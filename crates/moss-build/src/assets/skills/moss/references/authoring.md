@@ -770,13 +770,12 @@ A place page — claimed with `place_page:`, or generated like any other unclaim
 
 Place pages draw an offline map automatically when at least one relevant gazetteer entry has coordinates. A real page of your own at a place term's root (`places/index.md`, say, with no `place_page:` claim) keeps its own title and content — the map still draws below them, not instead of them. Set `map: false` in that page's frontmatter to turn the map off; this `map:` is the geographic map on the page, unrelated to `cascade:`'s own key-value map. `map:` is the one per-page switch for a page's own map, on a place page and on a located article alike (see the locator below).
 
-
 The world map alone stops at regional scale: it zooms in to about 20 screen pixels per degree of longitude (web zoom 5), so places within one city merge into a single badge. For places that close, add a detail layer: a map drawn at street scale at build time into tiles inside the site, so it stays offline. Declare it in `.moss/config.toml`:
 
 ```toml
 [map.layers.atlas-1956]
 kind = "historical"          # "streets" is read and checked but not drawn yet
-source = "maps/atlas-1956"   # a folder inside the site, read by the build and not published
+source = "maps/atlas-1956"   # a folder inside the site; drawn into tiles, never a page (an archival site's source copy keeps it)
 bbox = [-74.03, 40.68, -73.90, 40.88]   # west, south, east, north; optional, else taken from the places
 max_zoom = 17                # 10 to 19, default 16
 credit = "USGS, 1956"        # optional, else the plates' own credit
