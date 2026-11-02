@@ -1278,6 +1278,7 @@ pub fn generate_blocking_content_for_build(
         // The names a `cards = true` kind shows on listing cards: the same
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
+        crate::build::components::field_places::set_card_fields(&mut documents, &site_config.field_decls, site_config.typesetting.as_deref());
         if let Some(maps) = site_config.place_maps.as_ref() {
             crate::build::terms::places::warn_unknown_places(&documents, &site_config.term_kinds, maps.gazetteer());
         }

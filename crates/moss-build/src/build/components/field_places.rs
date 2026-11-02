@@ -246,6 +246,46 @@ fn subtitle_line(field: &str, html: &str) -> String {
     format!("<p class=\"moss-subtitle\" data-field=\"{field}\">{html}</p>\n")
 }
 
+/// Appends, to each page's card extras, the declared fields with `card = true` that the page has a value for.
+/// Plain text, never a link: a card is already one link. `decls` is in declaration order, which is the drawing order.
+pub fn set_card_fields(documents: &mut [ParsedDocument], decls: &[FieldDecl], typesetting: Option<&str>) {
+    let cards: Vec<&FieldDecl> = decls.iter().filter(|d| d.card).collect();
+    if cards.is_empty() {
+        return;
+    }
+    for doc in documents.iter_mut() {
+        let fields: Vec<String> = cards
+            .iter()
+            .filter_map(|d| {
+                let v = doc.declared.get(&d.name)?;
+                let (name, text) = (html_escape(&d.name), html_escape(&card_text(d, v, doc.lang, typesetting)));
+                // A choice's `data-value` is the slug of its key, as on a placed choice and a term credit; any other value is its own text.
+                let value = match v {
+                    TypedValue::Choice { value, .. } => html_escape(&moss_core::terms::term_slug(value)),
+                    _ => text.clone(),
+                };
+                Some(format!(r#"<span class="moss-card-field" data-field="{name}" data-value="{value}">{text}</span>"#))
+            })
+            .collect();
+        if fields.is_empty() {
+            continue;
+        }
+        // After the credits span the page may already carry, one separator between every part.
+        let parts: Vec<String> = doc.card_credits.take().into_iter().chain(fields).collect();
+        doc.card_credits = Some(parts.join(r#"<span class="moss-event-sep"> · </span>"#));
+    }
+}
+
+/// A value as a card reads it: the page's own text, with a url as its link text and a page link as its name.
+fn card_text(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>) -> String {
+    match v {
+        TypedValue::Url(u) => decl.text_for(lang.as_bcp47_attr()).filter(|t| !t.is_empty()).unwrap_or(u).to_string(),
+        TypedValue::Page(p) => link_name(p).to_string(),
+        TypedValue::Pages(pages) => pages.iter().map(link_name).collect::<Vec<_>>().join(", "),
+        other => value_text(other, lang, typesetting),
+    }
+}
+
 /// One value as inline markup.
 fn inline(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> String {
     if let Some(datetime) = datetime_attr(v) {
@@ -271,11 +311,14 @@ fn inline(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<
     }
 }
 
+fn link_name(link: &PageLink) -> &str {
+    link.alias.as_deref().unwrap_or_else(|| link.target.rsplit('/').next().unwrap_or(&link.target))
+}
+
 /// A page link reads as written, like a body wikilink: its alias, else the last
 /// segment of its target. It links to the page when the target resolves.
 fn page_link_html(link: &PageLink, page_href: &dyn Fn(&str) -> Option<String>) -> String {
-    let name = link.alias.as_deref().unwrap_or_else(|| link.target.rsplit('/').next().unwrap_or(&link.target));
-    let name = html_escape(name);
+    let name = html_escape(link_name(link));
     match page_href(&link.target) {
         Some(href) => format!("<a href=\"{}\">{name}</a>", html_escape(&href)),
         None => name,

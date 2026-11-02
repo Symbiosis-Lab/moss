@@ -446,7 +446,7 @@ When a page has no `description:`, the description moss derives for cards and me
 
 A card's title always shows in full, wrapping onto as many lines as it needs, so a long title is never cut off with an ellipsis on a phone. A card's description shows up to three lines and ends in an ellipsis after that; a longer one is a sign to shorten the `description:` rather than to restyle the card. A page's `subtitle:` shows under its title on the page itself, in `.moss-subtitle`, wherever its title block sits, and on every card and list row (grid, summary and list alike), muted and smaller by default; style it with `.moss-card-subtitle`, for example to set it in another script's font. A page without one draws nothing extra.
 
-A listing row or card reads only the page's own `subtitle:` frontmatter key, never a declared field, so text that must show on every row is written as `subtitle:` (a declared field with `place = "subtitle"` draws on the page itself only, see Declared fields):
+A listing row or card reads the page's own `subtitle:` frontmatter key, and the declared fields that say `card = true` (see Declared fields); no other declared field reaches a card. Text that must show on every row and is not a field is written as `subtitle:`:
 
 ```yaml
 ---
@@ -651,7 +651,7 @@ The built-in `date:` takes a calendar date (`1938-05-18`). A catalogue's date th
 
 A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields, except that `description` and `publisher` can take a `place` (see below).
 
-A field's `place` draws it on the page itself, never on a listing row (a row reads only `subtitle:` and `description:`, see the listing-row paragraph above):
+A field's `place` draws it on the page itself, never on a listing row or card (those take a field only through `card = true`, below):
 
 ```toml
 [fields.venue]
@@ -706,6 +706,14 @@ A count's digits follow the page's language. On a German page `.` groups digits 
 | `facts` | a label and value row per field, in a list | `moss-facts` |
 
 Dates and periods are `<time datetime>` elements carrying the EDTF value (`1927/1933`, or `1923/..` when open). A count is a `<data value>` element with the number as displayed, then its noun. A choice shows its label. A `page` or `pages` value links to the page where moss can resolve it, and shows the link as written (the text after `|` if there is one, else the last part of the name); where it cannot resolve, it shows the same text without a link; several pages are joined with ", ". A field whose value is missing or does not fit is not drawn on that page.
+
+`card = true` on a field draws its value on every listing card and row of a page that has one, in the card's meta line after the date and the term credits, in the order the fields are declared. It is plain text, never a link, and a page without a value draws nothing. Each value is a `<span class="moss-card-field" data-field="mark" data-value="wanted">`; for a choice `data-value` is the slug of its key in `of` (the same slug a placed choice and a term credit carry) and the text is its label, for any other type `data-value` is the text itself, formatted as the facts row formats it. A field with `card = true` and a `place` still draws that place on its own page. `card` takes `true` or `false`, and a group takes none. Style the span, or select a card by it, without a term kind: `.moss-card:has(.moss-card-field[data-field="mark"][data-value="wanted"])`.
+
+```toml
+[fields.holder]
+type = "text"
+card = true
+```
 
 `description` and `publisher` can take a place too, and their type is their own. `[fields.description]` with `place = "eyebrow"` draws the page's own `description:` as written, never the description moss derives from the body when the page has none. A built-in takes only `place` and `label`; no other moss field can take a place.
 

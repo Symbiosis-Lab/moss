@@ -524,6 +524,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "One credited name on a listing card, with its role inside. `data-term` is the term kind's key and `data-value` the slug of the name, the one its term page has in its address, so `.moss-card:has(.moss-credit[data-term=\"marks\"][data-value=\"wanted\"])` selects the cards that credit the term `Wanted` in the `marks` kind.",
     },
     ComponentEntry {
+        class: "moss-card-field",
+        kind: "instance",
+        parent: "moss-card-meta",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-card-field" data-field="holder" data-value="Example Archive">Example Archive</span>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "1",
+        description: "A declared field with `card = true`, drawn on a listing card or row of a page that has a value for it, in the meta after the date and the term credits, in the fields' declaration order. Plain text, never a link. `data-field` is the field's name; `data-value` is the slug of a choice's key in config (the text is its label), as on a placed choice, and for any other type the text itself, so `.moss-card:has(.moss-card-field[data-field=\"mark\"][data-value=\"wanted\"])` selects the cards of one value.",
+    },
+    ComponentEntry {
         class: "moss-credit-role",
         kind: "instance",
         parent: "moss-credit",
