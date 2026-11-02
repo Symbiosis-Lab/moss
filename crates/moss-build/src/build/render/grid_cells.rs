@@ -42,6 +42,7 @@
 use std::collections::HashMap;
 
 use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
+use moss_core::ast::link_card::{blocks_text, push_inlines_text};
 
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting};
@@ -250,33 +251,6 @@ fn inlines_text(inlines: &[Inline]) -> String {
     let mut out = String::new();
     push_inlines_text(&mut out, inlines);
     out.trim().to_string()
-}
-
-fn blocks_text(blocks: &[Block]) -> String {
-    let mut out = String::new();
-    for block in blocks {
-        match block {
-            Block::Paragraph(inlines) => push_inlines_text(&mut out, inlines),
-            Block::Heading { children, .. } => push_inlines_text(&mut out, children),
-            _ => {}
-        }
-        out.push(' ');
-    }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
-    for inline in inlines {
-        match inline {
-            Inline::Text(t) | Inline::Code(t) => out.push_str(t),
-            Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
-                push_inlines_text(out, children)
-            }
-            Inline::Link { children, .. } => push_inlines_text(out, children),
-            Inline::LineBreak => out.push(' '),
-            Inline::Image { .. } | Inline::Other(_) | Inline::FootnoteRef(_) | Inline::TaskMarker(_) => {}
-        }
-    }
 }
 
 // ── the render-phase entry point ────────────────────────────────────────

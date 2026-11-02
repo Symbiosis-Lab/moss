@@ -46,15 +46,6 @@ fn percent_encode_feed_url(url: &str) -> String {
     )
 }
 
-/// Escape special XML characters in text content.
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
 /// Convert a date string (YYYY-MM-DD, YYYY-MM, or YYYY) to RFC 822 format for
 /// RSS. A missing month or day defaults to 1 — RFC 822 has no partial form,
 /// and a feed entry with a coarse timestamp orders better than one with none.
@@ -221,11 +212,11 @@ pub fn generate_rss_feed(
     xml.push_str("<channel>\n");
 
     // Channel metadata
-    xml.push_str(&format!("<title>{}</title>\n", escape_xml(site_title)));
-    xml.push_str(&format!("<link>{}</link>\n", escape_xml(site_url)));
+    xml.push_str(&format!("<title>{}</title>\n", moss_core::media::xml_escape(site_title)));
+    xml.push_str(&format!("<link>{}</link>\n", moss_core::media::xml_escape(site_url)));
     xml.push_str(&format!(
         "<description>{}</description>\n",
-        escape_xml(description)
+        moss_core::media::xml_escape(description)
     ));
 
     // Atom self-link for feed discovery
@@ -237,7 +228,7 @@ pub fn generate_rss_feed(
     ));
     xml.push_str(&format!(
         "<atom:link href=\"{}\" rel=\"self\" type=\"application/rss+xml\"/>\n",
-        escape_xml(&feed_url)
+        moss_core::media::xml_escape(&feed_url)
     ));
 
     // Add items for each article
@@ -253,14 +244,14 @@ pub fn generate_rss_feed(
 
         xml.push_str("<item>\n");
         // Feed entry title is chrome; use the plain-text label.
-        xml.push_str(&format!("<title>{}</title>\n", escape_xml(&article.label)));
+        xml.push_str(&format!("<title>{}</title>\n", moss_core::media::xml_escape(&article.label)));
         xml.push_str(&format!(
             "<link>{}</link>\n",
-            escape_xml(&article_url_with_utm)
+            moss_core::media::xml_escape(&article_url_with_utm)
         ));
         xml.push_str(&format!(
             "<guid>{}</guid>\n",
-            escape_xml(&article_url_with_utm)
+            moss_core::media::xml_escape(&article_url_with_utm)
         ));
 
         // Add pubDate in RFC 822 format

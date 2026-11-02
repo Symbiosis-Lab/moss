@@ -76,15 +76,11 @@ pub fn cover_image_href(blocks: &[Block]) -> Option<(&str, &str)> {
     }
 }
 
-/// Plain text of a block sequence, markup dropped — the pure-crate twin of
-/// `build::render::grid_cells::blocks_text`. Deliberately does NOT fold in
-/// an image's `alt` (unlike `ast::plain_text::inlines_to_plain_text`,
-/// which is a different policy for a different job — see that module's own
-/// doc comment): a caption title should read as the caption, not as
-/// "alt-text caption", and the two renderers of a `Block::LinkCard` must
-/// agree on this text or the same page can show two different titles
-/// depending on which one ran.
-fn blocks_text(blocks: &[Block]) -> String {
+/// Plain text of a block sequence, markup dropped, for both renderers of a
+/// `Block::LinkCard` (this module and moss-build's grid cells). An image's
+/// `alt` is left out, unlike `ast::plain_text::inlines_to_plain_text`: a
+/// caption title reads as the caption, not as "alt-text caption".
+pub fn blocks_text(blocks: &[Block]) -> String {
     let mut out = String::new();
     for block in blocks {
         match block {
@@ -97,7 +93,7 @@ fn blocks_text(blocks: &[Block]) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
+pub fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
     for inline in inlines {
         match inline {
             Inline::Text(t) | Inline::Code(t) => out.push_str(t),

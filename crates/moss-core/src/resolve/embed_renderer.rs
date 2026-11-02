@@ -20,13 +20,8 @@
 mod common;
 pub mod folder_list;
 
-// Re-export the canonical 4-char attribute escaper so moss-core's own synthesizers
-// (pdf / iframe / model / audio / video) can share one definition instead of
-// inlining private copies that drifted apart (moss-core's was 4 chars; some
-// synthesizers via `moss_core::media::html_escape` was 5 chars including
-// `'` → `&#39;`). The 4-char form is correct per HTML5: apostrophe is safe
-// inside `"…"` attributes.
-pub use common::{file_stem, html_escape_attr};
+pub use crate::media::html_escape_attr;
+pub use common::file_stem;
 
 use crate::media::Placement;
 

@@ -63,10 +63,7 @@ fn generate_failed_svg(error: &str) -> String {
     } else {
         short_chars
     };
-    let escaped = short
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
+    let escaped = moss_core::media::html_escape_text(&short);
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><defs><pattern id="moss-grid" width="18" height="18" patternUnits="userSpaceOnUse"><path d="M18 0H0V18" fill="none" stroke="#143c82" stroke-opacity="0.16"/></pattern></defs><rect width="100%" height="100%" fill="#f4f1ec"/><rect width="100%" height="100%" fill="url(#moss-grid)"/><g transform="translate(400 280)"><text text-anchor="middle" font-family="system-ui,sans-serif" font-size="28" fill="#a33">⚠ asset failed</text><text y="42" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#7a2b2b">{}</text></g></svg>"##,
         escaped

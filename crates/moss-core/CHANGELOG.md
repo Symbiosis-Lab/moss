@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `media::html_escape_attr`, `media::html_escape_text` and `media::xml_escape` beside `media::html_escape`: one escaper per meaning (attribute without the apostrophe, element text, XML with `&apos;`). `resolve::embed_renderer::html_escape_attr` is now a re-export of the first.
+- `ast::link_card::blocks_text` and `push_inlines_text` are public, so every renderer of a link card reads its title text the same way.
 - `content_width` accepts `screen`.
 - `AppliesWhen` and `PagePosition`: where a schema field can change a page, as `{"position": "page" | "folder" | "home"}` or `{"set": "<other field>"}`, any one of which is enough. The built-in table sets it on the fields that do nothing elsewhere: `sort`, `cascade` and `color` on a folder index or the home, `logo` on the home, the event fields once `start` is set, the listing fields where a listing draws. An editor can leave such a field out of its add list.
 - Component contract entry `moss-lang-mark`, the language name a listing row carries when its page is in another language than the listing.

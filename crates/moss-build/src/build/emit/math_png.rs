@@ -151,7 +151,7 @@ impl EmailMathImg {
         } else {
             format!("{}{}", site_url.trim_end_matches('/'), rel)
         };
-        let alt = escape_attr(&moss_core::ast::math_text::math_source(
+        let alt = moss_core::media::html_escape(&moss_core::ast::math_text::math_source(
             &self.tex,
             self.display,
         ));
@@ -409,7 +409,7 @@ pub fn swap_math_svgs_for_email_imgs(html: &str, site_url: &str) -> String {
         let Some(after_svg) = after_open.get(close_rel + "</svg>".len()..) else { break };
 
         let display = open_tag.contains(r#"data-moss-math="display""#);
-        let tex = attr_value(open_tag, "aria-label").map(|v| unescape_attr(v));
+        let tex = attr_value(open_tag, "aria-label").map(moss_core::html_entities::decode);
 
         // Display math: consume the scroll wrapper around the svg too.
         let (lead, tail) = match (display, after_svg.strip_prefix("</div>")) {
@@ -429,7 +429,7 @@ pub fn swap_math_svgs_for_email_imgs(html: &str, site_url: &str) -> String {
                 let src = tex.unwrap_or_default();
                 out.push_str(&format!(
                     r#"<code class="moss-math">{}</code>"#,
-                    escape_attr(&moss_core::ast::math_text::math_source(&src, display))
+                    moss_core::media::html_escape(&moss_core::ast::math_text::math_source(&src, display))
                 ));
             }
         }
@@ -460,26 +460,6 @@ fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     let (_, after_name) = tag.split_once(&format!("{name}=\""))?;
     let (value, _) = after_name.split_once('"')?;
     Some(value)
-}
-
-/// Inverse of `markdown::math::escape_attr`. `&amp;` is replaced LAST so a
-/// literal `&lt;` in the source (escaped to `&amp;lt;`) round-trips.
-fn unescape_attr(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
-}
-
-/// Attribute-escape (the five break-out chars), local copy of
-/// `markdown::math::escape_attr` (private there).
-fn escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
 
 #[cfg(test)]
@@ -927,9 +907,9 @@ mod tests {
     }
 
     #[test]
-    fn unescape_attr_inverts_escape_attr_including_double_escapes() {
+    fn the_aria_label_round_trips_through_escape_and_decode() {
         for s in [r"a<b>c&d", r#"say "hi" & 'bye'"#, "&lt; literal entity text"] {
-            assert_eq!(unescape_attr(&escape_attr(s)), s, "round-trip failed for {s:?}");
+            assert_eq!(moss_core::html_entities::decode(&moss_core::media::html_escape(s)), s, "round-trip failed for {s:?}");
         }
     }
 

@@ -12,7 +12,7 @@ use std::path::Path;
 use super::moderation::{append_owner_event, load_mod_events, site_value, ModKind};
 use super::reduce::resolve_detailed;
 use super::{load_all_social_comments, MATTERS_DOMAIN_FALLBACK};
-use crate::cli::list::{display_width, json_error, pad};
+use crate::cli::list::{display_width, fail, pad};
 use crate::moss_paths::MossPaths;
 use crate::vault_root::{resolve_input, VaultRoot};
 
@@ -240,15 +240,6 @@ fn parse(args: &[String]) -> Result<Option<Parsed>, String> {
     });
     let folder = first_is_folder.then(|| positionals.remove(0));
     Ok(Some(Parsed { folder, ids: positionals, source, json }))
-}
-
-fn fail(message: &str, json: bool) -> i32 {
-    if json {
-        println!("{}", json_error(message));
-    } else {
-        eprintln!("error: {message}");
-    }
-    1
 }
 
 /// Entry point for `moss comments`. Returns the process exit code.

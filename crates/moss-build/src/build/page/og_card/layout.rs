@@ -6,7 +6,8 @@
 //! decoded picture. Caching, hashing, writing and manifest registration live
 //! in the parent module.
 
-use super::{CardInputs, CardError, xml_escape};
+use super::{CardInputs, CardError};
+use moss_core::media::xml_escape;
 use std::path::Path;
 
 /// Estimated advance in ems: full-width CJK glyphs advance one em,

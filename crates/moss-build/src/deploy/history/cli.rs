@@ -38,7 +38,7 @@ use super::restore::{self, RestoreMode, RestoreReport};
 use super::store;
 use super::HistoryStore;
 use crate::build::manifest::{published_record, SealedManifest};
-use crate::cli::list::json_error;
+use crate::cli::list::fail;
 use crate::moss_paths::MossPaths;
 use crate::vault_root::{resolve_input, VaultRoot};
 
@@ -218,18 +218,6 @@ fn reject_if_non_site_directory(path: Option<&str>, json: bool) -> Option<i32> {
     let path_arg = path?;
     let message = reject_non_site_directory(path_arg)?;
     Some(fail(&message, json))
-}
-
-/// The one choke point that honors `--json` on a failure, matching how
-/// `moss list --json` shapes its own errors: `{"error": ...}` on stdout,
-/// never stderr, so a script reading `--json` output always gets valid JSON.
-fn fail(message: &str, json: bool) -> i32 {
-    if json {
-        println!("{}", json_error(message));
-    } else {
-        eprintln!("error: {message}");
-    }
-    1
 }
 
 fn usage() -> &'static str {

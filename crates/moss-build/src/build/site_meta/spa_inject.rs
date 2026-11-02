@@ -89,14 +89,14 @@ pub fn inject_defaults(html: &str, defaults: &SpaDefaults) -> Result<String, Str
         if let Some(d) = defaults.description {
             additions.push_str(&format!(
                 r#"<meta name="description" content="{}">"#,
-                escape_attr(d)
+                moss_core::media::html_escape_attr(d)
             ));
             additions.push('\n');
         }
     }
     if !present.has_link("canonical") {
         if let Some(u) = defaults.canonical_url {
-            additions.push_str(&format!(r#"<link rel="canonical" href="{}">"#, escape_attr(u)));
+            additions.push_str(&format!(r#"<link rel="canonical" href="{}">"#, moss_core::media::html_escape_attr(u)));
             additions.push('\n');
         }
     }
@@ -128,14 +128,14 @@ pub fn inject_defaults(html: &str, defaults: &SpaDefaults) -> Result<String, Str
         if let Some(c) = defaults.theme_color_light {
             additions.push_str(&format!(
                 r#"<meta name="theme-color" content="{}" media="(prefers-color-scheme: light)">"#,
-                escape_attr(c)
+                moss_core::media::html_escape_attr(c)
             ));
             additions.push('\n');
         }
         if let Some(c) = defaults.theme_color_dark {
             additions.push_str(&format!(
                 r#"<meta name="theme-color" content="{}" media="(prefers-color-scheme: dark)">"#,
-                escape_attr(c)
+                moss_core::media::html_escape_attr(c)
             ));
             additions.push('\n');
         }
@@ -212,13 +212,6 @@ fn scan_present_tags(html: &str) -> PresentTags {
     let _ = rewriter.write(html.as_bytes());
     let _ = rewriter.end();
     result.into_inner()
-}
-
-fn escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

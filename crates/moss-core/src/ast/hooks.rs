@@ -20,6 +20,7 @@
 use super::grid_parts::GridParts;
 use super::shortcode::{GridShortcode, Shortcode};
 use super::url::{ResolvedUrl, UrlKind};
+pub(super) use crate::media::{html_escape_attr as escape_attr, html_escape_text as escape_text};
 
 /// Per-node-type HTML emission hooks. All methods have default
 /// implementations; consumers override only the ones they need.
@@ -1171,51 +1172,11 @@ fn ends_with_paragraph_close(s: &str) -> bool {
     s.ends_with("</p>")
 }
 
-/// Escape `&"<>` for HTML attribute values.
-pub(super) fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Escape `&<>` for HTML text content. Mirrors pulldown-cmark's text
-/// escape (it does NOT escape `"` in text — only in attributes).
-pub(super) fn escape_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::node::Inline;
     use crate::ast::url::Url;
-
-    #[test]
-    fn escape_attr_handles_all_unsafe_chars() {
-        assert_eq!(escape_attr(r#"&"<>"#), "&amp;&quot;&lt;&gt;");
-    }
-
-    #[test]
-    fn escape_text_does_not_quote_double_quote() {
-        assert_eq!(escape_text(r#"hi "there" & y"#), r#"hi "there" &amp; y"#);
-    }
 
     #[test]
     fn default_hooks_render_heading_emits_id() {

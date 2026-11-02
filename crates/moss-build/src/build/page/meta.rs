@@ -7,6 +7,7 @@ use crate::build::served_path::ServedPath;
 use crate::build::site_url::SiteUrl;
 use crate::i18n::link::TranslationLink;
 use std::collections::HashSet;
+pub use moss_core::media::html_escape_attr as escape_html_attr;
 
 /// A cover image reference. Two variants because the cover field is
 /// uniquely allowed to be an external HTTPS URL (e.g., a stock-photo CDN
@@ -1735,14 +1736,6 @@ pub(crate) fn description_from_content(content: Option<&str>, math: bool) -> Opt
     } else {
         Some(extracted)
     }
-}
-
-/// Escape HTML attribute value
-pub fn escape_html_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 /// Build the `<head>` block of `<link rel="alternate" hreflang="...">` tags

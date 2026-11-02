@@ -22,14 +22,7 @@ pub(crate) fn inactive_label(lang: crate::i18n::Language) -> &'static str {
 /// byte-for-byte identical (no-duplication rule).
 pub(crate) const CHECK_SVG: &str = r##"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
 
-/// Basic HTML escaping for attribute values and text content.
-pub(crate) fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
+pub(crate) use moss_core::media::html_escape;
 
 /// Mark a `<script ...>…</script>` tag as deploy-only: the deployed site must
 /// run it, but the preview server must never serve it — see

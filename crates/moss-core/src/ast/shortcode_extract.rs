@@ -1781,7 +1781,7 @@ fn extract_with_state(
             collected.warnings.push(format!("unknown shortcode `:::{}`", name));
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
-            let extra_attrs = format!(r#" data-name="{}""#, html_escape_attr(name));
+            let extra_attrs = format!(r#" data-name="{}""#, crate::media::html_escape(name));
             let body_config = config_at_body_line(config, body_start);
             let body_processed =
                 extract_with_state(&body, nonce, collected, &body_config);
@@ -1875,18 +1875,18 @@ fn render_div_open(
             if i > 0 {
                 out.push(' ');
             }
-            out.push_str(&html_escape_attr(c));
+            out.push_str(&crate::media::html_escape(c));
         }
         out.push('"');
     }
     if let Some(id_val) = id {
         out.push_str(" id=\"");
-        out.push_str(&html_escape_attr(id_val));
+        out.push_str(&crate::media::html_escape(id_val));
         out.push('"');
     }
     if let Some(w) = width.filter(|w| *w != "body") {
         out.push_str(" data-width=\"");
-        out.push_str(&html_escape_attr(w));
+        out.push_str(&crate::media::html_escape(w));
         out.push('"');
     }
     if let Some(extra) = extra_attrs {
@@ -1908,27 +1908,10 @@ fn data_attrs_for(kvs: &[(String, String)]) -> String {
             if key == "contents" && value == "end" {
                 " data-contents-end".to_string()
             } else {
-                format!(" {}=\"{}\"", html_attribute_name(key), html_escape_attr(value))
+                format!(" {}=\"{}\"", html_attribute_name(key), crate::media::html_escape(value))
             }
         })
         .collect()
-}
-
-/// HTML-attribute-safe escape. Replaces the five XML special characters
-/// so attribute values can't break out of `"..."` or close the tag.
-fn html_escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Parse an opening fence line into (name, args). Returns `None` if the line

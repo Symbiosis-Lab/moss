@@ -60,7 +60,7 @@ impl Walk<'_> {
         let mut out = String::new();
         for child in el.children() {
             match child.value() {
-                Node::Text(t) => out.push_str(&escape(t)),
+                Node::Text(t) => out.push_str(&moss_core::media::html_escape_attr(t)),
                 Node::Element(_) => {
                     if let Some(c) = ElementRef::wrap(child) {
                         out.push_str(&self.element(c, in_nav));
@@ -124,7 +124,7 @@ impl Walk<'_> {
             }
             return String::new();
         }
-        format!("<a href=\"{}\">{}</a>", escape(url.as_str()), escape(&text))
+        format!("<a href=\"{}\">{}</a>", moss_core::media::html_escape_attr(url.as_str()), moss_core::media::html_escape_attr(&text))
     }
 }
 
@@ -144,10 +144,6 @@ fn drop_invisible_lines(text: &str) -> String {
 
 fn attr(el: ElementRef, name: &str) -> String {
     el.value().attr(name).map(collapse).unwrap_or_default()
-}
-
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 #[cfg(test)]

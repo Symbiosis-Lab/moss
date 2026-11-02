@@ -206,19 +206,13 @@ pub fn render_html(posts: &[&ParsedDocument]) -> String {
         out.push_str(&format!(
             "  <li><a href=\"/{href}\">{title}</a><div class=\"moss-recent__date\">{date}</div><div class=\"moss-recent__desc\">{desc}</div></li>\n",
             href = p.url_path.trim_start_matches('/'),
-            title = html_escape(&p.title),
+            title = moss_core::media::html_escape_text(&p.title),
             date = date_str,
             desc = crate::build::page::meta::render_description_html(p.description.as_deref().unwrap_or("")),
         ));
     }
     out.push_str("</ul>\n");
     out
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

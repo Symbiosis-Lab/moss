@@ -575,14 +575,6 @@ fn rasterize(
     Ok(pixmap)
 }
 
-pub(super) fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
 #[derive(Debug)]
 pub enum CardError {
     Io(std::io::Error),
@@ -1039,12 +1031,6 @@ mod tests {
             }
             CardOutput::Carried { .. } => panic!("no previous entry: must rasterize"),
         }
-    }
-
-    #[test]
-    fn xml_escape_handles_specials() {
-        assert_eq!(xml_escape("a & b < c > d"), "a &amp; b &lt; c &gt; d");
-        assert_eq!(xml_escape(r#"say "hi""#), r#"say &quot;hi&quot;"#);
     }
 
     #[test]

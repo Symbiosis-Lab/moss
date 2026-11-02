@@ -66,15 +66,6 @@ pub(crate) fn declares_noindex(path: &std::path::Path) -> bool {
     found.get()
 }
 
-/// Escape special XML characters in text content.
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
 /// Generates a sitemap.xml string from page entries.
 ///
 /// # Arguments
@@ -109,9 +100,9 @@ pub fn generate_sitemap(entries: &[SitemapEntry], site_url: &str) -> String {
         };
 
         xml.push_str("<url>\n");
-        xml.push_str(&format!("<loc>{}</loc>\n", escape_xml(&full_url)));
+        xml.push_str(&format!("<loc>{}</loc>\n", moss_core::media::xml_escape(&full_url)));
         if let Some(ref date) = entry.lastmod {
-            xml.push_str(&format!("<lastmod>{}</lastmod>\n", escape_xml(date)));
+            xml.push_str(&format!("<lastmod>{}</lastmod>\n", moss_core::media::xml_escape(date)));
         }
         xml.push_str("</url>\n");
     }

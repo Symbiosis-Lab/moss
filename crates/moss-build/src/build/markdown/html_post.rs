@@ -303,7 +303,7 @@ pub fn strip_html_tags(html: &str) -> String {
 /// Injection is article-only, and the `moss-article-title` class is a stable
 /// contract.
 pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool, visually_hidden: bool) -> String {
-    let escaped = html_escape(title);
+    let escaped = moss_core::media::html_escape(title);
     let escaped = moss_core::heading::range::keep_ranges_together(&escaped);
     let fm_attr = if emit_source_lines { r#" data-source-fm="title""# } else { "" };
     let class = if visually_hidden { "moss-article-title visually-hidden" } else { "moss-article-title" };
@@ -342,8 +342,8 @@ pub(crate) fn prepend_parent_label(
     if split_leading_eyebrow(content).1.starts_with("<h1 class=\"moss-article-title\"") {
         let link = format!(
             "<a class=\"moss-parent-label\" href=\"{}\">{}</a>\n",
-            html_escape(&parent.url),
-            html_escape(&parent.title),
+            moss_core::media::html_escape(&parent.url),
+            moss_core::media::html_escape(&parent.title),
         );
         content.insert_str(0, &link);
     }
@@ -441,23 +441,6 @@ fn split_cover_body_prefix(html_body: &str) -> (&str, &str) {
     } else {
         ("", html_body)
     }
-}
-
-/// Minimal HTML text-content escaper for the five characters that change
-/// document structure or trigger entity parsing.
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 

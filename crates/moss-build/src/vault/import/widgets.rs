@@ -316,10 +316,6 @@ fn link_label(el: &Element, row: Option<&Row>, url: &Url) -> String {
         .unwrap_or_else(|| url.host_str().unwrap_or("link").to_string())
 }
 
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
-
 /// The address as a wikilink or markdown-link target: the characters that
 /// would end or split `![[…]]` or `[…](…)` are percent-encoded.
 fn wikilink_target(s: &str) -> String {
@@ -327,7 +323,7 @@ fn wikilink_target(s: &str) -> String {
 }
 
 fn link_html(href: &str, label: &str) -> String {
-    format!("<p><a href=\"{}\">{}</a></p>", escape(&wikilink_target(href)), escape(label))
+    format!("<p><a href=\"{}\">{}</a></p>", moss_core::media::html_escape_attr(&wikilink_target(href)), moss_core::media::html_escape_attr(label))
 }
 
 /// Tag the pre-pass leaves for an embed, or for a carried hosted page's frame
@@ -443,8 +439,8 @@ fn frame_html(el: &Element, row: Option<&Row>, url: &Url) -> String {
     };
     format!(
         "<{EMBED_TAG} data-url=\"{}\" data-label=\"{}\" data-size=\"{size}\"></{EMBED_TAG}>{}",
-        escape(&wikilink_target(url.as_str())),
-        escape(&label),
+        moss_core::media::html_escape_attr(&wikilink_target(url.as_str())),
+        moss_core::media::html_escape_attr(&label),
         link_html(url.as_str(), &label)
     )
 }
@@ -492,8 +488,8 @@ fn map_html(json: &str) -> Option<String> {
     };
     Some(format!(
         "<{EMBED_TAG} data-url=\"{}\" data-label=\"{}\"></{EMBED_TAG}>{}",
-        escape(&wikilink_target(&frame)),
-        escape(&label),
+        moss_core::media::html_escape_attr(&wikilink_target(&frame)),
+        moss_core::media::html_escape_attr(&label),
         link_html(&directions, "Directions")
     ))
 }
@@ -536,7 +532,7 @@ fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
     match row.map(|r| r.role) {
         Some(Embed) => Outcome::Replace(format!(
             "<{EMBED_TAG} data-url=\"{}\"></{EMBED_TAG}>",
-            escape(&embed_target(&url))
+            moss_core::media::html_escape_attr(&embed_target(&url))
         )),
         Some(Chrome) => Outcome::Leave,
         Some(Carry) | None => Outcome::Carried(frame_html(el, row, &url)),
@@ -610,7 +606,7 @@ fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
             .map(|a| attr(el, a))
             .find(|v| !v.is_empty() && !v.starts_with("data:"));
         if let Some(src) = src.filter(|s| seen.insert(s.to_string())) {
-            items.push_str(&format!("<p><img src=\"{}\" alt=\"{}\"></p>", escape(src), escape(attr(el, "alt"))));
+            items.push_str(&format!("<p><img src=\"{}\" alt=\"{}\"></p>", moss_core::media::html_escape_attr(src), moss_core::media::html_escape_attr(attr(el, "alt"))));
         }
     }
     if items.is_empty() {
