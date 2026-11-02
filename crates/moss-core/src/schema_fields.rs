@@ -47,7 +47,7 @@
 //! A lower score sorts earlier (more prominent position).
 
 use crate::resolve::ext_kind::ExtKind;
-use crate::schema::{FieldType, Widget};
+use crate::schema::{AppliesWhen, FieldType, PagePosition, Widget};
 
 /// A builtin frontmatter field definition.
 ///
@@ -127,7 +127,34 @@ pub struct BuiltinField {
     /// instantiate-frontmatter reset) needs no hand-maintained copy of this
     /// set. Read by `term_claim_fields()`.
     pub term_claim: bool,
+    /// Where the field can change a page; see `FieldDefinition::applies_when`.
+    /// `None` means everywhere.
+    pub applies_when: Option<&'static [When]>,
 }
+
+/// The const form of [`AppliesWhen`], so the table can name a field by `&'static str`.
+#[derive(Debug, Clone, Copy)]
+pub enum When {
+    Position(PagePosition),
+    Set(&'static str),
+}
+
+impl When {
+    pub(crate) fn materialize(&self) -> AppliesWhen {
+        match *self {
+            When::Position(p) => AppliesWhen::Position(p),
+            When::Set(key) => AppliesWhen::Set(key.to_string()),
+        }
+    }
+}
+
+const PAGE: When = When::Position(PagePosition::Page);
+const FOLDER: When = When::Position(PagePosition::Folder);
+const HOME: When = When::Position(PagePosition::Home);
+/// A listing draws on a folder index, the home, or a page that names a folder in `children`.
+const LISTS_CHILDREN: &[When] = &[FOLDER, HOME, When::Set("children")];
+/// Event fields mean nothing until the page carries a `start`.
+const EVENT: &[When] = &[When::Set("start")];
 
 /// Default values for optional `BuiltinField` fields. Used with struct update
 /// syntax (`..FIELD_DEFAULTS`) to reduce boilerplate in the table below.
@@ -150,6 +177,7 @@ const FIELD_DEFAULTS: BuiltinField = BuiltinField {
     file_kinds: None,
     name_list: false,
     term_claim: false,
+    applies_when: None,
 };
 
 /// Union members for `children`: a boolean toggle OR a single wikilink/path
@@ -588,6 +616,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Custom URL slug (e.g. `links` → /links/). Pin a stable ASCII slug when the filename isn't one — moss's convention is to name files after the page title in their own language, then pin `url:` here (`隐私.md` + `url: privacy` → /privacy). Keeps `[[wikilinks]]` working across a rename. It is one path segment that renames the page inside its folder (a `/` becomes `-`); to change the folder, move the file and keep the old address with a `[redirects]` entry.",
         label_key: "chip.url.label",
         group: "This Page",
+        applies_when: Some(&[PAGE, FOLDER]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -636,6 +665,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "When the event ends, same forms as `start`. For an all-day event the last day is included: `end: 2026-11-03` runs through the 3rd. Must not be before `start`.",
         label_key: "chip.end.label",
         group: "Event",
+        applies_when: Some(EVENT),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -647,6 +677,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "IANA time zone the event's `start`/`end` are in, e.g. Asia/Taipei. Only its Area/City shape is checked.",
         label_key: "chip.timezone.label",
         group: "Event",
+        applies_when: Some(EVENT),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -659,6 +690,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Event status when it is not going ahead as planned: cancelled, postponed, moved-online or rescheduled. Absent means scheduled.",
         label_key: "chip.status.label",
         group: "Event",
+        applies_when: Some(EVENT),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -670,6 +702,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "URL where tickets or registration are available.",
         label_key: "chip.tickets.label",
         group: "Event",
+        applies_when: Some(EVENT),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -681,6 +714,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "URL to attend the event online.",
         label_key: "chip.online.label",
         group: "Event",
+        applies_when: Some(EVENT),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -831,6 +865,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Title block"),
         label_key: "chip.title_block.label",
         group: "This Page",
+        applies_when: Some(&[PAGE]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -866,6 +901,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Section accent colour (`#rgb` or `#rrggbb`). Only a folder's home page reads it: the colour then applies to that page and every page under the folder, down to a nested folder that sets its own. Pages carry it as `--moss-section-color` on `<body>`, with the folder's name in `data-section`; no default style uses it",
         label: Some("Section colour"),
         group: "This Page",
+        applies_when: Some(&[FOLDER, HOME]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -925,6 +961,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Review Of"),
         label_key: "chip.review_of.label",
         group: "This Page",
+        applies_when: Some(&[PAGE]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -936,6 +973,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Author's rating of the reviewed item (1-5)",
         label_key: "chip.rating.label",
         group: "This Page",
+        applies_when: Some(&[When::Set("review_of")]),
         ..FIELD_DEFAULTS
     },
 
@@ -978,6 +1016,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "How to sort children in this folder's listing. Use date for newest-first chronological streams, date-asc for the same but oldest first, weight for authored order, title for alphabetical. A list of child stems (e.g. [intro, setup]) declares explicit order.",
         label_key: "chip.sort.label",
         group: "Child Pages",
+        applies_when: Some(&[FOLDER, HOME]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -990,6 +1029,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Declares children as a sequential series. On a folder index: true turns prev/next on for its children, a list of wikilinks declares their order, false turns the sequence off. On a page inside such a folder, `series: false` takes that page out of the reading order entirely — it keeps its place in the folder listing, shows no prev/next of its own, and stops being any sibling's prev or next, so an appendix or an editor's note no longer follows the last chapter. Position (\"2 / 3\") counts only the pages still in the order, so a series still being published reads its own length, not its planned one.",
         label_key: "chip.series.label",
         group: "Child Pages",
+        applies_when: Some(&[PAGE, FOLDER]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1017,6 +1057,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Child Layout"),
         label_key: "chip.children_style.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1030,6 +1071,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Group"),
         label_key: "chip.children_group.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1043,6 +1085,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Depth"),
         label_key: "chip.children_depth.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1056,6 +1099,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Feed Slot"),
         label_key: "chip.children_in.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1068,6 +1112,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Limit"),
         label_key: "chip.children_limit.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1080,6 +1125,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Card Count"),
         label_key: "chip.children_count.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1092,6 +1138,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("More Link"),
         label_key: "chip.children_more.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1105,6 +1152,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("Covers"),
         label_key: "chip.children_covers.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1118,6 +1166,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label: Some("When"),
         label_key: "chip.children_when.label",
         group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1137,6 +1186,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Frontmatter values to push to all descendant pages; the page that declares it is not included, so set the value on it directly too",
         label_key: "chip.cascade.label",
         group: "Child Styles",
+        applies_when: Some(&[FOLDER, HOME]),
         ..FIELD_DEFAULTS
     },
 
@@ -1152,6 +1202,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label_key: "chip.logo.label",
         group: "Whole Site",
         file_kinds: Some(&[ExtKind::Image]),
+        applies_when: Some(&[HOME]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {

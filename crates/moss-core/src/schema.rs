@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::schema_fields::{BuiltinField, BUILTIN_FIELDS};
+use crate::schema_fields::{BuiltinField, When, BUILTIN_FIELDS};
 
 /// The top-level content schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +116,34 @@ pub struct FieldDefinition {
     /// `schema_fields::BuiltinField::file_kinds` — see that field's doc comment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_kinds: Option<Vec<crate::resolve::ext_kind::ExtKind>>,
+    /// Where this field can change a page: it applies when any condition holds.
+    /// `None` means everywhere, an empty list nowhere. An editor reads it to
+    /// leave out of its add list a field that would do nothing on the open page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_when: Option<Vec<AppliesWhen>>,
+}
+
+/// Where a page sits in its site: an ordinary page, a folder's index, or the
+/// site root's index. A language tree's index counts as a folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "lowercase")]
+pub enum PagePosition {
+    Page,
+    Folder,
+    Home,
+}
+
+/// One condition under which a field takes effect.
+/// Serialized as `{"position": "folder"}` or `{"set": "start"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "lowercase")]
+pub enum AppliesWhen {
+    /// The page sits in this position.
+    Position(PagePosition),
+    /// The page's frontmatter sets this other field to a non-empty value.
+    Set(String),
 }
 
 /// Supported field types.
@@ -222,6 +250,7 @@ fn materialize_field(bf: &BuiltinField) -> FieldDefinition {
             source: None,
             group: None,
             file_kinds: None,
+            applies_when: None,
         })
     });
 
@@ -258,6 +287,7 @@ fn materialize_field(bf: &BuiltinField) -> FieldDefinition {
         source: None,
         group: if bf.group.is_empty() { None } else { Some(bf.group.to_string()) },
         file_kinds: bf.file_kinds.map(|kinds| kinds.to_vec()),
+        applies_when: bf.applies_when.map(|when| when.iter().map(When::materialize).collect()),
     }
 }
 
@@ -561,5 +591,58 @@ mod tests {
         assert!(fd.source.is_none());
         let serialized = serde_json::to_string(&fd).expect("serialize");
         assert!(!serialized.contains("source"));
+    }
+
+    fn applies_when_json(key: &str) -> serde_json::Value {
+        let schema = builtin_schema();
+        let fd = schema.frontmatter.fields.get(key).expect(key);
+        serde_json::to_value(fd).unwrap()["applies_when"].clone()
+    }
+
+    #[test]
+    fn applies_when_names_the_position_or_the_field_a_field_needs() {
+        assert_eq!(applies_when_json("sort"), serde_json::json!([{ "position": "folder" }, { "position": "home" }]));
+        assert_eq!(applies_when_json("logo"), serde_json::json!([{ "position": "home" }]));
+        assert_eq!(applies_when_json("end"), serde_json::json!([{ "set": "start" }]));
+        assert_eq!(applies_when_json("rating"), serde_json::json!([{ "set": "review_of" }]));
+        assert_eq!(
+            applies_when_json("children_style"),
+            serde_json::json!([{ "position": "folder" }, { "position": "home" }, { "set": "children" }]),
+        );
+    }
+
+    #[test]
+    fn a_field_that_applies_everywhere_carries_no_applies_when() {
+        assert_eq!(applies_when_json("title"), serde_json::Value::Null);
+        assert_eq!(applies_when_json("children"), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_plugin_schema_without_applies_when_still_parses() {
+        let schema = parse_schema(r#"{"generator":"p","version":"1","frontmatter":{"fields":{"x":{"type":"string"}}},"shortcodes":null}"#).unwrap();
+        assert!(schema.frontmatter.fields["x"].applies_when.is_none());
+        let back: FieldDefinition = serde_json::from_value(serde_json::json!({
+            "type": "string", "applies_when": [{ "set": "start" }]
+        })).unwrap();
+        assert_eq!(back.applies_when, Some(vec![AppliesWhen::Set("start".into())]));
+    }
+
+    #[test]
+    fn listed_and_children_depth_name_no_default_the_build_does_not_use() {
+        let schema = builtin_schema();
+        assert!(schema.frontmatter.fields["listed"].default.is_none());
+        assert!(schema.frontmatter.fields["children_depth"].default.is_none());
+    }
+
+    #[test]
+    fn every_set_condition_names_a_schema_field() {
+        let schema = builtin_schema();
+        for (key, fd) in &schema.frontmatter.fields {
+            for cond in fd.applies_when.iter().flatten() {
+                if let AppliesWhen::Set(other) = cond {
+                    assert!(schema.frontmatter.fields.contains_key(other), "{key} depends on unknown field {other}");
+                }
+            }
+        }
     }
 }
