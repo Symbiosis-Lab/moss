@@ -3706,7 +3706,7 @@ fn subscribe_in_grid_cell_renders_the_real_labelled_form() {
 /// `cli_eprintln!` loop from the pipeline is caught.
 #[test]
 fn foreign_frontmatter_field_warns_and_names_the_moss_equivalent() {
-    let warnings = foreign_frontmatter_warnings("privacy.md", &["title", "slug"], &Default::default());
+    let warnings = foreign_frontmatter_warnings("privacy.md", &["title", "slug"], &Default::default(), &[]);
     assert_eq!(
         warnings.len(),
         1,
@@ -3757,11 +3757,33 @@ fn ordinary_custom_frontmatter_fields_do_not_warn() {
         "post.md",
         &["title", "date", "my_field", "data", "uid"],
         &Default::default(),
+        &[],
     );
     assert!(
         warnings.is_empty(),
         "builtin and custom fields must not warn, got: {warnings:?}"
     );
+}
+
+/// A key the site declares is its own field, even when another generator uses
+/// the name for a job moss does differently (`category` is Jekyll's `tags`).
+/// Through the real page entry point, since the hint fails `--strict`.
+#[test]
+fn declared_field_named_like_a_foreign_one_gets_no_hint() {
+    let empty_map = HashMap::new();
+    let declared = [moss_core::fields::FieldDecl { name: "category".into(), ..Default::default() }];
+    let problems = |fields: &[moss_core::fields::FieldDecl]| {
+        let _ = crate::build::cli_output::take_cli_problems();
+        let md = "---\ntitle: Silk scarf\ncategory: clothes\n---\n\nbody\n";
+        process_markdown_file(
+            "shop/scarf.md", md, "site", &empty_map, false, Language::En, None,
+            SiteMarkdown { fields, ..SiteMarkdown::default() }, None, None, None, PageContext::default(),
+        )
+        .expect("should parse");
+        crate::build::cli_output::take_cli_problems()
+    };
+    assert_eq!(problems(&[]), 1, "undeclared, 'category' still earns the 'tags' hint");
+    assert_eq!(problems(&declared), 0, "declared in [fields], 'category' is the site's own");
 }
 
 /// Build the frontmatter map the way the pipeline does, so these tests exercise

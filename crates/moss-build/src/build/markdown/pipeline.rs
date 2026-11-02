@@ -225,27 +225,28 @@ fn children_count_warning(file_path: &str, count: Option<&moss_core::frontmatter
         .map(|_| format!("[{file_path}] frontmatter: children_count has no {{n}}, so every folder card shows the same text"))
 }
 
-/// Warnings for frontmatter keys that name another generator's field.
-///
-/// Unknown keys are normally silent, rightly — templates and plugins read their
-/// own. The exception is a name that means "do this job" elsewhere and does
-/// nothing here: `slug:` (Hugo/Jekyll/Zola/Astro) is moss's `url:` and was
-/// ignored without a word. Nothing else covers this at build time —
-/// `validate_frontmatter`'s only caller is the editor, so authoring in Obsidian
-/// or vim got no signal at all. Table (shared with that editor hint):
-/// [`moss_core::validation::foreign_field_suggestion`]. Pure so the wiring is
-/// testable; phrased as a question because a template may read its own `image:`.
+/// Warnings for frontmatter keys that name another generator's field (`slug:`
+/// is moss's `url:`). Unknown keys are otherwise silent, since templates and
+/// plugins read their own; a key the site declares in `[fields.*]` is its own by
+/// definition. Table, shared with the editor hint:
+/// [`moss_core::validation::foreign_field_suggestion`].
 fn foreign_frontmatter_warnings(
     file_path: &str,
     keys: &[&str],
     values: &std::collections::HashMap<String, serde_yaml::Value>,
+    declared: &[moss_core::fields::FieldDecl],
 ) -> Vec<String> {
     keys.iter()
-        .filter_map(|key| {
-            moss_core::validation::foreign_field_warning(key, values.get(*key))
-                .map(|w| format!("[{file_path}] frontmatter: {w}"))
-        })
+        .filter_map(|key| foreign_hint(key, values.get(*key), declared))
+        .map(|w| format!("[{file_path}] frontmatter: {w}"))
         .collect()
+}
+
+fn foreign_hint(key: &str, value: Option<&serde_yaml::Value>, declared: &[moss_core::fields::FieldDecl]) -> Option<String> {
+    if declared.iter().any(|d| d.name == key) {
+        return None;
+    }
+    moss_core::validation::foreign_field_warning(key, value)
 }
 
 /// The built-in schema, materialized once per process.
@@ -525,7 +526,7 @@ pub fn process_markdown_file(
             // parser drops unknown keys, so ask for them separately.
             let keys = moss_core::frontmatter_typed::simplified_frontmatter_keys(content);
             let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-            for warning in foreign_frontmatter_warnings(file_path, &key_refs, &Default::default()) {
+            for warning in foreign_frontmatter_warnings(file_path, &key_refs, &Default::default(), site.fields) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
             let fm_lines = frontmatter_block_lines(content, &body);
@@ -561,7 +562,7 @@ pub fn process_markdown_file(
             for w in &warnings {
                 // A key the foreign-field table explains (`order: 3`, read as
                 // `sort` and rejected) gets that clearer warning, not both.
-                if moss_core::validation::foreign_field_warning(&w.key, parsed.frontmatter.get(&w.key)).is_some() {
+                if foreign_hint(&w.key, parsed.frontmatter.get(&w.key), site.fields).is_some() {
                     continue;
                 }
                 crate::build::cli_output::cli_warn!("[{}] frontmatter: {}", file_path, w.message);
@@ -572,7 +573,7 @@ pub fn process_markdown_file(
             // Keys another generator uses for a job moss also does. See
             // `foreign_frontmatter_warnings` for why these are not silent.
             let keys: Vec<&str> = mapping.keys().filter_map(|k| k.as_str()).collect();
-            for warning in foreign_frontmatter_warnings(file_path, &keys, &parsed.frontmatter) {
+            for warning in foreign_frontmatter_warnings(file_path, &keys, &parsed.frontmatter, site.fields) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
             // Schema validation — type mismatches, enum violations, bad dates.
