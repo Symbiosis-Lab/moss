@@ -349,6 +349,8 @@ where
     let mut left_site: Vec<(String, String)> = Vec::new();
     // Normalised page URL → the note written for it, for the chrome pass.
     let mut written_urls: HashMap<String, String> = HashMap::new();
+    // Error stubs: not finished like a page, but still pages under their folder.
+    let mut error_stubs: Vec<String> = Vec::new();
     // Where the site's chrome is read from: the start page, else the first page.
     let mut home_page: Option<HomePage> = None;
 
@@ -647,6 +649,7 @@ where
             PageOutcome::Failed(reason) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &render_error_markdown(&url, &reason))?;
+                error_stubs.push(relative);
                 state.tally.record_failed();
                 state.cap.record_progress(is_declared);
             }
@@ -681,6 +684,9 @@ where
     }
 
     restore_left_links(out_dir, &written, &left_site)?;
+    // Which pages are folders and which are files, and the links between them,
+    // are only knowable now; the chrome below reads the final paths.
+    super::finalize::settle_layout(out_dir, &mut written, &mut written_urls, &error_stubs)?;
 
     // The site's chrome is written first: the home note's title becomes the
     // site name, which is the name the pass below strips from every title.
