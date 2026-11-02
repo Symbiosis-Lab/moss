@@ -145,6 +145,10 @@ fn collect_watch_targets(root: &Path) -> Result<Vec<WatchTarget>, StorageFailure
         match std::fs::metadata(&path) {
             Ok(_) => {}
             Err(error) if crate::build::icloud::is_definitely_absent(&path, &error) => continue,
+            // `.moss` is a file, so nothing inside it exists to watch. Failing
+            // here would read as an unreadable root and mark a reachable
+            // project unavailable.
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => continue,
             Err(error) => return Err(StorageFailure::new(
                 Some(path), StorageOperation::EntryMetadata, error,
             )),

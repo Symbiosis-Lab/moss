@@ -183,6 +183,17 @@ fn an_icloud_stub_keeps_the_moss_allowlist_candidate_unknown() {
 }
 
 #[test]
+fn a_moss_that_is_a_file_leaves_the_root_readable() {
+    let dir = fixture();
+    let root = dir.path();
+    fs::remove_dir_all(root.join(".moss")).ok();
+    fs::write(root.join(".moss"), b"not a folder").unwrap();
+
+    let targets = watch_targets_with_error(root).expect("the root itself is readable");
+    assert!(targets.iter().all(|(p, _)| !p.starts_with(root.join(".moss"))));
+}
+
+#[test]
 fn watch_targets_pick_up_a_new_top_level_folder() {
     let dir = fixture();
     let root = dir.path();
