@@ -221,6 +221,18 @@ for you. Never write `!important`.
 For shortcodes and partials (content reuse, not styling tiers), see
 `moss guide authoring`.
 
+## Keep the theme stylesheet readable
+
+`.moss/theme/style.css` is read and edited by the person who owns the site long after you finish, so write it for them. Before handing it over, simplify and consolidate:
+
+- Delete rules that match nothing (`moss doctor --surface` names them) and rules that restate a moss default or repeat another rule.
+- Fold a value that appears more than twice (a colour, a gap, a width) into a `--moss-*` override or a custom property of your own in `:root {}`.
+- Merge rules that differ in one property into one selector list; prefer one rule per component over the same selector reopened in several places.
+- Group the file by what it styles: tokens first, then page-wide type and layout, then one block per component, then page-specific blocks, with each block's responsive and dark-mode overrides right after it.
+- Head each group with a one-line comment, and comment a rule only for the reason the CSS cannot show (why this offset, which default it displaces). No commented-out code, no history.
+
+A stylesheet that is longer than the design needs is a defect even when it renders correctly: build before and after and compare the pages.
+
 ## Hard rules
 
 - Show a destination once. What the home page already shows (a set of listings, a map) is not also a nav item, and a nav item's page is not repeated on the home page; the same holds for a footer link that repeats the nav.
