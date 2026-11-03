@@ -53,6 +53,7 @@ pub struct Session {
     retired: CancellationToken,
     /// Renames this session can undo; a new folder starts with none.
     rename_undo: RenameUndoStore,
+    publish_dates: crate::editor::filesystem::PublishDateMemo,
     /// The server's live serve-dir pointer.
     site_dir: Arc<RwLock<PathBuf>>,
 }
@@ -92,6 +93,10 @@ impl CommandHost for Session {
 
     fn rename_undo(&self) -> &RenameUndoStore {
         &self.rename_undo
+    }
+
+    fn publish_dates(&self) -> &crate::editor::filesystem::PublishDateMemo {
+        &self.publish_dates
     }
 
     fn served_dir(&self) -> PathBuf {
@@ -182,6 +187,7 @@ impl InvokeCtx {
             token,
             retired: CancellationToken::new(),
             rename_undo: Default::default(),
+            publish_dates: Default::default(),
             site_dir: site_dir.clone(),
         });
         if let Some(previous) = session.replace(fresh.clone()) {

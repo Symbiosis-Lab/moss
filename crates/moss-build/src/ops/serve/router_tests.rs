@@ -3445,7 +3445,7 @@ async fn mutate_carrier_scan_references_for_delete_finds_hits_and_refuses_outsid
         .set("X-Moss-Token", &token)
         .timeout(std::time::Duration::from_secs(5))
         .send_string(
-            &serde_json::json!({ "path": vault_path.join("target.md").to_string_lossy() }).to_string(),
+            &serde_json::json!({ "paths": [vault_path.join("target.md").to_string_lossy()] }).to_string(),
         )
         .expect("control: an in-vault scan must succeed");
     assert_eq!(resp.status(), 200);
@@ -3462,7 +3462,7 @@ async fn mutate_carrier_scan_references_for_delete_finds_hits_and_refuses_outsid
         .set("X-Moss-Token", &token)
         .timeout(std::time::Duration::from_secs(5))
         .send_string(
-            &serde_json::json!({ "path": parent.path().join("secret.md").to_string_lossy() }).to_string(),
+            &serde_json::json!({ "paths": [parent.path().join("secret.md").to_string_lossy()] }).to_string(),
         );
     assert!(escaped.is_err(), "scan_references_for_delete must refuse a target outside the vault");
 

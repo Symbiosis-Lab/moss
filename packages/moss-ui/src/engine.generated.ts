@@ -456,6 +456,12 @@ ref_text: string;
  */
 line: number }
 
+export type FolderArgs = { 
+/**
+ * The folder the caller asks about; refused if it is not the open one.
+ */
+folderPath: string }
+
 /**
  * What the LAST BUILD listed under a folder, read from the `ArticleMap`.
  * Attached to `FolderListing` embeds so the editor's card can state what will
@@ -561,7 +567,8 @@ export type ListDirectoryArgs = { path: VaultPath; showInternal: boolean }
 
 /**
  * Walks the open folder; a caller's `path` is not read, for the reason
- * [`ListDirectoryArgs`] gives. Publish dates are recomputed per call.
+ * [`ListDirectoryArgs`] gives. A loose document's folder is listed only to a
+ * budget, since it can be any folder on the machine.
  */
 export type ListTreeArgs = { showInternal: boolean }
 
@@ -789,7 +796,11 @@ edited_pages: string[];
 /**
  * Pages skipped because they changed on disk after planning.
  */
-skipped_pages: string[]; undo_id: string }
+skipped_pages: string[]; 
+/**
+ * Empty when there is nothing to undo.
+ */
+undo_id: string }
 
 export type ResolveAssetArgs = { target: string; fromFile: VaultPath }
 
@@ -1192,9 +1203,9 @@ export type EngineCommands = {
 	describe_source_role: { args: FileArgs; out: SourceRole };
 	resolve_url_for_file: { args: FileArgs; out: string | null };
 	validate_content: { args: FileArgs; out: EditorDiagnostic[] };
-	get_publish_preflight: { args: NoArgs; out: PublishPreflightProjection | null };
+	get_publish_preflight: { args: FolderArgs; out: PublishPreflightProjection | null };
 	list_vault_terms: { args: NoArgs; out: VaultTerms };
-	get_cloud_unavailable_files: { args: NoArgs; out: string[] };
+	get_cloud_unavailable_files: { args: FolderArgs; out: string[] };
 	list_versions: { args: ListVersionsArgs; out: VersionList };
 	read_version: { args: ReadVersionArgs; out: VersionContent };
 	reveal_history_store: { args: NoArgs; out: null };
@@ -1205,7 +1216,7 @@ export type EngineCommands = {
 	delete_entry: { args: PathArgs; out: null };
 	delete_entries: { args: PathsArgs; out: null };
 	rename_entry_with_refs: { args: RenameArgs; out: RenameRefsSummary };
-	scan_references_for_delete: { args: PathArgs; out: FileReferenceHit[] };
+	scan_references_for_delete: { args: PathsArgs; out: FileReferenceHit[] };
 	clean_references_and_delete: { args: PathsArgs; out: null };
 	undo_rename: { args: UndoRenameArgs; out: UndoResult };
 	save_editor_content: { args: SaveEditorContentArgs; out: SaveResult };

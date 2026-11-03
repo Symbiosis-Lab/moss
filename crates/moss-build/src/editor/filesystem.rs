@@ -6,7 +6,11 @@
 //! and `resolve_url_for_file` Tauri commands in `commands.rs`.
 
 
+mod bounded;
 mod directory;
+mod publish_dates;
+pub use bounded::{bounded_tree, DOCUMENT_TREE_BUDGET};
+pub use publish_dates::{PublishDateCacheView, PublishDateMemo};
 pub use directory::list_directory_inner;
 use directory::list_directory_counted;
 
@@ -207,31 +211,12 @@ pub fn walk_source_files(dir: &str, project_path: &str, visit: &mut dyn FnMut(&D
     }
 }
 
-/// Per-project publish-date cache passed to `list_tree_inner_cached`.
-///
-/// Keyed by `(file_path, mtime_secs)` so a stale entry never gets served.
-/// The outer container is owned by `AppState`; this is a borrowed view.
-///
-/// The cached tuple is `(publish_date, date_source, home_marker)` — the third
-/// element records whether the file's frontmatter set `home: true`, extracted
-/// from the SAME 4 KB frontmatter read that resolves the date (zero extra
-/// I/O), and feeds the per-folder home election in `list_tree_inner_cached`.
-pub type PublishDateCacheView<'a> = std::sync::Mutex<
-    &'a mut std::collections::HashMap<
-        (std::path::PathBuf, u64),
-        (Option<String>, DateSource, bool),
-    >,
->;
-
 /// Inner implementation of `list_tree` for testability.
 ///
 /// `project_path` is the project root, used by `is_hidden` to compute the
 /// relative path when filtering `.moss/` children.
 ///
-/// This is a thin shim that calls `list_tree_inner_cached` with no cache
-/// (every md file is parsed fresh). The Tauri command path passes a real
-/// cache; tests use this shim.
-#[cfg_attr(not(test), allow(dead_code))]
+/// The walk with no memo: every page is read fresh.
 pub fn list_tree_inner(
     path: &str,
     project_path: &str,
@@ -242,7 +227,7 @@ pub fn list_tree_inner(
     list_tree_inner_cached(path, project_path, show_internal, &cache)
 }
 
-/// Cached variant — used by the Tauri command, where `AppState` owns the cache.
+/// The walk with a memo ([`PublishDateMemo::with_folder`] lends one).
 ///
 /// Reads each `.md` file's first 4 KB once per (path, mtime) pair, caches
 /// the resolved publish date, and feeds the result into the five-zone sort.

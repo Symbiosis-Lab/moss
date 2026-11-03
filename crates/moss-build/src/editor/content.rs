@@ -397,20 +397,6 @@ pub fn assemble_bootstrap(
     }
 }
 
-/// The boot payload for a folder that is open as a site (so no document-mode
-/// `editor_root`). The initial file is read synchronously, so call it off the
-/// UI thread: `read_vault_text` may wait briefly for a cloud file.
-pub fn bootstrap_for_site(
-    project_root: &std::path::Path,
-    source_path: Option<&str>,
-    schema: moss_core::schema::ContentSchema,
-) -> EditorBootstrap {
-    let project_path = Some(project_root.to_string_lossy().to_string());
-    let initial_content = bootstrap_source_path(project_path.as_deref(), source_path)
-        .and_then(|abs| read_vault_text(&abs).ok().flatten());
-    assemble_bootstrap(project_path, None, schema, initial_content)
-}
-
 // ── Heading state, file info, source role ──────────────────────────────────
 
 /// Core of `compute_heading_state`: the JSON `Value` → `HeadingInputs` bridge

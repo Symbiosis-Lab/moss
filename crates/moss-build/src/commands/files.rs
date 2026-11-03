@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use super::rename_undo::RenameRefsSummary;
-use super::{CommandHost, VaultPath};
+use super::{site_root, with_moves_announced, CommandHost, VaultPath};
 use crate::editor::rename_plan::UndoResult;
 
 fn resolve_all(host: &dyn CommandHost, paths: &[VaultPath]) -> Result<Vec<String>, String> {
@@ -50,17 +50,33 @@ pub async fn delete_entries(host: &dyn CommandHost, a: PathsArgs) -> Result<(), 
     crate::vault::fs::delete_entries_inner(host.root(), &resolve_all(host, &a.paths)?)
 }
 
+/// The references a delete of `paths` would break, for its confirmation. A
+/// loose document's folder has no links to break. A reference to a file inside
+/// a deleted folder is counted once.
 pub async fn scan_references_for_delete(
     host: &dyn CommandHost,
-    a: PathArgs,
+    a: PathsArgs,
 ) -> Result<Vec<crate::editor::ref_scan::FileReferenceHit>, String> {
-    crate::editor::ref_scan::scan_project_references_to(&host.resolve(&a.path)?, host.root())
+    let Ok(root) = site_root(host) else { return Ok(Vec::new()) };
+    let mut hits = Vec::new();
+    for path in &a.paths {
+        let abs = host.resolve(path)?;
+        if abs.exists() {
+            hits.extend(crate::editor::ref_scan::scan_project_references_to(&abs, root)?);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|h| seen.insert((h.referencing_file.clone(), h.ref_text.clone(), h.line)));
+    Ok(hits)
 }
 
-/// Strips every reference to `paths` from the folder's pages, then trashes them.
+/// Strips every reference to `paths` from the folder's pages (a loose
+/// document's folder has none), then trashes them.
 pub async fn clean_references_and_delete(host: &dyn CommandHost, a: PathsArgs) -> Result<(), String> {
     let paths = resolve_all(host, &a.paths)?;
-    crate::editor::ref_scan::clean_references_to_paths(host.root(), &paths)?;
+    if let Ok(root) = site_root(host) {
+        crate::editor::ref_scan::clean_references_to_paths(root, &paths)?;
+    }
     crate::vault::fs::delete_entries_inner(host.root(), &paths)
 }
 
@@ -72,12 +88,19 @@ pub struct RenameArgs {
 }
 
 /// Renames or moves one entry and rewrites every reference that follows it.
+/// In a loose document's folder nothing is rewritten and there is no undo.
 pub async fn rename_entry_with_refs(host: &dyn CommandHost, a: RenameArgs) -> Result<RenameRefsSummary, String> {
-    let old = host.resolve(&a.old_path)?;
-    let new = host.resolve(&a.new_path)?;
-    let root = host.root();
-    let applied =
-        crate::editor::ref_scan::rename_entry_with_refs_core(root.to_path_buf(), &old.to_string_lossy(), &new.to_string_lossy())?;
+    use crate::editor::{ref_scan, rename_plan};
+    let old = host.resolve(&a.old_path)?.to_string_lossy().into_owned();
+    let new = host.resolve(&a.new_path)?.to_string_lossy().into_owned();
+    let Ok(root) = site_root(host) else {
+        let plan = ref_scan::plan_loose(host.root(), &[(old, new)])?;
+        with_moves_announced(host, &plan.pairs, || plan.apply())?;
+        return Ok(RenameRefsSummary::empty());
+    };
+    let plan = rename_plan::plan_moves(root, &[(old, new)])?;
+    let pairs = ref_scan::page_file_pairs(&plan.file_moves);
+    let applied = with_moves_announced(host, &pairs, || rename_plan::apply_planned_moves(root, &plan))?;
     Ok(host.rename_undo().summarize_and_store(root, applied))
 }
 
@@ -96,7 +119,8 @@ pub async fn undo_rename(host: &dyn CommandHost, a: UndoRenameArgs) -> Result<Un
     if root != host.root() {
         return Err("Cannot undo — the folder has changed since this rename".to_string());
     }
-    crate::editor::rename_plan::undo_applied(&root, &applied)
+    let pairs = crate::editor::ref_scan::page_file_pairs(&crate::editor::rename_plan::undo_file_moves(&root, &applied)?);
+    with_moves_announced(host, &pairs, || crate::editor::rename_plan::undo_applied(&root, &applied))
 }
 
 #[derive(serde::Deserialize, specta::Type)]

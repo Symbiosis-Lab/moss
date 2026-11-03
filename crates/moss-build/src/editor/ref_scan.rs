@@ -225,15 +225,8 @@ fn clean_references_to(
 
 
 /// OS-rename the entry, then rewrite every project-wide `[[wikilink]]` /
-/// `[text](link)` reference to it. The project root is passed in explicitly:
-/// the app's `rename_entry_with_refs` command and `moss rename` in both
-/// binaries (`cli::rename`) call this same body.
-///
-/// The one-element wrapper around [`crate::editor::rename_plan`]'s
-/// resolver-driven plan/apply engine — see that module for what changed and
-/// why (a rename used to rewrite references by pattern-matching their raw
-/// text against the renamed entry's own path, which missed any reference the
-/// real resolver would find through a route the pattern-matcher didn't know).
+/// `[text](link)` reference to it: `moss rename`'s one-move wrapper around
+/// [`crate::editor::rename_plan`]'s resolver-driven plan and apply.
 ///
 /// Returns the [`crate::editor::rename_plan::RenameApplyResult`]
 /// `apply_planned_moves` produced — precise enough for
@@ -250,6 +243,67 @@ pub fn rename_entry_with_refs_core(
         &[(old_path.to_string(), new_path.to_string())],
     )?;
     crate::editor::rename_plan::apply_planned_moves(&project_root, &plan)
+}
+
+/// The page files among `file_moves` (root-relative `(old, new)` pairs), for
+/// a host's watcher to read as renames: a folder move lists every page in it.
+pub fn page_file_pairs(file_moves: &[(String, String)]) -> Vec<(String, String)> {
+    file_moves.iter().filter(|(_, new)| is_page_path(Path::new(new))).cloned().collect()
+}
+
+/// Renames or moves in a loose document's folder, which is not a site: no
+/// link is rewritten. `pairs` are the root-relative page moves (those inside a
+/// moved folder too), for a host's watcher; [`Self::apply`] moves everything or
+/// nothing.
+pub struct LoosePlan {
+    pub pairs: Vec<(String, String)>,
+    moves: Vec<(std::path::PathBuf, String)>,
+}
+
+/// Plan `moves` (absolute `(old, new)`): each source must be inside the folder
+/// and each destination still free.
+pub fn plan_loose(project_root: &Path, moves: &[(String, String)]) -> Result<LoosePlan, String> {
+    let mut planned = Vec::with_capacity(moves.len());
+    for (old, new) in moves {
+        let (_, old_c) = crate::vault::fs::recheck_canonical(project_root, Path::new(old))?;
+        if Path::new(new).exists() {
+            return Err(format!("'{new}' already exists"));
+        }
+        planned.push((old_c, new.clone()));
+    }
+    // Spelled relative to the folder as given; a path outside it is not announced.
+    let rel = |p: &Path| p.strip_prefix(project_root).ok().map(|r| r.to_string_lossy().replace('\\', "/"));
+    let mut pairs = Vec::new();
+    for (old, new) in moves {
+        let (old, new) = (Path::new(old), Path::new(new));
+        for entry in walkdir::WalkDir::new(old).into_iter().filter_map(Result::ok) {
+            let inner = entry.path().strip_prefix(old).unwrap_or(Path::new(""));
+            let moved = if inner.as_os_str().is_empty() { new.to_path_buf() } else { new.join(inner) };
+            if is_page_path(&moved) {
+                if let (Some(o), Some(n)) = (rel(entry.path()), rel(&moved)) {
+                    pairs.push((o, n));
+                }
+            }
+        }
+    }
+    Ok(LoosePlan { pairs, moves: planned })
+}
+
+impl LoosePlan {
+    /// A failure puts back the entries already moved.
+    pub fn apply(&self) -> Result<(), String> {
+        let mut done: Vec<&(std::path::PathBuf, String)> = Vec::new();
+        for mv in &self.moves {
+            if let Err(e) = std::fs::rename(&mv.0, &mv.1) {
+                for (back, from) in done.iter().rev().map(|m| (&m.0, &m.1)) {
+                    let _ = std::fs::rename(from, back);
+                }
+                return Err(format!("Failed to move '{}': {e}", mv.0.display()));
+            }
+            done.push(mv);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -22,10 +22,10 @@ use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::types::events::MossEvent;
 use rename_undo::RenameUndoStore;
 
-mod files;
-mod reads;
+pub mod files;
+pub mod reads;
 pub mod rename_undo;
-mod versions;
+pub mod versions;
 
 #[cfg(test)]
 mod tests;
@@ -46,11 +46,24 @@ pub trait CommandHost: Send + Sync {
 
     fn rename_undo(&self) -> &RenameUndoStore;
 
+    /// The publish dates the folder's tree walks have read, kept between walks.
+    fn publish_dates(&self) -> &crate::editor::filesystem::PublishDateMemo;
+
+    /// Root-relative page moves a command is about to make, for a host whose
+    /// watcher would otherwise read them as a delete and a create.
+    fn announce_moves(&self, _pairs: &[(String, String)]) {}
+
+    /// Moves announced by [`Self::announce_moves`] that did not happen.
+    fn withdraw_moves(&self, _pairs: &[(String, String)]) {}
+
     /// The schema the editor checks frontmatter against. A host with a live
-    /// plugin runtime answers from it; the default reads the installed
-    /// plugins and the site config from disk.
+    /// plugin runtime answers from it; the default reads a site's installed
+    /// plugins and config from disk, and a loose document gets the built-in one.
     fn editor_schema(&self) -> moss_core::schema::ContentSchema {
-        crate::editor::validation::schema_on_disk(self.root())
+        match self.scope() {
+            EditorScope::Site => crate::editor::validation::schema_on_disk(self.root()),
+            EditorScope::Folder => crate::editor::validation::compose_schema(&[], &[]),
+        }
     }
 
     /// Where the preview is serving the folder's current build from.
@@ -83,6 +96,66 @@ impl From<&str> for VaultPath {
     }
 }
 
+impl From<String> for VaultPath {
+    fn from(s: String) -> Self {
+        VaultPath(s)
+    }
+}
+
+/// The open folder when it is a site; a loose document's folder is not one, so
+/// a command that answers with site facts (URLs, terms, roles) refuses there.
+fn site_root(host: &dyn CommandHost) -> Result<&Path, String> {
+    match host.scope() {
+        EditorScope::Site => Ok(host.root()),
+        EditorScope::Folder => Err(crate::vault::paths::NO_PROJECT_OPEN.to_string()),
+    }
+}
+
+/// Run `apply` with its page moves announced to the host first, and withdrawn
+/// if it fails.
+fn with_moves_announced<T>(
+    host: &dyn CommandHost,
+    pairs: &[(String, String)],
+    apply: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    host.announce_moves(pairs);
+    let out = apply();
+    if out.is_err() {
+        host.withdraw_moves(pairs);
+    }
+    out
+}
+
+/// Run one command for an in-process host, with its arguments already typed.
+/// A panic inside the command answers as an error, as it does on every path.
+pub async fn call<'h, A, T, Fut>(
+    host: &'h dyn CommandHost,
+    command: impl FnOnce(&'h dyn CommandHost, A) -> Fut,
+    args: A,
+) -> Result<T, String>
+where
+    Fut: Future<Output = Result<T, String>> + 'h,
+{
+    let name = name_of(&command);
+    contained(name, command(host, args)).await.and_then(|out| out)
+}
+
+/// A command function's own name, for messages.
+fn name_of<F>(_: &F) -> &'static str {
+    std::any::type_name::<F>().rsplit("::").next().unwrap_or("command")
+}
+
+/// The one panic boundary every path into a command goes through: a
+/// panicking command answers as an error instead of unwinding into its host.
+async fn contained<T>(name: &str, run: impl Future<Output = T>) -> Result<T, String> {
+    use futures::FutureExt;
+    std::panic::AssertUnwindSafe(run).catch_unwind().await.map_err(|payload| {
+        let msg = crate::editor::content::panic_message_from_payload(&*payload);
+        log::error!("Engine command `{name}` panicked: {msg}");
+        format!("Internal error in `{name}`: {msg}")
+    })
+}
+
 /// Why a command did not answer: its arguments did not parse (the caller's
 /// fault) or the command itself failed.
 #[derive(Debug)]
@@ -106,7 +179,7 @@ where
     // A command without arguments may be sent no body at all.
     let args = if args.is_null() { Value::Object(Default::default()) } else { args };
     let args: A = serde_json::from_value(args).map_err(|e| CommandError::BadArgs(e.to_string()))?;
-    let out = command(host, args).await.map_err(CommandError::Failed)?;
+    let out = call(host, command, args).await.map_err(CommandError::Failed)?;
     serde_json::to_value(out).map_err(|e| CommandError::Failed(format!("serialize result: {e}")))
 }
 

@@ -30,19 +30,25 @@ pub fn skip_reason(src: &Path, err: &std::io::Error) -> ImportSkipReason {
     }
 }
 
-/// Validate the destination directory of an into-project copy. One door: the
-/// shared first-party guard ([`crate::vault::fs::validate_entry_path`]), then —
-/// because the target must already exist — the canonical-form recheck its doc
-/// prescribes, so a symlinked component inside the vault cannot point the copy
-/// outside it. Returns the validated (non-canonical) path so callers'
-/// relative-path math keeps the root's original spelling.
+/// Prepare the destination directory of an into-project copy, creating it
+/// when it does not exist yet (an image's attachment folder before its first
+/// file). One door: the shared first-party guard
+/// ([`crate::vault::fs::validate_entry_path`]) before anything is created,
+/// then the canonical-form recheck its doc prescribes, so a symlinked
+/// component inside the vault cannot point the copy outside it. Returns the
+/// validated (non-canonical) path so callers' relative-path math keeps the
+/// root's original spelling.
 ///
 /// A host uses this to check a destination folder before handing it to [`copy_files_into`].
-pub fn validate_copy_target(
+pub fn prepare_copy_target(
     project_root: &Path,
     target_dir: &str,
 ) -> Result<PathBuf, String> {
     let target = crate::vault::fs::validate_entry_path(project_root, target_dir)?;
+    if !target.exists() {
+        // allow:raw_write the author's own folder in the vault, not build output
+        std::fs::create_dir_all(&target).map_err(|e| format!("Could not create '{}': {e}", target.display()))?;
+    }
     if !target.is_dir() {
         return Err(format!("Target '{}' is not a directory", target.display()));
     }
@@ -90,7 +96,7 @@ pub const IMPORT_SKIP_DIRS: &[&str] = &[".moss", "node_modules", ".git"];
 /// Returns the number of FILES copied.
 ///
 /// A host uses this to copy a dropped folder with the same skip, symlink and deadline rules as [`copy_files_into`].
-/// `dst` must come from [`validate_copy_target`]; this function does no containment check of its own.
+/// `dst` must come from [`prepare_copy_target`]; this function does no containment check of its own.
 pub fn copy_dir_for_import(
     src: &Path,
     dst: &Path,
@@ -187,7 +193,7 @@ pub fn copy_dir_for_import(
 /// it worse.
 ///
 /// A host uses this to copy a single file with the same cloud-materialization wait as [`copy_files_into`].
-/// `dst` must come from [`validate_copy_target`]; this function does no containment check of its own.
+/// `dst` must come from [`prepare_copy_target`]; this function does no containment check of its own.
 pub fn copy_file_into_vault(
     src: &Path,
     dest: &Path,
@@ -209,7 +215,7 @@ pub fn copy_file_into_vault(
 
 /// The copy loop itself, without any host-shell state. `target` is already
 /// validated as a directory inside `project_root` (see
-/// [`validate_copy_target`]); this only decides what lands and what is
+/// [`prepare_copy_target`]); this only decides what lands and what is
 /// reported back.
 ///
 /// A host uses this to land a list of OS paths in a validated target and get back the [`CopyReport`].
@@ -363,7 +369,7 @@ mod tests {
         assert_eq!(report.skipped[0].reason, ImportSkipReason::Failed);
     }
 
-    /// Containment is the target's job ([`validate_copy_target`]), never a
+    /// Containment is the target's job ([`prepare_copy_target`]), never a
     /// substring test on the source: a `..` scan protects nothing — an
     /// absolute `/etc/passwd` has no `..` and always passes — while rejecting a
     /// filename people really have.
@@ -492,27 +498,39 @@ mod tests {
         );
     }
 
-    /// [`validate_copy_target`] rejects a destination outside the project root
+    /// [`prepare_copy_target`] rejects a destination outside the project root
     /// — the same guard the HTTP upload route leans on for its `dir` field.
     #[test]
-    fn validate_copy_target_rejects_outside_the_root() {
+    fn prepare_copy_target_rejects_outside_the_root() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
         std::fs::create_dir_all(&root).unwrap();
         let outside = dir.path().join("elsewhere");
         std::fs::create_dir_all(&outside).unwrap();
 
-        let err = validate_copy_target(&root, outside.to_str().unwrap()).unwrap_err();
+        let err = prepare_copy_target(&root, outside.to_str().unwrap()).unwrap_err();
         assert!(!err.is_empty());
     }
 
+    /// A first image dropped on a page whose attachment folder does not exist
+    /// yet lands in a newly created folder.
     #[test]
-    fn validate_copy_target_accepts_a_directory_inside_the_root() {
+    fn prepare_copy_target_creates_a_missing_folder_inside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let target = prepare_copy_target(root, &root.join("assets/posts").to_string_lossy()).unwrap();
+        assert!(target.is_dir());
+        assert!(prepare_copy_target(root, &root.join("../escape").to_string_lossy()).is_err());
+        assert!(!dir.path().parent().unwrap().join("escape").exists());
+    }
+
+    #[test]
+    fn prepare_copy_target_accepts_a_directory_inside_the_root() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("posts")).unwrap();
 
-        let target = validate_copy_target(root, &root.join("posts").to_string_lossy()).unwrap();
+        let target = prepare_copy_target(root, &root.join("posts").to_string_lossy()).unwrap();
         assert_eq!(target, root.join("posts"));
     }
 }

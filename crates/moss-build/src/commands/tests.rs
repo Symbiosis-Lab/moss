@@ -33,9 +33,9 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("describe_source_role", json!({ "filePath": "a.md" })),
         ("resolve_url_for_file", json!({ "filePath": "a.md" })),
         ("validate_content", json!({ "filePath": "a.md" })),
-        ("get_publish_preflight", json!({ "folder": "/ignored" })),
+        ("get_publish_preflight", json!({ "folderPath": "/open/folder" })),
         ("list_vault_terms", json!({})),
-        ("get_cloud_unavailable_files", json!({})),
+        ("get_cloud_unavailable_files", json!({ "folderPath": "/open/folder" })),
         (
             "list_versions",
             json!({ "projectPath": "/ignored", "scope": "site", "path": null }),
@@ -52,7 +52,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("delete_entry", json!({ "path": "a.md" })),
         ("delete_entries", json!({ "paths": ["a.md"] })),
         ("rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "b.md" })),
-        ("scan_references_for_delete", json!({ "path": "a.md" })),
+        ("scan_references_for_delete", json!({ "paths": ["a.md", "posts"] })),
         ("clean_references_and_delete", json!({ "paths": ["a.md"] })),
         ("undo_rename", json!({ "undoId": "id" })),
         (
@@ -95,7 +95,30 @@ fn the_tiers_are_disjoint() {
 
 struct TestHost {
     root: PathBuf,
+    scope: EditorScope,
     undo: RenameUndoStore,
+    dates: crate::editor::filesystem::PublishDateMemo,
+    announced: std::sync::Mutex<Vec<(String, String)>>,
+    withdrawn: std::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl TestHost {
+    fn site(root: &Path) -> Self {
+        Self::new(root, EditorScope::Site)
+    }
+    fn loose(root: &Path) -> Self {
+        Self::new(root, EditorScope::Folder)
+    }
+    fn new(root: &Path, scope: EditorScope) -> Self {
+        TestHost {
+            root: root.to_path_buf(),
+            scope,
+            undo: RenameUndoStore::default(),
+            dates: Default::default(),
+            announced: Default::default(),
+            withdrawn: Default::default(),
+        }
+    }
 }
 
 impl CommandHost for TestHost {
@@ -105,8 +128,20 @@ impl CommandHost for TestHost {
     fn resolve(&self, path: &VaultPath) -> Result<PathBuf, String> {
         Ok(self.root.join(path.as_written()))
     }
+    fn scope(&self) -> EditorScope {
+        self.scope
+    }
     fn rename_undo(&self) -> &RenameUndoStore {
         &self.undo
+    }
+    fn publish_dates(&self) -> &crate::editor::filesystem::PublishDateMemo {
+        &self.dates
+    }
+    fn announce_moves(&self, pairs: &[(String, String)]) {
+        self.announced.lock().unwrap().extend_from_slice(pairs);
+    }
+    fn withdraw_moves(&self, pairs: &[(String, String)]) {
+        self.withdrawn.lock().unwrap().extend_from_slice(pairs);
     }
     fn served_dir(&self) -> PathBuf {
         self.root.join(".moss")
@@ -115,6 +150,200 @@ impl CommandHost for TestHost {
     fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>> {
         Box::pin(async { Err("no build in tests".to_string()) })
     }
+}
+
+/// A folder of pages: `a.md`, and `b.md` linking to it.
+fn pages() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".moss")).unwrap();
+    // allow:raw_write test fixture pages in a temp folder
+    std::fs::write(root.join("a.md"), "---\ntitle: A\ndate: 2026-01-02\n---\nbody").unwrap();
+    // allow:raw_write test fixture pages in a temp folder
+    std::fs::write(root.join("b.md"), "see [A](a.md)").unwrap();
+    (dir, root)
+}
+
+async fn ok<T: serde::de::DeserializeOwned>(out: Option<CommandResult>) -> T {
+    match out {
+        Some(Ok(v)) => serde_json::from_value(v).unwrap(),
+        other => panic!("expected an answer, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_loose_document_boots_with_its_folder_as_editor_root_and_no_project() {
+    let (_d, root) = pages();
+    let boot: Value = ok(session_read::dispatch(&TestHost::loose(&root), "editor_bootstrap", json!({ "sourcePath": "a.md" })).await).await;
+    assert_eq!(boot["project_path"], Value::Null, "{boot}");
+    assert_eq!(boot["editor_root"], json!(root.to_string_lossy()), "{boot}");
+    assert_eq!(boot["initial_file"]["frontmatter"]["title"], json!("A"), "{boot}");
+}
+
+/// The bounded walk reads no frontmatter, so it finds no publish date.
+#[tokio::test]
+async fn a_loose_document_folder_is_listed_without_reading_its_pages() {
+    let (_d, root) = pages();
+    let date_of = |tree: &Value| {
+        tree["children"].as_array().unwrap().iter().find(|c| c["name"] == "a.md").unwrap()["publish_date"].clone()
+    };
+    let site: Value = ok(session_read::dispatch(&TestHost::site(&root), "list_tree", json!({ "showInternal": false })).await).await;
+    assert!(date_of(&site).is_string(), "{site}");
+    let loose: Value = ok(session_read::dispatch(&TestHost::loose(&root), "list_tree", json!({ "showInternal": false })).await).await;
+    assert_eq!(date_of(&loose), Value::Null, "{loose}");
+}
+
+#[tokio::test]
+async fn site_facts_are_refused_in_a_loose_document() {
+    let (_d, root) = pages();
+    let host = TestHost::loose(&root);
+    for (cmd, args) in [
+        ("describe_source_role", json!({ "filePath": "a.md" })),
+        ("resolve_url_for_file", json!({ "filePath": "a.md" })),
+        ("resolve_page_source", json!({ "urlPath": "/a/" })),
+        ("list_vault_terms", json!({})),
+    ] {
+        match session_read::dispatch(&host, cmd, args).await {
+            Some(Err(CommandError::Failed(msg))) => assert_eq!(msg, crate::vault::paths::NO_PROJECT_OPEN, "{cmd}"),
+            other => panic!("{cmd}: expected the no-project refusal, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_loose_rename_moves_the_file_and_rewrites_no_link() {
+    let (_d, root) = pages();
+    let host = TestHost::loose(&root);
+    let summary: Value =
+        ok(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "c.md" })).await).await;
+    assert!(root.join("c.md").exists() && !root.join("a.md").exists());
+    assert_eq!(std::fs::read_to_string(root.join("b.md")).unwrap(), "see [A](a.md)");
+    assert_eq!(summary["undo_id"], json!(""), "{summary}");
+    assert_eq!(*host.announced.lock().unwrap(), vec![("a.md".to_string(), "c.md".to_string())]);
+}
+
+#[tokio::test]
+async fn a_site_rename_rewrites_links_and_announces_the_move() {
+    let (_d, root) = pages();
+    let host = TestHost::site(&root);
+    ok::<Value>(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "c.md" })).await).await;
+    assert!(std::fs::read_to_string(root.join("b.md")).unwrap().contains("c.md"));
+    assert_eq!(*host.announced.lock().unwrap(), vec![("a.md".to_string(), "c.md".to_string())]);
+}
+
+#[tokio::test]
+async fn undo_announces_the_reverse_move() {
+    let (_d, root) = pages();
+    let host = TestHost::site(&root);
+    let summary: Value =
+        ok(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "c.md" })).await).await;
+    ok::<Value>(write::dispatch(&host, "undo_rename", json!({ "undoId": summary["undo_id"] })).await).await;
+    assert!(root.join("a.md").exists());
+    assert_eq!(host.announced.lock().unwrap().last(), Some(&("c.md".to_string(), "a.md".to_string())));
+}
+
+/// A loose rename that cannot happen takes back the move it announced.
+#[tokio::test]
+async fn a_failed_loose_rename_withdraws_its_announcement() {
+    let (_d, root) = pages();
+    let host = TestHost::loose(&root);
+    let out = write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "no-dir/c.md" })).await;
+    assert!(matches!(out, Some(Err(_))), "{out:?}");
+    assert!(root.join("a.md").exists());
+    assert_eq!(*host.withdrawn.lock().unwrap(), *host.announced.lock().unwrap());
+    assert!(!host.withdrawn.lock().unwrap().is_empty());
+}
+
+/// The delete is refused at its first path (outside the folder), after the
+/// clean has run: a site has lost its links to `a.md`, a loose folder keeps
+/// them. Nothing reaches the OS trash.
+#[tokio::test]
+async fn a_loose_delete_leaves_links_to_the_deleted_page() {
+    let (_d, root) = pages();
+    let args = json!({ "paths": ["../outside.md", "a.md"] });
+    let loose = write::dispatch(&TestHost::loose(&root), "clean_references_and_delete", args.clone()).await;
+    assert!(matches!(loose, Some(Err(_))), "{loose:?}");
+    assert_eq!(std::fs::read_to_string(root.join("b.md")).unwrap(), "see [A](a.md)");
+    let site = write::dispatch(&TestHost::site(&root), "clean_references_and_delete", args).await;
+    assert!(matches!(site, Some(Err(_))), "{site:?}");
+    assert!(!std::fs::read_to_string(root.join("b.md")).unwrap().contains("a.md"));
+    assert!(root.join("a.md").exists());
+}
+
+#[tokio::test]
+async fn the_delete_scan_counts_each_reference_once_and_none_in_a_loose_document() {
+    let (_d, root) = pages();
+    let args = json!({ "paths": ["a.md", "a.md", "gone.md"] });
+    let site: Vec<Value> = ok(write::dispatch(&TestHost::site(&root), "scan_references_for_delete", args.clone()).await).await;
+    assert_eq!(site.len(), 1, "{site:?}");
+    let loose: Vec<Value> = ok(write::dispatch(&TestHost::loose(&root), "scan_references_for_delete", args).await).await;
+    assert!(loose.is_empty(), "{loose:?}");
+}
+
+#[tokio::test]
+async fn cloud_file_details_refuse_a_folder_that_is_not_the_open_one() {
+    let (_d, root) = pages();
+    let other = tempfile::tempdir().unwrap();
+    let ask = |folder: &Path| json!({ "folderPath": folder.to_string_lossy() });
+    match session_read::dispatch(&TestHost::site(&root), "get_cloud_unavailable_files", ask(other.path())).await {
+        Some(Err(CommandError::Failed(msg))) => assert!(msg.contains("different folder"), "{msg}"),
+        other => panic!("expected the folder check to refuse, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_preflight_answers_only_for_the_open_folder() {
+    let (_d, root) = pages();
+    let other = tempfile::tempdir().unwrap();
+    let ask = |folder: &Path| json!({ "folderPath": folder.to_string_lossy() });
+    let host = TestHost::site(&root);
+    assert!(matches!(session_read::dispatch(&host, "get_publish_preflight", ask(other.path())).await, Some(Err(_))));
+    let none: Option<Value> = ok(session_read::dispatch(&host, "get_publish_preflight", ask(&root)).await).await;
+    assert!(none.is_none());
+}
+
+/// A folder move announces every page under it, the folder's own home page
+/// renamed with it included, and its undo announces the reverse.
+#[tokio::test]
+async fn a_folder_move_announces_each_page_inside_and_undo_reverses_them() {
+    let (_d, root) = pages();
+    std::fs::create_dir_all(root.join("posts/deep")).unwrap();
+    for page in ["posts/posts.md", "posts/deep/c.md"] {
+        // allow:raw_write test fixture pages in a temp folder
+        std::fs::write(root.join(page), "# page").unwrap();
+    }
+    let host = TestHost::site(&root);
+    let summary: Value =
+        ok(write::dispatch(&host, "rename_entry_with_refs", json!({ "oldPath": "posts", "newPath": "essays" })).await).await;
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    let mut moved = host.announced.lock().unwrap().clone();
+    moved.sort();
+    assert_eq!(moved, vec![pair("posts/deep/c.md", "essays/deep/c.md"), pair("posts/posts.md", "essays/essays.md")]);
+    host.announced.lock().unwrap().clear();
+    ok::<Value>(write::dispatch(&host, "undo_rename", json!({ "undoId": summary["undo_id"] })).await).await;
+    let mut back = host.announced.lock().unwrap().clone();
+    back.sort();
+    assert_eq!(back, vec![pair("essays/deep/c.md", "posts/deep/c.md"), pair("essays/essays.md", "posts/posts.md")]);
+}
+
+#[test]
+fn an_undo_id_works_once_and_an_unknown_one_not_at_all() {
+    let store = RenameUndoStore::default();
+    let id = store.summarize_and_store(Path::new("/f"), RenameApplyResult::default()).undo_id;
+    assert!(store.take(&id).is_some());
+    assert!(store.take(&id).is_none());
+    assert!(store.take("no-such-id").is_none());
+}
+
+async fn boom(_: &dyn CommandHost, _: NoArgs) -> Result<(), String> {
+    panic!("the core exploded")
+}
+
+#[tokio::test]
+async fn a_panicking_command_answers_with_its_name_instead_of_unwinding() {
+    let (_d, root) = pages();
+    let err = call(&TestHost::site(&root), boom, NoArgs {}).await.unwrap_err();
+    assert!(err.contains("`boom`") && err.contains("the core exploded"), "{err}");
 }
 
 #[test]
@@ -130,7 +359,7 @@ fn the_undo_store_keeps_only_the_newest_renames() {
 /// An id minted in one folder does not undo anything once the host is in another.
 #[tokio::test]
 async fn undo_refuses_a_rename_from_another_folder() {
-    let host = TestHost { root: PathBuf::from("/now/open"), undo: RenameUndoStore::default() };
+    let host = TestHost::site(Path::new("/now/open"));
     let id = host.undo.summarize_and_store(Path::new("/was/open"), RenameApplyResult::default()).undo_id;
     match write::dispatch(&host, "undo_rename", json!({ "undoId": id })).await {
         Some(Err(CommandError::Failed(msg))) => assert!(msg.contains("folder has changed"), "{msg}"),

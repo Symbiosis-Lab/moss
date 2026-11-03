@@ -40,23 +40,6 @@ use crate::commands::{self, CommandError, CommandResult};
 
 pub use super::session::{InvokeCtx, Session};
 
-/// The carrier's one panic boundary: a panicking command answers 500 instead
-/// of unwinding through hyper.
-async fn contain_panics(
-    cmd: &str,
-    run: impl std::future::Future<Output = Option<CommandResult>>,
-) -> Option<CommandResult> {
-    use futures::FutureExt;
-    match std::panic::AssertUnwindSafe(run).catch_unwind().await {
-        Ok(outcome) => outcome,
-        Err(payload) => {
-            let msg = crate::editor::content::panic_message_from_payload(&*payload);
-            log::error!("Carrier command `{cmd}` panicked: {msg}");
-            Some(Err(CommandError::Failed(format!("Internal error in `{cmd}`: {msg}"))))
-        }
-    }
-}
-
 fn outcome_to_response(cmd: &str, outcome: Option<CommandResult>) -> Response {
     match outcome {
         None => (StatusCode::NOT_FOUND, format!("unknown or unexposed command: {cmd}")).into_response(),
@@ -75,7 +58,7 @@ fn outcome_to_response(cmd: &str, outcome: Option<CommandResult>) -> Response {
 /// [`NO_PROJECT_OPEN`]: crate::vault::paths::NO_PROJECT_OPEN
 pub async fn handle_invoke(ctx: InvokeCtx, site_dir: Arc<RwLock<PathBuf>>, cmd: String, args: Value) -> Response {
     let outcome = match ctx.bind(&site_dir) {
-        Some(session) => contain_panics(&cmd, commands::public_read::dispatch(&*session, &cmd, args)).await,
+        Some(session) => commands::public_read::dispatch(&*session, &cmd, args).await,
         None if commands::public_read::COMMANDS.contains(&cmd.as_str()) => {
             Some(Err(CommandError::Failed(crate::vault::paths::NO_PROJECT_OPEN.to_string())))
         }
@@ -87,7 +70,7 @@ pub async fn handle_invoke(ctx: InvokeCtx, site_dir: Arc<RwLock<PathBuf>>, cmd: 
 /// `POST /__moss/mutate/*cmd`. The token gate (a `route_layer`, see `router.rs`)
 /// has already admitted the request and handed down the session it admitted.
 pub async fn handle_mutate(axum::Extension(session): axum::Extension<Arc<Session>>, cmd: String, args: Value) -> Response {
-    let outcome = contain_panics(&cmd, commands::write::dispatch(&*session, &cmd, args)).await;
+    let outcome = commands::write::dispatch(&*session, &cmd, args).await;
     outcome_to_response(&cmd, outcome)
 }
 
@@ -97,7 +80,7 @@ pub async fn handle_authed_read(
     cmd: String,
     args: Value,
 ) -> Response {
-    let outcome = contain_panics(&cmd, commands::session_read::dispatch(&*session, &cmd, args)).await;
+    let outcome = commands::session_read::dispatch(&*session, &cmd, args).await;
     outcome_to_response(&cmd, outcome)
 }
 
@@ -115,25 +98,6 @@ mod tests {
         let cell = Arc::new(RwLock::new(dir.path().to_path_buf()));
         let session = InvokeCtx::standalone().bind(&cell).expect("a vault binds");
         (dir, session)
-    }
-
-    /// A panicking command comes back as the 500-shaped `Failed`; every
-    /// handler runs its dispatch through `contain_panics`.
-    #[tokio::test]
-    async fn a_panicking_command_returns_an_error_instead_of_unwinding() {
-        let r = contain_panics("boom_cmd", async {
-            panic!("the core exploded");
-            #[allow(unreachable_code)]
-            Some(Ok(Value::Null))
-        })
-        .await;
-        match r {
-            Some(Err(CommandError::Failed(msg))) => {
-                assert!(msg.contains("Internal error in `boom_cmd`"), "got: {msg}");
-                assert!(msg.contains("the core exploded"), "got: {msg}");
-            }
-            other => panic!("expected a contained Command error, got {other:?}"),
-        }
     }
 
     /// A folder-relative path, as the editor sends it, resolves under the
@@ -238,8 +202,9 @@ mod tests {
 
     #[tokio::test]
     async fn cloud_unavailable_details_are_an_authenticated_session_read() {
-        let (_dir, ctx) = scratch();
-        let result = commands::session_read::dispatch(&*ctx, "get_cloud_unavailable_files", Value::Null)
+        let (dir, ctx) = scratch();
+        let args = json!({ "folderPath": dir.path().to_string_lossy() });
+        let result = commands::session_read::dispatch(&*ctx, "get_cloud_unavailable_files", args)
             .await
             .expect("the command is on the authed-read carrier");
         let error = result.expect_err("a scratch vault has no active sweep");
@@ -258,10 +223,9 @@ mod tests {
         assert!(out.is_object(), "expected an EditorScanResult object, got: {out}");
     }
 
-    /// `get_publish_preflight` reads the session's own folder, never the
-    /// `folder` a caller names.
+    /// `get_publish_preflight` answers with the session folder's own projection.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn get_publish_preflight_reads_the_session_root_not_the_caller_folder() {
+    async fn get_publish_preflight_reads_the_session_folder() {
         let (dir, ctx) = scratch();
         let root = dir.path().to_string_lossy().to_string();
         crate::system::build_records::records().install_publish_preflight(
@@ -269,7 +233,7 @@ mod tests {
             crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![], unresolved_inputs: vec![], drafts_linked: vec![] },
         );
 
-        let out = commands::session_read::dispatch(&*ctx, "get_publish_preflight", json!({ "folder": "/somewhere/else" }))
+        let out = commands::session_read::dispatch(&*ctx, "get_publish_preflight", json!({ "folderPath": root }))
             .await
             .expect("listed command must dispatch")
             .expect("a recorded projection is Ok");
@@ -279,8 +243,8 @@ mod tests {
     /// A folder this process has not built yet answers `null`: no verdict.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn get_publish_preflight_answers_null_for_an_unbuilt_vault() {
-        let (_dir, ctx) = scratch();
-        let out = commands::session_read::dispatch(&*ctx, "get_publish_preflight", json!({}))
+        let (dir, ctx) = scratch();
+        let out = commands::session_read::dispatch(&*ctx, "get_publish_preflight", json!({ "folderPath": dir.path() }))
             .await
             .expect("listed command must dispatch")
             .expect("no build recorded is still Ok(None)");

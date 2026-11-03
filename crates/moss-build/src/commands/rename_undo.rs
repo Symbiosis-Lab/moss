@@ -21,7 +21,22 @@ pub struct RenameRefsSummary {
     pub edited_pages: Vec<String>,
     /// Pages skipped because they changed on disk after planning.
     pub skipped_pages: Vec<String>,
+    /// Empty when there is nothing to undo.
     pub undo_id: String,
+}
+
+impl RenameRefsSummary {
+    /// The answer for a move that rewrote nothing: no entry moved, or a loose
+    /// document's folder, where there are no links.
+    pub fn empty() -> Self {
+        RenameRefsSummary {
+            moved: Vec::new(),
+            edited_link_count: 0,
+            edited_pages: Vec::new(),
+            skipped_pages: Vec::new(),
+            undo_id: String::new(),
+        }
+    }
 }
 
 /// How many applied renames are kept for Undo; the oldest is dropped first.
@@ -66,5 +81,10 @@ impl RenameUndoStore {
         let idx = entries.iter().position(|(id, _, _)| id == undo_id)?;
         let (_, root, applied) = entries.remove(idx)?;
         Some((root, applied))
+    }
+
+    /// Forget every entry, for a host that switches folders.
+    pub fn clear(&self) {
+        self.entries.lock().unwrap_or_else(|p| p.into_inner()).clear();
     }
 }

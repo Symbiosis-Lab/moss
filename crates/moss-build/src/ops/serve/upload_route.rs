@@ -27,7 +27,7 @@
 //!   (this server was started with no [`super::invoke::InvokeCtx`]) → **401**.
 //! * **400** — a `file` part with no filename; a filename containing a path
 //!   separator or `..`; a `dir` that resolves outside the vault (absolute or
-//!   via `..` — [`crate::editor::copy_in::validate_copy_target`], the same
+//!   via `..` — [`crate::editor::copy_in::prepare_copy_target`], the same
 //!   guard `copy_files_into`'s desktop caller validates its target through);
 //!   more than [`MAX_UPLOAD_PARTS`] file parts; a body that is not valid
 //!   `multipart/form-data`.
@@ -197,7 +197,7 @@ pub(crate) async fn handle_upload(
     }
 
     let dir_rel = dir_field.unwrap_or_default();
-    // `validate_copy_target` (like every first-party path guard here) expects
+    // `prepare_copy_target` (like every first-party path guard here) expects
     // a path that already starts with the project root — `dir` on the wire is
     // project-root-relative only (the same convention `invoke.rs`'s `confine`
     // uses for its path-shaped arguments), so it is always joined onto the
@@ -209,19 +209,8 @@ pub(crate) async fn handle_upload(
     // `..` segment survives into the traversal check rather than being
     // silently resolved away by it.
     let dir_for_target = project_root.join(&dir_rel).to_string_lossy().into_owned();
-    // The configured attachment folder may not exist until the first insert,
-    // so create it here. `validate_entry_path` runs first: it refuses `..` and
-    // anything outside the root, and rechecks the canonical form of the deepest
-    // EXISTING ancestor, so a symlink pointing out of the vault is refused
-    // before `create_dir_all` can create anything behind it.
-    if let Err(e) = crate::vault::fs::validate_entry_path(&project_root, &dir_for_target) {
-        return bad_request(&e);
-    }
-    // allow:raw_write the attachment folder is the user's vault, not the regenerable build tree
-    if let Err(e) = std::fs::create_dir_all(&dir_for_target) {
-        return server_error(&format!("could not create '{dir_rel}': {e}"));
-    }
-    let target = match crate::editor::copy_in::validate_copy_target(&project_root, &dir_for_target) {
+    // A missing attachment folder is created by `prepare_copy_target`.
+    let target = match crate::editor::copy_in::prepare_copy_target(&project_root, &dir_for_target) {
         Ok(t) => t,
         Err(e) => return bad_request(&e),
     };
