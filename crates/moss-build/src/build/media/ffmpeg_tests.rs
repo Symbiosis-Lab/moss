@@ -45,7 +45,7 @@ fn test_collect_videos_for_conversion_empty() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let videos = collect_videos_for_conversion(&project);
@@ -95,7 +95,7 @@ fn test_collect_videos_for_conversion_mov_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let videos = collect_videos_for_conversion(&project);
@@ -149,7 +149,7 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let videos = collect_videos_for_conversion(&project);

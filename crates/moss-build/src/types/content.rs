@@ -219,7 +219,7 @@ pub struct MediaMetadata {
 ///
 /// Media files use MediaMetadata to include dimensions and dominant color
 /// for placeholder SVG generation during page load.
-#[derive(Serialize, Deserialize, Debug, Clone, Type)]
+#[derive(Serialize, Deserialize, Debug, Clone, Type, Default)]
 pub struct ProjectStructure {
     /// Absolute path to the scanned directory
     pub root_path: String,
@@ -323,6 +323,12 @@ pub struct ProjectStructure {
     #[serde(skip)]
     #[specta(skip)]
     pub empty_folders: Vec<String>,
+    /// Folders left out of `dirs` because they only store files
+    /// (`classify::holds_only_storage`), whose old listing addresses the
+    /// build forwards to the home page.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub storage_folders: Vec<String>,
 }
 
 /// User configuration for site generation and publishing.

@@ -2325,7 +2325,7 @@ fn test_build_content_graph_indexes_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let graph = build_content_graph(&ps);
@@ -2381,7 +2381,7 @@ fn test_build_content_graph_indexes_html_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let graph = build_content_graph(&ps);
@@ -2462,7 +2462,7 @@ fn test_build_content_graph_indexes_asset_directories() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let graph = build_content_graph(&ps);

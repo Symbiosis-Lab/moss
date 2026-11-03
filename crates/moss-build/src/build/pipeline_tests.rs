@@ -6039,7 +6039,7 @@ fn gate_structure(root: &std::path::Path, homepage: Option<&str>, evicted: &[&st
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -8005,3 +8005,6 @@ fn previews_json_recomputes_only_changed_pages_and_drops_removed_ones() {
     assert!(removed.contains("Alpha opening") && removed.contains("Beta rewritten"));
     crate::build::parse_cache::reset_for_tests();
 }
+
+#[path = "assets_folder_tests.rs"]
+mod assets_folder;

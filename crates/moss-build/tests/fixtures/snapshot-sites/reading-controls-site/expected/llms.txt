@@ -35,9 +35,5 @@ Welcome to the test site.
 
 ---
 
-## assets
-
----
-
 ## writings
 

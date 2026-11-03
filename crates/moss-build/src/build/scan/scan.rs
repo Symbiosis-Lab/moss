@@ -1543,6 +1543,10 @@ pub fn scan_folder_with_dedup_emit_with_error(
     // `classify::holds_only_prebuilt_apps`). Empty and asset-only folders keep
     // theirs: `folder_index_plan_tests` pins that.
     let page_paths: Vec<&str> = markdown_files.iter().chain(&notebook_files).map(|f| f.path.as_str()).collect();
+    // Storage folders (`assets/`) get no listing; their old addresses forward home (`FolderIndexPlan`).
+    let (storage_folders, kept_dirs): (Vec<String>, Vec<String>) =
+        dirs.drain(..).partition(|d| crate::build::scan::classify::holds_only_storage(d, &page_paths));
+    dirs = kept_dirs;
     // An app-only folder still keeps its listing while a kept folder sits
     // beneath it, since that folder's breadcrumb links up to it.
     let app_only: Vec<bool> = dirs.iter().map(|d| crate::build::scan::classify::holds_only_prebuilt_apps(d, &passthrough_roots, &page_paths)).collect();
@@ -1572,6 +1576,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         passthrough_media,
         dirs,
         empty_folders,
+        storage_folders,
     };
     crate::build::scan::case_collision::warn_case_colliding_files(&structure);
     crate::build::template_check::warn_template_problems(Path::new(folder_path));

@@ -957,7 +957,7 @@ pub(crate) fn test_project() -> ProjectStructure {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     }
 }
 

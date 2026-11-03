@@ -2841,7 +2841,7 @@ mod children_field_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -6054,7 +6054,7 @@ mod typesetting_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -6984,7 +6984,7 @@ mod og_url_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -7761,7 +7761,7 @@ mod listable_page_card_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -8121,7 +8121,7 @@ mod place_locator_position_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -8379,7 +8379,7 @@ mod place_namespace_root_map_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -8549,7 +8549,7 @@ mod folder_index_meta_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
