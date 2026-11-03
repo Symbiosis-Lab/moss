@@ -6,6 +6,7 @@
 //! own QuickJS engine on a dedicated thread ([`engine`]).
 
 mod engine;
+pub(crate) mod picture;
 mod sanitize;
 
 use std::cell::RefCell;
@@ -126,6 +127,10 @@ pub(crate) fn render(
     if narrow.is_some() {
         html.push_str(" data-narrow");
     }
+    // Only a diagram that gets a picture names one, so a feed never points at a missing image.
+    if let Some((_, hash)) = picture::address_for(source, &wide.svg) {
+        html.push_str(&format!(" data-diagram=\"{hash}\""));
+    }
     html.push_str(" tabindex=\"0\"");
     if let Some(line) = source_line {
         html.push_str(&format!(" data-source-line=\"{line}\""));
@@ -151,22 +156,6 @@ fn push_layout(html: &mut String, drawn: &engine::Drawn, narrow: bool) {
     html.push_str(&format!("<div class=\"{class}\"{search} style=\"--diagram-w:{}px;--diagram-min:{floor}px\">", drawn.width));
     html.push_str(&drawn.svg);
     html.push_str("</div>");
-}
-
-/// A page's diagrams as a feed carries them: the wide layout only. A feed
-/// reader has no container query to choose a layout, so it would show both.
-pub(crate) fn for_feeds(html: &str) -> String {
-    const OPEN: &str = "<div class=\"moss-diagram-narrow\"";
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    while let Some(at) = rest.find(OPEN) {
-        out.push_str(&rest[..at]);
-        // The allowlist admits no <div> inside a drawing, so the next close is the wrapper's.
-        let Some(close) = rest[at..].find("</div>") else { break };
-        rest = &rest[at + close + "</div>".len()..];
-    }
-    out.push_str(rest);
-    out
 }
 
 /// The build's warning for a refused diagram. A preview build knows the

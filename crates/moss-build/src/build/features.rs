@@ -24,6 +24,14 @@ pub(crate) const CHECK_SVG: &str = r##"<svg viewBox="0 0 24 24" aria-hidden="tru
 
 pub(crate) use moss_core::media::html_escape;
 
+/// The double-quoted value of attribute `name` in an element's open tag.
+/// The name must follow a space, so `width` does not match `stroke-width`.
+pub(crate) fn open_tag_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!(" {name}=\"");
+    let at = tag.find(&key)? + key.len();
+    Some(&tag[at..at + tag[at..].find('"')?])
+}
+
 /// Mark a `<script ...>…</script>` tag as deploy-only: the deployed site must
 /// run it, but the preview server must never serve it — see
 /// `ops::serve::iframe_bridge::strip_preview_only_scripts`, the sole reader of

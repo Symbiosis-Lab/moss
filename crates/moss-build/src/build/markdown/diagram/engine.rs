@@ -109,6 +109,12 @@ const GLUE: &str = r#"
 })(__OPTIONS__);
 "#;
 
+/// The whole pin line, version and bundle digest, for content addresses.
+pub(super) fn pin() -> &'static str {
+    PIN.trim()
+}
+
+#[cfg(test)]
 pub(super) fn pele_version() -> &'static str {
     PIN.split_whitespace().next().unwrap_or("")
 }

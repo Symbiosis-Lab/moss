@@ -409,20 +409,25 @@ fn shared_fontdb() -> &'static std::sync::Arc<usvg::fontdb::Database> {
     static DB: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> =
         std::sync::OnceLock::new();
     DB.get_or_init(|| {
-        // Stored deflate-compressed (~1.2 MB of OTF per architecture raw);
-        // inflated once, here, on first card render. Paths are relative to
-        // this crate's manifest dir.
-        include_flate::flate!(static INTER_REGULAR: [u8] from "src/assets/fonts/Inter-Regular.otf");
-        include_flate::flate!(static INTER_BOLD: [u8] from "src/assets/fonts/Inter-Bold.otf");
         let mut db = usvg::fontdb::Database::new();
-        db.load_font_data(INTER_REGULAR.to_vec());
-        db.load_font_data(INTER_BOLD.to_vec());
+        for face in inter_faces() {
+            db.load_font_data(face.to_vec());
+        }
         // Map generic family `sans-serif` to Inter so legacy SVG references
         // still resolve to the embedded font.
         db.set_sans_serif_family("Inter");
         db.load_system_fonts();
         std::sync::Arc::new(db)
     })
+}
+
+/// The embedded Inter faces, regular and bold. Stored deflate-compressed
+/// (~1.2 MB of OTF raw) and inflated once, on first use. Paths are relative
+/// to this crate's manifest dir.
+pub(crate) fn inter_faces() -> [&'static [u8]; 2] {
+    include_flate::flate!(static INTER_REGULAR: [u8] from "src/assets/fonts/Inter-Regular.otf");
+    include_flate::flate!(static INTER_BOLD: [u8] from "src/assets/fonts/Inter-Bold.otf");
+    [&*INTER_REGULAR, &*INTER_BOLD]
 }
 
 /// CJK faces we are willing to set a card in, most wanted first.

@@ -44,6 +44,11 @@ impl PinnedFont {
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
+
+    /// The font file's bytes and the face to use in it.
+    pub(crate) fn face(&self) -> (Arc<Vec<u8>>, u32) {
+        (Arc::clone(&self.bytes), self.face_index)
+    }
 }
 
 /// The CJK codepoint ranges moss now permits inside math when a verified font

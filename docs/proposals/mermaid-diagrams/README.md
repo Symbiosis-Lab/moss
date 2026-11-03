@@ -10,7 +10,7 @@ People who write in Obsidian, on GitHub or in GitLab draw diagrams as text: a fe
 ## What we want
 
 1. A fenced `mermaid` block (backticks or tildes) becomes a drawing on the published page, with no new syntax to learn.
-2. The drawing is part of the HTML. A reader with JavaScript off, a search crawler and a screen reader get the diagram, not a script that might draw it later. Feeds and email are the exception for now; see below.
+2. The drawing is part of the HTML. A reader with JavaScript off, a search crawler and a screen reader get the diagram, not a script that might draw it later. Feeds and email get a picture of it; see below.
 3. It looks like the rest of the site: the site's fonts and colours, light and dark, with no setting to change.
 4. It reads on a phone. No label shrinks below a readable size; a diagram too wide for the screen scrolls inside its own frame, never the page.
 5. A broken diagram never breaks the build. The page shows the source and a plain error naming the line, the build prints a warning, and `--strict` makes it fatal, as it does for other authoring mistakes.
@@ -120,7 +120,7 @@ The renderer escapes diagram text, drops `click` callbacks and refuses `javascri
 
 ## Feeds and email
 
-A feed item carries the drawing's wide layout only, since a feed reader cannot choose between layouts. Many feed readers and every common mail client strip inline SVG, so for them the diagram is not there yet. The next step is the projection math already has: a hosted PNG of each drawing, with the page's colours resolved, linked from the item. The site search indexes the wide layout only (`data-pagefind-ignore` on the narrow one), so a label is not counted twice.
+Mail clients and most feed readers strip inline SVG, so feeds and newsletters carry a hosted PNG of each diagram instead, as math already does: the wide layout with the light theme's colours written in, on an opaque page-colour ground, at `/_moss/diagrams/<hash>.png`. The address covers everything that decides the picture's bytes, and the family is append-only, because mail proxies cache a picture forever. Labels are set in the embedded Inter, plus the pinned CJK font math uses when a diagram has CJK text, so a picture is the same on every build machine. The site search indexes the wide layout only (`data-pagefind-ignore` on the narrow one), so a label is not counted twice.
 
 ## The desktop preview
 

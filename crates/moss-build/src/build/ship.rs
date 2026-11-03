@@ -305,7 +305,7 @@ pub fn ship_phase(
         // promoting a generation short of a file its own manifest names only
         // moves the failure to the next publish. That stays a counted failure.
         if !crate::build::io_utils::entry_output_present(&source_path, mode) {
-            if rel_path.starts_with(crate::build::served_path::MATH_PNG_PREFIX) {
+            if crate::build::served_path::is_append_only(rel_path) {
                 continue;
             }
             log::info!(
@@ -840,7 +840,6 @@ pub(crate) fn drop_absent_outputs(
     object_store: Option<&crate::build::cache::ObjectStore>,
 ) -> std::collections::HashSet<String> {
     use crate::build::io_utils::Presence;
-    use crate::build::served_path::MATH_PNG_PREFIX;
     let mut absent: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut unverified: Vec<(String, String)> = Vec::new();
     for (rel, entry) in sealed.all_files() {
@@ -858,7 +857,7 @@ pub(crate) fn drop_absent_outputs(
         if presence.is_present() {
             continue;
         }
-        if rel.starts_with(MATH_PNG_PREFIX) {
+        if crate::build::served_path::is_append_only(rel) {
             crate::build::cloud_readiness::request_download(&path);
             continue;
         }

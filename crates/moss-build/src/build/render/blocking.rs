@@ -2974,7 +2974,10 @@ pub fn generate_blocking_content_for_build(
     // gated on `math_enabled` inside).
     crate::build::emit::math_png::emit_math_pngs(&documents, site_config.math, output_dir, pending)
         .map_err(|e| format!("Failed to emit math PNGs: {}", e))?;
-    log::debug!(target: "timing", "[render] prelude: scripts+math_png: {:?}", total_start.elapsed());
+    // The diagrams' email and feed pictures, the same append-only shape.
+    crate::build::emit::diagram_png::emit_diagram_pngs(&documents, output_dir, pending)
+        .map_err(|e| format!("Failed to emit diagram pictures: {}", e))?;
+    log::debug!(target: "timing", "[render] prelude: scripts+math_png+diagram_png: {:?}", total_start.elapsed());
 
     send_progress(
         progress_sender,

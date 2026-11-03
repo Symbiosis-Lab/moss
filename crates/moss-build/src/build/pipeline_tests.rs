@@ -2990,42 +2990,46 @@ fn test_remove_stale_files_deletes_untracked_webp() {
 /// Stale-file cleanup must never touch `_moss/math/`.
 #[test]
 fn remove_stale_files_never_deletes_math_pngs() {
-    let temp = TempDir::new().unwrap();
-    let dir = temp.path().join("output");
-    let math = dir.join("_moss").join("math");
-    fs::create_dir_all(&math).unwrap();
+    for family in ["math", "diagrams"] {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("output");
+        let math = dir.join("_moss").join(family);
+        fs::create_dir_all(&math).unwrap();
 
-    // Untracked on purpose — the equation is gone from every page.
-    fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
+        // Untracked on purpose — the equation or diagram is gone from every page.
+        fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
 
-    let hashes = SiteHashes::new();
-    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
+        let hashes = SiteHashes::new();
+        remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
-    assert!(
-        math.join("aaaaaaaaaaaaaaaa.png").exists(),
-        "math PNGs are append-only and must survive stale cleanup"
-    );
+        assert!(
+            math.join("aaaaaaaaaaaaaaaa.png").exists(),
+            "_moss/{family} PNGs are append-only and must survive stale cleanup"
+        );
+    }
 }
 
 /// The directory-level counterpart: a build with no math pages computes
 /// no expected `_moss/math` dir, but the dir holds append-only PNGs.
 #[test]
 fn remove_stale_dirs_never_deletes_math_dir() {
-    let temp = TempDir::new().unwrap();
-    let dir = temp.path().join("output");
-    let math = dir.join("_moss").join("math");
-    fs::create_dir_all(&math).unwrap();
-    fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
+    for family in ["math", "diagrams"] {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("output");
+        let math = dir.join("_moss").join(family);
+        fs::create_dir_all(&math).unwrap();
+        fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
 
-    // Expected dirs cover _moss (other artifacts) but NOT _moss/math.
-    let mut expected = std::collections::HashSet::new();
-    expected.insert(std::path::PathBuf::from("_moss"));
-    remove_stale_dirs(&dir, &expected, &crate::build::lifecycle::permit_for_test());
+        // Expected dirs cover _moss (other artifacts) but NOT this family's dir.
+        let mut expected = std::collections::HashSet::new();
+        expected.insert(std::path::PathBuf::from("_moss"));
+        remove_stale_dirs(&dir, &expected, &crate::build::lifecycle::permit_for_test());
 
-    assert!(
-        math.join("aaaaaaaaaaaaaaaa.png").exists(),
-        "_moss/math must survive dir-level stale cleanup"
-    );
+        assert!(
+            math.join("aaaaaaaaaaaaaaaa.png").exists(),
+            "_moss/{family} must survive dir-level stale cleanup"
+        );
+    }
 }
 
 /// Regression: a notebook hash entry the asset walk does not own must reach

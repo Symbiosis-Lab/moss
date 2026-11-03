@@ -77,6 +77,17 @@ pub fn served_address(output: &str) -> String {
 /// from a live site.
 pub const MATH_PNG_PREFIX: &str = "_moss/math/";
 
+/// Reserved prefix for the email and feed pictures of diagrams. Append-only,
+/// for the same reason as [`MATH_PNG_PREFIX`].
+pub const DIAGRAM_PNG_PREFIX: &str = "_moss/diagrams/";
+
+/// Whether a served path belongs to a hosted-picture family whose URLs are
+/// baked into sent email and cached forever by mail proxies: such a file is
+/// never pruned as stale, and an absent copy is fetched rather than dropped.
+pub fn is_append_only(rel: &str) -> bool {
+    rel.starts_with(MATH_PNG_PREFIX) || rel.starts_with(DIAGRAM_PNG_PREFIX)
+}
+
 /// Directory every downloaded external-link cover image is written under.
 /// See [`ServedPath::for_remote_cover`].
 pub const REMOTE_COVER_PREFIX: &str = "_moss/link/";
@@ -257,16 +268,25 @@ impl ServedPath {
     /// a math PNG — the URL is baked into already-sent emails and cached
     /// forever by Gmail's image proxy / Apple MPP.
     pub fn for_math_png(content_hash: &str) -> Result<Self, ServedPathError> {
+        Self::hosted_png(MATH_PNG_PREFIX, content_hash)
+    }
+
+    /// A diagram's email and feed picture; see [`Self::for_math_png`].
+    pub fn for_diagram_png(content_hash: &str) -> Result<Self, ServedPathError> {
+        Self::hosted_png(DIAGRAM_PNG_PREFIX, content_hash)
+    }
+
+    fn hosted_png(prefix: &str, content_hash: &str) -> Result<Self, ServedPathError> {
         if content_hash.is_empty() {
-            return Err(ServedPathError::InvalidInput("math png hash is empty"));
+            return Err(ServedPathError::InvalidInput("png hash is empty"));
         }
         if content_hash.len() != 16 {
-            return Err(ServedPathError::InvalidInput("math png hash must be 16 hex chars"));
+            return Err(ServedPathError::InvalidInput("png hash must be 16 hex chars"));
         }
         if !content_hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
-            return Err(ServedPathError::InvalidInput("math png hash must be lowercase hex"));
+            return Err(ServedPathError::InvalidInput("png hash must be lowercase hex"));
         }
-        Ok(ServedPath(format!("{}{}.png", MATH_PNG_PREFIX, content_hash)))
+        Ok(ServedPath(format!("{prefix}{content_hash}.png")))
     }
 
     /// A downloaded external-link cover image (an external `:::grid` card's

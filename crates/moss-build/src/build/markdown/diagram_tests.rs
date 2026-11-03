@@ -139,7 +139,8 @@ fn figure(source: &str) -> String {
 #[test]
 fn a_wide_diagram_carries_both_layouts_each_with_its_width_rule() {
     let html = figure("flowchart LR\n  A[Write markdown] --> B[Build the site] --> C[Publish it] --> D[Read it]\n");
-    assert!(html.starts_with("<figure class=\"moss-diagram\" data-narrow tabindex=\"0\" data-source-line=\"10\">"), "{html}");
+    let hash = super::picture::picture("flowchart LR\n  A[Write markdown] --> B[Build the site] --> C[Publish it] --> D[Read it]\n", Language::En).unwrap().hash;
+    assert!(html.starts_with(&format!("<figure class=\"moss-diagram\" data-narrow data-diagram=\"{hash}\" tabindex=\"0\" data-source-line=\"10\">")), "{html}");
     assert_eq!(html.matches("style=\"--diagram-w:").count(), 2, "{html}");
     assert!(html.contains("<div class=\"moss-diagram-narrow\" data-pagefind-ignore=\"\" style="), "{html}");
     assert!(html.contains("aria-label=\"Flowchart\""), "named by its type without accTitle");

@@ -349,7 +349,7 @@ pub fn has_scroll_row_recursive(doc: &Document) -> bool {
 
 /// Whether a fenced block's info string asks for a diagram: its first word is
 /// `mermaid`, as Obsidian, GitHub and GitLab read it.
-pub(crate) fn is_diagram_lang(info: &str) -> bool {
+pub fn is_diagram_lang(info: &str) -> bool {
     info.split_whitespace().next() == Some("mermaid")
 }
 
