@@ -1,6 +1,7 @@
-//! A folder redirect: one `[redirects]` line whose two sides end in `/` keeps
-//! every address under the old folder answering, from what the new folder
-//! serves.
+//! The redirects the seal writes, from what the build serves: a file
+//! redirect's copy, and a folder redirect (one `[redirects]` line whose two
+//! sides end in `/`), which keeps every address under the old folder
+//! answering from the new one.
 
 #[path = "support/site.rs"]
 mod site;
@@ -112,4 +113,24 @@ fn a_page_line_with_nothing_under_the_new_page_reports_nothing() {
     );
     assert!(forwards(&site, "old-post/index.html", "/about/"));
     assert!(redirect_lines(&site.logged).is_empty(), "{:?}", site.logged);
+}
+
+/// A picture's old address gives the picture the build serves, which moss has
+/// processed (a picture in a hand-made page's folder is re-encoded in place,
+/// here as a palette PNG), not the raw file in the folder.
+#[test]
+fn a_file_redirect_serves_the_processed_picture() {
+    let site = Site::with_config(
+        "domain = \"example.org\"\n\n[redirects]\n\"/old.png\" = \"/review/new/pic.png\"\n",
+        &[("index.md", "---\ntitle: Home\n---\n\nText.\n"), ("review/new/index.html", ROUND)],
+    );
+    image::RgbImage::from_fn(400, 300, |x, _| if x < 200 { image::Rgb([200, 40, 40]) } else { image::Rgb([20, 90, 160]) })
+        .save(site.root.join("review/new/pic.png"))
+        .unwrap();
+    let logged = site.rebuild();
+    let served = std::fs::read(site.output("review/new/pic.png")).unwrap();
+    let raw = std::fs::read(site.root.join("review/new/pic.png")).unwrap();
+    assert!(served != raw, "premise: moss serves a processed picture");
+    assert!(std::fs::read(site.output("old.png")).unwrap() == served, "the old address must give the served bytes");
+    assert!(redirect_lines(&logged).is_empty(), "{logged:?}");
 }

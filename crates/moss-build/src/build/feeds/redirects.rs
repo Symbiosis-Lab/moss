@@ -317,62 +317,44 @@ pub fn emit_redirect_table(
         .collect();
     let records = crate::system::build_records::records();
     let folder_key = project_root.to_string_lossy().into_owned();
-    records.record_folder_moves(&folder_key, folder_moves);
+    // A copy of a file this build generated (the feed) is written now, from the
+    // bytes it holds; a stage read at the seal could see a newer build's. A
+    // folder file's copy waits for the seal, which has its served bytes (a
+    // picture the image pipeline re-encoded after this table was planned).
+    let mut copies: Vec<super::kept_addresses::KeptCopy> = Vec::new();
+    for p in planned.iter().filter(|p| p.form == Form::Copy) {
+        let table::Target::Internal(t, _) = &p.to else { continue };
+        let staged = output_dir.join(t.key());
+        if pending.is_registered(t.key()) && staged.is_file() {
+            let bytes = std::fs::read(&staged).map_err(|e| format!("Failed to read '{}': {}", staged.display(), e))?;
+            BuildContext::for_render(output_dir, pending)
+                .emit_held(p.from.served_path(), bytes, HashBucket::Files)
+                .map_err(|e| format!("Failed to emit redirect copy '{}': {}", p.from.key(), e))?;
+        } else {
+            copies.push(super::kept_addresses::KeptCopy { from: p.from.key().to_string(), to: t.key().to_string(), raw: t.raw().to_string() });
+        }
+    }
+    records.record_late_redirects(&folder_key, super::kept_addresses::LateRedirects { copies, folder_moves });
     let unchanged = records.redirect_signature(&folder_key).as_ref() == Some(&stubs)
         && planned
             .iter()
             .filter(|p| p.form == Form::Stub)
             .all(|p| crate::build::io_utils::output_present(&output_dir.join(p.from.key())));
 
-    let probe = Probe { pending, source_root: project_root, written_later: &inputs.written_later };
-    let copy_sources: Vec<Option<table::CopySource>> = planned
-        .iter()
-        .map(|p| match (&p.form, &p.to) {
-            (Form::Copy, table::Target::Internal(t, _)) => probe.copy_source(t, output_dir),
-            _ => None,
-        })
-        .collect();
-    for (p, source) in planned.iter().zip(copy_sources) {
+    for p in planned.iter().filter(|p| p.form == Form::Stub) {
         let sp = p.from.served_path();
-        match p.form {
-            Form::Stub => {
-                let html = generate_redirect_html(&p.to.href());
-                if unchanged {
-                    // Same bytes already on disk from a previous build in this
-                    // session — re-register without rewriting or re-hashing off a
-                    // fresh write, so the manifest still carries the path through
-                    // `seal`.
-                    let hash = compute_binary_hash(html.as_bytes());
-                    pending.register_hashed(sp, &hash, crate::build::manifest::HashBucket::Files);
-                } else {
-                    BuildContext::for_render(output_dir, pending)
-                        .emit(sp, html.as_bytes(), HashBucket::Files)
-                        .map_err(|e| format!("Failed to emit redirect stub '{}': {}", sp.as_str(), e))?;
-                }
-            }
-            Form::Copy => match source {
-                // Generated this build (the feed): small, and rewritten by every
-                // build, so its bytes are held like the original's.
-                Some(table::CopySource::Stage(path)) => {
-                    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", path.display(), e))?;
-                    BuildContext::for_render(output_dir, pending)
-                        .emit_held(sp, bytes, HashBucket::Files)
-                        .map_err(|e| format!("Failed to emit redirect copy '{}': {}", sp.as_str(), e))?;
-                }
-                // The site folder's own file, which may be large: copied and
-                // hashed in chunks, never read whole into memory.
-                Some(table::CopySource::Folder(path)) => {
-                    let dst = output_dir.join(sp.as_str());
-                    crate::build::io_utils::copy_output(&path, &dst)
-                        .map_err(|e| format!("Failed to copy redirect '{}': {}", sp.as_str(), e))?;
-                    let hash = crate::build::assets::paths::compute_binary_hash_file(&dst)?;
-                    pending.register_hashed(sp, &hash, HashBucket::Files);
-                }
-                None => crate::build::cli_output::log_warn_problem!(
-                    "redirect '{}': its target could not be read, so no copy was written",
-                    p.from.served()
-                ),
-            },
+        let html = generate_redirect_html(&p.to.href());
+        if unchanged {
+            // Same bytes already on disk from a previous build in this
+            // session — re-register without rewriting or re-hashing off a
+            // fresh write, so the manifest still carries the path through
+            // `seal`.
+            let hash = compute_binary_hash(html.as_bytes());
+            pending.register_hashed(sp, &hash, crate::build::manifest::HashBucket::Files);
+        } else {
+            BuildContext::for_render(output_dir, pending)
+                .emit(sp, html.as_bytes(), HashBucket::Files)
+                .map_err(|e| format!("Failed to emit redirect stub '{}': {}", sp.as_str(), e))?;
         }
     }
     records.record_redirect_signature(&folder_key, stubs);
@@ -572,7 +554,9 @@ mod tests {
         record.triples = Some(projection_of(&previous_map).entries);
         published_record::save(&paths, &record).unwrap();
         emit_redirect_table(&paths, &current_map, &TableInputs { has_deployed_url: true, ..Default::default() }, &output, &mut pending).unwrap();
-        let sealed = pending.seal();
+        let mut sealed = pending.seal();
+        let late = crate::system::build_records::records().late_redirects(&paths.project_root().to_string_lossy());
+        crate::build::feeds::kept_addresses::keep(&paths, &output, &mut sealed, &late);
         for (_, old, new, _) in cases {
             assert!(sealed.files().contains_key(old), "old page missing from seal: {old}");
             assert!(std::fs::read_to_string(output.join(old)).unwrap().contains(&format!("url=/{}", to_pretty_url(new))));

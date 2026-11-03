@@ -13,8 +13,9 @@
 //! The static form depends on the old address:
 //!
 //! - a page address (`/old/`, `/old`) or a `.html` file gets the HTML stub;
-//! - any other file gets a byte copy of its target, when the target is a file
-//!   this build serves;
+//! - any other file gets a copy of its target, when the target is a file this
+//!   build serves: the bytes it serves there, so a folder picture's copy is
+//!   written by the seal (`kept_addresses`), after the image pipeline;
 //! - a file whose target is a page or an external URL has no static form, so
 //!   it is reported and left out.
 //!
@@ -107,6 +108,11 @@ impl Addr {
         self.sp.as_str()
     }
 
+    /// The decoded path, as the file is named in the site folder.
+    pub(crate) fn raw(&self) -> &str {
+        &self.raw
+    }
+
     pub(crate) fn served_path(&self) -> &ServedPath {
         &self.sp
     }
@@ -192,20 +198,6 @@ impl Probe<'_> {
             _ => Found::Missing,
         }
     }
-
-    /// Where the bytes of a file target are: the stage if this build wrote
-    /// them, else the site folder's own file.
-    pub(crate) fn copy_source(&self, a: &Addr, output_dir: &Path) -> Option<CopySource> {
-        let staged = output_dir.join(a.key());
-        if self.pending.is_registered(a.key()) && staged.is_file() {
-            return Some(CopySource::Stage(staged));
-        }
-        [a.key(), a.raw.as_str()]
-            .iter()
-            .map(|rel| self.source_root.join(rel))
-            .find(|p| p.is_file())
-            .map(CopySource::Folder)
-    }
 }
 
 enum Found {
@@ -213,11 +205,6 @@ enum Found {
     /// Not served, but the default language's page at the same place is.
     DefaultLanguage(Addr),
     Missing,
-}
-
-pub(crate) enum CopySource {
-    Stage(std::path::PathBuf),
-    Folder(std::path::PathBuf),
 }
 
 /// One entry as a source states it, before any check.
@@ -382,7 +369,7 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Plan {
 pub(crate) const RULES: [&str; 7] = [
     "Both sides are site-absolute; the new side is an address this site serves or an https:// URL.",
     "A page address (/old/ or /old) or an .html file gets a forwarding page.",
-    "Any other file can only be sent to another non-HTML file of the site, and gets a copy of it, so both addresses give the same bytes; any other target is reported and does not redirect.",
+    "Any other file can only be sent to another non-HTML file of the site, and gets a copy of the file the site serves there (for a picture, the processed one), so both addresses give the same bytes; any other target is reported and does not redirect.",
     "When both sides are folders of this site (ending in /, with no # or ?), the line also moves everything under the old folder: each page and .html file served under the new folder gets a forwarding page at the same path under the old one, and every other file a copy of the served file. A folder line naming the site root on either side moves no folder.",
     "An old address the site still serves keeps what it serves; a line that changes nothing is reported.",
     "An old address with capitals or spaces in a folder name cannot be a file path, so it is reported and does not redirect.",

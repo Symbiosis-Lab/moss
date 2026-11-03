@@ -127,8 +127,8 @@ pub struct BuildRecords {
     /// `(old, served)` output paths the last seal kept answering — see
     /// `feeds::kept_addresses`.
     kept: FolderSlot<Vec<(String, String)>>,
-    /// The last build's folder redirects, for its seal to fill in.
-    folder_moves: FolderSlot<Vec<crate::build::feeds::redirect_table::FolderMove>>,
+    /// The last build's file copies and folder redirects, for its seal to write.
+    late_redirects: FolderSlot<crate::build::feeds::kept_addresses::LateRedirects>,
 }
 
 /// See [`BuildRecords::removals`].
@@ -305,12 +305,12 @@ impl BuildRecords {
         self.content_hashes.forget(&Self::key(folder_path));
     }
 
-    pub fn record_folder_moves(&self, folder_path: &str, moves: Vec<crate::build::feeds::redirect_table::FolderMove>) {
-        self.folder_moves.record(Self::key(folder_path), moves);
+    pub fn record_late_redirects(&self, folder_path: &str, late: crate::build::feeds::kept_addresses::LateRedirects) {
+        self.late_redirects.record(Self::key(folder_path), late);
     }
 
-    pub fn folder_moves(&self, folder_path: &str) -> Vec<crate::build::feeds::redirect_table::FolderMove> {
-        self.folder_moves.get(&Self::key(folder_path)).unwrap_or_default()
+    pub fn late_redirects(&self, folder_path: &str) -> crate::build::feeds::kept_addresses::LateRedirects {
+        self.late_redirects.get(&Self::key(folder_path)).unwrap_or_default()
     }
 
     /// Record the merged redirect map the just-finished build emitted stubs

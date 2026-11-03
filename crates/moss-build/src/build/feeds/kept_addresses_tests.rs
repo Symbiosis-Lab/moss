@@ -53,7 +53,7 @@ fn a_dropped_derivative_of_a_served_picture_keeps_answering_and_the_removal_chec
     let mut sealed = build(&stage, &[], true);
     assert_eq!(backfill::removed_for_seal(&mp, &sealed).len(), 1, "without the redirect the publish is refused");
 
-    let kept = keep(&mp, &stage, &mut sealed, &[]);
+    let kept = keep(&mp, &stage, &mut sealed, &Default::default());
 
     assert_eq!(kept, [("photo-2.webp".to_string(), "photo-2.jpg".to_string())]);
     assert_eq!(std::fs::read(stage.join("photo-2.webp")).unwrap(), b"JPEG");
@@ -67,7 +67,7 @@ fn an_address_the_build_already_serves_is_left_alone() {
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[("photo-2.webp", b"AUTHORS")], true);
 
-    assert!(keep(&mp, &stage, &mut sealed, &[]).is_empty());
+    assert!(keep(&mp, &stage, &mut sealed, &Default::default()).is_empty());
     assert_eq!(std::fs::read(stage.join("photo-2.webp")).unwrap(), b"AUTHORS");
 }
 
@@ -77,7 +77,7 @@ fn a_derivative_of_a_deleted_picture_is_not_kept_and_stays_the_authors_removal()
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[], false);
 
-    assert!(keep(&mp, &stage, &mut sealed, &[]).is_empty());
+    assert!(keep(&mp, &stage, &mut sealed, &Default::default()).is_empty());
     assert!(!stage.join("photo-2.webp").exists());
     let reasons: Vec<_> = backfill::removed_for_seal(&mp, &sealed).into_iter().map(|r| (r.path, r.reason)).collect();
     assert_eq!(
@@ -148,6 +148,40 @@ fn a_folder_line_whose_new_folder_serves_no_public_file_is_reported() {
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[("review/new/.moss-lock", b"x")], true);
     let _ = crate::build::cli_output::take_cli_problems();
-    assert!(keep(&mp, &stage, &mut sealed, &[mv("review/old/", "review/new/")]).iter().all(|(old, _)| !old.starts_with("review/old/")));
+    let late = super::LateRedirects { copies: Vec::new(), folder_moves: vec![mv("review/old/", "review/new/")] };
+    assert!(keep(&mp, &stage, &mut sealed, &late).iter().all(|(old, _)| !old.starts_with("review/old/")));
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+}
+
+/// A declared file redirect and a folder move can both reach one old address;
+/// the declared line wins, as a hand-declared line wins everywhere in the table.
+#[test]
+fn a_declared_file_redirect_beats_a_folder_move_at_the_same_address() {
+    let (_vault, mp) = setup();
+    let stage = mp.staging_dir();
+    let mut sealed = build(&stage, &[("x.png", b"DECLARED"), ("review/new/pic.png", b"FOLDER")], true);
+    let late = super::LateRedirects {
+        copies: vec![super::KeptCopy { from: "review/old/pic.png".into(), to: "x.png".into(), raw: "x.png".into() }],
+        folder_moves: vec![mv("review/old/", "review/new/")],
+    };
+    let kept = keep(&mp, &stage, &mut sealed, &late);
+    assert_eq!(std::fs::read(stage.join("review/old/pic.png")).unwrap(), b"DECLARED");
+    assert!(kept.iter().all(|(old, _)| old != "review/old/pic.png"), "{kept:?}");
+}
+
+/// A declared copy whose target is in neither the stage nor the folder is a
+/// problem the author sees, not a quiet gap.
+#[test]
+fn a_declared_copy_that_cannot_be_read_is_reported() {
+    let (_vault, mp) = setup();
+    let stage = mp.staging_dir();
+    let mut sealed = build(&stage, &[], true);
+    let _ = crate::build::cli_output::take_cli_problems();
+    let late = super::LateRedirects {
+        copies: vec![super::KeptCopy { from: "old.pdf".into(), to: "gone.pdf".into(), raw: "gone.pdf".into() }],
+        folder_moves: Vec::new(),
+    };
+    keep(&mp, &stage, &mut sealed, &late);
+    assert!(!stage.join("old.pdf").exists());
     assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
 }

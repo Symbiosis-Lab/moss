@@ -2035,8 +2035,8 @@ async fn advertise_sealed(
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
     );
     let kept = if presence_verdict.repairs_staging() {
-        let moves = crate::system::build_records::records().folder_moves(folder_path);
-        crate::build::feeds::kept_addresses::keep(mp, stage_dir, &mut sealed, &moves)
+        let late = crate::system::build_records::records().late_redirects(folder_path);
+        crate::build::feeds::kept_addresses::keep(mp, stage_dir, &mut sealed, &late)
     } else {
         Vec::new()
     };

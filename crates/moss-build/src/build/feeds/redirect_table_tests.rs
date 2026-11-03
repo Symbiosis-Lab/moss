@@ -68,6 +68,10 @@ fn build(files: &[(&str, &str)]) -> Built {
     )
     .unwrap();
     crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();
+    // The seal writes the file copies and folder moves, from what is served.
+    let mut sealed = pending.seal();
+    let late = crate::system::build_records::records().late_redirects(dir.path().to_str().unwrap());
+    crate::build::feeds::kept_addresses::keep(&crate::moss_paths::MossPaths::new(dir.path()), &out, &mut sealed, &late);
     let problems = take_cli_problems();
     Built { _dir: dir, out, problems }
 }
@@ -201,6 +205,17 @@ fn a_declared_file_address_is_a_byte_copy_of_its_target() {
     assert_eq!(b.problems, 0);
 }
 
+/// A target in a folder named with capitals is served under its lowercased
+/// path; its copy still finds the file as the folder names it. (A case-blind
+/// file system finds it either way, so only a case-sensitive one can fail.)
+#[test]
+fn a_file_redirect_finds_a_target_whose_folder_name_is_slugged() {
+    let cfg = config(r#""/old.csv" = "/My Docs/data.csv""#);
+    let b = build(&[ABOUT, ("My Docs/data.csv", "a,b\n"), (".moss/config.toml", &cfg)]);
+    assert_eq!(b.read("old.csv"), "a,b\n");
+    assert_eq!(b.problems, 0);
+}
+
 #[test]
 fn a_declared_external_target_gets_a_stub_pointing_at_the_url() {
     let cfg = config(r#""/shop/" = "https://example.com/shop""#);
@@ -219,9 +234,7 @@ fn an_address_the_site_really_serves_keeps_its_content() {
     let b = build(&[ABOUT, ("contact.md", "# Contact\n"), ("keep.html", "<p>mine</p>"), (".moss/config.toml", &cfg)]);
     assert!(!b.read("about/index.html").contains("Redirecting"));
     assert!(!b.has("keep.html"), "the folder's own file is copied in later; no stub may sit in its place");
-    // `/about/` to `/contact/` is also a folder line, which the seal reports
-    // once it finds the line keeps nothing; this build stops before it.
-    assert_eq!(b.problems, 1);
+    assert_eq!(b.problems, 2);
 }
 
 #[test]
@@ -232,9 +245,7 @@ fn a_self_redirect_and_an_unknown_target_are_advisories_not_stubs() {
 "/plain/" = "http://example.com/""#,
     );
     let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
-    // `/old/` to `/nowhere/` is also a folder line, reported by the seal once
-    // it knows nothing is served under `/nowhere/`; this build stops before it.
-    assert_eq!(b.problems, 2);
+    assert_eq!(b.problems, 3);
     for rel in ["gone/index.html", "old/index.html", "plain/index.html"] {
         assert!(!b.has(rel), "{rel}");
     }
