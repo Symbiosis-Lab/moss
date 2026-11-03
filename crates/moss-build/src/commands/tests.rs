@@ -485,6 +485,16 @@ fn render_contract() -> String {
         session_read::signatures(&mut types),
         write::signatures(&mut types),
     ];
+    // Besides command answers, a UI hears the engine's events and the progress
+    // a build and a publish stream, and acts on the advisories they carry.
+    {
+        use specta::Type;
+        crate::types::events::MossEvent::reference(&mut types, &[]);
+        crate::types::events::ProgressUpdate::reference(&mut types, &[]);
+        crate::deploy::progress::DeployProgress::reference(&mut types, &[]);
+        crate::advisory::AppOp::reference(&mut types, &[]);
+        crate::i18n::AppLanguage::reference(&mut types, &[]);
+    }
     let ts = Typescript::default().bigint(BigIntExportBehavior::Number).remove_default_header();
     let render = |dt: &specta::DataType| {
         specta_typescript::datatype(&ts, &FunctionResultVariant::Value(dt.clone()), &types).expect("renders")
@@ -544,6 +554,14 @@ fn arg_fields(args: &specta::DataType, types: &specta::TypeMap) -> Vec<(String, 
             .filter_map(|(name, f)| f.ty().map(|ty| (name.to_string(), f.optional(), ty.clone())))
             .collect(),
         StructFields::Unnamed(_) => panic!("a command's arguments have named fields"),
+    }
+}
+
+#[test]
+fn the_contract_carries_what_the_engine_tells_a_ui() {
+    let contract = render_contract();
+    for name in ["MossEvent", "ProgressUpdate", "DeployProgress", "AppOp", "AppLanguage", "PanelTaskWire", "BuildComplete", "FileChangeEvent"] {
+        assert!(contract.contains(&format!("export type {name} =")), "the contract lacks {name}");
     }
 }
 
