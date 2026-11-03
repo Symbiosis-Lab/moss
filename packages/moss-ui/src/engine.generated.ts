@@ -434,6 +434,18 @@ export type CreateFilesArgs = { files: NewFile[] }
 
 export type CreateFolderArgs = { parentDir: string; name: string }
 
+export type CreateTemplateArgs = { sourcePath: VaultPath; name: string; 
+/**
+ * The tree's own verdict that the source is a folder's home file.
+ */
+isHome: boolean; 
+/**
+ * `(language, page path)` pairs saved beside it as that language's file.
+ */
+translations: ([string, VaultPath])[] | null }
+
+export type CreateTranslationArgs = { sourceAbs: VaultPath; lang: string }
+
 /**
  * moss asking for one credential again, on a plugin's behalf.
  * 
@@ -1176,6 +1188,8 @@ text: string;
 source: HeadingSource }
 
 export type HeadingStateArgs = { filePath: VaultPath; frontmatter: JsonValue; body: string }
+
+export type InstantiateTemplateArgs = { id: string; targetDir: VaultPath; name: string }
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 
@@ -2184,6 +2198,8 @@ skipped_pages: string[];
  */
 undo_id: string }
 
+export type RenameTemplateArgs = { id: string; newName: string }
+
 export type ResolveAssetArgs = { target: string; fromFile: VaultPath }
 
 export type ResolveReferencesArgs = { targets: RefTarget[]; fromFile: VaultPath }
@@ -2301,6 +2317,12 @@ export type SetImageWidthArgs = { imageMd: string;
  */
 width: string | null }
 
+export type SetTemplateFolderArgs = { id: string; 
+/**
+ * `None` clears it.
+ */
+folder: string | null }
+
 /**
  * One settled asset: its output path plus the `asset_type` the iframe-bridge
  * swap branches on ("image" | "video" | "thumbnail"). The type is
@@ -2377,6 +2399,11 @@ delimiters: [string, string];
  * Named shortcode definitions.
  */
 definitions: { [key in string]: ShortcodeDefinition } }
+
+/**
+ * The site's default language and its other language trees.
+ */
+export type SiteLanguages = { default_lang: string; trees: string[] }
 
 /**
  * The generation at `current` was just swapped — the bytes a preview loads
@@ -2721,6 +2748,37 @@ export type TaskTone =
  * is rendered in the panel below them).
  */
 "awaiting"
+
+export type TemplateIdArgs = { id: string }
+
+/**
+ * What a saved template produces when instantiated. Decided at capture time
+ * from the tree's own home-file election (a folder's home file captures as
+ * `Folder`), so the template store and the tree never disagree about it.
+ * Serialized as `page` / `folder` in the store and across the Tauri seam.
+ */
+export type TemplateKind = 
+/**
+ * A single new file.
+ */
+"page" | 
+/**
+ * A new folder with a seeded, self-named home file.
+ */
+"folder"
+
+/**
+ * A saved template, as listed for the "New from Template" menu.
+ */
+export type TemplateMeta = { id: string; name: string; kind: TemplateKind; created_at: string; 
+/**
+ * The folder its pages belong in (`work/`), when the template names one.
+ */
+folder: string | null; 
+/**
+ * The languages it has a file for besides the default, e.g. `zh-hans`.
+ */
+langs: string[] }
 
 /**
  * The one question the guard puts on the wire.
@@ -3120,6 +3178,8 @@ export type EngineCommands = {
 	resolve_asset_url_for_file: { args: FileArgs; out: string | null };
 	get_all_pages: { args: NoArgs; out: PageInfo[] };
 	read_source_text: { args: FileArgs; out: string };
+	list_templates: { args: NoArgs; out: TemplateMeta[] };
+	site_languages: { args: NoArgs; out: SiteLanguages };
 	create_files: { args: CreateFilesArgs; out: string[] };
 	create_folder: { args: CreateFolderArgs; out: string };
 	delete_entry: { args: PathArgs; out: null };
@@ -3134,6 +3194,12 @@ export type EngineCommands = {
 	save_version: { args: SaveVersionArgs; out: VersionRow };
 	write_editor_file_binary: { args: WriteEditorFileBinaryArgs; out: null };
 	expand_derived: { args: ExpandDerivedArgs; out: ExpandedDerived };
+	create_template: { args: CreateTemplateArgs; out: string };
+	rename_template: { args: RenameTemplateArgs; out: null };
+	delete_template: { args: TemplateIdArgs; out: null };
+	set_template_folder: { args: SetTemplateFolderArgs; out: null };
+	instantiate_template: { args: InstantiateTemplateArgs; out: string };
+	create_translation: { args: CreateTranslationArgs; out: string };
 };
 
 export type EngineCommand = keyof EngineCommands;
@@ -3169,6 +3235,8 @@ export const ENGINE_TIER = {
 	resolve_asset_url_for_file: "session_read",
 	get_all_pages: "session_read",
 	read_source_text: "session_read",
+	list_templates: "session_read",
+	site_languages: "session_read",
 	create_files: "write",
 	create_folder: "write",
 	delete_entry: "write",
@@ -3183,6 +3251,12 @@ export const ENGINE_TIER = {
 	save_version: "write",
 	write_editor_file_binary: "write",
 	expand_derived: "write",
+	create_template: "write",
+	rename_template: "write",
+	delete_template: "write",
+	set_template_folder: "write",
+	instantiate_template: "write",
+	create_translation: "write",
 } as const;
 
 // Each command's arguments in declaration order, for a client that takes them positionally:
@@ -3218,6 +3292,8 @@ export type EngineParams = {
 	resolve_asset_url_for_file: [filePath: VaultPath];
 	get_all_pages: [];
 	read_source_text: [filePath: VaultPath];
+	list_templates: [];
+	site_languages: [];
 	create_files: [files: NewFile[]];
 	create_folder: [parentDir: string, name: string];
 	delete_entry: [path: VaultPath];
@@ -3232,6 +3308,12 @@ export type EngineParams = {
 	save_version: [label: string | null];
 	write_editor_file_binary: [relativePath: VaultPath, dataBase64: string];
 	expand_derived: [pagePath: VaultPath, content: string];
+	create_template: [sourcePath: VaultPath, name: string, isHome: boolean, translations: ([string, VaultPath])[] | null];
+	rename_template: [id: string, newName: string];
+	delete_template: [id: string];
+	set_template_folder: [id: string, folder: string | null];
+	instantiate_template: [id: string, targetDir: VaultPath, name: string];
+	create_translation: [sourceAbs: VaultPath, lang: string];
 };
 
 export const ENGINE_PARAMS = {
@@ -3265,6 +3347,8 @@ export const ENGINE_PARAMS = {
 	resolve_asset_url_for_file: ["filePath"],
 	get_all_pages: [],
 	read_source_text: ["filePath"],
+	list_templates: [],
+	site_languages: [],
 	create_files: ["files"],
 	create_folder: ["parentDir", "name"],
 	delete_entry: ["path"],
@@ -3279,4 +3363,10 @@ export const ENGINE_PARAMS = {
 	save_version: ["label"],
 	write_editor_file_binary: ["relativePath", "dataBase64"],
 	expand_derived: ["pagePath", "content"],
+	create_template: ["sourcePath", "name", "isHome", "translations"],
+	rename_template: ["id", "newName"],
+	delete_template: ["id"],
+	set_template_folder: ["id", "folder"],
+	instantiate_template: ["id", "targetDir", "name"],
+	create_translation: ["sourceAbs", "lang"],
 } as const;

@@ -60,6 +60,17 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("expand_derived", json!({ "pagePath": "a.md", "content": "" })),
         ("write_editor_file_binary", json!({ "relativePath": "img/a.png", "dataBase64": "AA==" })),
         (
+            "create_template",
+            json!({ "sourcePath": "a.md", "name": "Post", "isHome": false, "translations": [["zh", "zh/a.md"]] }),
+        ),
+        ("list_templates", json!({})),
+        ("rename_template", json!({ "id": "t", "newName": "Note" })),
+        ("delete_template", json!({ "id": "t" })),
+        ("set_template_folder", json!({ "id": "t", "folder": null })),
+        ("site_languages", json!({})),
+        ("instantiate_template", json!({ "id": "t", "targetDir": "posts", "name": "untitled.md" })),
+        ("create_translation", json!({ "sourceAbs": "a.md", "lang": "zh" })),
+        (
             "create_files",
             json!({ "files": [{ "dir": "posts", "name": "a.md", "frontmatter": {} }] }),
         ),
@@ -281,6 +292,8 @@ async fn site_facts_are_refused_in_a_loose_document() {
         ("resolve_expected_url_for_file", json!({ "filePath": "a.md" })),
         ("resolve_asset_url_for_file", json!({ "filePath": "a.md" })),
         ("get_all_pages", json!({})),
+        ("list_templates", json!({})),
+        ("site_languages", json!({})),
     ] {
         match session_read::dispatch(&host, cmd, args).await {
             Some(Err(CommandError::Failed(msg))) => assert_eq!(msg, crate::vault::paths::NO_PROJECT_OPEN, "{cmd}"),
@@ -319,6 +332,23 @@ async fn the_editor_reads_answer_from_the_open_site() {
     assert!(expected.is_some_and(|u| u.contains('a')));
     let pages: Vec<Value> = ok(read("get_all_pages", json!({})).await).await;
     assert_eq!(pages, [json!({ "url_path": "index.html", "title": "Home" })]);
+}
+
+/// The template rows reach the store a site keeps; the store's own rules are
+/// tested beside it.
+#[tokio::test]
+async fn a_page_saved_as_a_template_makes_a_new_page_through_the_table() {
+    let (_d, root) = pages();
+    let host = TestHost::site(&root);
+    let id: String = ok(dispatch(&host, "create_template", json!({ "sourcePath": "a.md", "name": "Post", "isHome": false, "translations": null })).await).await;
+    let listed: Vec<Value> = ok(dispatch(&host, "list_templates", json!({})).await).await;
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["name"], json!("Post"));
+    let made: String = ok(dispatch(&host, "instantiate_template", json!({ "id": id, "targetDir": ".", "name": "c.md" })).await).await;
+    assert!(Path::new(&made).ends_with("c.md") && Path::new(&made).exists(), "{made}");
+    ok::<Value>(dispatch(&host, "delete_template", json!({ "id": id })).await).await;
+    let listed: Vec<Value> = ok(dispatch(&host, "list_templates", json!({})).await).await;
+    assert!(listed.is_empty());
 }
 
 #[tokio::test]

@@ -25,6 +25,7 @@ use rename_undo::RenameUndoStore;
 pub mod files;
 pub mod reads;
 pub mod rename_undo;
+pub mod templates;
 pub mod versions;
 
 #[cfg(test)]
@@ -322,6 +323,8 @@ tier! {
         resolve_asset_url_for_file => reads::resolve_asset_url_for_file,
         get_all_pages => reads::get_all_pages,
         read_source_text => reads::read_source_text,
+        list_templates => templates::list_templates,
+        site_languages => templates::site_languages,
     }
 }
 
@@ -343,6 +346,12 @@ tier! {
         save_version => versions::save_version,
         write_editor_file_binary => files::write_editor_file_binary,
         expand_derived => reads::expand_derived,
+        create_template => templates::create_template,
+        rename_template => templates::rename_template,
+        delete_template => templates::delete_template,
+        set_template_folder => templates::set_template_folder,
+        instantiate_template => templates::instantiate_template,
+        create_translation => templates::create_translation,
     }
 }
 
