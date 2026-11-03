@@ -35,6 +35,7 @@ fn kind_name(kind: ShortcodeKind) -> &'static str {
         ShortcodeKind::Hero => "hero",
         ShortcodeKind::Grid => "grid",
         ShortcodeKind::Recent => "recent",
+        ShortcodeKind::Form => "form",
     }
 }
 

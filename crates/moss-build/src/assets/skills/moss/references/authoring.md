@@ -529,6 +529,39 @@ Links in the footer, a row of social links in a paragraph included, keep a 44px 
 
 The newsletter form that a footer or a `:::subscribe` block draws appears for a site that has not been published yet only when moss serves it: `moss build --serve` or the desktop app's preview. Opened from disk or through a static file server such as `python -m http.server`, it is hidden, because a form with no site to send to would only fail for a reader. Once the site is published the form is wired to it and shows on the published host. Check it with `moss build <folder> --serve`, never by opening the built files. `:::subscribe` takes two arguments and no others: `button="Join"` for the submit label and `placeholder="you@example.org"` for the field's hint, written `:::subscribe {button="Join"}`. The email field has no visible label and there is no option for one; put the visible words in the text directly above the block. When the block comes straight after a paragraph of at most 120 characters (not a heading, whose permalink link would be read as part of the name), a screen reader names the field from that text followed by "Email address" (the field gets `aria-labelledby` and a paragraph gets an `id` for it); with anything else above it, or nothing, the name is the `aria-label` ("Email address" in English) alone. A heading, a `---` or a long paragraph between the words and the block breaks the tie, and a `:::subscribe` inside a grid cell is never labelled this way. After a subscribe the form keeps its "Check your email to confirm." (or "already subscribed") message until the reader types in the field again or taps the check mark; nothing times it out, because it names a step the reader still has to take. The field offers the reader's saved address (`autocomplete="email"`).
 
+### Request forms
+
+A `:::form` block is a form written as a list, in the page where its words are. Each list item is a field: its text is the label, a trailing `*` makes it required (the star is not shown), and `{type=…}` at the end of the line sets the type. A nested list gives the choices of a `select`, `radio` or `checkbox`; a line continuing an item is its help text.
+
+```markdown
+:::form {#booking next=/booking/received/ button="Ask for a date"}
+- Your name * {autocomplete=name}
+- Email * {type=email}
+- Phone {type=tel}
+- Session * {type=radio}
+  - Portrait
+  - Family
+  - Headshots
+- Preferred day {type=date}
+- Anything we should know {type=textarea}
+  Who is coming, and any ideas for the session.
+- Send me the studio's newsletter {type=checkbox}
+:::
+```
+
+`#booking` names the form: 1 to 40 lowercase letters, digits and hyphens, unique in the site. `next=` is the path the reader lands on after sending, and must be a page of the site. `button=` is the submit label ("Send" in the page's language by default). The types are `text` (the default), `email`, `tel`, `textarea`, `select`, `radio`, `checkbox` and `date`; `select` and `radio` need at least two choices, and a `checkbox` with no nested list is one box, sent as `on` when ticked. `email` and `tel` fields get the matching `autocomplete`, and `{autocomplete=…}` passes any other token through. A field with no `*` says "Optional" beside its label.
+
+A field's name is its label in lowercase with words joined by `_` (`Your name` is `your_name`). Set it with `{name=…}` when the label has no Latin letters, or when the label is long or starts with a digit. A name is a lowercase letter then up to 39 lowercase letters, digits or `_`, and `_next` and `_hp` are reserved for the form itself. Anything wrong with a form is a build warning, and `--strict` fails on it: a repeated form name, a bad name, an unknown type, too few choices, a nested list on a type that takes none, a `next=` that is not a path of the site.
+
+The form posts to `<endpoint>/<form name>`, where the endpoint is set in `.moss/config.toml`:
+
+```toml
+[services.forms]
+endpoint = "https://forms.example/f"
+```
+
+The post is `application/x-www-form-urlencoded`, with the fields plus `_next` (the `next=` path) and `_hp`, an empty honeypot that readers never see or reach by keyboard. With no script the browser checks `required` and each type, and the service answers with a redirect to `next`; with script the form stays on the page, goes to `next` when the post is accepted, marks each refused field and moves focus to the first, and keeps everything typed. A link can fill visible fields from the address (`/booking/?session=Family` selects that choice); it never sets `_next`, `_hp` or any hidden field. With no endpoint the build warns naming `[services.forms] endpoint`, published pages do not show the form, and the preview shows it with sending simulated. The build also writes `/_moss/commerce.json`, the site's forms (names, types, required, choices, `next`) for the service to read; labels and help text stay in the page, and who receives a form is set in the service, never in the folder.
+
 ### Welcome email
 
 A `welcome-email.md` at the top of the site is the email each new subscriber gets once, right after they confirm. It is not a page: it has no address and no nav item. Write it in `zh-hans/welcome-email.md` (or any other language folder) for subscribers of that language; a subscriber of a language without its own file gets the top-level letter.

@@ -2585,6 +2585,7 @@ pub fn generate_blocking_content_for_build(
     if crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some() {
         crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?;
     }
+    crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
     send_progress(
         progress_sender,

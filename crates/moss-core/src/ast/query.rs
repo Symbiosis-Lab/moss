@@ -365,7 +365,7 @@ fn collect_images_in_shortcode<'a>(
     out: &mut Vec<&'a Url>,
 ) {
     match sc {
-        Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) => {}
+        Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Form(_) => {}
         Shortcode::Gallery(args) => out.extend(args.items.first().map(|item| &item.src)),
         // The hero image itself is a `Url` on the shortcode, not an
         // `Inline::Image`: the cover chain reads `hero_image_url` for it.

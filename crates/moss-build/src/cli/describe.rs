@@ -285,6 +285,16 @@ fn config_tables() -> Vec<ConfigTableInfo> {
         entry: "\"/old-post/\" = \"/writings/new-post/\"",
         description: "Keep an old address answering after a move: old address = new address, both site-absolute. Once the site has been published, a page renamed under the same uid is redirected without an entry.",
         rules: crate::build::feeds::redirect_table::RULES.to_vec(),
+    },
+    ConfigTableInfo {
+        name: "services.forms",
+        entry: "endpoint = \"https://forms.example/f\"",
+        description: "Where the site's `:::form` blocks post: a form named `booking` posts to `<endpoint>/booking`. With no endpoint the build warns, published pages do not show the forms, and the preview shows them with sending simulated.",
+        rules: vec![
+            "A post is application/x-www-form-urlencoded, with `_next` (the form's next= path) and an empty honeypot `_hp`.",
+            "The build writes the site's forms to /_moss/commerce.json whenever the site has a form or this table.",
+            "`enabled = false` turns the table off.",
+        ],
     }]
 }
 

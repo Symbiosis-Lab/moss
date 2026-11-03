@@ -362,10 +362,6 @@ a.comment-author:hover {
    `.moss-btn__*` rules in site.css; these rules add the visibility changes.
    ========================================================================== */
 
-/* loading */
-.comment-form[data-state="loading"] .moss-btn { cursor: wait; }
-.comment-form[data-state="loading"] .moss-btn__label { opacity: 0; }
-.comment-form[data-state="loading"] .moss-btn__spinner { opacity: 1; }
 
 /* success — keep the full pill shape (no circle collapse like subscribe) */
 .comment-form[data-state="success"] .moss-btn__label { opacity: 0; }

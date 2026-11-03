@@ -39,6 +39,7 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/site/link-preview.ts", out: "crates/moss-build/src/assets/js/preview.js" },
   { entry: "crates/moss-build/src/js-src/site/comments/artalk.ts", out: "crates/moss-build/src/assets/js/comments-artalk.js" },
   { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "crates/moss-build/src/assets/js/subscribe.js" },
+  { entry: "crates/moss-build/src/js-src/site/forms/forms.ts", out: "crates/moss-build/src/assets/js/forms.js" },
   { entry: "crates/moss-build/src/js-src/site/heading-anchor.ts", out: "crates/moss-build/src/assets/js/heading-anchor.js" },
   // Site search runtime. `external: ["/_moss/pagefind/*"]` is not needed — the
   // pagefind.js specifier is computed at runtime, so esbuild leaves the dynamic

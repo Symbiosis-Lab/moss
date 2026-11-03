@@ -141,6 +141,13 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         load: Load::Shell { defer: true },
     },
     SiteScript {
+        name: "forms",
+        dev_path: "src/assets/js/forms.js",
+        source: || include_str!("../../assets/js/forms.js"),
+        gate: |a| a.forms,
+        load: Load::Shell { defer: false },
+    },
+    SiteScript {
         name: "sidenotes",
         dev_path: "src/assets/js/sidenotes.js",
         source: || include_str!("../../assets/js/sidenotes.js"),

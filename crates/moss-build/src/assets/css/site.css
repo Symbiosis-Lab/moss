@@ -1415,8 +1415,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
    on any one axis, and neither tracked one line of body text.
    `box-sizing: border-box` folds `.moss-input`'s border and both controls'
    padding inside that line instead of adding to it. */
-.moss-subscribe-form[data-moss-hosted="true"] .moss-input,
-.moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
+.moss-subscribe-form[data-moss-hosted="true"] .moss-input {
   box-sizing: border-box;
   block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
 }
@@ -1432,7 +1431,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
    landscape. */
 @media (width < 48rem), (pointer: coarse) {
   .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
-  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
+  .moss-btn-slot .moss-btn {
     block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
   }
 }
@@ -1462,6 +1461,23 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
 .moss-btn__label {
   display: inline-block;
 }
+
+/* The button in its slot: one line of text tall (a touch floor above), the same
+   for subscribe, comment and request forms. */
+.moss-btn-slot .moss-btn {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
+}
+
+/* Loading, written once for every form that morphs its button through states. */
+[data-state="loading"] .moss-btn-slot .moss-btn { cursor: wait; }
+[data-state="loading"] .moss-btn-slot .moss-btn__label { opacity: 0; }
+[data-state="loading"] .moss-btn-slot .moss-btn__spinner { opacity: 1; }
 
 .moss-btn__spinner,
 .moss-btn__check {
@@ -1508,11 +1524,6 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
 }
 
 .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
-  position: relative;
-  overflow: hidden;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: none;
   transition:
     background-color 0.3s var(--moss-ease-subscribe),
@@ -1573,9 +1584,6 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
 }
 
 /* --- loading --- */
-.moss-subscribe-form[data-state="loading"] .moss-btn { cursor: wait; }
-.moss-subscribe-form[data-state="loading"] .moss-btn__label { opacity: 0; }
-.moss-subscribe-form[data-state="loading"] .moss-btn__spinner { opacity: 1; }
 .moss-subscribe-form[data-state="loading"] .moss-input {
   pointer-events: none;
   opacity: 0.7;
@@ -10978,3 +10986,10 @@ body[data-moss-preview] .moss-service-inactive {
 }
 
 } /* @layer shortcodes */
+
+/* A hosted form with nowhere to post (no site yet, no forms endpoint) must never
+   face a reader: it would post to "#" and show an error. The preview keeps it so
+   the author sees the flow. Unlayered, so no theme rule outranks the hide. */
+body:not([data-moss-preview]) [data-moss-pending] {
+  display: none;
+}

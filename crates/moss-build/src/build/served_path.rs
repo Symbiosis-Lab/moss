@@ -409,6 +409,12 @@ impl ServedPath {
         out.strip_suffix(".html").map(|stem| ServedPath(format!("{stem}.ics")))
     }
 
+    /// The site's public description of its request forms, at a fixed,
+    /// unhashed address so a form service can fetch it by the site's URL.
+    pub fn for_commerce_json() -> Self {
+        ServedPath(crate::build::emit::commerce::COMMERCE_PATH.to_string())
+    }
+
     /// The welcome email of one language tree, read by the hosting server
     /// when a subscriber is confirmed. `edition` is the language-tree folder
     /// name, or `default` for the root tree.

@@ -1826,7 +1826,7 @@ fn test_pipeline_single_cell_scroll_grid_does_not_set_scroll_rows() {
 #[test]
 fn test_pipeline_no_site_id_yields_pending_form() {
     // Preview / no-deploy-config case. With no site_id the :::subscribe
-    // shortcode renders the PENDING form (action="#" + data-moss-pending-site),
+    // shortcode renders the PENDING form (action="#" + data-moss-pending),
     // consistent with the auto-injected footer form on unpublished sites —
     // instead of the old degraded wired form posting to /sites//subscribe.
     let content = "---\ntitle: T\n---\n\n:::subscribe\n:::\n";
@@ -1854,7 +1854,7 @@ fn test_pipeline_no_site_id_yields_pending_form() {
     );
     assert!(
         doc.html_content
-            .contains(r#"data-moss-pending-site="true""#),
+            .contains(r#"data-moss-pending="true""#),
         "unpublished :::subscribe → pending marker: {}",
         doc.html_content
     );

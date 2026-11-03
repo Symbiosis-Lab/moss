@@ -210,7 +210,7 @@ where
                 }
             }
         }
-        Shortcode::Recent(_) => {} // No URLs.
+        Shortcode::Recent(_) | Shortcode::Form(_) => {} // No URLs.
     }
 }
 
@@ -290,7 +290,7 @@ pub fn for_each_child_sequence(block: &Block, mut f: impl FnMut(&[Block]) -> boo
         Block::Shortcode(Shortcode::Grid(args)) => args.cells.iter().all(|cell| f(cell)),
         Block::Shortcode(Shortcode::Hero(args)) => f(&args.overlay),
         Block::Shortcode(
-            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_),
+            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_) | Shortcode::Form(_),
         ) => true,
         // No block children. Inline children of headings, paragraphs, terms,
         // tables and figures are visited by inline visitors, not block ones.
@@ -329,6 +329,18 @@ fn any_block(doc: &Document, pred: impl Fn(&Block) -> bool) -> bool {
 /// shortcodes migrate to typed AST in Phase B.
 pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
     any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == kind))
+}
+
+/// Every `:::form` in the document, nested ones included, in source order.
+pub fn forms_recursive(doc: &Document) -> Vec<super::extract_form::FormShortcode> {
+    let mut forms = Vec::new();
+    visit_blocks(doc, |block| {
+        if let Block::Shortcode(Shortcode::Form(f)) = block {
+            forms.push(f.clone());
+        }
+        true
+    });
+    forms
 }
 
 /// True if any `:::grid` in the document is a scroll row at all — see

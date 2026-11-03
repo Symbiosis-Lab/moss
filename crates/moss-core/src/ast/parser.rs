@@ -554,7 +554,7 @@ pub(crate) fn unwrap_implicit_figure(block: &mut Block) {
             Shortcode::Subscribe(_)
             | Shortcode::Buttons(_)
             | Shortcode::Gallery(_)
-            | Shortcode::Recent(_) => {}
+            | Shortcode::Recent(_) | Shortcode::Form(_) => {}
         },
         _ => {}
     }
@@ -2373,7 +2373,7 @@ fn collect_heading_id_slots<'a>(
                 Shortcode::Subscribe(_)
                 | Shortcode::Buttons(_)
                 | Shortcode::Gallery(_)
-                | Shortcode::Recent(_) => {}
+                | Shortcode::Recent(_) | Shortcode::Form(_) => {}
             },
             // Deliberately exhaustive, no `_` arm: these carry no block
             // children, and the next `Block` variant that gains a

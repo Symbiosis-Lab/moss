@@ -1833,6 +1833,7 @@ fn record_promise_gate(
     assets: Option<&std::sync::Arc<crate::types::assets::AssetRegistry>>,
     folder_path: &str,
 ) -> Vec<crate::build::manifest::link_audit::DeadLink> {
+    crate::build::emit::commerce::audit_next(stage_dir, sealed);
     let dead_links = crate::build::manifest::link_audit::audit_and_report(stage_dir, sealed);
 
     // Posters are deliberately not registry-tracked (`DeliveryKind::

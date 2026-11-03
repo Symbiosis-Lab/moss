@@ -167,6 +167,13 @@ fn present_in_stage(stage_dir: &Path, key: &str) -> bool {
         .is_ok_and(|sp| crate::build::io_utils::output_present(&sp.to_disk(stage_dir)))
 }
 
+/// Whether a root-relative `href` names nothing this build wrote: not in
+/// `satisfied`, not in `stage_dir`. A reference that is not root-relative is not dead.
+pub fn is_dead(href: &str, satisfied: &HashSet<&str>, stage_dir: &Path) -> bool {
+    let Some(keys) = candidate_keys(href) else { return false };
+    !keys.iter().any(|k| satisfied.contains(k.as_str()) || present_in_stage(stage_dir, k))
+}
+
 /// Root-relative references in `page`'s HTML that nothing in `sealed` or
 /// `stage_dir` satisfies. Deduplicated: 36 copies of one broken href on one page
 /// is one thing to fix, and printing it 36 times buries the other 35 problems.
@@ -179,14 +186,7 @@ pub fn dead_links_in_page(
     let mut seen = HashSet::new();
     let mut dead = Vec::new();
     for href in url_attr_values(html) {
-        let Some(keys) = candidate_keys(&href) else { continue };
-        if keys.iter().any(|k| satisfied.contains(k.as_str())) {
-            continue;
-        }
-        if keys.iter().any(|k| present_in_stage(stage_dir, k)) {
-            continue;
-        }
-        if seen.insert(href.clone()) {
+        if is_dead(&href, satisfied, stage_dir) && seen.insert(href.clone()) {
             dead.push(DeadLink { page: page.to_string(), href });
         }
     }

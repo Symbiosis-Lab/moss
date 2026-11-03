@@ -9,6 +9,7 @@
 
 pub mod comment;
 pub mod email;
+pub mod forms;
 pub mod review;
 pub mod sync;
 
@@ -23,6 +24,16 @@ pub(crate) fn inactive_label(lang: crate::i18n::Language) -> &'static str {
 pub(crate) const CHECK_SVG: &str = r##"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
 
 pub(crate) use moss_core::media::html_escape;
+
+/// The `action` of a hosted form and its pending marker: a form with nowhere to
+/// post gets `action="#"` and `data-moss-pending`, which published pages hide
+/// (one rule in `site.css`) and moss's preview shows, sending simulated.
+pub(crate) fn hosted_action(url: Option<String>) -> (String, &'static str) {
+    match url {
+        Some(url) => (url, ""),
+        None => ("#".to_string(), r#" data-moss-pending="true""#),
+    }
+}
 
 /// The double-quoted value of attribute `name` in an element's open tag.
 /// The name must follow a space, so `width` does not match `stroke-width`.
@@ -556,7 +567,7 @@ pub fn generate_native_slots(
         }
 
         // Seta subscribe form: injected in EVERY build mode. Wired when a
-        // site_id exists; pending (action="#", data-moss-pending-site) when
+        // site_id exists; pending (action="#", data-moss-pending) when
         // the site hasn't been published yet, so preview shows the real
         // footer from day one.
         //

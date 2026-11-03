@@ -105,15 +105,3 @@
     }
   }
 }
-
-/* A pending form (no site_id baked in yet) must never face real readers:
-   on a published page (body lacks data-moss-preview — ship.rs strips it)
-   it would POST to "#" and surface an error state. Preview keeps it
-   visible and interactive. This CSS is the shipped guard against a pending
-   form reaching readers (defense-in-depth for non-seta exports — GitHub
-   Pages plugin, plain `moss build` — where email is unsupported in Phase 1).
-   NOTE: this rule sits OUTSIDE the @layer block above (unlayered → highest
-   precedence after the wrap), which is what we want for a safety hide. */
-body:not([data-moss-preview]) .moss-subscribe-form[data-moss-pending-site] {
-  display: none;
-}

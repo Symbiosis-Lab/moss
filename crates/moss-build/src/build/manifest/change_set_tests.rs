@@ -871,3 +871,19 @@ fn a_deleted_page_is_not_moved_by_a_new_page_that_renders_alike() {
 
     assert_eq!(removed_of(&prev, &cur), [("a/index.html".to_string(), RemovalReason::AuthorRemoved)]);
 }
+
+/// Removing the last form stops `/_moss/commerce.json` being written when the
+/// site has no `[services.forms]` either; the publish must not be refused for it.
+#[test]
+fn a_vanished_form_description_never_refuses_the_publish() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A")],
+        &[("_moss/commerce.json", &br#"{"forms":{}}"#[..])],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    assert!(removed.is_empty(), "{removed:?}");
+    assert!(pending_removals(&removed, None).is_empty());
+    assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());
+}

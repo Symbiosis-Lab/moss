@@ -71,6 +71,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.callouts,
     },
     CssPartial {
+        name: "forms",
+        source: include_str!("../../assets/css/site/forms.css"),
+        gate: |a| a.forms,
+    },
+    CssPartial {
         name: "search",
         source: include_str!("../../assets/css/site/search.css"),
         gate: |a| a.search,

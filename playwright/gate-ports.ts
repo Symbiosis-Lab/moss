@@ -112,6 +112,7 @@ const GATE_PORT_KEYS = [
   'nav-one-row',
   'theme-floor-hooks',
   'hls-short-clip',
+  'request-form',
   'colophon-credit:long',
   'colophon-credit:short',
   'footer-end-space:hidden',

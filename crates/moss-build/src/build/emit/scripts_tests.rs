@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 fn all_on() -> SiteAssets {
     SiteAssets {
         callouts: true,
+        forms: true,
         link_preview: true,
         heading_anchors: true,
         math: true,

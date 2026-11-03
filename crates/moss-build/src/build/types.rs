@@ -869,6 +869,9 @@ impl ParsedDocument {
 /// elsewhere on `ParsedDocument` for this purpose.
 #[derive(Debug, Clone, Default)]
 pub struct PageFeatures {
+    /// True if the page contains a `:::form`, nested ones included. Gates the forms
+    /// stylesheet and script, and tells `commerce.json` which pages to read.
+    pub forms: bool,
     /// True if the page contains a `:::subscribe` inline shortcode block.
     /// When any page in a build has this set, the email feature pass injects
     /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
@@ -936,6 +939,8 @@ pub struct PageFeatures {
 /// row and the file disagree.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SiteAssets {
+    /// Any page has a `:::form`. Gates the `forms` stylesheet partial and `forms.js`.
+    pub forms: bool,
     /// Any page has a callout block.
     pub callouts: bool,
     /// Any page defines a footnote. Gates the sidenote runtime script — the
@@ -1020,6 +1025,7 @@ impl SiteAssets {
         // One pass, no per-page clone: `PageFeatures` is a handful of bools,
         // and this runs once per build over every page in the site.
         let mut out = Self {
+            forms: false,
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
@@ -1031,6 +1037,7 @@ impl SiteAssets {
             ..from_config
         };
         for page in pages {
+            out.forms |= page.features.forms;
             out.callouts |= page.features.callouts;
             out.vertical |= crate::build::render::config::effective_typesetting(
                 page.typesetting.as_deref(),

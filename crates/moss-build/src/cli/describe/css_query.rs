@@ -110,6 +110,7 @@ fn shipping_note(sheet: &str) -> &'static str {
     match sheet {
         "site.css" => "always shipped",
         "site/callouts.css" => "shipped only when some page has a callout",
+        "site/forms.css" => "shipped only when some page has a :::form",
         "site/search.css" => "shipped only when [site].search is on (off by default)",
         "site/sidenotes.css" => {
             "shipped only when some page defines a footnote; the rules themselves \

@@ -13,10 +13,9 @@
  */
 
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
+import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
 
 type StatusKey = 'check-email' | 'already-subscribed' | 'error';
-
-type FormState = 'idle' | 'loading' | 'success' | 'error';
 
 type SubscribeResponse = {
   subscribed?: boolean;
@@ -26,29 +25,17 @@ type SubscribeResponse = {
 };
 
 /**
- * Forms whose submit listener is already bound. A WeakSet keyed on the
- * element — not a `data-moss-hydrated` attribute — because idiomorph strips
- * any attribute the runtime added that isn't present in the freshly rendered
- * HTML: a dataset flag would vanish on the very node it was guarding, and a
- * post-morph `autoHydrate()` sweep would bind a second submit listener onto
- * the same (idiomorph-preserved) form element, double-POSTing on submit.
- */
-const hydratedForms = new WeakSet<HTMLFormElement>();
-
-/**
  * Hydrate one form. Safe to call multiple times on the same element —
- * the `hydratedForms` guard prevents double-binding.
+ * `claim` prevents double-binding.
  */
 export function hydrateSubscribeForm(form: HTMLFormElement): void {
-  if (hydratedForms.has(form)) return;
-
   const input = form.querySelector<HTMLInputElement>('input[type="email"]');
   const btn = form.querySelector<HTMLButtonElement>('button[type="submit"]');
   // Only mark the form hydrated once the required DOM is confirmed — otherwise
   // a malformed form (missing input/button) would be flagged as done without
   // any listener bound, and a later retry would early-return.
   if (!input || !btn) return;
-  hydratedForms.add(form);
+  if (!claim(form)) return;
 
   const lang: Lang = langBucket(document.documentElement.lang);
   const copy: SubscribeCopy = COPY[lang];
@@ -91,7 +78,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
     // POST (the form's action is the production subscribe endpoint, so a
     // localhost submit would create a real subscriber). ship.rs strips
     // data-moss-preview on publish, so this branch is dead on the live site.
-    if (document.body.hasAttribute('data-moss-preview')) {
+    if (inPreview()) {
       window.setTimeout(() => {
         // Mirror the real success path (status copy + state), so preview
         // shows the same confirmation the live site does.
@@ -140,22 +127,6 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   });
 }
 
-function setState(form: HTMLFormElement, state: FormState, btn?: HTMLButtonElement): void {
-  form.dataset.state = state;
-  // aria-disabled on the button during loading/success so
-  // screen-readers know it's unavailable without visual CSS alone.
-  // Resolve the button from the form when not passed so aria-disabled never
-  // goes stale on the live element.
-  const resolvedBtn = btn ?? form.querySelector<HTMLButtonElement>('button[type="submit"]');
-  if (resolvedBtn) {
-    if (state === 'loading' || state === 'success') {
-      resolvedBtn.setAttribute('aria-disabled', 'true');
-    } else {
-      resolvedBtn.removeAttribute('aria-disabled');
-    }
-  }
-}
-
 /**
  * Swap which status span is visible and set its text from the copy table.
  * The Rust renderer seeds each span with server-rendered text, but we
@@ -198,55 +169,4 @@ function copyFor(key: StatusKey, copy: SubscribeCopy): string {
   }
 }
 
-/**
- * Freeze the button slot's width to the button's natural idle width, once.
- * The slot element (`.moss-btn-slot`) stays this width through every
- * state change, so the input never sees the button collapse into a circle and
- * cannot shift horizontally. The circle centers inside the slot via CSS, which
- * puts it on the same centerline as the original button.
- */
-function lockSlotWidth(form: HTMLFormElement, btn: HTMLButtonElement): void {
-  const slot = btn.parentElement;
-  if (!slot || !slot.classList.contains('moss-btn-slot')) return;
-  // The lock protects the ROW layout (input beside button): without it the
-  // input's flex calculation sees the button collapse into a circle. In the
-  // stacked column layout (mobile in-page card) the slot is its own stretched
-  // row — a pixel lock there pins the circle to whatever width the form had
-  // at submit time, off-center after any pane resize. Leave it fluid.
-  if (getComputedStyle(form).flexDirection === 'column') {
-    slot.style.width = '';
-    return;
-  }
-  if (slot.style.width) return;
-  // Zero offsetWidth means layout isn't ready (detached, display:none, jsdom).
-  // Degrade gracefully: slot keeps its CSS flex:0 0 auto + min-height so the
-  // morph still renders — it just can't pin width across the transition.
-  const w = btn.offsetWidth;
-  if (w <= 0) return;
-  slot.style.width = `${w}px`;
-}
-
-/**
- * Auto-hydrate on load. The module is also exported so tests can drive it
- * explicitly without touching the document-level listener.
- */
-function autoHydrate(): void {
-  const forms = document.querySelectorAll<HTMLFormElement>(
-    'form.moss-subscribe-form[data-moss-hosted="true"]',
-  );
-  forms.forEach(hydrateSubscribeForm);
-}
-
-if (typeof document !== 'undefined') {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', autoHydrate);
-  } else {
-    autoHydrate();
-  }
-  // idiomorph preview updates patch the DOM without re-running inline
-  // scripts, so a `:::subscribe` block that appears (or is reused) after a
-  // morph never gets its submit listener bound unless we re-sweep here.
-  // `autoHydrate` is safe to call repeatedly — `hydratedForms` skips forms
-  // that are already bound.
-  document.addEventListener('moss-morph-patched', autoHydrate);
-}
+autoHydrate<HTMLFormElement>('form.moss-subscribe-form[data-moss-hosted="true"]', hydrateSubscribeForm);

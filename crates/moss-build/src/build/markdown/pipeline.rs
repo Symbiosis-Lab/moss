@@ -386,6 +386,9 @@ pub struct SiteMarkdown<'a> {
     /// The default edition's language as configured, not the interface language it maps to,
     /// which tells a tree in that language from an edition (`moss_core::home::root_language`).
     pub lang: &'a str,
+    /// `[services.forms] endpoint`, which request forms post to. `None` leaves
+    /// them pending. Part of the parse cache fingerprint.
+    pub forms_endpoint: Option<&'a str>,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -402,6 +405,7 @@ impl Default for SiteMarkdown<'_> {
             typesetting: None,
             fields: &[],
             lang: "en",
+            forms_endpoint: None,
         }
     }
 }
@@ -932,6 +936,7 @@ pub fn process_markdown_file(
         site_id: subscribe_site,
         lang: doc_lang,
         seta_base: seta_base_resolved,
+        forms_endpoint: site.forms_endpoint,
         assets: asset_snapshot,
         media_lookup,
         permalink_section_label: crate::i18n::t(doc_lang, "permalink_section"),
@@ -1273,6 +1278,7 @@ pub fn process_markdown_file(
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
+    let has_forms = moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Form);
     let has_viewer = moss_core::ast::has_viewable_picture_recursive(&doc);
 
     // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
@@ -1692,6 +1698,7 @@ pub fn process_markdown_file(
         hero_overlay_text,
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
+            forms: has_forms,
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
@@ -2106,6 +2113,7 @@ fn render_markdown_to_html_with_config(
         site_id: "",
         lang: crate::i18n::Language::En,
         seta_base: "https://api.mosspub.com",
+        forms_endpoint: None,
         assets: asset_snapshot,
         media_lookup,
         permalink_section_label: crate::i18n::t(crate::i18n::Language::En, "permalink_section"),
@@ -2209,6 +2217,8 @@ struct PipelineHooks<'a> {
     /// available (test / fragment-render paths) — those callers pass `None` to
     /// `process_markdown_file`'s `seta_url` parameter and the default is applied.
     seta_base: &'a str,
+    /// Where request forms post (`[services.forms] endpoint`).
+    forms_endpoint: Option<&'a str>,
     /// `Some` in the production path (an `AssetSnapshot` is built from
     /// the `MediaDimensionLookup` in `apply_typed_shortcodes`); `None`
     /// in test / fragment-render paths where no snapshot is in scope.
@@ -2272,6 +2282,10 @@ impl<'a> PipelineHooks<'a> {
         )
     }
 
+    fn render_request_form(&self, form: &moss_core::ast::FormShortcode) -> String {
+        crate::build::features::forms::render_form(form, self.lang, self.forms_endpoint)
+    }
+
     /// `DefaultHooks` bound to this render's asset snapshot, for the shortcode
     /// arms that delegate their whole byte shape to moss-core.
     fn asset_bound_hooks(&self) -> moss_core::ast::DefaultHooks<'a> {
@@ -2314,8 +2328,10 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         source_line: Option<usize>,
     ) -> moss_core::ast::GridParts {
         let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
+        let form = |f: &moss_core::ast::FormShortcode| self.render_request_form(f);
         let hooks = moss_core::ast::DefaultHooks::without_heading_anchors(self.assets)
-            .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe));
+            .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe))
+            .with_request_form(moss_core::ast::RequestFormFn(&form));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
     }
 
@@ -2420,6 +2436,9 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         match sc {
             moss_core::ast::Shortcode::Subscribe(args) => {
                 out.push_str(&self.render_subscribe_form(args));
+            }
+            moss_core::ast::Shortcode::Form(args) => {
+                out.push_str(&self.render_request_form(args));
             }
             moss_core::ast::Shortcode::Grid(args) => {
                 // moss-core's own Grid arm, verbatim: the asset binding lives

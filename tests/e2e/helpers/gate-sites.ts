@@ -4316,3 +4316,43 @@ The opening line of the fourth note.
 `,
   },
 };
+
+// A request form with one of each kind of field, for tests/render-gates/site/request-form.spec.ts
+// and playwright/request-form.config.ts.
+export const REQUEST_FORM: ScratchSiteSpec = {
+  name: "request-form-gate",
+  files: {
+    "index.md": `---
+title: Request form
+uid: "rfm00101"
+---
+
+# Request form
+
+:::form {#booking next=/received/ button="Ask for a date"}
+- Your name * {autocomplete=name}
+- Email * {type=email}
+- Phone {type=tel}
+- Session * {type=radio}
+  - Portrait
+  - Family
+  - Headshots
+- Preferred day {type=date}
+- Colour {type=select}
+  - Red
+  - Blue
+- Anything we should know {type=textarea}
+  Who is coming, and any ideas for the session.
+- Send me the newsletter {type=checkbox}
+:::
+`,
+    "received.md": `---
+title: Received
+uid: "rfm00102"
+---
+
+Thanks.
+`,
+    ".moss/config.toml": `${CONFIG_TOML}\n[services.forms]\nendpoint = "http://127.0.0.1:9/f"\n`,
+  },
+};

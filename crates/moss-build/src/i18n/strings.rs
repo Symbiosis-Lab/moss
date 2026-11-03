@@ -436,6 +436,61 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "订阅",
             Language::ZhHant => "訂閱",
         },
+        // Request forms
+        "form_send" => match lang {
+            Language::En => "Send",
+            Language::De => "Senden",
+            Language::ZhHans => "发送",
+            Language::ZhHant => "送出",
+        },
+        "form_optional" => match lang {
+            Language::En => "Optional",
+            Language::De => "Optional",
+            Language::ZhHans => "选填",
+            Language::ZhHant => "選填",
+        },
+        "form_hp_label" => match lang {
+            Language::En => "Leave this field empty",
+            Language::De => "Dieses Feld leer lassen",
+            Language::ZhHans => "请留空此项",
+            Language::ZhHant => "請留空此項",
+        },
+        "form_required" => match lang {
+            Language::En => "This field is required.",
+            Language::De => "Dieses Feld ist erforderlich.",
+            Language::ZhHans => "此项必填。",
+            Language::ZhHant => "此項必填。",
+        },
+        "form_format" => match lang {
+            Language::En => "Check this value.",
+            Language::De => "Bitte prüfen Sie diese Eingabe.",
+            Language::ZhHans => "请检查此项的内容。",
+            Language::ZhHant => "請檢查此項的內容。",
+        },
+        "form_invalid" => match lang {
+            Language::En => "Some fields need another look. They are marked below.",
+            Language::De => "Einige Felder müssen noch geprüft werden. Sie sind unten markiert.",
+            Language::ZhHans => "有几项需要再检查，已在下方标出。",
+            Language::ZhHant => "有幾項需要再檢查，已在下方標出。",
+        },
+        "form_rate_limited" => match lang {
+            Language::En => "Too many requests. Please try again in a little while.",
+            Language::De => "Zu viele Anfragen. Bitte versuchen Sie es in Kürze erneut.",
+            Language::ZhHans => "请求太频繁，请稍后再试。",
+            Language::ZhHant => "請求太頻繁，請稍後再試。",
+        },
+        "form_unknown" => match lang {
+            Language::En => "This form is not available right now.",
+            Language::De => "Dieses Formular ist derzeit nicht verfügbar.",
+            Language::ZhHans => "此表单暂时无法使用。",
+            Language::ZhHant => "此表單暫時無法使用。",
+        },
+        "form_network" => match lang {
+            Language::En => "Could not send. Check your connection and try again.",
+            Language::De => "Senden nicht möglich. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+            Language::ZhHans => "无法发送。请检查网络后重试。",
+            Language::ZhHant => "無法送出。請檢查網路後重試。",
+        },
         // Calendar files for events
         "add_to_calendar" => match lang {
             Language::En => "Add to calendar",

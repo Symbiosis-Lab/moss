@@ -190,6 +190,11 @@ pub trait RenderHooks {
         None
     }
 
+    /// The production HTML for a `:::form`, when the host supplies one.
+    fn request_form_html(&self, _args: &crate::ast::extract_form::FormShortcode) -> Option<String> {
+        None
+    }
+
     /// Emit a shortcode block as HTML.
     ///
     /// The default impl produces a minimal HTML skeleton suitable for the
@@ -225,6 +230,12 @@ pub trait RenderHooks {
                 out.push_str("</div>");
                 out.push_str("</div>");
             }
+            Shortcode::Form(args) => match self.request_form_html(args) {
+                Some(html) => out.push_str(&html),
+                // Test-harness skeleton, like `Recent`'s: the contract test renders
+                // each authorable example and looks for its root class.
+                None => out.push_str(r#"<div class="moss-form"></div>"#),
+            },
             Shortcode::Gallery(args) => {
                 let mut class_attr = String::from("moss-gallery");
                 if !args.classes.is_empty() {
@@ -827,6 +838,19 @@ pub struct DefaultHooks<'a> {
     /// Replaces the skeleton the `Subscribe` arm emits; see
     /// [`DefaultHooks::with_subscribe_form`].
     subscribe_form: Option<SubscribeFormFn<'a>>,
+    /// Replaces the skeleton the `Form` arm emits; see
+    /// [`DefaultHooks::with_request_form`].
+    request_form: Option<RequestFormFn<'a>>,
+}
+
+/// Renders a `:::form` shortcode to its production HTML.
+#[derive(Clone, Copy)]
+pub struct RequestFormFn<'a>(pub &'a dyn Fn(&crate::ast::extract_form::FormShortcode) -> String);
+
+impl std::fmt::Debug for RequestFormFn<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RequestFormFn")
+    }
 }
 
 /// Renders a `:::subscribe` shortcode to its production HTML.
@@ -845,6 +869,12 @@ impl<'a> DefaultHooks<'a> {
     /// grid cell, which renders through this instance, is not the skeleton.
     pub fn with_subscribe_form(mut self, render: SubscribeFormFn<'a>) -> Self {
         self.subscribe_form = Some(render);
+        self
+    }
+
+    /// Same as [`DefaultHooks::with_subscribe_form`], for `:::form`.
+    pub fn with_request_form(mut self, render: RequestFormFn<'a>) -> Self {
+        self.request_form = Some(render);
         self
     }
 
@@ -916,6 +946,10 @@ const GALLERY_LINK_TEMPLATE_EN: &str = "Open image {n} of {m}";
 impl<'a> RenderHooks for DefaultHooks<'a> {
     fn subscribe_form_html(&self, args: &crate::ast::shortcode::SubscribeShortcode) -> Option<String> {
         self.subscribe_form.map(|render| (render.0)(args))
+    }
+
+    fn request_form_html(&self, args: &crate::ast::extract_form::FormShortcode) -> Option<String> {
+        self.request_form.map(|render| (render.0)(args))
     }
 
     fn gallery_link_template(&self) -> &str {

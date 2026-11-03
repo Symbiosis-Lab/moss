@@ -130,7 +130,7 @@ pub(crate) fn source_fragment(
 /// Names recognized by the typed AST. Other names fall through to the
 /// unknown-name renderer (`<div class="moss-unknown-shortcode" data-name="…">`)
 /// with a build warning.
-const TYPED_KNOWN: &[&str] = &["subscribe", "buttons", "gallery", "hero", "grid", "recent"];
+const TYPED_KNOWN: &[&str] = &["subscribe", "buttons", "gallery", "hero", "grid", "recent", "form"];
 
 fn is_typed_known(name: &str) -> bool {
     TYPED_KNOWN.contains(&name)
@@ -153,7 +153,7 @@ fn parse_shortcode_block(
     let (shortcode, mut diagnostics) = parse_shortcode_by_name(name, args, body, config);
     // Only `:::grid` carries an `{#id}` to its element; say so for the rest
     // instead of dropping it silently.
-    if shortcode.is_some() && name != "grid" {
+    if shortcode.is_some() && name != "grid" && name != "form" {
         if let Some(id) = brace_id(args) {
             diagnostics.warnings.push(format!(
                 "shortcode `:::{name}` has `#{id}`, which it does not put on its element. The id is ignored; put it on a heading or a `::: {{#{id}}}` div instead."
@@ -255,6 +255,10 @@ fn parse_shortcode_by_name(
             (Some(Shortcode::Grid(sc)), warns)
         }
         "recent" => (Some(Shortcode::Recent(parse_recent_args(args, body))), Diagnostics::default()),
+        "form" => {
+            let (form, problems) = super::extract_form::parse_form(args, body);
+            (Some(Shortcode::Form(form)), Diagnostics { warnings: problems, ..Default::default() })
+        }
         _ => (None, Diagnostics::default()),
     }
 }
