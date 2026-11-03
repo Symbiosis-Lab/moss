@@ -490,25 +490,20 @@ fn mtime_to_yyyy_mm_dd(secs: f64) -> Option<String> {
     Some(dt.format("%Y-%m-%d").to_string())
 }
 
-/// Given a desired destination path, append `-2`, `-3`, ... before the
-/// extension until a non-existing path is found. Returns the original path
-/// unchanged if there is no collision.
-///
-/// ## Suffix format (unified in Task 5.1)
-///
-/// Uses **dash** (`-2`, `-3`, …) starting at 2 — consistent with
-/// `copy_files_into` in `copy_in.rs` and `move_one` in `batch.rs`.
-/// The previous underscore scheme (`_1`, `_2`) was retired to eliminate the
-/// divergence between the drag-import path (dash) and the copy/paste path
-/// (was underscore). Callers that documented `_1`-style names in comments or
-/// tests should be updated accordingly.
+/// `path`, or the first of `name-2.ext`, `name-3.ext`, … beside it that
+/// nothing occupies on disk.
 pub fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
+    first_free(path, |_| false)
+}
+
+/// `path`, or the first `-2`, `-3`, … suffixed name beside it that is neither
+/// on disk nor `claimed`.
+pub(crate) fn first_free(path: &std::path::Path, claimed: impl Fn(&std::path::Path) -> bool) -> std::path::PathBuf {
     // symlink_metadata, not exists(): exists() follows symlinks, so a
-    // DANGLING symlink at the destination reads as absent and fs::copy would
-    // then write THROUGH it — outside the vault if it points there (the
-    // same escape shape, one component deeper). Any pre-existing entry,
-    // including a dangling symlink, gets collision-suffixed instead.
-    if path.symlink_metadata().is_err() {
+    // dangling symlink at the destination reads as absent and a write would
+    // go through it, outside the folder if it points there.
+    let taken = |p: &std::path::Path| p.symlink_metadata().is_ok() || claimed(p);
+    if !taken(path) {
         return path.to_path_buf();
     }
 
@@ -526,7 +521,7 @@ pub fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
             None => format!("{}-{}", stem, i),
         };
         let candidate = parent.join(&new_name);
-        if candidate.symlink_metadata().is_err() {
+        if !taken(&candidate) {
             return candidate;
         }
     }

@@ -53,16 +53,7 @@ fn destination(
         return Ok(None);
     }
     let name = src.file_name().ok_or_else(|| format!("Cannot determine filename for '{source}'"))?;
-    let taken = |p: &Path| p.exists() || claimed.contains(p);
-    let mut dest = target_dir.join(name);
-    if taken(&dest) {
-        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-        let ext = src.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
-        dest = (2..=100)
-            .map(|n| target_dir.join(format!("{stem}-{n}{ext}")))
-            .find(|d| !taken(d))
-            .ok_or_else(|| format!("Too many name collisions for '{}' in '{}'", name.to_string_lossy(), target_dir.display()))?;
-    }
+    let dest = crate::editor::filesystem::first_free(&target_dir.join(name), |p| claimed.contains(p));
     claimed.insert(dest.clone());
     Ok(Some(dest.to_string_lossy().into_owned()))
 }
@@ -100,6 +91,16 @@ mod tests {
         let to: Vec<_> = moves.into_iter().map(|(_, to)| to).collect();
         assert_eq!(to, [s(root.join("dst/a-3.md")), s(root.join("dst/a-4.md"))]);
         assert!(root.join("posts/a.md").exists(), "nothing moves");
+    }
+
+    /// A dangling symlink is not free: a move onto it would write through it.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_takes_its_name() {
+        let (_d, root) = site();
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("dst/a.md")).unwrap();
+        let moves = into_folder(&root, &[file(&root, "posts/a.md")], &root.join("dst")).unwrap();
+        assert_eq!(moves[0].1, s(root.join("dst/a-2.md")));
     }
 
     /// The target is named through a symlink, so "already there" must compare
