@@ -341,3 +341,32 @@ fn an_acceptance_cannot_straddle_a_seal() {
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     accepter.join().unwrap();
 }
+
+/// Moved files under one folder, its subfolders included, are one line: the
+/// folder redirect that keeps them all. A file moved alone keeps its own line.
+#[test]
+fn files_moved_with_their_folder_print_one_folder_line() {
+    let text = refusal_text(&[
+        moved("review/old/index.html", "review/client/old/index.html", "review/old/index.html"),
+        moved("review/old/plan.pdf", "review/client/old/plan.pdf", "review/old/plan.pdf"),
+        moved("review/old/notes/a.png", "review/client/old/notes/a.png", "review/old/notes/a.png"),
+        moved("review/old/notes/b.png", "review/client/old/notes/b.png", "review/old/notes/b.png"),
+        moved("files/x.pdf", "archive/x.pdf", "files/x.pdf"),
+    ]);
+    assert!(text.starts_with("Nothing published — 5 addresses"), "{text}");
+    assert!(
+        text.contains("  4 addresses under /review/old/ now live under /review/client/old/. To keep them working, add \"/review/old/\" = \"/review/client/old/\" under [redirects]"),
+        "{text}"
+    );
+    assert!(text.contains("add \"/files/x.pdf\" = \"/archive/x.pdf\""), "{text}");
+    assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
+}
+
+/// Files moved out of the site root share no folder line: one would name the
+/// root, which a folder line cannot.
+#[test]
+fn files_moved_out_of_the_root_keep_their_own_lines() {
+    let text = refusal_text(&[moved("a.pdf", "files/a.pdf", "a.pdf"), moved("b.pdf", "files/b.pdf", "b.pdf")]);
+    assert!(!text.contains("\"/\" ="), "{text}");
+    assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
+}

@@ -50,6 +50,61 @@ pub(crate) fn pending_line(p: &PendingRemoval) -> String {
     }
 }
 
+/// The refusal's lines: one `[redirects]` line for each folder that two or
+/// more moved addresses share, and [`pending_line`] for every other address.
+/// A moved file's folder pair is its two parent folders when its name is
+/// unchanged, a moved page's is its two addresses, and a pair is lifted to its
+/// parents while the folder names match and that parent pair is moved too, so
+/// a folder moved with its subfolders prints one line.
+fn grouped_lines(pending: &[PendingRemoval]) -> Vec<String> {
+    fn parent(a: &str) -> Option<&str> {
+        let t = a.strip_suffix('/').unwrap_or(a);
+        t.rfind('/').map(|i| &t[..=i])
+    }
+    fn last(a: &str) -> &str {
+        a.trim_end_matches('/').rsplit('/').next().unwrap_or("")
+    }
+    let folder_pair = |p: &PendingRemoval| -> Option<(String, String)> {
+        let RemovalCause::Moved { to } = &p.cause else { return None };
+        if p.address.ends_with('/') {
+            return to.ends_with('/').then(|| (p.address.clone(), to.clone()));
+        }
+        let (old_dir, new_dir) = (parent(&p.address)?, parent(to)?);
+        (last(&p.address) == last(to) && old_dir != new_dir).then(|| (old_dir.to_string(), new_dir.to_string()))
+    };
+    // A folder line cannot name the site root, so no such line is suggested.
+    let pair = |p: &PendingRemoval| folder_pair(p).filter(|(old, new)| old != "/" && new != "/");
+    let pairs: Vec<Option<(String, String)>> = pending.iter().map(pair).collect();
+    let known: std::collections::BTreeSet<(String, String)> = pairs.iter().flatten().cloned().collect();
+    let lift = |mut p: (String, String)| loop {
+        match (parent(&p.0), parent(&p.1)) {
+            (Some(a), Some(b)) if last(&p.0) == last(&p.1) && known.contains(&(a.to_string(), b.to_string())) => {
+                p = (a.to_string(), b.to_string());
+            }
+            _ => return p,
+        }
+    };
+    let folders: Vec<Option<(String, String)>> = pairs.into_iter().map(|p| p.map(lift)).collect();
+    let mut sizes: std::collections::BTreeMap<&(String, String), usize> = std::collections::BTreeMap::new();
+    for f in folders.iter().flatten() {
+        *sizes.entry(f).or_default() += 1;
+    }
+    let mut printed = std::collections::BTreeSet::new();
+    let mut lines = Vec::new();
+    for (p, folder) in pending.iter().zip(&folders) {
+        match folder.as_ref().filter(|f| sizes[f] > 1) {
+            Some(f) if printed.insert(f) => lines.push(format!(
+                "{} addresses under {} now live under {}. To keep them working, add \"{}\" = \"{}\" under \
+                 [redirects] in .moss/config.toml.",
+                sizes[f], f.0, f.1, f.0, f.1
+            )),
+            Some(_) => {}
+            None => lines.push(pending_line(p)),
+        }
+    }
+    lines
+}
+
 /// `items` indented two spaces, one per line, the first `LIST_CAP`, then a cut
 /// line saying how many more.
 pub(crate) fn capped_lines<T>(items: &[T], line: impl Fn(&T) -> String) -> String {
@@ -81,7 +136,7 @@ pub(crate) fn refusal_text(pending: &[PendingRemoval]) -> String {
     format!(
         "Nothing published — {head}:\n{}Either keep {} working (for a moved page or file, add the redirect shown), \
          or accept losing {them} and publish with `moss deploy --accept-removals`.",
-        capped_lines(pending, pending_line),
+        capped_lines(&grouped_lines(pending), String::clone),
         if pending.len() == 1 { "the address" } else { "the addresses" },
     )
 }
