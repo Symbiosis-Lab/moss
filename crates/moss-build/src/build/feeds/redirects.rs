@@ -136,8 +136,11 @@ pub fn is_redirect_stub(html: &str) -> bool {
 
 /// Generate an HTML redirect page for the given target URL.
 ///
-/// Uses `<meta http-equiv="refresh">` for immediate redirect with a
-/// `<link rel="canonical">` for SEO and a fallback anchor link.
+/// An immediate `<meta http-equiv="refresh">`, a `<link rel="canonical">`
+/// naming the target and a fallback anchor link, the form static generators
+/// share for an alias page. It also says `noindex`: a stub never wants to be
+/// found by search, its target does, under its own address (and an unlisted
+/// page's old address is as secret as its new one).
 pub fn generate_redirect_html(target_url: &str) -> String {
     // Ensure absolute path (pretty URLs from article-map don't have leading /);
     // an external https URL is already absolute.
@@ -152,6 +155,7 @@ pub fn generate_redirect_html(target_url: &str) -> String {
     let absolute = crate::build::page::meta::escape_html_attr(&absolute);
     format!(
         r#"{STUB_HEAD} content="0; url={absolute}">
+<meta name="robots" content="noindex">
 <link rel="canonical" href="{absolute}">
 <title>Redirecting...</title>
 </head><body>

@@ -296,7 +296,9 @@ fn a_moved_unlisted_pages_old_address_is_published_only_in_its_own_stub() {
         ),
         (".moss/config.toml", &cfg),
     ]);
-    assert!(b.read("review/k7x9q2/index.html").contains("url=/review/client/k7x9q2/"));
+    let stub = b.read("review/k7x9q2/index.html");
+    assert!(stub.contains("url=/review/client/k7x9q2/"));
+    assert!(stub.contains(r#"<meta name="robots" content="noindex">"#), "a stub must not be indexed: {stub}");
     let mut leaks = Vec::new();
     for entry in walkdir::WalkDir::new(&b.out).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
         let rel = entry.path().strip_prefix(&b.out).unwrap().to_string_lossy().replace('\\', "/");

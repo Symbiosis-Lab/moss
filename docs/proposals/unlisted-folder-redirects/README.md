@@ -43,4 +43,4 @@ All of it is in this repository: the redirect table and its forms (`crates/moss-
 
 ## Not built yet
 
-- The forwarding page carries no `noindex` and no link-preview tags.
+- The forwarding page carries no link-preview tags, so an old link shared in a chat app draws no card. It does carry `noindex`.
