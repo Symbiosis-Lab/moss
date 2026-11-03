@@ -143,6 +143,7 @@ pub struct FrontMatter {
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub title: Option<String>,
     /// Optional publication date
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub date: Option<String>,
     /// Navigation weight for ordering (lower numbers = higher priority)
     pub weight: Option<i32>,
