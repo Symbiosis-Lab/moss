@@ -225,7 +225,8 @@ For shortcodes and partials (content reuse, not styling tiers), see
 
 `.moss/theme/style.css` is read and edited by the person who owns the site long after you finish, so write it for them. Before handing it over, simplify and consolidate:
 
-- Delete rules that match nothing (`moss doctor --surface` names them) and rules that restate a moss default or repeat another rule.
+- Delete rules that restate a moss default or repeat another rule.
+- Delete rules that match nothing (`moss doctor --surface` names them) only after a build that has every kind of content the site will carry, an upcoming and a past event included: a listing filtered by date or by drafts is empty on some days, and the rules for its entries match nothing on those days, and a rule for an empty listing matches nothing on the days it has entries. Doctor lists rules that name a listing's markup apart from the dead ones for that reason.
 - Fold a value that appears more than twice (a colour, a gap, a width) into a `--moss-*` override or a custom property of your own in `:root {}`.
 - Merge rules that differ in one property into one selector list; prefer one rule per component over the same selector reopened in several places.
 - Group the file by what it styles: tokens first, then page-wide type and layout, then one block per component, then page-specific blocks, with each block's responsive and dark-mode overrides right after it.
