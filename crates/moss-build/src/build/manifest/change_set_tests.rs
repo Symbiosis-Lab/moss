@@ -800,3 +800,74 @@ fn a_webp_with_no_picture_behind_it_is_not_kept() {
     assert!(crate::build::feeds::derivative_redirects::kept_derivatives(&prev, &files_of(&cur)).is_empty());
     assert_eq!(removed_of(&prev, &cur), [("cover.webp".to_string(), RemovalReason::Unexplained)]);
 }
+
+/// A folder file moved with its bytes loses its recorded source, which reads
+/// as a deletion. The same bytes served at an address the last publish did
+/// not serve are that file, moved: the publish asks for the redirect.
+#[test]
+fn a_moved_folder_file_is_a_move_not_a_deletion() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["review/old/plan.pdf"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["review/client/old/plan.pdf"], &[]);
+
+    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    assert_eq!(removed_of(&prev, &cur), [("review/old/plan.pdf".to_string(), RemovalReason::Unexplained)]);
+    let pending = pending_removals(&removed, None);
+    assert_eq!(pending[0].cause, RemovalCause::Moved { to: "/review/client/old/plan.pdf".to_string() });
+    let line = crate::deploy::removal_gate::pending_line(&pending[0]);
+    assert!(line.contains(r#"add "/review/old/plan.pdf" = "/review/client/old/plan.pdf" under [redirects]"#), "{line}");
+}
+
+/// A picture's derivative carries the same bytes to the new folder, so it
+/// moved too, rather than being a generated file nobody produces now.
+#[test]
+fn a_moved_pictures_derivative_moved_with_it() {
+    let prev = snapshot(&sealed_with_assets(&[], &[("old/photo.webp", b"W")], &["old/photo.png"], &[]));
+    let cur = sealed_with_assets(&[], &[("new/photo.webp", b"W")], &["new/photo.png"], &[]);
+
+    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| (r.path, r.moved_to)).collect();
+    assert_eq!(
+        moved,
+        [
+            ("old/photo.png".to_string(), Some("new/photo.png".to_string())),
+            ("old/photo.webp".to_string(), Some("new/photo.webp".to_string())),
+        ]
+    );
+}
+
+/// Bytes the last publish already served elsewhere are not a new home.
+#[test]
+fn a_deleted_file_whose_bytes_were_already_served_elsewhere_stays_a_deletion() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["a.pdf", "b.pdf"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["b.pdf"], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("a.pdf".to_string(), RemovalReason::AuthorRemoved)]);
+}
+
+/// When the bytes arrive at several addresses, the one with the same name wins.
+#[test]
+fn a_move_prefers_the_arrival_with_the_same_name() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.pdf"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["new/copy.pdf", "new/plan.pdf"], &[]);
+
+    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| r.moved_to).collect();
+    assert_eq!(moved, [Some("new/plan.pdf".to_string())]);
+}
+
+/// A move is the same bytes, not the same name.
+#[test]
+fn a_new_file_with_other_bytes_is_not_where_a_deleted_one_went() {
+    let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.pdf"], &[]));
+    let cur = sealed_with_assets(&[], &[("new/plan.pdf", b"other")], &[], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("old/plan.pdf".to_string(), RemovalReason::AuthorRemoved)]);
+}
+
+/// A page's rendered bytes are not its identity: its uid is, and a page whose
+/// source is gone stays the author's removal even if a new page renders alike.
+#[test]
+fn a_deleted_page_is_not_moved_by_a_new_page_that_renders_alike() {
+    let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h1", b"same")], &[]));
+    let cur = sealed(&[("b.md", "b/index.html", "h2", b"same")], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("a/index.html".to_string(), RemovalReason::AuthorRemoved)]);
+}

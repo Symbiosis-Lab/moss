@@ -79,7 +79,7 @@ pub(crate) fn refusal_text(pending: &[PendingRemoval]) -> String {
         (format!("{} addresses your site has served would stop working, and you did not remove them", pending.len()), "them")
     };
     format!(
-        "Nothing published — {head}:\n{}Either keep {} working (for a moved page, add the redirect shown), \
+        "Nothing published — {head}:\n{}Either keep {} working (for a moved page or file, add the redirect shown), \
          or accept losing {them} and publish with `moss deploy --accept-removals`.",
         capped_lines(pending, pending_line),
         if pending.len() == 1 { "the address" } else { "the addresses" },

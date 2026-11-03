@@ -290,7 +290,8 @@ pub enum RemovalReason {
     /// published, an author's act like deleting it.
     Withheld,
     /// Anything else: a generated file nobody produces now, a source that
-    /// still exists whose address changed, or a record too old to say.
+    /// still exists whose address changed, a file whose bytes moved to
+    /// another address, or a record too old to say.
     Unexplained,
 }
 
@@ -300,9 +301,10 @@ pub struct RemovedAddress {
     /// Build output path, e.g. `feed.xml` or `a/index.html`.
     pub path: String,
     pub reason: RemovalReason,
-    /// Where the page whose address this was now publishes, when its source
-    /// still exists and moved (a slug or permalink change with no redirect).
-    /// Lets a later step offer the redirect.
+    /// Where what was served here is served now, with no redirect: a page
+    /// whose source still exists under a new slug or permalink, or a file
+    /// whose bytes moved to another address. Lets a later step offer the
+    /// redirect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_to: Option<String>,
     /// The source file the last publish recorded for this address: a page's
@@ -323,8 +325,8 @@ pub enum RemovalCause {
     /// A file moss generates that this build no longer produces (or a record
     /// too old to say more).
     Generated,
-    /// The page that lived here is now served at `to` (served form), and
-    /// nothing answers at the old address.
+    /// The page or file that lived here is now served at `to` (served form),
+    /// and nothing answers at the old address.
     Moved { to: String },
     /// The source file is still in the folder but is no longer published.
     StillInFolder { source: String },
@@ -673,19 +675,15 @@ fn is_ladder_of_published_video(out: &str, current: &HashMap<String, String>) ->
 
 /// Public addresses the baseline served that `current` does not, each with
 /// why, sorted by path. An old address the new build still serves (a redirect
-/// stub, an alias) is therefore not removed; anything under `_moss/` is not a
-/// public address.
+/// stub, an alias) is not removed; nothing under `_moss/` is public.
 ///
-/// `AuthorRemoved` needs evidence that the author deleted the source: the
-/// recorded source of the output (a page's, or a folder file's via
-/// `asset_source_to_output`) no longer exists. `source_exists` must answer
-/// from the site folder, not from this build's source lists: a page that
-/// could not be read (bad bytes, no permission) drops out of the build while
-/// its file is still there, and is not the author's removal. Without a recorded source — a
-/// generated file, or a baseline that predates `asset_source_to_output` — the
-/// answer is `Unexplained`, which is the cautious one. So is a source that
-/// still exists: the file is there but its address is gone, and `moved_to`
-/// says where the page went.
+/// `AuthorRemoved` needs evidence: the recorded source of the output (a
+/// page's, or a folder file's via `asset_source_to_output`) no longer exists,
+/// and for a file, no address new to this build serves its bytes.
+/// `source_exists` answers from the site folder, not this build's source
+/// lists, since an unreadable page drops out of the build while its file is
+/// still there. Anything else is `Unexplained`, the cautious answer, and
+/// `moved_to` says where a moved page or file went.
 ///
 /// Pure, and independent of [`classify`]: the baseline may be another
 /// target's record, which must feed this and nothing else.
@@ -699,9 +697,7 @@ pub fn removed_addresses(
         for (src, out) in map {
             m.entry(out.as_str()).or_default().push(src.as_str());
         }
-        for srcs in m.values_mut() {
-            srcs.sort_unstable();
-        }
+        m.values_mut().for_each(|srcs| srcs.sort_unstable());
         m
     }
     let page_sources = by_output(&baseline.source_to_output);
@@ -709,28 +705,35 @@ pub fn removed_addresses(
     let exists = |src: &&str| source_exists(src);
     let withheld = current.withheld();
     let files = current.files();
-
+    // A moved folder file keeps its bytes but loses its recorded source. The
+    // same bytes at an address the last publish did not serve are that file.
+    let mut arrived: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (out, hash) in files.iter().filter(|(out, _)| !baseline.files.contains_key(*out) && is_public_address(out)) {
+        arrived.entry(hash.as_str()).or_default().push(out.as_str());
+    }
+    let arrival = |out: &str| {
+        let name = out.rsplit('/').next();
+        let arrivals = arrived.get(baseline.files.get(out)?.as_str())?;
+        arrivals.iter().min_by_key(|c| (c.rsplit('/').next() != name, **c)).map(|c| c.to_string())
+    };
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
         .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, &files))
         .map(|(out, is_page)| {
             let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
+            let renamed = recorded.and_then(|srcs| {
+                srcs.iter().filter_map(|src| current.source_to_output().get(*src)).find(|now| now.as_str() != out).cloned()
+            });
+            let moved_to = if is_page { renamed } else { renamed.or_else(|| arrival(out)) };
             let reason = match recorded {
                 _ if withheld.contains(out) => RemovalReason::Withheld,
+                _ if moved_to.is_some() => RemovalReason::Unexplained,
                 Some(srcs) if !srcs.iter().any(exists) => RemovalReason::AuthorRemoved,
-                // A calendar file has no source of its own: it exists while a page
-                // says `start:` (or a listing shows one). Losing it means the author
-                // edited that, and the page file is still on disk, so the deleted-
-                // source test above cannot see it.
+                // A calendar file exists while a page says `start:`; losing it is
+                // the author's edit of a page that is still on disk.
                 None if crate::build::feeds::calendar::is_calendar_file(out) => RemovalReason::AuthorRemoved,
                 _ => RemovalReason::Unexplained,
             };
-            let moved_to = recorded.and_then(|srcs| {
-                srcs.iter()
-                    .filter_map(|src| current.source_to_output().get(*src))
-                    .find(|now| now.as_str() != out)
-                    .cloned()
-            });
             let source = recorded.and_then(|srcs| srcs.first()).map(|s| s.to_string());
             RemovedAddress { path: out.to_string(), reason, moved_to, source }
         })

@@ -315,10 +315,10 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Refused because an address would go offline:** an address the site has
   served must not vanish unasked. When a build would stop serving one for a
   reason other than the human deleting its source (a page whose address
-  changed, a generated file no longer produced), `deploy` and `--dry-run`
-  list each address with its cause and refuse. Keep the address working
-  (for a moved page, add the printed `"/old/" = "/new/"` line under
-  `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
+  changed, a file moved to another folder, a generated file no longer
+  produced), `deploy` and `--dry-run` list each address with its cause and
+  refuse. Keep the address working (for a moved page or file, add the printed
+  `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
   the human has said to lose those addresses. A `.webp` derivative of a picture
   that is still in the folder needs none of this: when no page embeds the picture
   any more, moss keeps the derivative's address as a redirect to the picture by

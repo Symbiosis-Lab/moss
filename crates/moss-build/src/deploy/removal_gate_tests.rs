@@ -102,7 +102,7 @@ fn the_refusal_for_a_moved_page_names_the_redirect_and_both_ways_out() {
         text,
         "Nothing published — 1 address your site has served would stop working, and you did not remove it:\n\
          \x20 /old/ now lives at /new/. To keep the old link working, add \"/old/\" = \"/new/\" under [redirects] in .moss/config.toml.\n\
-         Either keep the address working (for a moved page, add the redirect shown), or accept losing it and publish with `moss deploy --accept-removals`."
+         Either keep the address working (for a moved page or file, add the redirect shown), or accept losing it and publish with `moss deploy --accept-removals`."
     );
 }
 
