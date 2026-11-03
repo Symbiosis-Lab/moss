@@ -20,12 +20,10 @@ path = "src/main.rs"
 
 [dependencies]
 moss-build = { path = "../moss-build" }
-log = "0.4"
 # The app binary loads `.env` before dispatch (the desktop app's `main.rs`), so a
 # crossed verb reading `MOSS_ENV`/`MOSS_SETA_URL` saw a developer's local
 # environment there and production here. Same crate, same call, same answer.
 dotenvy = "0.15"
-tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "signal", "time"] }
 # `UpdaterManifest` (`latest.json`) parsing, and the outer base64 layer both
 # `pubkey` and a manifest signature are wrapped in. Same version strings as
 # moss-build's, already in the lock via it — no new crate, no version bump.
@@ -35,6 +33,7 @@ base64 = "0.21"
 
 [dev-dependencies]
 tempfile = "3.0"
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "signal", "time"] }
 # Only the fixture builders in `desktop_tests.rs` still use these —
 # `install_bundle` now unpacks through `moss_build::system::tar_safe`.
 # Same version strings as moss-build's and the desktop app's, both already

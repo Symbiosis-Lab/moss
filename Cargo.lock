@@ -2973,7 +2973,6 @@ dependencies = [
  "base64 0.21.7",
  "dotenvy",
  "flate2",
- "log",
  "moss-build",
  "serde",
  "serde_json",

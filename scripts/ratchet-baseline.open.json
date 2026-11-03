@@ -132,7 +132,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/Cargo.toml": 83,
-        "crates/moss-cli/Cargo.toml": 7,
+        "crates/moss-cli/Cargo.toml": 5,
         "crates/moss-core/Cargo.toml": 6
       }
     }
