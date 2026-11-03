@@ -320,7 +320,11 @@ model (dark mode, quiet chrome, `@layer` rules), see
   refuse. Keep the address working (for a moved page or file, add the printed
   `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20
   addresses, `moss deploy <folder> --dry-run --json` lists every one, and its
-  `redirects_to_add` holds the lines to paste), or pass `--accept-removals` — only when
+  `redirects_to_add` holds the lines to paste; in that JSON, `refusal.kind` is one
+  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `removals`, `no_environment`, `foreign_inputs`;
+  a setup failure prints `{"error"}` instead; an `output_path` is a file of the
+  build output, an `address` is what a visitor asks for; with `--prebuilt` the
+  refused files are `transfer.removed_output_paths`), or pass `--accept-removals` — only when
   the human has said to lose those addresses. A `.webp` derivative of a picture
   that is still in the folder needs none of this: when no page embeds the picture
   any more, moss keeps the derivative's address as a redirect to the picture by

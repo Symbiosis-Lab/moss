@@ -462,7 +462,7 @@ fn removed_by_author(folder: &str) -> String {
 fn json_report(result: &Result<DeployReport, String>) -> (String, i32) {
     match result {
         Ok(DeployReport::DryRun(dry)) => {
-            (serde_json::to_string_pretty(dry).expect("a dry run serializes"), if dry.refusal.is_some() { 1 } else { 0 })
+            (serde_json::to_string_pretty(&dry.to_json()).expect("a dry run serializes"), if dry.refusal.is_some() { 1 } else { 0 })
         }
         Ok(_) => (super::list::json_error("--json describes a dry run, and this was a deploy"), 1),
         Err(e) => (super::list::json_error(e), 1),
@@ -734,7 +734,9 @@ mod dry_run_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_json_dry_run_lists_every_move_and_the_lines_that_keep_them() {
         let fx = Fixture::new(false);
-        let mut files = std::collections::HashMap::new();
+        // A page that moved, beside 25 files that moved with their folder.
+        std::fs::write(fx.dir.path().join("moved.md"), "---\ntitle: Moved\n---\n\nNew home.\n").unwrap();
+        let mut files = std::collections::HashMap::from([("old/index.html".to_string(), "100644:abc".to_string())]);
         let mut assets = std::collections::HashMap::new();
         std::fs::create_dir_all(fx.dir.path().join("review/new")).unwrap();
         for i in 0..25 {
@@ -751,6 +753,7 @@ mod dry_run_tests {
                 target: "moss:dry-test".into(),
                 published_at: "2026-09-20T09:12:30+00:00".into(),
                 files,
+                source_to_output: [("moved.md".to_string(), "old/index.html".to_string())].into(),
                 asset_source_to_output: Some(assets),
                 ..Default::default()
             },
@@ -766,8 +769,20 @@ mod dry_run_tests {
         let (out, code) = super::json_report(&Ok(report));
         assert_eq!(code, 1, "a refused dry run exits 1 in JSON too");
         let json: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(json["change_set"]["removed"].as_array().unwrap().len(), 25, "every address, not the first 20");
-        assert_eq!(json["redirects_to_add"], serde_json::json!([r#""/review/old/" = "/review/new/""#]));
+        let offline = json["addresses_going_offline"].as_array().unwrap();
+        assert_eq!(offline.len(), 26, "every address, not the first 20");
+        assert_eq!(offline[0]["output_path"], "old/index.html");
+        assert_eq!(offline[0]["address"], "/old/");
+        assert_eq!(offline[0]["moved_to"], "/moved/");
+        assert!(json["change_set"].get("removed").is_none(), "one list of offline addresses, named");
+        assert!(json["transfer"]["removed_output_paths"].as_array().unwrap().iter().any(|p| p == "review/old/00.pdf"));
+        assert_eq!(json["refusal"]["kind"], "removals");
+        let pending = json["pending_removals"].as_array().unwrap();
+        assert_eq!(pending.len(), 26);
+        assert_eq!(pending[1]["output_path"], "review/old/00.pdf");
+        assert_eq!(pending[1]["address"], "/review/old/00.pdf");
+        assert_eq!(pending[1]["cause"], serde_json::json!({ "kind": "moved", "to": "/review/new/00.pdf" }));
+        assert_eq!(json["redirects_to_add"], serde_json::json!([r#""/old/" = "/moved/""#, r#""/review/old/" = "/review/new/""#]));
         assert!(!fx.contacted_the_server());
     }
 
@@ -792,7 +807,7 @@ mod dry_run_tests {
         let report = fx.run(true).await.expect("a dry run reports, it does not fail");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
-        assert!(dry.refusal.as_deref().is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
+        assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
         assert!(
             matches!(&dry.transfer, crate::deploy::dry_run::Transfer::SinceLastPublish { removed, .. } if removed == &["legacy-feed.xml"]),
             "{:?}",
@@ -869,7 +884,7 @@ mod dry_run_tests {
         let fx = unpublished(false);
         let report = fx.run(true).await.expect("a dry run reports the plan");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
-        let refusal = dry.refusal.as_deref().expect("a real deploy would stop here");
+        let refusal = dry.refusal.as_ref().map(|r| r.text.as_str()).expect("a real deploy would stop here");
         assert!(refusal.contains("has no site yet") && refusal.contains("moss env"), "{refusal}");
         assert!(!fx.contacted_the_server());
     }
