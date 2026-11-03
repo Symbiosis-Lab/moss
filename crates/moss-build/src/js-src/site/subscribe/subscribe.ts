@@ -25,12 +25,6 @@ type SubscribeResponse = {
   error?: string;
 };
 
-/** How long success stays up before auto-reverting to idle. */
-const AUTO_REVERT_MS = 4000;
-
-/** Per-form auto-revert timers, keyed by form element. */
-const revertTimers = new WeakMap<HTMLFormElement, number>();
-
 /**
  * Forms whose submit listener is already bound. A WeakSet keyed on the
  * element — not a `data-moss-hydrated` attribute — because idiomorph strips
@@ -103,7 +97,6 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
         // shows the same confirmation the live site does.
         showStatus(form, 'check-email', copy);
         setState(form, 'success', btn);
-        scheduleAutoRevert(form, input);
       }, 600);
       return;
     }
@@ -128,18 +121,22 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       }
       showStatus(form, data.alreadySubscribed ? 'already-subscribed' : 'check-email', copy);
       setState(form, 'success', btn);
-      scheduleAutoRevert(form, input);
     } catch {
       showStatus(form, 'error', copy);
       setState(form, 'error', btn);
     }
   });
 
-  // Tap the success circle to revert immediately.
+  // Success stays up until the reader acts: tap the circle (clears the field)
+  // or type again (keeps what they typed).
   btn.addEventListener('click', (e) => {
     if (form.dataset.state !== 'success') return;
     e.preventDefault(); // always prevent submit from re-firing on success
-    revertToIdle(form, input);
+    input.value = '';
+    setState(form, 'idle');
+  });
+  input.addEventListener('input', () => {
+    if (form.dataset.state === 'success') setState(form, 'idle');
   });
 }
 
@@ -147,8 +144,8 @@ function setState(form: HTMLFormElement, state: FormState, btn?: HTMLButtonEleme
   form.dataset.state = state;
   // aria-disabled on the button during loading/success so
   // screen-readers know it's unavailable without visual CSS alone.
-  // Resolve the button from the form when not passed — ensures revertToIdle
-  // (which omits `btn`) never leaves aria-disabled stale on the live element.
+  // Resolve the button from the form when not passed so aria-disabled never
+  // goes stale on the live element.
   const resolvedBtn = btn ?? form.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (resolvedBtn) {
     if (state === 'loading' || state === 'success') {
@@ -227,38 +224,6 @@ function lockSlotWidth(form: HTMLFormElement, btn: HTMLButtonElement): void {
   const w = btn.offsetWidth;
   if (w <= 0) return;
   slot.style.width = `${w}px`;
-}
-
-/**
- * Start the auto-revert timer. Any existing timer for this form is cleared
- * first so rapid re-submits don't stack timers.
- */
-function scheduleAutoRevert(form: HTMLFormElement, input: HTMLInputElement): void {
-  clearAutoRevert(form);
-  const id = window.setTimeout(() => revertToIdle(form, input), AUTO_REVERT_MS);
-  revertTimers.set(form, id);
-}
-
-function clearAutoRevert(form: HTMLFormElement): void {
-  const existing = revertTimers.get(form);
-  if (existing !== undefined) {
-    clearTimeout(existing);
-    revertTimers.delete(form);
-  }
-}
-
-/**
- * Return the form to idle from success. Clears the input value so the user can
- * type a new email. Safe to call from either the auto-revert timer or a click
- * on the success circle.
- */
-function revertToIdle(form: HTMLFormElement, input: HTMLInputElement): void {
-  clearAutoRevert(form);
-  // Skip DOM work if the form has been detached — a stale timer firing on a
-  // removed form would otherwise clobber a fresh hydrate on the same page.
-  if (!form.isConnected) return;
-  input.value = '';
-  setState(form, 'idle');
 }
 
 /**
