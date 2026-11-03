@@ -88,17 +88,41 @@ pub struct RenameArgs {
 }
 
 /// Renames or moves one entry and rewrites every reference that follows it.
-/// In a loose document's folder nothing is rewritten and there is no undo.
 pub async fn rename_entry_with_refs(host: &dyn CommandHost, a: RenameArgs) -> Result<RenameRefsSummary, String> {
-    use crate::editor::{ref_scan, rename_plan};
     let old = host.resolve(&a.old_path)?.to_string_lossy().into_owned();
     let new = host.resolve(&a.new_path)?.to_string_lossy().into_owned();
+    apply_moves(host, &[(old, new)])
+}
+
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveEntriesArgs {
+    pub paths: Vec<VaultPath>,
+    pub target_dir: VaultPath,
+}
+
+/// Moves entries into one folder (see [`crate::editor::rename_plan::destinations::into_folder`]
+/// for where each lands), in one plan, with one undo.
+pub async fn move_entries(host: &dyn CommandHost, a: MoveEntriesArgs) -> Result<RenameRefsSummary, String> {
+    let target = host.resolve(&a.target_dir)?;
+    let moves = crate::editor::rename_plan::destinations::into_folder(host.root(), &resolve_all(host, &a.paths)?, &target)?;
+    apply_moves(host, &moves)
+}
+
+/// Applies absolute `(from, to)` moves all or none, announced to the host's
+/// watcher, and rewrites every reference that follows them. In a loose
+/// document's folder nothing is rewritten and there is no undo.
+fn apply_moves(host: &dyn CommandHost, moves: &[(String, String)]) -> Result<RenameRefsSummary, String> {
+    use crate::editor::{ref_scan, rename_plan};
+    if moves.is_empty() {
+        return Ok(RenameRefsSummary::empty());
+    }
     let Ok(root) = site_root(host) else {
-        let plan = ref_scan::plan_loose(host.root(), &[(old, new)])?;
+        let plan = ref_scan::plan_loose(host.root(), moves)?;
         with_moves_announced(host, &plan.pairs, || plan.apply())?;
         return Ok(RenameRefsSummary::empty());
     };
-    let plan = rename_plan::plan_moves(root, &[(old, new)])?;
+    let plan = rename_plan::plan_moves(root, moves)?;
     let pairs = ref_scan::page_file_pairs(&plan.file_moves);
     let applied = with_moves_announced(host, &pairs, || rename_plan::apply_planned_moves(root, &plan))?;
     Ok(host.rename_undo().summarize_and_store(root, applied))

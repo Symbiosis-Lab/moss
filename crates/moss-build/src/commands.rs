@@ -297,6 +297,7 @@ tier! {
         delete_entry => files::delete_entry,
         delete_entries => files::delete_entries,
         rename_entry_with_refs => files::rename_entry_with_refs,
+        move_entries => files::move_entries,
         scan_references_for_delete => files::scan_references_for_delete,
         clean_references_and_delete => files::clean_references_and_delete,
         undo_rename => files::undo_rename,

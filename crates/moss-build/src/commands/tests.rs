@@ -53,6 +53,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("delete_entry", json!({ "path": "a.md" })),
         ("delete_entries", json!({ "paths": ["a.md"] })),
         ("rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "b.md" })),
+        ("move_entries", json!({ "paths": ["a.md"], "targetDir": "posts" })),
         ("scan_references_for_delete", json!({ "paths": ["a.md", "posts"] })),
         ("clean_references_and_delete", json!({ "paths": ["a.md"] })),
         ("undo_rename", json!({ "undoId": "id" })),
@@ -264,6 +265,31 @@ async fn undo_announces_the_reverse_move() {
     ok::<Value>(write::dispatch(&host, "undo_rename", json!({ "undoId": summary["undo_id"] })).await).await;
     assert!(root.join("a.md").exists());
     assert_eq!(host.announced.lock().unwrap().last(), Some(&("c.md".to_string(), "a.md".to_string())));
+}
+
+/// `decoy/x.md` makes `x.md` ambiguous, so the links cannot resolve by unique name.
+#[tokio::test]
+async fn a_batch_move_rewrites_links_to_each_suffixed_page_and_undoes_as_one() {
+    let (_d, root) = pages();
+    for (rel, text) in [("one/x.md", "# one"), ("two/x.md", "# two"), ("decoy/x.md", "# decoy"), ("c.md", "[1](one/x.md) [2](two/x.md)")] {
+        std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
+        // allow:raw_write test fixture pages in a temp folder
+        std::fs::write(root.join(rel), text).unwrap();
+    }
+    std::fs::create_dir(root.join("dest")).unwrap();
+    let host = TestHost::site(&root);
+    let summary: Value =
+        ok(write::dispatch(&host, "move_entries", json!({ "paths": ["one/x.md", "two/x.md"], "targetDir": "dest" })).await).await;
+    assert_eq!(std::fs::read_to_string(root.join("dest/x-2.md")).unwrap(), "# two");
+    assert_eq!(std::fs::read_to_string(root.join("c.md")).unwrap(), "[1](dest/x.md) [2](dest/x-2.md)");
+    assert_eq!(summary["edited_link_count"], json!(2), "{summary}");
+    assert_eq!(
+        *host.announced.lock().unwrap(),
+        vec![("one/x.md".to_string(), "dest/x.md".to_string()), ("two/x.md".to_string(), "dest/x-2.md".to_string())]
+    );
+    ok::<Value>(write::dispatch(&host, "undo_rename", json!({ "undoId": summary["undo_id"] })).await).await;
+    assert!(root.join("one/x.md").exists() && root.join("two/x.md").exists());
+    assert_eq!(std::fs::read_to_string(root.join("c.md")).unwrap(), "[1](one/x.md) [2](two/x.md)");
 }
 
 /// A loose rename that cannot happen takes back the move it announced.

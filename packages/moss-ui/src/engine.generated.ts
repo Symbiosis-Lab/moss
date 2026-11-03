@@ -596,6 +596,8 @@ reference: string;
  */
 source_span: SourceSpan }
 
+export type MoveEntriesArgs = { paths: VaultPath[]; targetDir: VaultPath }
+
 /**
  * One note to create: `dir` is absolute, `name` carries the extension,
  * `frontmatter` is the JSON object the editor's save path already speaks.
@@ -1228,6 +1230,7 @@ export type EngineCommands = {
 	delete_entry: { args: PathArgs; out: null };
 	delete_entries: { args: PathsArgs; out: null };
 	rename_entry_with_refs: { args: RenameArgs; out: RenameRefsSummary };
+	move_entries: { args: MoveEntriesArgs; out: RenameRefsSummary };
 	scan_references_for_delete: { args: PathsArgs; out: FileReferenceHit[] };
 	clean_references_and_delete: { args: PathsArgs; out: null };
 	undo_rename: { args: UndoRenameArgs; out: UndoResult };
@@ -1265,6 +1268,7 @@ export const ENGINE_TIER = {
 	delete_entry: "write",
 	delete_entries: "write",
 	rename_entry_with_refs: "write",
+	move_entries: "write",
 	scan_references_for_delete: "write",
 	clean_references_and_delete: "write",
 	undo_rename: "write",

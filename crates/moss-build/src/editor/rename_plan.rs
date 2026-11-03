@@ -25,6 +25,7 @@
 //! wrapper: `plan_moves` + `apply_planned_moves` for a batch of exactly one.
 
 mod apply;
+pub(crate) mod destinations;
 mod passthrough;
 mod path_list_folder_index;
 mod served_address;
