@@ -124,6 +124,22 @@ pub fn candidate_keys(href: &str) -> Option<Vec<String>> {
     Some(keys)
 }
 
+/// `html` without its `<template>` elements: their content is inert DOM the
+/// browser never treats as a link, so a link in one is not a dead link.
+fn without_templates(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find("<template") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("</template>") {
+            Some(end) => rest = &rest[start + end + "</template>".len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Every `href`/`src` attribute value in `html`, in document order.
 ///
 /// A substring scan, not a parse. The alternative is a second HTML parser in a
@@ -132,6 +148,8 @@ pub fn candidate_keys(href: &str) -> Option<Vec<String>> {
 /// name immediately and the name must be preceded by whitespace, so `data-src`,
 /// `xlink:href` and `srcset` are all left alone.
 pub fn url_attr_values(html: &str) -> Vec<String> {
+    let owned = without_templates(html);
+    let html = owned.as_str();
     let mut out = Vec::new();
     for attr in URL_ATTRS {
         let mut rest = html;

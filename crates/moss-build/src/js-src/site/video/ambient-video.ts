@@ -19,7 +19,7 @@
  * the Rust synthesizer stays HTML-only and the JS owns the interactive layer.
  */
 
-import { initHeroSequences } from "./hero-sequence";
+import { initHeroSequences } from "../hero/hero-sequence";
 
 const PAUSE_LABEL = "Pause video";
 const PLAY_LABEL = "Play video";

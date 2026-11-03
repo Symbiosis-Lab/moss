@@ -9,8 +9,8 @@
  * Supports light/dark palettes, optional cover image, and QR code.
  */
 
-import { showToast } from "./toast";
-import { langBucket, type Lang } from "./subscribe/i18n";
+import { showToast } from "../toast";
+import { langBucket, type Lang } from "../subscribe/i18n";
 
 // ── Palette from CSS tokens + card overrides ─────────────────────────────
 
@@ -20,7 +20,7 @@ import {
   layoutBottomBar,
   drawBottomBar,
   extractDomain,
-} from "./share-card/bar";
+} from "./bar";
 import {
   type CardBlock,
   type LineSpan,
@@ -33,10 +33,10 @@ import {
   spaceSegments,
   drawJustifiedLine,
   drawJustifiedWrappedLine,
-} from "./share-card/text";
-import { type BlockLayout, layoutBlocks, drawBlocks } from "./share-card/blocks";
-import { buildVerticalCardCanvas } from "./share-card/vertical";
-import { drawCoverImage } from "./share-card/cover";
+} from "./text";
+import { type BlockLayout, layoutBlocks, drawBlocks } from "./blocks";
+import { buildVerticalCardCanvas } from "./vertical";
+import { drawCoverImage } from "./cover";
 
 // Re-exports: external importers and tests reach these through share-card.
 export {

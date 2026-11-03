@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "manifest_sha256": "60e7f69003724e9914d679fd4834c728c4050833022344b3bae2cfe6fe3e69dd",
+  "raw_bytes": 47918,
+  "brotli_bytes": 32117,
+  "budget_bytes": 33723,
+  "countries": 241,
+  "disputed_names": [
+    "Somaliland",
+    "W. Sahara",
+    "N. Cyprus",
+    "Siachen Glacier"
+  ],
+  "vertices": 12468
+}

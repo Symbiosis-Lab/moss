@@ -21,6 +21,7 @@ fn all_on() -> SiteAssets {
         colophon_credit: false,
         field_places: true,
         diagrams: true,
+        country_map: true,
     }
 }
 
@@ -41,16 +42,23 @@ fn every_embedded_script_has_a_row() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/assets/js");
     let in_table: BTreeSet<&str> = SITE_SCRIPTS.iter().map(|s| s.name).collect();
     let mut unregistered = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("assets/js must exist") {
-        let path = entry.expect("readable dir entry").path();
-        if path.extension().and_then(|e| e.to_str()) != Some("js") {
-            continue;
+    let mut pending = vec![dir];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).expect("assets/js must exist") {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("js") {
+                continue;
+            }
+            let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
+            if NOT_EMITTED.contains(&stem.as_str()) || in_table.contains(stem.as_str()) {
+                continue;
+            }
+            unregistered.push(stem);
         }
-        let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
-        if NOT_EMITTED.contains(&stem.as_str()) || in_table.contains(stem.as_str()) {
-            continue;
-        }
-        unregistered.push(stem);
     }
     assert!(
         unregistered.is_empty(),

@@ -43,7 +43,7 @@
  * room for it in the small collapsed frame, and nothing to widen from
  * before the reader has asked to expand.
  */
-import { setupImmersiveIframe } from "../immersive-mode";
+import { setupImmersiveIframe } from "../../immersive-mode";
 import type { PlacesMapController } from "./map";
 import { copyFor } from "./strings";
 

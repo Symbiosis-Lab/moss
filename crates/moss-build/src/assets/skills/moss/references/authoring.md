@@ -849,6 +849,37 @@ A place namespace's root page can also carry an interactive explorer layered ove
 
 The automatic place line can be dropped for the whole site with `line = false` in the same `[terms.<key>]` table; the default is `true`. With it off, no page renders the "Location: …" line, while `location:` keeps feeding listing cards, the places root, each place's page and every map exactly as before. Like `explorer`, the key is read only for a place-typed kind and ignored elsewhere.
 
+### Country maps
+
+A page whose body is a markdown table can be drawn as a world map with each country coloured by one column, with the same rows as text underneath. Mark the page with `country_map:`; the first column of the table names the country, and `date:` is the day the values were last set:
+
+```markdown
+---
+title: Risk levels
+date: 2026-11-03
+country_map:
+  by: Level
+  levels:
+    - Low
+    - {name: Elevated, text: "Take extra care."}
+    - High
+  unrated: "No assessment yet."
+  action: { label: "Ask us about this trip", link: "/ask/?to={country}" }
+---
+| Country | Level | Note |
+|---|---|---|
+| Mexico | Elevated | Avoid border crossings at night. |
+| Japan | Low | |
+```
+
+`by` names the column whose value colours the country, and `levels` lists that column's values lowest first, which is both the colour ramp and the legend (at most seven; a page with more is a build problem). A level is a plain name or `{name, text}`; when a row has nothing in its other columns, the panel shows its level's `text`. A blank level cell lists the country without colouring it, and a country with no row is neither coloured nor listed.
+
+The page draws the map, its legend and a stamp reading "As of" followed by the `date:` (never the build day), then its own table. Any other page embeds it by its file name, `![[Risk levels|style:map]]` for `Risk levels.md`, which draws the map, legend and stamp followed by the rows grouped by level as a list. Choosing a country (a tap on the map, a row of the list, or an address ending in the country's full English name in lower case with hyphens, such as `#united-states`) opens a panel with its level and the row's other columns, the as-of date and the `action` link, whose `{country}` becomes the country's name, URL-encoded. A country with no row opens the panel with "Not rated", the `unrated` text and the same link; disputed land does nothing. Esc, the panel's close button or a click on empty sea clears it, and without script the list is still the content, each row an anchor.
+
+The country column matches, ignoring case and accents, the ISO 3166 alpha-3 code or Natural Earth's English name (so "Côte d'Ivoire", "CIV" and "Cote d'Ivoire" all work), and a short list of common names: UK, USA, UAE, Ivory Coast, Turkey, Czech Republic, Burma, Swaziland, Macedonia, Cape Verde, East Timor and Vatican. An unknown name, a value outside `levels`, a country listed twice, Antarctica, and land that is disputed or breakaway throughout (such as Somaliland, Northern Cyprus and Western Sahara) are each a build problem naming the page, row and value, so `moss build --strict` fails on them. No borders are drawn: disputed land is cut out of every country and drawn as plain land, so a colour never assigns contested ground.
+
+The map is drawn equal-area (Equal Earth), not in the Patterson projection of place maps, so area compares true. Style it with `--moss-country-land` (uncoloured and disputed land), `--moss-country-fill-low` and `--moss-country-fill-high` (the ends of the ramp, mixed in OKLCH; by default one warm hue, light to dark in light mode and dark to light in dark mode), `--moss-country-fill-1` to `-7` (one level's colour), `--moss-country-graticule` and `--moss-country-chosen`, all listed by `moss describe --json`. Keep each level at 3:1 against the land colour in light and dark if you change them.
+
 ### Events
 
 A page becomes an event by carrying `start:`. `date:` stays the posted date; `start:` is the event time, so when porting from a generator where `date` is the event time, move that value to `start`.

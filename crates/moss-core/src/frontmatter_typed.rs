@@ -248,6 +248,10 @@ pub struct FrontMatter {
         serialize_with = "serialize_term_claim"
     )]
     pub place_page: Option<crate::terms::TermClaim>,
+    /// The country-map settings (`by`, `levels`, `unrated`, `action`), carried
+    /// as written: moss-build reads them, so a malformed block is a build
+    /// problem naming the page instead of a frontmatter parse failure.
+    pub country_map: Option<Value>,
     /// Byline shown under the article title: the credit lines a reader sees,
     /// as the author wrote them. One row per list entry, or per line of a
     /// block scalar:

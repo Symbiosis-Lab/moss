@@ -2953,6 +2953,7 @@ dependencies = [
  "tower-http 0.5.2",
  "trash",
  "ttf-parser 0.21.1",
+ "unicode-normalization",
  "ureq",
  "url",
  "urlencoding",

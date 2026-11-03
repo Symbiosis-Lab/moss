@@ -335,7 +335,7 @@ impl PattersonProjection {
     /// exactly: any point this projects and any point `full_extent` projects
     /// for the same longitude/latitude differ by exactly the affine map the
     /// runtime also applies (`translate(cellX - TILE_BLEED, cellY -
-    /// TILE_BLEED) scale(1/TILE_K)`, `js-src/site/places-explorer/tiles.ts`'s
+    /// TILE_BLEED) scale(1/TILE_K)`, `js-src/site/maps/places-explorer/tiles.ts`'s
     /// `tileOverlayTransform`), to float precision — see
     /// `world_and_a_tile_agree_on_a_known_points_position_after_the_runtimes_transform`.
     ///

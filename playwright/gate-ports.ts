@@ -82,6 +82,7 @@ const GATE_PORT_KEYS = [
   'iframe-open-url',
   'place-map-tokens',
   'place-map-align',
+  'country-map',
   'preview-parity-gate:static',
   'preview-parity-gate:preview',
   'header-hit-areas',

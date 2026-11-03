@@ -155,7 +155,7 @@ describe("tileOverlayTransform", () => {
   // pinned on the Rust side by
   // `tile_viewbox_covers_its_cell_padded_by_bleed_on_whole_units`; here the
   // client's own view of the cell must agree to within one unit of `k`.
-  const mapDir = join(__dirname, "../../../../../tests/fixtures/snapshot-sites/places-site/expected/_moss");
+  const mapDir = join(__dirname, "../../../../../../tests/fixtures/snapshot-sites/places-site/expected/_moss");
   const index = JSON.parse(
     readFileSync(join(mapDir, readdirSync(mapDir).find((name) => name.startsWith("map."))!, "tiles.json"), "utf8"),
   ) as { k: number; cells: Array<[number, number]>; origins: Record<string, [number, number]> };

@@ -121,6 +121,7 @@ fn shipping_note(sheet: &str) -> &'static str {
         "site/places-explorer.css" => {
             "shipped only when the site has a place-typed namespace root with the explorer on"
         }
+        "site/country-map.css" => "shipped only when some page is a country map (`country_map:` in its frontmatter)",
         "site/colophon-credit.css" => "shipped only when [site].credit is set and the colophon is on",
         "site/map-layers.css" => "shipped only when the site declares [map.layers]",
         "site/diagrams.css" => "shipped only when some page has a mermaid diagram",

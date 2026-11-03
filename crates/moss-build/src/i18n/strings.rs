@@ -579,6 +579,21 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHant => "實驗",
         },
 
+        // Country map
+        "country_map_as_of" => match lang {
+            Language::En => "As of {date}",
+            Language::De => "Stand: {date}",
+            Language::ZhHans => "截至 {date}",
+            Language::ZhHant => "截至 {date}",
+        },
+        "country_map_not_rated" => match lang {
+            Language::En => "Not rated",
+            Language::De => "Nicht bewertet",
+            Language::ZhHans => "未评级",
+            Language::ZhHant => "未評級",
+        },
+
+
         // Lightbox controls
         "close" => match lang {
             Language::En => "Close",

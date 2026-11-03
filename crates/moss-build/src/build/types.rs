@@ -391,6 +391,10 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     #[specta(skip)]
     pub embedded_listing_urls: std::collections::BTreeSet<String>,
+    /// The page's `country_map:` block read with its table; `None` for every other page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub country_map: Option<crate::build::place_map::country_map::resolve::Model>,
     /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
     /// in its existing declared order, as a route: a dashed line through the
     /// stops with numbered badges, on this page's own map and the locator
@@ -998,6 +1002,8 @@ pub struct SiteAssets {
     /// just carries the answer through to the `places-explorer` script/CSS
     /// gates.
     pub places_explorer: bool,
+    /// Some page is a country map, so the panel script and the map's stylesheet ship.
+    pub country_map: bool,
     /// The site declares `[map.layers]`, so its map figures carry a credit line.
     pub map_layers: bool,
     /// The site shows its own credit before moss's mark in the colophon
@@ -1048,6 +1054,7 @@ impl SiteAssets {
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;
+            out.country_map |= page.country_map.is_some();
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }
         out

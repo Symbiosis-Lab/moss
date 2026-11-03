@@ -9,10 +9,12 @@
   "scripts": {
     "check": "python3 generate.py --check",
     "generate": "node generate.mjs",
-    "test": "python3 -B -m unittest discover -s . -p 'test_*.py' && node --test test_generate.mjs"
+    "generate:countries": "node generate-countries.mjs",
+    "test": "python3 -B -m unittest discover -s . -p 'test_*.py' && node --test test_generate.mjs test_generate_countries.mjs"
   },
   "devDependencies": {
     "d3-contour": "4.0.2",
+    "polygon-clipping": "0.15.7",
     "shpjs": "6.1.0"
   }
 }

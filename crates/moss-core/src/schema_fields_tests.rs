@@ -200,3 +200,12 @@ fn test_event_fields_are_registered() {
     );
     assert!(field("children_group").enum_values.unwrap().contains(&"upcoming"));
 }
+
+#[test]
+fn country_map_is_a_described_object_field() {
+    let field = BUILTIN_FIELDS.iter().find(|f| f.name == "country_map").expect("country_map is a builtin field");
+    assert_eq!(field.field_type, FieldType::Object);
+    assert!(field.description.contains("levels"), "the description names the keys an author sets");
+    let schema = crate::schema::builtin_schema();
+    assert!(schema.frontmatter.fields.contains_key("country_map"), "moss describe lists it");
+}

@@ -650,6 +650,9 @@ pub fn process_markdown_file(
     let markdown_content_raw =
         prepare_markdown_source(&markdown_content_raw, file_path, frontmatter_line_count);
 
+    let (country_map, markdown_content_raw) =
+        crate::build::place_map::country_map::resolve::prepare(file_path, markdown_content_raw, frontmatter.country_map.as_ref());
+
     // Phase 2F: warn on author-typed raw <img>/<video> HTML in markdown source.
     // After Phase 2E retires placeholder.rs, raw HTML in markdown becomes
     // fully opaque to moss (no LQIP/dims/lazy-load injection). The scanner
@@ -1664,6 +1667,7 @@ pub fn process_markdown_file(
         embedded_listing_urls: Default::default(),
         map,
         route,
+        country_map,
         children,
         children_source,
         sidebar,

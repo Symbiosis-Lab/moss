@@ -21,7 +21,7 @@
  */
 import { aspectX, worldToScreen } from "./camera";
 import { CLUSTER_DISTANCE, clusterVisible } from "./clusters";
-import { langBucket } from "../subscribe/i18n";
+import { langBucket } from "../../subscribe/i18n";
 import { project } from "./projection";
 import { workIdOf, worldCentroid, type WorkPoint } from "./markers";
 import type { Camera, LabelPoint, LabelRiver, LabelsData, LanguageLabels, Place, Point, Rect, Viewport, Work } from "./types";

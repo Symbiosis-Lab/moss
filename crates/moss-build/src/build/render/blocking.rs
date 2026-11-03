@@ -1282,6 +1282,7 @@ pub fn generate_blocking_content_for_build(
         if let Some(maps) = site_config.place_maps.as_ref() {
             crate::build::terms::places::warn_unknown_places(&documents, &site_config.term_kinds, maps.gazetteer());
         }
+        crate::build::place_map::country_map::warn_problems(&documents);
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
         // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,

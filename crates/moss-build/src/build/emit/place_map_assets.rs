@@ -39,7 +39,7 @@
 //! without probing for a 404 per candidate, and derives its own tile
 //! detail ceiling and placement transform from the SAME `k` this build
 //! rendered the tiles at — never a separately-maintained copy that could
-//! drift from it (`js-src/site/places-explorer/camera.ts`'s
+//! drift from it (`js-src/site/maps/places-explorer/camera.ts`'s
 //! `tileDetailMaxZoom`, `tiles.ts`'s `TileLayer`).
 
 use std::path::Path;
@@ -61,6 +61,7 @@ use crate::vault::places::Gazetteer;
 /// condition that its source is acknowledged, so the text is the same file
 /// the pack's source manifest ships beside it.
 const NOTICE: &str = include_str!("../../../data/place-map/NOTICE");
+const COUNTRY_NOTICE: &str = include_str!("../../../data/place-map/country-NOTICE");
 
 /// `tiles.json`'s own shape: `k` and the grid's `columns`/`rows` alongside
 /// the emitted cells, so the runtime never has to hardcode or re-derive the
@@ -237,6 +238,21 @@ impl Asset {
             }
         }
         compute_binary_hash(&buf)
+    }
+}
+
+/// `NOTICE.txt` for a site with a country map, in a directory named after the
+/// country shapes' source: the shapes are drawn inline, so nothing else is
+/// emitted for them.
+pub fn emit_country_notice(documents: &[crate::build::types::ParsedDocument], output_dir: &Path, pending: &mut PendingManifest) {
+    if !documents.iter().any(|d| d.country_map.is_some()) {
+        return;
+    }
+    let result = ServedPath::for_place_map_asset(&place_map::country_map::shapes::embedded().digest, "NOTICE.txt")
+        .map_err(|e| e.to_string())
+        .and_then(|sp| BuildContext::for_render(output_dir, pending).emit(&sp, COUNTRY_NOTICE.as_bytes(), HashBucket::Files).map_err(|e| e.to_string()));
+    if let Err(error) = result {
+        crate::build::cli_output::log_warn_problem!("country-map notice could not be emitted: {error}");
     }
 }
 

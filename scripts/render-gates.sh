@@ -87,6 +87,7 @@ GATES_BUILD=(
   video-embed-shape
   hls-short-clip
   place-map-tokens
+  country-map
   place-map-align
   place-map-route
   preview-parity-gate

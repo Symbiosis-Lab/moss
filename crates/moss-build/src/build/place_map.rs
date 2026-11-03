@@ -17,6 +17,7 @@ pub(crate) mod layer_warp;
 pub(crate) mod places_data;
 mod simplify;
 mod svg;
+pub(crate) mod country_map;
 pub(crate) mod world_coords;
 
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};

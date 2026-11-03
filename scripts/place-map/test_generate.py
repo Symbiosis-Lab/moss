@@ -31,6 +31,25 @@ class SourceBoundaryTests(unittest.TestCase):
         # OR the schema itself allows, not `members` specifically.
         self.assertTrue(all(source.get("members") or source.get("member") for source in sources))
 
+    def test_country_shapes_have_their_own_two_source_manifest(self):
+        manifest, digest = generate.load_manifest(generate.COUNTRIES_MANIFEST)
+        sources = generate.validate_countries_manifest(manifest)
+        self.assertEqual({source["name"] for source in sources}, generate.COUNTRIES_NAMES)
+        main_manifest, main_digest = generate.load_manifest()
+        self.assertNotEqual(digest, main_digest)
+        self.assertFalse({s["name"] for s in main_manifest["sources"]} & generate.COUNTRIES_NAMES)
+
+    def test_country_manifest_rejects_a_missing_or_foreign_source(self):
+        manifest, _ = generate.load_manifest(generate.COUNTRIES_MANIFEST)
+        missing = deepcopy(manifest)
+        missing["sources"].pop()
+        with self.assertRaises(generate.VerificationError):
+            generate.validate_countries_manifest(missing)
+        foreign = deepcopy(manifest)
+        foreign["sources"][0]["url"] = "https://example.org/ne_50m_admin_0_countries.zip"
+        with self.assertRaises(generate.VerificationError):
+            generate.validate_countries_manifest(foreign)
+
     def test_duplicate_sources_are_rejected(self):
         manifest, _ = generate.load_manifest()
         duplicate = deepcopy(manifest)

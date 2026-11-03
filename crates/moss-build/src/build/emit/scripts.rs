@@ -37,7 +37,7 @@ use include_flate::flate;
 // hls.js is 571 kb of minified JS — the one script whose raw bytes are worth
 // not carrying in .rodata. Stored deflate-compressed, inflated once on first
 // use (path is relative to this crate's manifest dir).
-flate!(static HLS_JS: str from "src/assets/js/hls.js");
+flate!(static HLS_JS: str from "src/assets/js/video/hls.js");
 
 /// How a script reaches the browser, and — for the eager ones — who places
 /// its tag.
@@ -121,16 +121,23 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
     },
     SiteScript {
         name: "hero-ends",
-        dev_path: "src/assets/js/hero-ends.js",
-        source: || include_str!("../../assets/js/hero-ends.js"),
+        dev_path: "src/assets/js/hero/hero-ends.js",
+        source: || include_str!("../../assets/js/hero/hero-ends.js"),
         gate: |a| a.hero_ends,
         load: Load::Shell { defer: false },
     },
     SiteScript {
         name: "places-explorer",
-        dev_path: "src/assets/js/places-explorer.js",
-        source: || include_str!("../../assets/js/places-explorer.js"),
+        dev_path: "src/assets/js/maps/places-explorer.js",
+        source: || include_str!("../../assets/js/maps/places-explorer.js"),
         gate: |a| a.places_explorer,
+        load: Load::Shell { defer: false },
+    },
+    SiteScript {
+        name: "country-map",
+        dev_path: "src/assets/js/maps/country-map.js",
+        source: || include_str!("../../assets/js/maps/country-map.js"),
+        gate: |a| a.country_map,
         load: Load::Shell { defer: false },
     },
     SiteScript {
@@ -164,8 +171,8 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
     },
     SiteScript {
         name: "share-card",
-        dev_path: "src/assets/js/share-card.js",
-        source: || include_str!("../../assets/js/share-card.js"),
+        dev_path: "src/assets/js/share-card/share-card.js",
+        source: || include_str!("../../assets/js/share-card/share-card.js"),
         // Rides theme.js, which is unconditional: `selection-actions.ts` wires
         // the Share button on every page, so the chunk must be fetchable from
         // every page. Gating it would mean gating the button.
@@ -174,8 +181,8 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
     },
     SiteScript {
         name: "hls-boot",
-        dev_path: "src/assets/js/hls-boot.js",
-        source: || include_str!("../../assets/js/hls-boot.js"),
+        dev_path: "src/assets/js/video/hls-boot.js",
+        source: || include_str!("../../assets/js/video/hls-boot.js"),
         gate: |a| a.video_ladder,
         load: Load::Shell { defer: false },
     },
@@ -185,7 +192,7 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         // an iPhone, the connection this ladder was measured on, downloads
         // none of it.
         name: "hls",
-        dev_path: "src/assets/js/hls.js",
+        dev_path: "src/assets/js/video/hls.js",
         source: || &HLS_JS,
         gate: |a| a.video_ladder,
         load: Load::Lazy,

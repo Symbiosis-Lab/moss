@@ -4356,3 +4356,43 @@ Thanks.
     ".moss/config.toml": `${CONFIG_TOML}\n[services.forms]\nendpoint = "http://127.0.0.1:9/f"\n`,
   },
 };
+
+// A country map and a page that embeds it, for reading how the map paints and
+// opens its panel. Served by playwright/country-map.config.ts.
+export const COUNTRY_MAP_GATE: ScratchSiteSpec = {
+  name: "country-map-gate",
+  files: {
+    "index.md": `---
+title: Country Map Gate
+---
+
+Before the map.
+
+![[risk-levels|style:map]]
+`,
+    "risk-levels.md": `---
+title: Risk levels
+date: 2026-11-03
+country_map:
+  by: Level
+  levels:
+    - {name: Low, text: "Take normal precautions."}
+    - Guarded
+    - Elevated
+    - High
+  unrated: "No assessment yet."
+---
+| Country | Level | Note |
+|---|---|---|
+| Mexico | Low | |
+| Japan | Guarded | Calm. |
+| Brazil | Elevated | |
+| Chile | High | |
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+`,
+  },
+};

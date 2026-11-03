@@ -7,7 +7,7 @@
  * No per-site override exists for this landing, the same posture
  * `subscribe/i18n.ts` itself takes.
  */
-import { langBucket, type Lang } from "../subscribe/i18n";
+import { langBucket, type Lang } from "../../subscribe/i18n";
 
 export interface PlacesStrings {
   /** `aria-label` on the pannable map region. */

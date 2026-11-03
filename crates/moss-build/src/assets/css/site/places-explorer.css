@@ -6,7 +6,7 @@
    `SiteAssets.places_explorer`. Registered in `build/emit/stylesheet.rs`'s
    CSS_PARTIALS.
 
-   The runtime creates every selector below (`js-src/site/places-explorer/`);
+   The runtime creates every selector below (`js-src/site/maps/places-explorer/`);
    none of it is emitted by Rust, so there is nothing here for the snapshot
    suite to check beyond this file's own bytes. Every class is registered in
    moss-core's component contract (`contract/components.rs`), which is what

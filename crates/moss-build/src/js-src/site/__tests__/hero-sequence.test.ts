@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { initHeroSequences } from "../hero-sequence";
+import { initHeroSequences } from "../hero/hero-sequence";
 
 function mockMatchMedia(reducedMotion: boolean) {
   Object.defineProperty(window, "matchMedia", {
