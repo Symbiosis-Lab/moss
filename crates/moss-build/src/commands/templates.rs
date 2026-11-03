@@ -8,10 +8,10 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use moss_core::template::{
-    folder_in_default_tree, normalise_folder, plan_page_from_template, PlanError, Template, TemplateKind,
+    folder_in_default_tree, normalise_folder, plan_page_from_template, PlanError, SiteLanguages, Template, TemplateKind,
 };
 
-use super::{site_root, CommandHost, NoArgs, VaultPath};
+use super::{lossy, site_root, CommandHost, NoArgs, VaultPath};
 use crate::templates as store;
 use crate::vault::fs::{create_file_with_content_inner, create_folder_inner, recheck_canonical};
 
@@ -26,13 +26,6 @@ pub struct TemplateMeta {
     pub folder: Option<String>,
     /// The languages it has a file for besides the default, e.g. `zh-hans`.
     pub langs: Vec<String>,
-}
-
-/// The site's default language and its other language trees.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct SiteLanguages {
-    pub default_lang: String,
-    pub trees: Vec<String>,
 }
 
 fn today() -> String {
@@ -87,7 +80,7 @@ fn site_rel(root_canonical: &Path, abs: &Path) -> Result<String, String> {
 
 /// The folder a page made from `rel` belongs in, in the default-language tree.
 /// A folder's home file (`news/news.md`) belongs in the folder above its own.
-fn folder_of_source(rel: &str, is_home: bool, langs: &moss_core::template::SiteLanguages) -> Option<String> {
+fn folder_of_source(rel: &str, is_home: bool, langs: &SiteLanguages) -> Option<String> {
     let mut parts: Vec<&str> = rel.split('/').collect();
     parts.pop();
     if is_home {
@@ -142,10 +135,6 @@ fn delete_template_in(project_root: &Path, id: &str) -> Result<(), String> {
     store::delete_template(project_root, id)
 }
 
-fn site_languages_in(project_root: &Path) -> Result<SiteLanguages, String> {
-    let langs = store::site_languages(project_root)?;
-    Ok(SiteLanguages { default_lang: langs.default_lang, trees: langs.trees })
-}
 
 /// The `<field>_page` claim keys of the site's declared name-list fields. A
 /// template captured from a page that claims a person must not make every new
@@ -225,10 +214,6 @@ fn create_translation_in(project_root: &Path, source_abs: &str, lang: &str) -> R
 }
 
 
-fn lossy(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
-}
-
 #[derive(serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTemplateArgs {
@@ -288,8 +273,9 @@ pub async fn set_template_folder(host: &dyn CommandHost, a: SetTemplateFolderArg
     store::set_template_folder(site_root(host)?, &a.id, a.folder.as_deref())
 }
 
+/// The site's default language and its other language trees.
 pub async fn site_languages(host: &dyn CommandHost, _a: NoArgs) -> Result<SiteLanguages, String> {
-    site_languages_in(site_root(host)?)
+    store::site_languages(site_root(host)?)
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -484,7 +470,7 @@ mod tests {
         write(root, ".moss/config.toml", "[site]\nlang = \"en\"\n");
         write(root, "zh-hans/about.md", "---\ntitle: About\n---\nHi\n");
 
-        let langs = site_languages_in(root).unwrap();
+        let langs = store::site_languages(root).unwrap();
         assert_eq!((langs.default_lang.as_str(), langs.trees.as_slice()), ("en", &["zh-hans".to_string()][..]));
     }
 }

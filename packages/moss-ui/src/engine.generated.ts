@@ -2401,9 +2401,14 @@ delimiters: [string, string];
 definitions: { [key in string]: ShortcodeDefinition } }
 
 /**
- * The site's default language and its other language trees.
+ * The site's languages: the default language, and the language trees (folders
+ * named by a language code) beside it.
  */
-export type SiteLanguages = { default_lang: string; trees: string[] }
+export type SiteLanguages = { default_lang: string; 
+/**
+ * Folder names of the non-default language trees, e.g. `["zh-hans"]`.
+ */
+trees: string[] }
 
 /**
  * The generation at `current` was just swapped — the bytes a preview loads

@@ -130,6 +130,10 @@ impl From<String> for VaultPath {
     }
 }
 
+fn lossy(p: &Path) -> String {
+    p.to_string_lossy().into_owned()
+}
+
 /// The open folder when it is a site; a loose document's folder is not one, so
 /// a command that answers with site facts (URLs, terms, roles) refuses there.
 fn site_root(host: &dyn CommandHost) -> Result<&Path, String> {

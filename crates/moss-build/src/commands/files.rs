@@ -3,11 +3,11 @@
 use serde_json::Value;
 
 use super::rename_undo::RenameRefsSummary;
-use super::{site_root, with_moves_announced, CommandHost, VaultPath};
+use super::{lossy, site_root, with_moves_announced, CommandHost, VaultPath};
 use crate::editor::rename_plan::UndoResult;
 
 fn resolve_all(host: &dyn CommandHost, paths: &[VaultPath]) -> Result<Vec<String>, String> {
-    paths.iter().map(|p| host.resolve(p).map(|pb| pb.to_string_lossy().into_owned())).collect()
+    paths.iter().map(|p| host.resolve(p).map(|pb| lossy(&pb))).collect()
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -89,8 +89,8 @@ pub struct RenameArgs {
 
 /// Renames or moves one entry and rewrites every reference that follows it.
 pub async fn rename_entry_with_refs(host: &dyn CommandHost, a: RenameArgs) -> Result<RenameRefsSummary, String> {
-    let old = host.resolve(&a.old_path)?.to_string_lossy().into_owned();
-    let new = host.resolve(&a.new_path)?.to_string_lossy().into_owned();
+    let old = lossy(&host.resolve(&a.old_path)?);
+    let new = lossy(&host.resolve(&a.new_path)?);
     apply_moves(host, &[(old, new)])
 }
 
@@ -164,7 +164,7 @@ pub async fn save_editor_content(
     host: &dyn CommandHost,
     a: SaveEditorContentArgs,
 ) -> Result<crate::editor::content::SaveResult, String> {
-    let path = host.resolve(&a.file_path)?.to_string_lossy().into_owned();
+    let path = lossy(&host.resolve(&a.file_path)?);
     let r = host.saving(&path, &mut || {
         crate::editor::content::persist_editor_content(&path, &a.frontmatter, &a.body, &a.expected_hash, a.keep_displaced)
     })?;

@@ -85,7 +85,8 @@ pub fn instantiate_template_frontmatter(
 
 /// The site's languages: the default language, and the language trees (folders
 /// named by a language code) beside it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct SiteLanguages {
     pub default_lang: String,
     /// Folder names of the non-default language trees, e.g. `["zh-hans"]`.

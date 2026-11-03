@@ -2,17 +2,13 @@
 
 use serde_json::Value;
 
-use super::{site_relative, site_root, CommandHost, NoArgs, VaultPath};
+use super::{lossy, site_relative, site_root, CommandHost, NoArgs, VaultPath};
 use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::editor::content::{EditorBootstrap, ParsedFrontmatter, SourceRole};
 use crate::editor::filesystem::EditorFileInfo;
 use crate::editor::resolve::asset_resolver::ResolvedAsset;
 use crate::editor::resolve::reference_resolver::RefTarget;
 use crate::editor::validation::EditorDiagnostic;
-
-fn lossy(p: &std::path::Path) -> String {
-    p.to_string_lossy().into_owned()
-}
 
 #[derive(serde::Deserialize, specta::Type)]
 pub struct ScanShortcodesArgs {
@@ -351,13 +347,10 @@ pub async fn resolve_expected_url_for_file(host: &dyn CommandHost, a: FileArgs) 
 /// The URL the last build served an asset at; `None` before a build has recorded it.
 pub async fn resolve_asset_url_for_file(host: &dyn CommandHost, a: FileArgs) -> Result<Option<String>, String> {
     let (root, rel) = site_relative(host, &a.file_path)?;
-    let moss_dir = root.join(".moss");
-    let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
-    let Ok(content) = std::fs::read_to_string(paths.hashes()) else {
+    let Some(hashes) = crate::ops::watch::sweep::walk::read_baseline_from_disk(root) else {
         return Ok(None);
     };
-    let hashes: crate::types::content::SiteHashes = serde_json::from_str(&content).unwrap_or_default();
-    let overrides = crate::build::scan::article_map::ArticleMap::load(&moss_dir).map(|m| m.dir_overrides).unwrap_or_default();
+    let overrides = crate::build::scan::article_map::ArticleMap::load(&root.join(".moss")).map(|m| m.dir_overrides).unwrap_or_default();
     Ok(crate::editor::resolve::links::resolve_asset_url_inner(&rel.replace('\\', "/"), &hashes, &overrides))
 }
 
