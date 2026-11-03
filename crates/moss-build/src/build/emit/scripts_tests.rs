@@ -19,6 +19,7 @@ fn all_on() -> SiteAssets {
         map_layers: true,
         colophon_credit: false,
         field_places: true,
+        diagrams: true,
     }
 }
 

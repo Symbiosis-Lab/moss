@@ -1,0 +1,12 @@
+swimlane-beta LR
+  subgraph Customer
+    Browse[Browse catalog]
+    Pay[Pay]
+  end
+  subgraph Warehouse
+    Pick[Pick items]
+    Ship[Ship order]
+  end
+  Browse --> Pay
+  Pay --> Pick
+  Pick --> Ship

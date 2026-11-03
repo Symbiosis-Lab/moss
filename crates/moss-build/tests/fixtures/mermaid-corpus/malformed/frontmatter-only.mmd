@@ -1,0 +1,3 @@
+---
+title: Only frontmatter
+---

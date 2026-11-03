@@ -1,0 +1,8 @@
+flowchart LR
+  A[js] --> B[data] --> C[vb] --> D[proto] --> E[cb] --> F[ok]
+  click A "javascript:alert(1)"
+  click B "data:text/html,<script>alert(2)</script>"
+  click C "vbscript:msgbox(3)"
+  click D "//evil.example/x"
+  click E call alert(5)
+  click F "https://example.com/" "Safe link"

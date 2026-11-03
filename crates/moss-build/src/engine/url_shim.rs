@@ -53,6 +53,9 @@ fn url_constructor<'js>(
     obj.set("search", resolved.query().map(|q| format!("?{q}")).unwrap_or_default())?;
     obj.set("hash", resolved.fragment().map(|f| format!("#{f}")).unwrap_or_default())?;
     obj.set("origin", resolved.origin().ascii_serialization())?;
+    // `String(url)` is its href, as in a browser.
+    let href = resolved.to_string();
+    obj.set("toString", rquickjs::Function::new(ctx.clone(), move || href.clone())?)?;
     Ok(obj)
 }
 
@@ -91,6 +94,7 @@ mod tests {
                 "new URL('../../scale-compare.html', 'https://x.io/a/b/c.html').href"
             ).unwrap();
             let pathname: String = ctx.eval("new URL('https://x.io/p/q').pathname").unwrap();
+            assert_eq!(ctx.eval::<String, _>("String(new URL('HTTPS://X.IO/p'))").unwrap(), "https://x.io/p");
             let threw: bool = ctx.eval("(() => { try { new URL('not a url'); return false; } catch { return true; } })()").unwrap();
             (href, pathname, threw)
         })

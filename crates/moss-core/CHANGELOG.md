@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `content_width` accepts `screen`.
 - `AppliesWhen` and `PagePosition`: where a schema field can change a page, as `{"position": "page" | "folder" | "home"}` or `{"set": "<other field>"}`, any one of which is enough. The built-in table sets it on the fields that do nothing elsewhere: `sort`, `cascade` and `color` on a folder index or the home, `logo` on the home, the event fields once `start` is set, the listing fields where a listing draws. An editor can leave such a field out of its add list.
 - Component contract entry `moss-lang-mark`, the language name a listing row carries when its page is in another language than the listing.
+- `RenderHooks::render_diagram(out, info, source, source_line, fallback_html)`: a fenced block whose info string's first word is `mermaid` renders through it. The default emits `fallback_html`, the same code block as before, so output is unchanged unless a host overrides it. `ast::has_diagram_recursive` answers whether a document has one, nested blocks included.
 
 ## [0.21.0] - 2026-10-30
 

@@ -101,6 +101,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.colophon_credit,
     },
     CssPartial {
+        name: "diagrams",
+        source: include_str!("../../assets/css/site/diagrams.css"),
+        gate: |a| a.diagrams,
+    },
+    CssPartial {
         name: "map-layers",
         source: include_str!("../../assets/css/site/map-layers.css"),
         gate: |a| a.map_layers,

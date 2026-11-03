@@ -347,6 +347,18 @@ pub fn has_scroll_row_recursive(doc: &Document) -> bool {
     )
 }
 
+/// Whether a fenced block's info string asks for a diagram: its first word is
+/// `mermaid`, as Obsidian, GitHub and GitLab read it.
+pub(crate) fn is_diagram_lang(info: &str) -> bool {
+    info.split_whitespace().next() == Some("mermaid")
+}
+
+/// True if any block in the document is a fenced `mermaid` block, nested ones
+/// included.
+pub fn has_diagram_recursive(doc: &Document) -> bool {
+    any_block(doc, |block| matches!(block, Block::CodeBlock { lang: Some(l), .. } if is_diagram_lang(l)))
+}
+
 /// True if any block in the document is a callout (recursive — a callout
 /// nested inside a list item or another callout counts).
 ///

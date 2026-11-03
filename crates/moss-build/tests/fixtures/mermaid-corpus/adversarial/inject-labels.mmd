@@ -1,0 +1,6 @@
+flowchart LR
+  A["<script>alert(1)</script>"] --> B["#quot;><img src=x onerror=alert(2)>"]
+  B --> C["</svg><script>alert(3)</script>"]
+  C --> D["#lt;script#gt;alert(4)#lt;/script#gt;"]
+  D --> E["<foreignObject><div onclick=alert(5)>x</div></foreignObject>"]
+  E -->|"<a href='javascript:alert(6)'>edge</a>"| F["<style>*{display:none}</style>"]

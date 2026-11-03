@@ -278,6 +278,7 @@ pub fn generate_rss_feed(
             &description_html,
             site_url,
         );
+        description_html = crate::build::markdown::diagram::for_feeds(&description_html);
 
         if let Some(analytics_config) = analytics {
             // Use pretty path (strip index.html/.html) to match browser page views
@@ -834,6 +835,23 @@ mod tests {
             !rss.contains("goatcounter.com/count"),
             "Should not contain pixel without analytics"
         );
+    }
+
+    #[test]
+    fn rss_carries_one_layout_of_a_diagram() {
+        let figure = crate::build::markdown::diagram::render(
+            "flowchart LR\n  A[Write markdown] --> B[Build the site] --> C[Publish it] --> D[Read it]\n",
+            "d1",
+            None,
+            crate::i18n::Language::En,
+            None,
+        )
+        .unwrap();
+        assert!(figure.html.contains("moss-diagram-narrow"), "the page has both layouts");
+        let docs = vec![create_test_document("Flow", Some("2026-11-02"), "posts/flow.html", &figure.html)];
+        let rss = generate_rss_feed(&docs, "My Blog", "https://example.com", None, None);
+        assert!(rss.contains("moss-diagram-wide") && !rss.contains("moss-diagram-narrow"), "{rss}");
+        assert_eq!(rss.matches("&lt;svg").count() + rss.matches("<svg").count(), 1, "{rss}");
     }
 
     /// Item content built from the web HTML would carry inline

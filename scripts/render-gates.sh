@@ -109,6 +109,7 @@ GATES_BUILD=(
   wcag-output
   archival-footer
   type-defaults
+  diagrams
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

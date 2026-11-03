@@ -937,6 +937,8 @@ fn snapshot_customization_site() {
 #[test]
 fn snapshot_callouts_site() { run_snapshot_test("callouts-site"); }
 #[test]
+fn snapshot_diagrams_site() { run_snapshot_test("diagrams-site"); }
+#[test]
 fn snapshot_catalog_site() { run_snapshot_test("catalog-site"); }
 #[test]
 fn snapshot_folder_note_site() { run_snapshot_test("folder-note-site"); }

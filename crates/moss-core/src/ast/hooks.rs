@@ -147,6 +147,19 @@ pub trait RenderHooks {
         out.push_str(fallback_html);
     }
 
+    /// Emit a fenced `mermaid` block. `info` is the fence's whole info string
+    /// (`mermaid {.wide}`), `source` the block's text, `source_line` its
+    /// fence's line when the parser tracked lines, and `fallback_html` the
+    /// `<pre><code class="language-mermaid">` every other code block gets.
+    ///
+    /// Default impl: emit `fallback_html`, so this crate stays free of any
+    /// diagram engine. moss-build draws the diagram to SVG and falls back to
+    /// `fallback_html` when it cannot.
+    fn render_diagram(&self, out: &mut String, info: &str, source: &str, source_line: Option<usize>, fallback_html: &str) {
+        let _ = (info, source, source_line);
+        out.push_str(fallback_html);
+    }
+
     /// Optional [`AssetSnapshot`] for the gallery synth path.
     ///
     /// Phase 2E v5 PR3 (2026-05-26): when the impl returns

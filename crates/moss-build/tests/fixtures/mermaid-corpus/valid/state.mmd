@@ -1,0 +1,6 @@
+stateDiagram-v2
+  [*] --> Draft
+  Draft --> Preview : save
+  Preview --> Draft : edit
+  Preview --> Published : publish
+  Published --> [*]

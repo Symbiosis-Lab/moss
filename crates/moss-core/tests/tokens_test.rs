@@ -282,6 +282,16 @@ const TEXT_ON_BACKGROUNDS: &[(&str, &[&str])] = &[
     ("moss-code-accent-secondary", &["moss-code-background"]),
     ("moss-code-accent-tertiary", &["moss-code-background"]),
     ("moss-code-accent-quaternary", &["moss-code-background"]),
+    // Diagrams draw labels in the page colour on chart fills (pie slices, timeline bars), so each
+    // chart colour is held to the text ratio against the page colour, not the 3:1 for marks.
+    ("moss-chart-1", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-chart-2", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-chart-3", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-chart-4", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-chart-5", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-chart-6", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-chart-7", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-chart-8", &["moss-color-bg", "moss-color-surface"]),
 ];
 
 #[test]

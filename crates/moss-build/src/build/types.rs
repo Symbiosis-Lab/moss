@@ -902,6 +902,10 @@ pub struct PageFeatures {
     /// True if a declared field was drawn on the page. Gates the
     /// `field-places` stylesheet partial via [`SiteAssets`].
     pub field_places: bool,
+    /// True if the page has a fenced `mermaid` block
+    /// (`moss_core::ast::has_diagram_recursive`). Gates the `diagrams`
+    /// stylesheet partial via [`SiteAssets`].
+    pub diagrams: bool,
 }
 
 /// Which optional asset partials this build ships — the site-level union of
@@ -958,6 +962,8 @@ pub struct SiteAssets {
     pub viewer: bool,
     /// Some page draws declared fields (`place`). Gates the `field-places` stylesheet partial.
     pub field_places: bool,
+    /// Some page has a mermaid diagram. Gates the `diagrams` stylesheet partial.
+    pub diagrams: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -1020,6 +1026,7 @@ impl SiteAssets {
             hero_ends: false,
             viewer: false,
             field_places: false,
+            diagrams: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -1033,6 +1040,7 @@ impl SiteAssets {
             out.scroll_rows |= page.features.scroll_rows;
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
+            out.diagrams |= page.features.diagrams;
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }
         out

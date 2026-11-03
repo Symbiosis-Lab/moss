@@ -926,6 +926,8 @@ pub fn process_markdown_file(
     // Real dir_overrides, so the snapshot's output-URL keys are the strings the
     // synthesizer probes with. An empty map re-fires the 800x600 fallback.
     let asset_snapshot = media_lookup.map(|l| l.asset_snapshot());
+    let diagram_links = std::cell::RefCell::new(Vec::new());
+    let note_links = |name: &str| resolve_note_link(name, graph?, file_path, &resolve_link, &diagram_links);
     let pipeline_hooks = PipelineHooks {
         site_id: subscribe_site,
         lang: doc_lang,
@@ -940,6 +942,7 @@ pub fn process_markdown_file(
             site.typesetting,
         ) == Some("vertical"),
         leading_image: std::cell::Cell::new(None),
+        diagrams: super::diagram::PageDiagrams::new(file_path, doc_lang, Some(&note_links)),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -1255,6 +1258,8 @@ pub fn process_markdown_file(
         });
     }
     let mut body_plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
+    // A diagram's note links are dependency edges like a prose link's.
+    outgoing_links.extend(diagram_links.take());
 
     // Subscribe-form presence: read from the typed AST (descends into
     // shortcode bodies). Replaces the `has_inline_subscribe` flag the
@@ -1693,6 +1698,7 @@ pub fn process_markdown_file(
             hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,
+            diagrams: moss_core::ast::has_diagram_recursive(&doc),
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses
@@ -2047,6 +2053,7 @@ fn standalone_document_css() -> String {
         search: true,
         vertical: true,
         places_explorer: true,
+        diagrams: true,
         ..Default::default()
     };
     crate::build::emit::stylesheet::assemble(&assets)
@@ -2106,6 +2113,7 @@ fn render_markdown_to_html_with_config(
         // A fragment has no page, so no typesetting of its own.
         vertical: false,
         leading_image: std::cell::Cell::new(None),
+        diagrams: super::diagram::PageDiagrams::new("", crate::i18n::Language::En, None),
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -2243,6 +2251,7 @@ struct PipelineHooks<'a> {
     /// eager one), on a partial that is injected into every page, and on the
     /// fragment paths.
     leading_image: std::cell::Cell<Option<usize>>,
+    diagrams: super::diagram::PageDiagrams<'a>,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -2399,6 +2408,10 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         }
     }
 
+    fn render_diagram(&self, out: &mut String, _info: &str, source: &str, source_line: Option<usize>, fallback_html: &str) {
+        self.diagrams.render(out, source, source_line, fallback_html);
+    }
+
     fn render_shortcode(
         &self,
         out: &mut String,
@@ -2471,6 +2484,38 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
             }
         }
     }
+}
+
+/// A diagram's Obsidian note link, resolved exactly as `[[name]]` in the page
+/// would be: the same parse, graph lookup and URL classification, recording
+/// the same dependency edge into `edges`.
+fn resolve_note_link<R: Fn(&str) -> String>(
+    name: &str,
+    graph: &moss_core::content_graph::ContentGraph,
+    file_path: &str,
+    resolve_link: &R,
+    edges: &std::cell::RefCell<Vec<moss_core::resolve::OutgoingLink>>,
+) -> Option<String> {
+    if name.contains(['[', ']', '\n']) {
+        return None;
+    }
+    let mut doc = moss_core::ast::parse(&format!("[[{name}]]"));
+    let resolution = moss_core::ast::resolve_urls(&mut doc, graph, file_path);
+    if !resolution.diagnostics.is_empty() {
+        return None;
+    }
+    edges.borrow_mut().extend(resolution.outgoing);
+    let mut href = None;
+    moss_core::ast::visit_urls_mut(&mut doc, |url| {
+        let resolved = match url {
+            moss_core::ast::Url::Unresolved(raw) => classify_url_prod(raw, resolve_link),
+            resolved => resolved.clone(),
+        };
+        if let moss_core::ast::Url::Resolved(r) = resolved {
+            href.get_or_insert(r.href);
+        }
+    });
+    href
 }
 
 /// Classify a raw URL into [`moss_core::ast::Url`], decoding the three

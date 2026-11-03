@@ -1,0 +1,5 @@
+architecture-beta
+  group site(cloud)[Site]
+  service build(server)[Build] in site
+  service store(disk)[Storage] in site
+  build:R --> L:store

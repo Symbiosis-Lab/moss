@@ -138,6 +138,7 @@ const GATE_PORT_KEYS = [
   'closing-picture:capped',
   'closing-picture:landscape',
   'wcag-output',
+  'diagrams',
   'archival-footer',
   'type-defaults',
 ] as const;
