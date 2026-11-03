@@ -56,6 +56,9 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("resolve_expected_url_for_file", json!({ "filePath": "a.md" })),
         ("resolve_asset_url_for_file", json!({ "filePath": "i.png" })),
         ("get_all_pages", json!({})),
+        ("read_source_text", json!({ "filePath": "a.md" })),
+        ("expand_derived", json!({ "pagePath": "a.md", "content": "" })),
+        ("write_editor_file_binary", json!({ "relativePath": "img/a.png", "dataBase64": "AA==" })),
         (
             "create_files",
             json!({ "files": [{ "dir": "posts", "name": "a.md", "frontmatter": {} }] }),
@@ -316,6 +319,86 @@ async fn the_editor_reads_answer_from_the_open_site() {
     assert!(expected.is_some_and(|u| u.contains('a')));
     let pages: Vec<Value> = ok(read("get_all_pages", json!({})).await).await;
     assert_eq!(pages, [json!({ "url_path": "index.html", "title": "Home" })]);
+}
+
+#[tokio::test]
+async fn the_editor_reads_a_source_exactly_and_writes_the_bytes_it_made() {
+    let (_d, root) = pages();
+    let host = TestHost::site(&root);
+    let text: String = ok(dispatch(&host, "read_source_text", json!({ "filePath": "a.md" })).await).await;
+    assert_eq!(text, "---\ntitle: A\ndate: 2026-01-02\n---\nbody");
+    ok::<Value>(dispatch(&host, "write_editor_file_binary", json!({ "relativePath": "img/a.bin", "dataBase64": "AAEC" })).await).await;
+    assert_eq!(std::fs::read(root.join("img/a.bin")).unwrap(), [0, 1, 2]);
+    match dispatch(&host, "write_editor_file_binary", json!({ "relativePath": "x.bin", "dataBase64": "not base64!" })).await {
+        Some(Err(CommandError::Failed(msg))) => assert!(msg.contains("base64"), "{msg}"),
+        other => panic!("bad base64 is refused, got {other:?}"),
+    }
+}
+
+/// A site holding an invented plugin (`fake-reader`, files ending `.fake`) whose deriver is a shell script.
+#[cfg(unix)]
+fn derived_site(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    const DERIVER: &str = r###"#!/bin/sh
+REQ=$(cat)
+case "$REQ" in
+  *locked*) printf '%s' '{"kind":"skip","reason":"locked","message":"This file is locked."}' ;;
+  *) printf '%s' '{"kind":"derived","fragments":{"text":"## Hello\n\nworld"},"facts":{"title":"From Facts"}}' ;;
+esac
+"###;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let plugin = root.join(".moss/plugins/fake-reader");
+    std::fs::create_dir_all(&plugin).unwrap();
+    let deriver = plugin.join("deriver.sh");
+    // allow:raw_write test fixture plugin in a temp folder
+    std::fs::write(&deriver, DERIVER).unwrap();
+    std::fs::set_permissions(&deriver, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let manifest = json!({
+        "name": "fake-reader",
+        "version": "1.0.0",
+        "contributes": {"derivations": {"reader": {
+            "accepts": ["fake"],
+            "noun": {"one": "fake", "other": "fakes"},
+            "fragments": {"text": "markdown"},
+            "stub": ["#text"],
+            "run": {"binary": "deriver", "artifact": [{"kind": "path", "binary": deriver}]}
+        }}}
+    });
+    // allow:raw_write test fixture plugin in a temp folder
+    std::fs::write(plugin.join("manifest.json"), manifest.to_string()).unwrap();
+    for (name, body) in files {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // allow:raw_write test fixture pages in a temp folder
+        std::fs::write(path, body).unwrap();
+    }
+    (dir, root)
+}
+
+/// Expanding can fetch and run a plugin's deriver, so it is a write: a
+/// transport that serves reads to a weaker caller must not reach it.
+#[test]
+fn expanding_derived_embeds_is_not_a_read() {
+    assert!(write::COMMANDS.contains(&"expand_derived"));
+    assert!(!public_read::COMMANDS.contains(&"expand_derived") && !session_read::COMMANDS.contains(&"expand_derived"));
+}
+
+/// The expansion reads the editor's text, not the file, and writes nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn expanding_writes_out_ready_embeds_of_the_editors_text_and_leaves_the_others() {
+    let saved = "saved text\n";
+    let (_d, root) = derived_site(&[("reports/a.fake", "x"), ("reports/locked.fake", "locked"), ("reports/p.md", saved)]);
+    let host = TestHost::site(&root);
+    let unsaved = "unsaved\n\n![[a.fake#text]]\n\n![[locked.fake#text]]\n\n![[gone.fake#text]]\n";
+    let out: Value = ok(dispatch(&host, "expand_derived", json!({ "pagePath": "reports/p.md", "content": unsaved })).await).await;
+    let content = out["content"].as_str().unwrap();
+    assert_eq!(out["replaced"], json!(1), "{content}");
+    assert!(content.starts_with("unsaved") && content.contains("## Hello"), "{content}");
+    assert!(content.contains("![[locked.fake#text]]"), "a skipped file stays an embed");
+    assert!(content.contains("![[gone.fake#text]]"), "an unresolved embed stays");
+    assert_eq!(std::fs::read_to_string(root.join("reports/p.md")).unwrap(), saved, "nothing is written to disk");
 }
 
 #[cfg(unix)]

@@ -173,3 +173,22 @@ pub async fn save_editor_content(
     }
     Ok(r)
 }
+
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteEditorFileBinaryArgs {
+    pub relative_path: VaultPath,
+    pub data_base64: String,
+}
+
+/// Bytes the editor made (a pasted screenshot), written under the editor's
+/// folder. Not the plugin API's binary write, which is scoped to a site and
+/// fences `.moss/`: a loose document has no site.
+pub async fn write_editor_file_binary(host: &dyn CommandHost, a: WriteEditorFileBinaryArgs) -> Result<(), String> {
+    use base64::Engine;
+    let path = host.resolve(&a.relative_path)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&a.data_base64)
+        .map_err(|e| format!("Failed to decode base64 data: {e}"))?;
+    crate::plugins::project_files::write_file_with_dirs(&path, &bytes)
+}

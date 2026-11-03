@@ -856,6 +856,21 @@ args: string;
  */
 dividers: EditorDivider[] }
 
+export type ExpandDerivedArgs = { pagePath: VaultPath; 
+/**
+ * The editor's text, which may be ahead of the file.
+ */
+content: string }
+
+/**
+ * A page's text with its ready derived embeds written out.
+ */
+export type ExpandedDerived = { content: string; 
+/**
+ * How many embed lines were replaced.
+ */
+replaced: number }
+
 /**
  * The render family a non-folder, non-link target belongs to, by extension.
  */
@@ -3072,6 +3087,8 @@ page: string | null; allowedKinds: ExtKind[] | null }
  */
 export type WindowId = string
 
+export type WriteEditorFileBinaryArgs = { relativePath: VaultPath; dataBase64: string }
+
 export type EngineCommands = {
 	scan_shortcodes: { args: ScanShortcodesArgs; out: EditorScanResult };
 	parse_frontmatter: { args: FileArgs; out: ParsedFrontmatter };
@@ -3102,6 +3119,7 @@ export type EngineCommands = {
 	resolve_expected_url_for_file: { args: FileArgs; out: string | null };
 	resolve_asset_url_for_file: { args: FileArgs; out: string | null };
 	get_all_pages: { args: NoArgs; out: PageInfo[] };
+	read_source_text: { args: FileArgs; out: string };
 	create_files: { args: CreateFilesArgs; out: string[] };
 	create_folder: { args: CreateFolderArgs; out: string };
 	delete_entry: { args: PathArgs; out: null };
@@ -3114,6 +3132,8 @@ export type EngineCommands = {
 	save_editor_content: { args: SaveEditorContentArgs; out: SaveResult };
 	restore_version: { args: RestoreVersionArgs; out: RestoreReport };
 	save_version: { args: SaveVersionArgs; out: VersionRow };
+	write_editor_file_binary: { args: WriteEditorFileBinaryArgs; out: null };
+	expand_derived: { args: ExpandDerivedArgs; out: ExpandedDerived };
 };
 
 export type EngineCommand = keyof EngineCommands;
@@ -3148,6 +3168,7 @@ export const ENGINE_TIER = {
 	resolve_expected_url_for_file: "session_read",
 	resolve_asset_url_for_file: "session_read",
 	get_all_pages: "session_read",
+	read_source_text: "session_read",
 	create_files: "write",
 	create_folder: "write",
 	delete_entry: "write",
@@ -3160,6 +3181,8 @@ export const ENGINE_TIER = {
 	save_editor_content: "write",
 	restore_version: "write",
 	save_version: "write",
+	write_editor_file_binary: "write",
+	expand_derived: "write",
 } as const;
 
 // Each command's arguments in declaration order, for a client that takes them positionally:
@@ -3194,6 +3217,7 @@ export type EngineParams = {
 	resolve_expected_url_for_file: [filePath: VaultPath];
 	resolve_asset_url_for_file: [filePath: VaultPath];
 	get_all_pages: [];
+	read_source_text: [filePath: VaultPath];
 	create_files: [files: NewFile[]];
 	create_folder: [parentDir: string, name: string];
 	delete_entry: [path: VaultPath];
@@ -3206,6 +3230,8 @@ export type EngineParams = {
 	save_editor_content: [filePath: VaultPath, frontmatter: JsonValue, body: string, expectedHash: string, keepDisplaced?: boolean];
 	restore_version: [id: string, path: string | null, mode: string];
 	save_version: [label: string | null];
+	write_editor_file_binary: [relativePath: VaultPath, dataBase64: string];
+	expand_derived: [pagePath: VaultPath, content: string];
 };
 
 export const ENGINE_PARAMS = {
@@ -3238,6 +3264,7 @@ export const ENGINE_PARAMS = {
 	resolve_expected_url_for_file: ["filePath"],
 	resolve_asset_url_for_file: ["filePath"],
 	get_all_pages: [],
+	read_source_text: ["filePath"],
 	create_files: ["files"],
 	create_folder: ["parentDir", "name"],
 	delete_entry: ["path"],
@@ -3250,4 +3277,6 @@ export const ENGINE_PARAMS = {
 	save_editor_content: ["filePath", "frontmatter", "body", "expectedHash", "keepDisplaced"],
 	restore_version: ["id", "path", "mode"],
 	save_version: ["label"],
+	write_editor_file_binary: ["relativePath", "dataBase64"],
+	expand_derived: ["pagePath", "content"],
 } as const;

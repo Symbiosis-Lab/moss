@@ -366,3 +366,50 @@ pub async fn get_all_pages(host: &dyn CommandHost, _a: NoArgs) -> Result<Vec<cra
     site_root(host)?;
     Ok(crate::editor::page_source::pages_in(&host.served_dir()))
 }
+
+/// A source's exact text, for an editor that maps positions the build reported
+/// back onto the file as saved. A file still downloading from the cloud is an error.
+pub async fn read_source_text(host: &dyn CommandHost, a: FileArgs) -> Result<String, String> {
+    let path = host.resolve(&a.file_path)?;
+    crate::editor::content::read_vault_text_off_runtime(lossy(&path))
+        .await?
+        .ok_or_else(|| format!("{} is still downloading", a.file_path.as_written()))
+}
+
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpandDerivedArgs {
+    pub page_path: VaultPath,
+    /// The editor's text, which may be ahead of the file.
+    pub content: String,
+}
+
+/// A page's text with its ready derived embeds written out.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ExpandedDerived {
+    pub content: String,
+    /// How many embed lines were replaced.
+    pub replaced: u32,
+}
+
+/// The editor's text with every ready derived-text embed written out as
+/// markdown. Pending, skipped and failed embeds stay as written, and nothing is
+/// written to disk: the editor applies the result as its own edit.
+pub async fn expand_derived(host: &dyn CommandHost, a: ExpandDerivedArgs) -> Result<ExpandedDerived, String> {
+    use moss_core::resolve::embeds::derived::{DerivedFragment, DerivedTable, Derivations};
+    let (root, page) = site_relative(host, &a.page_path)?;
+    let page = page.replace('\\', "/");
+    let root_str = root.to_str().ok_or("the site path is not valid UTF-8")?;
+    let structure = crate::build::scan::scan::scan_folder_with_dedup_emit(root_str, None, None, true)?;
+    let graph = crate::build::scan::scan::build_content_graph(&structure);
+    let site = crate::system::derive::site::DerivedSite::load(true, root);
+    let empty = DerivedTable::new();
+    let read_derived = |path: &str, fragment: &str| match &site {
+        Some(site) => site.read(path, fragment),
+        None => DerivedFragment::Pending,
+    };
+    let derivations = Derivations { table: site.as_ref().map_or(&empty, |s| s.table()), reader: &read_derived };
+    let read_note = |path: &str| std::fs::read_to_string(root.join(path)).ok();
+    let expansion = moss_core::resolve::embeds::expand::expand_page(&page, &a.content, &graph, &read_note, &derivations);
+    Ok(ExpandedDerived { content: expansion.content, replaced: u32::try_from(expansion.expanded.len()).unwrap_or(u32::MAX) })
+}

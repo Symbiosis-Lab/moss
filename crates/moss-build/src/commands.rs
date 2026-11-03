@@ -321,11 +321,13 @@ tier! {
         resolve_expected_url_for_file => reads::resolve_expected_url_for_file,
         resolve_asset_url_for_file => reads::resolve_asset_url_for_file,
         get_all_pages => reads::get_all_pages,
+        read_source_text => reads::read_source_text,
     }
 }
 
 tier! {
-    /// Commands that write into the folder.
+    /// Commands that write into the folder, and those that can fetch or run
+    /// its plugins (a deriver), which no read may do.
     write {
         create_files => files::create_files,
         create_folder => files::create_folder,
@@ -339,6 +341,8 @@ tier! {
         save_editor_content => files::save_editor_content,
         restore_version => versions::restore_version,
         save_version => versions::save_version,
+        write_editor_file_binary => files::write_editor_file_binary,
+        expand_derived => reads::expand_derived,
     }
 }
 
