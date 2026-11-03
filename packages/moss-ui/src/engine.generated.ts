@@ -1276,3 +1276,77 @@ export const ENGINE_TIER = {
 	restore_version: "write",
 	save_version: "write",
 } as const;
+
+// Each command's arguments in declaration order, for a client that takes them positionally:
+// an Args struct's field order is its client's argument order, so reordering fields is a breaking change.
+export type EngineParams = {
+	scan_shortcodes: [text: string];
+	parse_frontmatter: [filePath: VaultPath];
+	editor_resolve_asset: [target: string, fromFile: VaultPath];
+	editor_resolve_references: [targets: RefTarget[], fromFile: VaultPath];
+	editor_bootstrap: [sourcePath: VaultPath | null];
+	list_directory: [path: VaultPath, showInternal: boolean];
+	list_tree: [showInternal: boolean];
+	get_file_info: [filePath: VaultPath];
+	compute_heading_state: [filePath: VaultPath, frontmatter: JsonValue, body: string];
+	describe_source_role: [filePath: VaultPath];
+	page_facts: [filePath: VaultPath];
+	resolve_url_for_file: [filePath: VaultPath];
+	validate_content: [filePath: VaultPath];
+	get_publish_preflight: [folderPath: string];
+	list_vault_terms: [];
+	get_cloud_unavailable_files: [folderPath: string];
+	list_versions: [scope: string, path: string | null];
+	read_version: [id: string, path: string];
+	reveal_history_store: [];
+	resolve_attachment_dir: [pageRelativePath: VaultPath];
+	resolve_page_source: [urlPath: string];
+	create_files: [files: NewFile[]];
+	create_folder: [parentDir: string, name: string];
+	delete_entry: [path: VaultPath];
+	delete_entries: [paths: VaultPath[]];
+	rename_entry_with_refs: [oldPath: VaultPath, newPath: VaultPath];
+	move_entries: [paths: VaultPath[], targetDir: VaultPath];
+	scan_references_for_delete: [paths: VaultPath[]];
+	clean_references_and_delete: [paths: VaultPath[]];
+	undo_rename: [undoId: string];
+	save_editor_content: [filePath: VaultPath, frontmatter: JsonValue, body: string, expectedHash: string, keepDisplaced?: boolean];
+	restore_version: [id: string, path: string | null, mode: string];
+	save_version: [label: string | null];
+};
+
+export const ENGINE_PARAMS = {
+	scan_shortcodes: ["text"],
+	parse_frontmatter: ["filePath"],
+	editor_resolve_asset: ["target", "fromFile"],
+	editor_resolve_references: ["targets", "fromFile"],
+	editor_bootstrap: ["sourcePath"],
+	list_directory: ["path", "showInternal"],
+	list_tree: ["showInternal"],
+	get_file_info: ["filePath"],
+	compute_heading_state: ["filePath", "frontmatter", "body"],
+	describe_source_role: ["filePath"],
+	page_facts: ["filePath"],
+	resolve_url_for_file: ["filePath"],
+	validate_content: ["filePath"],
+	get_publish_preflight: ["folderPath"],
+	list_vault_terms: [],
+	get_cloud_unavailable_files: ["folderPath"],
+	list_versions: ["scope", "path"],
+	read_version: ["id", "path"],
+	reveal_history_store: [],
+	resolve_attachment_dir: ["pageRelativePath"],
+	resolve_page_source: ["urlPath"],
+	create_files: ["files"],
+	create_folder: ["parentDir", "name"],
+	delete_entry: ["path"],
+	delete_entries: ["paths"],
+	rename_entry_with_refs: ["oldPath", "newPath"],
+	move_entries: ["paths", "targetDir"],
+	scan_references_for_delete: ["paths"],
+	clean_references_and_delete: ["paths"],
+	undo_rename: ["undoId"],
+	save_editor_content: ["filePath", "frontmatter", "body", "expectedHash", "keepDisplaced"],
+	restore_version: ["id", "path", "mode"],
+	save_version: ["label"],
+} as const;

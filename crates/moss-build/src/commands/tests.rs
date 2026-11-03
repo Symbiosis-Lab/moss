@@ -492,21 +492,59 @@ fn render_contract() -> String {
 
     let mut commands = String::from("export type EngineCommands = {\n");
     let mut tier_of = String::from("export const ENGINE_TIER = {\n");
+    let mut params = String::from("export type EngineParams = {\n");
+    let mut param_names = String::from("export const ENGINE_PARAMS = {\n");
     for (tier, signatures) in &tiers {
         for (name, args, out) in signatures {
+            // The client's camelCase method names rely on this shape (see `Camel` in moss-ui).
+            assert!(
+                name.split('_').all(|w| !w.is_empty() && w.bytes().all(|b| b.is_ascii_lowercase())),
+                "{name}: a command name is lowercase words joined by single underscores"
+            );
             commands += &format!("\t{name}: {{ args: {}; out: {} }};\n", render(args), render(out));
             tier_of += &format!("\t{name}: \"{tier}\",\n");
+            let fields = arg_fields(args, &types);
+            let labelled: Vec<String> =
+                fields.iter().map(|(f, optional, ty)| format!("{f}{}: {}", if *optional { "?" } else { "" }, render(ty))).collect();
+            params += &format!("\t{name}: [{}];\n", labelled.join(", "));
+            let names: Vec<String> = fields.iter().map(|(f, ..)| format!("\"{f}\"")).collect();
+            param_names += &format!("\t{name}: [{}],\n", names.join(", "));
         }
     }
     commands += "};\n";
     tier_of += "} as const;\n";
+    params += "};\n";
+    param_names += "} as const;\n";
 
     let named = specta::Language::export(&ts, types.clone()).expect("exports");
     format!(
         "// @generated from moss-build's command table. Do not edit.\n\
          // Regenerate: UPDATE_ENGINE_CONTRACT=1 cargo test -p moss-build --lib commands::tests::the_contract\n\n\
-         {named}{commands}\nexport type EngineCommand = keyof EngineCommands;\n\n{tier_of}"
+         {named}{commands}\nexport type EngineCommand = keyof EngineCommands;\n\n{tier_of}\n\
+         // Each command's arguments in declaration order, for a client that takes them positionally:\n\
+         // an Args struct's field order is its client's argument order, so reordering fields is a breaking change.\n\
+         {params}\n{param_names}"
     )
+}
+
+/// A command's argument fields in declaration order: name, whether a caller may
+/// leave it out, and its type.
+fn arg_fields(args: &specta::DataType, types: &specta::TypeMap) -> Vec<(String, bool, specta::DataType)> {
+    use specta::datatype::{DataType, StructFields};
+    let resolved = match args {
+        DataType::Reference(r) => &types.get(r.sid()).expect("argument types are exported").inner,
+        other => other,
+    };
+    let DataType::Struct(s) = resolved else { panic!("a command's arguments are a struct") };
+    match s.fields() {
+        StructFields::Unit => Vec::new(),
+        StructFields::Named(n) => n
+            .fields()
+            .iter()
+            .filter_map(|(name, f)| f.ty().map(|ty| (name.to_string(), f.optional(), ty.clone())))
+            .collect(),
+        StructFields::Unnamed(_) => panic!("a command's arguments have named fields"),
+    }
 }
 
 #[test]
