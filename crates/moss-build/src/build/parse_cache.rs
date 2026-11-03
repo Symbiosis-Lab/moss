@@ -780,6 +780,8 @@ static MATH_STORE: Mutex<Option<(PathBuf, HashMap<String, TypesetMath>)>> = Mute
 /// within the same build. Production call site: the end of that function,
 /// immediately before it returns.
 pub fn math_cache_finish_build(root: &Path, documents: &[ParsedDocument]) {
+    #[cfg(test)]
+    let _not_during_a_guarded_test = math_cache_shared_for_tests();
     let live_keys: std::collections::HashSet<String> = documents
         .iter()
         .flat_map(|d| crate::build::emit::math_png::collect_math_events(&d.content))
@@ -834,27 +836,43 @@ pub fn math_cache_finish_build(root: &Path, documents: &[ParsedDocument]) {
     }
 }
 
-/// Serializes tests that call [`math_cache_finish_build`] against each
-/// other — the `store_lock_for_tests` pattern,
-/// applied to this pair's own global state. Two such tests running
-/// concurrently (cargo's default) would otherwise race on the single
-/// [`MATH_STORE`] slot: whichever runs its `finish_build` call while the
-/// OTHER is mid-test would see a root mismatch and free that other test's
-/// keys out from under it. Caught this by observation, not by reasoning
-/// alone: the two lifecycle tests below passed every time run in isolation
-/// but failed intermittently as part of the full suite before this guard
-/// existed.
+/// Tests that assert on [`MATH_STORE`] / [`MATH_RENDER_CACHE`] hold this
+/// exclusively. Every other `math_cache_finish_build` call (any full build in
+/// a test) holds it shared, so no other root's build can free a guarded
+/// test's keys mid-test; the guarded test's own calls skip the shared take.
+#[cfg(test)]
+static MATH_TEST_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+#[cfg(test)]
+thread_local! {
+    static HOLDS_MATH_TEST_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[cfg(test)]
 fn math_cache_test_lock() -> MathCacheTestGuard {
-    static LOCK: Mutex<()> = Mutex::new(());
-    MathCacheTestGuard {
-        _lock: LOCK.lock().unwrap_or_else(|e| e.into_inner()),
+    let lock = MATH_TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
+    HOLDS_MATH_TEST_LOCK.with(|h| h.set(true));
+    MathCacheTestGuard { _lock: lock }
+}
+
+#[cfg(test)]
+fn math_cache_shared_for_tests() -> Option<std::sync::RwLockReadGuard<'static, ()>> {
+    if HOLDS_MATH_TEST_LOCK.with(|h| h.get()) {
+        return None;
     }
+    Some(MATH_TEST_LOCK.read().unwrap_or_else(|e| e.into_inner()))
 }
 
 #[cfg(test)]
 struct MathCacheTestGuard {
-    _lock: MutexGuard<'static, ()>,
+    _lock: std::sync::RwLockWriteGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for MathCacheTestGuard {
+    fn drop(&mut self) {
+        HOLDS_MATH_TEST_LOCK.with(|h| h.set(false));
+    }
 }
 
 #[cfg(test)]
