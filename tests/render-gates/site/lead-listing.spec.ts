@@ -53,6 +53,18 @@ test("on a wide screen the lead's date line starts on the picture's top edge", a
   expect(Math.abs(meta.y + halfLeading - cover.y)).toBeLessThanOrEqual(1);
 });
 
+for (const [name, viewport] of [["wide", WIDE], ["phone", PHONE]] as const) {
+  test(`at ${name} width the lead's opening line is shown whole`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/notes/");
+    const d = await page
+      .locator(".moss-cards[data-lead] > .moss-card:first-child .moss-card-description")
+      .evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight, lines: el.clientHeight / parseFloat(getComputedStyle(el).lineHeight) }));
+    expect(d.scroll).toBeLessThanOrEqual(d.client + 1);
+    expect(d.lines).toBeGreaterThan(3);
+  });
+}
+
 test("on a phone the lead's picture sits above its words", async ({ page }) => {
   await page.setViewportSize(PHONE);
   await page.goto("/notes/");

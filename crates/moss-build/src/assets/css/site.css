@@ -7299,12 +7299,15 @@ article a:where(:not(.moss-btn)):focus {
   padding-block: var(--moss-space-md);
   border-block-end: 1px solid var(--moss-border-light);
 }
+/* The lead shows its whole opening line; only the register is clamped. */
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-description {
+  display: block;
+  max-block-size: none;
+}
 .moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-cover { display: none; }
 .moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-description {
-  display: -webkit-box;
   -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  line-clamp: 2;
 }
 
 @media (width >= 48rem) {

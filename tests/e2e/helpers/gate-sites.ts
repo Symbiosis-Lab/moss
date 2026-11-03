@@ -4285,6 +4285,7 @@ title: The harbour in winter
 uid: "lead0011"
 date: 2026-04-01
 cover: tile.svg
+description: "The ferries stopped running before the first snow, and the pier went quiet. The fishermen moved their boats to the inner basin, the café by the ticket office put its chairs away, and for three months the only sound at the end of the breakwater was the wind turning the weather vane on the harbour master's roof, back and forth, all night."
 ---
 
 The ferries stopped running before the first snow, and the pier went quiet.
