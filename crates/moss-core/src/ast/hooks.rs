@@ -560,14 +560,12 @@ pub trait RenderHooks {
                     }
                 }
                 if !args.overlay.is_empty() {
-                    // Phase 4 PR4.5 (2026-05-28): overlay is now typed
-                    // `Vec<Block>`. Render via `render_blocks` then
-                    // collapse tag-adjacent newlines so the byte shape
-                    // matches today's `render_markdown_to_html_with`
-                    // production (pulldown-cmark's `push_html` emits no
-                    // tag-adjacent newlines).
+                    // Render via `render_blocks`, then collapse
+                    // tag-adjacent newlines to match the byte shape of
+                    // `render_markdown_to_html_with` (pulldown-cmark's
+                    // `push_html` emits none).
                     //
-                    // `DefaultHooks::hero_overlay` suppresses
+                    // `DefaultHooks::without_heading_anchors` suppresses
                     // moss-heading-anchor on overlay headings. We rebuild
                     // DefaultHooks from gallery_assets() rather than coercing
                     // `self` to `&dyn RenderHooks` — the coercion requires
@@ -654,10 +652,9 @@ pub trait RenderHooks {
     /// `# Title` in the body just as much as the auto-injected article
     /// title (which skips this hook entirely; see [`RenderHooks::render_heading`]).
     /// Overrides only narrow further, never widen past `level == 1`:
-    /// [`DefaultHooks::hero_overlay`]/[`grid_cells`](DefaultHooks::grid_cells)
-    /// say no at every level (a card/hero heading is a display title
-    /// regardless of level), and a hosting site can do the same for a
-    /// specific page (e.g. the home page).
+    /// [`DefaultHooks::without_heading_anchors`] says no at every level (a
+    /// card/hero heading is a display title regardless of level), and a
+    /// hosting site can do the same for a specific page (e.g. the home page).
     ///
     /// A policy hook rather than a `render_heading` override — same shape
     /// as [`emit_footnote_anchors`](RenderHooks::emit_footnote_anchors) —
@@ -816,7 +813,7 @@ pub struct DefaultHooks<'a> {
     grid_cell_sizes: std::cell::RefCell<Vec<String>>,
     /// Display-title mode: suppress the `moss-heading-anchor` permalink.
     /// Stored negated so `#[derive(Default)]` still means "anchors on".
-    /// Set by [`DefaultHooks::hero_overlay`] and [`DefaultHooks::grid_cells`].
+    /// Set by [`DefaultHooks::without_heading_anchors`].
     suppress_heading_anchors: bool,
     /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
     vertical: bool,
@@ -893,42 +890,19 @@ impl<'a> DefaultHooks<'a> {
         }
     }
 
-    /// Hooks for rendering the blocks of a `:::hero` overlay: identical to
-    /// the normal hooks except headings carry no permalink anchor (hero
-    /// headings are display titles, not navigation landmarks).
+    /// Hooks whose headings carry no permalink anchor, for the blocks of a
+    /// `:::hero` overlay and of a `:::grid` cell: a heading there is a display
+    /// title, not a section a reader deep-links to, and inside a card a `#`
+    /// lands mid-tile. Suppressing outright also means a site's
+    /// `heading_anchors` setting and the anchor's localized label, which a
+    /// delegated render cannot see, can never be wrong here.
     ///
     /// `assets` is the caller's snapshot, if any — the same `None`/`Some`
     /// split as [`new`](Self::new) / [`with_snapshot`](Self::with_snapshot).
     ///
-    /// This replaced a `HeroOverlayHooks` wrapper that re-implemented
-    /// `RenderHooks` by forwarding to an inner impl. Forwarding was manual, so
-    /// the wrapper silently dropped every hook nobody remembered to list —
-    /// which is how image embeds inside hero overlays lost their
-    /// `object-fit`/`object-position`. A construction mode on the one impl has
-    /// no forwarding surface to get wrong.
-    pub fn hero_overlay(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
-        Self {
-            assets,
-            suppress_heading_anchors: true,
-            ..Self::default()
-        }
-    }
-
-    /// Hooks for rendering the blocks of a `:::grid` cell. Same reasoning as
-    /// [`hero_overlay`](Self::hero_overlay): a heading in a cell is that
-    /// card's title, not a section of the page. Nobody deep-links to a card
-    /// the way they deep-link to a section, so the `#` is clutter — and it is
-    /// worse than clutter inside a card, where it lands in the middle of a
-    /// tile rather than in the margin of a text column.
-    ///
-    /// It also closes a hole. Grid cells render through `DefaultHooks`, whose
-    /// trait defaults said anchors-on and English-label, so a cell heading
-    /// carried a `#` even on a site with `[site].heading_anchors = false`, and
-    /// carried `aria-label="Permalink to this section"` on a zh-tw site. Both
-    /// were invisible from moss-build's side, which reads its own
-    /// `PipelineHooks` overrides and never sees the ones a delegated render
-    /// uses. Suppressing outright means neither setting can be wrong here.
-    pub fn grid_cells(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
+    /// A construction mode rather than a wrapper over `RenderHooks`: a
+    /// forwarding wrapper silently drops every hook it does not list.
+    pub fn without_heading_anchors(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
         Self {
             assets,
             suppress_heading_anchors: true,
@@ -1094,7 +1068,7 @@ fn push_bare_img(
     out.push_str(" />");
 }
 
-/// Render hero overlay blocks into `out` via [`DefaultHooks::hero_overlay`]
+/// Render hero overlay blocks into `out` via [`DefaultHooks::without_heading_anchors`]
 /// so that headings inside the overlay don't carry a `moss-heading-anchor`
 /// permalink.
 ///
@@ -1115,7 +1089,7 @@ fn render_hero_overlay_blocks(
     metas: &[super::document::BlockMeta],
     out: &mut String,
 ) {
-    super::render::render_blocks_with_meta(&DefaultHooks::hero_overlay(snapshot), out, blocks, metas);
+    super::render::render_blocks_with_meta(&DefaultHooks::without_heading_anchors(snapshot), out, blocks, metas);
 }
 
 /// Collapse `\n` that follows a heading or paragraph closing tag when the
@@ -2077,7 +2051,7 @@ mod tests {
         // carry moss-heading-anchor when rendered through DefaultHooks
         // (the moss-core test-harness path). The DefaultHooks::render_shortcode
         // Hero arm delegates overlay rendering to render_hero_overlay_blocks
-        // which uses `DefaultHooks::hero_overlay`. This test covers that path.
+        // which uses `DefaultHooks::without_heading_anchors`. This test covers that path.
         use crate::ast::shortcode::{HeroShortcode, Shortcode};
         use crate::ast::{parse, Url, UrlKind, ResolvedUrl};
         let overlay_blocks = parse("# Understanding climate extremes\n\nSubtitle.").blocks;

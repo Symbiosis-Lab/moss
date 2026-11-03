@@ -386,7 +386,7 @@ pub(crate) fn prepend_parent_label(
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
 /// rendered above `<main>`. That is where a byline belongs on a page whose
 /// title is a photograph. This mirrors the same anchored test in
-/// `credits::splice_byline_at_page_head`, so moss has one rule for it.
+/// `credits::splice_page_masthead`, so moss has one rule for it.
 pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> String {
     if fragment.is_empty() {
         return html_body.to_string();

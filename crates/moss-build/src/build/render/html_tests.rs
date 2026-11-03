@@ -3475,7 +3475,7 @@ mod children_field_tests {
     }
 
     /// The automatic place line reuses `render_byline_html`/
-    /// `splice_byline_at_page_head`, so it has to reach all four call sites
+    /// `splice_page_masthead`, so it has to reach all four call sites
     /// in `render/html.rs` (homepage page-head, folder title block,
     /// non-homepage page-head, article) — traced directly against the
     /// source rather than re-asserted, and exercised here through the same
@@ -5391,7 +5391,7 @@ mod children_field_tests {
     /// gets its `byline:` — the same `!is_article_page` splice every other
     /// page kind uses, run on the WHOLE already cover-wrapped `content` (one
     /// splice site, no lead-scoping special case). It lands correctly because
-    /// `splice_byline_at_page_head` delegates unconditionally to
+    /// `splice_page_masthead` hands every non-empty masthead to
     /// `splice_after_title_block`, which recognizes the cover wrapper's own
     /// empty `<h1 class="moss-folder-title">` and steps past it to splice
     /// after this page's REAL title — not above the whole cover row, which is

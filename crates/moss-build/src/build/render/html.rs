@@ -828,7 +828,7 @@ pub(super) fn render_page<'d>(
                     // No title block of moss's own — a home-override or
                     // language-root folder page, or a plain page — so the
                     // homepage rule applies. Runs AFTER any cover-wrap above:
-                    // `splice_byline_at_page_head` (via `splice_after_title_block`)
+                    // `splice_page_masthead` (via `splice_after_title_block`)
                     // recognizes that wrapper's own empty title placeholder
                     // and lands the byline beside the real title inside it,
                     // the same as it would for an unwrapped page — one splice

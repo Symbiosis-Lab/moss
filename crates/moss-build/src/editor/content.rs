@@ -481,25 +481,6 @@ pub fn get_file_info_inner(file_path: &str) -> Result<EditorFileInfo, String> {
     })
 }
 
-/// The project-relative spelling of an absolute path, or the shared
-/// "not inside project" error. One definition for the five commands that used
-/// to hand-roll the same `strip_prefix` + error format.
-pub fn project_relative(
-    folder_path: &std::path::Path,
-    file_path: &str,
-) -> Result<String, String> {
-    std::path::Path::new(file_path)
-        .strip_prefix(folder_path)
-        .map(|p| p.to_string_lossy().to_string())
-        .map_err(|_| {
-            format!(
-                "File '{}' is not inside project '{}'",
-                file_path,
-                folder_path.display()
-            )
-        })
-}
-
 /// A source's language and slot role, from its path inside the site.
 pub fn describe_source_role_inner(rel_path: &str) -> SourceRole {
     let normalized = moss_core::slug::normalize_separators(rel_path);

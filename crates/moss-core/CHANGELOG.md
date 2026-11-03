@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `DefaultHooks::hero_overlay` and `DefaultHooks::grid_cells` are one constructor, `DefaultHooks::without_heading_anchors`. The two built the same hooks; call the new name with the same argument.
 - **BREAKING:** `describe::DescribePayload` gains `config_tables`; a struct literal must name it.
 - **BREAKING:** `Block::Heading` gains `legacy_id: Option<String>`, a second id the heading answers, and `HeadingMarks` gains `legacy_id`; the renderer prints it as an empty `<span id>` first inside the heading. A struct literal must name it. For a derived id it is the id before punctuation was dropped; for a `{#id}` it is that id's slugged spelling.
 - `obsidian_heading_anchor` keeps only letters, digits, `_`, combining marks and the hyphens between words, as GitHub does, and returns `section` for a heading of punctuation only. Before, it kept punctuation such as `,`, `.`, `:` and `?`.

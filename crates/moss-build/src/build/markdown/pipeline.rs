@@ -2306,16 +2306,15 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     /// `Shortcode::Grid` arm and the segmented render funnel through here — one
     /// binding, one byte shape.
     ///
-    /// `grid_cells` rather than `asset_bound_hooks`: a heading in a cell is a
-    /// card title, so it carries no `#` permalink (see
-    /// [`DefaultHooks::grid_cells`]).
+    /// `without_heading_anchors` rather than `asset_bound_hooks`: a heading in
+    /// a cell is a card title, so it carries no `#` permalink.
     fn render_grid_parts(
         &self,
         args: &moss_core::ast::GridShortcode,
         source_line: Option<usize>,
     ) -> moss_core::ast::GridParts {
         let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
-        let hooks = moss_core::ast::DefaultHooks::grid_cells(self.assets)
+        let hooks = moss_core::ast::DefaultHooks::without_heading_anchors(self.assets)
             .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
     }

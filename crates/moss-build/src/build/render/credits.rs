@@ -24,7 +24,7 @@
 //!   `about.md`) — gets no H1 from moss at all. Whatever title it has, the
 //!   author wrote in the body.
 //!
-//! For that third kind [`splice_byline_at_page_head`] reads the body: if it
+//! For that third kind [`splice_page_masthead`] reads the body: if it
 //! opens with an `<h1>`, the byline goes under it, which is the same place a
 //! reader finds it on the other two kinds. If it does not, the byline goes at
 //! the very top of the page content — under a hero if the page has one, since
@@ -219,30 +219,6 @@ pub fn render_colophon_html(rows: &[String], emit_source_fm: bool) -> Option<Str
         rows,
         emit_source_fm,
     )
-}
-
-/// Put the byline at the head of a page moss gives no title of its own, and
-/// return the page content with it in place.
-///
-/// Under the author's own opening `<h1>` when the body starts with one, at the
-/// very top of the content when it does not. See the module docs for why the
-/// second case renders rather than skips. Returns the content untouched when
-/// there is no byline to place.
-pub fn splice_byline_at_page_head(
-    content: String,
-    rows: &[String],
-    emit_source_fm: bool,
-    place_line: Option<&str>,
-) -> String {
-    let Some(byline) = render_byline_html(rows, emit_source_fm, place_line) else {
-        return content;
-    };
-    // Same splice the article path uses, so the byline lands in the same
-    // relation to the title on every page kind — including a claimed leaf's
-    // cover, which wraps that title behind a recognized prefix
-    // `splice_after_title_block` already knows to step past; a page with no
-    // title block at all still falls through to its own prepend.
-    crate::build::markdown::html_post::splice_after_title_block(&content, &byline)
 }
 
 /// Byte offset just past the `</h1>` of the first heading, when the body opens
