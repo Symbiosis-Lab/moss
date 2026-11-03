@@ -263,11 +263,23 @@ fn a_staged_raw_binary_is_executable() {
     assert!(is_executable(&bin), "a staged raw binary must be executable");
 }
 
-/// Moved from `stack_install.rs`'s `hdiutil_mount_point_parsed`.
 #[test]
 fn hdiutil_mount_point_parsed() {
     let out = "/dev/disk4          \tGUID_partition_scheme          \t\n\
                /dev/disk4s1        \tApple_HFS                      \t/Volumes/OnionPress\n";
     assert_eq!(parse_hdiutil_mount_point(out), Some(std::path::PathBuf::from("/Volumes/OnionPress")));
     assert_eq!(parse_hdiutil_mount_point("/dev/disk4\tGUID\t"), None);
+}
+
+/// Without a volume, retries would each leave one more image attached.
+#[test]
+fn an_attached_image_is_always_detachable_even_when_no_volume_mounted() {
+    let mounted = "/dev/disk4\tGUID_partition_scheme\t\n/dev/disk4s1\tApple_HFS\t/Volumes/OnionPress\n";
+    assert_eq!(parse_hdiutil_detach_target(mounted), Some(std::path::PathBuf::from("/Volumes/OnionPress")));
+
+    let no_volume = "/dev/disk7\tGUID_partition_scheme\t\n/dev/disk7s1\tApple_APFS\t\n";
+    assert_eq!(parse_hdiutil_mount_point(no_volume), None);
+    assert_eq!(parse_hdiutil_detach_target(no_volume), Some(std::path::PathBuf::from("/dev/disk7")));
+
+    assert_eq!(parse_hdiutil_detach_target("hdiutil: attach failed"), None);
 }
