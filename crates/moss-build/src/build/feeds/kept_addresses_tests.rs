@@ -138,3 +138,16 @@ fn a_folder_moved_up_into_its_parent_does_not_nest_copies_of_itself() {
     let files = served(&["review/plan.pdf", "review/2026/index.html"]);
     assert_eq!(super::moved_folder_files(&[mv("review/2026/", "review/")], &files), pairs(&[("review/2026/plan.pdf", "review/plan.pdf")]));
 }
+
+/// Only a file a visitor can open counts as served under the new folder, the
+/// same test the move itself applies, so a line that can keep nothing is
+/// reported rather than passing in silence.
+#[test]
+fn a_folder_line_whose_new_folder_serves_no_public_file_is_reported() {
+    let (_vault, mp) = setup();
+    let stage = mp.staging_dir();
+    let mut sealed = build(&stage, &[("review/new/.moss-lock", b"x")], true);
+    let _ = crate::build::cli_output::take_cli_problems();
+    assert!(keep(&mp, &stage, &mut sealed, &[mv("review/old/", "review/new/")]).iter().all(|(old, _)| !old.starts_with("review/old/")));
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+}

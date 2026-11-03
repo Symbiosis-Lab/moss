@@ -95,7 +95,7 @@ pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest
     let folder_files = moved_folder_files(moves, &files);
     // A folder line that keeps nothing is reported here, the first point that can tell.
     for m in moves {
-        if !files.keys().any(|k| k.starts_with(&m.to)) {
+        if !files.keys().any(|k| k.starts_with(&m.to) && is_public_address(k)) {
             log_warn_problem!("redirect '/{}' skipped: '/{}' is not an address this site serves, and no file is served under it", m.from, m.to);
         } else if m.old_served && !folder_files.iter().any(|(old, served)| old.starts_with(&m.from) && served.starts_with(&m.to)) {
             log_warn_problem!("redirect '/{}' skipped: the site already serves that address and every one under it the line would keep", m.from);
