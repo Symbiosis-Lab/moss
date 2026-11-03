@@ -49,6 +49,9 @@ pub struct DescribePayload<'a> {
     pub manifest_fields: Vec<ManifestFieldInfo>,
     /// Site settings: each `[site]` key of `.moss/config.toml` the build reads.
     pub site_settings: Vec<SiteSettingInfo>,
+    /// Tables of `.moss/config.toml` beyond `[site]` that describe documents
+    /// (today `[redirects]`); not every table yet, the guide has the rest.
+    pub config_tables: Vec<ConfigTableInfo>,
     /// Template injection slots: each named slot in the build pipeline.
     pub slots: Vec<SlotInfo>,
     /// CLI commands: each subcommand moss exposes.
@@ -102,6 +105,21 @@ pub struct SiteSettingInfo {
     pub default: Option<&'static str>,
     /// One-line description.
     pub description: &'static str,
+}
+
+/// Config table entry emitted in `config_tables`: one table of
+/// `.moss/config.toml`, with the form of an entry and the rules the build
+/// applies to it. Populated by moss-build's `cli::describe`.
+#[derive(Serialize)]
+pub struct ConfigTableInfo {
+    /// Table name, e.g. "redirects".
+    pub name: &'static str,
+    /// One entry as written, e.g. `"/old/" = "/new/"`.
+    pub entry: &'static str,
+    /// One-line description.
+    pub description: &'static str,
+    /// What the build does with an entry, one sentence each.
+    pub rules: Vec<&'static str>,
 }
 
 /// Template slot entry emitted in `slots`.
@@ -278,6 +296,7 @@ impl<'a> DescribePayload<'a> {
             plugin_hooks: Vec::new(),
             manifest_fields: Vec::new(),
             site_settings: Vec::new(),
+            config_tables: Vec::new(),
             slots: Vec::new(),
             cli_commands: Vec::new(),
         }
@@ -322,6 +341,11 @@ impl<'a> DescribePayload<'a> {
     /// moss-build.
     pub fn with_site_settings(mut self, site_settings: Vec<SiteSettingInfo>) -> Self {
         self.site_settings = site_settings;
+        self
+    }
+
+    pub fn with_config_tables(mut self, config_tables: Vec<ConfigTableInfo>) -> Self {
+        self.config_tables = config_tables;
         self
     }
 }
