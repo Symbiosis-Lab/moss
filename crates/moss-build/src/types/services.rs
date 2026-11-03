@@ -741,6 +741,9 @@ mod tests {
     /// deterministically, on an ordering nothing declares.
     #[tokio::test]
     async fn headless_for_a_registered_folder_attaches_that_session() {
+        // Registering drains every other session in the process-global
+        // registry, which would unseat a seal test's vault running beside it.
+        let _serial = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // The regression this guards: a headless build with no session takes
         // NO stage-write lock — not in the pipeline, not in the seal tail, not
         // in the watcher's admission probe — so `moss build --serve --watch`
