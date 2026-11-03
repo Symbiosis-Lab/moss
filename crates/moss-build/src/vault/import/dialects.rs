@@ -257,10 +257,22 @@ pub(crate) struct HtmlChromeRow {
 pub(crate) struct ChromeDialect {
     pub name: &'static str,
     pub rows: &'static [HtmlChromeRow],
+    /// Selectors for the links the builder adds to every page, leading to
+    /// pages a site without that feature does not have (cart, customer
+    /// account). A link is skipped by a crawl when it or an ancestor matches.
+    /// The classes are the builder's own, so a page of another theme never
+    /// matches; the same URL linked from the content carries none of them and
+    /// is followed as usual.
+    pub link_chrome: &'static [&'static str],
 }
 
 pub(crate) static CHROME_DIALECTS: &[ChromeDialect] =
-    &[ChromeDialect { name: "squarespace", rows: SQUARESPACE_CHROME }];
+    &[ChromeDialect { name: "squarespace", rows: SQUARESPACE_CHROME, link_chrome: SQUARESPACE_LINK_CHROME }];
+
+/// Squarespace's header commerce links: the cart icon and the account link
+/// the template renders whether or not the site sells anything.
+static SQUARESPACE_LINK_CHROME: &[&str] =
+    &[".sqs-custom-cart", ".header-actions-action--cart", ".header-actions-action--account"];
 
 /// Squarespace template chrome. An event page renders its back link, date and
 /// time, venue address, calendar export links (one a `?format=ical` endpoint a

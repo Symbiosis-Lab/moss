@@ -2365,3 +2365,56 @@ async fn a_titled_in_scope_link_keeps_its_title_out_of_the_rewritten_path() {
     assert!(all.contains(" \"link-to-b\")"), "the title survives: {all}");
     assert!(!all.contains("%20"), "the title must not be folded into the path: {all}");
 }
+
+/// A hosted builder's template puts a cart link in every page's header. The
+/// site has no store, so `/cart` has no article and a crawl that followed it
+/// wrote a failure stub into the site. The link is recognised by the
+/// builder's markup, so a cart URL the author links from the body still works.
+#[tokio::test]
+async fn a_builders_cart_link_in_the_header_is_not_crawled_or_stubbed() {
+    let mut server = mockito::Server::new_async().await;
+    let header = "<header><a href=\"/cart\" class=\"sqs-custom-cart icon--cart\">Cart</a></header>";
+    let page = |title: &str, extra: &str| {
+        format!(
+            "<html><head><title>{title}</title></head><body>{header}<article><p>{LEAF_BODY} {extra}</p>\
+             </article></body></html>"
+        )
+    };
+    let mut mocks = Vec::new();
+    for (path, body) in [("/", page("Example Home", "<a href=\"/about\">About</a>")), ("/about", page("About", ""))] {
+        mocks.push(
+            server.mock("GET", path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).create_async().await,
+        );
+    }
+    let cart = server.mock("GET", "/cart").with_status(404).expect(0).create_async().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{}/", server.url()), tmp.path());
+    config.recursive = true;
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+
+    cart.assert_async().await;
+    assert_eq!(res.failed_pages, 0, "the cart link is not a failed page");
+    assert!(!tmp.path().join("cart.md").exists(), "no stub page for the cart");
+    assert!(tmp.path().join("about.md").exists(), "an ordinary page is still crawled");
+}
+
+/// The same URL linked from the article body is an ordinary link and is followed.
+#[tokio::test]
+async fn a_cart_url_linked_from_the_body_is_still_crawled() {
+    let mut server = mockito::Server::new_async().await;
+    let home = leaf_page("Example Home", "<a href=\"/cart\">Our cart of crafts</a>");
+    let mut mocks = Vec::new();
+    for (path, body) in [("/", home), ("/cart", leaf_page("Cart of crafts", ""))] {
+        mocks.push(
+            server.mock("GET", path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).expect_at_least(1).create_async().await,
+        );
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    crawl_leaves(&server, tmp.path()).await;
+    for m in &mocks {
+        m.assert_async().await;
+    }
+    assert!(tmp.path().join("cart.md").exists());
+}
