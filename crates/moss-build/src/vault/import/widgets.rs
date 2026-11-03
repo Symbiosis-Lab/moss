@@ -332,7 +332,8 @@ fn link_html(href: &str, label: &str) -> String {
 /// (Plain text `![[url]]` would be escaped by the converter.)
 const EMBED_TAG: &str = "moss-embed";
 
-/// htmd with two changes: `<moss-embed data-url="…">` becomes the
+/// htmd with three changes: a heading (h2 to h6) that is plainly a paragraph
+/// is written as one (see `is_paragraph_text`), `<moss-embed data-url="…">` becomes the
 /// remote-embed wikilink on its own paragraph, with the label and size its
 /// attributes carry, and an `<img>` whose alt is only a file name is written
 /// with an empty alt (see `describing_alt`).
@@ -347,6 +348,14 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
                 }
                 _ => handlers.fallback(el),
             }
+        })
+        .add_handler(vec!["h2", "h3", "h4", "h5", "h6"], |handlers: &dyn Handlers, el: htmd::Element| {
+            let inner = handlers.walk_children(el.node).content;
+            let text = inner.trim();
+            if is_paragraph_text(text) {
+                return Some(format!("\n\n{text}\n\n").into());
+            }
+            handlers.fallback(el)
         })
         .add_handler(vec![GALLERY_TAG], |handlers: &dyn Handlers, el: htmd::Element| {
             let inner = handlers.walk_children(el.node).content;
@@ -369,6 +378,18 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
         })
         .build()
         .convert(html)
+}
+
+/// Whether the text of a heading (h2 to h6; h1 is the page title) is plainly a
+/// paragraph: at least 40 whitespace-separated words and a final full stop,
+/// closing quotes, brackets and emphasis marks allowed after it. Some builders
+/// offer a heading style that owners use for large body text, and a headline
+/// does not end in a full stop. Text with no spaces between words (Chinese,
+/// Japanese) never counts as long, so it stays a heading.
+fn is_paragraph_text(text: &str) -> bool {
+    const MIN_WORDS: usize = 40;
+    let closers = [')', ']', '*', '_', '"', '\'', '”', '’'];
+    text.trim_end_matches(closers).ends_with('.') && text.split_whitespace().count() >= MIN_WORDS
 }
 
 fn valid_id(id: &str) -> bool {

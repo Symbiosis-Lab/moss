@@ -482,3 +482,47 @@ fn a_members_form_in_a_long_container_does_not_take_the_article_with_it() {
     assert!(md.contains("Text after the block."), "{md}");
     assert!(!md.contains("No spam"), "{md}");
 }
+
+const LONG_H4_A: &str = "Our workshop opens every Thursday evening and anyone is welcome to join, \
+    whether they have printed before or never held a brayer in their life. We keep the tables \
+    low and the lamps warm, and we <em>always</em> start with tea. Bring something small to \
+    work on, and read the <a href=\"/guide\">studio guide</a> before your first visit if you can.";
+const LONG_H4_B: &str = "The press itself is a hundred years old and still prints a clean line. \
+    Two of us look after it, and we have replaced almost every part at least once. If you hear \
+    a rattle during an evening session, please tell us before you lean on the bed, because we \
+    would rather stop for a minute than lose a week to a repair that was easy to prevent.";
+
+#[test]
+fn a_heading_that_is_plainly_a_paragraph_is_written_as_one_with_its_markup() {
+    let html = page(
+        "",
+        &format!(
+            "<h2>Visiting the studio</h2><h4>{LONG_H4_A}</h4><h4>{LONG_H4_B}</h4>\
+             <h3>A short title that still has fifteen words in it for sure, honestly, you know</h3>"
+        ),
+    );
+    let (md, _) = run(&html);
+    assert!(!md.contains("#### "), "long h4 paragraphs must not stay headings:\n{md}");
+    assert!(md.contains("\n\nOur workshop opens every Thursday evening"), "{md}");
+    assert!(md.contains("*always*") && md.contains("[studio guide](/guide)"), "inline markup kept:\n{md}");
+    assert!(md.contains("\n\nThe press itself is a hundred years old"), "{md}");
+    assert!(md.contains("## Visiting the studio"), "a real short h2 stays:\n{md}");
+    assert!(md.contains("### A short title that still has"), "a one-sentence h3 stays:\n{md}");
+}
+
+#[test]
+fn a_long_heading_stays_a_heading_unless_it_is_a_sentence_below_h1() {
+    let words = "word ".repeat(44);
+    let md = run(&page("", &format!("<h1>{words}end.</h1><h3>{words}end</h3><h4>{words}end.</h4>"))).0;
+    assert!(md.contains("# word word") && md.contains("### word word"), "{md}");
+    assert!(!md.contains("#### word"), "a one-sentence h4 ending in a full stop is a paragraph:\n{md}");
+    assert!(md.contains("\n\nword word"), "{md}");
+}
+
+#[test]
+fn a_paragraph_heading_keeps_its_line_breaks() {
+    let words = "word ".repeat(44);
+    let md = run(&page("", &format!("<h4>first line<br>{words}end.</h4>"))).0;
+    assert!(md.contains("first line") && !md.contains("#### first"), "{md}");
+    assert!(!md.contains("first line word"), "the break is not collapsed to a space:\n{md}");
+}
