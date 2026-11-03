@@ -254,3 +254,115 @@ pub async fn resolve_page_source(
     }
     crate::editor::page_source::resolve_page_source(url, root)
 }
+
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetImageWidthArgs {
+    pub image_md: String,
+    /// `None`, or a token the syntax does not know, removes the width.
+    pub width: Option<String>,
+}
+
+/// An image's markdown with its width token rewritten.
+pub async fn set_image_width(_host: &dyn CommandHost, a: SetImageWidthArgs) -> Result<String, String> {
+    Ok(moss_core::media::set_image_width(&a.image_md, a.width.as_deref()))
+}
+
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceCardArgs {
+    pub from_file: VaultPath,
+    pub target: String,
+}
+
+/// What a link or embed points at, as a card: the same classification the
+/// build uses, so a card never disagrees with the page it describes.
+pub async fn editor_reference_card(
+    host: &dyn CommandHost,
+    a: ReferenceCardArgs,
+) -> Result<crate::editor::resolve::reference_card::ReferenceCardInfo, String> {
+    let (root, from_rel) = site_relative(host, &a.from_file)?;
+    crate::editor::resolve::reference_card::reference_card_for(&a.target, &from_rel, root)
+}
+
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WikilinkCompletionsArgs {
+    pub prefix: String,
+    pub from_file: VaultPath,
+    pub syntax: moss_core::link_completions::LinkSyntax,
+    /// A root-relative page: complete its headings instead of the folder's pages and files.
+    pub page: Option<String>,
+    pub allowed_kinds: Option<Vec<moss_core::resolve::ext_kind::ExtKind>>,
+}
+
+pub async fn wikilink_completions(
+    host: &dyn CommandHost,
+    a: WikilinkCompletionsArgs,
+) -> Result<Vec<crate::editor::completions::WikilinkCompletion>, String> {
+    use crate::editor::completions::{heading_completions, link_completions};
+    let root = lossy(host.root());
+    match a.page {
+        Some(page) => heading_completions(&root, &page, a.syntax, &a.prefix),
+        None => {
+            let from_file = lossy(&host.resolve(&a.from_file)?);
+            Ok(link_completions(&root, &from_file, a.syntax, &a.prefix, a.allowed_kinds.as_deref(), host.scope()))
+        }
+    }
+}
+
+/// Every folder name in the site, for a field whose value names a section.
+pub async fn list_section_folders(host: &dyn CommandHost, _a: NoArgs) -> Result<Vec<String>, String> {
+    use crate::editor::filesystem::{list_tree_inner_cached, TreeNode};
+    fn collect(node: &TreeNode, is_root: bool, out: &mut std::collections::BTreeSet<String>) {
+        if node.is_dir && !is_root {
+            out.insert(node.name.clone());
+        }
+        for child in node.children.iter().flatten() {
+            collect(child, false, out);
+        }
+    }
+    let root = lossy(site_root(host)?);
+    let tree = host.publish_dates().with_folder(host.root(), |cache| list_tree_inner_cached(&root, &root, false, cache))?;
+    let mut names = std::collections::BTreeSet::new();
+    collect(&tree, true, &mut names);
+    Ok(names.into_iter().collect())
+}
+
+#[derive(serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderPathArgs {
+    pub folder_path: VaultPath,
+}
+
+/// The URL a folder's listing is served at, honouring folder renames the last build recorded.
+pub async fn resolve_url_for_folder(host: &dyn CommandHost, a: FolderPathArgs) -> Result<Option<String>, String> {
+    let (root, rel) = site_relative(host, &a.folder_path)?;
+    crate::editor::resolve::links::resolve_url_for_folder_inner(&rel, root)
+}
+
+/// The URL a source will be served at, from its path alone: a page not built
+/// yet can be opened at once, and the build-aware `resolve_url_for_file` corrects it.
+pub async fn resolve_expected_url_for_file(host: &dyn CommandHost, a: FileArgs) -> Result<Option<String>, String> {
+    let (root, rel) = site_relative(host, &a.file_path)?;
+    Ok(crate::editor::resolve::links::resolve_expected_url_for_file(&rel, root))
+}
+
+/// The URL the last build served an asset at; `None` before a build has recorded it.
+pub async fn resolve_asset_url_for_file(host: &dyn CommandHost, a: FileArgs) -> Result<Option<String>, String> {
+    let (root, rel) = site_relative(host, &a.file_path)?;
+    let moss_dir = root.join(".moss");
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
+    let Ok(content) = std::fs::read_to_string(paths.hashes()) else {
+        return Ok(None);
+    };
+    let hashes: crate::types::content::SiteHashes = serde_json::from_str(&content).unwrap_or_default();
+    let overrides = crate::build::scan::article_map::ArticleMap::load(&moss_dir).map(|m| m.dir_overrides).unwrap_or_default();
+    Ok(crate::editor::resolve::links::resolve_asset_url_inner(&rel.replace('\\', "/"), &hashes, &overrides))
+}
+
+/// The pages the preview is serving now, for an address bar's suggestions.
+pub async fn get_all_pages(host: &dyn CommandHost, _a: NoArgs) -> Result<Vec<crate::editor::page_source::PageInfo>, String> {
+    site_root(host)?;
+    Ok(crate::editor::page_source::pages_in(&host.served_dir()))
+}

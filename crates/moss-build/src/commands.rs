@@ -289,6 +289,7 @@ tier! {
         parse_frontmatter => reads::parse_frontmatter,
         editor_resolve_asset => reads::editor_resolve_asset,
         editor_resolve_references => reads::editor_resolve_references,
+        set_image_width => reads::set_image_width,
     }
 }
 
@@ -313,6 +314,13 @@ tier! {
         reveal_history_store => versions::reveal_history_store,
         resolve_attachment_dir => reads::resolve_attachment_dir,
         resolve_page_source => reads::resolve_page_source,
+        editor_reference_card => reads::editor_reference_card,
+        wikilink_completions => reads::wikilink_completions,
+        list_section_folders => reads::list_section_folders,
+        resolve_url_for_folder => reads::resolve_url_for_folder,
+        resolve_expected_url_for_file => reads::resolve_expected_url_for_file,
+        resolve_asset_url_for_file => reads::resolve_asset_url_for_file,
+        get_all_pages => reads::get_all_pages,
     }
 }
 

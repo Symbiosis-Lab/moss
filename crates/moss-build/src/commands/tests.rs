@@ -45,6 +45,17 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("reveal_history_store", json!({ "projectPath": "/ignored" })),
         ("resolve_attachment_dir", json!({ "pageRelativePath": "posts/a.md" })),
         ("resolve_page_source", json!({ "urlPath": "/posts/a/" })),
+        ("set_image_width", json!({ "imageMd": "![](i.png)", "width": "wide" })),
+        ("editor_reference_card", json!({ "fromFile": "b.md", "target": "a.md" })),
+        (
+            "wikilink_completions",
+            json!({ "prefix": "a", "fromFile": "b.md", "syntax": "wikilink", "page": null, "allowedKinds": null }),
+        ),
+        ("list_section_folders", json!({})),
+        ("resolve_url_for_folder", json!({ "folderPath": "posts" })),
+        ("resolve_expected_url_for_file", json!({ "filePath": "a.md" })),
+        ("resolve_asset_url_for_file", json!({ "filePath": "i.png" })),
+        ("get_all_pages", json!({})),
         (
             "create_files",
             json!({ "files": [{ "dir": "posts", "name": "a.md", "frontmatter": {} }] }),
@@ -261,12 +272,50 @@ async fn site_facts_are_refused_in_a_loose_document() {
         ("resolve_url_for_file", json!({ "filePath": "a.md" })),
         ("resolve_page_source", json!({ "urlPath": "/a/" })),
         ("list_vault_terms", json!({})),
+        ("editor_reference_card", json!({ "fromFile": "b.md", "target": "a.md" })),
+        ("list_section_folders", json!({})),
+        ("resolve_url_for_folder", json!({ "folderPath": "." })),
+        ("resolve_expected_url_for_file", json!({ "filePath": "a.md" })),
+        ("resolve_asset_url_for_file", json!({ "filePath": "a.md" })),
+        ("get_all_pages", json!({})),
     ] {
         match session_read::dispatch(&host, cmd, args).await {
             Some(Err(CommandError::Failed(msg))) => assert_eq!(msg, crate::vault::paths::NO_PROJECT_OPEN, "{cmd}"),
             other => panic!("{cmd}: expected the no-project refusal, got {other:?}"),
         }
     }
+}
+
+/// The reads an editor's completions, cards and address bar make, answered
+/// through the table like every other command.
+#[tokio::test]
+async fn the_editor_reads_answer_from_the_open_site() {
+    let (_d, root) = pages();
+    std::fs::create_dir_all(root.join("posts/drafts")).unwrap();
+    // allow:raw_write test fixture page in the served directory
+    std::fs::write(root.join(".moss/index.html"), "<title>Home</title>").unwrap();
+    let host = TestHost::site(&root);
+    let read = |cmd: &'static str, args: Value| dispatch(&host, cmd, args);
+
+    let md: String = ok(read("set_image_width", json!({ "imageMd": "![](i.png)", "width": "wide" })).await).await;
+    assert_ne!(md, "![](i.png)", "a width is written");
+    // allow:raw_write test fixture page
+    std::fs::write(root.join("posts/c.md"), "## Hello there\n").unwrap();
+    let card: Value = ok(read("editor_reference_card", json!({ "fromFile": root.join("posts/c.md"), "target": "#hello-there" })).await).await;
+    assert_eq!(card["heading"], json!("Hello there"), "{card}");
+    let rows: Vec<Value> = ok(read(
+        "wikilink_completions",
+        json!({ "prefix": "A", "fromFile": root.join("b.md"), "syntax": "wikilink", "page": null, "allowedKinds": null }),
+    )
+    .await)
+    .await;
+    assert!(!rows.is_empty(), "the folder's pages complete");
+    let folders: Vec<String> = ok(read("list_section_folders", json!({})).await).await;
+    assert_eq!(folders, ["drafts", "posts"]);
+    let expected: Option<String> = ok(read("resolve_expected_url_for_file", json!({ "filePath": "a.md" })).await).await;
+    assert!(expected.is_some_and(|u| u.contains('a')));
+    let pages: Vec<Value> = ok(read("get_all_pages", json!({})).await).await;
+    assert_eq!(pages, [json!({ "url_path": "index.html", "title": "Home" })]);
 }
 
 #[cfg(unix)]

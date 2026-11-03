@@ -1,4 +1,5 @@
-//! Map a served URL (or the site root) to the source page that produces it.
+//! Map a served URL (or the site root) to the source page that produces it,
+//! and list the pages a served build holds.
 //!
 //! The editor asks this when a site's root is opened, and again whenever the
 //! preview navigates. It tries the build's article map first (the fast path,
@@ -109,6 +110,50 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         takeover,
         source_pending: false,
     })
+}
+
+/// One page of the served build.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct PageInfo {
+    /// The page's file under the served directory, e.g. `posts/article.html`.
+    pub url_path: String,
+    /// Its `<title>`, or a name made from its path when it has none.
+    pub title: String,
+}
+
+/// Every HTML page under `served_dir`, sorted by path. The caller passes the
+/// directory the preview is serving now: before the first seal and after a
+/// rebuild that is not the promoted generation, and a guess would miss pages.
+pub fn pages_in(served_dir: &Path) -> Vec<PageInfo> {
+    if served_dir.symlink_metadata().is_err() {
+        return Vec::new();
+    }
+    let mut pages: Vec<PageInfo> = walkdir::WalkDir::new(served_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "html"))
+        .filter_map(|e| {
+            let url_path = e.path().strip_prefix(served_dir).ok()?.to_string_lossy().into_owned();
+            let title = title_of(e.path()).unwrap_or_else(|| {
+                url_path
+                    .trim_end_matches(".html")
+                    .trim_end_matches("/index")
+                    .replace('/', " > ")
+                    .replace(['-', '_'], " ")
+            });
+            Some(PageInfo { url_path, title })
+        })
+        .collect();
+    pages.sort_by(|a, b| a.url_path.cmp(&b.url_path));
+    pages
+}
+
+fn title_of(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let (_, after_open) = content.split_once("<title>")?;
+    let (title, _) = after_open.split_once("</title>")?;
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_string())
 }
 
 #[cfg(test)]
@@ -330,5 +375,35 @@ mod tests {
             assert_eq!(r.takeover, None, "no backing directory, no folder button");
             assert!(!r.is_dir);
         }
+    }
+
+    #[test]
+    fn a_page_is_named_by_its_title_or_else_its_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("posts")).unwrap();
+        std::fs::write(dir.path().join("index.html"), "<head><title>  Home  </title></head>").unwrap();
+        std::fs::write(dir.path().join("posts/first-note.html"), "<head><title></title></head>").unwrap();
+        std::fs::write(dir.path().join("style.css"), "").unwrap();
+        let pages = pages_in(dir.path());
+        let named: Vec<(&str, &str)> = pages.iter().map(|p| (p.url_path.as_str(), p.title.as_str())).collect();
+        assert_eq!(named, [("index.html", "Home"), ("posts/first-note.html", "posts > first note")]);
+    }
+
+    /// Once `current` exists, a rebuild stages pages the promoted generation
+    /// lacks while the preview serves `staging/`; only the served directory finds them.
+    #[test]
+    fn pages_are_read_from_the_directory_the_preview_serves() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join(".moss"));
+        let staging = paths.staging_dir();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("index.html"), "<title>Home</title>").unwrap();
+        assert_eq!(pages_in(&paths.initial_serve_dir()).len(), 1, "before the first seal, staging is served");
+
+        std::fs::create_dir_all(paths.generation_dir("gen001")).unwrap();
+        paths.set_current_ptr("gen001").unwrap();
+        std::fs::write(staging.join("second.html"), "<title>Second</title>").unwrap();
+        assert_eq!(pages_in(&staging).len(), 2);
+        assert_eq!(pages_in(&paths.initial_serve_dir()).len(), 0, "the promoted generation is not what is served");
     }
 }

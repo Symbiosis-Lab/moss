@@ -1098,6 +1098,8 @@ direct_child_count: number;
  */
 descendant_count: number }
 
+export type FolderPathArgs = { folderPath: VaultPath }
+
 /**
  * Frontmatter schema: a map of field name to definition.
  */
@@ -1170,6 +1172,29 @@ export type KindTerms = { fields: string[];
  * Each name once, whichever editions use it.
  */
 names: string[] }
+
+/**
+ * The link syntax the caret is inside. Decides how a target is written and
+ * which kinds rank first.
+ */
+export type LinkSyntax = 
+/**
+ * `[[…]]` — Obsidian form: pages by stem, assets by filename.
+ */
+"wikilink" | 
+/**
+ * `![[…]]` — same forms, assets first.
+ */
+"embed" | 
+/**
+ * `[text](…)` — the one syntax with two address spaces: a leading `/`
+ * means the published site, anything else means the source tree.
+ */
+"inline" | 
+/**
+ * `![alt](…)`, `image=…`, a gallery body line — an asset path, never a page.
+ */
+"asset-path"
 
 /**
  * A caller's `projectPath` is not read: a caller that names both the root
@@ -1585,6 +1610,19 @@ export type PageFacts = {
  * `None` for a slot, which is not a page.
  */
 position: PagePosition | null; auto: { [key in string]: JsonValue } }
+
+/**
+ * One page of the served build.
+ */
+export type PageInfo = { 
+/**
+ * The page's file under the served directory, e.g. `posts/article.html`.
+ */
+url_path: string; 
+/**
+ * Its `<title>`, or a name made from its path when it has none.
+ */
+title: string }
 
 /**
  * Where a page sits in its site: an ordinary page, a folder's index, or a
@@ -2051,6 +2089,10 @@ export type ReadVersionArgs = { id: string; path: string }
  */
 export type RefTarget = { text: string; is_embed: boolean }
 
+export type ReferenceCardArgs = { fromFile: VaultPath; target: string }
+
+export type ReferenceCardInfo = { title: string; description: string | null; source_path: string | null; generated: boolean; heading: string | null }
+
 export type ReferenceKind = { kind: "link"; data: { anchor: string | null } } | { kind: "image" } | { kind: "iframe" } | { kind: "pdf" } | { kind: "video" } | { kind: "audio" } | { kind: "model" } | { kind: "folder-listing" } | { kind: "folder-index-iframe" } | { kind: "transclusion" } | { kind: "notebook" } | { kind: "table" } | { kind: "external"; data: { url: string } } | { kind: "anchor" } | { kind: "ambiguous" } | { kind: "not-found" } | 
 /**
  * An internal link whose URL no longer exists: the page it named now
@@ -2237,6 +2279,12 @@ export type Scope =
  * The user's account/subscription.
  */
 "Account"
+
+export type SetImageWidthArgs = { imageMd: string; 
+/**
+ * `None`, or a token the syntax does not know, removes the width.
+ */
+width: string | null }
 
 /**
  * One settled asset: its output path plus the `asset_type` the iframe-bridge
@@ -2547,6 +2595,11 @@ export type TakeoverKind =
  * A language tree's synthesized home.
  */
 "lang-home"
+
+/**
+ * A target's kind, as the dropdown paints it (`.cm-completionIcon-<kind>`).
+ */
+export type TargetKind = "page" | "asset" | "folder" | "generated" | "heading"
 
 /**
  * Operation kind. **Closed enum, no `Custom` variant** — internal moss
@@ -2984,6 +3037,31 @@ export type Widget = "text-input" | "text-area" | "date-picker" | "number-input"
 "wikilink-list-picker"
 
 /**
+ * One completion row, ready to render.
+ */
+export type WikilinkCompletion = { 
+/**
+ * The exact text accepting the row writes into the link.
+ */
+insert: string; 
+/**
+ * The thing's name: page title, filename, `dir/`, term text, heading.
+ */
+label: string; 
+/**
+ * The dimmer second column. The insert text when it differs from the
+ * label (so the author learns the address on the spot); the heading's
+ * level (`H2`) when the two coincide.
+ */
+detail: string | null; kind: TargetKind }
+
+export type WikilinkCompletionsArgs = { prefix: string; fromFile: VaultPath; syntax: LinkSyntax; 
+/**
+ * A root-relative page: complete its headings instead of the folder's pages and files.
+ */
+page: string | null; allowedKinds: ExtKind[] | null }
+
+/**
  * Window identifier for multi-window task isolation. Wraps a `String` so
  * callers can pass either a Tauri `WebviewWindow::label()` (already
  * `&str`) or a synthetic id (tests, future launcher window).
@@ -2999,6 +3077,7 @@ export type EngineCommands = {
 	parse_frontmatter: { args: FileArgs; out: ParsedFrontmatter };
 	editor_resolve_asset: { args: ResolveAssetArgs; out: ResolvedAsset | null };
 	editor_resolve_references: { args: ResolveReferencesArgs; out: EditorReferenceResolution[] };
+	set_image_width: { args: SetImageWidthArgs; out: string };
 	editor_bootstrap: { args: BootstrapArgs; out: EditorBootstrap };
 	list_directory: { args: ListDirectoryArgs; out: DirEntry[] };
 	list_tree: { args: ListTreeArgs; out: TreeNode };
@@ -3016,6 +3095,13 @@ export type EngineCommands = {
 	reveal_history_store: { args: NoArgs; out: null };
 	resolve_attachment_dir: { args: AttachmentDirArgs; out: string };
 	resolve_page_source: { args: PageSourceArgs; out: PageSource };
+	editor_reference_card: { args: ReferenceCardArgs; out: ReferenceCardInfo };
+	wikilink_completions: { args: WikilinkCompletionsArgs; out: WikilinkCompletion[] };
+	list_section_folders: { args: NoArgs; out: string[] };
+	resolve_url_for_folder: { args: FolderPathArgs; out: string | null };
+	resolve_expected_url_for_file: { args: FileArgs; out: string | null };
+	resolve_asset_url_for_file: { args: FileArgs; out: string | null };
+	get_all_pages: { args: NoArgs; out: PageInfo[] };
 	create_files: { args: CreateFilesArgs; out: string[] };
 	create_folder: { args: CreateFolderArgs; out: string };
 	delete_entry: { args: PathArgs; out: null };
@@ -3037,6 +3123,7 @@ export const ENGINE_TIER = {
 	parse_frontmatter: "public_read",
 	editor_resolve_asset: "public_read",
 	editor_resolve_references: "public_read",
+	set_image_width: "public_read",
 	editor_bootstrap: "session_read",
 	list_directory: "session_read",
 	list_tree: "session_read",
@@ -3054,6 +3141,13 @@ export const ENGINE_TIER = {
 	reveal_history_store: "session_read",
 	resolve_attachment_dir: "session_read",
 	resolve_page_source: "session_read",
+	editor_reference_card: "session_read",
+	wikilink_completions: "session_read",
+	list_section_folders: "session_read",
+	resolve_url_for_folder: "session_read",
+	resolve_expected_url_for_file: "session_read",
+	resolve_asset_url_for_file: "session_read",
+	get_all_pages: "session_read",
 	create_files: "write",
 	create_folder: "write",
 	delete_entry: "write",
@@ -3075,6 +3169,7 @@ export type EngineParams = {
 	parse_frontmatter: [filePath: VaultPath];
 	editor_resolve_asset: [target: string, fromFile: VaultPath];
 	editor_resolve_references: [targets: RefTarget[], fromFile: VaultPath];
+	set_image_width: [imageMd: string, width: string | null];
 	editor_bootstrap: [sourcePath: VaultPath | null];
 	list_directory: [path: VaultPath, showInternal: boolean];
 	list_tree: [showInternal: boolean];
@@ -3092,6 +3187,13 @@ export type EngineParams = {
 	reveal_history_store: [];
 	resolve_attachment_dir: [pageRelativePath: VaultPath];
 	resolve_page_source: [urlPath: string];
+	editor_reference_card: [fromFile: VaultPath, target: string];
+	wikilink_completions: [prefix: string, fromFile: VaultPath, syntax: LinkSyntax, page: string | null, allowedKinds: ExtKind[] | null];
+	list_section_folders: [];
+	resolve_url_for_folder: [folderPath: VaultPath];
+	resolve_expected_url_for_file: [filePath: VaultPath];
+	resolve_asset_url_for_file: [filePath: VaultPath];
+	get_all_pages: [];
 	create_files: [files: NewFile[]];
 	create_folder: [parentDir: string, name: string];
 	delete_entry: [path: VaultPath];
@@ -3111,6 +3213,7 @@ export const ENGINE_PARAMS = {
 	parse_frontmatter: ["filePath"],
 	editor_resolve_asset: ["target", "fromFile"],
 	editor_resolve_references: ["targets", "fromFile"],
+	set_image_width: ["imageMd", "width"],
 	editor_bootstrap: ["sourcePath"],
 	list_directory: ["path", "showInternal"],
 	list_tree: ["showInternal"],
@@ -3128,6 +3231,13 @@ export const ENGINE_PARAMS = {
 	reveal_history_store: [],
 	resolve_attachment_dir: ["pageRelativePath"],
 	resolve_page_source: ["urlPath"],
+	editor_reference_card: ["fromFile", "target"],
+	wikilink_completions: ["prefix", "fromFile", "syntax", "page", "allowedKinds"],
+	list_section_folders: [],
+	resolve_url_for_folder: ["folderPath"],
+	resolve_expected_url_for_file: ["filePath"],
+	resolve_asset_url_for_file: ["filePath"],
+	get_all_pages: [],
 	create_files: ["files"],
 	create_folder: ["parentDir", "name"],
 	delete_entry: ["path"],
