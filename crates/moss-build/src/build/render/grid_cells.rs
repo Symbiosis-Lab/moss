@@ -372,6 +372,7 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
             "{}\n",
             crate::build::components::cards_container(
                 "list",
+                false,
                 true,
                 &Default::default(),
                 &cards.join("\n"),

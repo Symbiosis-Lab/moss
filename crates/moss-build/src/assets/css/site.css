@@ -7253,6 +7253,82 @@ article a:where(:not(.moss-btn)):focus {
   margin: 0;
 }
 
+/* Lead listing (`children_style: lead`): the first card leads, the rest form a
+   register. Phone: the lead stacks picture over words, the register is ruled
+   rows with no pictures. Wide: the lead is a picture beside its words and the
+   register is three equal columns. */
+.moss-cards[data-layout="list"][data-lead] {
+  max-inline-size: none;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-row {
+  display: grid;
+  gap: var(--moss-space-md);
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-cover {
+  order: -1;
+  /* 100%, not auto: a grid item with an aspect ratio is not stretched and its
+     only content is absolutely placed, so WebKit draws it 0 px wide */
+  inline-size: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 0;
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-cover img {
+  object-fit: cover;
+}
+.moss-cards[data-lead] .moss-card-title {
+  font-family: var(--moss-font-heading);
+  font-weight: var(--moss-font-heading-weight);
+  font-size: 1.3rem;
+  line-height: 1.45;
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-title {
+  font-size: clamp(1.75rem, 7vw, 2.9rem);
+  line-height: 1.24;
+  max-inline-size: 14em;
+  text-wrap: balance;
+}
+.moss-cards[data-lead] > .moss-card:first-child {
+  padding-block-end: var(--moss-space-xl);
+  margin-block-end: var(--moss-space-md);
+  border-block-end: 1px solid var(--moss-border-light);
+}
+.moss-cards[data-lead] > .moss-card:not(:first-child) {
+  padding-block: var(--moss-space-md);
+  border-block-end: 1px solid var(--moss-border-light);
+}
+.moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-cover { display: none; }
+.moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (width >= 48rem) {
+  .moss-cards[data-layout="list"][data-lead] {
+    grid-template-columns: repeat(3, 1fr);
+    column-gap: var(--moss-space-xl);
+  }
+  .moss-cards[data-lead] > .moss-card:first-child { grid-column: 1 / -1; }
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-row {
+    grid-template-columns: 7fr 5fr;
+    gap: var(--moss-space-xl);
+    align-items: start;
+  }
+  /* The words hang from the picture's top edge: trim the date line's
+     half-leading so its glyphs meet it. */
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-body > .moss-card-meta:first-child {
+    margin-block-start: calc((1em - 1lh) / 2);
+  }
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-cover { aspect-ratio: 3 / 2; }
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-title { font-size: clamp(1.9rem, 3.2vw, 2.9rem); }
+  .moss-cards[data-lead] > .moss-card:not(:first-child) { border: 0; padding-block: var(--moss-space-sm) 0; }
+  .moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-description { -webkit-line-clamp: 3; }
+}
+
 [data-theme="dark"] .moss-card-no-cover {
   background: linear-gradient(135deg, var(--moss-color-surface) 0%, rgba(255, 255, 255, 0.05) 100%);
 }

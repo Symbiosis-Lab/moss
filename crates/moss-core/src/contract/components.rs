@@ -243,6 +243,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 default: "",
                 description: "Boolean presence flag: emitted iff any child card has a cover. Combines with `data-list-axis` to widen `--moss-card-min` for cover-led layouts. Use `[data-list-has-covers]` in CSS to target it.",
             },
+            DataAttr {
+                name: "data-lead",
+                values: &[],
+                default: "",
+                description: "Boolean presence flag: emitted on a `data-layout=\"list\"` listing drawn with `children_style: lead`. The first card leads (picture beside its words on a wide screen, stacked on a phone) and the rest form a register of three columns with no pictures. Use `[data-lead]` in CSS to restyle it.",
+            },
         ],
         example_html: r#"<div class="moss-cards-container">
   <div class="moss-cards" data-layout="grid" data-list-axis="date" data-list-has-covers>

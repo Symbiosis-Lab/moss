@@ -311,7 +311,7 @@ pub(crate) fn resolve_children_config(
             // contract). A single dated post gets a year heading too; a
             // dateless listing stays flat. Auto-detected `year` is still
             // suppressed under a non-Date sort axis in `effective_group_for_axis`.
-            let auto_value = if style.value != "summary" && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
+            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
                 "year".to_string()
             } else {
                 "none".to_string()
@@ -393,7 +393,7 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 /// * `folder_docs` - Direct children documents to render
 /// * `all_folder_docs` - All documents in the folder (for computing child counts)
 /// * `project` - Project structure for date extraction
-/// * `style` - "list", "summary", or "grid" (collection cards)
+/// * `style` - "list", "summary", "lead" (summary whose first item leads), or "grid" (collection cards)
 /// * `group` - "year" or "none"
 /// * `lang` - Language for UI strings
 /// * `skip_resort` - If true, skip the internal date-desc resort and render docs
@@ -429,6 +429,10 @@ pub(crate) fn generate_children(
     if folder_docs.is_empty() {
         return String::new();
     }
+    // `lead` is `summary` markup plus a hook on the container, so every
+    // summary branch below serves it unchanged.
+    let lead = style == "lead";
+    let style = if lead { "summary" } else { style };
 
     // Build ChildItemProps for each doc. The shared reading lives beside the
     // struct; the one thing the row shapes want on top is the auto-extracted
@@ -677,7 +681,7 @@ pub(crate) fn generate_children(
     // render through `child_summary` and don't depend on the minimal item CSS.
     // (Grid returns earlier with its own data-layout="grid".)
     let data_layout = if style != "summary" { "minimal" } else { "list" };
-    components::cards_container(data_layout, is_embed, placement, html.trim())
+    components::cards_container(data_layout, lead, is_embed, placement, html.trim())
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in

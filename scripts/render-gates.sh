@@ -64,6 +64,7 @@ GATES_BUILD=(
   grid-mobile-collapse
   collage
   card-cover-ratio
+  lead-listing
   grid-card-image-inline-size
   hero-caption
   hero-from

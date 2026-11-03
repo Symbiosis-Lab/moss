@@ -67,6 +67,7 @@ const GATE_PORT_KEYS = [
   'grid-mobile-collapse',
   'collage',
   'card-cover-ratio',
+  'lead-listing',
   'grid-card-image-inline-size',
   'hero-caption',
   'content-width-escape',

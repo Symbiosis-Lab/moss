@@ -4252,3 +4252,66 @@ Body.
 `,
   },
 };
+
+const LEAD_TILE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4a7"/></svg>
+`;
+
+// A folder drawn with `children_style: lead`: a first item with a picture and
+// three more. Served by playwright/lead-listing.config.ts.
+export const LEAD_LISTING_GATE: ScratchSiteSpec = {
+  name: "lead-listing-gate",
+  files: {
+    "tile.svg": LEAD_TILE_SVG,
+    "index.md": `---
+title: Lead Listing
+uid: "lead0001"
+---
+
+Welcome.
+`,
+    "notes/index.md": `---
+title: Notes
+uid: "lead0010"
+children_style: lead
+children_group: none
+children_limit: 4
+content_width: wide
+---
+
+Notes.
+`,
+    "notes/one.md": `---
+title: The harbour in winter
+uid: "lead0011"
+date: 2026-04-01
+cover: tile.svg
+---
+
+The ferries stopped running before the first snow, and the pier went quiet.
+`,
+    "notes/two.md": `---
+title: Second note
+uid: "lead0012"
+date: 2026-03-01
+---
+
+The opening line of the second note.
+`,
+    "notes/three.md": `---
+title: Third note
+uid: "lead0013"
+date: 2026-02-01
+---
+
+The opening line of the third note.
+`,
+    "notes/four.md": `---
+title: Fourth note
+uid: "lead0014"
+date: 2026-01-01
+---
+
+The opening line of the fourth note.
+`,
+  },
+};
