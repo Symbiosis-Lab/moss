@@ -163,9 +163,8 @@ impl CommandHost for TestHost {
         self.root.as_deref().expect("a command read the root of a host with no folder open")
     }
     /// Canonical, like the HTTP carrier's own resolve.
-    fn resolve(&self, path: &VaultPath) -> Result<PathBuf, String> {
-        let joined = self.root.as_deref().unwrap_or(Path::new("")).join(path.as_written());
-        Ok(joined.canonicalize().unwrap_or(joined))
+    fn folder(&self) -> Option<&Path> {
+        self.root.as_deref()
     }
     fn scope(&self) -> EditorScope {
         self.scope
@@ -525,15 +524,38 @@ async fn a_failed_loose_rename_withdraws_its_announcement() {
 /// them. Nothing reaches the OS trash.
 #[tokio::test]
 async fn a_loose_delete_leaves_links_to_the_deleted_page() {
+    let args = json!({ "paths": ["a.md"] });
     let (_d, root) = pages();
-    let args = json!({ "paths": ["../outside.md", "a.md"] });
-    let loose = write::dispatch(&TestHost::loose(&root), "clean_references_and_delete", args.clone()).await;
-    assert!(matches!(loose, Some(Err(_))), "{loose:?}");
+    ok::<Value>(write::dispatch(&TestHost::loose(&root), "clean_references_and_delete", args.clone()).await).await;
+    assert!(!root.join("a.md").exists());
     assert_eq!(std::fs::read_to_string(root.join("b.md")).unwrap(), "see [A](a.md)");
-    let site = write::dispatch(&TestHost::site(&root), "clean_references_and_delete", args).await;
-    assert!(matches!(site, Some(Err(_))), "{site:?}");
+    let (_d, root) = pages();
+    ok::<Value>(write::dispatch(&TestHost::site(&root), "clean_references_and_delete", args).await).await;
     assert!(!std::fs::read_to_string(root.join("b.md")).unwrap().contains("a.md"));
-    assert!(root.join("a.md").exists());
+}
+
+/// A path out of the folder is refused before a batch touches anything, for
+/// every host: confinement is the table's, not a host's to implement.
+#[tokio::test]
+async fn a_path_out_of_the_folder_is_refused_before_anything_changes() {
+    let (d, root) = pages();
+    // allow:raw_write test fixture beside the folder
+    std::fs::write(d.path().join("outside.md"), "---\ntitle: Out\n---\n").unwrap();
+    let host = TestHost::site(&root);
+    let refused = |out: Option<CommandResult>| matches!(out, Some(Err(CommandError::Failed(_))));
+    assert!(refused(dispatch(&host, "parse_frontmatter", json!({ "filePath": "../outside.md" })).await), "a read");
+    assert!(refused(dispatch(&host, "clean_references_and_delete", json!({ "paths": ["../outside.md", "a.md"] })).await), "a write");
+    assert!(root.join("a.md").exists() && d.path().join("outside.md").exists(), "nothing was deleted");
+    assert_eq!(std::fs::read_to_string(root.join("b.md")).unwrap(), "see [A](a.md)", "no link was rewritten");
+}
+
+/// With no folder open, only the commands that read the file they are given run.
+#[tokio::test]
+async fn a_host_with_no_folder_runs_only_the_file_reads() {
+    match write::dispatch(&TestHost::without_folder(), "create_folder", json!({ "parentDir": "/tmp", "name": "x" })).await {
+        Some(Err(CommandError::Failed(msg))) => assert_eq!(msg, crate::vault::paths::NO_PROJECT_OPEN),
+        other => panic!("a write with no folder is refused, got {other:?}"),
+    }
 }
 
 #[tokio::test]

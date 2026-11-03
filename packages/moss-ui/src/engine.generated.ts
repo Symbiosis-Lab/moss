@@ -2993,8 +2993,8 @@ export type UndoRenameArgs = { undoId: string }
 export type UndoResult = { restored_files: string[]; skipped: SkippedFile[] }
 
 /**
- * A path a caller names. Its only way to a real path is
- * [`CommandHost::resolve`], so no command can skip the host's confinement.
+ * A path a caller names. Its only way to a real path is [`resolve`], so no
+ * command and no host can skip the confinement.
  */
 export type VaultPath = string
 

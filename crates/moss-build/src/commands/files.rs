@@ -3,11 +3,11 @@
 use serde_json::Value;
 
 use super::rename_undo::RenameRefsSummary;
-use super::{lossy, site_root, with_moves_announced, CommandHost, VaultPath};
+use super::{resolve, lossy, site_root, with_moves_announced, CommandHost, VaultPath};
 use crate::editor::rename_plan::UndoResult;
 
 fn resolve_all(host: &dyn CommandHost, paths: &[VaultPath]) -> Result<Vec<String>, String> {
-    paths.iter().map(|p| host.resolve(p).map(|pb| lossy(&pb))).collect()
+    paths.iter().map(|p| resolve(host, p).map(|pb| lossy(&pb))).collect()
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -60,7 +60,7 @@ pub async fn scan_references_for_delete(
     let Ok(root) = site_root(host) else { return Ok(Vec::new()) };
     let mut hits = Vec::new();
     for path in &a.paths {
-        let abs = host.resolve(path)?;
+        let abs = resolve(host, path)?;
         if abs.exists() {
             hits.extend(crate::editor::ref_scan::scan_project_references_to(&abs, root)?);
         }
@@ -89,8 +89,8 @@ pub struct RenameArgs {
 
 /// Renames or moves one entry and rewrites every reference that follows it.
 pub async fn rename_entry_with_refs(host: &dyn CommandHost, a: RenameArgs) -> Result<RenameRefsSummary, String> {
-    let old = lossy(&host.resolve(&a.old_path)?);
-    let new = lossy(&host.resolve(&a.new_path)?);
+    let old = lossy(&resolve(host, &a.old_path)?);
+    let new = lossy(&resolve(host, &a.new_path)?);
     apply_moves(host, &[(old, new)])
 }
 
@@ -104,7 +104,7 @@ pub struct MoveEntriesArgs {
 /// Moves entries into one folder (see [`crate::editor::rename_plan::destinations::into_folder`]
 /// for where each lands), in one plan, with one undo.
 pub async fn move_entries(host: &dyn CommandHost, a: MoveEntriesArgs) -> Result<RenameRefsSummary, String> {
-    let target = host.resolve(&a.target_dir)?;
+    let target = resolve(host, &a.target_dir)?;
     let moves = crate::editor::rename_plan::destinations::into_folder(host.root(), &resolve_all(host, &a.paths)?, &target)?;
     apply_moves(host, &moves)
 }
@@ -164,7 +164,7 @@ pub async fn save_editor_content(
     host: &dyn CommandHost,
     a: SaveEditorContentArgs,
 ) -> Result<crate::editor::content::SaveResult, String> {
-    let path = lossy(&host.resolve(&a.file_path)?);
+    let path = lossy(&resolve(host, &a.file_path)?);
     let r = host.saving(&path, &mut || {
         crate::editor::content::persist_editor_content(&path, &a.frontmatter, &a.body, &a.expected_hash, a.keep_displaced)
     })?;
@@ -186,7 +186,7 @@ pub struct WriteEditorFileBinaryArgs {
 /// fences `.moss/`: a loose document has no site.
 pub async fn write_editor_file_binary(host: &dyn CommandHost, a: WriteEditorFileBinaryArgs) -> Result<(), String> {
     use base64::Engine;
-    let path = host.resolve(&a.relative_path)?;
+    let path = resolve(host, &a.relative_path)?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&a.data_base64)
         .map_err(|e| format!("Failed to decode base64 data: {e}"))?;

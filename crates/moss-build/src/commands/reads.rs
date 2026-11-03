@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use super::{lossy, site_relative, site_root, CommandHost, NoArgs, VaultPath};
+use super::{resolve, lossy, site_relative, site_root, CommandHost, NoArgs, VaultPath};
 use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::editor::content::{EditorBootstrap, ParsedFrontmatter, SourceRole};
 use crate::editor::filesystem::EditorFileInfo;
@@ -29,7 +29,7 @@ pub struct FileArgs {
 }
 
 pub async fn parse_frontmatter(host: &dyn CommandHost, a: FileArgs) -> Result<ParsedFrontmatter, String> {
-    crate::editor::content::parse_frontmatter_from_disk(lossy(&host.resolve(&a.file_path)?)).await
+    crate::editor::content::parse_frontmatter_from_disk(lossy(&resolve(host, &a.file_path)?)).await
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -40,7 +40,7 @@ pub struct ResolveAssetArgs {
 }
 
 pub async fn editor_resolve_asset(host: &dyn CommandHost, a: ResolveAssetArgs) -> Result<Option<ResolvedAsset>, String> {
-    let from_file = host.resolve(&a.from_file)?;
+    let from_file = resolve(host, &a.from_file)?;
     Ok(crate::editor::resolve::asset_resolver::resolve_asset(&a.target, &from_file, host.root(), host.scope()))
 }
 
@@ -55,7 +55,7 @@ pub async fn editor_resolve_references(
     host: &dyn CommandHost,
     a: ResolveReferencesArgs,
 ) -> Result<Vec<crate::editor::resolve::reference_resolver::EditorReferenceResolution>, String> {
-    let from_file = host.resolve(&a.from_file)?;
+    let from_file = resolve(host, &a.from_file)?;
     Ok(crate::editor::resolve::reference_resolver::resolve_references_batch(
         &a.targets,
         &from_file.to_string_lossy(),
@@ -76,7 +76,7 @@ pub struct BootstrapArgs {
 pub async fn editor_bootstrap(host: &dyn CommandHost, a: BootstrapArgs) -> Result<EditorBootstrap, String> {
     use crate::editor::content::{assemble_bootstrap, bootstrap_source_path, read_vault_text_off_runtime};
     let root = lossy(host.root());
-    let source = a.source_path.as_ref().map(|p| host.resolve(p)).transpose()?;
+    let source = a.source_path.as_ref().map(|p| resolve(host, p)).transpose()?;
     let initial = match bootstrap_source_path(Some(&root), source.as_deref().map(lossy).as_deref()) {
         // A file still in the cloud boots without its parse; the editor loads it.
         Some(abs) => read_vault_text_off_runtime(abs).await.ok().flatten(),
@@ -102,7 +102,7 @@ pub async fn list_directory(
     host: &dyn CommandHost,
     a: ListDirectoryArgs,
 ) -> Result<Vec<crate::editor::filesystem::DirEntry>, String> {
-    let path = host.resolve(&a.path)?;
+    let path = resolve(host, &a.path)?;
     crate::editor::filesystem::list_directory_inner(&lossy(&path), &lossy(host.root()), a.show_internal)
 }
 
@@ -127,7 +127,7 @@ pub async fn list_tree(host: &dyn CommandHost, a: ListTreeArgs) -> Result<crate:
 }
 
 pub async fn get_file_info(host: &dyn CommandHost, a: FileArgs) -> Result<EditorFileInfo, String> {
-    crate::editor::content::get_file_info_inner(&lossy(&host.resolve(&a.file_path)?))
+    crate::editor::content::get_file_info_inner(&lossy(&resolve(host, &a.file_path)?))
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -142,7 +142,7 @@ pub async fn compute_heading_state(
     host: &dyn CommandHost,
     a: HeadingStateArgs,
 ) -> Result<moss_core::heading::HeadingState, String> {
-    let path = host.resolve(&a.file_path)?;
+    let path = resolve(host, &a.file_path)?;
     Ok(crate::editor::content::compute_heading_state_inner(&lossy(&path), &a.frontmatter, &a.body))
 }
 
@@ -161,7 +161,7 @@ pub async fn page_facts(
 
 /// A field the schema does not know is a warning, never silently accepted.
 pub async fn validate_content(host: &dyn CommandHost, a: FileArgs) -> Result<Vec<EditorDiagnostic>, String> {
-    let path = host.resolve(&a.file_path)?;
+    let path = resolve(host, &a.file_path)?;
     // A source still in the cloud has nothing to validate.
     let Some(content) = crate::editor::content::read_vault_text_off_runtime(lossy(&path)).await? else {
         return Ok(Vec::new());
@@ -227,7 +227,7 @@ pub struct AttachmentDirArgs {
 /// The project-relative folder (`""` is the root) where a file dropped on the
 /// page belongs. It does not create the folder: this is a read.
 pub async fn resolve_attachment_dir(host: &dyn CommandHost, a: AttachmentDirArgs) -> Result<String, String> {
-    host.resolve(&a.page_relative_path)?;
+    resolve(host, &a.page_relative_path)?;
     let raw = crate::build::site_config::load_attachment_folder(&lossy(host.root()));
     Ok(moss_core::attachment::attachment_dir_for_page(&raw, &a.page_relative_path.as_written().replace('\\', "/")))
 }
@@ -246,7 +246,7 @@ pub async fn resolve_page_source(
     let url = a.url_path.trim_start_matches('/');
     let root = site_root(host)?;
     if !url.is_empty() {
-        host.resolve(&VaultPath::from(url))?;
+        resolve(host, &VaultPath::from(url))?;
     }
     crate::editor::page_source::resolve_page_source(url, root)
 }
@@ -301,7 +301,7 @@ pub async fn wikilink_completions(
     match a.page {
         Some(page) => heading_completions(&root, &page, a.syntax, &a.prefix),
         None => {
-            let from_file = lossy(&host.resolve(&a.from_file)?);
+            let from_file = lossy(&resolve(host, &a.from_file)?);
             Ok(link_completions(&root, &from_file, a.syntax, &a.prefix, a.allowed_kinds.as_deref(), host.scope()))
         }
     }
@@ -363,7 +363,7 @@ pub async fn get_all_pages(host: &dyn CommandHost, _a: NoArgs) -> Result<Vec<cra
 /// A source's exact text, for an editor that maps positions the build reported
 /// back onto the file as saved. A file still downloading from the cloud is an error.
 pub async fn read_source_text(host: &dyn CommandHost, a: FileArgs) -> Result<String, String> {
-    let path = host.resolve(&a.file_path)?;
+    let path = resolve(host, &a.file_path)?;
     crate::editor::content::read_vault_text_off_runtime(lossy(&path))
         .await?
         .ok_or_else(|| format!("{} is still downloading", a.file_path.as_written()))

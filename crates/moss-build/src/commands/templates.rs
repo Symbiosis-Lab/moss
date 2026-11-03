@@ -11,7 +11,7 @@ use moss_core::template::{
     folder_in_default_tree, normalise_folder, plan_page_from_template, PlanError, SiteLanguages, Template, TemplateKind,
 };
 
-use super::{lossy, site_root, CommandHost, NoArgs, VaultPath};
+use super::{resolve, lossy, site_root, CommandHost, NoArgs, VaultPath};
 use crate::templates as store;
 use crate::vault::fs::{create_file_with_content_inner, create_folder_inner, recheck_canonical};
 
@@ -231,9 +231,9 @@ pub async fn create_template(host: &dyn CommandHost, a: CreateTemplateArgs) -> R
     let root = site_root(host)?;
     let mut translations = Vec::new();
     for (lang, path) in a.translations.unwrap_or_default() {
-        translations.push((lang, lossy(&host.resolve(&path)?)));
+        translations.push((lang, lossy(&resolve(host, &path)?)));
     }
-    create_template_in(root, &lossy(&host.resolve(&a.source_path)?), &a.name, a.is_home, &translations)
+    create_template_in(root, &lossy(&resolve(host, &a.source_path)?), &a.name, a.is_home, &translations)
 }
 
 pub async fn list_templates(host: &dyn CommandHost, _a: NoArgs) -> Result<Vec<TemplateMeta>, String> {
@@ -288,7 +288,7 @@ pub struct InstantiateTemplateArgs {
 
 /// Make a new page or folder from a saved template. Answers the new page's path.
 pub async fn instantiate_template(host: &dyn CommandHost, a: InstantiateTemplateArgs) -> Result<String, String> {
-    instantiate_template_in(site_root(host)?, &a.id, &lossy(&host.resolve(&a.target_dir)?), &a.name)
+    instantiate_template_in(site_root(host)?, &a.id, &lossy(&resolve(host, &a.target_dir)?), &a.name)
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -301,7 +301,7 @@ pub struct CreateTranslationArgs {
 /// Make the page's version in `lang` at the mirrored path, linked to the
 /// original with `translationKey`. Answers the new page's absolute path.
 pub async fn create_translation(host: &dyn CommandHost, a: CreateTranslationArgs) -> Result<String, String> {
-    create_translation_in(site_root(host)?, &lossy(&host.resolve(&a.source_abs)?), &a.lang)
+    create_translation_in(site_root(host)?, &lossy(&resolve(host, &a.source_abs)?), &a.lang)
 }
 
 #[cfg(test)]

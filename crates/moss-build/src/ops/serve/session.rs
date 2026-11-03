@@ -80,17 +80,6 @@ impl CommandHost for Session {
         self.vault.path()
     }
 
-    /// A relative path joins onto the folder, as the UI sends it; then
-    /// [`crate::vault::fs::validate_entry_path`] refuses `..` segments and
-    /// symlink escapes. A path that does not exist yet (a rename target)
-    /// travels as written.
-    fn resolve(&self, path: &VaultPath) -> Result<PathBuf, String> {
-        let root = self.root();
-        let joined = root.join(path.as_written());
-        let lexical = crate::vault::fs::validate_entry_path(root, &joined.to_string_lossy())?;
-        Ok(lexical.canonicalize().unwrap_or(lexical))
-    }
-
     fn rename_undo(&self) -> &RenameUndoStore {
         &self.rename_undo
     }

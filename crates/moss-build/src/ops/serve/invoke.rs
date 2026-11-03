@@ -104,7 +104,7 @@ mod tests {
     /// root; escapes still fail after the join.
     #[test]
     fn resolve_accepts_project_relative_paths_and_still_rejects_escapes() {
-        let confine = |s: &Session, p: &str| s.resolve(&VaultPath::from(p));
+        let confine = |s: &Session, p: &str| crate::commands::resolve(s, &VaultPath::from(p));
         let (dir, ctx) = scratch();
         std::fs::write(dir.path().join("note.md"), "x").expect("write");
 

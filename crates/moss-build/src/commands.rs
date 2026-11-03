@@ -36,10 +36,11 @@ pub trait CommandHost: Send + Sync {
     /// The open folder.
     fn root(&self) -> &Path;
 
-    /// Turn a caller's path into a real one. A transport whose caller is
-    /// untrusted confines it to [`Self::root`]; an in-process host whose
-    /// caller is moss's own UI may resolve outside it (a loose document).
-    fn resolve(&self, path: &VaultPath) -> Result<PathBuf, String>;
+    /// The folder every caller path is confined to; `None` only while no
+    /// folder is open, when the tiers run nothing but [`RUN_WITHOUT_FOLDER`].
+    fn folder(&self) -> Option<&Path> {
+        Some(self.root())
+    }
 
     fn scope(&self) -> EditorScope {
         EditorScope::Site
@@ -104,8 +105,8 @@ pub async fn dispatch(host: &dyn CommandHost, cmd: &str, args: Value) -> Option<
     }
 }
 
-/// A path a caller names. Its only way to a real path is
-/// [`CommandHost::resolve`], so no command can skip the host's confinement.
+/// A path a caller names. Its only way to a real path is [`resolve`], so no
+/// command and no host can skip the confinement.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, specta::Type)]
 #[serde(transparent)]
 pub struct VaultPath(String);
@@ -130,6 +131,20 @@ impl From<String> for VaultPath {
     }
 }
 
+/// A caller's path as a real one. With a folder open, a relative path joins
+/// onto it and [`crate::vault::fs::validate_entry_path`] refuses `..` segments
+/// and symlinks out of it; a path that does not exist yet (a rename target)
+/// travels as written. With none open, only the commands that read the file
+/// they are given run, and the path is taken as given.
+pub(crate) fn resolve(host: &dyn CommandHost, path: &VaultPath) -> Result<PathBuf, String> {
+    let Some(root) = host.folder() else {
+        return Ok(PathBuf::from(path.as_written()));
+    };
+    let joined = root.join(path.as_written());
+    let lexical = crate::vault::fs::validate_entry_path(root, &joined.to_string_lossy())?;
+    Ok(lexical.canonicalize().unwrap_or(lexical))
+}
+
 fn lossy(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
@@ -147,7 +162,7 @@ fn site_root(host: &dyn CommandHost) -> Result<&Path, String> {
 /// canonical spelling of a symlinked root, so both spellings are tried.
 fn site_relative<'h>(host: &'h dyn CommandHost, path: &VaultPath) -> Result<(&'h Path, String), String> {
     let root = site_root(host)?;
-    let abs = host.resolve(path)?;
+    let abs = resolve(host, path)?;
     let rel = abs
         .strip_prefix(root.canonicalize().as_deref().unwrap_or(root))
         .or_else(|_| abs.strip_prefix(root))
@@ -237,6 +252,12 @@ macro_rules! tier {
 
             /// `None` when `cmd` is not in this tier.
             pub async fn dispatch(host: &dyn CommandHost, cmd: &str, args: Value) -> Option<CommandResult> {
+                if !COMMANDS.contains(&cmd) {
+                    return None;
+                }
+                if host.folder().is_none() && !RUN_WITHOUT_FOLDER.contains(&cmd) {
+                    return Some(Err(CommandError::Failed(crate::vault::paths::NO_PROJECT_OPEN.to_string())));
+                }
                 match cmd {
                     $(stringify!($cmd) => Some(run(host, args, $f).await),)+
                     _ => None,
