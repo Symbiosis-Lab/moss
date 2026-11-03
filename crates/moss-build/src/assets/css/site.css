@@ -1420,22 +1420,6 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
 }
 
-/* Touch floor: one reading-size line is 30px at the default 1.125rem — a
-   real WCAG 2.5.8 AA violation as a tap target, measured on a real build.
-   `max()` keeps the one-line-of-text reasoning above as the shape (it
-   already clears 44px past about 1.4rem of reading size) and raises only
-   the common case, rather than a fixed control height that would fight it.
-   Desktop with a mouse is untouched above the same 48rem boundary the hero
-   and place-locator already treat as the mobile/desktop split; `(pointer:
-   coarse)` also reaches a touch device wider than 48rem, e.g. a tablet in
-   landscape. */
-@media (width < 48rem), (pointer: coarse) {
-  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
-  .moss-btn-slot .moss-btn {
-    block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
-  }
-}
-
 .moss-subscribe-form[data-moss-hosted="true"] .moss-input {
   transition:
     border-color 0.2s ease,
@@ -1462,7 +1446,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   display: inline-block;
 }
 
-/* The button in its slot: one line of text tall (a touch floor above), the same
+/* The button in its slot: one line of text tall (a touch floor below), the same
    for subscribe, comment and request forms. */
 .moss-btn-slot .moss-btn {
   position: relative;
@@ -1472,6 +1456,23 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   justify-content: center;
   box-sizing: border-box;
   block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
+}
+
+/* Touch floor: one reading-size line is 30px at the default 1.125rem — a
+   real WCAG 2.5.8 AA violation as a tap target, measured on a real build.
+   `max()` keeps the one-line-of-text reasoning above as the shape (it
+   already clears 44px past about 1.4rem of reading size) and raises only
+   the common case, rather than a fixed control height that would fight it.
+   Desktop with a mouse is untouched above the same 48rem boundary the hero
+   and place-locator already treat as the mobile/desktop split; `(pointer:
+   coarse)` also reaches a touch device wider than 48rem, e.g. a tablet in
+   landscape. It must follow the base `.moss-btn-slot .moss-btn` rule: the
+   selectors weigh the same, so the later one wins. */
+@media (width < 48rem), (pointer: coarse) {
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+  .moss-btn-slot .moss-btn {
+    block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
+  }
 }
 
 /* Loading, written once for every form that morphs its button through states. */
