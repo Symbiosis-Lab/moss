@@ -166,6 +166,12 @@ pub(crate) struct Probe<'a> {
 }
 
 impl Probe<'_> {
+    /// The old side of a line is a folder holding more than its own page, not one page's address.
+    fn holds_a_folder(&self, a: &Addr) -> bool {
+        let Some(prefix) = a.key().strip_suffix("index.html").filter(|p| !p.is_empty()) else { return false };
+        self.pending.has_registered_under(prefix) || self.source_root.join(a.raw.trim_end_matches('/')).is_dir()
+    }
+
     /// The address is taken. Asked after every page this build registers
     /// before its background phase: rendered, generated (folder indexes, media
     /// collections, subscribe pages) and carried forward from the last build
@@ -248,19 +254,21 @@ pub(crate) struct Plan {
 
 /// The folder move a declared line makes, when its two sides both end in `/`
 /// and name two folders of this site, neither of them the root. `Err` is a
-/// folder line that names the root: moving every address of the site is not
-/// something one line should do by accident.
-fn folder_move(c: &Candidate, from: &Addr, to: &Target, old_served: bool) -> Result<Option<FolderMove>, ()> {
+/// folder line that names the root while its old side is a folder holding
+/// files: moving every address of the site is not something one line should
+/// do by accident. A root line whose old side is one page's address is just
+/// that page forwarded.
+fn folder_move(c: &Candidate, from: &Addr, to: &Target, old_served: bool, probe: &Probe) -> Result<Option<FolderMove>, ()> {
     let Target::Internal(t, suffix) = to else { return Ok(None) };
     if !c.declared || !c.from.trim().ends_with('/') || !c.to.trim().ends_with('/') || !suffix.is_empty() || !from.carried || t.key() == from.key() {
         return Ok(None);
     }
     let prefix = |a: &Addr| a.key().strip_suffix("index.html").unwrap_or_default().to_string();
-    let (from, to) = (prefix(from), prefix(t));
-    if from.is_empty() || to.is_empty() {
-        return Err(());
+    let (old, new) = (prefix(from), prefix(t));
+    if old.is_empty() || new.is_empty() {
+        return if old.is_empty() || probe.holds_a_folder(from) { Err(()) } else { Ok(None) };
     }
-    Ok(Some(FolderMove { from, to, old_served }))
+    Ok(Some(FolderMove { from: old, to: new, old_served }))
 }
 
 /// Merge the candidates into the entries this build serves. A later candidate
@@ -291,7 +299,7 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Plan {
             }
         };
         let old_served = probe.serves(&from);
-        match folder_move(&c, &from, &to, old_served) {
+        match folder_move(&c, &from, &to, old_served, probe) {
             Ok(Some(m)) => {
                 folder_moves.push(m);
                 let Target::Internal(t, _) = &to else { unreachable!("a folder move is internal") };

@@ -656,6 +656,13 @@ impl PendingManifest {
         self.touched.contains(key)
     }
 
+    /// This build wrote or carried something under the folder `prefix` (ends
+    /// in `/`) besides the folder's own front page.
+    pub(crate) fn has_registered_under(&self, prefix: &str) -> bool {
+        let front = format!("{prefix}index.html");
+        self.touched.iter().any(|k| k.starts_with(prefix) && *k != front)
+    }
+
     /// Read-only access to the accumulated `source_to_output` map.
     ///
     /// Used by `generate_blocking_content`'s post-emission debug-assert that

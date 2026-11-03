@@ -311,14 +311,23 @@ fn a_moved_unlisted_pages_old_address_is_published_only_in_its_own_stub() {
 }
 
 /// A folder line naming the site root would copy every address of the site,
-/// so it moves no folder; the page itself is still redirected.
+/// so it moves no folder, and the line is reported.
 #[test]
 fn a_folder_line_naming_the_root_moves_no_folder() {
     let cfg = config(r#""/blog/" = "/""#);
-    let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
-    assert!(b.read("blog/index.html").contains("url=/\""));
+    let b = build(&[ABOUT, ("blog/post.md", "---\ntitle: Post\n---\n\nBody.\n"), (".moss/config.toml", &cfg)]);
     assert!(!b.has("blog/about/index.html"));
-    assert_eq!(b.problems, 1);
+    assert_eq!(b.problems, 2, "moves no folder, and the folder's own address is already served");
+}
+
+/// The old side of a line to the root can be one page's address with nothing
+/// under it: the page is forwarded and nothing is reported.
+#[test]
+fn a_single_page_address_forwarded_to_the_root_is_not_reported() {
+    let cfg = config(r#""/home/" = "/""#);
+    let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
+    assert!(b.read("home/index.html").contains("url=/\""));
+    assert_eq!(b.problems, 0);
 }
 
 /// A file can only be kept by a copy, so a declared line sending the old feed
