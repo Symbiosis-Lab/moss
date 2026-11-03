@@ -129,7 +129,7 @@ fn the_list_is_capped_at_twenty_with_the_rest_counted() {
     let text = refusal_text(&many);
     assert!(text.contains("23 addresses"), "{text}");
     assert!(text.contains("/f19.xml") && !text.contains("/f20.xml"), "{text}");
-    assert!(text.contains("  and 3 more\n"), "{text}");
+    assert!(text.contains("  and 3 more; `moss deploy --dry-run --json` lists every one\n"), "{text}");
 }
 
 /// Only an `index.html` is served at its directory. Every other output keeps
@@ -369,4 +369,27 @@ fn files_moved_out_of_the_root_keep_their_own_lines() {
     let text = refusal_text(&[moved("a.pdf", "files/a.pdf", "a.pdf"), moved("b.pdf", "files/b.pdf", "b.pdf")]);
     assert!(!text.contains("\"/\" ="), "{text}");
     assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
+}
+
+/// The lines that keep every moved address working, as they go in the config:
+/// one per folder moved together, one per other move, nothing for an address
+/// that did not move.
+#[test]
+fn redirect_lines_are_the_config_lines_for_every_move() {
+    let removed = [
+        moved("review/old/a.pdf", "review/new/a.pdf", "review/old/a.pdf"),
+        moved("review/old/b.pdf", "review/new/b.pdf", "review/old/b.pdf"),
+        moved("files/x.pdf", "archive/x.pdf", "files/x.pdf"),
+        address("feed.xml", RemovalReason::Unexplained),
+    ];
+    let lines = super::removal_gate::redirect_lines(&pending_removals(&removed, None));
+    assert_eq!(lines, [r#""/review/old/" = "/review/new/""#, r#""/files/x.pdf" = "/archive/x.pdf""#]);
+}
+
+/// A file name with a quote still gives a line TOML reads back as written.
+#[test]
+fn a_redirect_line_quotes_an_address_toml_can_read_back() {
+    let line = super::removal_gate::redirect_line("/say \"hi\".pdf", "/new.pdf");
+    let table: toml::Table = toml::from_str(&line).unwrap();
+    assert_eq!(table["/say \"hi\".pdf"].as_str(), Some("/new.pdf"));
 }

@@ -318,7 +318,9 @@ model (dark mode, quiet chrome, `@layer` rules), see
   changed, a file moved to another folder, a generated file no longer
   produced), `deploy` and `--dry-run` list each address with its cause and
   refuse. Keep the address working (for a moved page or file, add the printed
-  `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
+  `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20
+  addresses, `moss deploy <folder> --dry-run --json` lists every one, and its
+  `redirects_to_add` holds the lines to paste), or pass `--accept-removals` — only when
   the human has said to lose those addresses. A `.webp` derivative of a picture
   that is still in the folder needs none of this: when no page embeds the picture
   any more, moss keeps the derivative's address as a redirect to the picture by

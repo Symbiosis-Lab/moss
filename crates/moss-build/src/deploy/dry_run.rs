@@ -13,12 +13,13 @@ use std::path::Path;
 
 use crate::build::manifest::change_set::{self, ChangeSet, PageVerb};
 use crate::build::manifest::{backfill, published_record};
-use crate::deploy::removal_gate::{capped_lines, capped_lines_cut, cause_line};
+use crate::deploy::removal_gate::{capped_lines_cut, cause_line, more_in_json, JSON_LISTS_ALL};
 use crate::deploy::route::DeployRoute;
 use crate::moss_paths::MossPaths;
 
 /// What a deploy would send, and what that is measured against.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Transfer {
     /// Files that differ from this folder's last publish record.
     /// `removed` is every output path the last publish had and this build
@@ -31,7 +32,15 @@ pub enum Transfer {
     NotCounted,
 }
 
-#[derive(Debug)]
+/// An old address kept answering: `from` forwards to, or is a copy of, `to`.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Kept {
+    pub from: String,
+    pub to: String,
+}
+
+/// `moss deploy --dry-run --json` prints this whole, every list in full.
+#[derive(Debug, serde::Serialize)]
 pub struct DryRun {
     pub change_set: ChangeSet,
     pub transfer: Transfer,
@@ -50,7 +59,10 @@ pub struct DryRun {
     /// Old addresses kept answering without a line of their own: an image
     /// derivative the build stopped producing (from its picture), and each
     /// file under a moved folder: `(address, served address)`.
-    pub kept_as_redirect: Vec<(String, String)>,
+    pub kept_as_redirect: Vec<Kept>,
+    /// The `[redirects]` lines that keep every moved address working, as they
+    /// go in `.moss/config.toml`.
+    pub redirects_to_add: Vec<String>,
 }
 
 impl DryRun {
@@ -77,11 +89,11 @@ impl DryRun {
         }
         if !set.removed.is_empty() {
             out.push_str(&format!("Addresses going offline: {}\n", set.removed.len()));
-            out.push_str(&capped_lines(&set.removed, cause_line));
+            out.push_str(&capped_lines_cut(&set.removed, cause_line, more_in_json));
         }
         if !self.kept_as_redirect.is_empty() {
             out.push_str("Kept answering at the old address (a picture still served, or a folder redirect):\n");
-            out.push_str(&capped_lines(&self.kept_as_redirect, |(from, to)| format!("{from} -> {to}")));
+            out.push_str(&capped_lines_cut(&self.kept_as_redirect, |k| format!("{} -> {}", k.from, k.to), more_in_json));
         }
         match &self.transfer {
             Transfer::SinceLastPublish { upload, removed } => {
@@ -98,7 +110,7 @@ impl DryRun {
                     .collect();
                 if !rest.is_empty() {
                     out.push_str(if set.removed.is_empty() { "Removed:\n" } else { "Also removed:\n" });
-                    out.push_str(&capped_lines(&rest, |a| a.clone()));
+                    out.push_str(&capped_lines_cut(&rest, String::clone, more_in_json));
                 }
             }
             Transfer::NoRecord => out.push_str(
@@ -152,8 +164,8 @@ fn page_lines(pages: &[change_set::ChangedPage]) -> String {
                 })
                 .collect();
             match per_verb.as_slice() {
-                [only] => format!("and {} more {}", rest.len(), only.split_once(' ').map_or("", |(_, w)| w)),
-                _ => format!("and {} more: {}", rest.len(), per_verb.join(", ")),
+                [only] => format!("and {} more {}; {JSON_LISTS_ALL}", rest.len(), only.split_once(' ').map_or("", |(_, w)| w)),
+                _ => format!("and {} more: {}; {JSON_LISTS_ALL}", rest.len(), per_verb.join(", ")),
             }
         },
     )
@@ -287,15 +299,18 @@ pub async fn run_dry_run(
         needs_verification: local.needs_verification,
         prebuilt: false,
         kept_as_redirect: kept_as_redirect(&folder_str),
+        redirects_to_add: crate::deploy::removal_gate::redirect_lines(
+            &crate::system::build_records::records().pending_removals(&folder_str),
+        ),
     })
 }
 
-fn kept_as_redirect(folder: &str) -> Vec<(String, String)> {
+fn kept_as_redirect(folder: &str) -> Vec<Kept> {
     use crate::build::served_path::served_address;
     crate::system::build_records::records()
         .kept(folder)
         .into_iter()
-        .map(|(from, to)| (served_address(&from), served_address(&to)))
+        .map(|(from, to)| Kept { from: served_address(&from), to: served_address(&to) })
         .collect()
 }
 
@@ -340,6 +355,7 @@ pub async fn run_prebuilt_dry_run(
         needs_verification: local.needs_verification,
         prebuilt: true,
         kept_as_redirect: Vec::new(),
+        redirects_to_add: Vec::new(),
     })
 }
 
@@ -369,6 +385,7 @@ mod tests {
             needs_verification: false,
             prebuilt: false,
             kept_as_redirect: Vec::new(),
+            redirects_to_add: Vec::new(),
         }
     }
 
@@ -391,12 +408,13 @@ mod tests {
             needs_verification: false,
             prebuilt: false,
             kept_as_redirect: Vec::new(),
+            redirects_to_add: Vec::new(),
         };
 
         let text = dry.render();
 
         assert!(text.contains("Pages: 0 added, 1 edited, 0 deleted, 79 restyled\n  edited   z-edited.md\n  restyled a-00.md\n"), "{text}");
-        assert!(text.contains("  and 60 more restyled\n"), "{text}");
+        assert!(text.contains("  and 60 more restyled; `moss deploy --dry-run --json` lists every one\n"), "{text}");
     }
 
     fn listing(pages: &[(PageVerb, usize)]) -> String {
@@ -416,12 +434,12 @@ mod tests {
         let text = listing(&[(PageVerb::Added, 18), (PageVerb::Edited, 4), (PageVerb::Deleted, 3), (PageVerb::Restyled, 5)]);
         assert!(text.contains("  edited   Edited-01.md\n"), "{text}");
         assert!(!text.contains("Edited-02") && !text.contains("  restyled "), "{text}");
-        assert!(text.ends_with("  and 10 more: 2 edited, 3 deleted, 5 restyled\n"), "{text}");
+        assert!(text.ends_with("  and 10 more: 2 edited, 3 deleted, 5 restyled; `moss deploy --dry-run --json` lists every one\n"), "{text}");
     }
 
     #[test]
     fn a_cut_of_one_verb_names_just_that_verb() {
-        assert!(listing(&[(PageVerb::Added, 25)]).ends_with("  and 5 more added\n"));
+        assert!(listing(&[(PageVerb::Added, 25)]).ends_with("  and 5 more added; `moss deploy --dry-run --json` lists every one\n"));
     }
 
     #[test]
@@ -447,7 +465,8 @@ mod tests {
     #[test]
     fn a_derivative_kept_as_a_redirect_is_named_and_the_check_still_passes() {
         let dry = DryRun {
-            kept_as_redirect: vec![("/photo-2.webp".into(), "/photo-2.jpg".into())],
+            kept_as_redirect: vec![Kept { from: "/photo-2.webp".into(), to: "/photo-2.jpg".into() }],
+            redirects_to_add: Vec::new(),
             refusal: None,
             ..small()
         };
@@ -465,7 +484,7 @@ mod tests {
         let dry = DryRun { transfer: Transfer::SinceLastPublish { upload: 0, removed }, ..small() };
         let text = dry.render();
         assert!(text.contains("remove 23 files.\nAlso removed:\n  /old-00.css\n  /old-01.css\n"), "{text}");
-        assert!(text.contains("  /old-19.css\n  and 3 more\n"), "{text}");
+        assert!(text.contains("  /old-19.css\n  and 3 more; `moss deploy --dry-run --json` lists every one\n"), "{text}");
         assert!(!text.contains("old-20"), "{text}");
     }
 
@@ -499,6 +518,7 @@ mod tests {
             needs_verification: false,
             prebuilt: false,
             kept_as_redirect: Vec::new(),
+            redirects_to_add: Vec::new(),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");
