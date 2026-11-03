@@ -1498,6 +1498,47 @@ mod tests {
         assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
     }
 
+    /// The whole path for a moved folder: a file under it is refused as moved
+    /// (not passed as deleted), and one folder line keeps every address under
+    /// the old folder, so the next publish goes through.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_moved_folder_publishes_once_one_folder_redirect_is_added() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(false);
+        let bytes = b"%PDF-1.4 plan";
+        std::fs::create_dir_all(folder.path().join("review/client/old")).unwrap();
+        std::fs::write(folder.path().join("review/client/old/plan.pdf"), bytes).unwrap();
+        let hash = crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(bytes));
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(folder.path()),
+            &crate::build::manifest::change_set::PublishedSnapshot {
+                generation_id: "ours".to_string(),
+                target: "moss:behind-test".to_string(),
+                published_at: "2026-09-20T09:12:30+00:00".to_string(),
+                files: [("review/old/plan.pdf".to_string(), hash)].into(),
+                asset_source_to_output: Some([("review/old/plan.pdf".to_string(), "review/old/plan.pdf".to_string())].into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let addr = mock_seta_sequence(vec![
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"live"}"#),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ])
+        .await;
+
+        let refused = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+        let text = refused.expect_err("the file moved and nothing answers at its old address");
+        assert!(text.contains(r#""/review/old/plan.pdf" = "/review/client/old/plan.pdf""#), "{text}");
+
+        std::fs::write(folder.path().join(".moss/config.toml"), "[redirects]\n\"/review/old/\" = \"/review/client/old/\"\n").unwrap();
+        let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+    }
+
     /// `--accept-removals` records the set this build found and the publish
     /// goes on to the sync, which reports nothing to change.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

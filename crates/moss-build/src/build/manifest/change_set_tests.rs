@@ -760,7 +760,7 @@ fn a_derivative_whose_source_is_still_served_is_kept() {
     let cur = sealed_with_assets(&[], &[], &["photo-2.jpg"], &[]);
 
     assert_eq!(
-        crate::build::feeds::derivative_redirects::kept_derivatives(&prev, &files_of(&cur)),
+        crate::build::feeds::kept_addresses::kept_derivatives(&prev, &files_of(&cur)),
         [
             ("photo-2.w800.webp".to_string(), "photo-2.jpg".to_string()),
             ("photo-2.webp".to_string(), "photo-2.jpg".to_string()),
@@ -772,7 +772,7 @@ fn a_derivative_whose_source_is_still_served_is_kept() {
 fn a_derivative_this_build_still_produces_is_not_kept() {
     let prev = snapshot(&sealed_with_assets(&[], &[("photo-2.webp", b"W")], &["photo-2.jpg"], &[]));
     let cur = sealed_with_assets(&[], &[("photo-2.webp", b"W")], &["photo-2.jpg"], &[]);
-    assert!(crate::build::feeds::derivative_redirects::kept_derivatives(&prev, &files_of(&cur)).is_empty());
+    assert!(crate::build::feeds::kept_addresses::kept_derivatives(&prev, &files_of(&cur)).is_empty());
 }
 
 /// Nothing is left to redirect to, and the author deleted the picture: the
@@ -782,7 +782,7 @@ fn a_derivative_of_a_deleted_picture_is_author_removed_not_kept() {
     let prev = snapshot(&sealed_with_assets(&[], &[("photo-2.webp", b"W")], &["photo-2.jpg"], &[]));
     let cur = sealed_with_assets(&[], &[], &[], &[]);
 
-    assert!(crate::build::feeds::derivative_redirects::kept_derivatives(&prev, &files_of(&cur)).is_empty());
+    assert!(crate::build::feeds::kept_addresses::kept_derivatives(&prev, &files_of(&cur)).is_empty());
     assert_eq!(
         removed_of(&prev, &cur),
         [
@@ -797,7 +797,7 @@ fn a_derivative_of_a_deleted_picture_is_author_removed_not_kept() {
 fn a_webp_with_no_picture_behind_it_is_not_kept() {
     let prev = snapshot(&sealed_with_assets(&[], &[("cover.webp", b"W")], &[], &[]));
     let cur = sealed_with_assets(&[], &[], &[], &[]);
-    assert!(crate::build::feeds::derivative_redirects::kept_derivatives(&prev, &files_of(&cur)).is_empty());
+    assert!(crate::build::feeds::kept_addresses::kept_derivatives(&prev, &files_of(&cur)).is_empty());
     assert_eq!(removed_of(&prev, &cur), [("cover.webp".to_string(), RemovalReason::Unexplained)]);
 }
 

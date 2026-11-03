@@ -296,7 +296,7 @@ pub fn emit_redirect_table(
         inputs.declared.iter().map(|(from, to)| Candidate { from: from.clone(), to: to.clone(), declared: true }),
     );
     let project_root = paths.project_root();
-    let planned = table::plan(candidates, &Probe { pending, source_root: project_root, written_later: &inputs.written_later });
+    let table::Plan { entries: planned, folder_moves } = table::plan(candidates, &Probe { pending, source_root: project_root, written_later: &inputs.written_later });
 
     // Every build re-derives the table regardless (no I/O of its own), but
     // writing every stub's bytes to stage on every build — the loop below — is
@@ -317,6 +317,7 @@ pub fn emit_redirect_table(
         .collect();
     let records = crate::system::build_records::records();
     let folder_key = project_root.to_string_lossy().into_owned();
+    records.record_folder_moves(&folder_key, folder_moves);
     let unchanged = records.redirect_signature(&folder_key).as_ref() == Some(&stubs)
         && planned
             .iter()

@@ -241,11 +241,53 @@ pub(crate) struct Planned {
     pub form: Form,
 }
 
+/// A folder line's output prefixes, e.g. `review/old/` and `review/client/old/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FolderMove {
+    pub from: String,
+    pub to: String,
+    /// The site already serves the old folder's own address, so the line
+    /// does something only if it keeps a file under it.
+    pub old_served: bool,
+}
+
+/// What the build serves for the table: its entries, and the folder moves the
+/// seal fills in (`kept_addresses`), since only it knows every file served
+/// under a new folder.
+pub(crate) struct Plan {
+    pub entries: Vec<Planned>,
+    pub folder_moves: Vec<FolderMove>,
+}
+
+/// The folder move a declared line makes, when its two sides both end in `/`
+/// and name two folders of this site, neither of them the root. `Err` is a
+/// folder line that names the root: moving every address of the site is not
+/// something one line should do by accident.
+fn folder_move(c: &Candidate, from: &Addr, to: &Target, old_served: bool) -> Result<Option<FolderMove>, ()> {
+    let Target::Internal(t, suffix) = to else { return Ok(None) };
+    if !c.declared || !c.from.trim().ends_with('/') || !c.to.trim().ends_with('/') || !suffix.is_empty() || !from.carried || t.key() == from.key() {
+        return Ok(None);
+    }
+    let prefix = |a: &Addr| a.key().strip_suffix("index.html").unwrap_or_default().to_string();
+    let (from, to) = (prefix(from), prefix(t));
+    if from.is_empty() || to.is_empty() {
+        return Err(());
+    }
+    Ok(Some(FolderMove { from, to, old_served }))
+}
+
 /// Merge the candidates into the entries this build serves. A later candidate
 /// for the same output replaces an earlier one only when it can take a static
 /// form; one that cannot is reported and leaves the earlier entry standing.
-pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
+///
+/// A declared line whose two sides both end in `/` also moves everything under
+/// the old folder. Its own page half then forwards the folder's address only
+/// where it can: an old folder that still serves a page (its listing, while
+/// a file is left in it) keeps it, and a new folder with no front page is left
+/// for the seal to report if nothing is served under it either.
+pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Plan {
     let mut table: BTreeMap<String, Planned> = BTreeMap::new();
+    let mut folder_moves: Vec<FolderMove> = Vec::new();
     for c in candidates {
         let from = match Addr::parse(&c.from) {
             Ok(a) => a,
@@ -261,7 +303,23 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
                 continue;
             }
         };
-        if probe.serves(&from) {
+        let old_served = probe.serves(&from);
+        match folder_move(&c, &from, &to, old_served) {
+            Ok(Some(m)) => {
+                folder_moves.push(m);
+                let Target::Internal(t, _) = &to else { unreachable!("a folder move is internal") };
+                if old_served || !matches!(probe.locate(t), Found::Served) {
+                    continue;
+                }
+            }
+            Ok(None) => {}
+            Err(()) => log_warn_problem!(
+                "redirect '{}' to '{}' moves no folder: a folder line cannot name the site root (only the page itself is redirected)",
+                from.served(),
+                to.href()
+            ),
+        }
+        if old_served {
             if c.declared {
                 log_warn_problem!(
                     "redirect '{}' skipped: the site already serves that address, and what it serves wins",
@@ -315,7 +373,7 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
         };
         table.insert(from.key().to_string(), Planned { from, to, form });
     }
-    table.into_values().collect()
+    Plan { entries: table.into_values().collect(), folder_moves }
 }
 
 #[cfg(test)]

@@ -47,8 +47,9 @@ pub struct DryRun {
     pub needs_verification: bool,
     /// The folder was read as it is, with no build.
     pub prebuilt: bool,
-    /// Image derivatives the build stopped producing, now answering as a
-    /// redirect to their picture: `(address, picture address)`.
+    /// Old addresses kept answering without a line of their own: an image
+    /// derivative the build stopped producing (from its picture), and each
+    /// file under a moved folder: `(address, served address)`.
     pub kept_as_redirect: Vec<(String, String)>,
 }
 
@@ -79,7 +80,7 @@ impl DryRun {
             out.push_str(&capped_lines(&set.removed, cause_line));
         }
         if !self.kept_as_redirect.is_empty() {
-            out.push_str("Kept as a redirect, because the picture is still served:\n");
+            out.push_str("Kept answering at the old address (a picture still served, or a folder redirect):\n");
             out.push_str(&capped_lines(&self.kept_as_redirect, |(from, to)| format!("{from} -> {to}")));
         }
         match &self.transfer {
@@ -292,7 +293,7 @@ pub async fn run_dry_run(
 fn kept_as_redirect(folder: &str) -> Vec<(String, String)> {
     use crate::build::served_path::served_address;
     crate::system::build_records::records()
-        .kept_derivatives(folder)
+        .kept(folder)
         .into_iter()
         .map(|(from, to)| (served_address(&from), served_address(&to)))
         .collect()
@@ -452,7 +453,7 @@ mod tests {
         };
         let text = dry.render();
         assert!(
-            text.contains("Kept as a redirect, because the picture is still served:\n  /photo-2.webp -> /photo-2.jpg\n"),
+            text.contains("Kept answering at the old address (a picture still served, or a folder redirect):\n  /photo-2.webp -> /photo-2.jpg\n"),
             "{text}"
         );
         assert!(text.contains("Publish check: passes.\n"), "{text}");

@@ -53,7 +53,7 @@ fn a_dropped_derivative_of_a_served_picture_keeps_answering_and_the_removal_chec
     let mut sealed = build(&stage, &[], true);
     assert_eq!(backfill::removed_for_seal(&mp, &sealed).len(), 1, "without the redirect the publish is refused");
 
-    let kept = keep(&mp, &stage, &mut sealed);
+    let kept = keep(&mp, &stage, &mut sealed, &[]);
 
     assert_eq!(kept, [("photo-2.webp".to_string(), "photo-2.jpg".to_string())]);
     assert_eq!(std::fs::read(stage.join("photo-2.webp")).unwrap(), b"JPEG");
@@ -67,7 +67,7 @@ fn an_address_the_build_already_serves_is_left_alone() {
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[("photo-2.webp", b"AUTHORS")], true);
 
-    assert!(keep(&mp, &stage, &mut sealed).is_empty());
+    assert!(keep(&mp, &stage, &mut sealed, &[]).is_empty());
     assert_eq!(std::fs::read(stage.join("photo-2.webp")).unwrap(), b"AUTHORS");
 }
 
@@ -77,7 +77,7 @@ fn a_derivative_of_a_deleted_picture_is_not_kept_and_stays_the_authors_removal()
     let stage = mp.staging_dir();
     let mut sealed = build(&stage, &[], false);
 
-    assert!(keep(&mp, &stage, &mut sealed).is_empty());
+    assert!(keep(&mp, &stage, &mut sealed, &[]).is_empty());
     assert!(!stage.join("photo-2.webp").exists());
     let reasons: Vec<_> = backfill::removed_for_seal(&mp, &sealed).into_iter().map(|r| (r.path, r.reason)).collect();
     assert_eq!(
@@ -87,4 +87,54 @@ fn a_derivative_of_a_deleted_picture_is_not_kept_and_stays_the_authors_removal()
             ("photo-2.webp".to_string(), RemovalReason::AuthorRemoved),
         ]
     );
+}
+
+fn served(paths: &[&str]) -> std::collections::HashMap<String, String> {
+    paths.iter().map(|p| (p.to_string(), "h".to_string())).collect()
+}
+
+fn mv(from: &str, to: &str) -> super::FolderMove {
+    super::FolderMove { from: from.into(), to: to.into(), old_served: false }
+}
+
+fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
+#[test]
+fn a_moved_folder_keeps_each_served_file_at_its_old_address() {
+    let files = served(&["review/client/old/index.html", "review/client/old/a/b.png", "review/client/other/x.pdf", "_moss/og/1.png"]);
+    assert_eq!(
+        super::moved_folder_files(&[mv("review/old/", "review/client/old/")], &files),
+        pairs(&[("review/old/a/b.png", "review/client/old/a/b.png"), ("review/old/index.html", "review/client/old/index.html")])
+    );
+}
+
+#[test]
+fn an_old_address_the_build_still_serves_is_not_kept() {
+    let files = served(&["new/a.pdf", "new/b.pdf", "old/a.pdf"]);
+    assert_eq!(super::moved_folder_files(&[mv("old/", "new/")], &files), pairs(&[("old/b.pdf", "new/b.pdf")]));
+}
+
+/// Two lines reaching one old address: the line for the deeper folder wins.
+#[test]
+fn the_most_specific_move_wins_an_address_two_moves_reach() {
+    let files = served(&["x/sub/f.pdf", "y/f.pdf"]);
+    let kept = super::moved_folder_files(&[mv("a/", "x/"), mv("a/sub/", "y/")], &files);
+    assert_eq!(kept, pairs(&[("a/sub/f.pdf", "y/f.pdf")]));
+}
+
+/// Into its own subfolder: every file of the subfolder answers one level up.
+#[test]
+fn a_folder_moved_into_its_own_subfolder_answers_one_level_up() {
+    let files = served(&["review/2026/plan.pdf", "review/index.html"]);
+    assert_eq!(super::moved_folder_files(&[mv("review/", "review/2026/")], &files), pairs(&[("review/plan.pdf", "review/2026/plan.pdf")]));
+}
+
+/// Up into its parent: the parent's files answer under the old folder, but
+/// nothing already under the old folder is copied into it again.
+#[test]
+fn a_folder_moved_up_into_its_parent_does_not_nest_copies_of_itself() {
+    let files = served(&["review/plan.pdf", "review/2026/index.html"]);
+    assert_eq!(super::moved_folder_files(&[mv("review/2026/", "review/")], &files), pairs(&[("review/2026/plan.pdf", "review/plan.pdf")]));
 }

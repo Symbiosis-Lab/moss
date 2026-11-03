@@ -219,7 +219,9 @@ fn an_address_the_site_really_serves_keeps_its_content() {
     let b = build(&[ABOUT, ("contact.md", "# Contact\n"), ("keep.html", "<p>mine</p>"), (".moss/config.toml", &cfg)]);
     assert!(!b.read("about/index.html").contains("Redirecting"));
     assert!(!b.has("keep.html"), "the folder's own file is copied in later; no stub may sit in its place");
-    assert_eq!(b.problems, 2);
+    // `/about/` to `/contact/` is also a folder line, which the seal reports
+    // once it finds the line keeps nothing; this build stops before it.
+    assert_eq!(b.problems, 1);
 }
 
 #[test]
@@ -230,7 +232,9 @@ fn a_self_redirect_and_an_unknown_target_are_advisories_not_stubs() {
 "/plain/" = "http://example.com/""#,
     );
     let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
-    assert_eq!(b.problems, 3);
+    // `/old/` to `/nowhere/` is also a folder line, reported by the seal once
+    // it knows nothing is served under `/nowhere/`; this build stops before it.
+    assert_eq!(b.problems, 2);
     for rel in ["gone/index.html", "old/index.html", "plain/index.html"] {
         assert!(!b.has(rel), "{rel}");
     }
@@ -291,6 +295,17 @@ fn a_moved_unlisted_pages_old_address_is_published_only_in_its_own_stub() {
         }
     }
     assert!(leaks.is_empty(), "the old address is published in {leaks:?}");
+}
+
+/// A folder line naming the site root would copy every address of the site,
+/// so it moves no folder; the page itself is still redirected.
+#[test]
+fn a_folder_line_naming_the_root_moves_no_folder() {
+    let cfg = config(r#""/blog/" = "/""#);
+    let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
+    assert!(b.read("blog/index.html").contains("url=/\""));
+    assert!(!b.has("blog/about/index.html"));
+    assert_eq!(b.problems, 1);
 }
 
 /// A file can only be kept by a copy, so a declared line sending the old feed

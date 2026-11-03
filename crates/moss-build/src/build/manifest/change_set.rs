@@ -748,7 +748,7 @@ pub fn removed_addresses(
         .filter(|r| r.reason == RemovalReason::AuthorRemoved && !page_sources.contains_key(r.path.as_str()))
         .map(|r| (r.path.clone(), (r.reason, r.source.clone()))).collect();
     for r in removed.iter_mut().filter(|r| r.reason == RemovalReason::Unexplained && r.source.is_none()) {
-        let of_picture = || crate::build::feeds::derivative_redirects::webp_sources(&r.path).iter().find_map(|c| picture.get(c));
+        let of_picture = || crate::build::feeds::kept_addresses::webp_sources(&r.path).iter().find_map(|c| picture.get(c));
         if let Some((reason, source)) = page_qr.get(&r.path).or_else(of_picture) {
             (r.reason, r.source) = (*reason, source.clone());
         }
