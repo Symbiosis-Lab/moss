@@ -234,7 +234,7 @@ fn to_json(report: &SurfaceReport) -> serde_json::Value {
         ThemeRules::Checked { pages, unmatched } => {
             let rules: Vec<serde_json::Value> = unmatched
                 .iter()
-                .map(|r| serde_json::json!({ "path": r.path, "line": r.line, "selector": r.selector, "scripted": r.scripted }))
+                .map(|r| serde_json::json!({ "path": r.path, "line": r.line, "selector": r.selector, "scripted": r.scripted, "listing": r.listing }))
                 .collect();
             serde_json::json!({ "checked": true, "pages": pages, "unmatched": rules })
         }
@@ -328,7 +328,8 @@ fn render_theme_rules(rules: &ThemeRules, out: &mut String) -> bool {
         }
         ThemeRules::Checked { pages, unmatched } => (pages, unmatched),
     };
-    let (scripted, dead): (Vec<&UnmatchedRule>, Vec<&UnmatchedRule>) = unmatched.iter().partition(|r| !r.scripted.is_empty());
+    let (scripted, rest): (Vec<&UnmatchedRule>, Vec<&UnmatchedRule>) = unmatched.iter().partition(|r| !r.scripted.is_empty());
+    let (listing, dead): (Vec<&UnmatchedRule>, Vec<&UnmatchedRule>) = rest.into_iter().partition(|r| !r.listing.is_empty());
     let loc = |r: &UnmatchedRule| format!("{}:{}", r.path, r.line);
     let width = unmatched.iter().map(|r| loc(r).chars().count()).max().unwrap_or(0);
     if dead.is_empty() {
@@ -343,6 +344,12 @@ fn render_theme_rules(rules: &ThemeRules, out: &mut String) -> bool {
         out.push_str("Theme rules that match nothing in the built HTML but name something a script mentions — they may apply once it runs:\n");
         for r in &scripted {
             out.push_str(&format!("  {:<width$}  {}  (script mentions {})\n", loc(r), r.selector, r.scripted.join(", ")));
+        }
+    }
+    if !listing.is_empty() {
+        out.push_str("Theme rules that match nothing in the built HTML but name a folder listing's class, which a date or a draft can empty on the day of the build:\n");
+        for r in &listing {
+            out.push_str(&format!("  {:<width$}  {}  (listing class {})\n", loc(r), r.selector, r.listing.join(", ")));
         }
     }
     !dead.is_empty()
@@ -453,6 +460,20 @@ mod tests {
         assert!(text.contains("Theme rules that match nothing in the last build (1 page)"), "{text}");
         assert!(text.ends_with("3 kinds of finding. This is a report; nothing was changed.\n"), "{text}");
         assert_eq!(to_json(&report)["theme_rules"]["unmatched"][0]["line"], 4);
+    }
+
+    #[test]
+    fn a_rule_for_an_empty_listing_is_not_called_dead() {
+        let dir = fixture();
+        write(dir.path(), ".moss/theme/style.css", ".moss-cards-container .moss-card-title { x: 1 }\n");
+        write(dir.path(), ".moss/build.nosync/staging/index.html", "<html><body><p>x</p></body></html>");
+        let report = audit(dir.path(), false);
+        let text = render_text(&report);
+        assert!(text.contains("Every theme rule matches an element"), "{text}");
+        assert!(text.contains("name a folder listing's class"), "{text}");
+        assert!(text.contains("(listing class moss-card-title, moss-cards-container)"), "{text}");
+        assert!(!text.contains("style no element"), "{text}");
+        assert_eq!(to_json(&report)["theme_rules"]["unmatched"][0]["listing"][0], "moss-card-title");
     }
 
     #[test]

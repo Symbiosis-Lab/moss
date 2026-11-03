@@ -1,8 +1,7 @@
 //! Folder embed marker resolution.
 //!
 //! Consumes `<!--MOSS_MARKER_FOLDER_LIST:path=…|from=…|limit=N|sort=axis-->`
-//! markers emitted by moss-core's `embed_renderer::folder_list`
-//! (Task 15, triggered by `![[/folder/]]` wikilinks).
+//! markers that moss-core's `embed_renderer::folder_list` emits for `![[/folder/]]`.
 //!
 //! Three-branch resolution per marker:
 //!
@@ -33,6 +32,7 @@ mod maps;
 pub(crate) mod hero_from;
 pub(crate) mod members;
 mod calendar_tokens;
+pub mod listing_markup;
 pub(crate) mod upcoming;
 mod nav_note;
 mod repeat_note;
