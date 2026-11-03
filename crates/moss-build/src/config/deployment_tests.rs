@@ -346,3 +346,11 @@ fn live_custom_domain_url_none_for_blank_domain() {
     };
     assert_eq!(live_custom_domain_url(&config), None);
 }
+
+#[test]
+fn an_empty_site_id_is_no_site() {
+    let state: DeploymentState = toml::from_str(r#"site_id = """#).unwrap();
+    assert_eq!(state.site_id, None);
+    assert_eq!(derive_deploy_method(None, state.site_id.as_deref()), None, "no site, so not moss-hosted");
+    assert_eq!(slot_for("moss", state.site_id.as_deref()), None, "and no moss target to file a record under");
+}

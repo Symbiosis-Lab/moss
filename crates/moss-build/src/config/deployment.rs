@@ -382,7 +382,7 @@ pub struct DeploymentState {
     /// [`DomainObservation`]. Replaced as a unit, deletable with no loss.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed: Option<DomainObservation>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "non_empty")]
     pub site_id: Option<String>,
     #[serde(default)]
     pub onion_name: Option<String>,
@@ -685,6 +685,12 @@ pub fn live_custom_domain_url(config: &DomainDeploymentConfig) -> Option<String>
         }
         _ => None,
     }
+}
+
+/// An empty `site_id` names no site, so it reads as none: nothing then
+/// publishes to, links a domain to, or files a target under site "".
+fn non_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.filter(|id| !id.is_empty()))
 }
 
 #[cfg(test)]

@@ -903,9 +903,7 @@ fn single_scope_form_covers_synthesized_pages() {
 }
 
 /// `site_id = ""` in state must render the PENDING form, never a
-/// "wired" form with action `/sites//subscribe`. Re-establishes
-/// the invariant the deleted `get_email_policy_warnings` command held
-/// (it defended against an empty site_id in state.toml).
+/// "wired" form with action `/sites//subscribe`.
 #[test]
 fn empty_site_id_renders_pending_form() {
     use crate::build::types::ParsedDocument;
@@ -930,10 +928,9 @@ fn empty_site_id_renders_pending_form() {
         ..Default::default()
     }];
 
-    let deploy = DomainDeploymentConfig {
-        site_id: Some(String::new()),
-        ..Default::default()
-    };
+    let deploy = toml::from_str::<crate::config::deployment::DeploymentState>(r#"site_id = """#)
+        .unwrap()
+        .flat_view(None, None);
     let slots = generate_native_slots(
         &ServicesConfig::default(),
         project_path,

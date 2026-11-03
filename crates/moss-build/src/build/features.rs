@@ -581,14 +581,11 @@ pub fn generate_native_slots(
             );
         }
         if email_installed && !has_footer_file {
-            // An empty site_id is not wiring: it would render a "wired"
-            // form posting to /sites//subscribe. Treat it as absent
-            // (the invariant the deleted get_email_policy_warnings
-            // command used to defend).
-            let site_id = deploy_config.site_id.as_deref().filter(|s| !s.is_empty());
+            // An empty site_id reads as none, so a site with no id gets
+            // the pending form, never one posting to /sites//subscribe.
+            let site_id = deploy_config.site_id.as_deref();
             // The "default email footer" is just the :::subscribe shortcode
-            // injected into footer-end: one renderer for both. `site_id` is
-            // already filtered to non-empty, so None → pending form.
+            // injected into footer-end: one renderer for both.
             // `form_lang` localizes the form copy in the hosting page's own
             // language (see the scoped branch below); the single-scope Static
             // form uses the site default, which for a single-scope (=single-
