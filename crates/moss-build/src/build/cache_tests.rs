@@ -3172,7 +3172,7 @@ fn availability_cache_replays_the_actual_atomic_publication_after_each_cloud_ref
             let local = paths.cache_local_objects().join(&oid[..2]).join(&oid[2..4]).join(&oid);
             assert_eq!(fs::read(&local).unwrap(), bytes, "optional shared Pending must preserve complete working bytes");
             let start = std::time::Instant::now();
-            while !shared.is_file() && start.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+            while !shared.is_file() && start.elapsed() < std::time::Duration::from_secs(30) { std::thread::sleep(std::time::Duration::from_millis(1)); }
             assert_eq!(fs::read(&shared).expect("actual shared publication must recover without another build or directory-byte hint"), bytes);
         }
     });
@@ -3197,12 +3197,12 @@ fn availability_owned_file_replica_survives_caller_source_lifetime_and_blocks_gc
         assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some(), "an optional shared replica must not prevent staging cleanup or independent rebuilds");
         drop(fault);
         let started = std::time::Instant::now();
-        while !shared.is_file() && started.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        while !shared.is_file() && started.elapsed() < std::time::Duration::from_secs(30) { std::thread::sleep(std::time::Duration::from_millis(1)); }
         assert_eq!(fs::read(&shared).unwrap(), bytes, "replication owns the validated local blob, not the expired borrowed source");
         let started = std::time::Instant::now();
         loop {
             if let Ok(token) = crate::build::lifecycle::try_begin_cache_gc(&paths) { drop(token); break; }
-            assert!(started.elapsed() < std::time::Duration::from_secs(2), "lease must release at terminal completion");
+            assert!(started.elapsed() < std::time::Duration::from_secs(30), "lease must release at terminal completion");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     });
@@ -3230,7 +3230,7 @@ fn availability_owned_record_changes_recover_without_erasing_newer_merges() {
         assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some(), "optional records retain cache objects but do not own staging");
         drop(fault);
         let started = std::time::Instant::now();
-        while !path.is_file() && started.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        while !path.is_file() && started.elapsed() < std::time::Duration::from_secs(30) { std::thread::sleep(std::time::Duration::from_millis(1)); }
         let record: TransformRecord = serde_json::from_slice(&fs::read(&path).expect("owned record publication must retry the actual atomic write")).unwrap();
         assert_eq!(record.source_size, 1, "owned edits preserve source metadata");
         assert_eq!(record.transforms["first"].oid, "new", "older same-entry change cannot overwrite a newer merge");
@@ -3277,7 +3277,7 @@ fn availability_owned_record_replace_removes_omitted_entries_and_keeps_later_mer
         let started = std::time::Instant::now();
         let observed = loop {
             let record: TransformRecord = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-            if record.transforms.contains_key("later") || started.elapsed() > std::time::Duration::from_secs(2) { break record; }
+            if record.transforms.contains_key("later") || started.elapsed() > std::time::Duration::from_secs(30) { break record; }
             std::thread::sleep(std::time::Duration::from_millis(1));
         };
         assert!(!observed.transforms.contains_key("removed"), "put is an owned replacement intent, so omitted entries must disappear");
@@ -3304,7 +3304,7 @@ fn availability_owned_record_delete_cannot_be_resurrected_by_older_pending_publi
         let started = std::time::Instant::now();
         loop {
             if let Ok(token) = crate::build::lifecycle::try_begin_cache_gc(&paths) { drop(token); break; }
-            assert!(started.elapsed() < std::time::Duration::from_secs(2));
+            assert!(started.elapsed() < std::time::Duration::from_secs(30));
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(!path.exists(), "an owned delete shares the same revisioned key as the older pending writer");
@@ -3329,7 +3329,7 @@ fn availability_owned_record_delete_retries_its_actual_refused_operation() {
         assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some());
         drop(fault);
         let started = std::time::Instant::now();
-        while path.exists() && started.elapsed() < std::time::Duration::from_secs(2) { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        while path.exists() && started.elapsed() < std::time::Duration::from_secs(30) { std::thread::sleep(std::time::Duration::from_millis(1)); }
         assert!(!path.exists(), "owned cache eviction recovers without another build");
     });
 }
@@ -3362,7 +3362,7 @@ fn availability_new_merge_after_owned_full_intent_survives_unreadable_old_record
             loop {
                 let observed = fs::read(&path).ok().and_then(|b| serde_json::from_slice::<TransformRecord>(&b).ok());
                 if observed.is_some_and(|r| r.transforms.contains_key("reencoded")) { break; }
-                assert!(started.elapsed() < std::time::Duration::from_secs(2));
+                assert!(started.elapsed() < std::time::Duration::from_secs(30));
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }

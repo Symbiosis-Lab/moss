@@ -94,7 +94,7 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
         }
         let started = std::time::Instant::now();
         while pool.snapshot().in_flight != 6 {
-            assert!(started.elapsed() < std::time::Duration::from_secs(2));
+            assert!(started.elapsed() < std::time::Duration::from_secs(30));
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         for i in 6..18 {

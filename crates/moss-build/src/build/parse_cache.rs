@@ -835,7 +835,7 @@ pub fn math_cache_finish_build(root: &Path, documents: &[ParsedDocument]) {
 }
 
 /// Serializes tests that call [`math_cache_finish_build`] against each
-/// other — the `store_lock_for_tests`/`disk_cache_lock_for_tests` pattern,
+/// other — the `store_lock_for_tests` pattern,
 /// applied to this pair's own global state. Two such tests running
 /// concurrently (cargo's default) would otherwise race on the single
 /// [`MATH_STORE`] slot: whichever runs its `finish_build` call while the

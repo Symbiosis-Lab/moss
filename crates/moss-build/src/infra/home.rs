@@ -47,6 +47,21 @@ pub(crate) fn with_moss_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
     result
 }
 
+/// Runs the closure with `MOSS_HOME` unset under [`MOSS_HOME_TEST_LOCK`], for
+/// tests that assert the `~/.moss` default and would otherwise see another
+/// test's override.
+#[cfg(test)]
+pub(crate) fn without_moss_home<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let prior = std::env::var_os("MOSS_HOME");
+    std::env::remove_var("MOSS_HOME");
+    let result = f();
+    if let Some(v) = prior {
+        std::env::set_var("MOSS_HOME", v);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
