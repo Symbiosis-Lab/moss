@@ -3955,8 +3955,8 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
         modified: None,
     }];
 
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source));
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
+        &crate::build::cloud_ledger::InputEvidence::new(&source)));
 
     assert!(
         output.join("test.ipynb").exists(),
@@ -3966,6 +3966,16 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
         receipt_paths(&outputs).contains(&"test.ipynb".to_string()),
         "Outputs should include the notebook path"
     );
+}
+
+/// Runs under a `MOSS_HOME` whose `assets` is a file, so asset resolution
+/// fails offline and notebook processing takes its copy-only fallback,
+/// whatever `~/.moss` holds or another test has set.
+fn without_jupyterlite_assets<T>(f: impl FnOnce() -> T) -> T {
+    crate::infra::home::with_moss_home(|home| {
+        std::fs::write(home.join("assets"), "").unwrap();
+        f()
+    })
 }
 
 #[test]
@@ -3991,8 +4001,8 @@ fn test_data_files_copied_to_jupyter_files() {
         modified: None,
     }];
 
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source));
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
+        &crate::build::cloud_ledger::InputEvidence::new(&source)));
 
     // Data file should be in jupyter/files/ (fallback path without JupyterLite)
     // Note: without JupyterLite assets, the function takes the fallback path
@@ -4016,7 +4026,7 @@ fn skipped_notebook_copy_stays_unresolved_after_a_later_manifest_read() {
         size: content.len() as u64, modified: None,
     }];
     let evidence = crate::build::cloud_ledger::InputEvidence::new(&source);
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence);
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence));
     assert!(!receipt_paths(&outputs).contains(&"analysis.ipynb".to_string()));
     assert_eq!(evidence.unresolved_structural(), ["analysis.ipynb"]);
     assert!(read_notebook_sibling(&notebook, &evidence).is_some());
