@@ -31,6 +31,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({ "filePath": "a.md", "frontmatter": {}, "body": "" }),
         ),
         ("describe_source_role", json!({ "filePath": "a.md" })),
+        ("page_facts", json!({ "filePath": "a.md" })),
         ("resolve_url_for_file", json!({ "filePath": "a.md" })),
         ("validate_content", json!({ "filePath": "a.md" })),
         ("get_publish_preflight", json!({ "folderPath": "/open/folder" })),
@@ -125,8 +126,10 @@ impl CommandHost for TestHost {
     fn root(&self) -> &Path {
         &self.root
     }
+    /// Canonical, like the HTTP carrier's own resolve.
     fn resolve(&self, path: &VaultPath) -> Result<PathBuf, String> {
-        Ok(self.root.join(path.as_written()))
+        let joined = self.root.join(path.as_written());
+        Ok(joined.canonicalize().unwrap_or(joined))
     }
     fn scope(&self) -> EditorScope {
         self.scope
@@ -199,6 +202,7 @@ async fn site_facts_are_refused_in_a_loose_document() {
     let host = TestHost::loose(&root);
     for (cmd, args) in [
         ("describe_source_role", json!({ "filePath": "a.md" })),
+        ("page_facts", json!({ "filePath": "a.md" })),
         ("resolve_url_for_file", json!({ "filePath": "a.md" })),
         ("resolve_page_source", json!({ "urlPath": "/a/" })),
         ("list_vault_terms", json!({})),
@@ -208,6 +212,26 @@ async fn site_facts_are_refused_in_a_loose_document() {
             other => panic!("{cmd}: expected the no-project refusal, got {other:?}"),
         }
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn site_facts_answer_through_a_symlinked_root() {
+    let (d, root) = pages();
+    let doc = crate::build::types::ParsedDocument {
+        source_path: Some("a.md".into()),
+        url_path: "a/index.html".into(),
+        ..Default::default()
+    };
+    crate::build::emit::inventory::write_inventory(&[doc], &root.join(".moss"), false, "en", None).unwrap();
+    let link = d.path().join("link");
+    std::os::unix::fs::symlink(&root, &link).unwrap();
+    let host = TestHost::site(&link);
+    let facts: Value = ok(session_read::dispatch(&host, "page_facts", json!({ "filePath": "a.md" })).await).await;
+    assert_eq!(facts, json!({ "position": "page", "auto": facts["auto"].clone() }));
+    assert_eq!(facts["auto"]["url"], json!("a"), "{facts}");
+    let role: Value = ok(session_read::dispatch(&host, "describe_source_role", json!({ "filePath": "a.md" })).await).await;
+    assert_eq!(role["can_be_page"], json!(true), "{role}");
 }
 
 #[tokio::test]

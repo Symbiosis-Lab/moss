@@ -111,6 +111,18 @@ fn site_root(host: &dyn CommandHost) -> Result<&Path, String> {
     }
 }
 
+/// The site root and `path` relative to it. A host may resolve to the
+/// canonical spelling of a symlinked root, so both spellings are tried.
+fn site_relative<'h>(host: &'h dyn CommandHost, path: &VaultPath) -> Result<(&'h Path, String), String> {
+    let root = site_root(host)?;
+    let abs = host.resolve(path)?;
+    let rel = abs
+        .strip_prefix(root.canonicalize().as_deref().unwrap_or(root))
+        .or_else(|_| abs.strip_prefix(root))
+        .map_err(|_| format!("File '{}' is not inside project '{}'", path.as_written(), root.display()))?;
+    Ok((root, rel.to_string_lossy().into_owned()))
+}
+
 /// Run `apply` with its page moves announced to the host first, and withdrawn
 /// if it fails.
 fn with_moves_announced<T>(
@@ -263,6 +275,7 @@ tier! {
         get_file_info => reads::get_file_info,
         compute_heading_state => reads::compute_heading_state,
         describe_source_role => reads::describe_source_role,
+        page_facts => reads::page_facts,
         resolve_url_for_file => reads::resolve_url_for_file,
         validate_content => reads::validate_content,
         get_publish_preflight => reads::get_publish_preflight,

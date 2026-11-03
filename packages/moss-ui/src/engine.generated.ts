@@ -609,6 +609,17 @@ export type NewFile = { dir: string; name: string; frontmatter: { [key in string
 export type NoArgs = Record<string, never>
 
 /**
+ * What the last build knows about one source file, for an editor's add list:
+ * where the page sits, which decides the fields that apply, and the value the
+ * build gave each field the file leaves out.
+ */
+export type PageFacts = { 
+/**
+ * `None` for a slot, which is not a page.
+ */
+position: PagePosition | null; auto: { [key in string]: JsonValue } }
+
+/**
  * Where a page sits in its site: an ordinary page, a folder's index, or a
  * home (the site root's index, or the root index of a language tree such as
  * `en/`).
@@ -1201,6 +1212,7 @@ export type EngineCommands = {
 	get_file_info: { args: FileArgs; out: EditorFileInfo };
 	compute_heading_state: { args: HeadingStateArgs; out: HeadingState };
 	describe_source_role: { args: FileArgs; out: SourceRole };
+	page_facts: { args: FileArgs; out: PageFacts };
 	resolve_url_for_file: { args: FileArgs; out: string | null };
 	validate_content: { args: FileArgs; out: EditorDiagnostic[] };
 	get_publish_preflight: { args: FolderArgs; out: PublishPreflightProjection | null };
@@ -1237,6 +1249,7 @@ export const ENGINE_TIER = {
 	get_file_info: "session_read",
 	compute_heading_state: "session_read",
 	describe_source_role: "session_read",
+	page_facts: "session_read",
 	resolve_url_for_file: "session_read",
 	validate_content: "session_read",
 	get_publish_preflight: "session_read",

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use super::{site_root, CommandHost, NoArgs, VaultPath};
+use super::{site_relative, site_root, CommandHost, NoArgs, VaultPath};
 use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::editor::content::{EditorBootstrap, ParsedFrontmatter, SourceRole};
 use crate::editor::filesystem::EditorFileInfo;
@@ -151,9 +151,16 @@ pub async fn compute_heading_state(
 }
 
 pub async fn describe_source_role(host: &dyn CommandHost, a: FileArgs) -> Result<SourceRole, String> {
-    let root = site_root(host)?;
-    let path = host.resolve(&a.file_path)?;
-    crate::editor::content::describe_source_role_inner(root, &lossy(&path))
+    let (_, rel) = site_relative(host, &a.file_path)?;
+    Ok(crate::editor::content::describe_source_role_inner(&rel))
+}
+
+pub async fn page_facts(
+    host: &dyn CommandHost,
+    a: FileArgs,
+) -> Result<crate::build::emit::inventory::PageFacts, String> {
+    let (root, rel) = site_relative(host, &a.file_path)?;
+    Ok(crate::build::emit::inventory::page_facts_for_source(root, &rel))
 }
 
 /// A field the schema does not know is a warning, never silently accepted.
@@ -173,13 +180,8 @@ pub async fn resolve_url_for_file(
     host: &dyn CommandHost,
     a: FileArgs,
 ) -> Result<Option<String>, String> {
-    let root = site_root(host)?;
-    let abs = host.resolve(&a.file_path)?;
-    let rel = abs
-        .strip_prefix(root.canonicalize().as_deref().unwrap_or(root))
-        .or_else(|_| abs.strip_prefix(root))
-        .map_err(|_| format!("File '{}' is not inside project '{}'", a.file_path.as_written(), root.display()))?;
-    crate::editor::resolve::links::resolve_url_for_file_inner(&rel.to_string_lossy(), root, &host.served_dir())
+    let (root, rel) = site_relative(host, &a.file_path)?;
+    crate::editor::resolve::links::resolve_url_for_file_inner(&rel, root, &host.served_dir())
 }
 
 /// The open folder's last preflight. A request about any other folder is

@@ -270,18 +270,17 @@ pub struct PageFacts {
     pub auto: BTreeMap<String, serde_json::Value>,
 }
 
-/// The [`PageFacts`] of one source file. A file no build has reached yet, or
-/// a missing or unreadable inventory, gives none: they are hints, and the next
-/// build supplies them.
-pub fn page_facts_for_source(project_root: &Path, file_path: &str) -> Result<PageFacts, String> {
-    let key = moss_core::content_graph::normalize_path(&crate::editor::content::project_relative(project_root, file_path)?);
-    let Ok(bytes) = std::fs::read(inventory_path(&project_root.join(".moss"))) else { return Ok(PageFacts::default()) };
+/// The [`PageFacts`] of the source at `rel_path` inside the site. A file no
+/// build has reached yet, or a missing or unreadable inventory, gives none:
+/// they are hints, and the next build supplies them.
+pub fn page_facts_for_source(project_root: &Path, rel_path: &str) -> PageFacts {
+    let key = moss_core::content_graph::normalize_path(rel_path);
+    let Ok(bytes) = std::fs::read(inventory_path(&project_root.join(".moss"))) else { return PageFacts::default() };
     let rows: Vec<InventoryEntry> = serde_json::from_slice(&bytes).unwrap_or_default();
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .find(|r| r.source_path.as_deref().is_some_and(|p| moss_core::content_graph::normalize_path(p) == key))
         .map(|r| PageFacts { position: r.position, auto: r.resolved })
-        .unwrap_or_default())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -381,11 +380,10 @@ mod tests {
             ..Default::default()
         };
         write_inventory(&[doc], &tmp.path().join(".moss"), true, "en", None).unwrap();
-        let open = tmp.path().join("works/The Tyger.md");
-        let facts = page_facts_for_source(tmp.path(), &open.to_string_lossy()).unwrap();
+        let facts = page_facts_for_source(tmp.path(), "works/The Tyger.md");
         assert_eq!(facts.auto["url"], "the-tyger");
         assert_eq!(facts.position, Some(PagePosition::Page));
-        let unbuilt = page_facts_for_source(tmp.path(), &tmp.path().join("new.md").to_string_lossy()).unwrap();
+        let unbuilt = page_facts_for_source(tmp.path(), "new.md");
         assert!(unbuilt.auto.is_empty() && unbuilt.position.is_none());
     }
 
@@ -409,7 +407,7 @@ mod tests {
             footer,
         ];
         write_inventory(&docs, &tmp.path().join(".moss"), true, "zh-hans", None).unwrap();
-        let position = |rel: &str| page_facts_for_source(tmp.path(), &tmp.path().join(rel).to_string_lossy()).unwrap().position;
+        let position = |rel: &str| page_facts_for_source(tmp.path(), rel).position;
         assert_eq!(position("index.md"), Some(PagePosition::Home));
         assert_eq!(position("en/index.md"), Some(PagePosition::Home));
         assert_eq!(position("works/index.md"), Some(PagePosition::Folder));
@@ -420,7 +418,7 @@ mod tests {
     #[test]
     fn no_build_yet_means_no_values() {
         let tmp = tempfile::tempdir().unwrap();
-        let facts = page_facts_for_source(tmp.path(), &tmp.path().join("a.md").to_string_lossy()).unwrap();
+        let facts = page_facts_for_source(tmp.path(), "a.md");
         assert!(facts.auto.is_empty() && facts.position.is_none());
     }
 }

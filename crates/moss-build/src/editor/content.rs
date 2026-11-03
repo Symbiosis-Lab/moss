@@ -500,16 +500,9 @@ pub fn project_relative(
         })
 }
 
-/// The pure core of `describe_source_role`: given the project root and an
-/// absolute file path, classify the source's language + slot role. No `State`,
-/// no I/O — so the HTTP carrier arm calls this with the root it resolves from
-/// the live serve dir, exactly as the command resolves it from `AppState`.
-pub fn describe_source_role_inner(
-    folder_path: &std::path::Path,
-    file_path: &str,
-) -> Result<SourceRole, String> {
-    let rel_path = project_relative(folder_path, file_path)?;
-    let normalized = moss_core::slug::normalize_separators(&rel_path);
+/// A source's language and slot role, from its path inside the site.
+pub fn describe_source_role_inner(rel_path: &str) -> SourceRole {
+    let normalized = moss_core::slug::normalize_separators(rel_path);
     let normalized = normalized.trim_matches('/');
 
     let (language, within_tree) = crate::build::footer::language_tree_split(normalized);
@@ -523,11 +516,11 @@ pub fn describe_source_role_inner(
         .to_lowercase();
     let can_be_page = crate::build::scan::classify::is_page_source(&extension);
 
-    Ok(SourceRole {
+    SourceRole {
         language,
         slot,
         can_be_page,
-    })
+    }
 }
 
 // ── Saving ─────────────────────────────────────────────────────────────────
