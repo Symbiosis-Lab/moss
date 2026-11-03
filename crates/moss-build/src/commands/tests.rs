@@ -80,28 +80,34 @@ fn every_command_parses_the_json_its_callers_send() {
         parsed.unwrap_or_else(|e| panic!("{cmd} refused {body}: {e}"));
     }
     let sampled: Vec<&str> = samples.iter().map(|(cmd, _)| *cmd).collect();
-    for cmd in public_read::COMMANDS.iter().chain(session_read::COMMANDS).chain(write::COMMANDS) {
-        assert!(sampled.contains(cmd), "{cmd} has no wire sample here");
+    for cmd in all_commands() {
+        assert!(sampled.contains(&cmd), "{cmd} has no wire sample here");
     }
+}
+
+fn all_commands() -> impl Iterator<Item = &'static str> {
+    public_read::COMMANDS.iter().chain(session_read::COMMANDS).chain(write::COMMANDS).copied()
 }
 
 /// A command is in exactly one tier, so a transport that maps tiers to trust
 /// classes cannot expose a write as a read.
 #[test]
 fn the_tiers_are_disjoint() {
-    let all: Vec<&str> = public_read::COMMANDS.iter().chain(session_read::COMMANDS).chain(write::COMMANDS).copied().collect();
+    let all: Vec<&str> = all_commands().collect();
     for (i, cmd) in all.iter().enumerate() {
         assert!(!all[i + 1..].contains(cmd), "{cmd} is in two tiers");
     }
 }
 
 struct TestHost {
-    root: PathBuf,
+    /// `None` is a host with no folder open, whose root no command may read.
+    root: Option<PathBuf>,
     scope: EditorScope,
     undo: RenameUndoStore,
     dates: crate::editor::filesystem::PublishDateMemo,
     announced: std::sync::Mutex<Vec<(String, String)>>,
     withdrawn: std::sync::Mutex<Vec<(String, String)>>,
+    saved: std::sync::Mutex<Vec<String>>,
 }
 
 impl TestHost {
@@ -111,25 +117,29 @@ impl TestHost {
     fn loose(root: &Path) -> Self {
         Self::new(root, EditorScope::Folder)
     }
+    fn without_folder() -> Self {
+        TestHost { root: None, ..Self::site(Path::new("")) }
+    }
     fn new(root: &Path, scope: EditorScope) -> Self {
         TestHost {
-            root: root.to_path_buf(),
+            root: Some(root.to_path_buf()),
             scope,
             undo: RenameUndoStore::default(),
             dates: Default::default(),
             announced: Default::default(),
             withdrawn: Default::default(),
+            saved: Default::default(),
         }
     }
 }
 
 impl CommandHost for TestHost {
     fn root(&self) -> &Path {
-        &self.root
+        self.root.as_deref().expect("a command read the root of a host with no folder open")
     }
     /// Canonical, like the HTTP carrier's own resolve.
     fn resolve(&self, path: &VaultPath) -> Result<PathBuf, String> {
-        let joined = self.root.join(path.as_written());
+        let joined = self.root.as_deref().unwrap_or(Path::new("")).join(path.as_written());
         Ok(joined.canonicalize().unwrap_or(joined))
     }
     fn scope(&self) -> EditorScope {
@@ -148,9 +158,17 @@ impl CommandHost for TestHost {
         self.withdrawn.lock().unwrap().extend_from_slice(pairs);
     }
     fn served_dir(&self) -> PathBuf {
-        self.root.join(".moss")
+        self.root().join(".moss")
     }
     fn publish(&self, _: &MossEvent) {}
+    fn saving(
+        &self,
+        file_path: &str,
+        save: &mut dyn FnMut() -> Result<crate::editor::content::SaveResult, String>,
+    ) -> Result<crate::editor::content::SaveResult, String> {
+        self.saved.lock().unwrap().push(file_path.to_string());
+        save()
+    }
     fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>> {
         Box::pin(async { Err("no build in tests".to_string()) })
     }
@@ -173,6 +191,42 @@ async fn ok<T: serde::de::DeserializeOwned>(out: Option<CommandResult>) -> T {
         Some(Ok(v)) => serde_json::from_value(v).unwrap(),
         other => panic!("expected an answer, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn the_commands_that_run_without_a_folder_never_read_its_root() {
+    let (_d, root) = pages();
+    let host = TestHost::without_folder();
+    let file = root.join("a.md").to_string_lossy().into_owned();
+    for cmd in RUN_WITHOUT_FOLDER {
+        assert!(all_commands().any(|c| c == *cmd), "{cmd} is not a command");
+        let (_, mut body) = samples().into_iter().find(|(c, _)| c == cmd).unwrap();
+        if body.get("filePath").is_some() {
+            body["filePath"] = json!(file);
+        }
+        match dispatch(&host, cmd, body).await {
+            Some(Ok(_)) => {}
+            other => panic!("{cmd} with no folder: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn one_dispatch_reaches_every_tier_and_a_save_goes_through_the_host() {
+    let (_d, root) = pages();
+    let host = TestHost::site(&root);
+    let parsed: Value = ok(dispatch(&host, "parse_frontmatter", json!({ "filePath": "a.md" })).await).await;
+    ok::<Value>(dispatch(&host, "get_file_info", json!({ "filePath": "a.md" })).await).await;
+    let saved: Value = ok(dispatch(
+        &host,
+        "save_editor_content",
+        json!({ "filePath": "a.md", "frontmatter": { "title": "B" }, "body": "x", "expectedHash": parsed["hash"] }),
+    )
+    .await)
+    .await;
+    assert_eq!(saved["status"], json!("saved"), "{saved}");
+    assert_eq!(*host.saved.lock().unwrap(), vec![root.join("a.md").to_string_lossy().into_owned()]);
+    assert!(dispatch(&host, "no_such_command", json!({})).await.is_none());
 }
 
 #[tokio::test]

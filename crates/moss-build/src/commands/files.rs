@@ -165,7 +165,9 @@ pub async fn save_editor_content(
     a: SaveEditorContentArgs,
 ) -> Result<crate::editor::content::SaveResult, String> {
     let path = host.resolve(&a.file_path)?.to_string_lossy().into_owned();
-    let r = crate::editor::content::persist_editor_content(&path, &a.frontmatter, &a.body, &a.expected_hash, a.keep_displaced)?;
+    let r = host.saving(&path, &mut || {
+        crate::editor::content::persist_editor_content(&path, &a.frontmatter, &a.body, &a.expected_hash, a.keep_displaced)
+    })?;
     if let Some(event) = crate::editor::content::displaced_event(&path, &r) {
         host.publish(&event);
     }

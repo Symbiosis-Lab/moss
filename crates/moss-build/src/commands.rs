@@ -74,6 +74,33 @@ pub trait CommandHost: Send + Sync {
 
     /// The site as it stands now, sealed. A host without a live build builds.
     fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>>;
+
+    /// Run the write `save_editor_content` makes to `file_path`, for a host
+    /// that shows saving as a status of its own. `save` may panic; a host that
+    /// holds state across it catches the unwind.
+    fn saving(
+        &self,
+        _file_path: &str,
+        save: &mut dyn FnMut() -> Result<crate::editor::content::SaveResult, String>,
+    ) -> Result<crate::editor::content::SaveResult, String> {
+        save()
+    }
+}
+
+/// Commands that read only the file they are given, so a host may run them
+/// with no folder open.
+pub const RUN_WITHOUT_FOLDER: &[&str] = &["scan_shortcodes", "parse_frontmatter", "get_file_info", "compute_heading_state"];
+
+/// Run `cmd` from whichever tier holds it, for an in-process host whose caller
+/// is moss's own UI and so passes every trust class. `None` when no tier does.
+pub async fn dispatch(host: &dyn CommandHost, cmd: &str, args: Value) -> Option<CommandResult> {
+    if public_read::COMMANDS.contains(&cmd) {
+        public_read::dispatch(host, cmd, args).await
+    } else if session_read::COMMANDS.contains(&cmd) {
+        session_read::dispatch(host, cmd, args).await
+    } else {
+        write::dispatch(host, cmd, args).await
+    }
 }
 
 /// A path a caller names. Its only way to a real path is
