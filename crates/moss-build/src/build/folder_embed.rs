@@ -1643,7 +1643,11 @@ fn render_one(
     // no page at `/<key>/` for More to land on — a dead link would 404).
     let path_resolver = crate::build::assets::paths::PathResolver::new()
         .with_dir_overrides(dir_overrides.clone());
-    let more_link: Option<(String, String)> = if !truncated {
+    let more_link: Option<(String, String)> = if !truncated
+        || parsed.more.as_deref() == Some("none")
+    {
+        // `more:none` (or `children_more: none`) draws no link at all, for a
+        // page that writes its own under the listing.
         None
     } else if let Some(more_ref) = parsed.more.as_deref() {
         match resolve_more_link_target(more_ref, from, all_docs) {

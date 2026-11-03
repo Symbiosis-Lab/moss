@@ -1134,7 +1134,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=1, Importance=2 → score=86
         score: 87,
-        description: "Wikilink to a page the 'More \u{2192}' link should point at when children_limit truncates the feed. Fires even when the feed is listing this page's own folder.",
+        description: "Wikilink to a page the 'More \u{2192}' link should point at when children_limit truncates the feed. Fires even when the feed is listing this page's own folder. `none` draws no link.",
         label: Some("More Link"),
         label_key: "chip.children_more.label",
         group: "Child Styles",
