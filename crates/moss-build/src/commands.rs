@@ -22,6 +22,7 @@ use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::types::events::MossEvent;
 use rename_undo::RenameUndoStore;
 
+pub mod derivations;
 pub mod files;
 pub mod reads;
 pub mod rename_undo;
@@ -350,6 +351,7 @@ tier! {
         read_source_text => reads::read_source_text,
         list_templates => templates::list_templates,
         site_languages => templates::site_languages,
+        derivation_state => derivations::derivation_state,
     }
 }
 
@@ -361,6 +363,7 @@ tier! {
         create_folder => files::create_folder,
         delete_entry => files::delete_entry,
         delete_entries => files::delete_entries,
+        duplicate_entry => files::duplicate_entry,
         rename_entry_with_refs => files::rename_entry_with_refs,
         move_entries => files::move_entries,
         scan_references_for_delete => files::scan_references_for_delete,
@@ -371,6 +374,7 @@ tier! {
         save_version => versions::save_version,
         write_editor_file_binary => files::write_editor_file_binary,
         expand_derived => reads::expand_derived,
+        set_folder_derivation => derivations::set_folder_derivation,
         create_template => templates::create_template,
         rename_template => templates::rename_template,
         delete_template => templates::delete_template,

@@ -77,6 +77,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("create_folder", json!({ "parentDir": "posts", "name": "new" })),
         ("delete_entry", json!({ "path": "a.md" })),
         ("delete_entries", json!({ "paths": ["a.md"] })),
+        ("duplicate_entry", json!({ "path": "a.md" })),
+        ("derivation_state", json!({})),
+        ("set_folder_derivation", json!({ "folder": "reports/", "choice": { "show": "reader" } })),
+        ("set_folder_derivation", json!({ "folder": "reports/", "choice": "keep" })),
         ("rename_entry_with_refs", json!({ "oldPath": "a.md", "newPath": "b.md" })),
         ("move_entries", json!({ "paths": ["a.md"], "targetDir": "posts" })),
         ("scan_references_for_delete", json!({ "paths": ["a.md", "posts"] })),
@@ -505,6 +509,24 @@ async fn a_batch_move_rewrites_links_to_each_suffixed_page_and_undoes_as_one() {
     ok::<Value>(write::dispatch(&host, "undo_rename", json!({ "undoId": summary["undo_id"] })).await).await;
     assert!(root.join("one/x.md").exists() && root.join("two/x.md").exists());
     assert_eq!(std::fs::read_to_string(root.join("c.md")).unwrap(), "[1](one/x.md) [2](two/x.md)");
+}
+
+#[tokio::test]
+async fn a_duplicate_lands_beside_its_source_and_never_copies_the_folder_or_outside_it() {
+    let (_d, root) = pages();
+    std::fs::create_dir(root.join("posts")).unwrap();
+    // allow:raw_write test fixture pages in a temp folder
+    std::fs::write(root.join("posts/p.md"), "# p").unwrap();
+    let host = TestHost::site(&root);
+    let copy: String = ok(write::dispatch(&host, "duplicate_entry", json!({ "path": "a.md" })).await).await;
+    assert_eq!(Path::new(&copy), root.join("a-2.md"));
+    assert_eq!(std::fs::read(root.join("a-2.md")).unwrap(), std::fs::read(root.join("a.md")).unwrap());
+    let folder: String = ok(write::dispatch(&host, "duplicate_entry", json!({ "path": "posts" })).await).await;
+    assert_eq!(std::fs::read_to_string(Path::new(&folder).join("p.md")).unwrap(), "# p");
+    for refused in [".", "../elsewhere.md"] {
+        let out = write::dispatch(&host, "duplicate_entry", json!({ "path": refused })).await;
+        assert!(matches!(out, Some(Err(CommandError::Failed(_)))), "{refused}: {out:?}");
+    }
 }
 
 /// A loose rename that cannot happen takes back the move it announced.

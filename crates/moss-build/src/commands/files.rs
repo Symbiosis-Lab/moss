@@ -70,6 +70,36 @@ pub async fn scan_references_for_delete(
     Ok(hits)
 }
 
+/// Copies a file or folder beside itself under the first free `-2`, `-3`, …
+/// name, skipping `.moss/`, `node_modules/` and `.git/` inside a folder, and
+/// returns the copy's path. Each copy waits for a cloud-evicted source; a
+/// folder that cannot be copied whole leaves nothing behind.
+pub async fn duplicate_entry(host: &dyn CommandHost, a: PathArgs) -> Result<String, String> {
+    use crate::build::cloud_readiness::INTERACTIVE_DEADLINE;
+    use crate::editor::copy_in::{copy_dir_for_import, copy_file_into_vault};
+    let src = resolve(host, &a.path)?;
+    if !src.exists() {
+        return Err(format!("Path does not exist: {}", src.display()));
+    }
+    let (root, src_canonical) = crate::vault::fs::recheck_canonical(host.root(), &src)?;
+    if src_canonical == root {
+        return Err("Cannot duplicate the folder itself".to_string());
+    }
+    let dest = crate::editor::filesystem::resolve_collision(&src);
+    if src.is_dir() {
+        let mut lost = Vec::new();
+        copy_dir_for_import(&src, &dest, std::time::Instant::now() + INTERACTIVE_DEADLINE, &mut lost);
+        if !lost.is_empty() {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(format!("Duplicated '{}' without {} of its entries", src.display(), lost.len()));
+        }
+    } else {
+        copy_file_into_vault(&src, &dest, INTERACTIVE_DEADLINE)
+            .map_err(|e| format!("Failed to duplicate '{}': {}", src.display(), e))?;
+    }
+    Ok(lossy(&dest))
+}
+
 /// Strips every reference to `paths` from the folder's pages (a loose
 /// document's folder has none), then trashes them.
 pub async fn clean_references_and_delete(host: &dyn CommandHost, a: PathsArgs) -> Result<(), String> {

@@ -598,6 +598,11 @@ export type DeployStage =
 "verifying" | "complete" | "failed"
 
 /**
+ * What the author chose for a folder, as the UI names it.
+ */
+export type DerivationDecision = "undecided" | "show" | "keep"
+
+/**
  * A directory entry returned by `list_directory`.
  */
 export type DirEntry = { 
@@ -889,6 +894,11 @@ replaced: number }
 export type ExtKind = "Image" | "Iframe" | "Pdf" | "Video" | "Audio" | "Model" | "Transclusion" | "Notebook" | "Table" | "Other"
 
 /**
+ * A file the plugin could not read the last time it tried.
+ */
+export type FailedDerivedFile = { file: string; message: string }
+
+/**
  * A single field definition in the frontmatter schema.
  */
 export type FieldDefinition = { 
@@ -1100,6 +1110,25 @@ export type FolderArgs = {
  * The folder the caller asks about; refused if it is not the open one.
  */
 folderPath: string }
+
+/**
+ * One folder and one derivation.
+ */
+export type FolderDerivation = { 
+/**
+ * Site-relative with a trailing slash; `/` is the site root.
+ */
+folder: string; derivation_id: string; noun_one: string; noun_other: string; count: number; decision: DerivationDecision; 
+/**
+ * Pages the folder is still missing (0 unless shown).
+ */
+stubs_missing: number; skipped: SkippedDerivedFile[]; failed: FailedDerivedFile[] }
+
+/**
+ * The author's answer for a folder: show its files as pages with this
+ * derivation, or keep them as files.
+ */
+export type FolderDerivationChoice = { show: string } | "keep"
 
 /**
  * What the LAST BUILD listed under a folder, read from the `ArticleMap`.
@@ -2311,6 +2340,12 @@ export type Scope =
  */
 "Account"
 
+export type SetFolderDerivationArgs = { 
+/**
+ * Site-relative, as [`FolderDerivation::folder`] names it.
+ */
+folder: string; choice: FolderDerivationChoice }
+
 export type SetImageWidthArgs = { imageMd: string; 
 /**
  * `None`, or a token the syntax does not know, removes the width.
@@ -2429,6 +2464,11 @@ export type SitePromoted = {
  * The generation now serving at `.moss/build.nosync/current`.
  */
 generation_id: string }
+
+/**
+ * A file the plugin looked at and declined.
+ */
+export type SkippedDerivedFile = { file: string; reason: string; message: string }
 
 /**
  * A file [`apply_planned_moves`] or [`undo_applied`] left untouched because
@@ -3185,10 +3225,12 @@ export type EngineCommands = {
 	read_source_text: { args: FileArgs; out: string };
 	list_templates: { args: NoArgs; out: TemplateMeta[] };
 	site_languages: { args: NoArgs; out: SiteLanguages };
+	derivation_state: { args: NoArgs; out: FolderDerivation[] };
 	create_files: { args: CreateFilesArgs; out: string[] };
 	create_folder: { args: CreateFolderArgs; out: string };
 	delete_entry: { args: PathArgs; out: null };
 	delete_entries: { args: PathsArgs; out: null };
+	duplicate_entry: { args: PathArgs; out: string };
 	rename_entry_with_refs: { args: RenameArgs; out: RenameRefsSummary };
 	move_entries: { args: MoveEntriesArgs; out: RenameRefsSummary };
 	scan_references_for_delete: { args: PathsArgs; out: FileReferenceHit[] };
@@ -3199,6 +3241,7 @@ export type EngineCommands = {
 	save_version: { args: SaveVersionArgs; out: VersionRow };
 	write_editor_file_binary: { args: WriteEditorFileBinaryArgs; out: null };
 	expand_derived: { args: ExpandDerivedArgs; out: ExpandedDerived };
+	set_folder_derivation: { args: SetFolderDerivationArgs; out: string[] };
 	create_template: { args: CreateTemplateArgs; out: string };
 	rename_template: { args: RenameTemplateArgs; out: null };
 	delete_template: { args: TemplateIdArgs; out: null };
@@ -3242,10 +3285,12 @@ export const ENGINE_TIER = {
 	read_source_text: "session_read",
 	list_templates: "session_read",
 	site_languages: "session_read",
+	derivation_state: "session_read",
 	create_files: "write",
 	create_folder: "write",
 	delete_entry: "write",
 	delete_entries: "write",
+	duplicate_entry: "write",
 	rename_entry_with_refs: "write",
 	move_entries: "write",
 	scan_references_for_delete: "write",
@@ -3256,6 +3301,7 @@ export const ENGINE_TIER = {
 	save_version: "write",
 	write_editor_file_binary: "write",
 	expand_derived: "write",
+	set_folder_derivation: "write",
 	create_template: "write",
 	rename_template: "write",
 	delete_template: "write",
@@ -3299,10 +3345,12 @@ export type EngineParams = {
 	read_source_text: [filePath: VaultPath];
 	list_templates: [];
 	site_languages: [];
+	derivation_state: [];
 	create_files: [files: NewFile[]];
 	create_folder: [parentDir: string, name: string];
 	delete_entry: [path: VaultPath];
 	delete_entries: [paths: VaultPath[]];
+	duplicate_entry: [path: VaultPath];
 	rename_entry_with_refs: [oldPath: VaultPath, newPath: VaultPath];
 	move_entries: [paths: VaultPath[], targetDir: VaultPath];
 	scan_references_for_delete: [paths: VaultPath[]];
@@ -3313,6 +3361,7 @@ export type EngineParams = {
 	save_version: [label: string | null];
 	write_editor_file_binary: [relativePath: VaultPath, dataBase64: string];
 	expand_derived: [pagePath: VaultPath, content: string];
+	set_folder_derivation: [folder: string, choice: FolderDerivationChoice];
 	create_template: [sourcePath: VaultPath, name: string, isHome: boolean, translations: ([string, VaultPath])[] | null];
 	rename_template: [id: string, newName: string];
 	delete_template: [id: string];
@@ -3354,10 +3403,12 @@ export const ENGINE_PARAMS = {
 	read_source_text: ["filePath"],
 	list_templates: [],
 	site_languages: [],
+	derivation_state: [],
 	create_files: ["files"],
 	create_folder: ["parentDir", "name"],
 	delete_entry: ["path"],
 	delete_entries: ["paths"],
+	duplicate_entry: ["path"],
 	rename_entry_with_refs: ["oldPath", "newPath"],
 	move_entries: ["paths", "targetDir"],
 	scan_references_for_delete: ["paths"],
@@ -3368,6 +3419,7 @@ export const ENGINE_PARAMS = {
 	save_version: ["label"],
 	write_editor_file_binary: ["relativePath", "dataBase64"],
 	expand_derived: ["pagePath", "content"],
+	set_folder_derivation: ["folder", "choice"],
 	create_template: ["sourcePath", "name", "isHome", "translations"],
 	rename_template: ["id", "newName"],
 	delete_template: ["id"],
