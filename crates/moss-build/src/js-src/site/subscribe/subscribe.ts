@@ -91,11 +91,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       return;
     }
 
-    const scopeInput = form.querySelector<HTMLInputElement>('input[name="scope"]');
-    const jsonBody: { email: string; scope?: string } = { email };
-    if (scopeInput) {
-      jsonBody.scope = scopeInput.value;
-    }
+    const jsonBody = { email, scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value, lang };
 
     const post = async (): Promise<[Response, SubscribeResponse]> => {
       const res = await fetch(form.action, {
