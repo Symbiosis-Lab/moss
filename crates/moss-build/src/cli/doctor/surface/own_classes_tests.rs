@@ -102,3 +102,13 @@ fn nested_rules_are_not_read() {
     let names: Vec<String> = audit(dir.path(), false).own_classes.into_iter().map(|c| c.class).collect();
     assert_eq!(names, vec!["outer-one"]);
 }
+
+#[test]
+fn a_comment_opener_inside_a_string_hides_no_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, ".moss/theme/style.css", "@import url(\"https://fonts.example/a/*b.css\");\n@import \"../shared.css\";\n");
+    write(root, ".moss/shared.css", ".from-shared { x: 1 }\n");
+    let names: Vec<String> = audit(root, false).own_classes.into_iter().map(|c| c.class).collect();
+    assert_eq!(names, vec!["from-shared"]);
+}

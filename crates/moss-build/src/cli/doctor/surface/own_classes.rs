@@ -23,8 +23,8 @@ use pulldown_cmark::{Event, Parser};
 use regex::Regex;
 use scraper::{Html, Selector};
 
-use super::theme_rules::{without_comments, NOT_SELECTOR_BLOCKS};
-use crate::build::theme_lint::style_rules;
+use super::theme_rules::NOT_SELECTOR_BLOCKS;
+use crate::build::theme_lint::{strip_comments, style_rules};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnClass {
@@ -45,7 +45,7 @@ fn selector_classes(css: &str) -> BTreeMap<String, usize> {
         if rule.conditions.iter().any(|c| NOT_SELECTOR_BLOCKS.iter().any(|b| c.to_ascii_lowercase().contains(b))) {
             continue;
         }
-        let selector = without_attribute_selectors(&without_comments(rule.prelude));
+        let selector = without_attribute_selectors(&strip_comments(rule.prelude));
         for class in class_idents(&selector) {
             out.entry(class).or_insert_with(|| css[..rule.start].matches('\n').count() + 1);
         }
@@ -138,7 +138,7 @@ fn imported_sheets(folder: &Path, sheets: &[(String, String)]) -> Vec<(String, S
     let mut out = Vec::new();
     while let Some((rel, css)) = queue.pop() {
         let dir = Path::new(&rel).parent().map(Path::to_path_buf).unwrap_or_default();
-        for target in import.captures_iter(&without_comments(&css)).map(|c| c[1].to_string()) {
+        for target in import.captures_iter(&strip_comments(&css)).map(|c| c[1].to_string()) {
             if target.contains("://") || target.starts_with('/') {
                 continue;
             }
