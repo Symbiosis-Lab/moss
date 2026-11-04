@@ -143,7 +143,7 @@ describe("the world layer past its clean depth", () => {
 
   test("the stylesheet fades the detail surfaces by the world-detail property and never the flat ones", () => {
     const css = readFileSync("src/assets/css/site/places-explorer.css", "utf8");
-    const rule = (selector: string) => new RegExp(`${selector.replace(/[.[\]()*]/g, "\\$&")}[^{]*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    const rule = (selector: string) => new RegExp(`${selector.replace(/[\\.[\]()*]/g, "\\$&")}[^{]*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
     expect(rule(".moss-places-world > canvas:not(.moss-places-world-flat)")).toContain("opacity: var(--moss-place-world-detail, 1)");
     expect(rule(".moss-places-tile > canvas:not(.moss-places-tile-flat)")).toContain("opacity: var(--moss-place-world-detail, 1)");
     expect(css).not.toMatch(/\.moss-places-viewport \{[^}]*--moss-place-land/);
