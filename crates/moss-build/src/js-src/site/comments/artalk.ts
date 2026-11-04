@@ -1,3 +1,4 @@
+import { solveCaptcha } from "../subscribe/captcha";
 import { installQuoteFloat } from "./quote-float";
 import { widgetCopy } from "./i18n";
 import { langBucket } from "../subscribe/i18n";
@@ -476,74 +477,6 @@ interface LiveComment {
     void revalidate();
   }, 0);
 
-  // Solve Artalk's captcha challenge: open its captcha page in a modal iframe and
-  // resolve once the server reports the visitor passed. The iframe (served from
-  // the comment-server origin) renders Turnstile and POSTs the token to its own
-  // relative `./verify` — the TRAILING SLASH on the src is required so that
-  // ./verify resolves under the /comments proxy prefix
-  // (…/comments/api/v2/captcha/verify). moss never sees the site_key or token; we
-  // only poll /captcha/status. (Artalk's X-Frame headers are dropped by the seta
-  // proxy, so cross-origin framing from the blog page works.) Verification is
-  // keyed on the real client IP, which the seta proxy now forwards.
-  function solveCaptcha(server: string): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const overlay = document.createElement("div");
-      overlay.setAttribute("role", "dialog");
-      overlay.setAttribute("aria-modal", "true");
-      overlay.setAttribute("aria-label", copy.verifying);
-      overlay.style.cssText =
-        "position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;" +
-        "justify-content:center;background:rgba(0,0,0,.5)";
-      const frame = document.createElement("iframe");
-      frame.title = copy.verifying;
-      frame.src = server + "/api/v2/captcha/?t=" + Date.now();
-      frame.style.cssText =
-        "width:340px;max-width:92vw;height:240px;border:0;border-radius:12px;" +
-        "background:var(--moss-color-surface,#fff);box-shadow:var(--moss-elevation-3)";
-      overlay.appendChild(frame);
-      document.body.appendChild(overlay);
-      // A modal takes focus while open and gives it back when it closes.
-      const returnFocus = document.activeElement as HTMLElement | null;
-      frame.focus();
-
-      let settled = false;
-      const finish = (act: () => void): void => {
-        if (settled) return;
-        settled = true;
-        window.clearInterval(poll);
-        window.clearTimeout(timer);
-        overlay.removeEventListener("click", onClick);
-        document.removeEventListener("keydown", onKey);
-        overlay.remove();
-        returnFocus?.focus();
-        act();
-      };
-      const cancel = (): void => finish(() => reject(new Error("cancelled")));
-      const onClick = (ev: Event): void => {
-        if (ev.target === overlay) cancel();
-      };
-      // Escape dismisses the modal (keyboard parity with the backdrop click).
-      const onKey = (ev: KeyboardEvent): void => {
-        if (ev.key === "Escape") cancel();
-      };
-      overlay.addEventListener("click", onClick);
-      document.addEventListener("keydown", onKey);
-
-      const poll = window.setInterval(() => {
-        void fetch(server + "/api/v2/captcha/status", { headers: { Accept: "application/json" } })
-          .then(r => (r.ok ? r.json() : null))
-          .then((d: Record<string, unknown> | null) => {
-            if (d && d.is_pass === true) finish(resolve);
-          })
-          .catch(() => { /* transient — keep polling */ });
-      }, 1500);
-      const timer = window.setTimeout(
-        () => finish(() => reject(new Error("captcha timeout"))),
-        120000,
-      );
-    });
-  }
-
   type FormState = "idle" | "loading" | "success" | "error";
 
   const btn = form.querySelector<HTMLButtonElement>('[type="submit"]')!;
@@ -631,12 +564,13 @@ interface LiveComment {
 
     const serverUrl = form.dataset.serverUrl!.replace(/\/+$/, "");
 
-    // POST the comment, transparently solving Artalk's captcha if the server
-    // demands one. Artalk replies 403 { need_captcha:true, iframe:true } when a
-    // (Turnstile) challenge is required; solveCaptcha() runs Artalk's own captcha
-    // iframe, then we retry. This whole branch is inert until captcha is enabled
-    // server-side — otherwise the first POST returns 200 directly.
-    async function submitComment(): Promise<Record<string, unknown>> {
+    // POST the comment, transparently solving the service's captcha if it
+    // demands one: a 403 { need_captcha:true, iframe:true } means a Turnstile
+    // check is required; solveCaptcha() runs the service's captcha page, then
+    // we retry. This whole branch is inert until captcha is enabled
+    // server-side — otherwise the first POST returns 200 directly. Null means the
+    // visitor closed the check.
+    async function submitComment(): Promise<Record<string, unknown> | null> {
       const post = () => fetch(serverUrl + "/api/v2/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -648,7 +582,7 @@ interface LiveComment {
         if (info.need_captcha) {
           // Verifying stays on loading state — the button spinner keeps spinning
           // while the captcha modal is open; no separate status line needed.
-          await solveCaptcha(serverUrl);
+          if (!(await solveCaptcha(serverUrl + "/api/v2/captcha/"))) return null;
           r = await post();
         } else {
           throw new Error((typeof info.msg === "string" && info.msg) || "HTTP 403");
@@ -659,7 +593,11 @@ interface LiveComment {
     }
 
     submitComment()
-      .then((data: Record<string, unknown>) => {
+      .then((data: Record<string, unknown> | null) => {
+        if (!data) {
+          setState("idle");
+          return;
+        }
         // Success: morph button to ✓, auto-revert after 3s.
         setState("success");
         // The ✓ on the button says it to the eye; the live region says it to
@@ -708,14 +646,9 @@ interface LiveComment {
         }
       })
       .catch((err: Error) => {
-        // A visitor who dismisses the captcha modal resets quietly to idle.
-        if (err.message === "cancelled") {
-          setState("idle");
-        } else {
-          status.textContent = copy.errorPrefix + err.message;
-          status.classList.add("comment-form-status--error");
-          setState("error");
-        }
+        status.textContent = copy.errorPrefix + err.message;
+        status.classList.add("comment-form-status--error");
+        setState("error");
       })
       .finally(() => {
         // setState("loading") already disables the button; setState("success"|"error"|"idle")

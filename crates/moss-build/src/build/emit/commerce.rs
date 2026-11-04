@@ -1,9 +1,11 @@
 //! `_moss/commerce.json`: the site's public description of its request forms,
 //! at a fixed, unhashed address so a form service can fetch it by the site's URL.
+//! On the moss host it also carries `subscribe.turnstile: true`: this build's
+//! subscribe script can pass the host's bot check, so the host may require it.
 //!
-//! Written when the site has a form or a `[services.forms]` setting. It sits
-//! under `_moss/`, which the publish removal gate does not guard, so removing
-//! the last form never refuses a publish.
+//! Written when the site has a form, a `[services.forms]` setting, or a moss
+//! host site id. It sits under `_moss/`, which the publish removal gate does
+//! not guard, so removing the last form never refuses a publish.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -26,7 +28,7 @@ fn site_forms(documents: &[ParsedDocument]) -> Vec<FormShortcode> {
         .collect()
 }
 
-fn json(forms: &[FormShortcode]) -> String {
+fn json(forms: &[FormShortcode], hosted: bool) -> String {
     let mut seen = HashSet::new();
     let described: serde_json::Map<String, serde_json::Value> = forms
         .iter()
@@ -46,7 +48,11 @@ fn json(forms: &[FormShortcode]) -> String {
             (name.clone(), serde_json::json!({"fields": fields, "next": f.next, "turnstile": false}))
         })
         .collect();
-    serde_json::json!({ "forms": described }).to_string()
+    let mut out = serde_json::json!({ "forms": described });
+    if hosted {
+        out["subscribe"] = serde_json::json!({"turnstile": true});
+    }
+    out.to_string()
 }
 
 /// The problems only the whole site can see: a name used by two forms, and
@@ -69,6 +75,7 @@ fn problems(forms: &[FormShortcode], endpoint: Option<&str>) -> Vec<String> {
 pub fn emit(
     documents: &[ParsedDocument],
     endpoint: Option<&str>,
+    hosted: bool,
     output_dir: &Path,
     pending: &mut PendingManifest,
 ) -> Result<(), String> {
@@ -76,11 +83,11 @@ pub fn emit(
     for problem in problems(&forms, endpoint) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
-    if forms.is_empty() && endpoint.is_none() {
+    if forms.is_empty() && endpoint.is_none() && !hosted {
         return Ok(());
     }
     BuildContext::for_render(output_dir, pending)
-        .emit_held(&ServedPath::for_commerce_json(), json(&forms).into_bytes(), HashBucket::Files)
+        .emit_held(&ServedPath::for_commerce_json(), json(&forms, hosted).into_bytes(), HashBucket::Files)
         .map_err(|e| format!("Failed to emit {COMMERCE_PATH}: {e}"))
 }
 

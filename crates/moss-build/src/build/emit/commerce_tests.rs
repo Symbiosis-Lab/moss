@@ -11,15 +11,22 @@ fn booking() -> FormShortcode {
 
 #[test]
 fn commerce_lists_fields_options_next_and_a_false_turnstile_and_no_labels() {
-    let v: serde_json::Value = serde_json::from_str(&json(&[booking()])).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json(&[booking()], false)).unwrap();
     let b = &v["forms"]["booking"];
     assert_eq!(b["next"], "/booking/received/");
     assert_eq!(b["turnstile"], serde_json::Value::Bool(false));
     assert_eq!(b["fields"][0], serde_json::json!({"name": "your_name", "type": "text", "required": true}));
     assert_eq!(b["fields"][1]["options"], serde_json::json!(["Portrait", "Family"]));
     assert_eq!(b["fields"][1]["type"], "radio");
-    assert!(!json(&[booking()]).contains("Help words") && !json(&[booking()]).contains("Your name"));
-    assert_eq!(json(&[]), r#"{"forms":{}}"#);
+    assert!(!json(&[booking()], false).contains("Help words") && !json(&[booking()], false).contains("Your name"));
+    assert_eq!(json(&[], false), r#"{"forms":{}}"#);
+}
+
+#[test]
+fn a_site_on_the_moss_host_asks_for_the_subscribe_bot_check() {
+    let v: serde_json::Value = serde_json::from_str(&json(&[], true)).unwrap();
+    assert_eq!(v["subscribe"], serde_json::json!({"turnstile": true}));
+    assert!(!json(&[booking()], false).contains("subscribe"));
 }
 
 #[test]

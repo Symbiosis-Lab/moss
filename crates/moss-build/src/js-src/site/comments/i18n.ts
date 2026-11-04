@@ -17,8 +17,6 @@ import { langBucket, type Lang } from '../subscribe/i18n';
 export interface CommentWidgetCopy {
   /** Shown when submit is attempted without a name. */
   nameRequired: string;
-  /** Names the captcha dialog while the challenge is being solved. */
-  verifying: string;
   /** Announced after a successful post. */
   posted: string;
   /** Author label for the optimistic insert when no name was given. */
@@ -32,7 +30,6 @@ export interface CommentWidgetCopy {
 export const COPY: Record<Lang, CommentWidgetCopy> = {
   en: {
     nameRequired: 'Name is required',
-    verifying: 'Verifying…',
     posted: 'Sent',
     anonymous: 'Anonymous',
     justNow: 'just now',
@@ -40,7 +37,6 @@ export const COPY: Record<Lang, CommentWidgetCopy> = {
   },
   de: {
     nameRequired: 'Bitte geben Sie einen Namen an',
-    verifying: 'Wird überprüft …',
     posted: 'Gesendet',
     anonymous: 'Anonym',
     justNow: 'gerade eben',
@@ -48,7 +44,6 @@ export const COPY: Record<Lang, CommentWidgetCopy> = {
   },
   'zh-hans': {
     nameRequired: '请填写名字',
-    verifying: '验证中…',
     posted: '已发送',
     anonymous: '匿名',
     justNow: '刚刚',
@@ -56,7 +51,6 @@ export const COPY: Record<Lang, CommentWidgetCopy> = {
   },
   'zh-hant': {
     nameRequired: '請填寫名字',
-    verifying: '驗證中…',
     posted: '已發送',
     anonymous: '匿名',
     justNow: '剛剛',

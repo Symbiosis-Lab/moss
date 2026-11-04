@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 import { hydrateSubscribeForm } from '../subscribe.js';
 import { COPY, langBucket } from '../i18n.js';
+import { VERIFYING } from '../captcha.js';
 
 function mount(lang = 'en'): HTMLFormElement {
   document.documentElement.lang = lang;
@@ -409,5 +410,89 @@ describe('subscribe preview mode', () => {
     expect(span.hidden).toBe(false);
     expect(span.textContent).toBe(COPY.en.checkEmail);
     expect(form.querySelector<HTMLElement>('.moss-subscribe-status')!.dataset.state).toBe('check-email');
+  });
+});
+
+describe('the service asks for its bot check', () => {
+  const CAPTCHA = 'https://api.example.com/captcha/';
+  let posts: number;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    posts = 0;
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      posts += 1;
+      return posts === 1
+        ? new Response(JSON.stringify({ need_captcha: true, captcha_url: CAPTCHA }), { status: 403 })
+        : new Response(JSON.stringify({ subscribed: true, confirmationSent: true }));
+    });
+  });
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+  const tell = (state: string) =>
+    window.dispatchEvent(new MessageEvent('message', { data: { moss_captcha: state }, source: dialog()!.querySelector('iframe')!.contentWindow }));
+  const submit = async (): Promise<HTMLFormElement> => {
+    const form = mount('en');
+    hydrateSubscribeForm(form);
+    form.querySelector('input')!.value = 'reader@example.org';
+    form.requestSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+    return form;
+  };
+
+  test('loads the captcha page out of sight and subscribes once it passes', async () => {
+    const form = await submit();
+    const frame = dialog()!.querySelector('iframe')!;
+    expect(frame.src).toContain(CAPTCHA + '?quiet=1&t=');
+    expect(frame.title).toBe(VERIFYING.en);
+    expect(dialog()!.style.visibility).toBe('hidden');
+    expect(form.dataset.state).toBe('loading');
+
+    tell('passed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(2);
+    expect(form.dataset.state).toBe('success');
+    expect(dialog()).toBeNull();
+  });
+
+  test('shows the check only when Turnstile needs the reader, and takes focus then', async () => {
+    await submit();
+    tell('interactive');
+    expect(dialog()!.style.visibility).toBe('');
+    expect(dialog()!.contains(document.activeElement)).toBe(true);
+  });
+
+  test('a failed check shows the form error, with no retry', async () => {
+    const form = await submit();
+    tell('failed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    expect(form.dataset.state).toBe('error');
+    expect(dialog()).toBeNull();
+  });
+
+  test('Escape inside the check, reported by the page, closes it like Escape outside', async () => {
+    const form = await submit();
+    tell('interactive');
+    tell('cancelled');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(form.dataset.state).toBe('idle');
+    expect(posts).toBe(1);
+    expect(dialog()).toBeNull();
+  });
+
+  test('closing the check returns the form to idle without an error', async () => {
+    const form = await submit();
+    tell('interactive');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(form.dataset.state).toBe('idle');
+    expect(posts).toBe(1);
+    expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.hidden).toBe(true);
   });
 });

@@ -85,6 +85,15 @@ fn the_description_exists_for_a_setting_alone_and_not_for_a_site_with_neither() 
 }
 
 #[test]
+fn a_site_on_the_moss_host_tells_it_the_subscribe_form_passes_its_bot_check() {
+    let (_t, dir) = site("", "No form here.\n");
+    write(&dir, ".moss/state.toml", "[deployment]\nsite_id = \"harbor-notes\"\ndeploy_method = \"moss\"\n");
+    assert!(run(&dir, true).0);
+    let json: serde_json::Value = serde_json::from_str(&built(&dir, "_moss/commerce.json")).unwrap();
+    assert_eq!(json["subscribe"], serde_json::json!({"turnstile": true}));
+}
+
+#[test]
 fn no_endpoint_warns_naming_the_setting_fails_strict_and_leaves_a_pending_form_for_the_preview() {
     let (_t, dir) = site("", BOOKING);
     let (ok, stderr) = run(&dir, false);

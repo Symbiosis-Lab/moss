@@ -14,6 +14,7 @@
 
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
 import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
+import { solveCaptcha } from './captcha.js';
 
 type StatusKey = 'check-email' | 'already-subscribed' | 'error';
 
@@ -22,6 +23,8 @@ type SubscribeResponse = {
   confirmationSent?: boolean;
   alreadySubscribed?: boolean;
   error?: string;
+  need_captcha?: boolean;
+  captcha_url?: string;
 };
 
 /**
@@ -94,13 +97,26 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       jsonBody.scope = scopeInput.value;
     }
 
-    try {
+    const post = async (): Promise<[Response, SubscribeResponse]> => {
       const res = await fetch(form.action, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(jsonBody),
       });
-      const data: SubscribeResponse = await res.json().catch(() => ({}));
+      return [res, await res.json().catch(() => ({}))];
+    };
+
+    try {
+      let [res, data] = await post();
+      // The service asks for its bot check on a site that publishes
+      // `subscribe.turnstile`; the button keeps spinning while the modal is open.
+      if (res.status === 403 && data.need_captcha && data.captcha_url) {
+        if (!(await solveCaptcha(data.captcha_url))) {
+          setState(form, 'idle', btn);
+          return;
+        }
+        [res, data] = await post();
+      }
       if (!res.ok) {
         showStatus(form, 'error', copy);
         setState(form, 'error', btn);
