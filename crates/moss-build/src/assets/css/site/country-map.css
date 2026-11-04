@@ -56,7 +56,9 @@
 .moss-country-swatch[data-level] { background: var(--level); }
 .moss-country-stamp { margin: var(--moss-space-xs, 0.5rem) 0 0; font-size: var(--moss-size-xs, 0.8125rem); color: var(--moss-color-text-secondary); }
 
-.moss-country-panel { margin-block-start: var(--moss-space-sm, 0.75rem); padding: var(--moss-space-sm, 0.75rem) var(--moss-space-md, 1rem); border: 1px solid var(--moss-border-light); border-radius: 8px; background: var(--moss-color-surface); }
+/* The panel opens over the map's right side; under 56rem it is a sheet from the bottom of the viewport. */
+.moss-country-stage { position: relative; }
+.moss-country-panel { position: absolute; inset-block-start: var(--moss-space-sm, 0.75rem); inset-inline-end: var(--moss-space-sm, 0.75rem); z-index: 2; inline-size: min(22rem, calc(100% - 2 * var(--moss-space-sm, 0.75rem))); max-block-size: calc(100% - 1.5rem); overflow-y: auto; padding: var(--moss-space-sm, 0.75rem) var(--moss-space-md, 1rem); border: 1px solid var(--moss-border-light); border-radius: 8px; background: var(--moss-color-surface); box-shadow: 0 12px 32px -16px rgb(0 0 0 / 0.4); }
 .moss-country-panel[hidden] { display: none; }
 .moss-country-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 .moss-country-panel-name { margin: 0; font-size: var(--moss-size-lg, 1.125rem); font-weight: 600; }
@@ -72,5 +74,53 @@
 .moss-country-group ul { margin: 0; padding: 0; list-style: none; }
 .moss-country-group li { padding-block: 0.15rem; }
 .moss-country-group li:target { background: color-mix(in srgb, var(--moss-color-accent) 14%, transparent); border-radius: 4px; }
+
+/* Hover previews: a rated colour and unrated land each lift one step toward the outline colour. */
+.moss-country-tip { position: absolute; inset: 0 auto auto 0; z-index: 3; padding: 0.25rem 0.5rem; border: 1px solid var(--moss-border-light); border-radius: 4px; background: var(--moss-color-surface); color: var(--moss-color-text); font-size: var(--moss-size-xs, 0.8125rem); letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; pointer-events: none; }
+.moss-country-tip[hidden] { display: none; }
+.moss-country-land .moss-country { transition: fill 150ms, stroke 150ms, opacity 200ms; }
+@media (hover: hover) {
+  .moss-country-land .moss-country[data-level]:hover { fill: color-mix(in oklch, var(--level) 82%, var(--moss-country-chosen-now)); stroke: color-mix(in oklch, var(--level) 82%, var(--moss-country-chosen-now)); }
+  .moss-country-land .moss-country:not([data-level]):hover { fill: color-mix(in oklch, var(--moss-country-land-now) 88%, var(--moss-country-chosen-now)); stroke: color-mix(in oklch, var(--moss-country-land-now) 88%, var(--moss-country-chosen-now)); }
+}
+
+/* Hovering a legend level lifts it and dims the others. */
+.moss-country-land .moss-country.is-lifted { fill: color-mix(in oklch, var(--level) 82%, var(--moss-country-chosen-now)); stroke: color-mix(in oklch, var(--level) 82%, var(--moss-country-chosen-now)); }
+.moss-country-map.is-lifting .moss-country[data-level]:not(.is-lifted) { opacity: 0.3; }
+
+/* First view: levels fade in lowest first, only with script and motion. */
+@keyframes moss-country-tint { from { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  .moss-country-map.is-arming:not(.is-tinted) .moss-country[data-level] { opacity: 0; }
+  .moss-country-map.is-tinted .moss-country[data-level] { animation: moss-country-tint 500ms ease-out backwards; animation-delay: calc(var(--i, 0) * 100ms); }
+}
+
+/* Search: a link to the list without script, a combobox with it. */
+.moss-country-search { position: relative; max-inline-size: 22rem; margin-block-end: var(--moss-space-sm, 0.75rem); }
+a.moss-country-search { display: flex; align-items: center; min-block-size: 2.75rem; padding-inline: var(--moss-space-sm, 0.75rem); border: 1px solid var(--moss-border-light); border-radius: 8px; color: var(--moss-color-text-secondary); text-decoration: none; }
+.moss-country-search input { box-sizing: border-box; inline-size: 100%; min-block-size: 2.75rem; padding-inline: var(--moss-space-sm, 0.75rem); border: 1px solid var(--moss-border-strong); border-radius: 8px; background: var(--moss-color-bg); color: var(--moss-color-text); font: inherit; font-size: 1rem; }
+.moss-country-search input:focus-visible { outline: 2px solid var(--moss-color-accent); outline-offset: 2px; }
+.moss-country-search ul, .moss-country-search-none { position: absolute; z-index: 10; inset-inline: 0; inset-block-start: calc(100% + 4px); margin: 0; padding: 4px; border: 1px solid var(--moss-border-light); border-radius: 8px; background: var(--moss-color-surface); box-shadow: 0 12px 32px -16px rgb(0 0 0 / 0.4); list-style: none; }
+.moss-country-search-none { padding: var(--moss-space-sm, 0.75rem); color: var(--moss-color-text-secondary); }
+.moss-country-search ul[hidden], .moss-country-search-none[hidden] { display: none; }
+.moss-country-search li { display: flex; align-items: center; gap: 0.6rem; min-block-size: 2.75rem; padding-inline: 0.5rem; border-radius: 4px; cursor: pointer; }
+.moss-country-search li[aria-selected="true"] { background: color-mix(in srgb, var(--moss-color-accent) 14%, transparent); }
+.moss-country-search-name { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
+.moss-country-search-level { color: var(--moss-color-text-secondary); font-size: var(--moss-size-xs, 0.8125rem); letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+.moss-country-search-status { position: absolute; inline-size: 1px; block-size: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); }
+
+@keyframes moss-country-sheet { from { translate: 0 100%; } }
+
+/* Under 56rem the world is wider than the screen and scrolls sideways, and the panel is a sheet. */
+@media (width < 56rem) {
+  .moss-country-scroll { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x pan-y; }
+  .moss-country-scroll::-webkit-scrollbar { display: none; }
+  .moss-country-scroll svg { inline-size: 200%; max-inline-size: none; }
+  .moss-country-panel { position: fixed; inset: auto 0 0; z-index: 50; inline-size: auto; max-block-size: 72svh; padding-block: 1.75rem calc(var(--moss-space-md, 1rem) + env(safe-area-inset-bottom)); border-block-end: 0; border-radius: 14px 14px 0 0; box-shadow: 0 -12px 32px -12px rgb(0 0 0 / 0.4); }
+  .moss-country-panel::before { content: ""; position: absolute; inset-block-start: 0.625rem; inset-inline: 0; margin-inline: auto; inline-size: 2.25rem; block-size: 0.25rem; border-radius: 0.125rem; background: var(--moss-border-strong); }
+  @media (prefers-reduced-motion: no-preference) {
+    .moss-country-panel { animation: moss-country-sheet 260ms ease-out backwards; }
+  }
+}
 
 }

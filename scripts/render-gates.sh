@@ -88,6 +88,7 @@ GATES_BUILD=(
   hls-short-clip
   place-map-tokens
   country-map
+  country-map-interaction
   place-map-align
   place-map-route
   preview-parity-gate

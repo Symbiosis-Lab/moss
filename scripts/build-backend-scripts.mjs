@@ -55,7 +55,7 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/site/sidenotes.ts", out: "crates/moss-build/src/assets/js/sidenotes.js" },
   { entry: "crates/moss-build/src/js-src/site/math-copy.ts", out: "crates/moss-build/src/assets/js/math-copy.js" },
   { entry: "crates/moss-build/src/js-src/site/scroll-row.ts", out: "crates/moss-build/src/assets/js/scroll-row.js" },
-  { entry: "crates/moss-build/src/js-src/site/maps/country-map.ts", out: "crates/moss-build/src/assets/js/maps/country-map.js" },
+  { entry: "crates/moss-build/src/js-src/site/maps/country-map/index.ts", out: "crates/moss-build/src/assets/js/maps/country-map.js" },
   { entry: "crates/moss-build/src/js-src/site/hero/hero-ends.ts", out: "crates/moss-build/src/assets/js/hero/hero-ends.js" },
   // Places-explorer interactive layer, stub for now (see the entry's own
   // module doc). A directory, not a single file, because the runtime this

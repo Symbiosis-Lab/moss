@@ -92,6 +92,12 @@ impl Atlas {
         }
     }
 
+    /// The short names an author is likely to write for the country (UK, USA).
+    pub(crate) fn aliases_of(&self, country: usize) -> impl Iterator<Item = &'static str> {
+        let code = &self.shapes.countries[country].code;
+        ALIASES.iter().filter(move |(_, c)| c == code).map(|(alias, _)| *alias)
+    }
+
     /// The country's URL fragment, from its full name.
     pub(crate) fn slug_of(&self, country: usize) -> String {
         slug(&self.shapes.countries[country].name_long)

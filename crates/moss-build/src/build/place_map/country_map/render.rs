@@ -5,6 +5,8 @@
 use super::matching::Atlas;
 use super::projection::{self, NORTH, SOUTH};
 use super::resolve::Model;
+use super::search;
+use crate::build::served_path::ServedPath;
 use crate::i18n::{t, Language};
 use moss_core::media::html_escape;
 use std::fmt::Write;
@@ -49,6 +51,22 @@ fn rings_path(rings: &[Vec<(f64, f64)>], project: &impl Fn(f64, f64) -> (f64, f6
     rings.iter().map(|r| ring_path(r, project)).collect::<Vec<_>>().join("")
 }
 
+/// The box the map frames when this country is chosen: its rings' union, leaving out
+/// outlying islands (rings under a quarter of the largest ring's box) so they
+/// do not drag the frame away from the mainland.
+fn frame_box(rings: &[Vec<(f64, f64)>], project: &impl Fn(f64, f64) -> (f64, f64)) -> String {
+    let boxes: Vec<[f64; 4]> = rings
+        .iter()
+        .map(|ring| {
+            ring.iter().map(|&(lon, lat)| project(lon, lat)).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, (x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)])
+        })
+        .collect();
+    let area = |b: &[f64; 4]| (b[2] - b[0]) * (b[3] - b[1]);
+    let largest = boxes.iter().map(area).fold(0.0, f64::max);
+    let [x0, y0, x1, y1] = boxes.iter().filter(|b| area(b) >= largest * 0.25).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |u, b| [u[0].min(b[0]), u[1].min(b[1]), u[2].max(b[2]), u[3].max(b[3])]);
+    format!("{} {} {} {}", num(x0), num(y0), num(x1), num(y1))
+}
+
 fn graticule(project: &impl Fn(f64, f64) -> (f64, f64)) -> String {
     let mut d = String::new();
     let mut lat = -30.0;
@@ -86,18 +104,35 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
         let _ = write!(vars, "--moss-country-share-{i}:{share}%;");
     }
 
-    let mut out = format!(r#"<figure class="moss-country-map" data-moss-country-map style="{vars}">"#);
-    let _ = write!(out, r#"<svg viewBox="0 0 {} {}" role="img" aria-label="{}">"#, num(WIDTH), num(height), html_escape(title));
+    let search_index = ServedPath::for_place_map_asset(&atlas.shapes.digest, search::FILE).map(|p| format!("/{}", p.as_str())).unwrap_or_default();
+    let mut out = format!(r#"<figure class="moss-country-map" data-moss-country-map data-not-rated="{}""#, html_escape(t(lang, "country_map_not_rated")));
+    if model.spec.search {
+        let _ = write!(out, r#" data-search="{}""#, html_escape(&search_index));
+    }
+    let _ = write!(out, r#" style="{vars}">"#);
+    if model.spec.search {
+        let _ = write!(
+            out,
+            r##"<a class="moss-country-search" href="#moss-country-rows" data-count-one="{}" data-count-other="{}" data-none="{}" data-see-list="{}">{}</a>"##,
+            html_escape(t(lang, "country_map_result_one")),
+            html_escape(t(lang, "country_map_result_other")),
+            html_escape(t(lang, "country_map_no_match")),
+            html_escape(t(lang, "country_map_see_list")),
+            html_escape(t(lang, "country_map_search")),
+        );
+    }
+    let _ = write!(out, r#"<div class="moss-country-stage"><div class="moss-country-scroll"><svg viewBox="0 0 {} {}" role="img" aria-label="{}">"#, num(WIDTH), num(height), html_escape(title));
     let _ = write!(out, r#"<path class="moss-country-graticule" d="{}"/><g class="moss-country-land">"#, graticule(&project));
     let _ = write!(out, r#"<path class="moss-country-disputed" d="{}"/>"#, rings_path(&atlas.shapes.disputed, &project));
     for (i, c) in atlas.shapes.countries.iter().enumerate() {
         if c.rings.is_empty() {
             continue;
         }
-        let level = by_country.get(&i).and_then(|r| r.level).map(|l| format!(r#" data-level="{}""#, l + 1)).unwrap_or_default();
-        let _ = write!(out, r#"<path class="moss-country" data-slug="{}" data-name="{}"{level} d="{}"/>"#, atlas.slug_of(i), html_escape(&c.name_long), rings_path(&c.rings, &project));
+        let level = by_country.get(&i).and_then(|r| r.level).map(|l| format!(r#" data-level="{}" style="--i:{l}""#, l + 1)).unwrap_or_default();
+        let _ = write!(out, r#"<path class="moss-country" data-slug="{}" data-name="{}"{level} data-box="{}" d="{}"/>"#, atlas.slug_of(i), html_escape(&c.name_long), frame_box(&c.rings, &project), rings_path(&c.rings, &project));
     }
-    out.push_str("</g></svg>");
+    out.push_str("</g></svg></div>");
+    out.push_str(r#"<div class="moss-country-panel" role="region" aria-live="polite" hidden></div></div>"#);
 
     out.push_str(r#"<ul class="moss-country-legend">"#);
     for (i, level) in model.spec.levels.iter().enumerate() {
@@ -107,9 +142,10 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
     if let Some((raw, text)) = &stamp {
         let _ = write!(out, r#"<p class="moss-country-stamp"><time datetime="{}">{}</time></p>"#, html_escape(raw), html_escape(text));
     }
-    out.push_str(r#"<div class="moss-country-panel" role="region" aria-live="polite" hidden></div>"#);
     if place == Place::Embedded {
         out.push_str(&list(model, lang, atlas));
+    } else if model.spec.search {
+        out.push_str(r#"<span id="moss-country-rows"></span>"#);
     }
     let as_of = stamp.as_ref().map(|(_, text)| text.as_str());
     for r in &model.rows {
@@ -168,7 +204,7 @@ fn safe_link(link: &str) -> bool {
 
 /// The rows grouped by level, lowest first, each an anchor the panel opens from.
 fn list(model: &Model, lang: Language, atlas: &Atlas) -> String {
-    let mut out = String::from(r#"<div class="moss-country-list">"#);
+    let mut out = String::from(r#"<div class="moss-country-list" id="moss-country-rows">"#);
     for g in 0..=model.spec.levels.len() {
         let level = (g < model.spec.levels.len()).then_some(g);
         let rows: Vec<_> = model.rows.iter().filter(|r| r.level == level).collect();

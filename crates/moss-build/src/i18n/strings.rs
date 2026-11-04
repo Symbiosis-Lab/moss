@@ -592,6 +592,36 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "未评级",
             Language::ZhHant => "未評級",
         },
+        "country_map_search" => match lang {
+            Language::En => "Search a country or city",
+            Language::De => "Land oder Stadt suchen",
+            Language::ZhHans => "搜索国家或城市",
+            Language::ZhHant => "搜尋國家或城市",
+        },
+        "country_map_result_one" => match lang {
+            Language::En => "{n} result",
+            Language::De => "{n} Treffer",
+            Language::ZhHans => "{n} 个结果",
+            Language::ZhHant => "{n} 個結果",
+        },
+        "country_map_result_other" => match lang {
+            Language::En => "{n} results",
+            Language::De => "{n} Treffer",
+            Language::ZhHans => "{n} 个结果",
+            Language::ZhHant => "{n} 個結果",
+        },
+        "country_map_no_match" => match lang {
+            Language::En => "No country or city matches \u{201c}{q}\u{201d}.",
+            Language::De => "Kein Land und keine Stadt passt zu \u{201e}{q}\u{201c}.",
+            Language::ZhHans => "没有与“{q}”匹配的国家或城市。",
+            Language::ZhHant => "沒有與「{q}」相符的國家或城市。",
+        },
+        "country_map_see_list" => match lang {
+            Language::En => "See the full list below.",
+            Language::De => "Siehe die ganze Liste unten.",
+            Language::ZhHans => "请查看下方的完整列表。",
+            Language::ZhHant => "請查看下方的完整列表。",
+        },
 
 
         // Lightbox controls

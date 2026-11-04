@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
-import { BUDGET_BYTES, equalEarth, HALF_WIDTH, simplifyRings } from "./generate-countries.mjs";
+import { BUDGET_BYTES, INDEX_BUDGET_BYTES, cutCities, equalEarth, HALF_WIDTH, simplifyRings } from "./generate-countries.mjs";
 
 const DATA = resolve(import.meta.dirname, "../../crates/moss-build/data/place-map");
 
@@ -33,4 +33,26 @@ test("the checked-in asset is within its budget and says what it holds", async (
   assert.equal(report.budget_bytes, BUDGET_BYTES);
   assert.equal(brotliDecompressSync(packed).subarray(0, 8).toString("ascii"), "MOSSCTY1");
   assert.ok(!report.disputed_names.includes("Antarctica"));
+});
+
+const place = (name, adm0_a3, scalerank, pop_max, adm0cap = 0, sov_a3 = adm0_a3) => ({ properties: { name, adm0_a3, sov_a3, scalerank, pop_max, adm0cap } });
+
+test("the city cut keeps big cities and capitals, largest first, one per name and country", () => {
+  const cities = cutCities(
+    [place("Small Town", "NGA", 7, 900), place("Abuja", "NGA", 5, 2000000, 1), place("Lagos", "NGA", 1, 9000000), place("Kano", "NGA", 3, 3000000), place("Lagos", "NGA", 2, 100), place("Hamlet", "NGA", 8, 10, 1), place("Nowhere", "XXX", 0, 5)],
+    new Set(["NGA"]),
+  );
+  assert.deepEqual(cities, [["Lagos", "NGA"], ["Kano", "NGA"], ["Abuja", "NGA"]]);
+});
+
+test("a place whose own admin code has no shape falls back to its sovereign state, and a place on disputed land is dropped", () => {
+  const cities = cutCities([place("Hargeisa", "SOL", 4, 1000, 1, "SOL"), place("Stanley", "FLK", 4, 2000, 1, "GBR")], new Set(["GBR", "FLK"]));
+  assert.deepEqual(cities, [["Stanley", "FLK"]]);
+});
+
+test("the city list, the largest part of the search index, fits the index's budget, which the report records", async () => {
+  const report = JSON.parse(await readFile(resolve(DATA, "countries-size.json"), "utf8"));
+  const cities = await readFile(resolve(DATA, "countries-cities-v1.json"));
+  assert.equal(report.index_budget_bytes, INDEX_BUDGET_BYTES);
+  assert.ok(cities.length < INDEX_BUDGET_BYTES, `${cities.length} bytes of cities leave no room for the names`);
 });

@@ -1910,6 +1910,7 @@ fn build_inner(
         &mut pending,
     );
     crate::build::emit::place_map_assets::emit_country_notice(&documents, &stage_dir, &mut pending);
+    crate::build::emit::place_map_assets::emit_country_search(&documents, &stage_dir, &mut pending);
     // `layers.json` beside them; nothing is written without `[map.layers]`.
     let used_places = place_maps_for_places_data.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
     crate::build::emit::place_map_layers::emit_if_place_typed(

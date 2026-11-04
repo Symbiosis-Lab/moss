@@ -14,7 +14,9 @@ fn country_map_is_a_frontmatter_key() {
     let d = describe();
     let key = d["frontmatter"].as_array().unwrap().iter().find(|f| f["name"] == "country_map").expect("country_map listed under .frontmatter");
     assert_eq!(key["type"], "object");
-    assert!(key["description"].as_str().unwrap().contains("levels"));
+    let description = key["description"].as_str().unwrap();
+    assert!(description.contains("levels"));
+    assert!(description.contains("`search: false`"), "the search switch is listed with the other keys");
 }
 
 #[test]

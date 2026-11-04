@@ -25,7 +25,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/source-manifest.toml"
 COUNTRIES_MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/countries-source-manifest.toml"
-COUNTRIES_NAMES = {"countries", "breakaway_disputed_areas"}
+COUNTRIES_NAMES = {"countries", "breakaway_disputed_areas", "populated_places"}
 ELEVATION_MANIFEST_ARTIFACT = "earth_gebco_server.txt"
 EXPECTED_NAMES = {
     "land",
@@ -129,7 +129,7 @@ def load_manifest(path: Path = MANIFEST) -> tuple[dict, str]:
 
 
 def validate_countries_manifest(manifest: dict) -> list[dict]:
-    """The country shapes' two sources. Their manifest stays separate: listing them in the landscape pack's would change the manifest digest embedded in that pack and force regenerating it."""
+    """The country shapes' sources and the populated places the search index takes its cities from. Their manifest stays separate: listing them in the landscape pack's would change the manifest digest embedded in that pack and force regenerating it."""
     if manifest.get("schema") != 1:
         raise VerificationError("unsupported country-shapes manifest schema")
     if "public domain" not in manifest.get("natural_earth_license", "").lower():

@@ -4381,6 +4381,7 @@ country_map:
     - Elevated
     - High
   unrated: "No assessment yet."
+  action: { label: "Plan a trip", link: "/ask/?to={country}" }
 ---
 | Country | Level | Note |
 |---|---|---|
@@ -4388,6 +4389,8 @@ country_map:
 | Japan | Guarded | Calm. |
 | Brazil | Elevated | |
 | Chile | High | |
+| Russia | Elevated | |
+| Singapore | Low | |
 `,
     ".moss/config.toml": `schema_version = 6
 
