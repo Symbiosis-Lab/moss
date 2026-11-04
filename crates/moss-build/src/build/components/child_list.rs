@@ -74,6 +74,8 @@ pub struct ArticleListItemProps {
     /// The page's own `url_path`, which breaks a tie between two rows on the
     /// same date — the same key the folder's series links use.
     pub url_path: String,
+    /// The page's `weight:`, which orders rows on one date.
+    pub weight: Option<i32>,
     /// The page's resolved place, plain and unlinked (`ParsedDocument::place_names`)
     /// — shown next to the date by [`with_place`]. `None` for a page with no
     /// resolved `location:`.
@@ -101,6 +103,7 @@ impl ArticleListItemProps {
             is_folder: false,
             label: &self.title,
             url_path: &self.url_path,
+            weight: self.weight,
         }
     }
 }
@@ -280,6 +283,8 @@ pub struct ChildItemProps {
     /// directory override changes it, so it is what breaks a tie between two
     /// cards on the same date.
     pub url_path: String,
+    /// The page's `weight:`, which orders cards on one date.
+    pub weight: Option<i32>,
     /// The page's resolved place, plain and unlinked (`ParsedDocument::place_names`)
     /// — shown next to a leaf's date by [`with_place`]; never shown beside a
     /// folder's count, which is not a date. `None` for a page with no
@@ -348,6 +353,7 @@ impl ChildItemProps {
             is_folder: self.is_folder(),
             label: &self.title,
             url_path: &self.url_path,
+            weight: self.weight,
         }
     }
 }
@@ -576,6 +582,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
         url_path: doc.url_path.clone(),
+        weight: doc.weight,
         count_setting,
         place: doc.place_names.clone().or_else(|| {
             // An event's place is shown even when it names no place page.

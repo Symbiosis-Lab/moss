@@ -1180,6 +1180,7 @@ pub(super) fn render_page<'d>(
                         // chrome; plain-text label
                         title: d.label.clone(),
                         url_path: d.url_path.clone(),
+                        weight: d.weight,
                         place: d.place_names.clone(),
                         when_html: None,
                         when: None,

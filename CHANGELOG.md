@@ -271,6 +271,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - After subscribing, "Check your email to confirm." stays until the reader types in the field again or taps the check mark; before, it cleared after four seconds with the field, hiding the one step left. The email field also offers the browser's saved address.
+- A listing sorted by date (`sort: date` or `date-asc`) now orders pages that share a date by their `weight:`, lower first, before falling back to the page address. Before, two articles of the same year stayed in address order whatever weight the author gave them. Pages without a weight keep the order they had.
 - `moss import --recursive` no longer follows the cart and account links a hosted builder's template puts in every page header, so a site without a store no longer gets a "Page Unavailable" `cart` page.
 - `moss import` writes a heading from h2 to h6 of 40 words or more that ends in a full stop as a paragraph (a builder's "Heading 4" style is often used for body text), so it no longer gets a heading anchor and a line in the page's contents list.
 - A page with `date: 2023`, a bare year written without quotes, now shows that year as its date. The guide already allowed it, but YAML reads the number as an integer and the build dropped the field.

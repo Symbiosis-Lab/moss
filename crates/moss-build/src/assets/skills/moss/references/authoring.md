@@ -929,7 +929,7 @@ Under `typesetting = "vertical"` the column is a page, not a scroll: its height 
 sort: [intro, setup, advanced]
 ```
 
-A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem.
+A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem. Under `sort: date` or `date-asc`, `weight:` also settles pages with the same date, lower first and weighted before unweighted, so two articles of one year stay in the order you number them; pages without one keep the order of their addresses. A feed keeps pure date order.
 
 ### One-page sites: no header
  At the top of the page the controls stand at the end of the page title's first line, which keeps their room free, so a long title wraps before them. A title set with `text-wrap: balance` can then leave one short word alone on that first line, beside the controls' room; `text-wrap: pretty` on the title avoids it.
