@@ -240,6 +240,13 @@ fn a_hero_after_body_content_stays_in_place() {
     assert_eq!(doc.blocks.len(), 2, "the hero stays in the body");
 }
 
+#[test]
+fn only_closed_comments_with_nothing_after_are_comments() {
+    assert!(is_comment(&Block::Other("<!-- 编辑注释 -->\n<!-- 第二条 -->\n".into())));
+    assert!(!is_comment(&Block::Other("<!-- 注释 -->正文\n".into())));
+    assert!(!is_comment(&Block::Other("<!-- 没有结尾\n".into())));
+}
+
 /// A comment is not content: a hero under one still opens the page, and keeps
 /// `header=over`, which only an opening hero takes.
 #[test]

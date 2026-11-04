@@ -771,10 +771,8 @@ fn is_comment(block: &Block) -> bool {
     let Block::Other(html) = block else { return false };
     let mut rest = html.trim();
     while let Some(after) = rest.strip_prefix("<!--") {
-        match after.find("-->") {
-            Some(end) => rest = after[end + 3..].trim_start(),
-            None => return false,
-        }
+        let Some((_, tail)) = after.split_once("-->") else { return false };
+        rest = tail.trim_start();
     }
     rest.is_empty()
 }
