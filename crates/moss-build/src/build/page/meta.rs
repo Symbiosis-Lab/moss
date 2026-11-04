@@ -1666,10 +1666,9 @@ pub fn resolve_page_description(
 pub struct DescriptionChainInputs<'a> {
     /// Current page's `description:` frontmatter (may carry inline markdown).
     pub page_description: Option<&'a str>,
-    /// Current page's hero overlay text — pre-extracted at hoisting from
-    /// `HeroShortcode.overlay_markdown` via the same [`extract_description`]
-    /// pipeline used for body fallback. `None` when the hero had no
-    /// extractable paragraph or the page had no hero.
+    /// Current page's hero overlay text — plain text taken at hoisting from
+    /// the hero's first paragraph, else its first heading. `None` when the
+    /// hero had neither or the page had no hero.
     pub page_hero_overlay_text: Option<&'a str>,
     /// Current page's raw markdown body (fed to [`extract_description`]).
     pub page_content: &'a str,
@@ -1715,9 +1714,8 @@ fn description_from_explicit(s: Option<&str>) -> Option<String> {
     }
 }
 
-/// Pass-through for already-extracted text (hero overlay text). The value
-/// already went through [`extract_description`] at hoisting time; treat as
-/// a finished string. Empty becomes `None`.
+/// Pass-through for already-plain text (hero overlay text); treat as a
+/// finished string. Empty becomes `None`.
 fn description_from_extracted(s: Option<&str>) -> Option<String> {
     let raw = s?.trim();
     if raw.is_empty() {

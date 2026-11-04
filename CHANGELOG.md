@@ -271,6 +271,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A page with no `description:` whose opening picture block holds only a heading no longer has a description that starts with the heading's `#` mark: `<meta name="description">`, `og:description`, `twitter:description` and the structured-data description now read `A sentence about the work.` instead of `# A sentence about the work.`.
 - After subscribing, "Check your email to confirm." stays until the reader types in the field again or taps the check mark; before, it cleared after four seconds with the field, hiding the one step left. The email field also offers the browser's saved address.
 - A listing sorted by date (`sort: date` or `date-asc`) now orders pages that share a date by their `weight:`, lower first, before falling back to the page address. Before, two articles of the same year stayed in address order whatever weight the author gave them. Pages without a weight keep the order they had.
 - `moss import --recursive` no longer follows the cart and account links a hosted builder's template puts in every page header, so a site without a store no longer gets a "Page Unavailable" `cart` page.

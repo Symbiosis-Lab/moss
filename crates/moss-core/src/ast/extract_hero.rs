@@ -130,15 +130,10 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
         None => None,
     };
 
-    // overlay_text: the typed overlay first, else the markdown source
-    // captured at parse time.
-    let walked = first_paragraph_plain_text(&hero_args.overlay);
-    let overlay_text = if !walked.trim().is_empty() {
-        Some(walked)
-    } else {
-        let source = crate::resolve::embed_renderer::folder_list::strip_markers(&hero_args.overlay_text);
-        (!source.trim().is_empty()).then_some(source)
-    };
+    // overlay_text is the description chain's feed, so it is always plain
+    // text from the typed overlay, never a slice of its Markdown source.
+    let walked = first_text_plain(&hero_args.overlay);
+    let overlay_text = (!walked.trim().is_empty()).then_some(walked);
 
     // Render via the hooks' Hero arm. Production's `PipelineHooks`
     // dispatches to `render_hero_html_typed` which produces the full
@@ -164,32 +159,24 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     })
 }
 
-/// Walk a typed block sequence and return the first paragraph's plain
-/// text (no markdown formatting). Returns empty string if no paragraph
-/// is found.
+/// Plain text of the first paragraph in a typed block sequence, or, when the
+/// sequence has none, of its first heading (a hero that is only a headline).
+/// Empty when there is neither.
 ///
-/// Mirrors the intent of `crate::build::page::meta::extract_description`
-/// but operates on the typed AST instead of markdown source — the
-/// described follow-up at `HeroShortcode::overlay_text` (TODO
-/// `phase4-cleanup`).
-fn first_paragraph_plain_text(blocks: &[Block]) -> String {
+/// The walk is deliberately SHALLOW — it never descends into a container,
+/// `Block::FootnoteDefinition` included. Endnote prose is not the overlay's
+/// opening line, and a footnote body reached by recursion would land in
+/// `<meta name="description">`.
+fn first_text_plain(blocks: &[Block]) -> String {
+    let mut heading = None;
     for block in blocks {
         match block {
-            Block::Paragraph(inlines) => {
-                return crate::ast::plain_text::inlines_to_plain_text(inlines)
-            }
-            // Skip headings and shortcodes; the description chain wants
-            // first body prose. Lists and other paragraphs follow if the
-            // first hit didn't qualify.
-            //
-            // This walk is deliberately SHALLOW — it never descends into a
-            // container, `Block::FootnoteDefinition` included. Endnote prose
-            // is not the overlay's opening line, and a footnote body reached
-            // by recursion would land in `<meta name="description">`.
-            _ => continue,
+            Block::Paragraph(inlines) => return crate::ast::plain_text::inlines_to_plain_text(inlines),
+            Block::Heading { children, .. } if heading.is_none() => heading = Some(children),
+            _ => {}
         }
     }
-    String::new()
+    heading.map(|c| crate::ast::plain_text::inlines_to_plain_text(c)).unwrap_or_default()
 }
 
 // ── Source parsing: `:::hero` block → HeroShortcode ─────────────────────
