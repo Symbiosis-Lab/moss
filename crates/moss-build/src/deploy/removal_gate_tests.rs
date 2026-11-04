@@ -371,6 +371,15 @@ fn files_moved_out_of_the_root_keep_their_own_lines() {
     assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
 }
 
+/// Files moved up into the folder that held their folder share no folder
+/// line either: it would move a folder into one that contains it.
+#[test]
+fn files_moved_up_into_the_surrounding_folder_keep_their_own_lines() {
+    let text = refusal_text(&[moved("docs/x/a.pdf", "docs/a.pdf", "docs/x/a.pdf"), moved("docs/x/b.pdf", "docs/b.pdf", "docs/x/b.pdf")]);
+    assert!(!text.contains("\"/docs/x/\" = \"/docs/\""), "{text}");
+    assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
+}
+
 /// The lines that keep every moved address working, as they go in the config:
 /// one per folder moved together, one per other move, nothing for an address
 /// that did not move.

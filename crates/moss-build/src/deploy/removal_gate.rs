@@ -9,6 +9,7 @@
 //! does with it and how it reads.
 
 use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress};
+use crate::build::feeds::redirect_table::moves_a_folder;
 use crate::build::served_path::served_address;
 
 /// How many addresses a message names before counting the rest.
@@ -85,8 +86,8 @@ fn groups(pending: &[PendingRemoval]) -> Vec<Group<'_>> {
         let (old_dir, new_dir) = (parent(&p.address)?, parent(to)?);
         (last(&p.address) == last(to) && old_dir != new_dir).then(|| (old_dir.to_string(), new_dir.to_string()))
     };
-    // A folder line cannot name the site root, so no such line is suggested.
-    let pair = |p: &PendingRemoval| folder_pair(p).filter(|(old, new)| old != "/" && new != "/");
+    // Only a line that would move a folder is suggested as one.
+    let pair = |p: &PendingRemoval| folder_pair(p).filter(|(old, new)| moves_a_folder(old, new));
     let pairs: Vec<Option<(String, String)>> = pending.iter().map(pair).collect();
     let known: std::collections::BTreeSet<(String, String)> = pairs.iter().flatten().cloned().collect();
     let lift = |mut p: (String, String)| loop {
