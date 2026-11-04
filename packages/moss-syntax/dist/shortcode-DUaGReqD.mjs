@@ -100,6 +100,12 @@ const SHORTCODES = [
 		],
 		canonicalTemplate: "recent {count=${1:5}}\n${2:No posts yet.}\n:::",
 		authorable: true
+	},
+	{
+		name: "form",
+		attrs: [{ name: "next" }, { name: "button" }],
+		canonicalTemplate: "form {#${1:request} next=${2:/thanks/}}\n- ${3:Your name} *\n- ${4:Email} * {type=email}\n:::",
+		authorable: true
 	}
 ];
 
