@@ -112,3 +112,11 @@ fn a_comment_opener_inside_a_string_hides_no_import() {
     let names: Vec<String> = audit(root, false).own_classes.into_iter().map(|c| c.class).collect();
     assert_eq!(names, vec!["from-shared"]);
 }
+
+#[test]
+fn a_comment_opener_inside_a_selector_string_hides_no_class() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ".moss/theme/style.css", "a[title=\"/*\"] .tip-box { x: 1 }\n.after-it { x: 1 }\n");
+    let names: Vec<String> = audit(dir.path(), false).own_classes.into_iter().map(|c| c.class).collect();
+    assert_eq!(names, vec!["after-it", "tip-box"]);
+}

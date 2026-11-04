@@ -273,6 +273,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A theme stylesheet with `/*` or a brace inside a quoted string, as in `a[title="/*"]` or `content: "}"`, is now read whole. Before, everything after it was lost to the build's theme checks, the hero's text colours, `moss describe`'s CSS query and `moss doctor --surface`.
 - A page with no `description:` whose opening picture block holds only a heading no longer has a description that starts with the heading's `#` mark: `<meta name="description">`, `og:description`, `twitter:description` and the structured-data description now read `A sentence about the work.` instead of `# A sentence about the work.`.
 - A `[redirects]` line from a page inside a folder to that folder, such as `"/zh-hans/apply/" = "/zh-hans/"` for an old page of a language edition, now forwards that one page. It used to move the whole folder under itself, writing a forwarding page under the old address for every page of the edition.
 - After subscribing, "Check your email to confirm." stays until the reader types in the field again or taps the check mark; before, it cleared after four seconds with the field, hiding the one step left. The email field also offers the browser's saved address.

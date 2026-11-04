@@ -18,6 +18,7 @@ use crate::build::assets::paths::compute_binary_hash;
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::theme_lint::{comment_end, string_end};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -107,9 +108,7 @@ pub fn rewrite(css: &str, mut read: impl FnMut(&str) -> Option<Vec<u8>>) -> Them
 
     while i < b.len() {
         match b[i] {
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                i = css[i + 2..].find("*/").map_or(b.len(), |p| i + 2 + p + 2);
-            }
+            b'/' if b.get(i + 1) == Some(&b'*') => i = comment_end(b, i),
             q @ (b'"' | b'\'') => {
                 let end = string_end(b, i, q);
                 if i < image_set_end && end < b.len() {
@@ -243,14 +242,6 @@ fn ident_before(b: &[u8], i: usize, dash_counts: bool) -> bool {
 }
 
 /// Index of the closing quote of the string opened at `start`, or the end.
-fn string_end(b: &[u8], start: usize, quote: u8) -> usize {
-    let mut j = start + 1;
-    while j < b.len() && b[j] != quote {
-        j += if b[j] == b'\\' { 2 } else { 1 };
-    }
-    j.min(b.len())
-}
-
 /// Index of the `)` matching the `(` at `open`, or the end.
 fn paren_end(b: &[u8], open: usize) -> usize {
     let mut depth = 0;
