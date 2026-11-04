@@ -46,15 +46,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -90,7 +90,7 @@ jobs:
       # Playwright browser cache. A cache hit means the browsers are present
       # but system packages may not be, so install-deps runs without a full
       # download; a miss downloads the browser and its dependencies together.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
@@ -115,15 +115,15 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -149,7 +149,7 @@ jobs:
 
       # Same cache mechanics as the Chromium job; the path is macOS's own
       # Playwright cache location, not Linux's.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         id: playwright-cache
         with:
           path: ~/Library/Caches/ms-playwright
