@@ -48,7 +48,7 @@ fn fixed_sheets() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Every stylesheet the query scans: the fixed set plus each registered partial.
-fn sheets() -> Vec<(String, &'static str)> {
+pub(crate) fn sheets() -> Vec<(String, &'static str)> {
     fixed_sheets()
         .into_iter()
         .map(|(n, c)| (n.to_string(), c))

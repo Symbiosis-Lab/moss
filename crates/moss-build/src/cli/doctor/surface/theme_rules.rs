@@ -47,7 +47,7 @@ pub enum ThemeRules {
 }
 
 /// At-rule blocks whose inner preludes are not selectors.
-const NOT_SELECTOR_BLOCKS: &[&str] = &["keyframes", "@font-face", "@page", "@counter-style", "@property"];
+pub(super) const NOT_SELECTOR_BLOCKS: &[&str] = &["keyframes", "@font-face", "@page", "@counter-style", "@property"];
 
 /// Pseudo-classes that depend on interaction or form state, which a built page
 /// never has.
@@ -191,7 +191,7 @@ fn script_mentions(scripts: &str, name: &str) -> bool {
     !camel.is_empty() && mentions(scripts, &format!("dataset.{camel}"))
 }
 
-fn without_comments(s: &str) -> String {
+pub(super) fn without_comments(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
     while let Some(open) = rest.find("/*") {
@@ -370,7 +370,7 @@ fn without_not(selector: &str) -> String {
 
 /// The class, id and attribute names a selector mentions, each led by its
 /// kind: `.class`, `#id`, `[attribute`.
-fn names(selector: &str) -> Vec<String> {
+pub(super) fn names(selector: &str) -> Vec<String> {
     let chars: Vec<char> = selector.chars().collect();
     let mut out = Vec::new();
     syntax_chars(&chars, |i, c, _| {

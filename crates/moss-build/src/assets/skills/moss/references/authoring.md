@@ -55,7 +55,7 @@ A selector list inside `:is()` takes the specificity of its strongest member. Wh
 
 The result is a page in standard Markdown, which reads the same in any editor and on GitHub, with the design in the theme. Before adding a fence or a brace, check whether the content already has a shape a selector can find.
 
-To tell whether a change held, build the site before and after and compare the positions of the main blocks at a desktop, a laptop (1024 to 1280), a tablet and a phone width. Then check every built page, not only the one you changed: a selector chosen by content matches wherever that content occurs. `moss doctor --surface` lists rules that match nothing.
+To tell whether a change held, build the site before and after and compare the positions of the main blocks at a desktop, a laptop (1024 to 1280), a tablet and a phone width. Then check every built page, not only the one you changed: a selector chosen by content matches wherever that content occurs. `moss doctor --surface` lists rules that match nothing, and the class names your theme invents that moss does not write, each marked as used in pages or nowhere: a short list means the page is styled by what it is, a long one means the Markdown is carrying design.
 
 A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border. moss's search field already does: its input and result rows draw no outline whatever the theme says, so restyle the panel's border or the `.is-selected` row instead.
 
