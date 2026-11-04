@@ -1392,7 +1392,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   gap: 0.75rem;
   align-items: center;
   /* Reserve the vertical space the input/button row occupies; the status
-     row (below, on error/success) grows the form instead of overlapping it —
+     row (below, on error) grows the form instead of overlapping it —
      see the `.moss-subscribe-status` rule below for why it moved out of
      `position: absolute`. */
   min-height: 2.5rem;
@@ -1591,7 +1591,12 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
 }
 
 /* --- success --- */
+/* The confirmation takes the input's place on the circle's row, so the two
+   read as one line: the fading input leaves the flow but stays in the page,
+   keeping its focus so typing again returns the form to idle. */
 .moss-subscribe-form[data-state="success"] .moss-input {
+  position: absolute;
+  inset-inline-start: 0;
   opacity: 0;
   transform: translateY(-4px);
   pointer-events: none;
@@ -1623,6 +1628,10 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   stroke-dashoffset: 0;
 }
 .moss-subscribe-form[data-state="success"] .moss-subscribe-status {
+  order: -1;
+  flex: 1;
+  min-inline-size: 0;
+  margin-block-start: 0;
   opacity: 1;
   transform: translateY(0);
   transition-delay: 0.35s;
@@ -1644,6 +1653,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
    is deliberately NOT zeroed here — its exception lives on the family rule
    at .moss-btn__spinner::after above. */
 @media (prefers-reduced-motion: reduce) {
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
   .moss-subscribe-form[data-moss-hosted="true"] .moss-btn,
   .moss-subscribe-form[data-moss-hosted="true"] .moss-btn__label,
   .moss-subscribe-form[data-moss-hosted="true"] .moss-btn__check,

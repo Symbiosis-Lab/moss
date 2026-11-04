@@ -1519,27 +1519,6 @@ fn email_css_mobile_btn_width_rules_skip_success_state() {
     );
 }
 
-/// Regression guard for the stacked (≤32rem, in-page) success layout:
-/// site.css absolutely positions `.moss-subscribe-status` over the WHOLE
-/// form (`inset: 0`), which is right for the single-row desktop form but
-/// centers the copy across both stacked rows on mobile — the text lands
-/// on top of the success circle. email.css must re-anchor the status to
-/// the input row for the stacked card, and restore full-form overlay for
-/// the footer form (which stays single-row on mobile).
-#[test]
-fn email_css_mobile_status_anchors_to_input_row() {
-    let css = include_str!("../assets/css/email.css");
-    assert!(
-        css.contains(r#"[data-position="inline"] .moss-subscribe-status"#),
-        "email.css must re-anchor the stacked form's status to the input row"
-    );
-    assert!(
-            css.contains(r#"footer .moss-subscribe .moss-subscribe-form[data-position="inline"] .moss-subscribe-status"#),
-            "footer forms stay single-row on mobile — email.css must restore \
-             their full-form status overlay"
-        );
-}
-
 /// Slot-merge contract test: the review-colophon path in
 /// `generate_native_slots` honors a non-`None` `media_lookup` and
 /// routes the cover image through the synthesizer. Arch review of
