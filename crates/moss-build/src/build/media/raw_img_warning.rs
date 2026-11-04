@@ -21,7 +21,8 @@
 //! [`detect_raw_media`] is a pure scan over markdown source that returns one
 //! [`RawMediaWarning`] per `<img>`/`<video>`/`<audio>` tag-start. Detection is
 //! case-insensitive on tag name; attributes are not inspected. Markdown image
-//! syntax (`![alt](src)`) and Obsidian-style embeds (`![[file]]`) never match.
+//! syntax (`![alt](src)`) and Obsidian-style embeds (`![[file]]`) never match,
+//! and neither does a tag inside code or an HTML comment, where it is text.
 //!
 //! [`scan_for_raw_media_warnings`] is the I/O-shaped caller-facing wrapper:
 //! it runs the detector and emits one `log::warn!` line per detection. No
@@ -70,8 +71,10 @@ fn raw_media_regex() -> &'static Regex {
 /// no logging. Returns an empty vec when the markdown only uses
 /// `![alt](src)` / `![[file]]` syntax.
 pub fn detect_raw_media(markdown: &str) -> Vec<RawMediaWarning> {
-    let re = raw_media_regex();
-    re.captures_iter(markdown)
+    // A tag shown as code or inside a comment is text, not media. The mask keeps every offset.
+    let live = moss_core::inert_regions::mask_inert(markdown);
+    raw_media_regex()
+        .captures_iter(&live)
         .filter_map(|cap| {
             let whole = cap.get(0)?;
             let tag = cap.get(1)?;
@@ -105,6 +108,25 @@ pub fn scan_for_raw_media_warnings(markdown: &str, page_path: &Path) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn media_tags_shown_as_code_are_not_raw_media() {
+        let md = "A live one: <img src=\"live.jpg\">\n\n\
+                  ```html\n<img src=\"fenced.jpg\">\n```\n\n\
+                  ~~~\n<video src=\"tilde.mp4\">\n~~~\n\n\
+                  Inline: `<audio src=\"inline.mp3\">`.\n\n\
+                  <!-- <img src=\"commented.jpg\"> -->\n\n\
+                  \x20   <img src=\"indented.jpg\">\n";
+        let hits = detect_raw_media(md);
+        assert_eq!(hits.len(), 1, "only the live tag is raw media: {hits:?}");
+        assert_eq!(hits[0].byte_offset, "A live one: ".len());
+    }
+
+    #[test]
+    fn media_tag_in_a_raw_html_block_is_still_raw_media() {
+        let hits = detect_raw_media("<div>\n<img src=\"block.jpg\">\n</div>\n");
+        assert_eq!(hits.len(), 1, "an HTML block is live markup, not code: {hits:?}");
+    }
 
     #[test]
     fn detects_raw_img_tag() {

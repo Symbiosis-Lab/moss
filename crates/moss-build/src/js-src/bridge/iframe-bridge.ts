@@ -1099,8 +1099,8 @@ import { installCaptureResponder } from "./capture/responder";
         // idiomorph, whose fallback parse path holds `"</template></body>"` as
         // a string literal. Every morph therefore re-wrapped the page as
         // `<body><head></head><body>…`, falsifying every `body[...]` descendant
-        // rule — loudest the one hiding `.moss-subscribe-form[data-moss-
-        // pending-site]`. A fragment has no text to sniff and, unlike `doc.body`
+        // rule — loudest the one hiding `[data-moss-
+        // pending]`. A fragment has no text to sniff and, unlike `doc.body`
         // itself, no element for `normalizeParent` to wrap. Import into the
         // template's own INERT contents document, not `document`: the live
         // registry would upgrade every matching custom element on a detached

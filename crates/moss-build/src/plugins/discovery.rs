@@ -324,22 +324,6 @@ pub fn get_plugin_config_with_defaults(
     merged
 }
 
-/// [`get_plugin_config_with_defaults`] for call sites that only hold the
-/// plugin *name* plus the discovered plugin set: resolves the named plugin's
-/// manifest defaults from `plugins` (unknown name ⇒ no defaults).
-pub fn get_plugin_config_for_hook(
-    project_path: &str,
-    plugin_name: &str,
-    plugins: &[super::types::Plugin],
-) -> std::collections::HashMap<String, serde_json::Value> {
-    let defaults = plugins
-        .iter()
-        .find(|p| p.manifest.name == plugin_name)
-        .map(|p| p.manifest.config_defaults())
-        .unwrap_or_default();
-    get_plugin_config_with_defaults(project_path, plugin_name, &defaults)
-}
-
 /// Read plugin config from a JSON file in the plugin folder
 fn read_plugin_config_json(
     config_path: &Path,
@@ -628,42 +612,6 @@ mod tests {
             Some(&serde_json::json!(3)),
             "untouched default must still come through"
         );
-    }
-
-    fn plugin_with_config(
-        name: &str,
-        config: std::collections::HashMap<String, serde_json::Value>,
-    ) -> crate::plugins::types::Plugin {
-        crate::plugins::types::Plugin {
-            manifest: crate::plugins::types::PluginManifest {
-                name: name.into(),
-                version: "0.0.1".into(),
-                entry: Some("plugin.js".into()),
-                config,
-                ..Default::default()
-            },
-            path: std::path::PathBuf::from("/tmp/p"),
-        }
-    }
-
-    /// Name-based variant: resolves the named plugin's manifest defaults from
-    /// the discovered plugin set; an unknown name yields no defaults.
-    #[test]
-    fn test_config_for_hook_resolves_defaults_by_plugin_name() {
-        let temp_dir = TempDir::new().unwrap();
-        let project_path = temp_dir.path().to_str().unwrap();
-        let mut defaults = std::collections::HashMap::new();
-        defaults.insert("gateway".to_string(), serde_json::json!("https://default.example"));
-        let plugins = vec![plugin_with_config("ipfs", defaults)];
-
-        let config = get_plugin_config_for_hook(project_path, "ipfs", &plugins);
-        assert_eq!(
-            config.get("gateway"),
-            Some(&serde_json::json!("https://default.example"))
-        );
-
-        let other = get_plugin_config_for_hook(project_path, "unknown", &plugins);
-        assert!(other.is_empty(), "unknown plugin name must yield no defaults");
     }
 
 

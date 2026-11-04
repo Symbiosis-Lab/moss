@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::document::BlockMeta;
+use super::extract_form::FormShortcode;
 use super::node::{Block, Inline};
 use super::url::Url;
 
@@ -76,6 +77,9 @@ pub enum Shortcode {
     /// fallback content rendered when the query returns zero matches.
     /// Empty body means no fallback (the shortcode renders nothing).
     Recent(RecentShortcode),
+    /// `:::form {#name next=/path/}` — a request form written as a list; see
+    /// [`FormShortcode`].
+    Form(FormShortcode),
 }
 
 /// Arguments for [`Shortcode::Subscribe`].
@@ -503,6 +507,7 @@ pub enum ShortcodeKind {
     Hero,
     Grid,
     Recent,
+    Form,
 }
 
 impl ShortcodeKind {
@@ -516,6 +521,7 @@ impl ShortcodeKind {
             ShortcodeKind::Buttons => "moss-buttons",
             ShortcodeKind::Subscribe => "moss-subscribe",
             ShortcodeKind::Recent => "moss-recent",
+            ShortcodeKind::Form => "moss-form",
         }
     }
 
@@ -530,6 +536,7 @@ impl ShortcodeKind {
             ShortcodeKind::Hero => "hero",
             ShortcodeKind::Grid => "grid",
             ShortcodeKind::Recent => "recent",
+            ShortcodeKind::Form => "form",
         }
     }
 
@@ -544,6 +551,7 @@ impl ShortcodeKind {
             ShortcodeKind::Hero,
             ShortcodeKind::Grid,
             ShortcodeKind::Recent,
+            ShortcodeKind::Form,
         ]
         .into_iter()
     }
@@ -559,6 +567,7 @@ impl Shortcode {
             Shortcode::Hero(_) => ShortcodeKind::Hero,
             Shortcode::Grid(_) => ShortcodeKind::Grid,
             Shortcode::Recent(_) => ShortcodeKind::Recent,
+            Shortcode::Form(_) => ShortcodeKind::Form,
         }
     }
 }
@@ -576,6 +585,7 @@ mod tests {
             ShortcodeKind::Hero,
             ShortcodeKind::Grid,
             ShortcodeKind::Recent,
+            ShortcodeKind::Form,
         ];
         let unique: std::collections::HashSet<_> = kinds.iter().collect();
         assert_eq!(unique.len(), kinds.len());
@@ -590,6 +600,7 @@ mod tests {
             ShortcodeKind::Hero,
             ShortcodeKind::Grid,
             ShortcodeKind::Recent,
+            ShortcodeKind::Form,
         ] {
             let s = serde_json::to_string(&kind).expect("serialize");
             let back: ShortcodeKind = serde_json::from_str(&s).expect("deserialize");

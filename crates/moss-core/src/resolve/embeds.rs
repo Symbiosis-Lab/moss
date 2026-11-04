@@ -142,7 +142,7 @@ fn resolve_embeds_inner(
                     output.push('\n');
                 }
                 Some(file_content) => {
-                    let body = strip_frontmatter(&file_content);
+                    let body = crate::frontmatter::body(&file_content);
 
                     let section = select_section(body, heading_anchor).unwrap_or_else(|| {
                         let anchor = heading_anchor.unwrap_or_default();
@@ -234,20 +234,6 @@ fn split_target(target: &str) -> (&str, Option<&str>) {
             }
         }
         None => (target, None),
-    }
-}
-
-/// Strip frontmatter from file content, in either dialect.
-///
-/// A transcluded page whose frontmatter is simplified used to have its field
-/// lines rendered as prose inside the embedding page — this saw a YAML block or
-/// nothing.
-pub(super) fn strip_frontmatter(content: &str) -> &str {
-    match crate::frontmatter::frontmatter_span(content) {
-        // Char-aligned: `body` is a line-boundary offset from the splitter.
-        #[allow(clippy::string_slice)]
-        Some(span) => &content[span.body..],
-        None => content,
     }
 }
 
@@ -809,25 +795,6 @@ mod tests {
             split_target("path/to/file.md#deep-heading"),
             ("path/to/file.md", Some("deep-heading"))
         );
-    }
-
-    #[test]
-    fn test_strip_frontmatter_basic() {
-        let input = "---\ntitle: Test\n---\nBody content.";
-        assert_eq!(strip_frontmatter(input), "Body content.");
-    }
-
-    #[test]
-    fn test_strip_frontmatter_none() {
-        let input = "No frontmatter here.\nJust content.";
-        assert_eq!(strip_frontmatter(input), input);
-    }
-
-    #[test]
-    fn test_strip_frontmatter_no_closing() {
-        let input = "---\ntitle: Test\nNo closing delimiter.";
-        // No closing `---`, so treat as no frontmatter.
-        assert_eq!(strip_frontmatter(input), input);
     }
 
     #[test]

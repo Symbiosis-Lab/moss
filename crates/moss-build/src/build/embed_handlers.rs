@@ -73,7 +73,7 @@ fn render_ipynb_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
         return format!(
             "<div class=\"{} moss-embed-error\">{}</div>",
             CLASS_EMBED,
-            html_escape(&msg),
+            moss_core::media::html_escape_text(&msg),
         );
     }
 
@@ -135,7 +135,7 @@ fn render_table_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
             return format!(
                 "<div class=\"{} moss-embed-error\">{}</div>",
                 CLASS_EMBED,
-                html_escape(&msg),
+                moss_core::media::html_escape_text(&msg),
             );
         }
     };
@@ -161,13 +161,6 @@ fn split_query(target: &str) -> (&str, Option<&str>) {
         Some((path, query)) => (path, Some(query)),
         None => (target, None),
     }
-}
-
-/// Minimal HTML escaper for error-message text spliced back into content.
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 /// Percent-encode characters that would break a URL query parameter value.

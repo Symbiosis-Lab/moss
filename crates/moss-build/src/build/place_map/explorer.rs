@@ -531,7 +531,7 @@ mod tests {
     /// Opening frames the explorer's `fitWork` draws, shared with its own
     /// vitest suite, which holds the TypeScript fit to the same rectangles.
     fn golden_frames() -> GoldenFrames {
-        serde_json::from_str(include_str!("../../js-src/site/places-explorer/__tests__/opening-frames.json")).unwrap()
+        serde_json::from_str(include_str!("../../js-src/site/maps/places-explorer/__tests__/opening-frames.json")).unwrap()
     }
 
     fn gazetteer_of(places: &[(f64, f64)]) -> Gazetteer {

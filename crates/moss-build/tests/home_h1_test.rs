@@ -99,6 +99,28 @@ fn home_whose_hero_holds_only_an_image_and_a_link_gets_a_visually_hidden_h1() {
     assert_eq!(h1s(&html), vec!["moss-folder-title visually-hidden|Harbor Notes"], "{html}");
 }
 
+#[test]
+fn page_saved_with_a_byte_order_mark_keeps_its_own_h1() {
+    let tmp = std::env::temp_dir().join(format!("moss_bom_h1_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
+    write(&tmp, "index.md", "---\ntitle: Harbor Notes\n---\n\nWelcome.\n");
+    write(&tmp, "posts/note.md", "\u{feff}# A heading\n\nSaved by a Windows tool.\n");
+    write(&tmp, "posts/host.md", "---\ntitle: Host\n---\n\n![[note]]\n\n![[note#A heading]]\n");
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
+    let staging = tmp.join(".moss/build.nosync/staging/posts");
+    let html = fs::read_to_string(staging.join("note/index.html")).unwrap();
+    assert!(!html.contains('\u{feff}'), "{html}");
+    assert_eq!(h1s(&html).iter().filter(|h| h.ends_with("|A heading")).count(), 1, "{html}");
+    let host = fs::read_to_string(staging.join("host/index.html")).unwrap();
+    assert!(!host.contains('\u{feff}'), "an embed carried the mark: {host}");
+    // Both embeds, the whole note and its `#A heading` section, find the text.
+    let main = &host[host.find("<main").unwrap()..host.find("</main>").unwrap()];
+    assert_eq!(main.matches("Saved by a Windows tool.").count(), 2, "{main}");
+}
+
 fn folder_page_html(folder_note_body: &str) -> String {
     let tmp = std::env::temp_dir().join(format!("moss_folder_h1_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&tmp).unwrap();

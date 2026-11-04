@@ -226,6 +226,11 @@ pub async fn handle_events(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+/// Printed when a served build's `current` has caught up with the preview.
+pub(crate) fn promoted_line(generation_id: &str) -> String {
+    format!("current updated to generation {generation_id}")
+}
+
 /// The `BuildReporter` for a build with no Tauri shell: publish to the carrier,
 /// and otherwise behave as `HeadlessReporter` did.
 ///
@@ -245,6 +250,7 @@ pub struct CarrierAnnouncer;
 impl crate::build::ports::announcer::SealAnnouncer for CarrierAnnouncer {
     fn promoted(&self, generation_id: &str) {
         log::info!("promoted generation {generation_id} to current");
+        crate::cli_eprintln!("{}", promoted_line(generation_id));
         publish(&MossEvent::SitePromoted(crate::build::progress::SitePromoted {
             generation_id: generation_id.to_string(),
         }));
@@ -414,5 +420,31 @@ mod shows_on_terminal_tests {
     #[test]
     fn other_background_tasks_stay_off_the_terminal() {
         assert!(!shows_on_terminal(&tick("images")));
+    }
+}
+
+#[cfg(test)]
+mod promoted_line_tests {
+    use super::promoted_line;
+    use crate::ops::serve::ownership::generated_line;
+    use std::path::Path;
+
+    #[test]
+    fn a_served_build_does_not_claim_current_was_written() {
+        let line = generated_line("s", Path::new("/s/.moss/build.nosync/current"), Path::new("/s/.moss/build.nosync/staging"), true);
+        assert!(line.contains("serves /s/.moss/build.nosync/staging"), "{line}");
+        assert!(line.contains("current follows after 20 s without edits"), "{line}");
+        assert!(!line.contains("generated at"), "{line}");
+    }
+
+    #[test]
+    fn a_one_shot_build_names_current() {
+        let line = generated_line("s", Path::new("/s/current"), Path::new("/s/staging"), false);
+        assert_eq!(line, "📁 's': Site generated at /s/current");
+    }
+
+    #[test]
+    fn promotion_names_its_generation() {
+        assert_eq!(promoted_line("g1"), "current updated to generation g1");
     }
 }

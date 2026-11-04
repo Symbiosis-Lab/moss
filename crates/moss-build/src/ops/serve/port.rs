@@ -87,29 +87,6 @@ pub(crate) async fn moss_health_handler(
         .unwrap()
 }
 
-/// Finds an available TCP port starting from the given port number.
-///
-/// Scans through a range of 100 ports starting from `start_port` to find
-/// an available port for the preview server.
-///
-/// # Arguments
-/// * `start_port` - Port number to start scanning from
-///
-/// # Returns
-/// * `Ok(u16)` - First available port found
-/// * `Err(String)` - No available ports in the scanned range
-pub fn find_available_port(start_port: u16) -> Result<u16, String> {
-    for port in start_port..start_port + 100 {
-        if is_port_available(port) {
-            return Ok(port);
-        }
-    }
-    Err(format!(
-        "No available ports found starting from {}",
-        start_port
-    ))
-}
-
 /// Checks if a TCP port is available for binding on both IPv4 and IPv6 loopback.
 ///
 /// Probes both `127.0.0.1:{port}` and `[::1]:{port}`. Returns `false` if
@@ -120,19 +97,10 @@ pub fn find_available_port(start_port: u16) -> Result<u16, String> {
 /// `http://localhost:` iframe URL (IPv6-first on macOS) would silently route
 /// to the foreign server.
 ///
-/// This is defense-in-depth — the authoritative collision check is the
-/// dual-stack server bind in `router.rs::start_server`.
-/// We still want `is_port_available` to be honest so the
-/// `if available { use } else { scan }` ladder picks the right starting
-/// point.
-///
-/// # Arguments
-/// * `port` - Port number to test
-///
-/// # Returns
-/// * `true` - Port is available on both IPv4 and IPv6 loopback
-/// * `false` - Port is already in use on at least one of the two
-pub fn is_port_available(port: u16) -> bool {
+/// Tests only: the server's collision check is its own dual-stack bind in
+/// `router.rs::start_server`.
+#[cfg(test)]
+pub(crate) fn is_port_available(port: u16) -> bool {
     let v4_ok = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
     let v6_ok = std::net::TcpListener::bind(("::1", port)).is_ok();
     v4_ok && v6_ok
@@ -444,31 +412,18 @@ pub(super) async fn drive(
 mod tests {
     use super::*;
 
+    /// The first free port in the hundred from `start_port`.
+    fn find_available_port(start_port: u16) -> Result<u16, String> {
+        (start_port..start_port + 100)
+            .find(|&port| is_port_available(port))
+            .ok_or_else(|| format!("No available ports found starting from {start_port}"))
+    }
+
     #[test]
     fn test_is_port_available_function_runs() {
         // Test that the function can be called without panicking
         // We use a high port that's unlikely to be in use
         let _ = is_port_available(59123);
-    }
-
-    #[test]
-    fn test_find_available_port_success() {
-        // Should find an available port in the range
-        let result = find_available_port(50000);
-        assert!(result.is_ok(), "Should find an available port");
-        let port = result.unwrap();
-        assert!(port >= 50000, "Port should be >= start_port");
-        assert!(port < 50100, "Port should be < start_port + 100");
-    }
-
-    #[test]
-    fn test_find_available_port_returns_first_available() {
-        // Find a port, then verify it's actually available by trying to bind to it
-        let port = find_available_port(51000).expect("Should find a port");
-
-        // Verify the port is actually bindable
-        let listener = std::net::TcpListener::bind(("127.0.0.1", port));
-        assert!(listener.is_ok(), "Returned port should be bindable");
     }
 
     #[test]

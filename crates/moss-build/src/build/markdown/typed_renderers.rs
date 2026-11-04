@@ -485,7 +485,7 @@ pub(crate) fn render_hero_html_typed(
 
     // Captions render with the overlay's hooks: they are inline markdown from
     // the same document, so their links and images take the body's path.
-    let caption_hooks = moss_core::ast::DefaultHooks::hero_overlay(media_assets);
+    let caption_hooks = moss_core::ast::DefaultHooks::without_heading_anchors(media_assets);
     // Slide captions sit after the slides, one per slide that has one. The
     // container is shared, so the stylesheet can stack them in one grid cell.
     let captions_html = if captions.is_empty() {
@@ -554,14 +554,8 @@ pub(crate) fn render_hero_html_typed(
         // `pipeline.rs` (which descends into `args.overlay` via
         // `resolve_urls_in_block`). The renderer reads `Url::Resolved`
         // directly.
-        //
-        // `_resolve_link` is retained in the signature to preserve the
-        // public API for downstream callers; PR4.5 leaves Hero as a
-        // hoisted shortcode rendered out of band (not via
-        // `render_document` proper), so the parameter pays the cost of
-        // an unused-arg until PR7a flips production to `render_document`.
         let mut html_content = String::new();
-        let hooks = moss_core::ast::DefaultHooks::hero_overlay(media_assets);
+        let hooks = moss_core::ast::DefaultHooks::without_heading_anchors(media_assets);
         moss_core::ast::render::render_blocks_with_meta(
             &hooks,
             &mut html_content,

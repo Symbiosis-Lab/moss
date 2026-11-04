@@ -31,8 +31,7 @@
 //!
 //! ## Cascade
 //!
-//! Each sheet is emitted wrapped in `@layer plugins`, the layer the inline
-//! blocks were given by `enhance::wrap_style_blocks_in_layer`. Layer order is
+//! Each sheet is emitted wrapped in `@layer plugins`. Layer order is
 //! declared once, at the top of the main stylesheet
 //! (`@layer reset, tokens, base, layout, shortcodes, plugins, themes;`), which
 //! is linked earlier in `<head>` — so a layer's precedence does not depend on

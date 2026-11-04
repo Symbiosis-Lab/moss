@@ -301,15 +301,15 @@ pub struct PipelineConfig {
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
     /// callers cannot rely on `spawn_native_process_sync`'s background task
     /// to populate the link-meta cache — it gets killed before completion.
-    /// When set, `run_pipeline` synchronously prewarms link-meta before
-    /// render. Defaults to `false`; only `start_cli_build` and `build_sync`
-    /// flip it.
+    /// When set, the render fetches link metadata for this build's external
+    /// links before it renders them (`build::render::blocking`). Defaults to
+    /// `false`; only `start_cli_build` and `build_sync` flip it.
     ///
     /// Note: this is NOT derivable from `progress` or the host ports. The
     /// moss binary is a Tauri app even in CLI mode, so a shell can be
     /// attached. And `progress: Null` is used by GUI-initiated rebuilds
     /// (deploy, plugin install, watch) where the runtime IS alive — those
-    /// must NOT prewarm synchronously.
+    /// must NOT fetch synchronously.
     pub exits_after_build: bool,
     /// CLI `--site-url` override. When `Some`, the value is passed through to
     /// `generate_blocking_content` via `SiteConfig` and ultimately consumed by
@@ -443,6 +443,20 @@ fn extract_frontmatter_title(content: &str) -> Option<String> {
     None
 }
 
+/// Whether `fingerprint` differs from the last one logged for the site at
+/// `folder`, and remember it. One line per change per site keeps the context a
+/// support reader needs without repeating it on every rebuild.
+fn fingerprint_changed(folder: &str, fingerprint: &str) -> bool {
+    static LAST: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.get(folder).map(String::as_str) == Some(fingerprint) {
+        return false;
+    }
+    last.insert(folder.to_string(), fingerprint.to_string());
+    true
+}
+
 fn collect_native_slots_for_documents(
     folder_path: &str,
     cached_domain_config: crate::config::deployment::DomainDeploymentConfig,
@@ -476,14 +490,10 @@ fn collect_native_slots_for_documents(
     let has_footer_file = pages.iter().any(|p| p.slot_only);
 
     // Site fingerprint: a PII-free, one-line summary of the build-shaping state
-    // that decides footer chrome + slot resolution. Emitted here — BEFORE the
-    // no-services early-return below — so it fires on every STANDARD build,
-    // including the services-free case (email not installed, no footer.md) that
-    // surfaced the footer stray-">" report. Rides
-    // "Send logs"; names/counts only, no user content. This is the context that
-    // was missing when diagnosing that report.
-    log::info!(
-        target: "moss::build",
+    // that decides footer chrome + slot resolution. Emitted BEFORE the
+    // no-services early-return below, so the services-free case is covered
+    // too; names and counts only. Logged when it changes, not on every build.
+    let fingerprint = format!(
         "site fingerprint: pages={}, email_installed={}, comments={}, moss_hosted={}, footer_md={}, inline_subscribe={}, analytics={}",
         pages.len(),
         email_channel_installed,
@@ -493,6 +503,9 @@ fn collect_native_slots_for_documents(
         has_inline_subscribe,
         services_config.analytics.is_some(),
     );
+    if fingerprint_changed(folder_path, &fingerprint) {
+        log::info!(target: "moss::build", "{fingerprint}");
+    }
 
     // Record the site's audiences ({scope, lang}) so every reader — the email
     // settings command, the syndicate hook — gets EXACTLY what the build
@@ -671,6 +684,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         &collector,
         pipeline_start.elapsed(),
         if result.is_ok() { "ok" } else { "error" },
+        &config.trigger,
     );
     result
 }
@@ -743,7 +757,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let moss_dir_str = moss_dir_path.to_string_lossy().to_string();
 
     // Ensure .moss/ exists and mark the regenerable tree out of cloud sync
-    // BEFORE anything below writes into it: the CLI's link-meta prewarm writes
+    // BEFORE anything below writes into it: the CLI's link-meta fetch writes
     // `.moss/build.nosync/cache/link-meta/`, and a marker cannot un-sync bytes a
     // provider already took.
     // allow:raw_write `.moss` itself; the regenerable tree starts below it
@@ -765,53 +779,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     crate::build::page::link_meta::start_build_session(
         &Path::new(&folder_path).join(".moss"),
     );
-
-    // Synchronous link-meta prewarm. The Tauri-app build path defers metadata
-    // fetches to `spawn_native_process_sync`, but CLI builds and snapshot
-    // tests exit moments after render — that background task gets killed
-    // before it can populate the cache. So when `config.exits_after_build`
-    // is set, we synchronously fetch (in parallel) any URLs recorded by the
-    // previous build BEFORE render. Render then reads a warm cache.
-    //
-    // First-ever build for a folder is still cold (no `.urls.json` yet);
-    // second+ build serves populated cards. The one-build lag for newly-
-    // added URLs is intentional: `.urls.json` is written AFTER render in
-    // the current build, so prewarm reads the *previous* build's URL set.
-    // Don't try to "fix" this by scanning markdown pre-render — that would
-    // duplicate the parser work that render already does.
-    //
-    // Wrapped in `block_in_place` so the blocking I/O doesn't tie up a
-    // tokio worker: `std::thread::scope` joins synchronously, and on a
-    // multi-thread runtime that worker is unavailable for other tasks for
-    // the duration. Today CLI mode has nothing else on the runtime, but
-    // future watch/serve paths might.
-    if config.exits_after_build && !pass.repeat {
-        let _trace = PhaseTrace::start("link_meta_prewarm");
-        let moss_dir = Path::new(&folder_path).join(".moss");
-        let (seen, fetched) = tokio::task::block_in_place(|| {
-            // `block_in_place` lets the blocking std::thread::scope inside
-            // `prewarm_link_meta_for_build` not hold a tokio worker hostage.
-            crate::build::page::link_meta::prewarm_link_meta_for_build_with_progress(
-                &moss_dir,
-                |cold_count| {
-                    // Stderr progress so a slow network doesn't look like a
-                    // hang. Only fires when we're about to hit the network.
-                    if cold_count > 0 && config.progress.is_terminal() {
-                        eprintln!("Prewarming {cold_count} link previews…");
-                    }
-                },
-            )
-        });
-        if seen > 0 {
-            log::info!(
-                target: "link-meta",
-                "link-meta prewarm: {} URLs seen, {} fetched (rest from fresh cache)",
-                seen,
-                fetched
-            );
-        }
-    }
-
 
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
     crate::infra::moss_paths::note_hidden_moss_files(config.source());
@@ -1097,7 +1064,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // to .moss/data/social/*.json) is read by the NEXT build's enhance phase.
     //
     // Architectural invariant: `run_pipeline` does no network fetches itself
-    // **except for the link-meta prewarm above**, which is gated on
+    // **except for the link-meta fetch before render (`build::render::blocking`)**, which is gated on
     // `config.exits_after_build` (CLI / snapshot tests) where there's no
     // long-lived runtime to host `spawn_native_process_sync`. GUI builds
     // never fetch inline — the background task handles them async.
@@ -1589,8 +1556,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
 
     let folder_name = config.root.name_opt().unwrap_or("unnamed-site");
 
-    let current_output = crate::moss_paths::MossPaths::new(config.source()).current_ptr();
-    let base_message = format!("📁 '{}': Site generated at {}", folder_name, current_output.display());
+    let site_paths = crate::moss_paths::MossPaths::new(config.source());
+    let current_output = site_paths.current_ptr();
+    let base_message = crate::ops::serve::ownership::generated_line(folder_name, &current_output, &site_paths.staging_dir(), port_now().is_some());
 
     if let Some(p) = port_now() {
         let preview_url = format!("http://localhost:{}", p);
@@ -1604,7 +1572,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         Ok(PassOutcome { message: base_message, owed: media_rerender_owed, is_empty: _is_empty, port: None })
     }
 }
-
 
 
 /// Load article-map.json and convert to the ArticleInfo map needed by native features.
@@ -1866,6 +1833,7 @@ fn record_promise_gate(
     assets: Option<&std::sync::Arc<crate::types::assets::AssetRegistry>>,
     folder_path: &str,
 ) -> Vec<crate::build::manifest::link_audit::DeadLink> {
+    crate::build::emit::commerce::audit_next(stage_dir, sealed);
     let dead_links = crate::build::manifest::link_audit::audit_and_report(stage_dir, sealed);
 
     // Posters are deliberately not registry-tracked (`DeliveryKind::
@@ -2068,11 +2036,12 @@ async fn advertise_sealed(
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
     );
     let kept = if presence_verdict.repairs_staging() {
-        crate::build::feeds::derivative_redirects::keep(mp, stage_dir, &mut sealed)
+        let late = crate::system::build_records::records().late_redirects(folder_path);
+        crate::build::feeds::kept_addresses::keep(mp, stage_dir, &mut sealed, &late)
     } else {
         Vec::new()
     };
-    crate::system::build_records::records().record_kept_derivatives(folder_path, kept);
+    crate::system::build_records::records().record_kept(folder_path, kept);
     // Background assets have drained. Validate only the selected page's
     // direct local CSS/script outputs before writing hashes.json or scheduling
     // promotion; media and unrelated pages do not affect preview readiness.
@@ -2288,3 +2257,7 @@ mod cache_lease_ship_tests;
 #[cfg(test)]
 #[path = "build/overlap_tests.rs"]
 mod overlap_tests;
+
+#[cfg(test)]
+#[path = "build/log_line_tests.rs"]
+mod log_line_tests;

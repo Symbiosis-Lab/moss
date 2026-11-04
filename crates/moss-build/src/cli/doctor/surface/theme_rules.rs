@@ -12,12 +12,17 @@
 //! A script can add the class later (`classList.add("is-open")`). A rule that
 //! matches nothing but names something a built script also mentions is
 //! reported apart, as one that may apply once the script runs.
+//!
+//! A folder listing writes its markup only when it has entries, and `when:`
+//! and drafts decide that on the day of the build. A rule that matches nothing
+//! but whose every missing class is a listing class is reported apart too.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 use scraper::{Html, Selector};
 
+use crate::build::folder_embed::listing_markup::is_listing_name;
 use crate::build::theme_lint::style_rules;
 use crate::cli::describe::css_query::mentions;
 
@@ -30,6 +35,8 @@ pub struct UnmatchedRule {
     pub selector: String,
     /// Class, id and attribute names of the rule that a built script mentions.
     pub scripted: Vec<String>,
+    /// Class names of the rule that a folder listing emits only when it has entries.
+    pub listing: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +68,8 @@ struct Pending {
     selector: String,
     statics: Vec<Selector>,
     names: Vec<String>,
+    /// Names inside the `:not(...)` groups that contain `:has(`.
+    negated: Vec<String>,
 }
 
 /// Check every theme stylesheet against the pages built into `site`.
@@ -75,18 +84,20 @@ pub fn check(sheets: &[(String, String)], site: &Path) -> ThemeRules {
             let selector = without_comments(rule.prelude).split_whitespace().collect::<Vec<_>>().join(" ");
             let mut statics = Vec::new();
             let mut names_in = Vec::new();
+            let mut negated = Vec::new();
             let mut unknown = false;
             for one in split_selector_list(&selector) {
                 match static_form(one).and_then(|s| Selector::parse(&s).ok()) {
                     Some(parsed) => statics.push(parsed),
                     None => unknown = true,
                 }
-                names_in.extend(names(one));
+                negated.extend(not_groups(one).into_iter().filter(|g| g.to_ascii_lowercase().contains(":has(")).flat_map(names));
+                names_in.extend(names(&without_not(one)));
             }
             if unknown || statics.is_empty() {
                 continue;
             }
-            pending.push(Pending { path: path.clone(), line: css[..rule.start].matches('\n').count() + 1, selector, statics, names: names_in });
+            pending.push(Pending { path: path.clone(), line: css[..rule.start].matches('\n').count() + 1, selector, statics, names: names_in, negated });
         }
     }
 
@@ -94,6 +105,8 @@ pub fn check(sheets: &[(String, String)], site: &Path) -> ThemeRules {
     let redirect = Selector::parse("meta[http-equiv=refresh i]").expect("static selector");
     let mut pages = 0usize;
     let mut scripts: BTreeSet<String> = BTreeSet::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let every_element = Selector::parse("*").expect("static selector");
     let walk = walkdir::WalkDir::new(site).follow_links(true).into_iter().filter_entry(|e| e.depth() == 0 || e.file_name() != "_moss");
     for entry in walk.filter_map(Result::ok) {
         if !entry.file_type().is_file() {
@@ -109,6 +122,12 @@ pub fn check(sheets: &[(String, String)], site: &Path) -> ThemeRules {
                 }
                 pages += 1;
                 scripts.extend(page.select(&inline_script).map(|s| s.text().collect::<String>()));
+                for el in page.select(&every_element) {
+                    let el = el.value();
+                    seen.extend(el.classes().map(|c| format!(".{c}")));
+                    seen.extend(el.id().map(|i| format!("#{i}")));
+                    seen.extend(el.attrs().map(|(k, _)| format!("[{k}")));
+                }
                 pending.retain(|rule| !rule.statics.iter().any(|s| page.select(s).next().is_some()));
             }
             Some("js" | "mjs") => {
@@ -133,10 +152,19 @@ pub fn check(sheets: &[(String, String)], site: &Path) -> ThemeRules {
     let unmatched = pending
         .into_iter()
         .map(|rule| {
-            let mut scripted: Vec<String> = rule.names.into_iter().filter(|n| script_mentions(&scripts, n)).collect();
+            let mut scripted: Vec<String> = rule.names.iter().map(|n| &n[1..]).filter(|n| script_mentions(&scripts, n)).map(str::to_string).collect();
             scripted.sort();
             scripted.dedup();
-            UnmatchedRule { path: rule.path, line: rule.line, selector: rule.selector, scripted }
+            let mut missing: Vec<String> = rule.names.into_iter().filter(|n| !seen.contains(n)).collect();
+            missing.sort();
+            missing.dedup();
+            let is_listing = |n: &String| is_listing_name(n.as_bytes()[0] as char, &n[1..]);
+            // `:not(:has(...))` is how a rule styles an empty listing, so a listing name there means it applies on a day the listing is empty.
+            let negated = rule.negated.iter().filter(|n| is_listing(n));
+            let mut listing: Vec<String> = if missing.iter().all(is_listing) { missing.iter().chain(negated).map(|n| n[1..].to_string()).collect() } else { Vec::new() };
+            listing.sort();
+            listing.dedup();
+            UnmatchedRule { path: rule.path, line: rule.line, selector: rule.selector, scripted, listing }
         })
         .collect();
     ThemeRules::Checked { pages, unmatched }
@@ -295,7 +323,53 @@ fn static_form(selector: &str) -> Option<String> {
     Some(out.trim().to_string())
 }
 
-/// The class, id and attribute names a selector mentions.
+/// Byte spans of the `:not(...)` groups of `selector`.
+fn not_spans(selector: &str) -> Vec<(usize, usize)> {
+    let lower = selector.to_ascii_lowercase();
+    let mut spans = Vec::new();
+    let mut from = 0;
+    while let Some(found) = lower[from..].find(":not(") {
+        let at = from + found;
+        let mut open = 0;
+        let mut end = selector.len();
+        for (i, c) in selector[at..].char_indices() {
+            match c {
+                '(' => open += 1,
+                ')' => {
+                    open -= 1;
+                    if open == 0 {
+                        end = at + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        spans.push((at, end));
+        from = end;
+    }
+    spans
+}
+
+/// The `:not(...)` groups of `selector`.
+fn not_groups(selector: &str) -> Vec<&str> {
+    not_spans(selector).into_iter().map(|(a, b)| &selector[a..b]).collect()
+}
+
+/// `selector` without its `:not(...)` groups, whose names no element needs.
+fn without_not(selector: &str) -> String {
+    let mut out = String::new();
+    let mut at = 0;
+    for (from, to) in not_spans(selector) {
+        out.push_str(&selector[at..from]);
+        at = to;
+    }
+    out.push_str(&selector[at..]);
+    out
+}
+
+/// The class, id and attribute names a selector mentions, each led by its
+/// kind: `.class`, `#id`, `[attribute`.
 fn names(selector: &str) -> Vec<String> {
     let chars: Vec<char> = selector.chars().collect();
     let mut out = Vec::new();
@@ -305,7 +379,8 @@ fn names(selector: &str) -> Vec<String> {
         }
         let end = ident_end(&chars, i + 1);
         if end > i + 1 {
-            out.push(chars[i + 1..end].iter().collect());
+            let name: String = chars[i + 1..end].iter().collect();
+            out.push(if c == '[' { format!("[{}", name.to_ascii_lowercase()) } else { format!("{c}{name}") });
         }
         None
     });

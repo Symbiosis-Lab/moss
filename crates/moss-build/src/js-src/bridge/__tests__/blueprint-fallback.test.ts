@@ -18,7 +18,7 @@ const { startBlueprintGridMock, cleanupSpy } = vi.hoisted(() => {
   return { startBlueprintGridMock, cleanupSpy };
 });
 
-vi.mock("../blueprint-grid", () => ({
+vi.mock("@symbiosis-lab/moss-blueprint-grid", () => ({
   startBlueprintGrid: startBlueprintGridMock,
 }));
 
@@ -89,12 +89,12 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
     const container = cover.querySelector<HTMLElement>(".moss-blueprint-fallback");
     expect(container).not.toBeNull();
     const canvas = container!.querySelector<HTMLCanvasElement>(
-      "canvas#blueprint-canvas",
+      "canvas",
     );
     expect(canvas).not.toBeNull();
     // Grid started against the canvas host.
     expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
-    expect(startBlueprintGridMock).toHaveBeenCalledWith(container);
+    expect(startBlueprintGridMock).toHaveBeenCalledWith(container, { canvas });
     // The <img> stays in place (box-definer + heal-anchor) but hidden.
     expect(img.isConnected).toBe(true);
     expect(img.style.opacity).toBe("0");
@@ -198,7 +198,7 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
     await Promise.resolve();
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(cover.querySelector("canvas#blueprint-canvas")).not.toBeNull();
+    expect(cover.querySelector("canvas")).not.toBeNull();
     expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
 
     stop();
@@ -221,8 +221,8 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
       const host = block.querySelector<HTMLElement>(".moss-blueprint-fallback");
       expect(host).not.toBeNull();
       expect(host!.getAttribute("aria-hidden")).toBe("true");
-      expect(host!.querySelector("canvas#blueprint-canvas")).not.toBeNull();
-      expect(startBlueprintGridMock).toHaveBeenCalledWith(host);
+      expect(host!.querySelector("canvas")).not.toBeNull();
+      expect(startBlueprintGridMock).toHaveBeenCalledWith(host, { canvas: host!.querySelector("canvas") });
       expect(block.style.position).toBe("relative");
       // The status role and its hidden text survive.
       expect(block.getAttribute("role")).toBe("status");

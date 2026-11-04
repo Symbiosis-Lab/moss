@@ -187,12 +187,6 @@ impl ToastPayload {
         self
     }
 
-    /// Put `label` on the message's own line as a link to `url`.
-    pub fn with_inline_link(mut self, label: impl Into<String>, url: impl Into<String>) -> Self {
-        self.inline_link = Some(ToastInlineLink { label: label.into(), url: url.into() });
-        self
-    }
-
     /// Hold the auto-dismiss countdown while the window is away — see
     /// [`ToastPayload::await_attention`].
     pub fn await_attention(mut self) -> Self {

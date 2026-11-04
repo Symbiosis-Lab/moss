@@ -6,7 +6,7 @@
 //! Data only. Nothing here places a label on a rendered map — this emitter
 //! only picks which of the pack's two label languages (`en`, `zh-Hant`) the
 //! site gets and writes them out; the places-explorer's own `labels.ts`
-//! (`crates/moss-build/src/js-src/site/places-explorer/`) reads this file
+//! (`crates/moss-build/src/js-src/site/maps/places-explorer/`) reads this file
 //! client-side to actually place one.
 //!
 //! Computing this file is cheap — a few hundred small records read straight

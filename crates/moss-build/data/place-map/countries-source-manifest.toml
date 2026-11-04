@@ -1,0 +1,27 @@
+schema = 1
+generator = "moss-country-shapes-generator"
+generator_version = "1.0.0"
+natural_earth_theme = "50m cultural"
+natural_earth_license = "Public domain; see https://www.naturalearthdata.com/about/terms-of-use/"
+projection = "longitude/latitude in WGS84; Rust owns screen projection"
+quantization = 100
+
+[[sources]]
+name = "countries"
+artifact = "ne_50m_admin_0_countries.zip"
+url = "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_admin_0_countries.zip"
+sha256 = "5fed433373581fa648920435f937d95f2d3c0200e067409c6478dcdf1b853139"
+size_bytes = 799734
+published_version = "5.1.1"
+members = ["ne_50m_admin_0_countries.shp", "ne_50m_admin_0_countries.dbf", "ne_50m_admin_0_countries.shx", "ne_50m_admin_0_countries.prj", "ne_50m_admin_0_countries.cpg"]
+layer = "countries"
+
+[[sources]]
+name = "breakaway_disputed_areas"
+artifact = "ne_50m_admin_0_breakaway_disputed_areas.zip"
+url = "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_admin_0_breakaway_disputed_areas.zip"
+sha256 = "916aa95a9ce65bb1d551cf5fe1f689d96032a3498b053487bbd4a805650f8f4d"
+size_bytes = 49928
+published_version = "5.1.1"
+members = ["ne_50m_admin_0_breakaway_disputed_areas.shp", "ne_50m_admin_0_breakaway_disputed_areas.dbf", "ne_50m_admin_0_breakaway_disputed_areas.shx", "ne_50m_admin_0_breakaway_disputed_areas.prj", "ne_50m_admin_0_breakaway_disputed_areas.cpg"]
+layer = "disputed"

@@ -20,6 +20,7 @@
 use super::grid_parts::GridParts;
 use super::shortcode::{GridShortcode, Shortcode};
 use super::url::{ResolvedUrl, UrlKind};
+pub(super) use crate::media::{html_escape_attr as escape_attr, html_escape_text as escape_text};
 
 /// Per-node-type HTML emission hooks. All methods have default
 /// implementations; consumers override only the ones they need.
@@ -146,6 +147,19 @@ pub trait RenderHooks {
         out.push_str(fallback_html);
     }
 
+    /// Emit a fenced `mermaid` block. `info` is the fence's whole info string
+    /// (`mermaid {.wide}`), `source` the block's text, `source_line` its
+    /// fence's line when the parser tracked lines, and `fallback_html` the
+    /// `<pre><code class="language-mermaid">` every other code block gets.
+    ///
+    /// Default impl: emit `fallback_html`, so this crate stays free of any
+    /// diagram engine. moss-build draws the diagram to SVG and falls back to
+    /// `fallback_html` when it cannot.
+    fn render_diagram(&self, out: &mut String, info: &str, source: &str, source_line: Option<usize>, fallback_html: &str) {
+        let _ = (info, source, source_line);
+        out.push_str(fallback_html);
+    }
+
     /// Optional [`AssetSnapshot`] for the gallery synth path.
     ///
     /// Phase 2E v5 PR3 (2026-05-26): when the impl returns
@@ -173,6 +187,11 @@ pub trait RenderHooks {
     /// The production HTML for a `:::subscribe` form, when the host supplies
     /// one; `None` leaves `render_shortcode` on its skeleton.
     fn subscribe_form_html(&self, _args: &crate::ast::shortcode::SubscribeShortcode) -> Option<String> {
+        None
+    }
+
+    /// The production HTML for a `:::form`, when the host supplies one.
+    fn request_form_html(&self, _args: &crate::ast::extract_form::FormShortcode) -> Option<String> {
         None
     }
 
@@ -211,6 +230,12 @@ pub trait RenderHooks {
                 out.push_str("</div>");
                 out.push_str("</div>");
             }
+            Shortcode::Form(args) => match self.request_form_html(args) {
+                Some(html) => out.push_str(&html),
+                // Test-harness skeleton, like `Recent`'s: the contract test renders
+                // each authorable example and looks for its root class.
+                None => out.push_str(r#"<div class="moss-form"></div>"#),
+            },
             Shortcode::Gallery(args) => {
                 let mut class_attr = String::from("moss-gallery");
                 if !args.classes.is_empty() {
@@ -546,14 +571,12 @@ pub trait RenderHooks {
                     }
                 }
                 if !args.overlay.is_empty() {
-                    // Phase 4 PR4.5 (2026-05-28): overlay is now typed
-                    // `Vec<Block>`. Render via `render_blocks` then
-                    // collapse tag-adjacent newlines so the byte shape
-                    // matches today's `render_markdown_to_html_with`
-                    // production (pulldown-cmark's `push_html` emits no
-                    // tag-adjacent newlines).
+                    // Render via `render_blocks`, then collapse
+                    // tag-adjacent newlines to match the byte shape of
+                    // `render_markdown_to_html_with` (pulldown-cmark's
+                    // `push_html` emits none).
                     //
-                    // `DefaultHooks::hero_overlay` suppresses
+                    // `DefaultHooks::without_heading_anchors` suppresses
                     // moss-heading-anchor on overlay headings. We rebuild
                     // DefaultHooks from gallery_assets() rather than coercing
                     // `self` to `&dyn RenderHooks` — the coercion requires
@@ -640,10 +663,9 @@ pub trait RenderHooks {
     /// `# Title` in the body just as much as the auto-injected article
     /// title (which skips this hook entirely; see [`RenderHooks::render_heading`]).
     /// Overrides only narrow further, never widen past `level == 1`:
-    /// [`DefaultHooks::hero_overlay`]/[`grid_cells`](DefaultHooks::grid_cells)
-    /// say no at every level (a card/hero heading is a display title
-    /// regardless of level), and a hosting site can do the same for a
-    /// specific page (e.g. the home page).
+    /// [`DefaultHooks::without_heading_anchors`] says no at every level (a
+    /// card/hero heading is a display title regardless of level), and a
+    /// hosting site can do the same for a specific page (e.g. the home page).
     ///
     /// A policy hook rather than a `render_heading` override — same shape
     /// as [`emit_footnote_anchors`](RenderHooks::emit_footnote_anchors) —
@@ -698,7 +720,7 @@ pub trait RenderHooks {
         source_line: Option<usize>,
         content: &str,
     ) {
-        let HeadingMarks { id, contents_end, contents_label } = marks;
+        let HeadingMarks { id, legacy_id, contents_end, contents_label } = marks;
         out.push('<');
         out.push('h');
         out.push((b'0' + level) as char);
@@ -720,6 +742,11 @@ pub trait RenderHooks {
             let _ = write!(out, r#" data-source-line="{}""#, n);
         }
         out.push('>');
+        if let Some(old) = legacy_id {
+            out.push_str(r#"<span id=""#);
+            out.push_str(&escape_attr(old));
+            out.push_str("\"></span>");
+        }
         out.push_str(&crate::heading::range::keep_ranges_together(content));
         // Permalink anchor — only when the heading has a slug id AND
         // `emit_heading_anchors(level)` says yes (never for level 1 by
@@ -757,6 +784,12 @@ pub trait RenderHooks {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HeadingMarks<'a> {
     pub id: Option<&'a str>,
+    /// The id the heading had before punctuation was dropped from ids: an
+    /// empty element carrying it opens the heading, so a stored `#old-id`
+    /// link lands here. Inside the heading, so sibling selectors
+    /// (`:first-child`, `+ h2`) see the same tree; empty, so nothing reads
+    /// or announces it and the contents list never meets it.
+    pub legacy_id: Option<&'a str>,
     pub contents_end: bool,
     pub contents_label: Option<&'a str>,
 }
@@ -791,7 +824,7 @@ pub struct DefaultHooks<'a> {
     grid_cell_sizes: std::cell::RefCell<Vec<String>>,
     /// Display-title mode: suppress the `moss-heading-anchor` permalink.
     /// Stored negated so `#[derive(Default)]` still means "anchors on".
-    /// Set by [`DefaultHooks::hero_overlay`] and [`DefaultHooks::grid_cells`].
+    /// Set by [`DefaultHooks::without_heading_anchors`].
     suppress_heading_anchors: bool,
     /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
     vertical: bool,
@@ -805,6 +838,19 @@ pub struct DefaultHooks<'a> {
     /// Replaces the skeleton the `Subscribe` arm emits; see
     /// [`DefaultHooks::with_subscribe_form`].
     subscribe_form: Option<SubscribeFormFn<'a>>,
+    /// Replaces the skeleton the `Form` arm emits; see
+    /// [`DefaultHooks::with_request_form`].
+    request_form: Option<RequestFormFn<'a>>,
+}
+
+/// Renders a `:::form` shortcode to its production HTML.
+#[derive(Clone, Copy)]
+pub struct RequestFormFn<'a>(pub &'a dyn Fn(&crate::ast::extract_form::FormShortcode) -> String);
+
+impl std::fmt::Debug for RequestFormFn<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RequestFormFn")
+    }
 }
 
 /// Renders a `:::subscribe` shortcode to its production HTML.
@@ -823,6 +869,12 @@ impl<'a> DefaultHooks<'a> {
     /// grid cell, which renders through this instance, is not the skeleton.
     pub fn with_subscribe_form(mut self, render: SubscribeFormFn<'a>) -> Self {
         self.subscribe_form = Some(render);
+        self
+    }
+
+    /// Same as [`DefaultHooks::with_subscribe_form`], for `:::form`.
+    pub fn with_request_form(mut self, render: RequestFormFn<'a>) -> Self {
+        self.request_form = Some(render);
         self
     }
 
@@ -868,42 +920,19 @@ impl<'a> DefaultHooks<'a> {
         }
     }
 
-    /// Hooks for rendering the blocks of a `:::hero` overlay: identical to
-    /// the normal hooks except headings carry no permalink anchor (hero
-    /// headings are display titles, not navigation landmarks).
+    /// Hooks whose headings carry no permalink anchor, for the blocks of a
+    /// `:::hero` overlay and of a `:::grid` cell: a heading there is a display
+    /// title, not a section a reader deep-links to, and inside a card a `#`
+    /// lands mid-tile. Suppressing outright also means a site's
+    /// `heading_anchors` setting and the anchor's localized label, which a
+    /// delegated render cannot see, can never be wrong here.
     ///
     /// `assets` is the caller's snapshot, if any — the same `None`/`Some`
     /// split as [`new`](Self::new) / [`with_snapshot`](Self::with_snapshot).
     ///
-    /// This replaced a `HeroOverlayHooks` wrapper that re-implemented
-    /// `RenderHooks` by forwarding to an inner impl. Forwarding was manual, so
-    /// the wrapper silently dropped every hook nobody remembered to list —
-    /// which is how image embeds inside hero overlays lost their
-    /// `object-fit`/`object-position`. A construction mode on the one impl has
-    /// no forwarding surface to get wrong.
-    pub fn hero_overlay(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
-        Self {
-            assets,
-            suppress_heading_anchors: true,
-            ..Self::default()
-        }
-    }
-
-    /// Hooks for rendering the blocks of a `:::grid` cell. Same reasoning as
-    /// [`hero_overlay`](Self::hero_overlay): a heading in a cell is that
-    /// card's title, not a section of the page. Nobody deep-links to a card
-    /// the way they deep-link to a section, so the `#` is clutter — and it is
-    /// worse than clutter inside a card, where it lands in the middle of a
-    /// tile rather than in the margin of a text column.
-    ///
-    /// It also closes a hole. Grid cells render through `DefaultHooks`, whose
-    /// trait defaults said anchors-on and English-label, so a cell heading
-    /// carried a `#` even on a site with `[site].heading_anchors = false`, and
-    /// carried `aria-label="Permalink to this section"` on a zh-tw site. Both
-    /// were invisible from moss-build's side, which reads its own
-    /// `PipelineHooks` overrides and never sees the ones a delegated render
-    /// uses. Suppressing outright means neither setting can be wrong here.
-    pub fn grid_cells(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
+    /// A construction mode rather than a wrapper over `RenderHooks`: a
+    /// forwarding wrapper silently drops every hook it does not list.
+    pub fn without_heading_anchors(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
         Self {
             assets,
             suppress_heading_anchors: true,
@@ -917,6 +946,10 @@ const GALLERY_LINK_TEMPLATE_EN: &str = "Open image {n} of {m}";
 impl<'a> RenderHooks for DefaultHooks<'a> {
     fn subscribe_form_html(&self, args: &crate::ast::shortcode::SubscribeShortcode) -> Option<String> {
         self.subscribe_form.map(|render| (render.0)(args))
+    }
+
+    fn request_form_html(&self, args: &crate::ast::extract_form::FormShortcode) -> Option<String> {
+        self.request_form.map(|render| (render.0)(args))
     }
 
     fn gallery_link_template(&self) -> &str {
@@ -1069,7 +1102,7 @@ fn push_bare_img(
     out.push_str(" />");
 }
 
-/// Render hero overlay blocks into `out` via [`DefaultHooks::hero_overlay`]
+/// Render hero overlay blocks into `out` via [`DefaultHooks::without_heading_anchors`]
 /// so that headings inside the overlay don't carry a `moss-heading-anchor`
 /// permalink.
 ///
@@ -1090,7 +1123,7 @@ fn render_hero_overlay_blocks(
     metas: &[super::document::BlockMeta],
     out: &mut String,
 ) {
-    super::render::render_blocks_with_meta(&DefaultHooks::hero_overlay(snapshot), out, blocks, metas);
+    super::render::render_blocks_with_meta(&DefaultHooks::without_heading_anchors(snapshot), out, blocks, metas);
 }
 
 /// Collapse `\n` that follows a heading or paragraph closing tag when the
@@ -1160,51 +1193,11 @@ fn ends_with_paragraph_close(s: &str) -> bool {
     s.ends_with("</p>")
 }
 
-/// Escape `&"<>` for HTML attribute values.
-pub(super) fn escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Escape `&<>` for HTML text content. Mirrors pulldown-cmark's text
-/// escape (it does NOT escape `"` in text — only in attributes).
-pub(super) fn escape_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::node::Inline;
     use crate::ast::url::Url;
-
-    #[test]
-    fn escape_attr_handles_all_unsafe_chars() {
-        assert_eq!(escape_attr(r#"&"<>"#), "&amp;&quot;&lt;&gt;");
-    }
-
-    #[test]
-    fn escape_text_does_not_quote_double_quote() {
-        assert_eq!(escape_text(r#"hi "there" & y"#), r#"hi "there" &amp; y"#);
-    }
 
     #[test]
     fn default_hooks_render_heading_emits_id() {
@@ -2092,7 +2085,7 @@ mod tests {
         // carry moss-heading-anchor when rendered through DefaultHooks
         // (the moss-core test-harness path). The DefaultHooks::render_shortcode
         // Hero arm delegates overlay rendering to render_hero_overlay_blocks
-        // which uses `DefaultHooks::hero_overlay`. This test covers that path.
+        // which uses `DefaultHooks::without_heading_anchors`. This test covers that path.
         use crate::ast::shortcode::{HeroShortcode, Shortcode};
         use crate::ast::{parse, Url, UrlKind, ResolvedUrl};
         let overlay_blocks = parse("# Understanding climate extremes\n\nSubtitle.").blocks;

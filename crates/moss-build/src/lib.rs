@@ -36,6 +36,7 @@ pub mod vault_root;
 // mirror the app crate's: `build`, `i18n`, `types`, `tasks`, and the partial
 // families below. The desktop app re-exports each at its old path.
 pub mod build;
+pub mod commands;
 // The editor backend: resolve/tree/content/source-asset cores the
 // HTTP command carrier calls; the app keeps the Tauri wrappers + shims.
 pub mod editor;

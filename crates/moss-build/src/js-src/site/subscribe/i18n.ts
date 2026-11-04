@@ -27,7 +27,7 @@ export const COPY: Record<Lang, SubscribeCopy> = {
     placeholder: 'your@email.com',
     label: 'Subscribe',
     checkEmail: 'Check your email to confirm.',
-    alreadySubscribed: "You're already subscribed.",
+    alreadySubscribed: "You’re already subscribed.",
     error: 'Something went wrong. Try again?',
   },
   de: {

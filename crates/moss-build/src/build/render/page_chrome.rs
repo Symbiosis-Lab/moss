@@ -150,6 +150,9 @@ impl PageChromeContext<'_, '_> {
         let analytics_home = if generated {
             self.documents.iter().find(|d| d.url_path == "index.html")
         } else { homepage };
+        let column = |w: &String| crate::build::page::default_width::column_preset(w).to_string();
+        let page_width = doc.and_then(|d| d.content_width.as_ref()).map(column);
+        let site_width = self.layout.content_width.as_ref().map(column);
         ShellVars {
             title: String::new(),
             css_path: paths.css_path(), js_path: paths.js_path(),
@@ -185,7 +188,7 @@ impl PageChromeContext<'_, '_> {
             theme_importmap,
             has_sidebar_layout: self.has_sidebar_layout,
             runtime_js_tags: self.assets.scripts.shell_tags(&self.layout.assets, paths),
-            content_width_attr: resolve_data_attr(doc.and_then(|d| d.content_width.as_ref()), self.layout.content_width.as_ref(), "content-width", None),
+            content_width_attr: resolve_data_attr(page_width.as_ref(), site_width.as_ref(), "content-width", None),
             typesetting_attr: resolve_data_attr(doc.and_then(|d| d.typesetting.as_ref()), self.layout.typesetting.as_ref(), "typesetting", Some("horizontal")),
             comments_attr: resolve_comments_attr(doc.and_then(|d| d.comments), self.layout.comments),
             homepage_content: String::new(), latest_list: None, latest_sidebar: None,

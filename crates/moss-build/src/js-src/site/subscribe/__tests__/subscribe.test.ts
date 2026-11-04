@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 import { hydrateSubscribeForm } from '../subscribe.js';
 import { COPY, langBucket } from '../i18n.js';
+import { VERIFYING } from '../captcha.js';
 
 function mount(lang = 'en'): HTMLFormElement {
   document.documentElement.lang = lang;
@@ -200,7 +201,7 @@ describe('hydrateSubscribeForm', () => {
     expect(form.dataset.state).toBe('idle');
   });
 
-  test('auto-reverts to idle after 4s and clears the input', async () => {
+  test('success stays well past 4s: the confirm instruction is not timed out', async () => {
     vi.useFakeTimers();
     try {
       const form = mount('en');
@@ -212,12 +213,47 @@ describe('hydrateSubscribeForm', () => {
       form.requestSubmit();
       await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
 
-      vi.advanceTimersByTime(4000);
-      expect(form.dataset.state).toBe('idle');
-      expect(input.value).toBe('');
+      vi.advanceTimersByTime(60_000);
+      expect(form.dataset.state).toBe('success');
+      expect(input.value).toBe('test@example.com');
+      const span = form.querySelector<HTMLElement>('[data-copy="check-email"]')!;
+      expect(span.hidden).toBe(false);
+      expect(span.textContent).toBe(COPY.en.checkEmail);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test('typing in the field after success returns the form to idle and keeps what was typed', async () => {
+    const form = mount('en');
+    hydrateSubscribeForm(form);
+    const input = form.querySelector<HTMLInputElement>('input')!;
+    input.value = 'test@example.com';
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
+
+    form.requestSubmit();
+    await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
+
+    input.value = 'test@example.co';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(form.dataset.state).toBe('idle');
+    expect(input.value).toBe('test@example.co');
+    expect(form.querySelector('button')!.hasAttribute('aria-disabled')).toBe(false);
+  });
+
+  test('typing while idle or after an error changes nothing', async () => {
+    const form = mount('en');
+    hydrateSubscribeForm(form);
+    const input = form.querySelector<HTMLInputElement>('input')!;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(form.dataset.state).toBe('idle');
+
+    input.value = 'x@example.com';
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 500 }));
+    form.requestSubmit();
+    await vi.waitFor(() => expect(form.dataset.state).toBe('error'));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(form.dataset.state).toBe('error');
   });
 
   test('tap-to-revert: clicking the circle in success state returns to idle', async () => {
@@ -235,7 +271,7 @@ describe('hydrateSubscribeForm', () => {
     expect(input.value).toBe('');
   });
 
-  test('alreadySubscribed branch also auto-reverts', async () => {
+  test('alreadySubscribed branch also stays until the reader acts', async () => {
     vi.useFakeTimers();
     try {
       const form = mount('en');
@@ -245,8 +281,9 @@ describe('hydrateSubscribeForm', () => {
 
       form.requestSubmit();
       await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
-      vi.advanceTimersByTime(4000);
-      expect(form.dataset.state).toBe('idle');
+      vi.advanceTimersByTime(60_000);
+      expect(form.dataset.state).toBe('success');
+      expect(form.querySelector<HTMLElement>('[data-copy="already-subscribed"]')!.textContent).toBe('You\u2019re already subscribed.');
     } finally {
       vi.useRealTimers();
     }
@@ -309,29 +346,6 @@ describe('hydrateSubscribeForm', () => {
     form.requestSubmit();
     await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
     expect(slot.style.width).toBe('96px');
-  });
-
-  test('revert is a no-op on a detached form — stale timer cannot clobber state', async () => {
-    vi.useFakeTimers();
-    try {
-      const form = mount('en');
-      hydrateSubscribeForm(form);
-      const input = form.querySelector<HTMLInputElement>('input')!;
-      input.value = 'detached@example.com';
-      fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
-
-      form.requestSubmit();
-      // Flush microtasks so the fetch resolves and the 4s timer is set.
-      await vi.waitFor(() => expect(form.dataset.state).toBe('success'));
-
-      form.remove();
-      vi.advanceTimersByTime(4000);
-      // The timer fired but the isConnected guard in revertToIdle should have
-      // left data-state untouched on the detached node.
-      expect(form.dataset.state).toBe('success');
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
 
@@ -396,5 +410,89 @@ describe('subscribe preview mode', () => {
     expect(span.hidden).toBe(false);
     expect(span.textContent).toBe(COPY.en.checkEmail);
     expect(form.querySelector<HTMLElement>('.moss-subscribe-status')!.dataset.state).toBe('check-email');
+  });
+});
+
+describe('the service asks for its bot check', () => {
+  const CAPTCHA = 'https://api.example.com/captcha/';
+  let posts: number;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    posts = 0;
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      posts += 1;
+      return posts === 1
+        ? new Response(JSON.stringify({ need_captcha: true, captcha_url: CAPTCHA }), { status: 403 })
+        : new Response(JSON.stringify({ subscribed: true, confirmationSent: true }));
+    });
+  });
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+  const tell = (state: string) =>
+    window.dispatchEvent(new MessageEvent('message', { data: { moss_captcha: state }, source: dialog()!.querySelector('iframe')!.contentWindow }));
+  const submit = async (): Promise<HTMLFormElement> => {
+    const form = mount('en');
+    hydrateSubscribeForm(form);
+    form.querySelector('input')!.value = 'reader@example.org';
+    form.requestSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+    return form;
+  };
+
+  test('loads the captcha page out of sight and subscribes once it passes', async () => {
+    const form = await submit();
+    const frame = dialog()!.querySelector('iframe')!;
+    expect(frame.src).toContain(CAPTCHA + '?quiet=1&t=');
+    expect(frame.title).toBe(VERIFYING.en);
+    expect(dialog()!.style.visibility).toBe('hidden');
+    expect(form.dataset.state).toBe('loading');
+
+    tell('passed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(2);
+    expect(form.dataset.state).toBe('success');
+    expect(dialog()).toBeNull();
+  });
+
+  test('shows the check only when Turnstile needs the reader, and takes focus then', async () => {
+    await submit();
+    tell('interactive');
+    expect(dialog()!.style.visibility).toBe('');
+    expect(dialog()!.contains(document.activeElement)).toBe(true);
+  });
+
+  test('a failed check shows the form error, with no retry', async () => {
+    const form = await submit();
+    tell('failed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    expect(form.dataset.state).toBe('error');
+    expect(dialog()).toBeNull();
+  });
+
+  test('Escape inside the check, reported by the page, closes it like Escape outside', async () => {
+    const form = await submit();
+    tell('interactive');
+    tell('cancelled');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(form.dataset.state).toBe('idle');
+    expect(posts).toBe(1);
+    expect(dialog()).toBeNull();
+  });
+
+  test('closing the check returns the form to idle without an error', async () => {
+    const form = await submit();
+    tell('interactive');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(form.dataset.state).toBe('idle');
+    expect(posts).toBe(1);
+    expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.hidden).toBe(true);
   });
 });

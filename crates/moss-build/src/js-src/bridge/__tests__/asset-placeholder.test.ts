@@ -249,7 +249,7 @@ describe("place — paints the blueprint without destroying identity", () => {
     document.documentElement.setAttribute("data-theme", "dark");
     const img = bare("/assets/photo.webp");
     fail(img);
-    // Dark grid lines are blueprint-grid.ts's dark blue, %235a9bff.
+    // Dark grid lines are the grid package's dark blue, %235a9bff.
     expect(img.getAttribute("src")).toContain("%235a9bff");
   });
 

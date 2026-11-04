@@ -625,6 +625,10 @@ fn test_breadcrumb_renders_when_enabled_on_homepage() {
         "Should render breadcrumb separators"
     );
     assert!(
+        nav_html.contains(r#"<span class="breadcrumb-separator" aria-hidden="true">/</span>"#),
+        "a separator is a visual delimiter, not text a screen reader should announce: {nav_html}"
+    );
+    assert!(
         !nav_html.contains("breadcrumb-current"),
         "Current page should not appear in breadcrumb"
     );
@@ -2628,7 +2632,7 @@ fn island_trail_reuses_the_mastheads_breadcrumb_classes() {
     assert!(island.contains(r#"class="site-name""#), "got: {island}");
     assert!(island.contains(r#"class="breadcrumb-segment""#), "got: {island}");
     assert!(island.contains(r#"<span class="breadcrumb-label">Posts</span>"#), "got: {island}");
-    assert!(island.contains(r#"<span class="breadcrumb-separator">/</span>"#), "got: {island}");
+    assert!(island.contains(r#"<span class="breadcrumb-separator" aria-hidden="true">/</span>"#), "got: {island}");
 }
 
 #[test]

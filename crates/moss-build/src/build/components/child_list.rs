@@ -17,6 +17,49 @@ use crate::build::assets::paths::PathResolver;
 use crate::build::media::cover::{detect_cover_type, html_escape, CoverType};
 use crate::build::types::ParsedDocument;
 
+/// The language of a listed page that differs from the listing page's: the page's
+/// BCP 47 tag for `lang=` on its title and description, and the mark naming it in
+/// the listing page's interface language.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowLang {
+    pub tag: String,
+    /// Language name in the listing page's interface language; empty for an unknown tag.
+    pub name: &'static str,
+    /// The listing page's tag, which the mark's text is in.
+    pub listing_tag: String,
+}
+
+impl RowLang {
+    /// Set when `doc` is written in another language than the page listing it.
+    pub(crate) fn between(
+        doc: &ParsedDocument,
+        listing_tag: &str,
+        ui: crate::i18n::Language,
+    ) -> Option<RowLang> {
+        let tag = doc.lang_tag.as_deref().unwrap_or_else(|| doc.lang.as_bcp47_attr());
+        (!tag.eq_ignore_ascii_case(listing_tag)).then(|| RowLang {
+            tag: tag.to_string(),
+            name: crate::i18n::language_name(ui, tag),
+            listing_tag: listing_tag.to_string(),
+        })
+    }
+}
+
+/// ` lang="de"` for an element holding a page's words in another language, or nothing.
+pub(crate) fn lang_attr(lang: Option<&RowLang>) -> String {
+    lang.map(|l| format!(r#" lang="{}""#, html_escape(&l.tag))).unwrap_or_default()
+}
+
+/// The small mark naming a row's language, or nothing for a row in the listing's own.
+pub(crate) fn lang_mark(lang: Option<&RowLang>) -> String {
+    match lang {
+        Some(l) if !l.name.is_empty() => {
+            format!(r#"<span class="moss-lang-mark" lang="{}">{}</span>"#, html_escape(&l.listing_tag), l.name)
+        }
+        _ => String::new(),
+    }
+}
+
 /// Properties for rendering an article list item
 #[derive(Debug, Clone, Default)]
 pub struct ArticleListItemProps {
@@ -47,6 +90,8 @@ pub struct ArticleListItemProps {
     pub subtitle: Option<String>,
     /// Source path of the page this row stands for (`ParsedDocument::source_path`).
     pub source_file: Option<String>,
+    /// Set when the page is in another language than the listing.
+    pub lang: Option<RowLang>,
 }
 
 impl ArticleListItemProps {
@@ -143,7 +188,7 @@ pub fn render(
             root_attrs(props.source_file.as_deref(), props.when),
             html_escape(&props.url),
             title_with_subtitle(
-                format!(r#"<span class="moss-prefix-link-title title">{}</span>"#, html_escape(&props.title)),
+                format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
                 props.subtitle.as_deref(),
             )
         );
@@ -187,7 +232,7 @@ pub fn render(
         html_escape(&props.url),
         prefix,
         title_with_subtitle(
-            format!(r#"<span class="moss-prefix-link-title title">{}</span>"#, html_escape(&props.title)),
+            format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
             props.subtitle.as_deref(),
         )
     )
@@ -268,6 +313,8 @@ pub struct ChildItemProps {
     pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
     /// The page's `subtitle:` ([`card_subtitle`]), drawn under the title.
     pub subtitle: Option<String>,
+    /// Set when the page is in another language than the listing.
+    pub lang: Option<RowLang>,
 }
 
 impl ChildItemProps {
@@ -331,6 +378,9 @@ fn with_place_html(date_html: &str, place: Option<&str>) -> String {
     }
 }
 
+/// The dot between the parts of a card's meta line.
+pub(crate) const EVENT_SEP: &str = r#"<span class="moss-event-sep"> · </span>"#;
+
 /// A leaf's date-and-place text: the event's `<time>` when it has one, else
 /// the date markup (`date_html`, already escaped and `<time>`-wrapped by
 /// whoever produced it), then the page's listed names when a term kind shows
@@ -343,7 +393,7 @@ pub(crate) fn leaf_meta(date_html: &str, when_html: Option<&str>, place: Option<
     match credits {
         None => base,
         Some(c) if base.is_empty() => c.to_string(),
-        Some(c) => format!(r#"{}<span class="moss-event-sep"> · </span>{}"#, base, c),
+        Some(c) => format!("{base}{EVENT_SEP}{c}"),
     }
 }
 
@@ -354,8 +404,7 @@ fn with_event_place(time_html: &str, place: Option<&str>) -> String {
     match place.map(str::trim).filter(|p| !p.is_empty()) {
         None => time_html.to_string(),
         Some(p) => format!(
-            r#"{}<span class="moss-event-sep"> · </span><span class="moss-event-place">{}</span>"#,
-            time_html,
+            r#"{time_html}{EVENT_SEP}<span class="moss-event-place">{}</span>"#,
             html_escape(p),
         ),
     }
@@ -537,18 +586,19 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
             let mut html = crate::build::components::event_meta::render_when(e.start, e.end, doc.lang);
             let mark = crate::build::components::event_meta::upcoming_mark(e, doc.lang, now);
             if !mark.is_empty() {
-                html.push_str(r#"<span class="moss-event-sep"> · </span>"#);
+                html.push_str(EVENT_SEP);
                 html.push_str(&mark);
             }
             html
         }),
         when,
-        credits: doc.card_credits.clone(),
+        credits: doc.card_extras.clone(),
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
         online: doc.event.as_ref().and_then(|e| e.online.clone()),
         section_color: doc.section.clone(),
         source_file: doc.source_path.clone(),
         subtitle: card_subtitle(doc),
+        lang: None,
     }
 }
 
@@ -617,14 +667,14 @@ fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: 
             format!(r#"<div class="{row_class}">"#),
             format!(
                 "{}{}",
-                title_with_subtitle(format!(r#"<span class="{title_class}">{}</span>"#, links.title), props.subtitle.as_deref()),
+                title_with_subtitle(format!(r#"<span class="{title_class}"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), links.title, lang_mark(props.lang.as_ref())), props.subtitle.as_deref()),
                 links.actions
             ),
             "</div>",
         ),
         None => (
             format!(r#"<a href="{}" class="{row_class}">"#, html_escape(&props.url)),
-            title_with_subtitle(format!(r#"<span class="{title_class}">{}</span>"#, html_escape(&props.title)), props.subtitle.as_deref()),
+            title_with_subtitle(format!(r#"<span class="{title_class}"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())), props.subtitle.as_deref()),
             "</a>",
         ),
     }
@@ -655,8 +705,8 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             // Folder WITH description: title + count suffix, description below
             let (open, title, close) = row_parts(props, event, "moss-prefix-link moss-folder-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card moss-folder-item"{}>{}{}{}{}<p class="moss-folder-description">{}</p></div>"#,
-                props.root_attrs(), open, title, meta_span("moss-prefix-link-suffix"), close,
+                r#"<div class="moss-card moss-folder-item"{}>{}{}{}{}<p class="moss-folder-description"{}>{}</p></div>"#,
+                props.root_attrs(), open, title, meta_span("moss-prefix-link-suffix"), close, lang_attr(props.lang.as_ref()),
                 crate::build::page::meta::render_description_html(desc)
             )
         } else {
@@ -691,11 +741,13 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             props.root_attrs(), open, date, title, close
         )
     } else {
-        // Article without any date
+        // Article without any date: its meta (event time, place, credits and card fields), when it has any.
+        let meta = leaf_meta("", props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
+        let prefix = if meta.is_empty() { String::new() } else { format!(r#"<span class="moss-prefix-link-prefix date">{meta}</span>"#) };
         format!(
-            r#"<div class="moss-card"{}>{}{}{}</div>"#,
-            props.root_attrs(), open, title, close
+            r#"<div class="moss-card"{}>{}{}{}{}</div>"#,
+            props.root_attrs(), open, prefix, title, close
         )
     }
 }

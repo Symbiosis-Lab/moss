@@ -89,11 +89,7 @@ pub struct FrontmatterSpan {
 pub fn frontmatter_span(content: &str) -> Option<FrontmatterSpan> {
     // A BOM before the opening delimiter is invisible to authors and to every
     // editor; it must not decide whether a file has frontmatter.
-    let start = if content.starts_with('\u{feff}') {
-        '\u{feff}'.len_utf8()
-    } else {
-        0
-    };
+    let start = bom_len(content);
     // Char-aligned: `start` is 0 or the length of the leading BOM char.
     #[allow(clippy::string_slice)]
     let rest = &content[start..];
@@ -105,6 +101,26 @@ pub fn frontmatter_span(content: &str) -> Option<FrontmatterSpan> {
         return yaml_span(content, start);
     }
     simplified_span(content, start)
+}
+
+/// Length of a leading UTF-8 byte-order mark: 3, or 0 without one. Windows
+/// tools still write it; it is the file's encoding marker, never text.
+pub fn bom_len(content: &str) -> usize {
+    if content.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    }
+}
+
+/// The page's text without its frontmatter, in either dialect, or without the
+/// byte-order mark when it has none: what an embed transcludes and where a
+/// first-line heading is found.
+pub fn body(content: &str) -> &str {
+    let start = frontmatter_span(content).map_or_else(|| bom_len(content), |span| span.body);
+    // Char-aligned: a line-boundary offset from the splitter, or the BOM's length.
+    #[allow(clippy::string_slice)]
+    &content[start..]
 }
 
 fn yaml_span(content: &str, start: usize) -> Option<FrontmatterSpan> {
@@ -285,9 +301,12 @@ pub fn parse(content: &str) -> ParsedDocument {
         content
     };
 
+    // Left in the body, a BOM sits before the first block and a first-line
+    // `# Heading` is no longer one. Char-aligned: the BOM's length.
+    #[allow(clippy::string_slice)]
     let none = || ParsedDocument {
         frontmatter: HashMap::new(),
-        body: content.to_string(),
+        body: content[bom_len(content)..].to_string(),
         frontmatter_range: None,
         frontmatter_error: None,
     };
@@ -875,7 +894,7 @@ pub fn edit_fields(content: &str, edits: &[FieldEdit]) -> Result<String, String>
         if lines.is_empty() {
             return Ok(content.to_string());
         }
-        let bom = if content.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
+        let bom = bom_len(content);
         #[allow(clippy::string_slice)]
         // `bom` is 0 or the length of the leading BOM char.
         return Ok(format!("{}---{newline}{lines}---{newline}{}", &content[..bom], &content[bom..]));

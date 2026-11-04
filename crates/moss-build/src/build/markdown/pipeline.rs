@@ -225,27 +225,28 @@ fn children_count_warning(file_path: &str, count: Option<&moss_core::frontmatter
         .map(|_| format!("[{file_path}] frontmatter: children_count has no {{n}}, so every folder card shows the same text"))
 }
 
-/// Warnings for frontmatter keys that name another generator's field.
-///
-/// Unknown keys are normally silent, rightly — templates and plugins read their
-/// own. The exception is a name that means "do this job" elsewhere and does
-/// nothing here: `slug:` (Hugo/Jekyll/Zola/Astro) is moss's `url:` and was
-/// ignored without a word. Nothing else covers this at build time —
-/// `validate_frontmatter`'s only caller is the editor, so authoring in Obsidian
-/// or vim got no signal at all. Table (shared with that editor hint):
-/// [`moss_core::validation::foreign_field_suggestion`]. Pure so the wiring is
-/// testable; phrased as a question because a template may read its own `image:`.
+/// Warnings for frontmatter keys that name another generator's field (`slug:`
+/// is moss's `url:`). Unknown keys are otherwise silent, since templates and
+/// plugins read their own; a key the site declares in `[fields.*]` is its own by
+/// definition. Table, shared with the editor hint:
+/// [`moss_core::validation::foreign_field_suggestion`].
 fn foreign_frontmatter_warnings(
     file_path: &str,
     keys: &[&str],
     values: &std::collections::HashMap<String, serde_yaml::Value>,
+    declared: &[moss_core::fields::FieldDecl],
 ) -> Vec<String> {
     keys.iter()
-        .filter_map(|key| {
-            moss_core::validation::foreign_field_warning(key, values.get(*key))
-                .map(|w| format!("[{file_path}] frontmatter: {w}"))
-        })
+        .filter_map(|key| foreign_hint(key, values.get(*key), declared))
+        .map(|w| format!("[{file_path}] frontmatter: {w}"))
         .collect()
+}
+
+fn foreign_hint(key: &str, value: Option<&serde_yaml::Value>, declared: &[moss_core::fields::FieldDecl]) -> Option<String> {
+    if declared.iter().any(|d| d.name == key) {
+        return None;
+    }
+    moss_core::validation::foreign_field_warning(key, value)
 }
 
 /// The built-in schema, materialized once per process.
@@ -385,6 +386,9 @@ pub struct SiteMarkdown<'a> {
     /// The default edition's language as configured, not the interface language it maps to,
     /// which tells a tree in that language from an edition (`moss_core::home::root_language`).
     pub lang: &'a str,
+    /// `[services.forms] endpoint`, which request forms post to. `None` leaves
+    /// them pending. Part of the parse cache fingerprint.
+    pub forms_endpoint: Option<&'a str>,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -401,6 +405,7 @@ impl Default for SiteMarkdown<'_> {
             typesetting: None,
             fields: &[],
             lang: "en",
+            forms_endpoint: None,
         }
     }
 }
@@ -525,7 +530,7 @@ pub fn process_markdown_file(
             // parser drops unknown keys, so ask for them separately.
             let keys = moss_core::frontmatter_typed::simplified_frontmatter_keys(content);
             let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
-            for warning in foreign_frontmatter_warnings(file_path, &key_refs, &Default::default()) {
+            for warning in foreign_frontmatter_warnings(file_path, &key_refs, &Default::default(), site.fields) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
             let fm_lines = frontmatter_block_lines(content, &body);
@@ -561,7 +566,7 @@ pub fn process_markdown_file(
             for w in &warnings {
                 // A key the foreign-field table explains (`order: 3`, read as
                 // `sort` and rejected) gets that clearer warning, not both.
-                if moss_core::validation::foreign_field_warning(&w.key, parsed.frontmatter.get(&w.key)).is_some() {
+                if foreign_hint(&w.key, parsed.frontmatter.get(&w.key), site.fields).is_some() {
                     continue;
                 }
                 crate::build::cli_output::cli_warn!("[{}] frontmatter: {}", file_path, w.message);
@@ -572,7 +577,7 @@ pub fn process_markdown_file(
             // Keys another generator uses for a job moss also does. See
             // `foreign_frontmatter_warnings` for why these are not silent.
             let keys: Vec<&str> = mapping.keys().filter_map(|k| k.as_str()).collect();
-            for warning in foreign_frontmatter_warnings(file_path, &keys, &parsed.frontmatter) {
+            for warning in foreign_frontmatter_warnings(file_path, &keys, &parsed.frontmatter, site.fields) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
             // Schema validation — type mismatches, enum violations, bad dates.
@@ -644,6 +649,9 @@ pub fn process_markdown_file(
     // warning. See `html_post::prepare_markdown_source`.
     let markdown_content_raw =
         prepare_markdown_source(&markdown_content_raw, file_path, frontmatter_line_count);
+
+    let (country_map, markdown_content_raw) =
+        crate::build::place_map::country_map::resolve::prepare(file_path, markdown_content_raw, frontmatter.country_map.as_ref());
 
     // Phase 2F: warn on author-typed raw <img>/<video> HTML in markdown source.
     // After Phase 2E retires placeholder.rs, raw HTML in markdown becomes
@@ -925,10 +933,13 @@ pub fn process_markdown_file(
     // Real dir_overrides, so the snapshot's output-URL keys are the strings the
     // synthesizer probes with. An empty map re-fires the 800x600 fallback.
     let asset_snapshot = media_lookup.map(|l| l.asset_snapshot());
+    let diagram_links = std::cell::RefCell::new(Vec::new());
+    let note_links = |name: &str| resolve_note_link(name, graph?, file_path, &resolve_link, &diagram_links);
     let pipeline_hooks = PipelineHooks {
         site_id: subscribe_site,
         lang: doc_lang,
         seta_base: seta_base_resolved,
+        forms_endpoint: site.forms_endpoint,
         assets: asset_snapshot,
         media_lookup,
         permalink_section_label: crate::i18n::t(doc_lang, "permalink_section"),
@@ -939,6 +950,7 @@ pub fn process_markdown_file(
             site.typesetting,
         ) == Some("vertical"),
         leading_image: std::cell::Cell::new(None),
+        diagrams: super::diagram::PageDiagrams::new(file_path, doc_lang, Some(&note_links)),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -1254,6 +1266,8 @@ pub fn process_markdown_file(
         });
     }
     let mut body_plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
+    // A diagram's note links are dependency edges like a prose link's.
+    outgoing_links.extend(diagram_links.take());
 
     // Subscribe-form presence: read from the typed AST (descends into
     // shortcode bodies). Replaces the `has_inline_subscribe` flag the
@@ -1267,6 +1281,7 @@ pub fn process_markdown_file(
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
+    let has_forms = moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Form);
     let has_viewer = moss_core::ast::has_viewable_picture_recursive(&doc);
 
     // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
@@ -1592,7 +1607,7 @@ pub fn process_markdown_file(
         placed_fields,
         title_block: frontmatter.title_block,
         reader_controls: frontmatter.reader_controls,
-        card_credits: None,
+        card_extras: None,
         label,
         nav_label,
         title,
@@ -1652,6 +1667,7 @@ pub fn process_markdown_file(
         embedded_listing_urls: Default::default(),
         map,
         route,
+        country_map,
         children,
         children_source,
         sidebar,
@@ -1686,12 +1702,14 @@ pub fn process_markdown_file(
         hero_overlay_text,
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
+            forms: has_forms,
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
             hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,
+            diagrams: moss_core::ast::has_diagram_recursive(&doc),
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses
@@ -2046,6 +2064,7 @@ fn standalone_document_css() -> String {
         search: true,
         vertical: true,
         places_explorer: true,
+        diagrams: true,
         ..Default::default()
     };
     crate::build::emit::stylesheet::assemble(&assets)
@@ -2098,6 +2117,7 @@ fn render_markdown_to_html_with_config(
         site_id: "",
         lang: crate::i18n::Language::En,
         seta_base: "https://api.mosspub.com",
+        forms_endpoint: None,
         assets: asset_snapshot,
         media_lookup,
         permalink_section_label: crate::i18n::t(crate::i18n::Language::En, "permalink_section"),
@@ -2105,6 +2125,7 @@ fn render_markdown_to_html_with_config(
         // A fragment has no page, so no typesetting of its own.
         vertical: false,
         leading_image: std::cell::Cell::new(None),
+        diagrams: super::diagram::PageDiagrams::new("", crate::i18n::Language::En, None),
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -2200,6 +2221,8 @@ struct PipelineHooks<'a> {
     /// available (test / fragment-render paths) — those callers pass `None` to
     /// `process_markdown_file`'s `seta_url` parameter and the default is applied.
     seta_base: &'a str,
+    /// Where request forms post (`[services.forms] endpoint`).
+    forms_endpoint: Option<&'a str>,
     /// `Some` in the production path (an `AssetSnapshot` is built from
     /// the `MediaDimensionLookup` in `apply_typed_shortcodes`); `None`
     /// in test / fragment-render paths where no snapshot is in scope.
@@ -2242,6 +2265,7 @@ struct PipelineHooks<'a> {
     /// eager one), on a partial that is injected into every page, and on the
     /// fragment paths.
     leading_image: std::cell::Cell<Option<usize>>,
+    diagrams: super::diagram::PageDiagrams<'a>,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -2260,6 +2284,10 @@ impl<'a> PipelineHooks<'a> {
             args.button.as_deref(),
             self.seta_base,
         )
+    }
+
+    fn render_request_form(&self, form: &moss_core::ast::FormShortcode) -> String {
+        crate::build::features::forms::render_form(form, self.lang, self.forms_endpoint)
     }
 
     /// `DefaultHooks` bound to this render's asset snapshot, for the shortcode
@@ -2296,17 +2324,18 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     /// `Shortcode::Grid` arm and the segmented render funnel through here — one
     /// binding, one byte shape.
     ///
-    /// `grid_cells` rather than `asset_bound_hooks`: a heading in a cell is a
-    /// card title, so it carries no `#` permalink (see
-    /// [`DefaultHooks::grid_cells`]).
+    /// `without_heading_anchors` rather than `asset_bound_hooks`: a heading in
+    /// a cell is a card title, so it carries no `#` permalink.
     fn render_grid_parts(
         &self,
         args: &moss_core::ast::GridShortcode,
         source_line: Option<usize>,
     ) -> moss_core::ast::GridParts {
         let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
-        let hooks = moss_core::ast::DefaultHooks::grid_cells(self.assets)
-            .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe));
+        let form = |f: &moss_core::ast::FormShortcode| self.render_request_form(f);
+        let hooks = moss_core::ast::DefaultHooks::without_heading_anchors(self.assets)
+            .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe))
+            .with_request_form(moss_core::ast::RequestFormFn(&form));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
     }
 
@@ -2398,6 +2427,10 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         }
     }
 
+    fn render_diagram(&self, out: &mut String, _info: &str, source: &str, source_line: Option<usize>, fallback_html: &str) {
+        self.diagrams.render(out, source, source_line, fallback_html);
+    }
+
     fn render_shortcode(
         &self,
         out: &mut String,
@@ -2407,6 +2440,9 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         match sc {
             moss_core::ast::Shortcode::Subscribe(args) => {
                 out.push_str(&self.render_subscribe_form(args));
+            }
+            moss_core::ast::Shortcode::Form(args) => {
+                out.push_str(&self.render_request_form(args));
             }
             moss_core::ast::Shortcode::Grid(args) => {
                 // moss-core's own Grid arm, verbatim: the asset binding lives
@@ -2470,6 +2506,38 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
             }
         }
     }
+}
+
+/// A diagram's Obsidian note link, resolved exactly as `[[name]]` in the page
+/// would be: the same parse, graph lookup and URL classification, recording
+/// the same dependency edge into `edges`.
+fn resolve_note_link<R: Fn(&str) -> String>(
+    name: &str,
+    graph: &moss_core::content_graph::ContentGraph,
+    file_path: &str,
+    resolve_link: &R,
+    edges: &std::cell::RefCell<Vec<moss_core::resolve::OutgoingLink>>,
+) -> Option<String> {
+    if name.contains(['[', ']', '\n']) {
+        return None;
+    }
+    let mut doc = moss_core::ast::parse(&format!("[[{name}]]"));
+    let resolution = moss_core::ast::resolve_urls(&mut doc, graph, file_path);
+    if !resolution.diagnostics.is_empty() {
+        return None;
+    }
+    edges.borrow_mut().extend(resolution.outgoing);
+    let mut href = None;
+    moss_core::ast::visit_urls_mut(&mut doc, |url| {
+        let resolved = match url {
+            moss_core::ast::Url::Unresolved(raw) => classify_url_prod(raw, resolve_link),
+            resolved => resolved.clone(),
+        };
+        if let moss_core::ast::Url::Resolved(r) = resolved {
+            href.get_or_insert(r.href);
+        }
+    });
+    href
 }
 
 /// Classify a raw URL into [`moss_core::ast::Url`], decoding the three

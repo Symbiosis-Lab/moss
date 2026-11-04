@@ -172,15 +172,6 @@ impl InputEvidence {
             .collect()
     }
 
-    pub fn unresolved_for_preview(
-        &self,
-        needed_pages: &std::collections::BTreeSet<String>,
-        include_listing_metadata: bool,
-        include_places: bool,
-    ) -> Vec<String> {
-        unresolved_preview_entries(&self.snapshot(), needed_pages, include_listing_metadata, include_places, None)
-    }
-
     pub fn pending_count(&self) -> usize {
         self.snapshot().values().filter(|entry| matches!(entry.state, InputState::Pending { .. })).count()
     }
@@ -329,8 +320,8 @@ mod tests {
         evidence.pending(&places);
         evidence.pending(&media);
         let needed = std::collections::BTreeSet::new();
-        assert_eq!(evidence.unresolved_for_preview(&needed, false, false), [".moss/theme/script.js"]);
-        assert_eq!(evidence.unresolved_for_preview(&needed, false, true), [".moss/places.toml", ".moss/theme/script.js"]);
+        assert_eq!(unresolved_preview_entries(&evidence.snapshot(), &needed, false, false, None), [".moss/theme/script.js"]);
+        assert_eq!(unresolved_preview_entries(&evidence.snapshot(), &needed, false, true, None), [".moss/places.toml", ".moss/theme/script.js"]);
         assert_eq!(evidence.unresolved_structural(), [".moss/places.toml", ".moss/theme/script.js"]);
     }
 }

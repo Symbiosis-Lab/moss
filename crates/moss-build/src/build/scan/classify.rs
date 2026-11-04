@@ -323,6 +323,18 @@ pub fn holds_only_prebuilt_apps(
         && !page_paths.iter().any(|p| p.starts_with(&prefix))
 }
 
+/// The site-root `assets/` folder and every folder beneath it, while no page
+/// (`page_paths`: markdown and notebooks) lives beneath `dir`. Files kept
+/// there (a favicon, imported pictures and documents) are storage, not a
+/// section, so the folder gets no index page. A page beneath it makes it a
+/// section like any other. The exact lowercase name is the documented one;
+/// `Assets/` stays an ordinary folder.
+pub fn holds_only_storage(dir: &str, page_paths: &[&str]) -> bool {
+    let is_storage = dir == "assets" || dir.starts_with("assets/");
+    let prefix = format!("{dir}/");
+    is_storage && !page_paths.iter().any(|p| p.starts_with(&prefix))
+}
+
 /// Directories whose `index.html` is copied verbatim: those holding a source
 /// file of exactly that name inside a passthrough root. Such a directory has no
 /// room for a page of its own at its folder address, so no markdown file or

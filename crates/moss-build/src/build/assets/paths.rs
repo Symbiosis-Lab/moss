@@ -241,12 +241,6 @@ impl PathResolver {
             .to_relative_url()
     }
 
-    /// Generate root-relative permalink for a document
-    #[allow(dead_code)]
-    pub fn generate_permalink(&self, url_path: &str) -> String {
-        format!("/{}", url_path) // allow:served-path-url-construct (page permalink helper, derives user-content URL from url_path)
-    }
-
     /// Resolve a URL path to a root-relative href.
     ///
     /// Absolute URLs (`http://`, `https://`) pass through unchanged.
@@ -830,14 +824,6 @@ mod tests {
     fn test_js_path_without_cache_bust() {
         let resolver = PathResolver::new();
         assert_eq!(resolver.js_path(), "/_moss/js/theme.js");
-    }
-
-    // Permalink test
-    #[test]
-    fn test_generate_permalink() {
-        let resolver = PathResolver::new();
-        assert_eq!(resolver.generate_permalink("posts/hello/index.html"), "/posts/hello/index.html");
-        assert_eq!(resolver.generate_permalink("index.html"), "/index.html");
     }
 
     // User JS path tests

@@ -154,6 +154,25 @@ test.describe('horizontal', () => {
     });
   }
 
+  for (const width of [390, 1440]) {
+    test(`content_width: screen at ${width}px: an un-worded grid and band span the window, a {body} grid stays in the column`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/screen-page/');
+      const grid = await box(page, 'article.container > .moss-grid:not([data-width="body"])');
+      const band = await box(page, 'article.container > div.band');
+      for (const b of [grid, band]) {
+        expect(Math.abs(b.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(b.width - width)).toBeLessThanOrEqual(1);
+      }
+      const kept = await box(page, 'article.container > .moss-grid[data-width="body"]');
+      const col = await column(page);
+      expect(kept.width).toBeLessThanOrEqual(col.width + 1);
+      // The page's column is the `full` one, and the band's text keeps the reading measure.
+      expect(await page.locator('body').getAttribute('data-content-width')).toBe('full');
+      expect(await page.locator('article.container > div.band > p').evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(width);
+    });
+  }
+
   test('|wide under dir="rtl" is centred on the column too, with no sideways scroll', async ({ page }) => {
     await page.goto('/h-wide/');
     await page.evaluate(() => { document.documentElement.dir = 'rtl'; });

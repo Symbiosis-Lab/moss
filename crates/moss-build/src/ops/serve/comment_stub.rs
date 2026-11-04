@@ -43,10 +43,7 @@ pub(crate) fn stub_response(payload: &serde_json::Value) -> Option<serde_json::V
     if content.trim().is_empty() || nick.trim().is_empty() {
         return None;
     }
-    let escaped = content
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
+    let escaped = moss_core::media::html_escape_text(content);
     Some(serde_json::json!({
         "id": 0,
         "content": format!("<p>{}</p>", escaped),

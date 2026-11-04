@@ -457,7 +457,7 @@ impl PlaceMapRenderContext {
     /// `</a>` of a linked figure, never inside it. `credit`: its layers'.
     fn with_credit_slot(&self, mut svg: String, credit: &str) -> String {
         if let Some(end) = svg.rfind("</figure>").filter(|_| self.has_layers()) {
-            let credit = escape_attr(credit);
+            let credit = moss_core::media::html_escape_attr(credit);
             svg.insert_str(end, &format!(r#"<p class="moss-place-map-credit" aria-live="polite">{credit}</p>"#));
         }
         svg
@@ -502,7 +502,7 @@ impl PlaceMapRenderContext {
             svg,
             &format!(
                 "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}embed=1\" data-embed-name=\"{}\"",
-                escape_attr(name),
+                moss_core::media::html_escape_attr(name),
             ),
         );
         // JS-enabled pages hide the fallback SVG from first paint. This
@@ -791,20 +791,6 @@ impl PlaceMapTarget {
         places.sort_by_cached_key(|place| (matches!(place.precision, Precision::Exact | Precision::City), place.precision as u8, place.key.clone()));
         places
     }
-}
-
-/// Escape a plain display name for use inside a double-quoted HTML
-/// attribute value — `svg.rs`'s own `xml_escape` is `pub(super)` to that
-/// module alone, and threading a cross-module export through for one short
-/// attribute here is not worth it; every other renderer touching HTML output
-/// in this crate carries the same small local copy (`media.rs`,
-/// `embed_handlers.rs`, `markdown/html_post.rs`, …).
-fn escape_attr(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 #[cfg(test)]

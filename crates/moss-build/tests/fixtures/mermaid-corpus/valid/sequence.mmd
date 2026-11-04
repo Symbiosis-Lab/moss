@@ -1,0 +1,8 @@
+sequenceDiagram
+  participant Author
+  participant Moss
+  participant Reader
+  Author->>Moss: save page.md
+  Moss-->>Author: preview updated
+  Moss->>Reader: publish
+  Note over Moss,Reader: static HTML, no script

@@ -1,6 +1,7 @@
 //! Markdown parsing pipeline. Split out of a single larger module for size.
 
 pub mod body_plan;
+pub(crate) mod diagram;
 pub mod frontmatter;
 pub mod hero_ink;
 pub mod html_post;

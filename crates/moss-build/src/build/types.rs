@@ -341,14 +341,14 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_names: Option<String>,
-    /// The names this page shows on listing cards, pre-rendered as one
-    /// `moss-card-credits` span: every term kind with `cards = true`, its
-    /// fields in order, each name with its role. `None` when no such kind
-    /// names this page. Set by `build::terms::roles::set_card_credits` once
-    /// per build; `props_for_document` copies it into the card props.
+    /// What this page adds to a listing card's meta line, pre-rendered: a
+    /// `moss-card-credits` span for the term kinds with `cards = true` that
+    /// name it (`terms::roles::set_card_credits`), then one `moss-card-field`
+    /// span per declared `card = true` field it has a value for
+    /// (`field_places::set_card_fields`). `None` when there is nothing.
     #[serde(skip)]
     #[specta(skip)]
-    pub card_credits: Option<String>,
+    pub card_extras: Option<String>,
     /// True for a folder-index page sitting exactly at a place-typed term
     /// namespace root — an authored `places/index.md` with no `place_page:`
     /// claim, or a synthetic one when no such file exists. An authored page
@@ -391,6 +391,10 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     #[specta(skip)]
     pub embedded_listing_urls: std::collections::BTreeSet<String>,
+    /// The page's `country_map:` block read with its table; `None` for every other page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub country_map: Option<crate::build::place_map::country_map::resolve::Model>,
     /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
     /// in its existing declared order, as a route: a dashed line through the
     /// stops with numbered badges, on this page's own map and the locator
@@ -869,6 +873,9 @@ impl ParsedDocument {
 /// elsewhere on `ParsedDocument` for this purpose.
 #[derive(Debug, Clone, Default)]
 pub struct PageFeatures {
+    /// True if the page contains a `:::form`, nested ones included. Gates the forms
+    /// stylesheet and script, and tells `commerce.json` which pages to read.
+    pub forms: bool,
     /// True if the page contains a `:::subscribe` inline shortcode block.
     /// When any page in a build has this set, the email feature pass injects
     /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
@@ -902,6 +909,10 @@ pub struct PageFeatures {
     /// True if a declared field was drawn on the page. Gates the
     /// `field-places` stylesheet partial via [`SiteAssets`].
     pub field_places: bool,
+    /// True if the page has a fenced `mermaid` block
+    /// (`moss_core::ast::has_diagram_recursive`). Gates the `diagrams`
+    /// stylesheet partial via [`SiteAssets`].
+    pub diagrams: bool,
 }
 
 /// Which optional asset partials this build ships — the site-level union of
@@ -932,6 +943,8 @@ pub struct PageFeatures {
 /// row and the file disagree.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SiteAssets {
+    /// Any page has a `:::form`. Gates the `forms` stylesheet partial and `forms.js`.
+    pub forms: bool,
     /// Any page has a callout block.
     pub callouts: bool,
     /// Any page defines a footnote. Gates the sidenote runtime script — the
@@ -958,6 +971,8 @@ pub struct SiteAssets {
     pub viewer: bool,
     /// Some page draws declared fields (`place`). Gates the `field-places` stylesheet partial.
     pub field_places: bool,
+    /// Some page has a mermaid diagram. Gates the `diagrams` stylesheet partial.
+    pub diagrams: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -987,6 +1002,8 @@ pub struct SiteAssets {
     /// just carries the answer through to the `places-explorer` script/CSS
     /// gates.
     pub places_explorer: bool,
+    /// Some page is a country map, so the panel script and the map's stylesheet ship.
+    pub country_map: bool,
     /// The site declares `[map.layers]`, so its map figures carry a credit line.
     pub map_layers: bool,
     /// The site shows its own credit before moss's mark in the colophon
@@ -1014,16 +1031,19 @@ impl SiteAssets {
         // One pass, no per-page clone: `PageFeatures` is a handful of bools,
         // and this runs once per build over every page in the site.
         let mut out = Self {
+            forms: false,
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
             hero_ends: false,
             viewer: false,
             field_places: false,
+            diagrams: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
         for page in pages {
+            out.forms |= page.features.forms;
             out.callouts |= page.features.callouts;
             out.vertical |= crate::build::render::config::effective_typesetting(
                 page.typesetting.as_deref(),
@@ -1033,6 +1053,8 @@ impl SiteAssets {
             out.scroll_rows |= page.features.scroll_rows;
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
+            out.diagrams |= page.features.diagrams;
+            out.country_map |= page.country_map.is_some();
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }
         out

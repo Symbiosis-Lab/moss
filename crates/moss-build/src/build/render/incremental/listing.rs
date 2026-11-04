@@ -70,6 +70,9 @@ pub struct GroupKey {
     pub depth: Depth,
     pub scope_default_tree: bool,
     pub exclude_nav: bool,
+    /// The host's edition: a listing across editions shows a translated piece
+    /// once, in the host's edition when it has one.
+    pub edition: String,
 }
 
 impl GroupKey {
@@ -77,12 +80,14 @@ impl GroupKey {
     /// value crosses builds inside `dep-cache.json`, so its shape is a format,
     /// not a rendering convenience.
     pub fn id(&self) -> String {
+        let edition = if self.edition.is_empty() { String::new() } else { format!("|{}", self.edition) };
         format!(
-            "{}|{}|{}|{}",
+            "{}|{}|{}|{}{}",
             self.folder_slug,
             if self.depth.is_flatten() { "all" } else { "direct" },
             self.scope_default_tree as u8,
             self.exclude_nav as u8,
+            edition,
         )
     }
 }
@@ -157,6 +162,7 @@ impl ListingGroups {
                     key.depth.is_flatten(),
                     key.scope_default_tree,
                     key.exclude_nav,
+                    &key.edition,
                     documents,
                     project,
                 );
@@ -343,6 +349,7 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
             depth: Depth::from_frontmatter(doc.children_depth.as_deref(), home.depth_all),
             scope_default_tree: home.scoped,
             exclude_nav: home.scoped,
+            edition: doc.edition.clone(),
         });
     }
 
@@ -358,6 +365,7 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
             depth: Depth::from_frontmatter(doc.children_depth.as_deref(), false),
             scope_default_tree: false,
             exclude_nav: false,
+            edition: doc.edition.clone(),
         });
     }
 
@@ -374,12 +382,14 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
             depth: Depth::Direct,
             scope_default_tree: false,
             exclude_nav: false,
+            edition: doc.edition.clone(),
         });
         keys.push(GroupKey {
             folder_slug: resolve_children_source_slug(reference, documents)?,
             depth: Depth::Direct,
             scope_default_tree: false,
             exclude_nav: false,
+            edition: doc.edition.clone(),
         });
     }
 
@@ -395,6 +405,7 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
             depth: Depth::from_frontmatter(doc.children_depth.as_deref(), false),
             scope_default_tree: false,
             exclude_nav: false,
+            edition: doc.edition.clone(),
         });
     }
 
@@ -414,6 +425,7 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
                 depth: Depth::from_frontmatter(parent_doc.children_depth.as_deref(), false),
                 scope_default_tree: false,
                 exclude_nav: false,
+                edition: doc.edition.clone(),
             });
         }
     }

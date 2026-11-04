@@ -66,7 +66,7 @@ Inspect built HTML under `.moss/build.nosync/current/` (the active frozen genera
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
-**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `--strict` fails on problems, which the author can fix in the folder; notes are advice and never fail it. A problem prints as `[WARN]` and counts; a note prints as `[NOTE]` (a dead root-relative link is one, since a proxy may serve the path; so is a file the build left out because it is still downloading from cloud storage, or a suspended process); environment, timing and cache notes log at INFO and are hidden unless `MOSS_LOG_LEVEL=info`. A build's last status line is `Built N pages (M skipped) · K problems`, plus ` · J notes` when there are any; `moss: K problems reported above` follows it only when K is not 0, and is the line to grep for. `moss list [--json]` is the inventory of what actually got published — url, kind, date (an event page with `start:` and no `date:` shows its start day), and the LANG column that confirms a new language tree registered. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
+**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `--strict` fails on problems, which the author can fix in the folder; notes are advice and never fail it. A problem prints as `[WARN]` and counts; a note prints as `[NOTE]` (a dead root-relative link is one, since a proxy may serve the path; so is a file the build left out because it is still downloading from cloud storage, or a suspended process); environment, timing and cache notes log at INFO and are hidden unless `MOSS_LOG_LEVEL=info`. A build's last status line is `Built N pages (M skipped) · K problems`, plus ` · J notes` when there are any; `moss: K problems reported above` follows it only when K is not 0, and is the line to grep for. `moss list [--json]` is the inventory of what actually got published — url, kind, date (an event page with `start:` and no `date:` shows its start day), and the LANG column that confirms a new language tree registered; in `--json`, `translations` lists where a page's versions in other languages publish, so rows that are one piece can be grouped. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
 
 **A site in cloud storage.** A folder in Google Drive, iCloud Drive, Dropbox or OneDrive can hold files that are only in the cloud. `moss build` waits for them while they keep arriving, and exits 1 when the provider has stopped delivering, naming it and saying what to open. `moss fetch <folder>` downloads every cloud-only file in the folder and writes nothing there, so a tool that copies the folder (rsync, a backup) does not block on each file; it exits 1 the same way.
 
@@ -80,7 +80,7 @@ Class names, tokens, shortcodes, and frontmatter fields change between moss
 releases. Never hardcode them from memory. From the project root, run:
 
 ```
-moss describe --json          # everything; the .moss/config.toml [site] keys are under site_settings
+moss describe --json          # everything; the .moss/config.toml [site] keys are under site_settings, [redirects] under config_tables
 moss describe --json | jq 'keys'   # what "everything" covers, right now
 ```
 
@@ -139,6 +139,10 @@ declarations that fight each other.
 - **A folder's home page is a markdown file** whose stem is `index`, `readme`,
   `_index`, or `main`, **or** that is named after its folder (`recipes/recipes.md`
   is the home of `recipes/`). Every other `.md` file is an article.
+  The site's own folder counts: copy a site whose home is `Harbour/Harbour.md`
+  into a folder named `copy/` and the build, without a warning, makes
+  `Harbour.md` an article and names the site "copy". Keep the folder's name
+  in a copy, or set `home: true` on the home page so it survives any rename.
 - moss classifies every page as **Article** or **Folder**.
 
 ## Styling: the one-sentence model
@@ -167,7 +171,7 @@ A fact is a field, and moss places it. Before writing CSS, a classed div or HTML
 2. Every page in a folder shares the value: write it once in `cascade:` on the folder's home page; a page's own value wins.
 3. Several facts read as one line: a group field, `type = "group"` with `of = [...]`, draws the parts that have a value, in order.
 4. A picture needs its crop or framing: display words on the embed, `![[photo.jpg|focus:30%,20%]]` keeps that point in view, `|contain` shows it whole (`moss guide authoring`, images).
-5. A section a link must reach: `## Opening hours {#hours}`, linked as `[[Page#hours]]`.
+5. A section a link must reach: a heading's own words already give a clean id (`## Opening hours` is `#opening-hours`, punctuation dropped); add `{#hours}` only to give it a different name, linked as `[[Page#hours]]`.
 
 Only then style it, with the rungs below. Never write `{.class}` on an image, link or inline span: other markdown tools print it as text.
 
@@ -216,6 +220,19 @@ for you. Never write `!important`.
 
 For shortcodes and partials (content reuse, not styling tiers), see
 `moss guide authoring`.
+
+## Keep the theme stylesheet readable
+
+`.moss/theme/style.css` is read and edited by the person who owns the site long after you finish, so write it for them. Before handing it over, simplify and consolidate:
+
+- Delete rules that restate a moss default or repeat another rule.
+- Delete rules that match nothing (`moss doctor --surface` names them) only after a build that has every kind of content the site will carry, an upcoming and a past event included: a listing filtered by date or by drafts is empty on some days, and the rules for its entries match nothing on those days, and a rule for an empty listing matches nothing on the days it has entries. Doctor lists rules that name a listing's markup apart from the dead ones for that reason.
+- Fold a value that appears more than twice (a colour, a gap, a width) into a `--moss-*` override or a custom property of your own in `:root {}`.
+- Merge rules that differ in one property into one selector list; prefer one rule per component over the same selector reopened in several places.
+- Group the file by what it styles: tokens first, then page-wide type and layout, then one block per component, then page-specific blocks, with each block's responsive and dark-mode overrides right after it.
+- Head each group with a one-line comment, and comment a rule only for the reason the CSS cannot show (why this offset, which default it displaces). No commented-out code, no history.
+
+A stylesheet that is longer than the design needs is a defect even when it renders correctly: build before and after and compare the pages.
 
 ## Hard rules
 
@@ -298,10 +315,16 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Refused because an address would go offline:** an address the site has
   served must not vanish unasked. When a build would stop serving one for a
   reason other than the human deleting its source (a page whose address
-  changed, a generated file no longer produced), `deploy` and `--dry-run`
-  list each address with its cause and refuse. Keep the address working
-  (for a moved page, add the printed `"/old/" = "/new/"` line under
-  `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
+  changed, a file moved to another folder, a generated file no longer
+  produced), `deploy` and `--dry-run` list each address with its cause and
+  refuse. Keep the address working (for a moved page or file, add the printed
+  `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20
+  addresses, `moss deploy <folder> --dry-run --json` lists every one, and its
+  `redirects_to_add` holds the lines to paste; in that JSON, `refusal.kind` is one
+  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `removals`, `no_environment`, `foreign_inputs`;
+  a setup failure prints `{"error"}` instead; an `output_path` is a file of the
+  build output, an `address` is what a visitor asks for; with `--prebuilt` the
+  refused files are `transfer.removed_output_paths`), or pass `--accept-removals` — only when
   the human has said to lose those addresses. A `.webp` derivative of a picture
   that is still in the folder needs none of this: when no page embeds the picture
   any more, moss keeps the derivative's address as a redirect to the picture by

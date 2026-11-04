@@ -301,8 +301,8 @@ mod view_site_url_tests {
 pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(), String> {
     use crate::build::cloud_readiness::{materialize_input, INTERACTIVE_DEADLINE};
 
-    let identity_dir = folder_path.join(".moss").join("identity");
-    let inputs = [identity_dir.join("secret-key"), identity_dir.join("public.json")];
+    let site = crate::moss_paths::MossPaths::new(folder_path);
+    let inputs = [site.identity_secret(), site.identity_public()];
     let stalled: Option<std::path::PathBuf> = tokio::task::spawn_blocking(move || {
         // `materialize_input` blocks for up to the deadline, so it runs off the
         // async runtime — a publish must not park a runtime worker for 15s.
@@ -327,7 +327,43 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
     ))
 }
 
-/// Refuse the publish if this site points at a file that does not exist.
+/// [`publish_refusal`] as text, for the callers that only stop.
+pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
+    publish_refusal(folder_path).map_or(Ok(()), |r| Err(r.text))
+}
+
+/// A refused publish: which rule refused it and the text a person reads.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Refusal {
+    pub kind: RefusalKind,
+    pub text: String,
+}
+
+/// Which rule refused a publish; `moss deploy --dry-run --json` prints it in
+/// snake case, and this list is the whole vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalKind {
+    UnresolvedInputs,
+    MissingReferences,
+    DraftsLinked,
+    LinksInCloud,
+    LinksInFlight,
+    PendingDerivations,
+    Removals,
+    NoEnvironment,
+    ForeignInputs,
+}
+
+impl Refusal {
+    pub(crate) fn new(kind: RefusalKind, text: String) -> Self {
+        Self { kind, text }
+    }
+}
+
+/// The rule that refuses this folder's publish, if one does, with its text.
+///
+/// First: the site points at a file that does not exist.
 ///
 /// A published site cannot contain a broken file. moss will not paper over one
 /// either — the blueprint grid the author sees locally is a preview affordance
@@ -365,46 +401,42 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 ///
 /// Also refused: a structural source (a page, `config.toml`, the user
 /// stylesheet) this build could not read falls back to last-known content
-/// instead of refusing the SCREEN outright — see
-/// the selected sealed manifest's input evidence. The publish it might go on to make is
-/// still built on that carried-forward content, and that is what THIS rule
-/// refuses: not because the site is wrong, but because shipping it without
-/// saying so would let a source stay stale indefinitely with no signal that
-/// anything needed attention.
+/// instead of failing the build. The publish it might go on to make is still
+/// built on that carried-forward content, and that is what THIS rule refuses:
+/// not because the site is wrong, but because shipping it without saying so
+/// would let a source stay stale indefinitely with no signal that anything
+/// needed attention.
 ///
 /// Also refused: the build would stop serving an address the last publish
 /// served, and not because the author deleted its source —
 /// `removal_gate`. An address is a promise to every link and subscription
 /// stored elsewhere; the author keeps it working or accepts losing it
 /// (`moss deploy --accept-removals`), and the same set never asks twice.
-pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
+pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
     let records = crate::system::build_records::records();
     if let Some(projection) = records.publish_preflight(folder_path) {
         if !projection.unresolved_inputs.is_empty() {
-            return Err(stale_source_refusal_text(&projection.unresolved_inputs));
+            return Some(Refusal::new(RefusalKind::UnresolvedInputs, stale_source_refusal_text(&projection.unresolved_inputs)));
         }
         if !projection.missing_references.is_empty() {
-            return Err(refusal_text(projection.missing_references.len()));
+            return Some(Refusal::new(RefusalKind::MissingReferences, refusal_text(projection.missing_references.len())));
         }
         if !projection.drafts_linked.is_empty() {
-            return Err(drafts_linked_refusal_text(&projection.drafts_linked));
+            return Some(Refusal::new(RefusalKind::DraftsLinked, drafts_linked_refusal_text(&projection.drafts_linked)));
         }
     }
     if let Some(promised) = records.promised_dead_links(folder_path) {
         if !promised.in_cloud.is_empty() {
-            return Err(cloud_refusal_text(&promised.in_cloud));
+            return Some(Refusal::new(RefusalKind::LinksInCloud, cloud_refusal_text(&promised.in_cloud)));
         }
         if !promised.links.is_empty() {
-            return Err(in_flight_refusal_text(promised.links.len()));
+            return Some(Refusal::new(RefusalKind::LinksInFlight, in_flight_refusal_text(promised.links.len())));
         }
     }
     if let Some(pending) = records.pending_derivations(folder_path).filter(|n| *n > 0) {
-        return Err(derivations_refusal_text(pending));
+        return Some(Refusal::new(RefusalKind::PendingDerivations, derivations_refusal_text(pending)));
     }
-    if let Some(refusal) = removal_gate::refusal_for(folder_path) {
-        return Err(refusal);
-    }
-    Ok(())
+    removal_gate::refusal_for(folder_path).map(|text| Refusal::new(RefusalKind::Removals, text))
 }
 
 /// Refuse the exact generation selected for upload when it was rendered with

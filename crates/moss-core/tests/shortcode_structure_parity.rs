@@ -59,6 +59,7 @@ fn summarize(blocks: &[Block]) -> Vec<ExpectedBlock> {
             Shortcode::Gallery(_) => simple("gallery"),
             Shortcode::Subscribe(_) => simple("subscribe"),
             Shortcode::Recent(_) => simple("recent"),
+            Shortcode::Form(_) => simple("form"),
         };
         out.push(node);
     }

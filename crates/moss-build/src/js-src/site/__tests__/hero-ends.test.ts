@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect } from "vitest";
-import { initHeroEnds } from "../hero-ends";
+import { initHeroEnds } from "../hero/hero-ends";
 
 const NOW = new Date("2030-06-01T12:00").getTime();
 

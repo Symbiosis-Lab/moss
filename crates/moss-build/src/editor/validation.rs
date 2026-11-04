@@ -34,6 +34,18 @@ impl From<moss_core::validation::Diagnostic> for EditorDiagnostic {
     }
 }
 
+/// The schema for `root` from what is on disk: the built-in fields, the
+/// installed plugins' fields and the name-list fields the site config declares.
+pub fn schema_on_disk(root: &std::path::Path) -> moss_core::schema::ContentSchema {
+    let root = root.to_string_lossy();
+    let declared = match crate::build::site_config::read_project_config(&root) {
+        Ok(cfg) => crate::build::terms::declared_name_list_fields(&cfg),
+        Err(_) => Vec::new(),
+    };
+    let plugins = crate::plugins::discovery::discover_installed_plugins(&root).unwrap_or_default();
+    compose_schema(&plugins, &declared)
+}
+
 /// Compose the effective schema by merging builtin fields with plugin
 /// contributions.
 ///

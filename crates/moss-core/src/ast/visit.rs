@@ -210,7 +210,7 @@ where
                 }
             }
         }
-        Shortcode::Recent(_) => {} // No URLs.
+        Shortcode::Recent(_) | Shortcode::Form(_) => {} // No URLs.
     }
 }
 
@@ -290,7 +290,7 @@ pub fn for_each_child_sequence(block: &Block, mut f: impl FnMut(&[Block]) -> boo
         Block::Shortcode(Shortcode::Grid(args)) => args.cells.iter().all(|cell| f(cell)),
         Block::Shortcode(Shortcode::Hero(args)) => f(&args.overlay),
         Block::Shortcode(
-            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_),
+            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_) | Shortcode::Form(_),
         ) => true,
         // No block children. Inline children of headings, paragraphs, terms,
         // tables and figures are visited by inline visitors, not block ones.
@@ -331,6 +331,18 @@ pub fn has_shortcode_recursive(doc: &Document, kind: ShortcodeKind) -> bool {
     any_block(doc, |block| matches!(block, Block::Shortcode(sc) if sc.kind() == kind))
 }
 
+/// Every `:::form` in the document, nested ones included, in source order.
+pub fn forms_recursive(doc: &Document) -> Vec<super::extract_form::FormShortcode> {
+    let mut forms = Vec::new();
+    visit_blocks(doc, |block| {
+        if let Block::Shortcode(Shortcode::Form(f)) = block {
+            forms.push(f.clone());
+        }
+        true
+    });
+    forms
+}
+
 /// True if any `:::grid` in the document is a scroll row at all — see
 /// [`GridShortcode::is_scroll_row`] — recursive, like
 /// [`has_shortcode_recursive`]. Gates the scroll-row runtime script, so a
@@ -345,6 +357,18 @@ pub fn has_scroll_row_recursive(doc: &Document) -> bool {
         doc,
         |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.is_scroll_row()),
     )
+}
+
+/// Whether a fenced block's info string asks for a diagram: its first word is
+/// `mermaid`, as Obsidian, GitHub and GitLab read it.
+pub fn is_diagram_lang(info: &str) -> bool {
+    info.split_whitespace().next() == Some("mermaid")
+}
+
+/// True if any block in the document is a fenced `mermaid` block, nested ones
+/// included.
+pub fn has_diagram_recursive(doc: &Document) -> bool {
+    any_block(doc, |block| matches!(block, Block::CodeBlock { lang: Some(l), .. } if is_diagram_lang(l)))
 }
 
 /// True if any block in the document is a callout (recursive — a callout
@@ -612,6 +636,7 @@ mod tests {
                 has_pothole: false,
             }],
             id: None,
+            legacy_id: None,
             contents_end: false,
             contents_label: None,
         }]);

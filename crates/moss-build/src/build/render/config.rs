@@ -132,6 +132,9 @@ pub struct SiteConfig {
     /// The `[fields.<name>]` declarations, read once per build; the markdown
     /// pipeline checks each page's frontmatter against them.
     pub field_decls: Vec<moss_core::fields::FieldDecl>,
+    /// `[services.forms] endpoint`, without a trailing slash: where request
+    /// forms post. `None` leaves forms pending.
+    pub forms_endpoint: Option<String>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -157,6 +160,7 @@ impl SiteConfig {
             typesetting: self.typesetting.as_deref(),
             fields: &self.field_decls,
             lang: &self.lang,
+            forms_endpoint: self.forms_endpoint.as_deref(),
         }
     }
 }
@@ -193,6 +197,7 @@ impl Default for SiteConfig {
             term_kinds: Vec::new(),
             term_nav: Vec::new(),
             field_decls: Vec::new(),
+            forms_endpoint: None,
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

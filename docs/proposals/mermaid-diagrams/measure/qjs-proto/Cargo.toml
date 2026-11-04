@@ -1,0 +1,8 @@
+[package]
+name = "qjs-proto"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+rquickjs = { version = "=0.12.0", features = [] }
+[profile.release]
+debug = 0

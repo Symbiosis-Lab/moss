@@ -182,7 +182,7 @@ fn heading_targets(project_path: &str, relative_page: &str) -> Result<Vec<Target
         .flatten()
         .unwrap_or(true);
     let config = moss_core::ast::ParseConfig { math, ..Default::default() };
-    Ok(moss_core::heading::extract::extract_headings_with_config(&src, &config)
+    Ok(moss_core::heading::extract::extract_headings_with_config(moss_core::frontmatter::body(&src), &config)
         .into_iter()
         .map(|h| Target::Heading { text: h.text, slug: h.slug, level: h.level })
         .collect())

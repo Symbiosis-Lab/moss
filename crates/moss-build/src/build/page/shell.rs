@@ -68,7 +68,7 @@ impl ShellRegistry {
     /// Determines the appropriate template type for a given document and context.
     ///
     /// Adaptive selection based on site mode:
-    /// - Organized (has_content_folders): root non-index = Page, nested = Article
+    /// - Organized (has_content_folders): every other page = Article, top-level ones included
     /// - Flat (!has_content_folders): nav keywords (about) = Page, everything else = Article
     ///
     /// Synthetic asset (per-image) pages always render as Page, regardless of
@@ -107,12 +107,9 @@ impl ShellRegistry {
                     return ShellType::Page;
                 }
                 if has_content_folders {
-                    // Organized mode: root-level = Page, nested = Article
-                    if !doc.url_path.contains('/') {
-                        ShellType::Page
-                    } else {
-                        ShellType::Article
-                    }
+                    // Organized mode: a top-level page is an Article too, since
+                    // its url_path (`about/index.html`) is nested like any other.
+                    ShellType::Article
                 } else {
                     // Flat mode: nav keywords = Page, everything else = Article
                     if doc.is_root_level && crate::build::components::nav::is_nav_keyword(&doc.clean_stem) {

@@ -36,6 +36,9 @@ pub mod place_hierarchy;
 /// the two share `site.css`'s `.moss-cards[data-layout="list"]` rules and the
 /// render gates already written against them.
 ///
+/// `lead` stamps `data-lead`, which `site.css` reads to make the first card
+/// lead and the rest a register (`children_style: lead`).
+///
 /// `is_embed` stamps `data-embed`, which marks a body-embedded listing (a
 /// `![[folder/]]` embed or a grid fence) apart from the trailing automatic one
 /// so CSS can give it its own block rhythm.
@@ -47,6 +50,7 @@ pub mod place_hierarchy;
 /// that match silently stop matching with no test going red.
 pub(crate) fn cards_container(
     layout: &str,
+    lead: bool,
     is_embed: bool,
     placement: &moss_core::media::Placement,
     inner: &str,
@@ -54,12 +58,13 @@ pub(crate) fn cards_container(
     let place = moss_core::render::placement::placement_attrs(placement);
     let align = place.align_suffix();
     format!(
-        "<div class=\"moss-cards-container{}\"{}{}{}><div class=\"moss-cards\" data-layout=\"{}\">{}</div></div>",
+        "<div class=\"moss-cards-container{}\"{}{}{}><div class=\"moss-cards\" data-layout=\"{}\"{}>{}</div></div>",
         align,
         place.data_width_attr,
         place.size_style_attr,
         if is_embed { " data-embed" } else { "" },
         layout,
+        if lead { " data-lead" } else { "" },
         inner,
     )
 }

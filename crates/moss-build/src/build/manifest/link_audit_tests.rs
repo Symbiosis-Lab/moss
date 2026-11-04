@@ -447,3 +447,10 @@ mod drafts {
         assert!(drafts_linked(&docs, no_source).is_empty());
     }
 }
+
+#[test]
+fn a_dead_href_inside_a_template_is_not_reported_but_the_same_one_outside_is() {
+    let template = r#"<template data-slug="x"><a href="/ask/?to=Japan">Ask</a></template>"#;
+    assert!(hrefs(template, &[]).is_empty(), "a template's content is inert, never a link");
+    assert_eq!(hrefs(&format!(r#"{template}<a href="/ask/?to=Japan">Ask</a>"#), &[]), ["/ask/?to=Japan"]);
+}

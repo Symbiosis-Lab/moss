@@ -2125,6 +2125,7 @@ async fn mutate_carrier_with_valid_token_persists_editor_bytes() {
         "filePath": target.to_string_lossy(),
         "frontmatter": { "title": "Hello" },
         "body": "New **body** text.",
+        "expectedHash": crate::editor::content::content_hash(b"---\nx: 1\n---\nold"),
     })
     .to_string();
     let url = format!("http://localhost:{}/__moss/mutate/save_editor_content", port);
@@ -2809,6 +2810,8 @@ async fn mutate_carrier_refuses_to_write_outside_the_vault_even_with_a_valid_tok
                     "filePath": file.to_string_lossy(),
                     "frontmatter": { "title": "T" },
                     "body": body,
+                    // The file's real base, so a refusal can only come from confinement.
+                    "expectedHash": std::fs::read(&file).map(|b| crate::editor::content::content_hash(&b)).unwrap_or_default(),
                 })
                 .to_string(),
             )
@@ -3317,8 +3320,7 @@ async fn host_route_colliding_with_an_engine_path_fails_construction_instead_of_
     );
 }
 
-// ===== File-operation arms: rename-with-refs, batch delete, reference =====
-// ===== cleanup and undo (the `file_ops` sibling module)               =====
+// ===== File operations: rename-with-refs, batch delete, reference cleanup and undo =====
 
 /// `rename_entry_with_refs` renames in place and rewrites the referencing
 /// file to follow it; the mutation tier must still refuse a destination
@@ -3348,6 +3350,10 @@ async fn mutate_carrier_rename_entry_with_refs_renames_and_refuses_outside_the_v
         )
         .expect("control: an in-vault rename must succeed");
     assert_eq!(resp.status(), 200);
+    let summary: serde_json::Value = resp.into_json().expect("a rename summary");
+    assert_eq!(summary["moved"].as_array().map(Vec::len), Some(1), "{summary}");
+    assert_eq!(summary["edited_link_count"], 1, "{summary}");
+    assert!(summary["undo_id"].as_str().is_some_and(|id| !id.is_empty()), "{summary}");
     assert!(new.exists(), "control: the renamed file must exist");
     assert!(!old.exists(), "control: the old name must be gone");
     let other = std::fs::read_to_string(vault_path.join("other.md")).unwrap();
@@ -3439,7 +3445,7 @@ async fn mutate_carrier_scan_references_for_delete_finds_hits_and_refuses_outsid
         .set("X-Moss-Token", &token)
         .timeout(std::time::Duration::from_secs(5))
         .send_string(
-            &serde_json::json!({ "path": vault_path.join("target.md").to_string_lossy() }).to_string(),
+            &serde_json::json!({ "paths": [vault_path.join("target.md").to_string_lossy()] }).to_string(),
         )
         .expect("control: an in-vault scan must succeed");
     assert_eq!(resp.status(), 200);
@@ -3456,7 +3462,7 @@ async fn mutate_carrier_scan_references_for_delete_finds_hits_and_refuses_outsid
         .set("X-Moss-Token", &token)
         .timeout(std::time::Duration::from_secs(5))
         .send_string(
-            &serde_json::json!({ "path": parent.path().join("secret.md").to_string_lossy() }).to_string(),
+            &serde_json::json!({ "paths": [parent.path().join("secret.md").to_string_lossy()] }).to_string(),
         );
     assert!(escaped.is_err(), "scan_references_for_delete must refuse a target outside the vault");
 
@@ -3509,66 +3515,104 @@ async fn mutate_carrier_clean_references_and_delete_cleans_and_refuses_outside_t
     let _ = shutdown_tx.send(());
 }
 
-/// `undo_rename` reverses a prior `rename_entry_with_refs` result. Its core,
-/// `rename_plan::undo_applied`, joins every path inside the plan onto the
-/// project root with no containment check of its own — it trusts the plan it
-/// was handed — so this pins that the carrier's `confine` is what refuses a
-/// forged, out-of-vault plan even with a valid token.
+/// `undo_rename` takes the opaque id the rename answered with, once. The
+/// applied plan never leaves the engine, so a client cannot hand back a forged
+/// one: a plan-shaped body is refused as bad arguments and touches nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mutate_carrier_undo_rename_reverses_and_refuses_outside_the_vault() {
+async fn mutate_carrier_undo_rename_takes_the_rename_id_once_and_never_a_plan() {
     let (_parent, vault_path, site_dir) = confinement_vault();
     std::fs::write(vault_path.join("note.md"), "# Note").unwrap();
 
     let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 64500).await;
+    let post = |url: &str, body: serde_json::Value| {
+        ureq::post(url)
+            .set("Content-Type", "application/json")
+            .set("X-Moss-Token", &token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_string(&body.to_string())
+    };
 
-    // Set-up: a real rename, to get a genuine RenameApplyResult to undo.
     let rename_url = format!("http://localhost:{}/__moss/mutate/rename_entry_with_refs", port);
     let old = vault_path.join("note.md");
     let new = vault_path.join("renamed.md");
-    let resp = ureq::post(&rename_url)
-        .set("Content-Type", "application/json")
-        .set("X-Moss-Token", &token)
-        .timeout(std::time::Duration::from_secs(5))
-        .send_string(
-            &serde_json::json!({
-                "oldPath": old.to_string_lossy(),
-                "newPath": new.to_string_lossy(),
-            })
-            .to_string(),
-        )
-        .expect("setup: the rename must succeed");
-    let applied: serde_json::Value = resp.into_json().expect("a RenameApplyResult");
+    let summary: serde_json::Value = post(
+        &rename_url,
+        serde_json::json!({ "oldPath": old.to_string_lossy(), "newPath": new.to_string_lossy() }),
+    )
+    .expect("setup: the rename must succeed")
+    .into_json()
+    .expect("a rename summary");
+    let undo_id = summary["undo_id"].as_str().expect("the summary carries an undo id").to_string();
+    assert!(summary.get("edits").is_none(), "the applied edits stay in the engine: {summary}");
 
-    // Positive control: undoing it restores the original name.
     let undo_url = format!("http://localhost:{}/__moss/mutate/undo_rename", port);
-    let resp = ureq::post(&undo_url)
-        .set("Content-Type", "application/json")
-        .set("X-Moss-Token", &token)
-        .timeout(std::time::Duration::from_secs(5))
-        .send_string(&serde_json::json!({ "applied": applied }).to_string())
-        .expect("control: undo must succeed");
-    assert_eq!(resp.status(), 200);
-    assert!(old.exists(), "control: undo must restore the original name");
-    assert!(!new.exists(), "control: the renamed-to name must be gone after undo");
-
-    // The escape: a forged `applied` whose move claims a path outside the vault.
     let forged = serde_json::json!({
-        "applied": {
-            "moves": [{ "old_path": "../secret.md", "new_path": "whatever.md", "is_dir": false }],
-            "edits": [],
-            "skipped": [],
-        }
+        "applied": { "moves": [{ "old_path": "renamed.md", "new_path": "../escaped.md", "is_dir": false }] }
     });
-    let escaped = ureq::post(&undo_url)
-        .set("Content-Type", "application/json")
-        .set("X-Moss-Token", &token)
-        .timeout(std::time::Duration::from_secs(5))
-        .send_string(&forged.to_string());
-    assert!(escaped.is_err(), "undo_rename must refuse a plan naming a path outside the vault");
-    assert!(
-        !vault_path.join("whatever.md").exists(),
-        "no file must land from a forged out-of-vault undo plan"
-    );
+    match post(&undo_url, forged) {
+        Err(ureq::Error::Status(400, _)) => {}
+        other => panic!("a plan-shaped body must be refused as bad arguments, got {other:?}"),
+    }
+    assert!(new.exists(), "a refused undo touches nothing");
+
+    let resp = post(&undo_url, serde_json::json!({ "undoId": undo_id })).expect("undo by id must succeed");
+    assert_eq!(resp.status(), 200);
+    assert!(old.exists() && !new.exists(), "undo restores the original name");
+
+    match post(&undo_url, serde_json::json!({ "undoId": undo_id })) {
+        Err(ureq::Error::Status(500, _)) => {}
+        other => panic!("an undo id is spent on first use, got {other:?}"),
+    }
+
+    let _ = shutdown_tx.send(());
+}
+
+/// An agent listening on the event stream learns, with the version id, when a
+/// save through the carrier kept its text and wrote the person's over it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_save_that_keeps_an_outside_edit_announces_it_on_the_event_stream() {
+    let _streams = event_stream_lock();
+    let (vault, site_dir) = served_vault();
+    let theirs = "Agent's line.\n";
+    let target = vault.path().join("index.md");
+    std::fs::write(&target, theirs).unwrap();
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63450).await;
+
+    let reader = tokio::task::spawn_blocking({
+        let (url, token) = (format!("http://localhost:{port}/__moss/events"), token.clone());
+        move || ureq::get(&url).set("X-Moss-Token", &token).timeout(std::time::Duration::from_secs(10)).call().expect("the stream must open").into_reader()
+    })
+    .await
+    .unwrap();
+
+    let payload = serde_json::json!({
+        "filePath": target.to_string_lossy(),
+        "frontmatter": {},
+        "body": "The person's line.\n",
+        "expectedHash": crate::editor::content::content_hash(theirs.as_bytes()),
+        "keepDisplaced": true,
+    })
+    .to_string();
+    let saved: serde_json::Value = tokio::task::spawn_blocking(move || {
+        ureq::post(&format!("http://localhost:{port}/__moss/mutate/save_editor_content"))
+            .set("Content-Type", "application/json")
+            .set("X-Moss-Token", &token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_string(&payload)
+            .expect("the save must answer 200")
+            .into_json()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    let version = saved["displaced"].as_str().unwrap_or_else(|| panic!("the save must name the kept version: {saved}")).to_string();
+
+    let record = tokio::task::spawn_blocking(move || read_one_sse_record(reader)).await.unwrap().expect("one SSE record");
+    let json: serde_json::Value = serde_json::from_str(record.trim_start_matches("data:").trim()).unwrap();
+    assert_eq!(json["payload"]["kind"], "OutsideEditKept");
+    assert_eq!(json["payload"]["payload"]["version_id"], version.as_str());
+    assert_eq!(json["payload"]["payload"]["path"], "index.md");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "The person's line.\n");
 
     let _ = shutdown_tx.send(());
 }

@@ -13,3 +13,14 @@ pub mod pdf;
 pub mod placement;
 pub mod url_embed;
 pub mod video;
+
+/// A [`TitleParams`](crate::resolve::title_params::TitleParams) holding
+/// `kvs`, for the synthesizers' tests.
+#[cfg(test)]
+pub(crate) fn params_with(kvs: &[(&str, &str)]) -> crate::resolve::title_params::TitleParams {
+    let mut p = crate::resolve::title_params::TitleParams::default();
+    for (k, v) in kvs {
+        p.insert(*k, *v);
+    }
+    p
+}

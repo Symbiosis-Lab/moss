@@ -653,6 +653,20 @@ pub fn cached_entries() -> Vec<super::index::IndexEntry> {
         .unwrap_or_default()
 }
 
+/// The catalog's current entry for `plugin_id`, from a catalog that may be
+/// installed from (see [`CachedRegistry::index_to_install_from`]).
+pub fn installable_entry(plugin_id: &str) -> Result<super::index::IndexEntry, String> {
+    let guard = SNAPSHOT.read().unwrap_or_else(|e| e.into_inner());
+    let dated = !super::signature::REGISTRY_KEYS.is_empty();
+    let index = match guard.as_ref() {
+        Some(cache) => cache.index_to_install_from(chrono::Utc::now(), dated)?,
+        None => None,
+    };
+    index
+        .and_then(|index| index.find(plugin_id).cloned())
+        .ok_or_else(|| format!("Plugin '{plugin_id}' is not in this build or the catalog"))
+}
+
 /// Whether a version this catalog offers can actually run here.
 ///
 /// The registry publishes one entry per id — the latest — and that latest can

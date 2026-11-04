@@ -281,3 +281,18 @@ fn a_root_agent_file_is_never_the_file_a_reference_names() {
     let hits = scan_project_references_to(&root.join("AGENTS.md"), root).expect("scan");
     assert!(hits.is_empty(), "{hits:?}");
 }
+
+/// A batch of loose moves whose second move fails puts the first back.
+#[test]
+fn a_failed_loose_move_puts_back_what_already_moved() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for page in ["a.md", "b.md"] {
+        // allow:raw_write test fixture pages in a temp folder
+        std::fs::write(root.join(page), "# page").unwrap();
+    }
+    let p = |n: &str| root.join(n).to_string_lossy().to_string();
+    let plan = plan_loose(&root, &[(p("a.md"), p("c.md")), (p("b.md"), p("missing-dir/b.md"))]).unwrap();
+    assert!(plan.apply().is_err());
+    assert!(root.join("a.md").exists() && !root.join("c.md").exists());
+}

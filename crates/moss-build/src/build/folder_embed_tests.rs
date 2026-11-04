@@ -664,6 +664,82 @@ fn children_more_link_text_uses_target_title() {
     );
 }
 
+/// An English site with a `de/` tree whose archive pages both set
+/// `url: archive`; the German one is listed first.
+fn archive_docs_in_two_editions() -> Vec<ParsedDocument> {
+    let mut home = make_folder_doc("index.html", "Home");
+    home.source_path = Some("index.md".to_string());
+    home.children_limit = Some(2);
+    home.children_more = Some("Everything.md".to_string());
+    let mut de_home = make_folder_doc("de/index.html", "Start");
+    de_home.source_path = Some("de/index.md".to_string());
+    de_home.edition = "de".to_string();
+    de_home.children_limit = Some(2);
+    de_home.children_more = Some("de/Alles.md".to_string());
+    let mut de_archive = make_doc("de/archive/index.html", "Alles", None);
+    de_archive.source_path = Some("de/Alles.md".to_string());
+    de_archive.edition = "de".to_string();
+    let mut archive = make_doc("archive/index.html", "Everything", None);
+    archive.source_path = Some("Everything.md".to_string());
+    let mut docs = vec![de_archive, archive, de_home, home];
+    for n in ["a", "b", "c"] {
+        let mut en = make_doc(&format!("{n}.html"), n, Some("2025-01-01"));
+        en.source_path = Some(format!("{n}.md"));
+        let mut de = make_doc(&format!("de/{n}.html"), n, Some("2025-01-01"));
+        de.source_path = Some(format!("de/{n}.md"));
+        de.edition = "de".to_string();
+        docs.extend([en, de]);
+    }
+    docs
+}
+
+fn more_link_from(docs: &[ParsedDocument], home: &str, folder: &str) -> String {
+    let home_doc = docs.iter().find(|d| d.source_path.as_deref() == Some(home)).unwrap();
+    let marker = synthesize_children_marker(home_doc, folder, home);
+    resolve_markers(
+        &marker,
+        home,
+        docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    )
+}
+
+/// A target page that sets its own `url:` is still named by its file, as a
+/// wikilink names it anywhere else in moss.
+#[test]
+fn children_more_names_its_target_by_filename_despite_url() {
+    let docs = archive_docs_in_two_editions();
+    let out = more_link_from(&docs, "index.md", "");
+    assert!(
+        out.contains(r#"<a href="/archive/">Everything →</a>"#),
+        "{out}"
+    );
+}
+
+/// Both editions' archive pages share the address leaf `archive`; a name that
+/// matches both goes to the listing page's own edition, in either document order.
+#[test]
+fn children_more_prefers_the_listing_pages_own_edition() {
+    let mut docs = archive_docs_in_two_editions();
+    for home in docs.iter_mut().filter(|d| d.children_more.is_some()) {
+        home.children_more = Some("[[/archive]]".to_string());
+    }
+    let out = more_link_from(&docs, "index.md", "");
+    assert!(out.contains(r#"<a href="/archive/">Everything →</a>"#), "{out}");
+    let out = more_link_from(&docs, "de/index.md", "de");
+    assert!(out.contains(r#"<a href="/de/archive/">Alles →</a>"#), "{out}");
+    docs.reverse();
+    let out = more_link_from(&docs, "index.md", "");
+    assert!(out.contains(r#"<a href="/archive/">Everything →</a>"#), "{out}");
+    let out = more_link_from(&docs, "de/index.md", "de");
+    assert!(out.contains(r#"<a href="/de/archive/">Alles →</a>"#), "{out}");
+}
+
 /// An unresolvable `more:` target is a broken reference like any other —
 /// warn and omit the link, rather than falling back to the folder's own
 /// (non-self) page, which the embed is NOT sitting on here.
@@ -881,7 +957,7 @@ pub(crate) fn test_project() -> ProjectStructure {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -2032,7 +2108,7 @@ fn year_groups_under_non_date_axis_skip_resort() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Year sections must appear.
@@ -2115,7 +2191,7 @@ fn date_asc_year_groups_lead_with_the_oldest_year() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_1924 = out.find("<h2>1924</h2>").expect("1924 heading present");
@@ -2213,7 +2289,7 @@ fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_1924 = out.find(r#"href="/lectures/cambridge-1924""#).expect("1924 lecture present");
@@ -2263,7 +2339,7 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Sections exist for the articles.
@@ -2316,7 +2392,7 @@ fn no_group_skip_resort_stays_flat() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -2395,7 +2471,7 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Both folders must precede both articles.
@@ -2464,7 +2540,7 @@ fn skip_resort_summary_year_still_groups_by_year() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -2519,7 +2595,7 @@ fn undated_grid_puts_folders_first_then_folds_case() {
         Some(moss_core::sort::SortAxis::Title),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let order: Vec<&str> = ["Zebra", "Alpha", "mao", "Scarly"]

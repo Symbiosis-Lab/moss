@@ -106,7 +106,23 @@ fn rename_in(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<String,
         parts.push(format!("{pt} passthrough entr{} updated", if pt == 1 { "y" } else { "ies" }));
     }
     let outcome = if parts.is_empty() { "no references to rewrite".to_string() } else { parts.join("; ") };
-    Ok(format!("Renamed {} → {} ({outcome})", args[0], args[1]))
+    let mut line = format!("Renamed {} → {} ({outcome})", args[0], args[1]);
+    let left = &result.left_as_written;
+    if !left.is_empty() {
+        let mut names: Vec<&str> = left.iter().map(String::as_str).collect();
+        names.sort_unstable();
+        names.dedup();
+        let shown = names.iter().take(5).copied().collect::<Vec<_>>().join(", ");
+        let more = if names.len() > 5 { format!(" and {} more", names.len() - 5) } else { String::new() };
+        line.push_str(&format!(
+            "\n{} link{} name no file exactly, so {} not rewritten; check {} by hand: {shown}{more}",
+            left.len(),
+            if left.len() == 1 { "" } else { "s" },
+            if left.len() == 1 { "it was" } else { "they were" },
+            if left.len() == 1 { "it" } else { "them" },
+        ));
+    }
+    Ok(line)
 }
 
 #[cfg(test)]

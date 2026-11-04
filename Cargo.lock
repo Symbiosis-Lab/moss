@@ -2909,6 +2909,7 @@ dependencies = [
  "libc",
  "log",
  "lol_html 1.2.1",
+ "minisign-verify",
  "mockito",
  "moss-core",
  "notify",
@@ -2939,6 +2940,7 @@ dependencies = [
  "serde_yaml 0.9.34+deprecated",
  "sha2 0.10.9",
  "specta",
+ "specta-typescript",
  "tar",
  "tempfile",
  "thiserror 1.0.69",
@@ -2951,6 +2953,7 @@ dependencies = [
  "tower-http 0.5.2",
  "trash",
  "ttf-parser 0.21.1",
+ "unicode-normalization",
  "ureq",
  "url",
  "urlencoding",
@@ -2966,13 +2969,11 @@ dependencies = [
 
 [[package]]
 name = "moss-cli"
-version = "0.15.17"
+version = "0.15.18"
 dependencies = [
  "base64 0.21.7",
  "dotenvy",
  "flate2",
- "log",
- "minisign-verify",
  "moss-build",
  "serde",
  "serde_json",
@@ -2983,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "moss-core"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "proptest",
  "pulldown-cmark",
@@ -5006,6 +5007,27 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "specta-serde"
+version = "0.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12260cbb21abb2e83a0375b1521867910e3aed8a7afa782206150ce552cd2e5a"
+dependencies = [
+ "specta",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "specta-typescript"
+version = "0.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1e4472229365ceb6395487e3a60d921ad8e21f9ad06eaecc396f098902c9adc"
+dependencies = [
+ "specta",
+ "specta-serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

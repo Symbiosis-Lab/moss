@@ -651,12 +651,12 @@ async fn a_nested_pages_images_and_cover_are_page_relative() {
         .with_header("content-type", "text/html")
         .with_body(
             "<html><body><article><p>Home body, long enough to be extracted as content.</p>\
-             <a href=\"/events/\">Events</a></article></body></html>",
+             <a href=\"/events/2026/\">Events</a></article></body></html>",
         )
         .create_async()
         .await;
     let _events = server
-        .mock("GET", "/events/")
+        .mock("GET", "/events/2026/")
         .with_status(200)
         .with_header("content-type", "text/html")
         .with_body(
@@ -677,7 +677,7 @@ async fn a_nested_pages_images_and_cover_are_page_relative() {
     let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
     config.recursive = true;
     scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
-    let md = std::fs::read_to_string(tmp.path().join("events/index.md")).unwrap();
+    let md = std::fs::read_to_string(tmp.path().join("events/2026.md")).unwrap();
     assert!(md.contains("cover: \"../assets/imported/"), "{md}");
     assert!(md.contains("![Poster](../assets/imported/"), "{md}");
 }
@@ -813,13 +813,13 @@ async fn linked_files_are_downloaded_once_and_linked_relative_to_each_page() {
             "<html><body><article><p>Home page body, long enough to be extracted as content.</p>\
              <a href=\"/files/score.pdf\">Score</a>\
              <a href=\"{base}/files/score.pdf#page=2\">Score, page two</a>\
-             <a href=\"/music/\">Music</a>\
+             <a href=\"/music/live/\">Music</a>\
              </article></body></html>"
         ))
         .create_async()
         .await;
     let music = server
-        .mock("GET", "/music/")
+        .mock("GET", "/music/live/")
         .with_status(200)
         .with_header("content-type", "text/html")
         .with_body(
@@ -877,7 +877,7 @@ async fn linked_files_are_downloaded_once_and_linked_relative_to_each_page() {
         home_md.contains("[Score, page two](./assets/imported/score.pdf#page=2)"),
         "{home_md}"
     );
-    let music_md = std::fs::read_to_string(tmp.path().join("music/index.md")).unwrap();
+    let music_md = std::fs::read_to_string(tmp.path().join("music/live.md")).unwrap();
     assert!(music_md.contains("[Score](../assets/imported/score.pdf)"), "{music_md}");
     assert!(music_md.contains("[Violin](../assets/imported/Violin%20Part.pdf)"), "{music_md}");
     assert!(
@@ -2143,4 +2143,278 @@ fn a_composed_note_takes_the_heading_when_the_title_is_never_shown() {
     assert!(note.contains("title: \"The Winter's Tale\""), "{note}");
     assert!(!note.contains("## The Winter's Tale"), "{note}");
     assert!(!note.contains("T_Winter_Tale_S"), "{note}");
+}
+
+/// A link aimed at a note that was never written goes back to the address it
+/// was written with; links to other notes are untouched.
+#[test]
+fn a_link_to_a_page_that_left_the_site_is_restored() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("index.md"),
+        "[Survey](./r/abc.md) and [About](./about.md) and [again](./r/abc.md)\n",
+    )
+    .unwrap();
+    let left = vec![(
+        "](./r/abc.md)".to_string(),
+        "](https://example.test/r/abc)".to_string(),
+    )];
+    restore_left_links(tmp.path(), &["index.md".to_string()], &left).unwrap();
+    let note = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert_eq!(
+        note,
+        "[Survey](https://example.test/r/abc) and [About](./about.md) and [again](https://example.test/r/abc)\n"
+    );
+}
+
+const LEAF_BODY: &str = "Page body, long enough to be extracted as content by the generic scorer.";
+
+fn leaf_page(title: &str, extra: &str) -> String {
+    format!(
+        "<html><head><title>{title}</title></head><body><article><p>{LEAF_BODY} {extra}</p>\
+         </article></body></html>"
+    )
+}
+
+async fn crawl_leaves(server: &mockito::ServerGuard, out: &Path) {
+    let mut config = ScrapeConfig::new(format!("{}/", server.url()), out);
+    config.recursive = true;
+    scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+}
+
+fn read_leaf(out: &Path, rel: &str) -> String {
+    std::fs::read_to_string(out.join(rel)).unwrap()
+}
+
+#[test]
+fn a_link_is_relative_to_the_page_that_holds_it() {
+    assert_eq!(super::super::finalize::relative_path("index.md", "about.md"), "./about.md");
+    assert_eq!(super::super::finalize::relative_path("notes/first.md", "about.md"), "../about.md");
+    assert_eq!(super::super::finalize::relative_path("notes/first.md", "notes/second.md"), "./second.md");
+    assert_eq!(super::super::finalize::relative_path("notes/index.md", "notes/2024/post.md"), "./2024/post.md");
+    assert_eq!(super::super::finalize::relative_path("a/b/c.md", "a/x.md"), "../x.md");
+}
+
+/// A crawl of `/`, `/notes/` (with `/notes/first/` under it) and `/about/`:
+/// the collection keeps its folder and index, the leaves become files, and a
+/// link from a nested leaf names the file that exists.
+#[tokio::test]
+async fn a_page_with_nothing_under_it_is_a_file_and_links_follow_the_final_paths() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let pages = [
+        ("/", leaf_page("Example Journal", &format!("<a href=\"{base}/notes/\">N</a> <a href=\"{base}/about/\">A</a>"))),
+        ("/notes/", leaf_page("Notes", &format!("<a href=\"{base}/notes/first/\">F</a>"))),
+        (
+            "/notes/first/",
+            leaf_page(
+                "First",
+                &format!("<a href=\"{base}/about/\">About</a> <a href=\"{base}/\">Home</a> <img src=\"/img/pic.png\" alt=\"Pic\">"),
+            ),
+        ),
+        ("/about/", leaf_page("About", "")),
+    ];
+    let mut mocks = Vec::new();
+    for (path, body) in &pages {
+        mocks.push(
+            server.mock("GET", *path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).create_async().await,
+        );
+    }
+    mocks.push(
+        server.mock("GET", "/img/pic.png").with_status(200).with_header("content-type", "image/png")
+            .with_body("png").create_async().await,
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    crawl_leaves(&server, tmp.path()).await;
+
+    for rel in ["index.md", "notes/index.md", "notes/first.md", "about.md"] {
+        assert!(tmp.path().join(rel).is_file(), "{rel} missing");
+    }
+    assert!(!tmp.path().join("about").exists(), "an emptied folder is removed");
+    assert!(!tmp.path().join("notes/first").exists());
+    let first = read_leaf(tmp.path(), "notes/first.md");
+    assert!(first.contains("[About](../about.md)"), "{first}");
+    assert!(first.contains("[Home](../index.md)"), "{first}");
+    assert!(first.contains("![Pic](../assets/imported/"), "media follows the page up a level: {first}");
+    let home = read_leaf(tmp.path(), "index.md");
+    assert!(home.contains("(./notes/index.md)") && home.contains("(./about.md)"), "{home}");
+}
+
+/// Root-level posts become nav candidates in moss's organized mode, so a menu
+/// of two pages must leave the posts out of the bar.
+#[tokio::test]
+async fn leaf_pages_that_become_root_level_files_stay_out_of_the_nav_bar() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let home = format!(
+        "<html><head><title>Example Journal</title></head><body><header><nav>\
+         <a href=\"{base}/about/\">About</a><a href=\"{base}/notes/\">Notes</a></nav></header>\
+         <article><p>{LEAF_BODY} <a href=\"{base}/hello/\">Hello</a> <a href=\"{base}/notes/first/\">F</a></p></article></body></html>"
+    );
+    let mut mocks = Vec::new();
+    for (path, body) in [
+        ("/", home),
+        ("/about/", leaf_page("About", "")),
+        ("/notes/", leaf_page("Notes", &format!("<a href=\"{base}/notes/first/\">F</a>"))),
+        ("/notes/first/", leaf_page("First", "")),
+        ("/hello/", leaf_page("Hello", "")),
+    ] {
+        mocks.push(
+            server.mock("GET", path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).create_async().await,
+        );
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    crawl_leaves(&server, tmp.path()).await;
+
+    assert!(read_leaf(tmp.path(), "about.md").contains("\nnav: true\n"));
+    assert!(read_leaf(tmp.path(), "hello.md").contains("\nnav: false\n"), "{}", read_leaf(tmp.path(), "hello.md"));
+    assert!(!read_leaf(tmp.path(), "notes/first.md").contains("nav:"));
+}
+
+/// With no menu in the source at all, a root-level leaf still must not turn
+/// into a nav item just because the site has a content folder.
+#[tokio::test]
+async fn a_site_without_a_menu_gets_no_nav_bar_from_its_root_level_leaves() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let home = format!(
+        "<html><head><title>Example Journal</title></head><body><article><p>{LEAF_BODY} \
+         <a href=\"{base}/hello/\">Hello</a> <a href=\"{base}/notes/first/\">F</a></p></article></body></html>"
+    );
+    let mut mocks = Vec::new();
+    for (path, body) in [
+        ("/", home),
+        ("/notes/first/", leaf_page("First", "")),
+        ("/hello/", leaf_page("Hello", "")),
+    ] {
+        mocks.push(
+            server.mock("GET", path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).create_async().await,
+        );
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    crawl_leaves(&server, tmp.path()).await;
+
+    assert!(tmp.path().join("notes/first.md").is_file());
+    assert!(read_leaf(tmp.path(), "hello.md").contains("\nnav: false\n"), "{}", read_leaf(tmp.path(), "hello.md"));
+}
+
+/// Only a link the import wrote to a page it wrote is rewritten: code, and a
+/// link to a file that is not an imported page, stay as they were.
+#[test]
+fn links_in_code_and_to_pages_the_import_did_not_write_are_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("notes/first")).unwrap();
+    std::fs::write(tmp.path().join("about.md"), "About").unwrap();
+    let body = "---\ntitle: \"First\"\n---\n\n[real](./about.md) and [mine](./notes.md) and `[x](./about.md)`.\n\n```\n[y](./about.md)\n![z](../assets/imported/p.png)\n```\n";
+    std::fs::write(tmp.path().join("notes/first/index.md"), body).unwrap();
+    let mut written = vec!["notes/first/index.md".to_string(), "about.md".to_string()];
+    super::super::finalize::settle_layout(tmp.path(), &mut written, &mut HashMap::new(), &[]).unwrap();
+
+    assert_eq!(written[0], "notes/first.md");
+    let got = std::fs::read_to_string(tmp.path().join("notes/first.md")).unwrap();
+    assert_eq!(
+        got,
+        body.replace("[real](./about.md)", "[real](../about.md)"),
+        "only the real link to an imported page changes"
+    );
+}
+
+/// A link's title (`[text](url "title")` once converted) stays a title after
+/// the in-scope rewrite instead of becoming part of the destination path.
+#[tokio::test]
+async fn a_titled_in_scope_link_keeps_its_title_out_of_the_rewritten_path() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let page = |links: &str| {
+        format!(
+            "<html><head><title>Example Notes</title></head><body><article><h1>Example Notes</h1>\
+             <p>{links} Some body text long enough for the content extraction scorer to keep.</p>\
+             </article></body></html>"
+        )
+    };
+    let _root = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(page(&format!("<a href=\"{base}/b/\" title=\"link-to-b\">the second page</a>")))
+        .create_async()
+        .await;
+    let _b = server
+        .mock("GET", "/b/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(page("Second page."))
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.recursive = true;
+    scrape_to_folder(config, |_| {}).await.expect("the crawl succeeds");
+
+    let all: String = walkdir::WalkDir::new(tmp.path())
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .collect();
+    assert!(all.contains("the second page]("), "{all}");
+    assert!(all.contains(" \"link-to-b\")"), "the title survives: {all}");
+    assert!(!all.contains("%20"), "the title must not be folded into the path: {all}");
+}
+
+/// A hosted builder's template puts a cart link in every page's header. The
+/// site has no store, so `/cart` has no article and a crawl that followed it
+/// wrote a failure stub into the site. The link is recognised by the
+/// builder's markup, so a cart URL the author links from the body still works.
+#[tokio::test]
+async fn a_builders_cart_link_in_the_header_is_not_crawled_or_stubbed() {
+    let mut server = mockito::Server::new_async().await;
+    let header = "<header><a href=\"/cart\" class=\"sqs-custom-cart icon--cart\">Cart</a></header>";
+    let page = |title: &str, extra: &str| {
+        format!(
+            "<html><head><title>{title}</title></head><body>{header}<article><p>{LEAF_BODY} {extra}</p>\
+             </article></body></html>"
+        )
+    };
+    let mut mocks = Vec::new();
+    for (path, body) in [("/", page("Example Home", "<a href=\"/about\">About</a>")), ("/about", page("About", ""))] {
+        mocks.push(
+            server.mock("GET", path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).create_async().await,
+        );
+    }
+    let cart = server.mock("GET", "/cart").with_status(404).expect(0).create_async().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{}/", server.url()), tmp.path());
+    config.recursive = true;
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+
+    cart.assert_async().await;
+    assert_eq!(res.failed_pages, 0, "the cart link is not a failed page");
+    assert!(!tmp.path().join("cart.md").exists(), "no stub page for the cart");
+    assert!(tmp.path().join("about.md").exists(), "an ordinary page is still crawled");
+}
+
+/// The same URL linked from the article body is an ordinary link and is followed.
+#[tokio::test]
+async fn a_cart_url_linked_from_the_body_is_still_crawled() {
+    let mut server = mockito::Server::new_async().await;
+    let home = leaf_page("Example Home", "<a href=\"/cart\">Our cart of crafts</a>");
+    let mut mocks = Vec::new();
+    for (path, body) in [("/", home), ("/cart", leaf_page("Cart of crafts", ""))] {
+        mocks.push(
+            server.mock("GET", path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).expect_at_least(1).create_async().await,
+        );
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    crawl_leaves(&server, tmp.path()).await;
+    for m in &mocks {
+        m.assert_async().await;
+    }
+    assert!(tmp.path().join("cart.md").exists());
 }

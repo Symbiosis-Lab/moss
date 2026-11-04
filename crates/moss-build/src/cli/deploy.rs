@@ -114,6 +114,9 @@ pub struct DeployFlags {
     /// `--dry-run`: build as a deploy would, say what it would do, send
     /// nothing and record nothing.
     pub dry_run: bool,
+    /// `--json`, with `--dry-run`: print the dry run as JSON, every list in
+    /// full, for a script or an agent.
+    pub json: bool,
 }
 
 /// A parsed `moss deploy` command line.
@@ -153,6 +156,7 @@ impl DeployArgs {
                 "--overwrite-newer" => flags.overwrite_newer = true,
                 "--accept-removals" => flags.accept_removals = true,
                 "--dry-run" => flags.dry_run = true,
+                "--json" => flags.json = true,
                 a if a.starts_with('-') => {
                     return Err(format!("error: unknown option '{}'\n{}", a, usage()))
                 }
@@ -166,6 +170,9 @@ impl DeployArgs {
         }
         if let Some(address) = &flags.email {
             crate::identity::verify_email::validate_email(address)?;
+        }
+        if flags.json && !flags.dry_run {
+            return Err("error: --json goes with --dry-run; a deploy itself prints the published address".to_string());
         }
         if flags.dry_run && flags.accept_removals {
             return Err(
@@ -201,6 +208,7 @@ pub fn run(args: &[String]) -> i32 {
     report(
         publish(path, &route, &crate::cli::host::cli_host_ports, &parsed.flags),
         &parsed.folder,
+        parsed.flags.json,
     )
 }
 
@@ -378,7 +386,13 @@ async fn send(
 ///
 /// The URL is the only thing on stdout, so `$(moss deploy .)` is the site
 /// address and nothing else; progress and errors are stderr.
-pub fn report(result: Result<DeployReport, String>, folder_display: &str) -> i32 {
+/// `json` is `--json`: the dry run, or any failure, printed as JSON instead.
+pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: bool) -> i32 {
+    if json {
+        let (out, code) = json_report(&result);
+        println!("{out}");
+        return code;
+    }
     match result {
         Ok(DeployReport::Push(PushResult::Success { url, files_uploaded, files_removed })) => {
             println!("{}", url);
@@ -443,6 +457,18 @@ fn removed_by_author(folder: &str) -> String {
 /// From the shared command table, the same line the app binary prints for a
 /// deploy with no folder. `--help` never reaches here: both binaries answer it
 /// from that table before dispatch.
+/// `--dry-run --json`'s stdout and exit code: the dry run, or an `{"error"}`
+/// object for any failure, so a script reads JSON on every path.
+fn json_report(result: &Result<DeployReport, String>) -> (String, i32) {
+    match result {
+        Ok(DeployReport::DryRun(dry)) => {
+            (serde_json::to_string_pretty(&dry.to_json()).expect("a dry run serializes"), if dry.refusal.is_some() { 1 } else { 0 })
+        }
+        Ok(_) => (super::list::json_error("--json describes a dry run, and this was a deploy"), 1),
+        Err(e) => (super::list::json_error(e), 1),
+    }
+}
+
 fn usage() -> String {
     super::commands::help_for("deploy").expect("deploy is in the command table")
 }
@@ -585,6 +611,20 @@ mod removal_flag_tests {
         assert!(parse(&["site", "--email", "nope"]).unwrap_err().contains("not an email address"));
     }
 
+    #[test]
+    fn a_failed_json_dry_run_still_prints_json() {
+        let (out, code) = super::json_report(&Err("the build failed".to_string()));
+        assert_eq!(code, 1);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&out).unwrap()["error"], "the build failed");
+    }
+
+    #[test]
+    fn json_goes_with_a_dry_run_only() {
+        assert!(parse(&["site", "--dry-run", "--json"]).unwrap().flags.json);
+        let err = parse(&["site", "--json"]).unwrap_err();
+        assert!(err.starts_with("error: --json goes with --dry-run"), "{err}");
+    }
+
     /// A dry run records nothing, so it cannot also record an acceptance.
     #[test]
     fn a_dry_run_cannot_accept_removals() {
@@ -689,6 +729,63 @@ mod dry_run_tests {
         }
     }
 
+    /// `--json` gives the whole plan to a script: every moved address, and the
+    /// `[redirects]` lines that keep them, which the text report cuts at 20.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_json_dry_run_lists_every_move_and_the_lines_that_keep_them() {
+        let fx = Fixture::new(false);
+        // A page that moved, beside 25 files that moved with their folder.
+        std::fs::write(fx.dir.path().join("moved.md"), "---\ntitle: Moved\n---\n\nNew home.\n").unwrap();
+        let mut files = std::collections::HashMap::from([("old/index.html".to_string(), "100644:abc".to_string())]);
+        let mut assets = std::collections::HashMap::new();
+        std::fs::create_dir_all(fx.dir.path().join("review/new")).unwrap();
+        for i in 0..25 {
+            let bytes = format!("%PDF-1.4 {i}");
+            std::fs::write(fx.dir.path().join(format!("review/new/{i:02}.pdf")), &bytes).unwrap();
+            let old = format!("review/old/{i:02}.pdf");
+            files.insert(old.clone(), crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(bytes.as_bytes())));
+            assets.insert(old.clone(), old);
+        }
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(fx.dir.path()),
+            &PublishedSnapshot {
+                generation_id: "ours".into(),
+                target: "moss:dry-test".into(),
+                published_at: "2026-09-20T09:12:30+00:00".into(),
+                files,
+                source_to_output: [("moved.md".to_string(), "old/index.html".to_string())].into(),
+                asset_source_to_output: Some(assets),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let flags = DeployFlags { dry_run: true, json: true, ..DeployFlags::default() };
+        let report = dispatch(fx.dir.path(), &DeployRoute::Hosted, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing())
+            .await
+            .expect("a dry run reports");
+
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+        assert!(dry.refusal.is_some());
+        let (out, code) = super::json_report(&Ok(report));
+        assert_eq!(code, 1, "a refused dry run exits 1 in JSON too");
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let offline = json["addresses_going_offline"].as_array().unwrap();
+        assert_eq!(offline.len(), 26, "every address, not the first 20");
+        assert_eq!(offline[0]["output_path"], "old/index.html");
+        assert_eq!(offline[0]["address"], "/old/");
+        assert_eq!(offline[0]["moved_to"], "/moved/");
+        assert!(json["change_set"].get("removed").is_none(), "one list of offline addresses, named");
+        assert!(json["transfer"]["removed_output_paths"].as_array().unwrap().iter().any(|p| p == "review/old/00.pdf"));
+        assert_eq!(json["refusal"]["kind"], "removals");
+        let pending = json["pending_removals"].as_array().unwrap();
+        assert_eq!(pending.len(), 26);
+        assert_eq!(pending[1]["output_path"], "review/old/00.pdf");
+        assert_eq!(pending[1]["address"], "/review/old/00.pdf");
+        assert_eq!(pending[1]["cause"], serde_json::json!({ "kind": "moved", "to": "/review/new/00.pdf" }));
+        assert_eq!(json["redirects_to_add"], serde_json::json!([r#""/old/" = "/moved/""#, r#""/review/old/" = "/review/new/""#]));
+        assert!(!fx.contacted_the_server());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_dry_run_leaves_the_source_folder_byte_identical() {
         let fx = Fixture::new(false);
@@ -710,7 +807,7 @@ mod dry_run_tests {
         let report = fx.run(true).await.expect("a dry run reports, it does not fail");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
-        assert!(dry.refusal.as_deref().is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
+        assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
         assert!(
             matches!(&dry.transfer, crate::deploy::dry_run::Transfer::SinceLastPublish { removed, .. } if removed == &["legacy-feed.xml"]),
             "{:?}",
@@ -751,7 +848,7 @@ mod dry_run_tests {
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
         assert!(dry.refusal.is_none(), "{dry:?}");
-        assert_eq!(dry.kept_as_redirect, [("/photo-2.webp".to_string(), "/photo-2.jpg".to_string())]);
+        assert_eq!(dry.kept_as_redirect, [crate::deploy::dry_run::Kept { from: "/photo-2.webp".into(), to: "/photo-2.jpg".into() }]);
         assert!(dry.render().contains("/photo-2.webp -> /photo-2.jpg"));
     }
 
@@ -787,7 +884,7 @@ mod dry_run_tests {
         let fx = unpublished(false);
         let report = fx.run(true).await.expect("a dry run reports the plan");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
-        let refusal = dry.refusal.as_deref().expect("a real deploy would stop here");
+        let refusal = dry.refusal.as_ref().map(|r| r.text.as_str()).expect("a real deploy would stop here");
         assert!(refusal.contains("has no site yet") && refusal.contains("moss env"), "{refusal}");
         assert!(!fx.contacted_the_server());
     }
@@ -905,7 +1002,7 @@ mod dry_run_tests {
     }
 
     fn report_code(report: DeployReport) -> i32 {
-        super::report(Ok(report), "site")
+        super::report(Ok(report), "site", false)
     }
 }
 

@@ -1,4 +1,4 @@
-//! serde_json::Value ⇆ rquickjs::Value marshaling.
+//! rquickjs::Value -> serde_json::Value marshaling.
 //!
 //! rquickjs 0.12 has NO serde feature (research report 1 §3). The verified
 //! bridge is Ctx::json_parse / json_stringify (ctx.rs:280 / :301) — go through
@@ -8,12 +8,6 @@
 
 use rquickjs::{Ctx, Error, Result, Value};
 use serde_json::Value as Json;
-
-/// serde_json::Value -> rquickjs Value (inside a Ctx).
-pub fn json_to_js<'js>(ctx: &Ctx<'js>, j: &Json) -> Result<Value<'js>> {
-    let s = serde_json::to_string(j).map_err(|_| Error::Unknown)?;
-    ctx.json_parse(s)
-}
 
 /// rquickjs Value -> serde_json::Value (None JS value `undefined` => Json::Null).
 pub fn js_to_json<'js>(ctx: &Ctx<'js>, v: Value<'js>) -> Result<Json> {
@@ -39,7 +33,7 @@ mod tests {
         let input = json!({ "name": "x", "n": 7, "nested": { "arr": [1, 2, 3], "b": true } });
         // Convert IN, read a field back OUT — never let a Value<'js> escape the closure.
         let out: Json = async_with!(ctx => |ctx| {
-            let v = json_to_js(&ctx, &input).unwrap();
+            let v = ctx.json_parse(serde_json::to_string(&input).unwrap()).unwrap();
             ctx.globals().set("__probe", v).unwrap();
             let back: Value = ctx.eval("__probe").unwrap();
             js_to_json(&ctx, back).unwrap()

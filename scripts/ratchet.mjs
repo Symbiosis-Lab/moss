@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ratchet.mjs — shrink-only architecture ratchet for this repo. Three rows:
+// ratchet.mjs — shrink-only architecture ratchet for this repo. Four rows:
 //
 //   (a) prod_lines_per_file — files over 800 prod lines (Rust counted
 //                             #[cfg(test)]-aware) need a banded ceiling; any
@@ -11,6 +11,11 @@
 //                             disposition in `oversized{}`)
 //   (e) mirror_markers      — "keep in sync" / "must match" / "mirror of"
 //                             comment markers
+//   (f) direct_deps_per_crate — distinct production dependencies per crate
+//                             (normal ones, target-specific included; dev and
+//                             build excluded), read with `cargo metadata
+//                             --no-deps --offline`. Every crate with one is
+//                             baselined, so a new crate needs an `accept`.
 //
 // Roots: this repo's own `crates/*/src` and `packages/*/src` (rows a/b);
 // mirror_markers never scanned packages.
@@ -34,7 +39,7 @@
 //                                             runs the --check form itself, so
 //                                             an unregenerated block is red
 //
-// `--path` (repeatable) is required by `accept` for a per-path row (a, b): it
+// `--path` (repeatable) is required by `accept` for a per-path row (a, b, f): it
 // names exactly which entries the reason covers, so a reason written for one
 // file's growth cannot silently accept another file's growth in the same row.
 // A named path that is not over its baseline is an error, and nothing is
@@ -351,12 +356,41 @@ const collectors = {
     }
     return { kind: 'scalar', ...countAcross(root, files, [/keep in sync|must match|mirror of/gi]) };
   },
+
+  // (f) distinct production dependencies per crate → map {Cargo.toml: count}.
+  // A tree without a root Cargo.toml has no crates to count.
+  direct_deps_per_crate(root) {
+    const map = {};
+    if (isFile(path.join(root, 'Cargo.toml'))) {
+      for (const p of cargoMetadata(root).packages) {
+        const names = new Set(p.dependencies.filter((d) => d.kind === null).map((d) => d.rename ?? d.name));
+        if (names.size > 0) map[rel(root, p.manifest_path)] = names.size;
+      }
+    }
+    return { kind: 'map', map, threshold: 0, unit: 'direct dependencies' };
+  },
 };
+
+/** Workspace manifests as cargo reads them: no build, no network, no lock
+ *  resolution. Fails closed, since an unread manifest would count as zero. */
+function cargoMetadata(root) {
+  const r = spawnSync('cargo', ['metadata', '--format-version', '1', '--no-deps', '--offline'], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error || r.status !== 0) {
+    console.error(`RED direct_deps_per_crate: \`cargo metadata\` failed in ${root}: ${r.error?.message ?? r.stderr.trim()}`);
+    process.exit(1);
+  }
+  return JSON.parse(r.stdout);
+}
 
 const ROWS = {
   prod_lines_per_file: { letter: 'a', disposition: 'permanent' },
   children_per_dir: { letter: 'b', disposition: 'permanent' },
   mirror_markers: { letter: 'e', disposition: 'permanent' },
+  direct_deps_per_crate: { letter: 'f', disposition: 'permanent' },
 };
 
 export function collectCurrent(root) {
@@ -528,7 +562,8 @@ function cmdDocs(root, { check } = {}) {
     return;
   }
   const baseline = loadBaseline();
-  const current = collectCurrent(root);
+  // The block reads only row (a); collecting every row would need cargo here.
+  const current = { prod_lines_per_file: collectors.prod_lines_per_file(root) };
   const doc = read(docPath);
   const rendered = renderArchitectureDoc(doc, baseline, current);
   if (rendered === null) {
@@ -709,7 +744,9 @@ function checkRow(key, row, cur, violations) {
     const b = base[p];
     let msg = null;
     if (b === undefined) {
-      if (cur.threshold !== undefined) {
+      if (cur.threshold === 0) {
+        msg = `(${row.letter}) ${key}: NEW '${p}' has ${n} ${cur.unit}, not in baseline — run: ratchet.mjs accept ${key} "<reason>" --path ${p}`;
+      } else if (cur.threshold !== undefined) {
         msg = `(${row.letter}) ${key}: NEW '${p}' crossed ${cur.threshold} (${n} ${cur.unit}, not in baseline) — split it, or run: ratchet.mjs accept ${key} "<reason>" --path ${p}`;
       } else if (cur.newBudget !== undefined && n > cur.newBudget) {
         msg = `(${row.letter}) ${key}: NEW dir '${p}' has ${n} ${cur.unit} > budget ${cur.newBudget} — run: ratchet.mjs accept ${key} "<reason>" --path ${p}`;
@@ -907,9 +944,9 @@ function cmdAccept(root, rowKey, reason, only = []) {
     return;
   }
 
-  // Per-path rows (a, b) take --path as an argument, always — a pathless
-  // accept that sweeps every violation in the row is removed (ratchet-spec.md
-  // §1): the reason it prints would then cover growth it never looked at.
+  // Per-path rows (a, b, f) take --path as an argument, always — a pathless
+  // accept that sweeps every violation in the row is removed: the reason it
+  // prints would then cover growth it never looked at.
   if (!only.length) {
     console.error(`row '${rowKey}' takes one or more --path <file> — a pathless accept is not allowed`);
     process.exit(1);

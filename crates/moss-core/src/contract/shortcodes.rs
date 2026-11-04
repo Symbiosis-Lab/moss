@@ -128,6 +128,14 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
             None,
             "recent {count=${1:5}}\n${2:No posts yet.}\n:::",
         ),
+        ShortcodeKind::Form => (
+            &[
+                ShortcodeAttrSpec { name: "next", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "button", asset_kinds: &[], flag: false },
+            ],
+            None,
+            "form {#${1:request} next=${2:/thanks/}}\n- ${3:Your name} *\n- ${4:Email} * {type=email}\n:::",
+        ),
     };
     ShortcodeCatalogEntry {
         kind,

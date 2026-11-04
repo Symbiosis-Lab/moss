@@ -384,79 +384,85 @@ fn test_validate_config_no_sha256() {
 
 #[test]
 fn test_get_cached_binary_path_simple() {
-    // Flat binary: no cache_dir, no layout → ~/.moss/bin/ffmpeg
-    let config = test_config("ffmpeg");
-    let path = get_cached_binary_path(&config).unwrap();
-    // Normalize separators so the `/`-form suffix matches on Windows too;
-    // Windows also appends `.exe` to the binary filename.
-    let path_str = moss_core::slug::normalize_separators(&path.to_string_lossy());
-    let expected = if cfg!(target_os = "windows") {
-        ".moss/bin/ffmpeg.exe"
-    } else {
-        ".moss/bin/ffmpeg"
-    };
-    assert!(
-        path_str.ends_with(expected),
-        "Simple binary should be at ~/{}, got: {}",
-        expected,
-        path_str
-    );
+    crate::infra::home::without_moss_home(|| {
+        // Flat binary: no cache_dir, no layout → ~/.moss/bin/ffmpeg
+        let config = test_config("ffmpeg");
+        let path = get_cached_binary_path(&config).unwrap();
+        // Normalize separators so the `/`-form suffix matches on Windows too;
+        // Windows also appends `.exe` to the binary filename.
+        let path_str = moss_core::slug::normalize_separators(&path.to_string_lossy());
+        let expected = if cfg!(target_os = "windows") {
+            ".moss/bin/ffmpeg.exe"
+        } else {
+            ".moss/bin/ffmpeg"
+        };
+        assert!(
+            path_str.ends_with(expected),
+            "Simple binary should be at ~/{}, got: {}",
+            expected,
+            path_str
+        );
+    });
 }
 
 #[test]
 fn test_get_cached_binary_path_with_layout() {
-    // Nested layout: cache_dir + layout → ~/.moss/bin/git-portable/bin/git
-    let config = BinaryConfig {
-        name: "git".to_string(),
-        binary_name: None,
-        version_check: None,
-        sources: HashMap::new(),
-        archive_layout: Some(ArchiveLayout {
-            binary_path: "bin/git".to_string(),
-            executable_dirs: vec!["bin".to_string()],
-        }),
-        cache_dir: Some("git-portable".to_string()),
-        required_disk_space: None,
-    };
-    let path = get_cached_binary_path(&config).unwrap();
-    // Normalize separators so the `/`-form suffix matches on Windows too.
-    // The nested layout uses `archive_layout.binary_path` verbatim, so no
-    // `.exe` is appended here.
-    let path_str = moss_core::slug::normalize_separators(&path.to_string_lossy());
-    assert!(
-        path_str.ends_with(".moss/bin/git-portable/bin/git"),
-        "Nested binary should be at ~/.moss/bin/git-portable/bin/git, got: {}",
-        path_str
-    );
+    crate::infra::home::without_moss_home(|| {
+        // Nested layout: cache_dir + layout → ~/.moss/bin/git-portable/bin/git
+        let config = BinaryConfig {
+            name: "git".to_string(),
+            binary_name: None,
+            version_check: None,
+            sources: HashMap::new(),
+            archive_layout: Some(ArchiveLayout {
+                binary_path: "bin/git".to_string(),
+                executable_dirs: vec!["bin".to_string()],
+            }),
+            cache_dir: Some("git-portable".to_string()),
+            required_disk_space: None,
+        };
+        let path = get_cached_binary_path(&config).unwrap();
+        // Normalize separators so the `/`-form suffix matches on Windows too.
+        // The nested layout uses `archive_layout.binary_path` verbatim, so no
+        // `.exe` is appended here.
+        let path_str = moss_core::slug::normalize_separators(&path.to_string_lossy());
+        assert!(
+            path_str.ends_with(".moss/bin/git-portable/bin/git"),
+            "Nested binary should be at ~/.moss/bin/git-portable/bin/git, got: {}",
+            path_str
+        );
+    });
 }
 
 #[test]
 fn test_get_cached_binary_path_cache_dir_no_layout() {
-    // Cache dir but no layout → ~/.moss/bin/subdir/hugo
-    let config = BinaryConfig {
-        name: "hugo".to_string(),
-        binary_name: None,
-        version_check: None,
-        sources: HashMap::new(),
-        archive_layout: None,
-        cache_dir: Some("hugo-cache".to_string()),
-        required_disk_space: None,
-    };
-    let path = get_cached_binary_path(&config).unwrap();
-    // Normalize separators so the `/`-form suffix matches on Windows too;
-    // this branch uses the binary filename, so Windows appends `.exe`.
-    let path_str = moss_core::slug::normalize_separators(&path.to_string_lossy());
-    let expected = if cfg!(target_os = "windows") {
-        ".moss/bin/hugo-cache/hugo.exe"
-    } else {
-        ".moss/bin/hugo-cache/hugo"
-    };
-    assert!(
-        path_str.ends_with(expected),
-        "Cache-dir binary should be at ~/{}, got: {}",
-        expected,
-        path_str
-    );
+    crate::infra::home::without_moss_home(|| {
+        // Cache dir but no layout → ~/.moss/bin/subdir/hugo
+        let config = BinaryConfig {
+            name: "hugo".to_string(),
+            binary_name: None,
+            version_check: None,
+            sources: HashMap::new(),
+            archive_layout: None,
+            cache_dir: Some("hugo-cache".to_string()),
+            required_disk_space: None,
+        };
+        let path = get_cached_binary_path(&config).unwrap();
+        // Normalize separators so the `/`-form suffix matches on Windows too;
+        // this branch uses the binary filename, so Windows appends `.exe`.
+        let path_str = moss_core::slug::normalize_separators(&path.to_string_lossy());
+        let expected = if cfg!(target_os = "windows") {
+            ".moss/bin/hugo-cache/hugo.exe"
+        } else {
+            ".moss/bin/hugo-cache/hugo"
+        };
+        assert!(
+            path_str.ends_with(expected),
+            "Cache-dir binary should be at ~/{}, got: {}",
+            expected,
+            path_str
+        );
+    });
 }
 
 // -------------------------------------------------------------------------

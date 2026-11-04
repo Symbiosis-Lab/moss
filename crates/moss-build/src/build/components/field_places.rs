@@ -62,10 +62,9 @@ pub fn draw(placed: &[Placed], lang: Language, typesetting: Option<&str>, page_h
         .collect();
     let rows: String = drawn(Place::Facts)
         .map(|(p, html)| {
-            let d = p.decl();
-            let label = html_escape(&d.label_for(lang.as_bcp47_attr()));
+            let label = html_escape(&p.decl().label_for(lang.as_bcp47_attr()));
             let dd = open("dd", "", matches!(p, Placed::Group(..)), None);
-            format!("{}<dt>{label}</dt>{dd}{html}</dd></div>\n", open("div", "", false, Some(d)))
+            format!("{}<dt>{label}</dt>{dd}{html}</dd></div>\n", open("div", "", false, Some(p)))
         })
         .collect();
     Placements {
@@ -90,11 +89,12 @@ impl Placements {
 
 /// One drawn entry: `body` inside `tag`, with `classes` plus `moss-field-group` for a group.
 fn element(p: &Placed, tag: &str, classes: &str, body: &str) -> String {
-    format!("{}{body}</{tag}>", open(tag, classes, matches!(p, Placed::Group(..)), Some(p.decl())))
+    format!("{}{body}</{tag}>", open(tag, classes, matches!(p, Placed::Group(..)), Some(p)))
 }
 
-/// The opening tag of an entry; `field` puts its `data-field` on it.
-fn open(tag: &str, classes: &str, group: bool, field: Option<&FieldDecl>) -> String {
+/// The opening tag of an entry; `field` puts its `data-field` on it, and a
+/// choice's `data-value` beside it.
+fn open(tag: &str, classes: &str, group: bool, field: Option<&Placed>) -> String {
     let mut class = classes.to_string();
     if group {
         if !class.is_empty() {
@@ -103,8 +103,20 @@ fn open(tag: &str, classes: &str, group: bool, field: Option<&FieldDecl>) -> Str
         class.push_str("moss-field-group");
     }
     let class = if class.is_empty() { String::new() } else { format!(" class=\"{class}\"") };
-    let field = field.map_or(String::new(), |d| format!(" data-field=\"{}\"", html_escape(&d.name)));
+    let field = field.map_or(String::new(), |p| match p {
+        Placed::Value(d, v) => format!(" data-field=\"{}\"{}", html_escape(&d.name), choice_attr(v)),
+        Placed::Group(d, _) => format!(" data-field=\"{}\"", html_escape(&d.name)),
+    });
     format!("<{tag}{class}{field}>")
+}
+
+/// ` data-value="<slug>"` for a choice, the slug of the key as written in
+/// config, so a theme selects by value without knowing the label's language.
+fn choice_attr(v: &TypedValue) -> String {
+    match v {
+        TypedValue::Choice { value, .. } => format!(" data-value=\"{}\"", html_escape(&moss_core::terms::term_slug(value))),
+        _ => String::new(),
+    }
 }
 
 /// [`draw`] for a rendered page: a page link resolves through the content
@@ -222,7 +234,7 @@ fn parts_html(parts: &[(FieldDecl, TypedValue)], lang: Language, typesetting: Op
         .iter()
         .filter_map(|(d, v)| {
             let html = inline(d, v, lang, typesetting, page_href);
-            (!html.is_empty()).then(|| format!("<span data-field=\"{}\">{html}</span>", html_escape(&d.name)))
+            (!html.is_empty()).then(|| format!("<span data-field=\"{}\"{}>{html}</span>", html_escape(&d.name), choice_attr(v)))
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -232,6 +244,46 @@ fn parts_html(parts: &[(FieldDecl, TypedValue)], lang: Language, typesetting: Op
 /// field, so a theme styles both alike.
 fn subtitle_line(field: &str, html: &str) -> String {
     format!("<p class=\"moss-subtitle\" data-field=\"{field}\">{html}</p>\n")
+}
+
+/// Appends, to each page's card extras, the declared fields with `card = true` that the page has a value for.
+/// Plain text, never a link: a card is already one link. `decls` is in declaration order, which is the drawing order.
+pub fn set_card_fields(documents: &mut [ParsedDocument], decls: &[FieldDecl], typesetting: Option<&str>) {
+    let cards: Vec<&FieldDecl> = decls.iter().filter(|d| d.card).collect();
+    if cards.is_empty() {
+        return;
+    }
+    for doc in documents.iter_mut() {
+        let fields: Vec<String> = cards
+            .iter()
+            .filter_map(|d| {
+                let v = doc.declared.get(&d.name)?;
+                let (name, text) = (html_escape(&d.name), html_escape(&card_text(d, v, doc.lang, typesetting)));
+                // A choice's `data-value` is the slug of its key, as on a placed choice and a term credit; any other value is its own text.
+                let value = match v {
+                    TypedValue::Choice { value, .. } => html_escape(&moss_core::terms::term_slug(value)),
+                    _ => text.clone(),
+                };
+                Some(format!(r#"<span class="moss-card-field" data-field="{name}" data-value="{value}">{text}</span>"#))
+            })
+            .collect();
+        if fields.is_empty() {
+            continue;
+        }
+        // After the credits span the page may already carry, one separator between every part.
+        let parts: Vec<String> = doc.card_extras.take().into_iter().chain(fields).collect();
+        doc.card_extras = Some(parts.join(child_list::EVENT_SEP));
+    }
+}
+
+/// A value as a card reads it: the page's own text, with a url as its link text and a page link as its name.
+fn card_text(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>) -> String {
+    match v {
+        TypedValue::Url(u) => decl.text_for(lang.as_bcp47_attr()).filter(|t| !t.is_empty()).unwrap_or(u).to_string(),
+        TypedValue::Page(p) => link_name(p).to_string(),
+        TypedValue::Pages(pages) => pages.iter().map(link_name).collect::<Vec<_>>().join(", "),
+        other => value_text(other, lang, typesetting),
+    }
 }
 
 /// One value as inline markup.
@@ -259,11 +311,14 @@ fn inline(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<
     }
 }
 
+fn link_name(link: &PageLink) -> &str {
+    link.alias.as_deref().unwrap_or_else(|| link.target.rsplit('/').next().unwrap_or(&link.target))
+}
+
 /// A page link reads as written, like a body wikilink: its alias, else the last
 /// segment of its target. It links to the page when the target resolves.
 fn page_link_html(link: &PageLink, page_href: &dyn Fn(&str) -> Option<String>) -> String {
-    let name = link.alias.as_deref().unwrap_or_else(|| link.target.rsplit('/').next().unwrap_or(&link.target));
-    let name = html_escape(name);
+    let name = html_escape(link_name(link));
     match page_href(&link.target) {
         Some(href) => format!("<a href=\"{}\">{name}</a>", html_escape(&href)),
         None => name,

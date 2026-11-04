@@ -45,7 +45,7 @@ fn test_collect_videos_for_conversion_empty() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let videos = collect_videos_for_conversion(&project);
@@ -95,7 +95,7 @@ fn test_collect_videos_for_conversion_mov_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let videos = collect_videos_for_conversion(&project);
@@ -149,7 +149,7 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let videos = collect_videos_for_conversion(&project);
@@ -842,7 +842,11 @@ fn test_background_command_sets_niceness() {
         .output()
         .expect("spawn sh");
     assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "10");
+    // An unprivileged process cannot lower its priority, so a test run that
+    // is already niced past 10 keeps its own niceness.
+    let nice = |out: std::process::Output| String::from_utf8_lossy(&out.stdout).trim().parse::<i32>().unwrap();
+    let own = std::process::Command::new("ps").args(["-o", "nice=", "-p", &std::process::id().to_string()]).output().unwrap();
+    assert_eq!(nice(out), nice(own).max(BACKGROUND_NICENESS));
 }
 
 #[test]

@@ -1,0 +1,21 @@
+{
+  "name": "@symbiosis-lab/moss-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The moss UI's side of the engine: the typed contract of every command the UI sends to the moss engine",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "author": "Guo Liu",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

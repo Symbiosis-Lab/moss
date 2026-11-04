@@ -198,16 +198,12 @@ fn a_holder_record_that_cannot_be_parsed_costs_the_refusal_only_its_name() {
 }
 
 /// `MOSS_STACKS_ROOT` is what makes every test above hermetic, so its
-/// precedence over the home directory is pinned rather than assumed.
+/// precedence over the moss home is pinned rather than assumed. Runs under
+/// `with_moss_home`: `stacks_root` reads `$MOSS_HOME`, which other tests set.
 #[test]
-fn the_stacks_root_falls_back_to_home_but_prefers_the_override() {
-    // Read-only: no other test mutates the environment, so this observes
-    // whichever arm the suite is running under without racing anything.
-    match std::env::var_os("MOSS_STACKS_ROOT") {
+fn the_stacks_root_falls_back_to_moss_home_but_prefers_the_override() {
+    crate::infra::home::with_moss_home(|home| match std::env::var_os("MOSS_STACKS_ROOT") {
         Some(over) => assert_eq!(stacks_root().unwrap(), PathBuf::from(over)),
-        None => assert_eq!(
-            stacks_root().unwrap(),
-            dirs::home_dir().unwrap().join(".moss").join("stacks")
-        ),
-    }
+        None => assert_eq!(stacks_root().unwrap(), home.join("stacks")),
+    });
 }

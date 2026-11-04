@@ -14,8 +14,8 @@ fn the_lock_path_is_derived_from_the_canonical_folder_path() {
         std::fs::create_dir_all(&folder).unwrap();
         let canonical = std::fs::canonicalize(&folder).unwrap();
 
-        let via_canonical = lock_path_for(&canonical).unwrap();
-        let via_dotdot = lock_path_for(&folder.join("..").join("site")).unwrap();
+        let via_canonical = lock_path_named(&canonical, "build").unwrap();
+        let via_dotdot = lock_path_named(&folder.join("..").join("site"), "build").unwrap();
 
         assert_eq!(
             via_canonical, via_dotdot,
@@ -35,7 +35,7 @@ fn different_folders_get_different_lock_paths() {
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
 
-        assert_ne!(lock_path_for(&a).unwrap(), lock_path_for(&b).unwrap());
+        assert_ne!(lock_path_named(&a, "build").unwrap(), lock_path_named(&b, "build").unwrap());
     });
 }
 
@@ -48,7 +48,7 @@ fn the_lock_path_lives_under_moss_home_locks() {
         let folder = tmp.path().join("site");
         std::fs::create_dir_all(&folder).unwrap();
 
-        let path = lock_path_for(&folder).unwrap();
+        let path = lock_path_named(&folder, "build").unwrap();
         assert_eq!(path.parent().unwrap(), home.join("locks"));
         assert!(path.extension().is_some_and(|e| e == "build"));
     });

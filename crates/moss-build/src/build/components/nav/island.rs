@@ -35,9 +35,15 @@ pub(super) enum IslandShape {
 /// worse than not claiming them — a screen-reader user told "menu" presses
 /// ArrowDown and nothing moves. `aria-expanded` already says the button
 /// discloses something, which is the truth here.
+/// The `/` between crumbs, for the masthead and the island alike. Hidden from
+/// assistive technology: the trail's links already say where each level is, and
+/// a reader announcing "slash" between them adds nothing. As a visual delimiter
+/// it is held to non-text contrast (3:1), which `--moss-border-strong` meets.
+pub(super) const SEPARATOR: &str = r#"<span class="breadcrumb-separator" aria-hidden="true">/</span>"#;
+
 pub(super) fn fold_more_fragment(class: &str, more_label: &str) -> String {
     format!(
-        r#"<button type="button" class="{class}" hidden aria-expanded="false" aria-label="{more_label}">…</button><span class="breadcrumb-separator" data-trail-more-separator hidden>/</span>"#
+        r#"<button type="button" class="{class}" hidden aria-expanded="false" aria-label="{more_label}">…</button><span class="breadcrumb-separator" aria-hidden="true" data-trail-more-separator hidden>/</span>"#
     )
 }
 
@@ -110,7 +116,7 @@ impl<'a> NavigationBuilder<'a> {
         let home_path = self.home_path();
         let logo_html = self.logo_html();
         let lang = self.current_lang;
-        let separator = r#"<span class="breadcrumb-separator">/</span>"#;
+        let separator = SEPARATOR;
 
         // The trail is the masthead's markup continued: same
         // `site-name` / `breadcrumb-segment` / `breadcrumb-label` /

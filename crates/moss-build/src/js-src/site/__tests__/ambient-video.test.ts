@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { initAmbientVideos } from "../ambient-video";
+import { initAmbientVideos } from "../video/ambient-video";
 
 function mockMatchMedia(reducedMotion: boolean) {
   Object.defineProperty(window, "matchMedia", {

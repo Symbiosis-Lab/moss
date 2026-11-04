@@ -994,34 +994,6 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     "ico",
 ];
 
-/// Project-root-relative `/`-prefixed request path for an image source file
-/// under `root`, else None. Pure (no kind check) — kind is filtered by caller.
-///
-/// Handles two cases:
-/// - For files that EXIST on disk: uses `canonicalize` on both sides.
-/// - For files that are GONE (deleted/renamed away): does a lexical strip of
-///   the (already-absolute) event path against `root`'s canonical form,
-///   because `canonicalize` would fail on a missing file.
-///
-/// Returns the path with a leading `/`, normalizing `\` to `/`, e.g.
-/// `/图片/摄影/X.jpeg`. Returns `None` if `abs` is not under `root` or does
-/// not have an image extension.
-pub(crate) fn source_image_request_path(root: &Path, abs: &Path) -> Option<String> {
-    // Check extension first (cheap) before touching the filesystem.
-    let ext = abs
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase());
-    let is_image = ext
-        .as_deref()
-        .map(|e| IMAGE_EXTENSIONS.contains(&e))
-        .unwrap_or(false);
-    if !is_image {
-        return None;
-    }
-    request_path_under_root(root, abs)
-}
-
 /// Which `SourceAssetChanged` emissions one debounced event owes the editor.
 ///
 /// Per-path policy (the editor's reference resolver revalidates its whole

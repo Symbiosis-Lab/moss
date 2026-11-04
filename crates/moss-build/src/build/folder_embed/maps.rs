@@ -64,6 +64,15 @@ pub(super) fn render(
     let path = marker_decode(parsed.path);
     let from = marker_decode(parsed.from);
     let target = docs.iter().find(|d| d.source_path.as_deref() == Some(path.as_str()));
+    if let Some((doc, model)) = target.and_then(|d| d.country_map.as_ref().map(|m| (d, m))) {
+        use crate::build::place_map::country_map::render::{render, Place};
+        if model.rows.is_empty() {
+            return String::new();
+        }
+        let host_lang = docs.iter().find(|d| d.source_path.as_deref() == Some(from.as_str())).map_or(doc.lang, |d| d.lang);
+        let place = if path == from { Place::OwnPage } else { Place::Embedded };
+        return render(model, &doc.title, doc.date.as_deref(), host_lang, place);
+    }
     if let Some((doc, maps)) = target.zip(maps) {
         if let Some(svg) = maps.render_article_map(&doc.location, doc.route, &doc.url_path, &from, ordinal) {
             return place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref());

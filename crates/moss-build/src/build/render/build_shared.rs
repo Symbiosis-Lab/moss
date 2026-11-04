@@ -222,7 +222,7 @@ impl FolderIndexPlan {
             if in_passthrough { withheld.push(folder) } else { folders.push(folder) }
         }
         // Each withheld listing forwards to the nearest folder page still served.
-        let passthrough_stubs = withheld.iter().map(|folder| {
+        let mut passthrough_stubs: Vec<(String, String)> = withheld.iter().map(|folder| {
             let target = std::iter::successors(folder.rsplit_once('/').map(|(parent, _)| parent), |p| p.rsplit_once('/').map(|(parent, _)| parent))
                 .find(|p| authored.contains(*p) || verbatim.contains(*p) || folders.iter().any(|f| f == p))
                 .map_or_else(|| "/".to_string(), |p| format!("/{p}/")); // allow:served-path-url-construct (the redirect target is the parent page's address)
@@ -234,6 +234,8 @@ impl FolderIndexPlan {
             documents.push(make_document(&folder));
             FolderIndexEntry { folder, document_index }
         }).collect();
+        // A storage folder's listing is not written; its address forwards home.
+        passthrough_stubs.extend(project.storage_folders.iter().map(|f| (format!("{f}/"), "/".to_string()))); // allow:served-path-url-construct (the address the listing had, the redirect source)
         Self { entries, passthrough_stubs }
     }
 }

@@ -464,3 +464,20 @@ fn save_before_restore_saves_when_the_current_tree_differs() {
     let expected_label = format!("Before restoring {}", format_date(&restoring_record.published_at));
     assert_eq!(pre_restore.1.label.as_deref(), Some(expected_label.as_str()));
 }
+
+#[test]
+fn a_kept_outside_edit_was_published_nowhere() {
+    let record = |target: &str, trigger| PublishRecord {
+        version: 1,
+        published_at: "2026-01-01T00:00:00Z".into(),
+        target: target.into(),
+        generation_id: "g".into(),
+        git_head: None,
+        trigger,
+        label: None,
+        entries: Default::default(),
+    };
+    assert_eq!(record("moss:site", Trigger::Publish).published_target(), Some("moss:site"));
+    assert_eq!(record("moss:site", Trigger::Restore).published_target(), Some("moss:site"));
+    assert_eq!(record("", Trigger::Displaced).published_target(), None);
+}

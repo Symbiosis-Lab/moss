@@ -1363,6 +1363,13 @@ fn build_inner(
     for note in cfg.as_ref().map(|c| c.unknown_site_keys()).unwrap_or_default() {
         crate::build::cli_output::log_note!("{note}");
     }
+    let forms_endpoint = cfg.as_ref().and_then(|c| match crate::build::site_config::parse_services(c) {
+        Ok(services) => services.forms_endpoint(),
+        Err(problem) => {
+            crate::build::cli_output::log_warn_problem!("{problem}");
+            None
+        }
+    });
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1528,6 +1535,7 @@ fn build_inner(
         term_kinds: kinds,
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
+        forms_endpoint,
         place_maps,
         incremental,
         derivations: derived.clone(),
@@ -1901,6 +1909,7 @@ fn build_inner(
         &stage_dir,
         &mut pending,
     );
+    crate::build::emit::place_map_assets::emit_country_notice(&documents, &stage_dir, &mut pending);
     // `layers.json` beside them; nothing is written without `[map.layers]`.
     let used_places = place_maps_for_places_data.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
     crate::build::emit::place_map_layers::emit_if_place_typed(

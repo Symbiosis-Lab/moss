@@ -145,6 +145,10 @@ fn collect_watch_targets(root: &Path) -> Result<Vec<WatchTarget>, StorageFailure
         match std::fs::metadata(&path) {
             Ok(_) => {}
             Err(error) if crate::build::icloud::is_definitely_absent(&path, &error) => continue,
+            // `.moss` is a file, so nothing inside it exists to watch. Failing
+            // here would read as an unreadable root and mark a reachable
+            // project unavailable.
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => continue,
             Err(error) => return Err(StorageFailure::new(
                 Some(path), StorageOperation::EntryMetadata, error,
             )),
@@ -214,22 +218,6 @@ pub fn any_path_watchable(root: &Path, paths: &[PathBuf]) -> bool {
         paths.len(),
         paths
     );
-    false
-}
-
-/// True when `path` lies inside a NESTED moss root below `root` — a subtree
-/// that is a different site's territory, which the scan walks around. Probes each directory strictly between `root` and `path`
-/// for a `.moss/` of its own: one lstat per level, so it is safe per-event.
-pub fn path_in_nested_vault(root: &Path, path: &Path) -> bool {
-    let Ok(rel) = path.strip_prefix(root) else { return false };
-    let comps: Vec<_> = rel.components().collect();
-    let mut probe = root.to_path_buf();
-    for comp in comps.iter().take(comps.len().saturating_sub(1)) {
-        probe.push(comp);
-        if probe.join(".moss").is_dir() {
-            return true;
-        }
-    }
     false
 }
 

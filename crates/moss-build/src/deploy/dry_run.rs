@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::build::manifest::change_set::{self, ChangeSet, PageVerb};
 use crate::build::manifest::{backfill, published_record};
-use crate::deploy::removal_gate::{capped_lines, capped_lines_cut, cause_line};
+use crate::deploy::removal_gate::{capped_lines_cut, cause_line, more_in_json, JSON_LISTS_ALL};
 use crate::deploy::route::DeployRoute;
 use crate::moss_paths::MossPaths;
 
@@ -31,12 +31,19 @@ pub enum Transfer {
     NotCounted,
 }
 
+/// An old address kept answering: `from` forwards to, or is a copy of, `to`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Kept {
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Debug)]
 pub struct DryRun {
     pub change_set: ChangeSet,
     pub transfer: Transfer,
-    /// The publish gate's refusal text, when a real deploy would stop at it.
-    pub refusal: Option<String>,
+    /// The refusal a real deploy would stop at, with the rule that made it.
+    pub refusal: Option<crate::deploy::Refusal>,
     /// The site a first publish would register. Not registered.
     pub would_register: Option<String>,
     /// A deploy creates a signing key when the site has none. Not created.
@@ -47,12 +54,68 @@ pub struct DryRun {
     pub needs_verification: bool,
     /// The folder was read as it is, with no build.
     pub prebuilt: bool,
-    /// Image derivatives the build stopped producing, now answering as a
-    /// redirect to their picture: `(address, picture address)`.
-    pub kept_as_redirect: Vec<(String, String)>,
+    /// Old addresses kept answering without a line of their own: an image
+    /// derivative the build stopped producing (from its picture), and each
+    /// file under a moved folder: `(address, served address)`.
+    pub kept_as_redirect: Vec<Kept>,
+    /// The removals that refuse this publish, as the publish gate holds them.
+    pub pending_removals: Vec<change_set::PendingRemoval>,
 }
 
 impl DryRun {
+    /// What `moss deploy --dry-run --json` prints: every list in full. A field
+    /// named `output_path` is a file of the build output (`a/index.html`); one
+    /// named `address`, `moved_to` or a move's `to` is what a visitor asks for
+    /// (`/a/`); one named `source_path` is a file in the site folder.
+    pub fn to_json(&self) -> serde_json::Value {
+        use crate::build::served_path::served_address;
+        use serde_json::json;
+        // Every field, so a new one is a build error here until it is printed.
+        let DryRun {
+            change_set: set,
+            transfer,
+            refusal,
+            would_register,
+            would_create_key,
+            needs_verification,
+            prebuilt,
+            kept_as_redirect,
+            pending_removals,
+        } = self;
+        let mut change_set = serde_json::to_value(set).expect("a change set serializes");
+        if let Some(fields) = change_set.as_object_mut() {
+            fields.remove("removed");
+        }
+        let offline: Vec<_> = set.removed.iter().map(|r| json!({
+            "output_path": r.path,
+            "address": served_address(&r.path),
+            "reason": r.reason,
+            "moved_to": r.moved_to.as_deref().map(served_address),
+            "source_path": r.source,
+        })).collect();
+        let pending: Vec<_> = pending_removals.iter()
+            .map(|p| json!({ "output_path": p.path, "address": p.address, "cause": p.cause }))
+            .collect();
+        let transfer = match transfer {
+            Transfer::SinceLastPublish { upload, removed } => json!({ "kind": "since_last_publish", "upload": upload, "removed_output_paths": removed }),
+            Transfer::NoRecord => json!({ "kind": "no_record" }),
+            Transfer::NotCounted => json!({ "kind": "not_counted" }),
+        };
+        json!({
+            "change_set": change_set,
+            "addresses_going_offline": offline,
+            "refusal": refusal,
+            "pending_removals": pending,
+            "redirects_to_add": crate::deploy::removal_gate::redirect_lines(pending_removals),
+            "kept": kept_as_redirect.iter().map(|k| json!({ "address": k.from, "to": k.to })).collect::<Vec<_>>(),
+            "transfer": transfer,
+            "would_register": would_register,
+            "would_create_key": would_create_key,
+            "needs_verification": needs_verification,
+            "prebuilt": prebuilt,
+        })
+    }
+
     pub fn render(&self) -> String {
         let set = &self.change_set;
         let mut out = if self.prebuilt {
@@ -76,11 +139,11 @@ impl DryRun {
         }
         if !set.removed.is_empty() {
             out.push_str(&format!("Addresses going offline: {}\n", set.removed.len()));
-            out.push_str(&capped_lines(&set.removed, cause_line));
+            out.push_str(&capped_lines_cut(&set.removed, cause_line, more_in_json));
         }
         if !self.kept_as_redirect.is_empty() {
-            out.push_str("Kept as a redirect, because the picture is still served:\n");
-            out.push_str(&capped_lines(&self.kept_as_redirect, |(from, to)| format!("{from} -> {to}")));
+            out.push_str("Kept answering at the old address (a picture still served, or a folder redirect):\n");
+            out.push_str(&capped_lines_cut(&self.kept_as_redirect, |k| format!("{} -> {}", k.from, k.to), more_in_json));
         }
         match &self.transfer {
             Transfer::SinceLastPublish { upload, removed } => {
@@ -97,7 +160,7 @@ impl DryRun {
                     .collect();
                 if !rest.is_empty() {
                     out.push_str(if set.removed.is_empty() { "Removed:\n" } else { "Also removed:\n" });
-                    out.push_str(&capped_lines(&rest, |a| a.clone()));
+                    out.push_str(&capped_lines_cut(&rest, String::clone, more_in_json));
                 }
             }
             Transfer::NoRecord => out.push_str(
@@ -114,7 +177,7 @@ impl DryRun {
             out.push_str("This folder's key is not linked to an email yet, so registering would need verification: a real deploy needs `--email <address>` (the account the site should belong to) to be sent a sign-in link. Nothing was sent.\n");
         }
         match &self.refusal {
-            Some(text) => out.push_str(&format!("Publish check: a real deploy would be refused:\n{text}\n")),
+            Some(r) => out.push_str(&format!("Publish check: a real deploy would be refused:\n{}\n", r.text)),
             None => out.push_str("Publish check: passes.\n"),
         }
         out.push_str(
@@ -151,8 +214,8 @@ fn page_lines(pages: &[change_set::ChangedPage]) -> String {
                 })
                 .collect();
             match per_verb.as_slice() {
-                [only] => format!("and {} more {}", rest.len(), only.split_once(' ').map_or("", |(_, w)| w)),
-                _ => format!("and {} more: {}", rest.len(), per_verb.join(", ")),
+                [only] => format!("and {} more {}; {JSON_LISTS_ALL}", rest.len(), only.split_once(' ').map_or("", |(_, w)| w)),
+                _ => format!("and {} more: {}; {JSON_LISTS_ALL}", rest.len(), per_verb.join(", ")),
             }
         },
     )
@@ -271,11 +334,12 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
+    use crate::deploy::Refusal;
     let refusal = match &local.no_environment {
-        Some(text) => Some(text.clone()),
-        None => crate::deploy::refuse_publish(&folder_str)
-            .and_then(|_| crate::deploy::refuse_foreign_inputs(&sealed, folder))
-            .and_then(|_| crate::deploy::refuse_unresolved_inputs(&sealed)).err(),
+        Some(text) => Some(Refusal::new(crate::deploy::RefusalKind::NoEnvironment, text.clone())),
+        None => crate::deploy::publish_refusal(&folder_str)
+            .or_else(|| crate::deploy::refuse_foreign_inputs(&sealed, folder).err().map(|t| Refusal::new(crate::deploy::RefusalKind::ForeignInputs, t)))
+            .or_else(|| crate::deploy::refuse_unresolved_inputs(&sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::UnresolvedInputs, t))),
     };
     Ok(DryRun {
         change_set,
@@ -286,15 +350,16 @@ pub async fn run_dry_run(
         needs_verification: local.needs_verification,
         prebuilt: false,
         kept_as_redirect: kept_as_redirect(&folder_str),
+        pending_removals: crate::system::build_records::records().pending_removals(&folder_str),
     })
 }
 
-fn kept_as_redirect(folder: &str) -> Vec<(String, String)> {
+fn kept_as_redirect(folder: &str) -> Vec<Kept> {
     use crate::build::served_path::served_address;
     crate::system::build_records::records()
-        .kept_derivatives(folder)
+        .kept(folder)
         .into_iter()
-        .map(|(from, to)| (served_address(&from), served_address(&to)))
+        .map(|(from, to)| Kept { from: served_address(&from), to: served_address(&to) })
         .collect()
 }
 
@@ -324,7 +389,7 @@ pub async fn run_prebuilt_dry_run(
     let (transfer, refusal) = match super::prebuilt::removed_against_last_publish(folder, &site_id, &manifest) {
         Some((baseline, removed)) => {
             let refusal = (!accept_removals && !removed.is_empty())
-                .then(|| crate::deploy::removal_gate::prebuilt_refusal(&removed));
+                .then(|| crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, crate::deploy::removal_gate::prebuilt_refusal(&removed)));
             let upload = change_set::upload_count_of(&baseline.files, &manifest) as u32;
             (Transfer::SinceLastPublish { upload, removed }, refusal)
         }
@@ -339,6 +404,7 @@ pub async fn run_prebuilt_dry_run(
         needs_verification: local.needs_verification,
         prebuilt: true,
         kept_as_redirect: Vec::new(),
+        pending_removals: Vec::new(),
     })
 }
 
@@ -362,12 +428,13 @@ mod tests {
                 source: None,
             }]),
             transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["legacy-feed.xml".into(), "style.1a2b3c.css".into()] },
-            refusal: Some("Nothing published — REFUSED".into()),
+            refusal: Some(crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, "Nothing published — REFUSED".into())),
             would_register: None,
             would_create_key: false,
             needs_verification: false,
             prebuilt: false,
             kept_as_redirect: Vec::new(),
+            pending_removals: Vec::new(),
         }
     }
 
@@ -390,12 +457,13 @@ mod tests {
             needs_verification: false,
             prebuilt: false,
             kept_as_redirect: Vec::new(),
+            pending_removals: Vec::new(),
         };
 
         let text = dry.render();
 
         assert!(text.contains("Pages: 0 added, 1 edited, 0 deleted, 79 restyled\n  edited   z-edited.md\n  restyled a-00.md\n"), "{text}");
-        assert!(text.contains("  and 60 more restyled\n"), "{text}");
+        assert!(text.contains("  and 60 more restyled; `moss deploy --dry-run --json` lists every one\n"), "{text}");
     }
 
     fn listing(pages: &[(PageVerb, usize)]) -> String {
@@ -415,12 +483,12 @@ mod tests {
         let text = listing(&[(PageVerb::Added, 18), (PageVerb::Edited, 4), (PageVerb::Deleted, 3), (PageVerb::Restyled, 5)]);
         assert!(text.contains("  edited   Edited-01.md\n"), "{text}");
         assert!(!text.contains("Edited-02") && !text.contains("  restyled "), "{text}");
-        assert!(text.ends_with("  and 10 more: 2 edited, 3 deleted, 5 restyled\n"), "{text}");
+        assert!(text.ends_with("  and 10 more: 2 edited, 3 deleted, 5 restyled; `moss deploy --dry-run --json` lists every one\n"), "{text}");
     }
 
     #[test]
     fn a_cut_of_one_verb_names_just_that_verb() {
-        assert!(listing(&[(PageVerb::Added, 25)]).ends_with("  and 5 more added\n"));
+        assert!(listing(&[(PageVerb::Added, 25)]).ends_with("  and 5 more added; `moss deploy --dry-run --json` lists every one\n"));
     }
 
     #[test]
@@ -446,13 +514,14 @@ mod tests {
     #[test]
     fn a_derivative_kept_as_a_redirect_is_named_and_the_check_still_passes() {
         let dry = DryRun {
-            kept_as_redirect: vec![("/photo-2.webp".into(), "/photo-2.jpg".into())],
+            kept_as_redirect: vec![Kept { from: "/photo-2.webp".into(), to: "/photo-2.jpg".into() }],
+            pending_removals: Vec::new(),
             refusal: None,
             ..small()
         };
         let text = dry.render();
         assert!(
-            text.contains("Kept as a redirect, because the picture is still served:\n  /photo-2.webp -> /photo-2.jpg\n"),
+            text.contains("Kept answering at the old address (a picture still served, or a folder redirect):\n  /photo-2.webp -> /photo-2.jpg\n"),
             "{text}"
         );
         assert!(text.contains("Publish check: passes.\n"), "{text}");
@@ -464,7 +533,7 @@ mod tests {
         let dry = DryRun { transfer: Transfer::SinceLastPublish { upload: 0, removed }, ..small() };
         let text = dry.render();
         assert!(text.contains("remove 23 files.\nAlso removed:\n  /old-00.css\n  /old-01.css\n"), "{text}");
-        assert!(text.contains("  /old-19.css\n  and 3 more\n"), "{text}");
+        assert!(text.contains("  /old-19.css\n  and 3 more; `moss deploy --dry-run --json` lists every one\n"), "{text}");
         assert!(!text.contains("old-20"), "{text}");
     }
 
@@ -498,6 +567,7 @@ mod tests {
             needs_verification: false,
             prebuilt: false,
             kept_as_redirect: Vec::new(),
+            pending_removals: Vec::new(),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");
@@ -563,7 +633,7 @@ mod tests {
             let dry = run(&dir, false).await;
             let Transfer::SinceLastPublish { removed, .. } = &dry.transfer else { panic!("{dry:?}") };
             assert_eq!(removed, &vec!["old/index.html".to_string()]);
-            assert!(dry.refusal.as_deref().is_some_and(|t| t.contains("/old/")), "{dry:?}");
+            assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|t| t.contains("/old/")), "{dry:?}");
             let text = dry.render();
             assert!(text.contains("nothing was built"), "{text}");
             assert!(text.contains("\nRemoved:\n  /old/\n") && !text.contains("Also removed"), "{text}");

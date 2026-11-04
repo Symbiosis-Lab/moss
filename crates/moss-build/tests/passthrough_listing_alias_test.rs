@@ -28,9 +28,7 @@ fn a_passthrough_folders_old_listing_addresses_forward_up() {
 
     let scene = site.html("scene/index.html");
     assert!(scene.contains("http-equiv=\"refresh\"") && scene.contains("url=/"), "{scene}");
-    let table = site.html("_moss/redirects.json");
-    assert!(table.contains(r#"{"from":"/scene/","to":"/","status":301}"#), "{table}");
-    assert!(!table.contains("/scene/sketch/"), "an authored page keeps its address: {table}");
+    assert!(!site.html("scene/sketch/index.html").contains("http-equiv=\"refresh\""), "an authored page keeps its address");
 }
 
 #[test]
@@ -43,9 +41,9 @@ fn a_nested_folder_without_a_page_of_its_own_forwards_to_the_nearest_served_ance
         ],
     );
     assert!(site.html("scene/sketch/deep/note/index.html").contains("Note text."));
-    let table = site.html("_moss/redirects.json");
-    for from in ["/scene/", "/scene/sketch/", "/scene/sketch/deep/"] {
-        assert!(table.contains(&format!(r#"{{"from":"{from}","to":"/","status":301}}"#)), "{from}: {table}");
+    for from in ["scene/", "scene/sketch/", "scene/sketch/deep/"] {
+        let stub = site.html(&format!("{from}index.html"));
+        assert!(stub.contains("http-equiv=\"refresh\"") && stub.contains("url=/\""), "{from}: {stub}");
     }
 }
 
@@ -60,8 +58,8 @@ fn a_passthrough_folder_inside_a_listed_folder_forwards_to_that_listing() {
         ],
     );
     assert!(site.html("work/index.html").contains("/work/piece/"));
-    let table = site.html("_moss/redirects.json");
-    assert!(table.contains(r#"{"from":"/work/scene/","to":"/work/","status":301}"#), "{table}");
+    let stub = site.html("work/scene/index.html");
+    assert!(stub.contains("http-equiv=\"refresh\"") && stub.contains("url=/work/\""), "{stub}");
 }
 
 #[test]

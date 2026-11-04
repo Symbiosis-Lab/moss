@@ -130,7 +130,7 @@ pub(crate) fn source_fragment(
 /// Names recognized by the typed AST. Other names fall through to the
 /// unknown-name renderer (`<div class="moss-unknown-shortcode" data-name="…">`)
 /// with a build warning.
-const TYPED_KNOWN: &[&str] = &["subscribe", "buttons", "gallery", "hero", "grid", "recent"];
+const TYPED_KNOWN: &[&str] = &["subscribe", "buttons", "gallery", "hero", "grid", "recent", "form"];
 
 fn is_typed_known(name: &str) -> bool {
     TYPED_KNOWN.contains(&name)
@@ -153,7 +153,7 @@ fn parse_shortcode_block(
     let (shortcode, mut diagnostics) = parse_shortcode_by_name(name, args, body, config);
     // Only `:::grid` carries an `{#id}` to its element; say so for the rest
     // instead of dropping it silently.
-    if shortcode.is_some() && name != "grid" {
+    if shortcode.is_some() && name != "grid" && name != "form" {
         if let Some(id) = brace_id(args) {
             diagnostics.warnings.push(format!(
                 "shortcode `:::{name}` has `#{id}`, which it does not put on its element. The id is ignored; put it on a heading or a `::: {{#{id}}}` div instead."
@@ -255,6 +255,10 @@ fn parse_shortcode_by_name(
             (Some(Shortcode::Grid(sc)), warns)
         }
         "recent" => (Some(Shortcode::Recent(parse_recent_args(args, body))), Diagnostics::default()),
+        "form" => {
+            let (form, problems) = super::extract_form::parse_form(args, body);
+            (Some(Shortcode::Form(form)), Diagnostics { warnings: problems, ..Default::default() })
+        }
         _ => (None, Diagnostics::default()),
     }
 }
@@ -527,7 +531,9 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Blo
         let linkified = format!("[]({})", url);
         return fragment_parts(parse_fragment_with_config(&linkified, config));
     }
-    fragment_parts(parse_fragment_with_config(raw, config))
+    let (mut blocks, metas, diag) = fragment_parts(parse_fragment_with_config(raw, config));
+    super::picture_row::promote(&mut blocks);
+    (blocks, metas, diag)
 }
 
 /// Detect a "bare URL cell": the entire cell content (after trim) is a
@@ -1167,7 +1173,13 @@ fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig)
                     return Some(GalleryLine::Caption(caption));
                 }
             }
-            let item = gallery_item_span(line);
+            let mut item = gallery_item_span(line);
+            // A wiki embed's pipe text is sorted as a picture's words are
+            // everywhere: its caption words are the alt, display words stay display.
+            if let (Some(it), true) = (item.as_mut(), line.trim_start().starts_with("![[")) {
+                let words = crate::media::read_image_words(&it.attrs);
+                (it.alt, it.attrs) = (words.caption, words.display);
+            }
             after_item = item.is_some();
             item.map(|it| GalleryLine::Item(it, markdown_image_title(line.trim())))
         })
@@ -1773,7 +1785,7 @@ fn extract_with_state(
             collected.warnings.push(format!("unknown shortcode `:::{}`", name));
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
-            let extra_attrs = format!(r#" data-name="{}""#, html_escape_attr(name));
+            let extra_attrs = format!(r#" data-name="{}""#, crate::media::html_escape(name));
             let body_config = config_at_body_line(config, body_start);
             let body_processed =
                 extract_with_state(&body, nonce, collected, &body_config);
@@ -1867,18 +1879,18 @@ fn render_div_open(
             if i > 0 {
                 out.push(' ');
             }
-            out.push_str(&html_escape_attr(c));
+            out.push_str(&crate::media::html_escape(c));
         }
         out.push('"');
     }
     if let Some(id_val) = id {
         out.push_str(" id=\"");
-        out.push_str(&html_escape_attr(id_val));
+        out.push_str(&crate::media::html_escape(id_val));
         out.push('"');
     }
     if let Some(w) = width.filter(|w| *w != "body") {
         out.push_str(" data-width=\"");
-        out.push_str(&html_escape_attr(w));
+        out.push_str(&crate::media::html_escape(w));
         out.push('"');
     }
     if let Some(extra) = extra_attrs {
@@ -1900,27 +1912,10 @@ fn data_attrs_for(kvs: &[(String, String)]) -> String {
             if key == "contents" && value == "end" {
                 " data-contents-end".to_string()
             } else {
-                format!(" {}=\"{}\"", html_attribute_name(key), html_escape_attr(value))
+                format!(" {}=\"{}\"", html_attribute_name(key), crate::media::html_escape(value))
             }
         })
         .collect()
-}
-
-/// HTML-attribute-safe escape. Replaces the five XML special characters
-/// so attribute values can't break out of `"..."` or close the tag.
-fn html_escape_attr(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Parse an opening fence line into (name, args). Returns `None` if the line

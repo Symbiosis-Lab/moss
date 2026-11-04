@@ -64,6 +64,7 @@ GATES_BUILD=(
   grid-mobile-collapse
   collage
   card-cover-ratio
+  lead-listing
   grid-card-image-inline-size
   hero-caption
   hero-from
@@ -86,6 +87,7 @@ GATES_BUILD=(
   video-embed-shape
   hls-short-clip
   place-map-tokens
+  country-map
   place-map-align
   place-map-route
   preview-parity-gate
@@ -103,12 +105,14 @@ GATES_BUILD=(
   places-explorer-single
   footer-end-space
   colophon-credit
+  request-form
   facts-margin
   closing-picture
   content-grid
   wcag-output
   archival-footer
   type-defaults
+  diagrams
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

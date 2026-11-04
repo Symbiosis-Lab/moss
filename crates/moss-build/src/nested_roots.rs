@@ -310,10 +310,7 @@ fn nested_root_info(dir: &Path, rel: &Path) -> NestedRootInfo {
 /// below, same as before.
 fn read_publish_state(dir: &Path) -> (Option<bool>, Option<String>) {
     match crate::build::site_config::read_deployment_state_no_wait(&dir.to_string_lossy()) {
-        Ok(state) => {
-            let site_id = state.site_id.filter(|s| !s.is_empty());
-            (Some(site_id.is_some()), site_id)
-        }
+        Ok(state) => (Some(state.site_id.is_some()), state.site_id),
         Err(_) => (None, None),
     }
 }

@@ -13,7 +13,7 @@
 use crate::content_graph::ContentGraph;
 
 use super::derived::{escape_derived_markdown, parse_marker, DerivedFacts, DerivedFragment, Derivations};
-use super::{parse_embed_marker, select_section, split_target, strip_frontmatter};
+use super::{parse_embed_marker, select_section, split_target};
 
 /// One line that was replaced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +120,7 @@ fn expansion_for(
     }
     let (path, anchor) = split_target(parse_embed_marker(&marker)?);
     let text = file_reader(path)?;
-    let text = select_section(strip_frontmatter(&text), anchor)?;
+    let text = select_section(crate::frontmatter::body(&text), anchor)?;
     Some(Replacement { text, derived: false, facts: DerivedFacts::default() })
 }
 

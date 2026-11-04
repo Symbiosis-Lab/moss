@@ -409,6 +409,23 @@ pub async fn acquire_for_site_dir(
     }
 }
 
+/// The CLI's "build done" line. Under a preview server the pages are served
+/// from `staging` and `current` is only promoted after
+/// `seal_phase::IDLE` without edits, so naming `current` as the output would
+/// be false while a watch is running.
+pub(crate) fn generated_line(name: &str, current: &Path, staging: &Path, serving: bool) -> String {
+    if serving {
+        format!(
+            "📁 '{name}': Site built; the preview serves {}. {} follows after {} s without edits.",
+            staging.display(),
+            current.display(),
+            crate::build::seal_phase::IDLE.as_secs()
+        )
+    } else {
+        format!("📁 '{name}': Site generated at {}", current.display())
+    }
+}
+
 /// The line a build names its own preview URL with, once a server is up.
 /// Reused verbatim by [`acquire_for_site_dir`]'s standby branch, which
 /// reports an owner's URL without having just run a build of its own, so the

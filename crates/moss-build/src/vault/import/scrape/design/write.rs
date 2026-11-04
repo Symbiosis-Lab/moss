@@ -82,7 +82,8 @@ fn write_nav(
         }
     }
     if targets.len() < 2 {
-        return Ok(());
+        // No menu to copy, but moss would still list every root-level page.
+        return opt_out_of_auto_nav(capture, &targets, home_note);
     }
     for rel in &targets {
         let content = read_note(capture.out_dir, rel)?;

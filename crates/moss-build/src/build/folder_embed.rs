@@ -1,8 +1,7 @@
 //! Folder embed marker resolution.
 //!
 //! Consumes `<!--MOSS_MARKER_FOLDER_LIST:path=…|from=…|limit=N|sort=axis-->`
-//! markers emitted by moss-core's `embed_renderer::folder_list`
-//! (Task 15, triggered by `![[/folder/]]` wikilinks).
+//! markers that moss-core's `embed_renderer::folder_list` emits for `![[/folder/]]`.
 //!
 //! Three-branch resolution per marker:
 //!
@@ -33,6 +32,7 @@ mod maps;
 pub(crate) mod hero_from;
 pub(crate) mod members;
 mod calendar_tokens;
+pub mod listing_markup;
 pub(crate) mod upcoming;
 mod nav_note;
 mod repeat_note;
@@ -311,7 +311,7 @@ pub(crate) fn resolve_children_config(
             // contract). A single dated post gets a year heading too; a
             // dateless listing stays flat. Auto-detected `year` is still
             // suppressed under a non-Date sort axis in `effective_group_for_axis`.
-            let auto_value = if style.value != "summary" && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
+            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
                 "year".to_string()
             } else {
                 "none".to_string()
@@ -393,7 +393,7 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 /// * `folder_docs` - Direct children documents to render
 /// * `all_folder_docs` - All documents in the folder (for computing child counts)
 /// * `project` - Project structure for date extraction
-/// * `style` - "list", "summary", or "grid" (collection cards)
+/// * `style` - "list", "summary", "lead" (summary whose first item leads), or "grid" (collection cards)
 /// * `group` - "year" or "none"
 /// * `lang` - Language for UI strings
 /// * `skip_resort` - If true, skip the internal date-desc resort and render docs
@@ -423,11 +423,16 @@ pub(crate) fn generate_children(
     placement: &moss_core::media::Placement,
     lazy_cards: bool,
     count: Option<&ChildrenCount>,
+    listing_tag: Option<&str>,
     now: chrono::NaiveDateTime,
 ) -> String {
     if folder_docs.is_empty() {
         return String::new();
     }
+    // `lead` is `summary` markup plus a hook on the container, so every
+    // summary branch below serves it unchanged.
+    let lead = style == "lead";
+    let style = if lead { "summary" } else { style };
 
     // Build ChildItemProps for each doc. The shared reading lives beside the
     // struct; the one thing the row shapes want on top is the auto-extracted
@@ -449,6 +454,7 @@ pub(crate) fn generate_children(
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
             props.count_setting = props.count_setting.take().or_else(|| count.cloned());
+            props.lang = listing_tag.and_then(|tag| components::child_list::RowLang::between(doc, tag, lang));
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
                     crate::build::components::child_list::explicit_card_text(doc).as_deref(),
@@ -640,6 +646,7 @@ pub(crate) fn generate_children(
                     credits: item.credits.clone(),
                     subtitle: item.subtitle.clone(),
                     source_file: item.source_file.clone(),
+                    lang: item.lang.clone(),
                 })
                 .collect();
             let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
@@ -674,7 +681,7 @@ pub(crate) fn generate_children(
     // render through `child_summary` and don't depend on the minimal item CSS.
     // (Grid returns earlier with its own data-layout="grid".)
     let data_layout = if style != "summary" { "minimal" } else { "list" };
-    components::cards_container(data_layout, is_embed, placement, html.trim())
+    components::cards_container(data_layout, lead, is_embed, placement, html.trim())
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in
@@ -736,6 +743,7 @@ fn render_minimal_year_section(
                 credits: a.credits.clone(),
                 subtitle: a.subtitle.clone(),
                 source_file: a.source_file.clone(),
+                lang: a.lang.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })
@@ -1159,6 +1167,7 @@ pub(crate) fn select_children_by_slug<'a>(
     is_flatten: bool,
     scope_default_tree: bool,
     exclude_nav: bool,
+    edition: &str,
     all_docs: &'a [ParsedDocument],
     project: &ProjectStructure,
 ) -> Vec<&'a ParsedDocument> {
@@ -1180,7 +1189,7 @@ pub(crate) fn select_children_by_slug<'a>(
     } else {
         format!("{}/", folder_id_slug)
     };
-    all_docs
+    let picked: Vec<&ParsedDocument> = all_docs
         .iter()
         .filter(|d| {
             if d.url_path == target_url {
@@ -1234,7 +1243,31 @@ pub(crate) fn select_children_by_slug<'a>(
                     })
             }
         })
-        .collect()
+        .collect();
+    one_per_translation(picked, edition)
+}
+
+/// A listing that reaches more than one edition shows a translated piece once:
+/// the page in the listing page's own edition, else the default edition's, else
+/// the first picked. Pages of one edition never displace each other, so a
+/// listing within an edition is returned as it came.
+fn one_per_translation<'a>(picked: Vec<&'a ParsedDocument>, edition: &str) -> Vec<&'a ParsedDocument> {
+    if picked.iter().all(|d| d.edition == picked[0].edition) {
+        return picked;
+    }
+    let rank = |d: &ParsedDocument| {
+        if d.edition.eq_ignore_ascii_case(edition) { 0 } else if d.edition.is_empty() { 1 } else { 2 }
+    };
+    let at: std::collections::HashMap<&str, usize> =
+        picked.iter().enumerate().map(|(i, d)| (d.url_path.as_str(), i)).collect();
+    let better_twin = |i: usize, d: &ParsedDocument| {
+        d.translations.iter().filter_map(|t| at.get(t.url_path.as_str())).any(|&j| {
+            let twin = picked[j];
+            twin.edition != d.edition && (rank(twin), j) < (rank(d), i)
+        })
+    };
+    let dropped: Vec<bool> = picked.iter().enumerate().map(|(i, d)| better_twin(i, d)).collect();
+    picked.into_iter().zip(dropped).filter(|(_, gone)| !gone).map(|(d, _)| d).collect()
 }
 
 /// What a home page lists when its frontmatter says nothing: shared by the
@@ -1513,6 +1546,10 @@ fn render_one(
     let children_style = style_resolved.value.clone();
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
+    let host_tag = all_docs
+        .iter()
+        .find(|d| d.source_path.as_deref() == Some(from))
+        .map(|h| h.lang_tag.clone().unwrap_or_else(|| h.lang.as_bcp47_attr().to_string()));
 
     // With a caption, the whole placement — width, float AND size — moves
     // out to the figure wrapping the listing (the width escape is a
@@ -1542,6 +1579,7 @@ fn render_one(
             &container_placement,
             parsed.lazy_cards,
             parsed.count.as_ref(),
+            host_tag.as_deref(),
             now,
         )
     };
@@ -1605,10 +1643,14 @@ fn render_one(
     // no page at `/<key>/` for More to land on — a dead link would 404).
     let path_resolver = crate::build::assets::paths::PathResolver::new()
         .with_dir_overrides(dir_overrides.clone());
-    let more_link: Option<(String, String)> = if !truncated {
+    let more_link: Option<(String, String)> = if !truncated
+        || parsed.more.as_deref() == Some("none")
+    {
+        // `more:none` (or `children_more: none`) draws no link at all, for a
+        // page that writes its own under the listing.
         None
     } else if let Some(more_ref) = parsed.more.as_deref() {
-        match resolve_more_link_target(more_ref, all_docs) {
+        match resolve_more_link_target(more_ref, from, all_docs) {
             Some(doc) => {
                 let stem = doc.url_path.trim_end_matches("index.html").trim_end_matches('/');
                 let href = if stem.is_empty() {
@@ -1670,31 +1712,55 @@ fn not_found(folder_id: &str) -> String {
     format!("Folder not found: /{folder_id}/")
 }
 
-/// Resolve a `children_more:` reference to the page it names. Mirrors
-/// `children_source`'s stem matching (`frontmatter_ref_to_stem` + slug
-/// comparison against `ParsedDocument::url_path`), generalized from folders to
-/// any listable page — `children_more` sends the reader to an ordinary page,
-/// not a folder. `more_ref` is already a resolved path by the time it reaches
-/// here in a real build (the frontmatter-wikilink pass runs first); the raw
+/// Resolve a `children_more:` reference to the page it names, as a
+/// `[[reference]]` written on `from` would: the file it names (the
+/// frontmatter-wikilink pass has already turned a bracket form into that
+/// file's path), else a file of that stem, else a page whose address ends in
+/// that name. Among several matches the page in `from`'s own edition wins, so
+/// a home links to its own language's archive; another edition's page is
+/// reached only when no page of the same edition matches. The raw
 /// `[[bracket]]` form is handled too, for callers that construct a marker
 /// directly.
 fn resolve_more_link_target<'a>(
     more_ref: &str,
+    from: &str,
     all_docs: &'a [ParsedDocument],
 ) -> Option<&'a ParsedDocument> {
+    let source_of = |d: &ParsedDocument| d.source_path.as_deref().map(|p| p.replace('\\', "/"));
+    let edition = all_docs
+        .iter()
+        .find(|d| source_of(d).as_deref() == Some(from))
+        .map(|d| d.edition.as_str())
+        .unwrap_or("");
+    let path = more_ref
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .trim_start_matches("[[")
+        .trim_end_matches("]]")
+        .trim_start_matches('/');
+    if let Some(named) = all_docs.iter().find(|d| source_of(d).as_deref() == Some(path)) {
+        return Some(named);
+    }
     let stem = crate::build::markdown::frontmatter_ref_to_stem(more_ref);
     // Page URLs are built by `slug::generate_slug` (`&` becomes `and`, dots
     // are kept), so the target is slugged by the same function.
     let target_slug = moss_core::slug::generate_slug(&stem);
-    all_docs.iter().find(|d| {
-        let d_stem = d
-            .url_path
-            .trim_end_matches("/index.html")
-            .trim_end_matches("index.html")
-            .trim_end_matches('/');
-        let d_leaf = d_stem.rsplit('/').next().unwrap_or(d_stem);
-        d_leaf == target_slug
-    })
+    all_docs
+        .iter()
+        .filter_map(|d| {
+            let file_stem = source_of(d)
+                .and_then(|p| p.rsplit('/').next().map(|f| f.rsplit_once('.').map_or(f, |(s, _)| s).to_string()))
+                .is_some_and(|s| moss_core::slug::generate_slug(&s) == target_slug);
+            let d_stem = d
+                .url_path
+                .trim_end_matches("/index.html")
+                .trim_end_matches("index.html")
+                .trim_end_matches('/');
+            let url_leaf = d_stem.rsplit('/').next().unwrap_or(d_stem) == target_slug;
+            (file_stem || url_leaf).then_some((d, file_stem))
+        })
+        .min_by_key(|(d, file_stem)| (d.edition != edition, !file_stem))
+        .map(|(d, _)| d)
 }
 
 /// Synthesize a folder-list marker from a page's `children_*` frontmatter fields.
@@ -1714,15 +1780,29 @@ fn resolve_more_link_target<'a>(
 /// A home lists its whole edition (depth "all"), dropping other editions'
 /// pages and top-level nav pages (the nav bar already shows those), unless
 /// `children_source` names another folder on purpose; see [`home_defaults`].
+/// `names_scoped_home` is set when `children_source` names an edition home whose
+/// own listing is scoped: the listing then takes that home's filters too.
 /// Any other host lists its own `folder_path` at depth "direct", unfiltered.
 pub fn synthesize_children_marker(
     doc: &crate::build::types::ParsedDocument,
     folder_path: &str,
     from_md_path: &str,
 ) -> String {
+    synthesize_children_marker_for(doc, folder_path, from_md_path, false)
+}
+
+/// [`synthesize_children_marker`] for a host whose `children_source` may name an
+/// edition home (`names_scoped_home`).
+pub(crate) fn synthesize_children_marker_for(
+    doc: &crate::build::types::ParsedDocument,
+    folder_path: &str,
+    from_md_path: &str,
+    names_scoped_home: bool,
+) -> String {
     use moss_core::resolve::embed_renderer::folder_list::{FolderEmbedParams, emit_marker};
 
     let home = home_defaults(doc);
+    let scoped = home.scoped || names_scoped_home;
     let depth = doc.children_depth.clone().or_else(|| home.depth_all.then(|| "all".to_string()));
     let params = FolderEmbedParams {
         limit: doc.children_limit.map(|n| n as usize),
@@ -1739,8 +1819,8 @@ pub fn synthesize_children_marker(
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
         count: doc.children_count.clone(),
-        scope_default_tree: home.scoped,
-        exclude_nav: home.scoped,
+        scope_default_tree: scoped,
+        exclude_nav: scoped,
         // A frontmatter listing has no pothole to read placement or a
         // caption out of; both are body-embed vocabulary.
         placement: Default::default(),

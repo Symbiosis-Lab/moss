@@ -1,30 +1,10 @@
 //! Shared helpers for typed embed renderers.
 //!
-//! These live here (not in each renderer) because Phase C/D renderers (pdf,
-//! audio, video, 3d, etc.) all need to build `src` URLs, parse `|WxH` sizing
-//! into HTML attrs, and escape attribute values. One copy, many callers.
+//! These live here (not in each renderer) because the pdf, audio, video and
+//! 3d renderers all parse `|WxH` sizing into HTML attrs and escape attribute
+//! values. One copy, many callers.
 
 use super::Sizing;
-
-/// Build a `src` URL for embed elements: `path?query#fragment` (URL order,
-/// independent of authoring order).
-///
-/// Retained for Phase 1's Stage 2 dispatcher, which may reconstruct embed
-/// URLs from title-attribute params (`query=…`, `fragment=…`). Tests in this
-/// module keep it exercised.
-#[allow(dead_code)]
-pub(super) fn build_src(path: &str, query: Option<&str>, fragment: Option<&str>) -> String {
-    let mut out = String::from(path);
-    if let Some(q) = query {
-        out.push('?');
-        out.push_str(q);
-    }
-    if let Some(f) = fragment {
-        out.push('#');
-        out.push_str(f);
-    }
-    out
-}
 
 /// Parse `|WxH` into HTML `width="..."` and `height="..."` attribute strings
 /// (each with a leading space). Empty strings if alias is missing or not a
@@ -48,20 +28,6 @@ pub(super) fn dim_attrs(alias: Option<&str>) -> (String, String) {
     }
 }
 
-/// Minimal HTML attribute-value escaper for `src`, `title`, and similar.
-/// Escapes `& < > "`. Apostrophe is safe inside `"..."` attributes per HTML5.
-///
-/// Canonical 4-char attribute escaper for synthesizer output. Used by
-/// Phase 1's Stage 2 dispatcher (still emits HTML) and by moss-core's own
-/// typed-embed synthesizers (pdf / iframe / model / audio / video) which
-/// import this single source rather than each inlining a private copy.
-pub fn html_escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 /// Extract filename stem (no directory, no extension). Used by renderers that
 /// want a human-readable label from a path.
 ///
@@ -78,50 +44,9 @@ pub fn file_stem(path: &str) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_build_src_plain() {
-        assert_eq!(build_src("file.html", None, None), "file.html");
-    }
-
-    #[test]
-    fn test_build_src_with_query() {
-        assert_eq!(
-            build_src("file.html", Some("x=1&y=2"), None),
-            "file.html?x=1&y=2"
-        );
-    }
-
-    #[test]
-    fn test_build_src_with_query_and_fragment() {
-        assert_eq!(
-            build_src("doc.html", Some("x=1"), Some("sec")),
-            "doc.html?x=1#sec"
-        );
-    }
-
-    #[test]
-    fn test_html_escape_attr() {
-        assert_eq!(html_escape_attr("a&b"), "a&amp;b");
-        assert_eq!(html_escape_attr("a<b>c"), "a&lt;b&gt;c");
-        assert_eq!(html_escape_attr("say \"hi\""), "say &quot;hi&quot;");
-    }
-
-    #[test]
-    fn test_html_escape_attr_apostrophe_passthrough() {
-        // Apostrophe (`'`) is safe inside `"..."` attribute values per HTML5,
-        // so the canonical synthesizer escaper does NOT touch it. This
-        // distinguishes the synthesizer's 4-char escaper from media.rs's
-        // 5-char `html_escape` (which escapes `'` to `&#39;` for HTML-text
-        // contexts). The pdf / iframe / model / audio / video synthesizers
-        // all emit attribute values, so the 4-char form is correct.
-        assert_eq!(html_escape_attr("it's"), "it's");
-        assert_eq!(html_escape_attr("path/it's-here.mp3"), "path/it's-here.mp3");
-    }
 
     #[test]
     fn test_file_stem() {

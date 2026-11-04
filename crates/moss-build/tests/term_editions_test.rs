@@ -118,10 +118,7 @@ fn a_name_only_one_non_default_edition_uses_keeps_its_old_address() {
     // A name the default edition has keeps its own page there, not a stub.
     let kept = site.html("partners/ada-example/index.html");
     assert!(!kept.contains("http-equiv=\"refresh\""), "{kept}");
-
-    let table = site.html("_moss/redirects.json");
-    assert!(table.contains("partners/nur-deutsch/"), "{table}");
-    assert!(!table.contains("\"partners/ada-example/\"") && !table.contains("partners/only-english"), "{table}");
+    assert!(!site.html("partners/only-english/index.html").contains("http-equiv=\"refresh\""));
 }
 
 #[test]
@@ -267,7 +264,6 @@ fn a_name_only_one_edition_uses_forwards_without_a_domain_too() {
     );
     let old = site.html("partners/nur-deutsch/index.html");
     assert!(old.contains("http-equiv=\"refresh\"") && old.contains("/de/partners/nur-deutsch/"), "{old}");
-    assert!(!site.output("_moss/redirects.json").exists(), "no table without a domain");
 }
 
 #[test]

@@ -156,7 +156,8 @@ fn shortcode_kind_all_enumerates_every_variant() {
             | ShortcodeKind::Gallery
             | ShortcodeKind::Hero
             | ShortcodeKind::Grid
-            | ShortcodeKind::Recent => {}
+            | ShortcodeKind::Recent
+            | ShortcodeKind::Form => {}
         }
     }
     let expected = [
@@ -166,6 +167,7 @@ fn shortcode_kind_all_enumerates_every_variant() {
         ShortcodeKind::Hero,
         ShortcodeKind::Grid,
         ShortcodeKind::Recent,
+        ShortcodeKind::Form,
     ];
     assert_eq!(all.len(), expected.len(), "ShortcodeKind::all() must list every variant");
     for e in expected {

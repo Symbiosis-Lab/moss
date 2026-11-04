@@ -64,6 +64,19 @@ pub struct CustomProp {
 /// entry here declares fails the build. That test is the point of the table —
 /// a hook nothing declares is a hook no agent can find.
 pub const CUSTOM_PROPS: &[CustomProp] = &[
+    CustomProp { name: "--moss-country-land", owner: "moss-country-map", default: "#e3dfd6 (dark: #22262a)", description: "Fill of land with no value, and of disputed land, on a country map." },
+    CustomProp { name: "--moss-country-fill-low", owner: "moss-country-map", default: "#b85c22 (dark: #a2602f)", description: "Colour of the lowest level of a country map; level i of n is mixed between this and --moss-country-fill-high in OKLCH. The defaults run light to dark on the light theme and dark to light on the dark one, each step 3:1 against the land colour; keep that if you change either end." },
+    CustomProp { name: "--moss-country-fill-high", owner: "moss-country-map", default: "#2b0e07 (dark: #fff6e8)", description: "Colour of the highest level on a country map; see --moss-country-fill-low." },
+    CustomProp { name: "--moss-country-graticule", owner: "moss-country-map", default: "#d2cdc2 (dark: #33383d)", description: "The faint 30-degree grid drawn under a country map." },
+    CustomProp { name: "--moss-country-chosen", owner: "moss-country-map", default: "#1c1a17 (dark: #f4f1ea)", description: "Outline of the country a reader has chosen on a country map." },
+    CustomProp { name: "--moss-country-fill-1", owner: "moss-country-map", default: "mixed between fill-low and fill-high", description: "Overrides the colour of level 1 (counting from the lowest) on a country map." },
+    CustomProp { name: "--moss-country-fill-2", owner: "moss-country-map", default: "mixed between fill-low and fill-high", description: "Overrides the colour of level 2 (counting from the lowest) on a country map." },
+    CustomProp { name: "--moss-country-fill-3", owner: "moss-country-map", default: "mixed between fill-low and fill-high", description: "Overrides the colour of level 3 (counting from the lowest) on a country map." },
+    CustomProp { name: "--moss-country-fill-4", owner: "moss-country-map", default: "mixed between fill-low and fill-high", description: "Overrides the colour of level 4 (counting from the lowest) on a country map." },
+    CustomProp { name: "--moss-country-fill-5", owner: "moss-country-map", default: "mixed between fill-low and fill-high", description: "Overrides the colour of level 5 (counting from the lowest) on a country map." },
+    CustomProp { name: "--moss-country-fill-6", owner: "moss-country-map", default: "mixed between fill-low and fill-high", description: "Overrides the colour of level 6 (counting from the lowest) on a country map." },
+    CustomProp { name: "--moss-country-fill-7", owner: "moss-country-map", default: "mixed between fill-low and fill-high", description: "Overrides the colour of level 7 (counting from the lowest) on a country map." },
+
     CustomProp {
         name: "--moss-title-size",
         owner: "moss-article-title",
@@ -747,5 +760,23 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "data-field",
         values: &[],
         description: "The declared field's name, on each element a placed field draws: each eyebrow span, the subtitle, each key figure and each facts row, and each part of a declared group. Scope one field with `[data-field=\"ja\"]` rather than a selector on the page's address.",
+    },
+    ScopeAttr {
+        selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div, .moss-field-group > [data-field]",
+        name: "data-value",
+        values: &[],
+        description: "On an element a placed `choice` field draws (beside its `data-field`): the slug of the choice's key as written in config, whatever language its label is shown in. Select a page by it with `article:has([data-field=\"mark\"][data-value=\"wanted\"])`. Other field types carry none.",
+    },
+    ScopeAttr {
+        selector: ".moss-credit",
+        name: "data-term",
+        values: &[],
+        description: "The key of the term kind a listing-card credit belongs to (`marks` for `[terms.marks]`), on each credit of a kind with `cards = true`. Pair it with `data-value`.",
+    },
+    ScopeAttr {
+        selector: ".moss-credit",
+        name: "data-value",
+        values: &[],
+        description: "The slug of the credited term, the same one its term page has in its address. `.moss-card:has(.moss-credit[data-term=\"marks\"][data-value=\"wanted\"])` selects every card that credits the term `Wanted`.",
     },
 ];

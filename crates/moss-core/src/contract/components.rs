@@ -22,6 +22,10 @@
 //! type-checked guarantee like BUILTIN_FIELDS' compile-time mirror. The
 //! limitation is documented in the spec § Source 2.
 
+mod country_map;
+mod forms;
+mod places;
+
 /// Status of a component entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -34,6 +38,7 @@ pub enum Status {
 }
 
 /// A declared `data-*` attribute on a component.
+#[derive(Clone, Copy)]
 pub struct DataAttr {
     /// Attribute name including `data-` prefix (e.g. `"data-layout"`).
     pub name: &'static str,
@@ -46,6 +51,7 @@ pub struct DataAttr {
 }
 
 /// A single component contract entry.
+#[derive(Clone, Copy)]
 pub struct ComponentEntry {
     /// Class name without leading `.` (e.g. `"moss-cards"`).
     pub class: &'static str,
@@ -209,11 +215,10 @@ pub fn is_unprefixed_legacy(class: &str) -> bool {
     class.starts_with("callout-") || UNPREFIXED_LEGACY_CLASSES.contains(&class)
 }
 
-/// The full contract surface — every `moss-*` class moss currently emits.
-///
-/// Phase 0b seeds this with the CURRENT emitted vocabulary (not the
-/// v1-collapsed shape). Phase 1c rewrites to the collapsed form.
-pub const COMPONENTS: &[ComponentEntry] = &[
+/// The core rows: every emitted `moss-*` class outside the forms, country-map
+/// and place-map families, which live in sibling files. [`COMPONENTS`] is
+/// all of them.
+const CORE: &[ComponentEntry] = &[
     ComponentEntry {
         class: "moss-cards",
         kind: "container",
@@ -242,6 +247,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 values: &[],
                 default: "",
                 description: "Boolean presence flag: emitted iff any child card has a cover. Combines with `data-list-axis` to widen `--moss-card-min` for cover-led layouts. Use `[data-list-has-covers]` in CSS to target it.",
+            },
+            DataAttr {
+                name: "data-lead",
+                values: &[],
+                default: "",
+                description: "Boolean presence flag: emitted on a `data-layout=\"list\"` listing drawn with `children_style: lead`. The first card leads (picture beside its words on a wide screen, stacked on a phone) and the rest form a register of three columns with no pictures. Use `[data-lead]` in CSS to restyle it.",
             },
         ],
         example_html: r#"<div class="moss-cards-container">
@@ -506,7 +517,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-card-meta",
         data_attrs: &[],
-        example_html: r#"<span class="moss-card-credits"><span class="moss-credit">Ada Example<span class="moss-credit-role">, conductor</span></span></span>"#,
+        example_html: r#"<span class="moss-card-credits"><span class="moss-credit" data-term="people" data-value="ada-example">Ada Example<span class="moss-credit-role">, conductor</span></span></span>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0.16",
@@ -517,11 +528,22 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-card-credits",
         data_attrs: &[],
-        example_html: r#"<span class="moss-credit">Ada Example<span class="moss-credit-role">, conductor</span></span>"#,
+        example_html: r#"<span class="moss-credit" data-term="people" data-value="ada-example">Ada Example<span class="moss-credit-role">, conductor</span></span>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0.16",
-        description: "One credited name on a listing card, with its role inside.",
+        description: "One credited name on a listing card, with its role inside. `data-term` is the term kind's key and `data-value` the slug of the name, the one its term page has in its address, so `.moss-card:has(.moss-credit[data-term=\"marks\"][data-value=\"wanted\"])` selects the cards that credit the term `Wanted` in the `marks` kind.",
+    },
+    ComponentEntry {
+        class: "moss-card-field",
+        kind: "instance",
+        parent: "moss-card-meta",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-card-field" data-field="holder" data-value="Example Archive">Example Archive</span>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "1",
+        description: "A declared field with `card = true`, drawn on a listing card or row of a page that has a value for it, in the meta after the date and the term credits, in the fields' declaration order. Plain text, never a link. `data-field` is the field's name; `data-value` is the slug of a choice's key in config (the text is its label), as on a placed choice, and for any other type the text itself, so `.moss-card:has(.moss-card-field[data-field=\"mark\"][data-value=\"wanted\"])` selects the cards of one value.",
     },
     ComponentEntry {
         class: "moss-credit-role",
@@ -621,6 +643,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "1",
         description: "The page's `subtitle:` under its title, on grid and summary cards and on list rows. Absent when the page has no subtitle. Muted and smaller than the title by default.",
+    },
+    ComponentEntry {
+        class: "moss-lang-mark",
+        kind: "instance",
+        parent: "moss-card",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-card-title" lang="de">Aufsatz<span class="moss-lang-mark" lang="en">German</span></span>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The language of a listed page, after its title, when that page is in another language than the page listing it. The text is the language's name in the listing page's language and the mark carries that page's `lang`; the title and description of such a row carry the listed page's own `lang`. Absent on a row in the listing's language. Small, muted and outlined by default.",
     },
     ComponentEntry {
         class: "moss-embed-more",
@@ -1668,11 +1701,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "standalone",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<dl class="moss-facts" data-beside><div data-field="architect"><dt>Architect</dt><dd>Anna Weber</dd></div></dl>"#,
+        example_html: r#"<dl class="moss-facts" data-beside><div data-field="architect"><dt>Architect</dt><dd>Anna Weber</dd></div><div data-field="status" data-value="in-use"><dt>Status</dt><dd>In use</dd></div></dl>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "1",
-        description: "A list of the page's declared fields whose `place` is `facts`: one `<div data-field>` per field in declaration order, with the field's label in `<dt>` and its value in `<dd>`. On a wide screen the list sits in the right margin beside the title; on a narrow, vertical, full-width or sidebar page, or one with sidenotes, it stays in the flow. Emitted only on a page that has a value for such a field.",
+        description: "A list of the page's declared fields whose `place` is `facts`: one `<div data-field>` per field in declaration order, with the field's label in `<dt>` and its value in `<dd>`. A row for a `choice` field also carries `data-value`, the slug of the choice's key as written in config. On a wide screen the list sits in the right margin beside the title; on a narrow, vertical, full-width or sidebar page, or one with sidenotes, it stays in the flow. Emitted only on a page that has a value for such a field.",
     },
     ComponentEntry {
         class: "moss-align-end",
@@ -2119,10 +2152,10 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Runtime submit state machine, driven by subscribe.ts. Emitted as `idle`; theme authors target `.moss-subscribe-form[data-state=...]`.",
             },
             DataAttr {
-                name: "data-moss-pending-site",
+                name: "data-moss-pending",
                 values: &["true"],
                 default: "true",
-                description: "Pre-first-publish pending wiring (`action=\"#\"`, no site_id yet). Hidden on published pages (body without `data-moss-preview`) via the email.css defense rule so a pending form never faces real readers.",
+                description: "Pre-first-publish pending wiring (`action=\"#\"`, no site_id yet). Hidden on published pages (body without `data-moss-preview`) by one rule in site.css, shared with `.moss-form`, so a pending form never faces real readers.",
             },
         ],
         example_html: r#"<form class="moss-subscribe-form">...</form>"#,
@@ -3198,11 +3231,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "nav-left",
         data_attrs: &[],
-        example_html: r#"<span class="breadcrumb-separator">/</span>"#,
+        example_html: r#"<span class="breadcrumb-separator" aria-hidden="true">/</span>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The `/` between breadcrumb segments. Restyle or hide this rather than trying to remove it from the markup.",
+        description: "The `/` between breadcrumb segments, hidden from assistive technology and drawn in `--moss-border-strong` (3:1 non-text contrast). Restyle or hide this rather than trying to remove it from the markup.",
     },
     ComponentEntry {
         class: "mobile-menu-button",
@@ -3739,6 +3772,77 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "1",
         description: "Horizontal-scroll container the build path wraps around typeset display math (`svg.moss-math[data-moss-math=\"display\"]`). On a narrow viewport a wide equation scrolls inside this box at its natural size rather than shrinking to unreadability or pushing the page into horizontal overflow. Emitted only by P2's typeset path; the P1 `<code>` fallback is never wrapped. A display SVG left unwrapped still cannot overflow the page — it falls back to scaling down via `max-width: 100%`.",
+    },
+    // -------------------------------------------------------------------
+    // Diagrams drawn from fenced `mermaid` blocks at build time.
+    // -------------------------------------------------------------------
+    ComponentEntry {
+        class: "moss-diagram",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[
+            DataAttr {
+                name: "data-narrow",
+                values: &[""],
+                default: "",
+                description: "Present when the figure carries a second, narrow layout (`.moss-diagram-narrow`), shown instead of the wide one when the figure is under 640px wide. The renderer draws it for a 360px column: a left-to-right flowchart turns top to bottom, a timeline wraps.",
+            },
+            DataAttr {
+                name: "data-diagram",
+                values: &[],
+                default: "",
+                description: "The content address of the diagram's hosted picture, `/_moss/diagrams/<value>.png`, a PNG of the wide layout in the light theme. A feed carries that picture in place of the figure, and a newsletter the same one, since mail clients and most feed readers strip inline SVG.",
+            },
+        ],
+        example_html: r#"<figure class="moss-diagram" data-narrow data-diagram="3a44ed4e88d87236" tabindex="0"><div class="moss-diagram-wide"><svg …>…</svg></div><div class="moss-diagram-narrow"><svg …>…</svg></div></figure>"#,
+        example_markdown: "```mermaid\nflowchart LR\n  A[Write] --> B[Publish]\n```",
+        status: Status::Emerging,
+        since: "0.22",
+        description: "A diagram drawn from a fenced `mermaid` block when the site is built, so the page carries the SVG and no script. The drawing takes its colours and fonts from `--pele-*` custom properties set from the site's tokens, so it follows the theme and dark mode. Each SVG shrinks to its column but never below the scale that keeps its smallest text at 11px; past that the figure scrolls, which is why it is focusable.",
+    },
+    ComponentEntry {
+        class: "moss-diagram-wide",
+        kind: "instance",
+        parent: "moss-diagram",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-diagram-wide"><svg …>…</svg></div>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0.22",
+        description: "The diagram's natural layout. Hidden under 640px when the figure has a narrow layout.",
+    },
+    ComponentEntry {
+        class: "moss-diagram-narrow",
+        kind: "instance",
+        parent: "moss-diagram",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-diagram-narrow"><svg …>…</svg></div>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0.22",
+        description: "The layout drawn for a narrow column, shown only under 640px; `display: none` otherwise, so a screen reader meets one drawing.",
+    },
+    ComponentEntry {
+        class: "moss-diagram-error",
+        kind: "state",
+        parent: "moss-diagram",
+        data_attrs: &[],
+        example_html: r#"<figure class="moss-diagram moss-diagram-error"><figcaption class="moss-diagram-message">This diagram could not be drawn: line 3: syntax error.</figcaption><pre tabindex="0"><code class="language-mermaid">…</code></pre></figure>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0.22",
+        description: "A diagram that could not be drawn (a syntax error, an unknown type, a limit or the safety check). The figure shows the source as a code block with the reason above it; the build warns, and `--strict` fails.",
+    },
+    ComponentEntry {
+        class: "moss-diagram-message",
+        kind: "instance",
+        parent: "moss-diagram-error",
+        data_attrs: &[],
+        example_html: r#"<figcaption class="moss-diagram-message">This diagram could not be drawn: it is empty.</figcaption>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0.22",
+        description: "The plain reason a diagram was not drawn, above its source.",
     },
     ComponentEntry {
         class: "moss-table-scroll",
@@ -4657,522 +4761,6 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Section heading on a term page (e.g. /people/<name>/) for one name-list field's group of works, when the kind names more than one field.",
     },
     ComponentEntry {
-        class: "moss-place-children",
-        kind: "instance",
-        parent: "",
-        data_attrs: &[],
-        example_html: r#"<ul class="moss-place-children"><li><a href="/places/kyoto/">Kyoto (3)</a></li></ul>"#,
-        example_markdown: "",
-        status: Status::Confirmed,
-        since: "0",
-        description: "Direct child places on a place page, each with its roll-up-inclusive member count. Absent for a leaf place with no children, and for every non-place term.",
-    },
-    ComponentEntry {
-        class: "moss-place-line",
-        kind: "instance",
-        parent: "",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-place-line">Location: <a href="/places/kyoto/">Kyoto</a></div>"#,
-        example_markdown: "",
-        status: Status::Confirmed,
-        since: "0",
-        description: "The automatic place line under a page's byline, generated from `location:` — every declared place, linked to its term page. Absent when `location:` is unset, or the site declares no place-typed kind. No opt-out: this is generated chrome with no authored equivalent.",
-    },
-    ComponentEntry {
-        class: "moss-place-map",
-        kind: "instance",
-        parent: "",
-        data_attrs: &[
-            DataAttr {
-                name: "data-moss-places-explorer",
-                values: &[],
-                default: "",
-                description: "Presence-only. Set on a place-typed namespace root's own figure when the site's interactive explorer is on (`[terms.<key>] explorer`, default true); absent on every sub-place map and on any root where the explorer is off.",
-            },
-            DataAttr {
-                name: "data-world",
-                values: &[],
-                default: "",
-                description: "URL of this build's `world.svg` (the content-hashed `_moss/map.<hash>/` directory). Present only alongside `data-moss-places-explorer`.",
-            },
-            DataAttr {
-                name: "data-tiles",
-                values: &[],
-                default: "",
-                description: "URL of this build's `tiles.json` tile index, same directory as `data-world`.",
-            },
-            DataAttr {
-                name: "data-places",
-                values: &[],
-                default: "",
-                description: "URL of this build's `places.<hash>.json` data file.",
-            },
-            DataAttr {
-                name: "data-labels",
-                values: &[],
-                default: "",
-                description: "URL of this build's `labels.json` place-name data (cities, ranges, peaks, rivers), same directory as `data-world`. Optional: a handshake missing it still boots the map, just without the label layer.",
-            },
-            DataAttr {
-                name: "data-scope",
-                values: &[],
-                default: "",
-                description: "The place-typed kind's namespace key (`places`, or whatever a declared kind named it).",
-            },
-            DataAttr {
-                name: "data-moss-place-embed",
-                values: &[],
-                default: "",
-                description: "Presence-only. Set on a route-free `style:map` embed or article locator when the explorer is on. The stable 3:2 host shows the interactive iframe after READY, with the static SVG reserved for no-JS and failure fallback.",
-            },
-            DataAttr {
-                name: "data-hydrate-url",
-                values: &[],
-                default: "",
-                description: "The places root's own URL, scoped by `place=<key>` (a `style:map` embed) or `article=<url>` (the locator's own hosting page) and carrying `embed=1`. Present only alongside `data-moss-place-embed`.",
-            },
-            DataAttr {
-                name: "data-moss-place-embed-state",
-                values: &["waiting", "consent", "loading", "ready", "fallback"],
-                default: "",
-                description: "Runtime host lifecycle. `waiting` is near-viewport lazy load, `consent` waits for the Save-Data action, `loading` is the READY handshake, `ready` exposes the iframe, and `fallback` restores the static SVG after timeout.",
-            },
-            DataAttr {
-                name: "data-moss-places-cards",
-                values: &[],
-                default: "",
-                description: "Presence-only, runtime-set by the explorer on its figure once the card row is mounted (on the places root and inside a hydrated embed alike); absent on a static figure. The map's credit line sits at the top-left under the chip when it is present, at the bottom right when not.",
-            },
-            DataAttr {
-                name: "data-moss-places-embed-mode",
-                values: &["collapsed", "expanded"],
-                default: "collapsed",
-                description: "Runtime-set, inside the hydrated iframe only: whether the embed is showing its small collapsed presentation or has been expanded through the immersive/fullscreen control. Absent on the full places root page and on the static (unhydrated) figure.",
-            },
-        ],
-        example_html: r#"<figure class="moss-place-map" role="img" aria-label="Map of Kyoto, city precision"><svg aria-hidden="true"></svg></figure>"#,
-        example_markdown: r#"![[/places/kyoto/|style:map]]"#,
-        status: Status::Confirmed,
-        since: "0",
-        description: "Offline SVG map on a place term page or explicit `style:map` embed. Geography and privacy precision come from `.moss/places.toml`; no browser network request is made.",
-    },
-    ComponentEntry {
-        class: "moss-place-map-credit",
-        kind: "instance",
-        parent: "moss-place-map",
-        data_attrs: &[],
-        example_html: r#"<p class="moss-place-map-credit" aria-live="polite"></p>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The credit line in a map figure's bottom-right corner, present only on a site that declares `[map.layers]`; on a figure with a card row (`data-moss-places-cards`) it sits at the top-left, under the scope chip. Empty (and hidden) until the places explorer fills it with the credit of a detail layer that draws in view.",
-    },
-    ComponentEntry {
-        class: "moss-place-map-frame",
-        kind: "container",
-        parent: "",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-place-map-frame"><figure class="moss-place-map"></figure></div>"#,
-        example_markdown: r#"![[/places/kyoto/|style:map|wide]]"#,
-        status: Status::Confirmed,
-        since: "0",
-        description: "Placement wrapper for an explicit map embed. Carries the standard width, alignment and size attributes while the semantic map figure remains self-contained.",
-    },
-    ComponentEntry {
-        class: "moss-place-map-caption",
-        kind: "instance",
-        parent: "moss-place-map-frame",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-place-map-caption">Kyoto</div>"#,
-        example_markdown: r#"![[/places/kyoto/|style:map|Kyoto]]"#,
-        status: Status::Confirmed,
-        since: "0",
-        description: "Optional caption below an explicitly embedded place map.",
-    },
-    ComponentEntry {
-        class: "moss-place-locator",
-        kind: "container",
-        parent: "",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-place-locator moss-align-right"><figure class="moss-place-map"></figure></div>"#,
-        example_markdown: "",
-        status: Status::Confirmed,
-        since: "0",
-        description: "Compact sparse map after an authored page's location line when `[site].locator = \"align-right\"`; collapses into the reading flow on narrow screens.",
-    },
-    // Places explorer: the interactive pan/zoom layer `places-explorer.js`
-    // builds, in place, over a `moss-place-map` namespace root carrying the
-    // `data-moss-places-explorer` handshake. Every class below is created by
-    // that runtime, never emitted from Rust — `js-src/site/places-explorer/`
-    // is this table's one source outside this crate's own scanned emitter
-    // roots, so `emitter_classes_match_components_table` never sees these
-    // literals; `css_selectors_match_components_table` still requires an
-    // entry for each, since `places-explorer.css` targets them all.
-    ComponentEntry {
-        class: "moss-places-viewport",
-        kind: "instance",
-        parent: "moss-place-map",
-        data_attrs: &[
-            DataAttr { name: "data-dragging", values: &[], default: "", description: "Presence-only, set for the duration of a pointer-drag pan gesture." },
-            DataAttr { name: "data-gesture-mode", values: &["cooperative"], default: "", description: "Set by the embed's own `setCooperativeGestures` while collapsed: a lone touch defers to the page's own scroll instead of panning, and `places-explorer.css`'s own `touch-action: pan-y` rule lets it. Absent on the full explorer page and on an expanded embed." },
-        ],
-        example_html: r#"<div class="moss-places-viewport" tabindex="0" role="application" aria-label="Map. Use arrow keys to pan, plus and minus to zoom."></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The focusable, pannable region the explorer lays over the static figure's box once the world map has loaded. Captures drag, wheel, pinch and arrow-key gestures; absent (the static SVG alone) until then or if the data fetch fails.",
-    },
-    ComponentEntry {
-        class: "moss-places-world",
-        kind: "instance",
-        parent: "moss-places-viewport",
-        data_attrs: &[
-            DataAttr { name: "data-gesture", values: &[], default: "", description: "Presence-only, set only while a pan/zoom gesture is actively moving the camera — hides the sibling label layer for that span (places-explorer.css); no longer what promotes this layer to its own compositing layer, which is now permanent." },
-        ],
-        example_html: r#"<div class="moss-places-world"><img class="moss-places-world-surface" src="blob:…"><svg class="moss-places-rivers" viewBox="0 0 842.035025 480">…</svg></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Carries the world's own decoded raster (`raster.ts`'s `splitMapSvg`/`rasterizeOrFallback`, built from the fetched `world.svg`) plus its live, unfiltered rivers overlay, and the CSS `transform` the camera drives.",
-    },
-    ComponentEntry {
-        class: "moss-places-world-surface",
-        kind: "instance",
-        parent: "moss-places-world",
-        data_attrs: &[],
-        example_html: r#"<img class="moss-places-world-surface" src="blob:…">"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The world layer's own decoded raster — an `<img>`, or (a browser lacking `Blob`/`HTMLImageElement.decode()` support) the live, unrasterised `<svg>` itself. Re-decoded at a sharper size on settle, up to a capped zoom past which it is left to go soft under whatever regional tiles cover that area.",
-    },
-    ComponentEntry {
-        class: "moss-places-world-flat",
-        kind: "instance",
-        parent: "moss-places-world",
-        data_attrs: &[],
-        example_html: r#"<canvas class="moss-places-world-flat"></canvas>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The world layer's land, water and lakes alone, flat, drawn under `moss-places-world-surface`. Past the depth the world data supports, the surface's detail (relief, sea floor, built-up areas) fades out through `--moss-place-world-detail` and this keeps land and water distinct instead of enlarging shapes the data cannot carry.",
-    },
-    ComponentEntry {
-        class: "moss-places-tile-flat",
-        kind: "instance",
-        parent: "moss-places-tile",
-        data_attrs: &[],
-        example_html: r#"<svg class="moss-places-tile-flat" viewBox="0 0 100 100">…</svg>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "A regional tile's land, water and lakes alone, as live SVG under the tile's detail raster, so the coast stays a crisp edge when the detail fades past the world data's clean depth.",
-    },
-    ComponentEntry {
-        class: "moss-places-rivers",
-        kind: "instance",
-        parent: "moss-places-world",
-        data_attrs: &[],
-        example_html: r#"<svg class="moss-places-rivers" viewBox="0 0 842.035025 480">…</svg>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "A live, unfiltered overlay of just the `[data-map-layer=\"rivers\"]` group, extracted from the world or a regional tile's own fetched SVG (`raster.ts`'s `splitMapSvg`) so `--moss-place-river-scale` keeps working — a rasterised sibling has no access to the page's own custom properties. One per `moss-places-world` and one per `moss-places-tile` that actually drew a river.",
-    },
-    ComponentEntry {
-        class: "moss-places-tiles",
-        kind: "instance",
-        parent: "moss-places-world",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-tiles"><div class="moss-places-tile" data-moss-places-tile="3,-1">…</div></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Regional detail layer above `moss-places-world`: once the camera's screen scale passes the world ceiling, the tiles `tiles.json` lists for the current view are fetched, cached and positioned here at their own 10° cell.",
-    },
-    ComponentEntry {
-        class: "moss-places-tile",
-        kind: "instance",
-        parent: "moss-places-tiles",
-        data_attrs: &[
-            DataAttr { name: "data-moss-places-tile", values: &[], default: "", description: "The cell's own `x,y` key (`tiles.json`'s coordinates), e.g. `3,-1` — lets a gate locate one specific loaded tile rather than the nth child." },
-        ],
-        example_html: r#"<div class="moss-places-tile" data-moss-places-tile="3,-1"><img src="blob:…"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One fetched, decoded regional tile: a positioned wrapper (`tiles.ts`'s `TileLayer`) carrying the tile's own raster image and, if the tile drew one, its own `moss-places-rivers` overlay.",
-    },
-    ComponentEntry {
-        class: "moss-places-labels",
-        kind: "container",
-        parent: "moss-places-viewport",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-labels" aria-hidden="true"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Decorative place-name layer, above the map and below `moss-places-markers`. Rebuilt on every camera settle (skipped mid-gesture, matching `moss-places-world`'s own `[data-gesture]` window) from `labels.json`'s cities, mountain ranges, peaks and rivers, greedily placed by priority within an area budget and never overlapping another label, a marker, the controls or the card row.",
-    },
-    ComponentEntry {
-        class: "moss-places-label",
-        kind: "instance",
-        parent: "moss-places-labels",
-        data_attrs: &[
-            DataAttr { name: "data-kind", values: &["city", "range", "peak", "river"], default: "city", description: "Which `labels.json` group this label came from — cities sit upright, ranges carry extra letter-spacing, rivers lean italic and may switch to vertical writing-mode near-vertical CJK text, peaks stay plain." },
-        ],
-        example_html: r#"<span class="moss-places-label" data-kind="city">Lisbon</span>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One placed label's text. `hidden` when the greedy placement pass this settle did not have room for it — present in the DOM either way, so repeated camera settles never rebuild the underlying text/measurement work.",
-    },
-    ComponentEntry {
-        class: "moss-places-label-dot",
-        kind: "instance",
-        parent: "moss-places-labels",
-        data_attrs: &[],
-        example_html: r#"<i class="moss-places-label-dot"></i>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "A city label's own anchor point, shown only when its name text had to move aside from a work marker sitting on the exact place — hidden (the marker IS the dot) when the label sits beside a marker whose own place it names, and hidden along with the label itself when dropped entirely.",
-    },
-    ComponentEntry {
-        class: "moss-places-markers",
-        kind: "instance",
-        parent: "moss-places-viewport",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-markers"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Marker and ring layer, above the map layers. Rebuilt on every camera settle from the works currently in scope and view.",
-    },
-    ComponentEntry {
-        class: "moss-places-marker",
-        kind: "instance",
-        parent: "moss-places-markers",
-        data_attrs: &[
-            DataAttr { name: "data-precision", values: &["exact", "city", "region", "country"], default: "exact", description: "The coarsest precision among the works this marker (or cluster) represents — exact/city draw a fixed-size dot, region/country a softer fade, matching the static map's own privacy-first sizing." },
-            DataAttr { name: "data-count", values: &[], default: "", description: "Present with the work count when a marker represents a merged cluster of two or more works; its number is also the badge's `::after` content. Absent on a single-work marker." },
-            DataAttr { name: "data-selected", values: &["true", "false"], default: "false", description: "Whether the currently-selected work is one this marker (or cluster) represents." },
-            DataAttr { name: "data-ring-anchor", values: &[], default: "", description: "Presence-only: this marker is a bloomed ring's own centroid dot, not a clickable work or cluster — clicking it closes the ring." },
-            DataAttr { name: "data-dimmed", values: &[], default: "", description: "Presence-only, set on every marker except a just-bloomed ring's own members, fading the rest of the map while the ring is open." },
-        ],
-        example_html: r#"<button type="button" class="moss-places-marker" data-precision="city" data-count="3" aria-label="Lisbon, 3 works"></button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One button per work, or per cluster of works `mergeByProximity` merges at the current zoom. Clicking a single-work marker selects it; clicking a separable cluster zooms to separate it; clicking a cluster that stays merged at the detail ceiling blooms it into a ring instead.",
-    },
-    ComponentEntry {
-        class: "moss-places-ring-leg",
-        kind: "instance",
-        parent: "moss-places-markers",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-ring-leg"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "A hairline from a bloomed ring's anchor to one of its own `moss-places-ring-dot` buttons, evenly spaced clockwise from 12 o'clock.",
-    },
-    ComponentEntry {
-        class: "moss-places-ring-dot",
-        kind: "instance",
-        parent: "moss-places-markers",
-        data_attrs: &[
-            DataAttr { name: "data-selected", values: &["true", "false"], default: "false", description: "Whether this dot's own work is the currently-selected one." },
-        ],
-        example_html: r#"<button type="button" class="moss-places-ring-dot" aria-label="Harbor Walk, Lisbon"></button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One real, individually-clickable button per work in a bloomed ring — a coincident cluster too close to ever separate by zooming, rendered as a small circle of dots instead of staying a single merged marker. Row order matches the scoped card row, both derived from the same work order.",
-    },
-    ComponentEntry {
-        class: "moss-places-controls",
-        kind: "container",
-        parent: "moss-places-viewport",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-controls" role="group" aria-label="Map controls"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Top-right floating control stack: the zoom capsule and the reset-to-cover circle, sharing one glass material.",
-    },
-    ComponentEntry {
-        class: "moss-places-capsule",
-        kind: "container",
-        parent: "moss-places-controls",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-capsule" role="group" aria-label="Zoom"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The two-cell zoom pill. Carries the glass material and the capsule's own rounded ends; its two `moss-places-control` cells are transparent so the capsule's background shows through, divided by one hairline.",
-    },
-    ComponentEntry {
-        class: "moss-places-control",
-        kind: "instance",
-        parent: "moss-places-controls",
-        data_attrs: &[
-            DataAttr { name: "data-control", values: &["zoom-in", "zoom-out", "reset"], default: "zoom-in", description: "Which control this button is — the two zoom cells sit inside `moss-places-capsule`, `reset` is its own standalone circle." },
-        ],
-        example_html: r#"<button type="button" class="moss-places-control" data-control="zoom-in" aria-label="Zoom in"></button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One control button: a 36px visible circle with a 44px hit area (an inset pseudo-element extends it without growing the painted size), round focus/hover/pressed states following that shape.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip",
-        kind: "container",
-        parent: "moss-places-viewport",
-        data_attrs: &[],
-        example_html: r#"<nav class="moss-places-chip"><div class="moss-places-chip-trail">…</div></nav>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Top-left floating breadcrumb scope chip, sharing `moss-places-controls`' own glass material. Shows the trail from every work down to the current scope (or the selected work, or an open ring's own member count) and is the map's one hierarchy control: an earlier crumb widens back out, the terminal crumb's own chevron digs into its children.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-trail",
-        kind: "instance",
-        parent: "moss-places-chip",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-chip-trail"><button class="moss-places-chip-crumb">All places</button></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Flex row of `moss-places-chip-crumb`/`moss-places-chip-sep` pairs, rebuilt whole on every scope, selection or ring change.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-crumb",
-        kind: "instance",
-        parent: "moss-places-chip-trail",
-        data_attrs: &[
-            DataAttr { name: "data-terminal", values: &[], default: "", description: "Presence-only: this is the trail's own last crumb — the current scope, the selected work, or an open ring's trailing count — never itself a widen target. Carries `aria-haspopup`/`aria-expanded` instead when it also opens the dig-down menu." },
-        ],
-        example_html: r#"<button type="button" class="moss-places-chip-crumb" data-terminal aria-haspopup="menu" aria-expanded="false">Portugal<span class="moss-places-chip-chevron"></span></button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One crumb: a `<button>` when clicking it widens the scope (or opens the terminal crumb's own menu), a plain `<span>` for a leaf terminal crumb (a selected work, an open ring's count, or a place with no children). `display: flex; align-items: center` keeps every crumb's text on the same baseline as its neighbouring `moss-places-chip-sep`, regardless of which element is a real button.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-sep",
-        kind: "instance",
-        parent: "moss-places-chip-trail",
-        data_attrs: &[],
-        example_html: r#"<span class="moss-places-chip-sep" aria-hidden="true">›</span>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The `›` between two crumbs, decorative (`aria-hidden`).",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-chevron",
-        kind: "instance",
-        parent: "moss-places-chip-crumb",
-        data_attrs: &[],
-        example_html: r#"<span class="moss-places-chip-chevron"><svg aria-hidden="true">…</svg></span>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Inline-SVG chevron inside the terminal crumb, present only when places lie under the current scope; flips 180° when its own crumb's `aria-expanded` is `true`.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-collapsible",
-        kind: "instance",
-        parent: "moss-places-chip-trail",
-        data_attrs: &[
-            DataAttr { name: "data-expanded", values: &[], default: "", description: "Presence-only: `moss-places-chip-ellipsis` toggles this to override the phone-width breakpoint's own `display: none`, revealing the collapsed crumbs in place so they're reachable by keyboard or touch without a wider viewport. Absent again on the next real render (a scope, selection or ring change)." },
-        ],
-        example_html: r#"<span class="moss-places-chip-collapsible"><span class="moss-places-chip-sep">›</span><button class="moss-places-chip-crumb">Portugal</button></span>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Wraps every crumb between the trail's first and terminal one. Always in the DOM; `places-explorer.css` hides it below a phone-width breakpoint, where `moss-places-chip-ellipsis` shows in its place — a CSS-only swap, nothing JS toggles on resize, except `data-expanded`, which `moss-places-chip-ellipsis` itself sets.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-ellipsis",
-        kind: "instance",
-        parent: "moss-places-chip-trail",
-        data_attrs: &[],
-        example_html: r#"<button type="button" class="moss-places-chip-ellipsis" aria-expanded="false" aria-label="Show hidden places"><span class="moss-places-chip-sep">›</span>…</button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The phone-width stand-in for `moss-places-chip-collapsible`, hidden above that breakpoint. A real button, not decorative text: activating it sets its own `aria-expanded` and toggles `moss-places-chip-collapsible`'s `data-expanded`, so every crumb the phone width would otherwise hide stays reachable by keyboard or touch.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-menu",
-        kind: "container",
-        parent: "moss-places-chip",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-chip-menu" role="menu" aria-labelledby="moss-places-chip-trigger-ab12cd"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The terminal crumb's dig-down menu: the current scope's own direct children, sharing the chip's glass material. Opens on the terminal crumb's click, closes on Escape, an outside click, or choosing an item; arrow keys move a roving `tabindex` between `moss-places-chip-menu-item`s.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-menu-item",
-        kind: "instance",
-        parent: "moss-places-chip-menu",
-        data_attrs: &[],
-        example_html: r#"<button type="button" class="moss-places-chip-menu-item" role="menuitem" tabindex="-1"><span>Porto</span><span class="moss-places-chip-menu-count">(3)</span></button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One child place, sorted by work count descending then name (the same order `scope.ts`'s `childrenOf` already gives a place term page's own children list). Hovering or focusing it exempts its own works from the marker layer's dimming attribute — the same one a bloomed ring uses — and dims the rest; choosing it narrows the scope to that place.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-menu-count",
-        kind: "instance",
-        parent: "moss-places-chip-menu-item",
-        data_attrs: &[],
-        example_html: r#"<span class="moss-places-chip-menu-count">(3)</span>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "A menu item's own locale-formatted work count, in parentheses.",
-    },
-    ComponentEntry {
-        class: "moss-places-cards",
-        kind: "container",
-        parent: "moss-place-map",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-cards" role="list" aria-label="Works in view"></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The horizontal row of works currently in scope and in view, floating along the bottom of the map. Each child is a `moss-card`, sorted by date descending then title.",
-    },
-    ComponentEntry {
-        class: "moss-places-card-select",
-        kind: "instance",
-        parent: "moss-card",
-        data_attrs: &[],
-        example_html: r#"<button type="button" class="moss-places-card-select" aria-pressed="false" aria-expanded="false"><div class="moss-card-row">…</div></button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Wraps a `moss-places-cards` card's own `moss-card-row`: the whole card's click target, toggling its `moss-places-card-detail` open or closed.",
-    },
-    ComponentEntry {
-        class: "moss-places-card-detail",
-        kind: "instance",
-        parent: "moss-card",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-card-detail" inert><p class="moss-card-description">…</p><p>Lisbon · Porto</p><a class="moss-places-card-read" href="/works/harbor-walk/">Read article</a></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "A selected `moss-places-cards` card's own expand-in-place detail: description, place names, companion links and a link to the article. Collapsed (and `inert`) on every other card.",
-    },
-    ComponentEntry {
         class: "moss-card-meta-author",
         kind: "instance",
         parent: "moss-card-meta",
@@ -5193,30 +4781,6 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "1",
         description: "The date on a collapsed `moss-places-cards` card's meta line. It carries its own leading no-break-space, middle dot, no-break-space separator when an author precedes it, and never shrinks or wraps.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-scope",
-        kind: "instance",
-        parent: "moss-places-chip",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-places-chip-scope" role="group"><button type="button" class="moss-places-chip-scope-option" data-scope="article" aria-current="true">This article</button><button type="button" class="moss-places-chip-scope-option" data-scope="all">All articles</button></div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The two-segment \"This article | All articles\" switch that replaces the breadcrumb trail on an article's own map. The current segment carries `aria-current`.",
-    },
-    ComponentEntry {
-        class: "moss-places-chip-scope-option",
-        kind: "instance",
-        parent: "moss-places-chip-scope",
-        data_attrs: &[
-            DataAttr { name: "data-scope", values: &["article", "all"], default: "", description: "Which scope the segment selects: only this article, or every article." },
-        ],
-        example_html: r#"<button type="button" class="moss-places-chip-scope-option" data-scope="all">All articles</button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "One segment of the `moss-places-chip-scope` switch.",
     },
     ComponentEntry {
         class: "immersive-fullscreen-btn",
@@ -5240,99 +4804,30 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         since: "1",
         description: "Added by site script, not in the built HTML: the box around a local iframe that is a direct child of the article (a places map or any embed of a page on the same site), holding the iframe and its fullscreen and open-in-new-window controls. It copies the iframe's `moss-align-left` or `moss-align-right` class and `data-width`, so a floated or wide embed keeps its placement. An iframe from another site is not wrapped.",
     },
-    ComponentEntry {
-        class: "moss-places-card-read",
-        kind: "instance",
-        parent: "moss-places-card-detail",
-        data_attrs: &[],
-        example_html: r#"<a class="moss-places-card-read" href="/works/harbor-walk/">Read article</a>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Link to the work's own article, inside an expanded card's detail region.",
-    },
-    ComponentEntry {
-        class: "moss-places-status",
-        kind: "standalone",
-        parent: "",
-        data_attrs: &[],
-        example_html: r#"<p class="moss-places-status" role="status" aria-live="polite"></p>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Visually-hidden polite live region announcing scope and selection changes — never pan or zoom, and never a visible status line.",
-    },
-    // Embeds: `places-explorer/embed.ts`'s own lazy-hydrated iframe, in the
-    // stable host for a `style:map` or locator. Created by that runtime, like the
-    // rest of this section — `data-moss-place-embed`/`data-hydrate-url`
-    // above, on `moss-place-map`, are the one exception (Rust-emitted).
-    ComponentEntry {
-        class: "moss-places-embed-frame",
-        kind: "instance",
-        parent: "moss-place-map",
-        data_attrs: &[],
-        example_html: r#"<iframe class="moss-places-embed-frame" src="/places/?place=places/kyoto&embed=1"></iframe>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "The lazy-hydrated iframe `embed.ts` creates in the stable 3:2 host when near the viewport (or after an explicit Save-Data action). Hidden and non-interactive until its explorer posts READY.",
-    },
-    ComponentEntry {
-        class: "moss-places-embed-frame--settled",
-        kind: "instance",
-        parent: "moss-places-embed-frame",
-        data_attrs: &[],
-        example_html: r#"<iframe class="moss-places-embed-frame moss-places-embed-frame--settled" src="/places/?place=places/kyoto&embed=1"></iframe>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Added once the iframe's own explorer posts READY. Enables the canonical iframe as the sole visible map; it does not animate between two map surfaces.",
-    },
-    ComponentEntry {
-        class: "moss-places-embed-status",
-        kind: "instance",
-        parent: "moss-place-map",
-        data_attrs: &[],
-        example_html: r#"<span class="moss-places-embed-status" role="status">Loading interactive map…</span>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Localized waiting/loading status inside the stable embed host; removed when the iframe posts READY or the static fallback is restored.",
-    },
-    ComponentEntry {
-        class: "moss-places-embed-load",
-        kind: "instance",
-        parent: "moss-place-map",
-        data_attrs: &[],
-        example_html: r#"<button type="button" class="moss-places-embed-load">Load interactive map</button>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Localized keyboard-accessible opt-in action for Save-Data or slow connections. No iframe request starts until this button is activated.",
-    },
-    ComponentEntry {
-        class: "moss-places-coop-hint",
-        kind: "instance",
-        parent: "moss-places-viewport",
-        data_attrs: &[],
-        example_html: r#"<p class="moss-places-coop-hint" role="status" aria-live="polite">Hold ⌘ and scroll to zoom the map</p>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "`map.ts`'s one-time nudge toward the zoom modifier: appended to the viewport the first time a reader wheels a COOPERATIVE (collapsed-embed) map without it held, since a bare wheel there deliberately does nothing — `gestures.ts` leaves it for the page's own scroll. Never appears on the full explorer page, which has no competing scroll to defer to.",
-    },
-    ComponentEntry {
-        class: "moss-places-coop-hint--visible",
-        kind: "instance",
-        parent: "moss-places-coop-hint",
-        data_attrs: &[],
-        example_html: r#"<p class="moss-places-coop-hint moss-places-coop-hint--visible" role="status" aria-live="polite">Hold ⌘ and scroll to zoom the map</p>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "1",
-        description: "Added one frame after the hint mounts (so its own opacity transition runs) and removed a couple of seconds later as the hint auto-dismisses — never left present once dismissed.",
-    },
 ];
+
+const TOTAL: usize = CORE.len() + forms::ENTRIES.len() + country_map::ENTRIES.len() + places::ENTRIES.len();
+
+/// The family slices laid end to end, so the table keeps one public name and
+/// type while each family's rows live in a file of their own.
+const fn concat(parts: [&[ComponentEntry]; 4]) -> [ComponentEntry; TOTAL] {
+    let mut out = [parts[0][0]; TOTAL];
+    let (mut at, mut part) = (0, 0);
+    while part < parts.len() {
+        let mut i = 0;
+        while i < parts[part].len() {
+            out[at] = parts[part][i];
+            at += 1;
+            i += 1;
+        }
+        part += 1;
+    }
+    out
+}
+
+const ALL: [ComponentEntry; TOTAL] = concat([CORE, forms::ENTRIES, country_map::ENTRIES, places::ENTRIES]);
+
+pub const COMPONENTS: &[ComponentEntry] = &ALL;
 
 impl ComponentEntry {
     /// True for entries that belong in the public, agent/theme-facing surface:

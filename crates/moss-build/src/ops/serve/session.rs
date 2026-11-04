@@ -1,11 +1,17 @@
 //! The carrier's session: which vault the HTTP command carrier is serving and
-//! the token that unlocks it, as ONE record. `invoke.rs`
-//! holds the arms; this file holds what they run against.
+//! the token that unlocks it, as ONE record, and the [`CommandHost`] the
+//! carrier's commands run against.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
+
+use crate::build::manifest::SealedManifest;
+use crate::commands::rename_undo::RenameUndoStore;
+use crate::commands::{CommandHost, VaultPath};
+use crate::types::events::MossEvent;
 
 use crate::types::runtime::ServerHandle;
 use crate::vault::paths::VaultRoot;
@@ -45,6 +51,11 @@ pub struct Session {
     /// subscriber admitted under this vault stops receiving the next vault's
     /// events the moment the switch is observed.
     retired: CancellationToken,
+    /// Renames this session can undo; a new folder starts with none.
+    rename_undo: RenameUndoStore,
+    publish_dates: crate::editor::filesystem::PublishDateMemo,
+    /// The server's live serve-dir pointer.
+    site_dir: Arc<RwLock<PathBuf>>,
 }
 
 impl Session {
@@ -59,6 +70,35 @@ impl Session {
     /// Resolves when a different vault has been bound over this session.
     pub fn retired(&self) -> &CancellationToken {
         &self.retired
+    }
+}
+
+/// The carrier's caller is untrusted, so [`CommandHost::resolve`] here is the
+/// one place a caller path is confined to the folder.
+impl CommandHost for Session {
+    fn root(&self) -> &Path {
+        self.vault.path()
+    }
+
+    fn rename_undo(&self) -> &RenameUndoStore {
+        &self.rename_undo
+    }
+
+    fn publish_dates(&self) -> &crate::editor::filesystem::PublishDateMemo {
+        &self.publish_dates
+    }
+
+    fn served_dir(&self) -> PathBuf {
+        self.site_dir.read().map(|d| d.clone()).unwrap_or_else(|e| e.into_inner().clone())
+    }
+
+    fn publish(&self, event: &MossEvent) {
+        super::events::publish(event);
+    }
+
+    /// No live build here, so this builds.
+    fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>> {
+        Box::pin(crate::deploy::one_shot::build_sealed_now(&self.vault))
     }
 }
 
@@ -135,6 +175,9 @@ impl InvokeCtx {
             vault,
             token,
             retired: CancellationToken::new(),
+            rename_undo: Default::default(),
+            publish_dates: Default::default(),
+            site_dir: site_dir.clone(),
         });
         if let Some(previous) = session.replace(fresh.clone()) {
             previous.retired.cancel();

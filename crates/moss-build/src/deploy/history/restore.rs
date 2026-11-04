@@ -78,9 +78,12 @@ pub(crate) fn restore_site(
     trash: &dyn Fn(&Path, &str) -> Result<(), String>,
 ) -> RestoreReport {
     let mut report = RestoreReport::default();
-    let Some(record) = store::load_record(root, id) else {
-        report.failed.push(("*".to_string(), format!("no such version: {id}")));
-        return report;
+    let record = match site_version(root, id) {
+        Ok(record) => record,
+        Err(e) => {
+            report.failed.push(("*".to_string(), e));
+            return report;
+        }
     };
     let object_store = store::object_store(root);
     let current_hashes = record::current_entry_hashes(current);
@@ -110,6 +113,18 @@ pub(crate) fn restore_site(
     report.trashed.sort();
     report.failed.sort_by(|a, b| a.0.cmp(&b.0));
     report
+}
+
+/// The record `id` names, when the whole site can be restored to it. A kept
+/// outside edit holds one page, so restoring the site to it would trash every
+/// other page; callers check this before saving the present as a version, so
+/// a refused restore leaves no backup behind.
+pub(crate) fn site_version(root: &Path, id: &str) -> Result<super::PublishRecord, String> {
+    let record = store::load_record(root, id).ok_or_else(|| format!("no such version: {id}"))?;
+    match record.trigger {
+        super::Trigger::Displaced => Err(format!("{id} is one page's kept outside edit; restore that page instead")),
+        _ => Ok(record),
+    }
 }
 
 /// Move a vault-relative path to the OS Trash through the existing delete

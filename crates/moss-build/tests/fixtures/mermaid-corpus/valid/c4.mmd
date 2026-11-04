@@ -1,0 +1,7 @@
+C4Context
+  title System context
+  Person(author, "Author", "Writes pages")
+  System(moss, "moss", "Builds the site")
+  System_Ext(host, "Host", "Serves the site")
+  Rel(author, moss, "Writes")
+  Rel(moss, host, "Publishes")

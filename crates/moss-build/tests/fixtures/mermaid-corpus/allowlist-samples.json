@@ -1,0 +1,42 @@
+{
+ "about": "Shared by the build's SVG sanitiser and tests/diagrams/svg-allowlist.mjs, so the two implementations of the allowlist cannot drift apart. Each fragment is placed inside `wrap` and checked with `prefix`.",
+ "wrap": "<svg xmlns=\"http://www.w3.org/2000/svg\" id=\"p-root\" viewBox=\"0 0 10 10\">{}</svg>",
+ "prefix": "p-",
+ "refused": [
+  "<script>alert(1)</script>",
+  "<foreignObject><div/></foreignObject>",
+  "<style>*{}</style>",
+  "<image href=\"https://example.com/t.png\"/>",
+  "<g onload=\"alert(1)\"/>",
+  "<g ONclick=\"alert(1)\"/>",
+  "<g 中=\"x\"/>",
+  "<g aé=\"x\"/>",
+  "<a href=\"javascript:alert(1)\"><text>x</text></a>",
+  "<a href=\"JavaScript:alert(1)\"><text>x</text></a>",
+  "<a href=\"data:text/html,x\"><text>x</text></a>",
+  "<a href=\"//example.com/x\"><text>x</text></a>",
+  "<a href=\"vbscript:x\"><text>x</text></a>",
+  "<g href=\"https://example.com\"/>",
+  "<a xmlns:xl=\"http://www.w3.org/1999/xlink\" xl:href=\"https://example.com\"><text>x</text></a>",
+  "<rect fill=\"url(https://example.com/x)\"/>",
+  "<rect fill=\"url(#other-x)\"/>",
+  "<rect style=\"fill:url('https://example.com/x')\"/>",
+  "<rect style=\"background:red\"/>",
+  "<rect style=\"fill:\\75 rl(x)\"/>",
+  "<rect id=\"other\"/>",
+  "<a target=\"evil\" href=\"https://example.com\"><text>x</text></a>",
+  "<!-- x --><g/>",
+  "<g xmlns:h=\"http://www.w3.org/1999/xhtml\"><h:div/></g>",
+  "<text><![CDATA[x]]></text>"
+ ],
+ "accepted": [
+  "<a href=\"/notes/a/\" target=\"_blank\" rel=\"noopener\"><text aria-label=\"Data: sales\" style=\"fill:var(--pele-fg);--x:1\">x</text></a><rect fill=\"url(#p-grad)\"/>",
+  "<a href=\"mailto:a@example.com\"><text>javascript: is only text here</text></a>"
+ ],
+ "refused_documents": [
+  "<!DOCTYPE svg><svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+  "<html xmlns=\"http://www.w3.org/2000/svg\"/>",
+  "<svg/>",
+  "<g xmlns=\"http://www.w3.org/2000/svg\"/>"
+ ]
+}

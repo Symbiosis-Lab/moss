@@ -2990,42 +2990,46 @@ fn test_remove_stale_files_deletes_untracked_webp() {
 /// Stale-file cleanup must never touch `_moss/math/`.
 #[test]
 fn remove_stale_files_never_deletes_math_pngs() {
-    let temp = TempDir::new().unwrap();
-    let dir = temp.path().join("output");
-    let math = dir.join("_moss").join("math");
-    fs::create_dir_all(&math).unwrap();
+    for family in ["math", "diagrams"] {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("output");
+        let math = dir.join("_moss").join(family);
+        fs::create_dir_all(&math).unwrap();
 
-    // Untracked on purpose — the equation is gone from every page.
-    fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
+        // Untracked on purpose — the equation or diagram is gone from every page.
+        fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
 
-    let hashes = SiteHashes::new();
-    remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
+        let hashes = SiteHashes::new();
+        remove_stale_files(&dir, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 
-    assert!(
-        math.join("aaaaaaaaaaaaaaaa.png").exists(),
-        "math PNGs are append-only and must survive stale cleanup"
-    );
+        assert!(
+            math.join("aaaaaaaaaaaaaaaa.png").exists(),
+            "_moss/{family} PNGs are append-only and must survive stale cleanup"
+        );
+    }
 }
 
 /// The directory-level counterpart: a build with no math pages computes
 /// no expected `_moss/math` dir, but the dir holds append-only PNGs.
 #[test]
 fn remove_stale_dirs_never_deletes_math_dir() {
-    let temp = TempDir::new().unwrap();
-    let dir = temp.path().join("output");
-    let math = dir.join("_moss").join("math");
-    fs::create_dir_all(&math).unwrap();
-    fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
+    for family in ["math", "diagrams"] {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("output");
+        let math = dir.join("_moss").join(family);
+        fs::create_dir_all(&math).unwrap();
+        fs::write(math.join("aaaaaaaaaaaaaaaa.png"), "png bytes").unwrap();
 
-    // Expected dirs cover _moss (other artifacts) but NOT _moss/math.
-    let mut expected = std::collections::HashSet::new();
-    expected.insert(std::path::PathBuf::from("_moss"));
-    remove_stale_dirs(&dir, &expected, &crate::build::lifecycle::permit_for_test());
+        // Expected dirs cover _moss (other artifacts) but NOT this family's dir.
+        let mut expected = std::collections::HashSet::new();
+        expected.insert(std::path::PathBuf::from("_moss"));
+        remove_stale_dirs(&dir, &expected, &crate::build::lifecycle::permit_for_test());
 
-    assert!(
-        math.join("aaaaaaaaaaaaaaaa.png").exists(),
-        "_moss/math must survive dir-level stale cleanup"
-    );
+        assert!(
+            math.join("aaaaaaaaaaaaaaaa.png").exists(),
+            "_moss/{family} must survive dir-level stale cleanup"
+        );
+    }
 }
 
 /// Regression: a notebook hash entry the asset walk does not own must reach
@@ -3951,8 +3955,8 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
         modified: None,
     }];
 
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source));
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
+        &crate::build::cloud_ledger::InputEvidence::new(&source)));
 
     assert!(
         output.join("test.ipynb").exists(),
@@ -3962,6 +3966,16 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
         receipt_paths(&outputs).contains(&"test.ipynb".to_string()),
         "Outputs should include the notebook path"
     );
+}
+
+/// Runs under a `MOSS_HOME` whose `assets` is a file, so asset resolution
+/// fails offline and notebook processing takes its copy-only fallback,
+/// whatever `~/.moss` holds or another test has set.
+fn without_jupyterlite_assets<T>(f: impl FnOnce() -> T) -> T {
+    crate::infra::home::with_moss_home(|home| {
+        std::fs::write(home.join("assets"), "").unwrap();
+        f()
+    })
 }
 
 #[test]
@@ -3987,8 +4001,8 @@ fn test_data_files_copied_to_jupyter_files() {
         modified: None,
     }];
 
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source));
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
+        &crate::build::cloud_ledger::InputEvidence::new(&source)));
 
     // Data file should be in jupyter/files/ (fallback path without JupyterLite)
     // Note: without JupyterLite assets, the function takes the fallback path
@@ -4012,7 +4026,7 @@ fn skipped_notebook_copy_stays_unresolved_after_a_later_manifest_read() {
         size: content.len() as u64, modified: None,
     }];
     let evidence = crate::build::cloud_ledger::InputEvidence::new(&source);
-    let outputs = run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence);
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence));
     assert!(!receipt_paths(&outputs).contains(&"analysis.ipynb".to_string()));
     assert_eq!(evidence.unresolved_structural(), ["analysis.ipynb"]);
     assert!(read_notebook_sibling(&notebook, &evidence).is_some());
@@ -6025,7 +6039,7 @@ fn gate_structure(root: &std::path::Path, homepage: Option<&str>, evicted: &[&st
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -7991,3 +8005,6 @@ fn previews_json_recomputes_only_changed_pages_and_drops_removed_ones() {
     assert!(removed.contains("Alpha opening") && removed.contains("Beta rewritten"));
     crate::build::parse_cache::reset_for_tests();
 }
+
+#[path = "assets_folder_tests.rs"]
+mod assets_folder;

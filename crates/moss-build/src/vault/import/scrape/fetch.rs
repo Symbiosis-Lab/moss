@@ -9,6 +9,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use super::crawl_state::HostPacer;
 
@@ -91,7 +92,7 @@ pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
         "http" | "https" => {}
         other => {
             return Err(format!(
-                "URL scheme '{other}' is not allowed — only http/https"
+                "URL scheme '{other}' is not allowed - only http/https"
             ))
         }
     }
@@ -215,11 +216,18 @@ fn fetch_following_redirects(
     // (it never reads the body), so the detail goes in `status_text`
     // itself rather than being silently dropped.
     const REFUSED_STATUS: u16 = 400;
+    // ureq parses the status text back out of a status line, which must be
+    // ASCII with no control characters; a refusal reason is free text, so it
+    // is folded to that first.
     let refused = |status_text: &str| {
+        let status_text: String = status_text
+            .chars()
+            .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '-' })
+            .collect();
         ureq::Error::Status(
             REFUSED_STATUS,
-            ureq::Response::new(REFUSED_STATUS, status_text, "")
-                .expect("status line without newlines always builds"),
+            ureq::Response::new(REFUSED_STATUS, &status_text, "")
+                .expect("a printable ASCII status line always builds"),
         )
     };
 
@@ -394,17 +402,21 @@ pub(crate) fn observe_pace<T>(pacer: &mut HostPacer, host: &str, result: &Result
 ///
 /// `accept: None` — a page fetch is never asked to localize a transcoded
 /// variant, so it keeps ureq's own `Accept: */*` default unchanged.
-pub(crate) async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), FetchError> {
+pub(crate) async fn fetch_page(
+    url: &str,
+    user_agent: &str,
+) -> Result<(String, String, String), FetchError> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
         let response =
             call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30), None, None)?;
         let content_type = response.content_type().to_string();
+        let final_url = response.get_url().to_string();
 
         response
             .into_string()
-            .map(|body| (body, content_type))
+            .map(|body| (body, content_type, final_url))
             .map_err(|e| FetchError::message(format!("Failed to read response: {}", e)))
     })
     .await
@@ -626,6 +638,62 @@ pub(crate) fn content_type_to_extension(content_type: &str) -> &str {
         "audio/wav" => "wav",
         "application/pdf" => "pdf",
         _ => "bin",
+    }
+}
+
+// ── Progress line for a slow page ────────────────────────────────────
+
+/// Quiet period between two lines, and the time a page's downloads may take
+/// before the first one.
+const INTERVAL: Duration = Duration::from_secs(30);
+
+/// The line to print now, or `None` when `since_last_line` is under 30 s or
+/// nothing is left to download. `delay` is the host's current spacing between
+/// requests; zero leaves the spacing and the estimate out.
+pub(crate) fn progress_line(done: usize, total: usize, delay: Duration, since_last_line: Duration) -> Option<String> {
+    if since_last_line < INTERVAL || done >= total {
+        return None;
+    }
+    let mut line = format!("    ↳ {done} of {total} files for this page");
+    if !delay.is_zero() {
+        let left = delay.saturating_mul((total - done) as u32);
+        line.push_str(&format!(
+            "; requests are {} apart, about {} left",
+            human(delay),
+            human(left)
+        ));
+    }
+    Some(line)
+}
+
+fn human(d: Duration) -> String {
+    let secs = d.as_secs_f64().round() as u64;
+    match secs {
+        0..=89 => format!("{secs} s"),
+        90..=5399 => format!("{} min", (secs + 30) / 60),
+        _ => format!("{:.1} h", secs as f64 / 3600.0),
+    }
+}
+
+/// Counts one page's file downloads as they finish and prints the line.
+pub(crate) struct FileProgress {
+    total: usize,
+    done: usize,
+    last_line: Instant,
+}
+
+impl FileProgress {
+    pub(crate) fn new(total: usize) -> Self {
+        Self { total, done: 0, last_line: Instant::now() }
+    }
+
+    /// Call after each download, successful or not.
+    pub(crate) fn finished_one(&mut self, delay: Duration) {
+        self.done += 1;
+        if let Some(line) = progress_line(self.done, self.total, delay, self.last_line.elapsed()) {
+            eprintln!("{line}");
+            self.last_line = Instant::now();
+        }
     }
 }
 

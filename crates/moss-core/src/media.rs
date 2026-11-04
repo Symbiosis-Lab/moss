@@ -749,27 +749,44 @@ fn swapped_from(word: &str, known: &str) -> bool {
         })
 }
 
-/// Escape a string for safe use in HTML text or attribute values.
-///
-/// Replaces `&`, `"`, `'`, `<`, and `>` with their HTML entities.
+/// Escape for HTML text or a double-quoted attribute value: `&`, `<`, `>`,
+/// `"`, and `'` as `&#39;`.
 pub fn html_escape(s: &str) -> String {
+    escape(s, true, Some("&#39;"))
+}
+
+/// Escape for a double-quoted HTML attribute value: `&`, `<`, `>`, `"`. An
+/// apostrophe cannot end a double-quoted value, so it stays.
+pub fn html_escape_attr(s: &str) -> String {
+    escape(s, true, None)
+}
+
+/// Escape for HTML element text: `&`, `<`, `>`, as pulldown-cmark escapes
+/// text. Not for attribute values.
+pub fn html_escape_text(s: &str) -> String {
+    escape(s, false, None)
+}
+
+/// Escape for XML (feeds, the sitemap, SVG): `&`, `<`, `>`, `"`, and `'` as
+/// XML's own `&apos;`.
+pub fn xml_escape(s: &str) -> String {
+    escape(s, true, Some("&apos;"))
+}
+
+fn escape(s: &str, quote: bool, apostrophe: Option<&str>) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
+        match (ch, apostrophe) {
+            ('&', _) => out.push_str("&amp;"),
+            ('<', _) => out.push_str("&lt;"),
+            ('>', _) => out.push_str("&gt;"),
+            ('"', _) if quote => out.push_str("&quot;"),
+            ('\'', Some(entity)) => out.push_str(entity),
             _ => out.push(ch),
         }
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 #[path = "media_tests.rs"]

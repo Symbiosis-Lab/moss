@@ -185,6 +185,15 @@ pub fn ensure_config_current(project_path: &str) -> Result<(), String> {
     }
 }
 
+/// The `[services]` table of an already-read config, so a build that has parsed
+/// `.moss/config.toml` once does not read it again.
+pub(crate) fn parse_services(config: &crate::config::ConfigFile) -> Result<ServicesConfig, String> {
+    match config.section(&["services"]) {
+        Some(v) => v.clone().try_into().map_err(|e| format!("Failed to parse [services]: {}", e)),
+        None => Ok(ServicesConfig::default()),
+    }
+}
+
 /// Read `[services.<kind>]` sections from .moss/config.toml. Permissive —
 /// unknown providers are preserved as-is in the `provider` field; wiring
 /// errors are not checked here. Call `validate()` on the returned config
@@ -195,13 +204,7 @@ pub fn ensure_config_current(project_path: &str) -> Result<(), String> {
 /// convert into a render-time panic.
 pub fn get_services_config(project_path: &str) -> Result<ServicesConfig, String> {
     let config = read_project_config(project_path)?;
-    let mut services: ServicesConfig = match config.section(&["services"]) {
-        Some(v) => v
-            .clone()
-            .try_into()
-            .map_err(|e| format!("Failed to parse [services]: {}", e))?,
-        None => ServicesConfig::default(),
-    };
+    let mut services = parse_services(&config)?;
     // A script set only in the home page's front matter still counts, read in
     // memory: reading a site never writes its config, and the next explicit
     // edit of the analytics setting saves it.

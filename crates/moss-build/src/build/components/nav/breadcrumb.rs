@@ -107,7 +107,7 @@ impl<'a> NavigationBuilder<'a> {
                         content
                     ));
                 }
-                let separator = r#"<span class="breadcrumb-separator">/</span>"#;
+                let separator = island::SEPARATOR;
                 // Editor preview: the trail names the field that toggles it.
                 // Only the breadcrumb-mode `.nav-left` — the plain site-name
                 // fallbacks are not breadcrumbs and stay bare chrome.

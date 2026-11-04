@@ -614,16 +614,19 @@ describe("comment count agrees with the rendered list", () => {
   });
 });
 
-describe("artalk captcha handshake (Artalk iframe flow)", () => {
-  test("403 need_captcha → opens Artalk's captcha iframe, polls status, retries, appends", async () => {
+/** What the captcha page in the open frame tells this window. */
+function tell(state: string): void {
+  const frame = document.querySelector<HTMLIFrameElement>('[role="dialog"] iframe')!;
+  window.dispatchEvent(new MessageEvent("message", { data: { moss_captcha: state }, source: frame.contentWindow }));
+}
+
+describe("artalk captcha handshake", () => {
+  test("403 need_captcha → loads the captcha page, retries once it passes, appends", async () => {
     vi.useFakeTimers();
     mountForm();
     let postCount = 0;
     fetchMock = vi.fn((url: string, opts?: { method?: string }) => {
       const u = String(url);
-      if (u.includes("/api/v2/captcha/status")) {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ is_pass: true }) });
-      }
       if (u.includes("/api/v2/comments") && opts?.method === "POST") {
         postCount += 1;
         // First attempt is challenged; after verify the retry succeeds.
@@ -643,13 +646,13 @@ describe("artalk captcha handshake (Artalk iframe flow)", () => {
     await vi.advanceTimersByTimeAsync(0); // first POST → 403 → captcha modal opens
 
     // The modal iframe targets the captcha page WITH a trailing slash — required
-    // so Artalk's relative ./verify resolves under the /comments proxy prefix.
+    // so the page's relative ./verify resolves under the /comments proxy prefix.
     const frame = document.querySelector('iframe[title="Verifying…"]') as HTMLIFrameElement | null;
     expect(frame).not.toBeNull();
-    expect(frame!.src).toContain("/api/v2/captcha/?t=");
+    expect(frame!.src).toContain("/api/v2/captcha/?quiet=1&t=");
 
-    // Poll fires after 1.5s → is_pass → retry POST → comment appended, modal gone.
-    await vi.advanceTimersByTimeAsync(1600);
+    tell("passed");
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(postCount).toBe(2);
     expect(document.getElementById("comment-artalk-42")).not.toBeNull();
@@ -657,27 +660,49 @@ describe("artalk captcha handshake (Artalk iframe flow)", () => {
     vi.useRealTimers();
   });
 
-  test("dismissing the captcha modal cancels quietly (no error, submit re-enabled)", async () => {
+  async function submitChallenged(): Promise<HTMLFormElement> {
     vi.useFakeTimers();
     mountForm();
-    fetchMock = vi.fn((url: string, opts?: { method?: string }) => {
-      const u = String(url);
-      if (u.includes("/api/v2/comments") && opts?.method === "POST") {
-        return Promise.resolve({ ok: false, status: 403, json: async () => ({ need_captcha: true, iframe: true }) });
-      }
-      return Promise.resolve({ ok: true, status: 200, json: async () => ({ comments: [], count: 0 }) });
-    });
+    fetchMock = vi.fn((url: string, opts?: { method?: string }) =>
+      String(url).includes("/api/v2/comments") && opts?.method === "POST"
+        ? Promise.resolve({ ok: false, status: 403, json: async () => ({ need_captcha: true, iframe: true }) })
+        : Promise.resolve({ ok: true, status: 200, json: async () => ({ comments: [], count: 0 }) }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     await import("../artalk");
     await vi.advanceTimersByTimeAsync(0);
-
     (document.getElementById("moss-comment-text") as HTMLTextAreaElement).value = "hi";
     const form = document.getElementById("moss-comment-form") as HTMLFormElement;
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.advanceTimersByTimeAsync(0);
+    return form;
+  }
+
+  test("the check stays out of sight until Turnstile needs the commenter", async () => {
+    const form = await submitChallenged();
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.style.visibility).toBe("hidden");
+    expect(form.dataset.state).toBe("loading");
+    tell("interactive");
+    expect(dialog.style.visibility).toBe("");
+    vi.useRealTimers();
+  });
+
+  test("a failed check shows the form error at once", async () => {
+    const form = await submitChallenged();
+    tell("failed");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(form.dataset.state).toBe("error");
+    expect(document.getElementById("moss-comment-status")!.textContent).not.toBe("");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    vi.useRealTimers();
+  });
+
+  test("dismissing the captcha modal cancels quietly (no error, submit re-enabled)", async () => {
+    const form = await submitChallenged();
 
     const overlay = document.querySelector('[role="dialog"]') as HTMLElement | null;
     expect(overlay).not.toBeNull();
+    tell("interactive");
     overlay!.dispatchEvent(new MouseEvent("click", { bubbles: true })); // click the backdrop
     await vi.advanceTimersByTimeAsync(0);
 
@@ -710,6 +735,7 @@ describe("artalk captcha handshake (Artalk iframe flow)", () => {
 
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
+    tell("interactive");
     // A modal takes focus, and is named in the page's language.
     expect(dialog!.contains(document.activeElement)).toBe(true);
     expect(dialog!.getAttribute("aria-label")).toBe("Verifying…");

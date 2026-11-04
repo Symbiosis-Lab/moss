@@ -78,11 +78,12 @@ function gitTree(files, rows) {
 
 const perPath = (value) => ({ [ROW]: { letter: 'a', disposition: 'permanent', armed: true, value } });
 
-/** A baseline with all three rows present — `check` self-check 1 requires it. */
-const fullBaseline = (value) => ({
+/** A baseline with every row present — `check` self-check 1 requires it. */
+const fullBaseline = (value, deps = {}) => ({
   ...perPath(value),
   children_per_dir: { letter: 'b', disposition: 'permanent', armed: true, value: {} },
   mirror_markers: { letter: 'e', disposition: 'permanent', armed: true, value: 0 },
+  direct_deps_per_crate: { letter: 'f', disposition: 'permanent', armed: true, value: deps },
 });
 
 /** a and b are over their baselines, c sits exactly at its own. */
@@ -858,5 +859,84 @@ describe('docs — ARCHITECTURE.md Known-debt block', () => {
         assert.equal(ok.status, 0, ok.stdout + ok.stderr);
       },
     );
+  });
+});
+
+describe('row (f) direct_deps_per_crate', () => {
+  const MANIFEST = 'crates/c/Cargo.toml';
+  const CARGO = [
+    '[package]',
+    'name = "c"',
+    'version = "0.1.0"',
+    'edition = "2021"',
+    '',
+    "[dependencies] # it's the production table",
+    'serde = { version = "1", features = ["derive"] }',
+    'regex.workspace = true',
+    '"quoted-key" = "1"',
+    'renamed = { package = "url", version = "2" }',
+    'url1 = { package = "url", version = "1" }',
+    '',
+    "[target.'cfg(unix)'.dependencies]",
+    'libc = "0.2"',
+    'serde = "1"',
+    '',
+    '[dev-dependencies]',
+    'proptest = "1"',
+    '',
+    '[build-dependencies]',
+    'cc = "1"',
+    '',
+  ].join('\n');
+
+  // serde, regex, quoted-key, renamed, url1, libc: serde's second table is one
+  // dependency, and two renames of one package are two.
+  const COUNT = 6;
+
+  function depTree(cargo, deps) {
+    const t = tree({ 'crates/c/src/lib.rs': 1 }, fullBaseline({}, deps));
+    fs.writeFileSync(path.join(t.root, 'Cargo.toml'), '[workspace]\nmembers = ["crates/c"]\nresolver = "2"\n\n[workspace.dependencies]\nregex = "1"\n');
+    fs.writeFileSync(path.join(t.root, MANIFEST), cargo);
+    return t;
+  }
+
+  it('is green at the baseline and red when a crate gains a dependency', () => {
+    within(depTree(CARGO, { [MANIFEST]: COUNT }), (t) => {
+      const ok = t.run('check');
+      assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    });
+    within(depTree(CARGO.replace('[dev-dependencies]', 'anyhow = "1"\n\n[dev-dependencies]'), { [MANIFEST]: COUNT }), (t) => {
+      const red = t.run('check');
+      assert.notEqual(red.status, 0);
+      assert.match(red.stdout, new RegExp(`'crates/c/Cargo\\.toml' grew to ${COUNT + 1} direct dependencies \\(baseline ${COUNT}\\)`));
+    });
+  });
+
+  it('holds a new crate to an accept, whose trailer names the manifest', () => {
+    within(depTree(CARGO, {}), (t) => {
+      const red = t.run('check');
+      assert.notEqual(red.status, 0);
+      assert.match(red.stdout, new RegExp(`NEW 'crates/c/Cargo\\.toml' has ${COUNT} direct dependencies, not in baseline`));
+      const ok = t.run('accept', 'direct_deps_per_crate', 'the new crate needs serde for its manifest format', '--path', MANIFEST);
+      assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+      assert.match(ok.stdout, /Ratchet-Accept: direct_deps_per_crate crates\/c\/Cargo\.toml — the new crate needs serde/);
+      assert.equal(t.baseline().rows.direct_deps_per_crate.value[MANIFEST], COUNT);
+    });
+  });
+
+  it('tighten lowers the count when a dependency is dropped', () => {
+    within(depTree(CARGO.replace('libc = "0.2"\n', ''), { [MANIFEST]: COUNT }), (t) => {
+      const r = t.run('tighten');
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.equal(t.baseline().rows.direct_deps_per_crate.value[MANIFEST], COUNT - 1);
+    });
+  });
+
+  it('fails closed when cargo cannot read the manifests', () => {
+    within(depTree('[package]\nname = "c"\nnot toml at all [\n', { [MANIFEST]: COUNT }), (t) => {
+      const red = t.run('check');
+      assert.notEqual(red.status, 0);
+      assert.match(red.stderr, /cargo metadata.* failed/);
+    });
   });
 });

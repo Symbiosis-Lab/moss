@@ -13,48 +13,32 @@
  */
 
 import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
+import { autoHydrate, claim, inPreview, lockSlotWidth, setState } from './hosted-form.js';
+import { solveCaptcha } from './captcha.js';
 
 type StatusKey = 'check-email' | 'already-subscribed' | 'error';
-
-type FormState = 'idle' | 'loading' | 'success' | 'error';
 
 type SubscribeResponse = {
   subscribed?: boolean;
   confirmationSent?: boolean;
   alreadySubscribed?: boolean;
   error?: string;
+  need_captcha?: boolean;
+  captcha_url?: string;
 };
-
-/** How long success stays up before auto-reverting to idle. */
-const AUTO_REVERT_MS = 4000;
-
-/** Per-form auto-revert timers, keyed by form element. */
-const revertTimers = new WeakMap<HTMLFormElement, number>();
-
-/**
- * Forms whose submit listener is already bound. A WeakSet keyed on the
- * element — not a `data-moss-hydrated` attribute — because idiomorph strips
- * any attribute the runtime added that isn't present in the freshly rendered
- * HTML: a dataset flag would vanish on the very node it was guarding, and a
- * post-morph `autoHydrate()` sweep would bind a second submit listener onto
- * the same (idiomorph-preserved) form element, double-POSTing on submit.
- */
-const hydratedForms = new WeakSet<HTMLFormElement>();
 
 /**
  * Hydrate one form. Safe to call multiple times on the same element —
- * the `hydratedForms` guard prevents double-binding.
+ * `claim` prevents double-binding.
  */
 export function hydrateSubscribeForm(form: HTMLFormElement): void {
-  if (hydratedForms.has(form)) return;
-
   const input = form.querySelector<HTMLInputElement>('input[type="email"]');
   const btn = form.querySelector<HTMLButtonElement>('button[type="submit"]');
   // Only mark the form hydrated once the required DOM is confirmed — otherwise
   // a malformed form (missing input/button) would be flagged as done without
   // any listener bound, and a later retry would early-return.
   if (!input || !btn) return;
-  hydratedForms.add(form);
+  if (!claim(form)) return;
 
   const lang: Lang = langBucket(document.documentElement.lang);
   const copy: SubscribeCopy = COPY[lang];
@@ -97,13 +81,12 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
     // POST (the form's action is the production subscribe endpoint, so a
     // localhost submit would create a real subscriber). ship.rs strips
     // data-moss-preview on publish, so this branch is dead on the live site.
-    if (document.body.hasAttribute('data-moss-preview')) {
+    if (inPreview()) {
       window.setTimeout(() => {
         // Mirror the real success path (status copy + state), so preview
         // shows the same confirmation the live site does.
         showStatus(form, 'check-email', copy);
         setState(form, 'success', btn);
-        scheduleAutoRevert(form, input);
       }, 600);
       return;
     }
@@ -114,13 +97,26 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       jsonBody.scope = scopeInput.value;
     }
 
-    try {
+    const post = async (): Promise<[Response, SubscribeResponse]> => {
       const res = await fetch(form.action, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(jsonBody),
       });
-      const data: SubscribeResponse = await res.json().catch(() => ({}));
+      return [res, await res.json().catch(() => ({}))];
+    };
+
+    try {
+      let [res, data] = await post();
+      // The service asks for its bot check on a site that publishes
+      // `subscribe.turnstile`; the button keeps spinning while the modal is open.
+      if (res.status === 403 && data.need_captcha && data.captcha_url) {
+        if (!(await solveCaptcha(data.captcha_url))) {
+          setState(form, 'idle', btn);
+          return;
+        }
+        [res, data] = await post();
+      }
       if (!res.ok) {
         showStatus(form, 'error', copy);
         setState(form, 'error', btn);
@@ -128,35 +124,23 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       }
       showStatus(form, data.alreadySubscribed ? 'already-subscribed' : 'check-email', copy);
       setState(form, 'success', btn);
-      scheduleAutoRevert(form, input);
     } catch {
       showStatus(form, 'error', copy);
       setState(form, 'error', btn);
     }
   });
 
-  // Tap the success circle to revert immediately.
+  // Success stays up until the reader acts: tap the circle (clears the field)
+  // or type again (keeps what they typed).
   btn.addEventListener('click', (e) => {
     if (form.dataset.state !== 'success') return;
     e.preventDefault(); // always prevent submit from re-firing on success
-    revertToIdle(form, input);
+    input.value = '';
+    setState(form, 'idle');
   });
-}
-
-function setState(form: HTMLFormElement, state: FormState, btn?: HTMLButtonElement): void {
-  form.dataset.state = state;
-  // aria-disabled on the button during loading/success so
-  // screen-readers know it's unavailable without visual CSS alone.
-  // Resolve the button from the form when not passed — ensures revertToIdle
-  // (which omits `btn`) never leaves aria-disabled stale on the live element.
-  const resolvedBtn = btn ?? form.querySelector<HTMLButtonElement>('button[type="submit"]');
-  if (resolvedBtn) {
-    if (state === 'loading' || state === 'success') {
-      resolvedBtn.setAttribute('aria-disabled', 'true');
-    } else {
-      resolvedBtn.removeAttribute('aria-disabled');
-    }
-  }
+  input.addEventListener('input', () => {
+    if (form.dataset.state === 'success') setState(form, 'idle');
+  });
 }
 
 /**
@@ -201,87 +185,4 @@ function copyFor(key: StatusKey, copy: SubscribeCopy): string {
   }
 }
 
-/**
- * Freeze the button slot's width to the button's natural idle width, once.
- * The slot element (`.moss-btn-slot`) stays this width through every
- * state change, so the input never sees the button collapse into a circle and
- * cannot shift horizontally. The circle centers inside the slot via CSS, which
- * puts it on the same centerline as the original button.
- */
-function lockSlotWidth(form: HTMLFormElement, btn: HTMLButtonElement): void {
-  const slot = btn.parentElement;
-  if (!slot || !slot.classList.contains('moss-btn-slot')) return;
-  // The lock protects the ROW layout (input beside button): without it the
-  // input's flex calculation sees the button collapse into a circle. In the
-  // stacked column layout (mobile in-page card) the slot is its own stretched
-  // row — a pixel lock there pins the circle to whatever width the form had
-  // at submit time, off-center after any pane resize. Leave it fluid.
-  if (getComputedStyle(form).flexDirection === 'column') {
-    slot.style.width = '';
-    return;
-  }
-  if (slot.style.width) return;
-  // Zero offsetWidth means layout isn't ready (detached, display:none, jsdom).
-  // Degrade gracefully: slot keeps its CSS flex:0 0 auto + min-height so the
-  // morph still renders — it just can't pin width across the transition.
-  const w = btn.offsetWidth;
-  if (w <= 0) return;
-  slot.style.width = `${w}px`;
-}
-
-/**
- * Start the auto-revert timer. Any existing timer for this form is cleared
- * first so rapid re-submits don't stack timers.
- */
-function scheduleAutoRevert(form: HTMLFormElement, input: HTMLInputElement): void {
-  clearAutoRevert(form);
-  const id = window.setTimeout(() => revertToIdle(form, input), AUTO_REVERT_MS);
-  revertTimers.set(form, id);
-}
-
-function clearAutoRevert(form: HTMLFormElement): void {
-  const existing = revertTimers.get(form);
-  if (existing !== undefined) {
-    clearTimeout(existing);
-    revertTimers.delete(form);
-  }
-}
-
-/**
- * Return the form to idle from success. Clears the input value so the user can
- * type a new email. Safe to call from either the auto-revert timer or a click
- * on the success circle.
- */
-function revertToIdle(form: HTMLFormElement, input: HTMLInputElement): void {
-  clearAutoRevert(form);
-  // Skip DOM work if the form has been detached — a stale timer firing on a
-  // removed form would otherwise clobber a fresh hydrate on the same page.
-  if (!form.isConnected) return;
-  input.value = '';
-  setState(form, 'idle');
-}
-
-/**
- * Auto-hydrate on load. The module is also exported so tests can drive it
- * explicitly without touching the document-level listener.
- */
-function autoHydrate(): void {
-  const forms = document.querySelectorAll<HTMLFormElement>(
-    'form.moss-subscribe-form[data-moss-hosted="true"]',
-  );
-  forms.forEach(hydrateSubscribeForm);
-}
-
-if (typeof document !== 'undefined') {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', autoHydrate);
-  } else {
-    autoHydrate();
-  }
-  // idiomorph preview updates patch the DOM without re-running inline
-  // scripts, so a `:::subscribe` block that appears (or is reused) after a
-  // morph never gets its submit listener bound unless we re-sweep here.
-  // `autoHydrate` is safe to call repeatedly — `hydratedForms` skips forms
-  // that are already bound.
-  document.addEventListener('moss-morph-patched', autoHydrate);
-}
+autoHydrate<HTMLFormElement>('form.moss-subscribe-form[data-moss-hosted="true"]', hydrateSubscribeForm);

@@ -1,0 +1,79 @@
+/* Diagrams drawn from Mermaid text, shipped only when some page has one.
+ *
+ * <figure class="moss-diagram" [data-narrow] tabindex="0">
+ *   <div class="moss-diagram-wide" style="--diagram-w:…;--diagram-min:…"><svg class="pele …"></div>
+ *   <div class="moss-diagram-narrow" …><svg class="pele …"></div>   (only with data-narrow)
+ * </figure>
+ * <figure class="moss-diagram moss-diagram-error">
+ *   <figcaption class="moss-diagram-message">…</figcaption><pre><code class="language-mermaid">…</code></pre>
+ * </figure>
+ *
+ * The drawing reads its colours and fonts from --pele-* custom properties, so it follows the
+ * theme and dark mode without being redrawn. Each drawing shrinks to fit, but never below the
+ * scale that keeps its smallest text readable; past that the figure scrolls, which is why the
+ * figure is focusable. */
+@layer shortcodes {
+  .moss-diagram {
+    --pele-bg: var(--moss-color-bg);
+    --pele-fg: var(--moss-color-text);
+    --pele-muted: var(--moss-color-muted);
+    --pele-line: var(--moss-color-text-secondary);
+    --pele-surface: var(--moss-color-surface);
+    --pele-surface-alt: var(--moss-code-background);
+    --pele-border: var(--moss-border-strong);
+    --pele-accent: var(--moss-color-accent);
+    --pele-font: var(--moss-font-body);
+    --pele-font-mono: var(--moss-font-mono);
+    --pele-radius: 4px;
+    --pele-series-1: var(--moss-chart-1);
+    --pele-series-2: var(--moss-chart-2);
+    --pele-series-3: var(--moss-chart-3);
+    --pele-series-4: var(--moss-chart-4);
+    --pele-series-5: var(--moss-chart-5);
+    --pele-series-6: var(--moss-chart-6);
+    --pele-series-7: var(--moss-chart-7);
+    --pele-series-8: var(--moss-chart-8);
+    margin: var(--moss-space-md) 0;
+    overflow-x: auto;
+    container-type: inline-size;
+  }
+  .moss-diagram:focus-visible {
+    outline: 2px solid var(--moss-color-accent);
+    outline-offset: 2px;
+  }
+  .moss-diagram svg {
+    display: block;
+    margin-inline: auto;
+  }
+  /* Natural width, shrinking with the column to the narrowest that keeps the
+   * smallest text readable; the build writes both onto each layout. */
+  .moss-diagram-wide > svg,
+  .moss-diagram-narrow > svg {
+    width: min(var(--diagram-w), max(100%, var(--diagram-min)));
+    max-width: none;
+    height: auto;
+  }
+  .moss-diagram-narrow {
+    display: none;
+  }
+  /* The renderer's own breakpoint: under 640px it lays a diagram out for a narrow column. */
+  @container (max-width: 639px) {
+    .moss-diagram[data-narrow] > .moss-diagram-wide {
+      display: none;
+    }
+    .moss-diagram[data-narrow] > .moss-diagram-narrow {
+      display: block;
+    }
+  }
+  .moss-diagram-error {
+    overflow-x: visible;
+  }
+  .moss-diagram-message {
+    color: var(--moss-color-muted);
+    font-size: var(--moss-size-xs);
+    margin-block-end: var(--moss-space-xs);
+  }
+  .moss-diagram-error > pre {
+    margin-block-start: 0;
+  }
+}

@@ -1,14 +1,21 @@
 #!/bin/sh
-# Runs the size ratchet before anything leaves this machine. Nothing else —
-# it's the one check cheap enough to run on every push (a few hundred files,
-# a few seconds) rather than only in CI on a pull request, which is how the
-# baseline drifted before this hook existed.
+# Runs the size ratchet and the diagram check before anything leaves this
+# machine. They are cheap enough to run on every push (a few seconds) rather
+# than only in CI on a pull request, which is how the baseline drifted before
+# this hook existed.
 #
-# node is assumed present for anyone developing this repo, but these hooks
-# also install for a plain `pnpm install` in contexts that don't have it
-# wired the same way — never block a push over a missing interpreter.
-if ! command -v node >/dev/null 2>&1; then
+# node and cargo are assumed present for anyone developing this repo, but
+# these hooks also install for a plain `pnpm install` in contexts that don't
+# have them wired the same way — never block a push over a missing tool. The
+# ratchet reads crate dependencies through `cargo metadata`; CI runs it with both.
+if ! command -v node >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
   exit 0
 fi
 
-exec node scripts/ratchet.mjs check
+node scripts/ratchet.mjs check || exit 1
+
+# The architecture diagrams name only crates, paths and items that exist. Needs
+# pele from node_modules; skipped without it.
+if [ -d node_modules/pele ]; then
+  exec node scripts/gen-architecture-diagrams.mjs --check
+fi

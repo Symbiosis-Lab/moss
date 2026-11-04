@@ -34,11 +34,11 @@ pub fn term_role_label(lang: crate::i18n::Language, field: &str) -> String {
     }
 }
 
-/// Set [`ParsedDocument::card_credits`] on every page from the kinds that
-/// declare `cards = true`. A site with no such kind sets `None` everywhere.
+/// Set [`ParsedDocument::card_extras`] on every page to its card credits, from the
+/// kinds that declare `cards = true`; a site with no such kind sets `None` everywhere.
 pub fn set_card_credits(documents: &mut [ParsedDocument], kinds: &[TermKind]) {
     for doc in documents.iter_mut() {
-        doc.card_credits = card_credits_html(doc, kinds);
+        doc.card_extras = card_credits_html(doc, kinds);
     }
 }
 
@@ -53,8 +53,13 @@ fn card_credits_html(doc: &ParsedDocument, kinds: &[TermKind]) -> Option<String>
             }
             let role = html_escape(&term_role_label(doc.lang, field).to_lowercase());
             for name in names {
+                // The slug the term's own page uses, so `data-value` matches its address.
+                let key = crate::vault::places::slugged_key(&kind.slugs, &kind.key, name);
+                let slug = key.strip_prefix(kind.key.as_str()).unwrap_or(&key).trim_start_matches('/');
                 credits.push(format!(
-                    r#"<span class="moss-credit">{}<span class="moss-credit-role">, {}</span></span>"#,
+                    r#"<span class="moss-credit" data-term="{}" data-value="{}">{}<span class="moss-credit-role">, {}</span></span>"#,
+                    html_escape(&kind.key),
+                    html_escape(slug),
                     html_escape(name),
                     role
                 ));
@@ -66,6 +71,6 @@ fn card_credits_html(doc: &ParsedDocument, kinds: &[TermKind]) -> Option<String>
     }
     Some(format!(
         r#"<span class="moss-card-credits">{}</span>"#,
-        credits.join(r#"<span class="moss-event-sep"> · </span>"#)
+        credits.join(crate::build::components::child_list::EVENT_SEP)
     ))
 }

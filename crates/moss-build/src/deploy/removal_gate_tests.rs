@@ -102,7 +102,7 @@ fn the_refusal_for_a_moved_page_names_the_redirect_and_both_ways_out() {
         text,
         "Nothing published — 1 address your site has served would stop working, and you did not remove it:\n\
          \x20 /old/ now lives at /new/. To keep the old link working, add \"/old/\" = \"/new/\" under [redirects] in .moss/config.toml.\n\
-         Either keep the address working (for a moved page, add the redirect shown), or accept losing it and publish with `moss deploy --accept-removals`."
+         Either keep the address working (for a moved page or file, add the redirect shown), or accept losing it and publish with `moss deploy --accept-removals`."
     );
 }
 
@@ -129,7 +129,7 @@ fn the_list_is_capped_at_twenty_with_the_rest_counted() {
     let text = refusal_text(&many);
     assert!(text.contains("23 addresses"), "{text}");
     assert!(text.contains("/f19.xml") && !text.contains("/f20.xml"), "{text}");
-    assert!(text.contains("  and 3 more\n"), "{text}");
+    assert!(text.contains("  and 3 more; `moss deploy --dry-run --json` lists every one\n"), "{text}");
 }
 
 /// Only an `index.html` is served at its directory. Every other output keeps
@@ -340,4 +340,56 @@ fn an_acceptance_cannot_straddle_a_seal() {
     }
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     accepter.join().unwrap();
+}
+
+/// Moved files under one folder, its subfolders included, are one line: the
+/// folder redirect that keeps them all. A file moved alone keeps its own line.
+#[test]
+fn files_moved_with_their_folder_print_one_folder_line() {
+    let text = refusal_text(&[
+        moved("review/old/index.html", "review/client/old/index.html", "review/old/index.html"),
+        moved("review/old/plan.pdf", "review/client/old/plan.pdf", "review/old/plan.pdf"),
+        moved("review/old/notes/a.png", "review/client/old/notes/a.png", "review/old/notes/a.png"),
+        moved("review/old/notes/b.png", "review/client/old/notes/b.png", "review/old/notes/b.png"),
+        moved("files/x.pdf", "archive/x.pdf", "files/x.pdf"),
+    ]);
+    assert!(text.starts_with("Nothing published — 5 addresses"), "{text}");
+    assert!(
+        text.contains("  4 addresses under /review/old/ now live under /review/client/old/. To keep them working, add \"/review/old/\" = \"/review/client/old/\" under [redirects]"),
+        "{text}"
+    );
+    assert!(text.contains("add \"/files/x.pdf\" = \"/archive/x.pdf\""), "{text}");
+    assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
+}
+
+/// Files moved out of the site root share no folder line: one would name the
+/// root, which a folder line cannot.
+#[test]
+fn files_moved_out_of_the_root_keep_their_own_lines() {
+    let text = refusal_text(&[moved("a.pdf", "files/a.pdf", "a.pdf"), moved("b.pdf", "files/b.pdf", "b.pdf")]);
+    assert!(!text.contains("\"/\" ="), "{text}");
+    assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
+}
+
+/// The lines that keep every moved address working, as they go in the config:
+/// one per folder moved together, one per other move, nothing for an address
+/// that did not move.
+#[test]
+fn redirect_lines_are_the_config_lines_for_every_move() {
+    let removed = [
+        moved("review/old/a.pdf", "review/new/a.pdf", "review/old/a.pdf"),
+        moved("review/old/b.pdf", "review/new/b.pdf", "review/old/b.pdf"),
+        moved("files/x.pdf", "archive/x.pdf", "files/x.pdf"),
+        address("feed.xml", RemovalReason::Unexplained),
+    ];
+    let lines = super::removal_gate::redirect_lines(&pending_removals(&removed, None));
+    assert_eq!(lines, [r#""/review/old/" = "/review/new/""#, r#""/files/x.pdf" = "/archive/x.pdf""#]);
+}
+
+/// A file name with a quote still gives a line TOML reads back as written.
+#[test]
+fn a_redirect_line_quotes_an_address_toml_can_read_back() {
+    let line = super::removal_gate::redirect_line("/say \"hi\".pdf", "/new.pdf");
+    let table: toml::Table = toml::from_str(&line).unwrap();
+    assert_eq!(table["/say \"hi\".pdf"].as_str(), Some("/new.pdf"));
 }

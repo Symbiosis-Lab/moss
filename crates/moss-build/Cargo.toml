@@ -80,6 +80,7 @@ lol_html = "1.2"
 notify = "6.1"
 notify-debouncer-full = "0.3"
 percent-encoding = "2"
+unicode-normalization = "0.1"
 pulldown-cmark = "0.13"
 rand = "0.8"
 ratex-parser = "=0.1.13"
@@ -91,6 +92,9 @@ resvg = { version = "0.42", default-features = false, features = ["text", "syste
 roxmltree = "0.20"
 scraper = "0.20"
 sha2 = "0.10"
+# Verifies the plugin registry's signed documents and, for `moss desktop
+# install`, the release tarball. No dependencies of its own.
+minisign-verify = "0.2"
 tar = "0.4"
 thiserror = "1.0"
 tiny-skia = "0.11"
@@ -173,6 +177,9 @@ pathdiff = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
+# Renders the engine's command contract for the moss UI (commands/tests.rs).
+# Pinned to the release that matches the `specta` pin above.
+specta-typescript = "=0.0.7"
 # vault_root_tests.rs mints unique temp dirs per test.
 uuid = { version = "1.11", features = ["v4"] }
 # The moved build tree's inline tests (M6a).

@@ -1,0 +1,175 @@
+@layer shortcodes {
+
+.moss-form {
+  max-width: 32rem;
+  margin-block: var(--moss-space-lg);
+}
+
+.moss-form form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--moss-space-md);
+}
+
+.moss-form__field,
+.moss-form__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.moss-form__label,
+.moss-form__group legend {
+  padding: 0;
+  font-size: var(--moss-size-sm, 1rem);
+  font-weight: 500;
+}
+
+.moss-form__optional {
+  margin-inline-start: 0.4em;
+  font-size: 0.875em;
+  font-weight: 400;
+  color: var(--moss-color-muted);
+}
+
+.moss-form__help,
+.moss-form__error {
+  margin: 0;
+  font-size: 0.9rem;
+}
+.moss-form__help { color: var(--moss-color-muted); }
+.moss-form__error,
+.moss-form__status {
+  /* Plain error red is under 4.5:1 on the page ground. */
+  color: color-mix(in oklch, var(--moss-error, #c85450) 65%, var(--moss-color-text));
+}
+
+/* A text area has no single edge to underline, so it keeps a full border. */
+.moss-form textarea.moss-input {
+  box-sizing: border-box;
+  padding: var(--moss-space-xs, 0.5rem);
+  border: 1px solid var(--moss-border-strong);
+  resize: vertical;
+}
+.moss-form .moss-input[aria-invalid="true"] {
+  border-color: var(--moss-error, #c85450);
+}
+
+/* The base rule hides the focus outline in favour of a darker underline,
+   which a keyboard user can miss; the ring comes back for keyboard focus. */
+.moss-form .moss-input:focus-visible,
+.moss-form__choice input:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+
+.moss-form__choice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-block-size: 2.75rem;
+}
+.moss-form__choice input {
+  flex: none;
+  inline-size: 1.15rem;
+  block-size: 1.15rem;
+  margin: 0;
+  accent-color: var(--moss-color-accent);
+}
+.moss-form__choice input[aria-invalid="true"] {
+  outline: 2px solid var(--moss-error, #c85450);
+  outline-offset: 2px;
+}
+
+/* The honeypot is for software: out of sight, out of the tab order. */
+.moss-form__hp {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.moss-form .moss-btn-slot { align-self: flex-start; }
+
+.moss-form__status {
+  /* The error red alone is under 4.5:1 on the page ground; mixing in the text colour clears it in light and dark. */
+  color: color-mix(in oklch, var(--moss-error, #c85450) 65%, var(--moss-color-text));
+}
+
+/* A text area has no single edge to underline, so it keeps a full border. */
+.moss-form textarea.moss-input {
+  box-sizing: border-box;
+  padding: var(--moss-space-xs, 0.5rem);
+  border: 1px solid var(--moss-border-strong);
+  resize: vertical;
+}
+.moss-form .moss-input[aria-invalid="true"] {
+  border-color: var(--moss-error, #c85450);
+}
+
+/* The base rule hides the focus outline in favour of a darker underline,
+   which a keyboard user can miss; the ring comes back for keyboard focus. */
+.moss-form .moss-input:focus-visible,
+.moss-form__choice input:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+}
+
+.moss-form__choice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-block-size: 2.75rem;
+}
+.moss-form__choice input {
+  flex: none;
+  inline-size: 1.15rem;
+  block-size: 1.15rem;
+  margin: 0;
+  accent-color: var(--moss-color-accent);
+}
+.moss-form__choice input[aria-invalid="true"] {
+  outline: 2px solid var(--moss-error, #c85450);
+  outline-offset: 2px;
+}
+
+/* The honeypot is for software: out of sight, out of the tab order. */
+.moss-form__hp {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.moss-form .moss-btn-slot {
+  align-self: flex-start;
+  min-block-size: 2.75rem;
+}
+.moss-form .moss-btn {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.moss-form__status {
+  min-block-size: 1.4em;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+}
+
+}

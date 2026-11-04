@@ -41,14 +41,6 @@ pub fn globe_line(
     paths
 }
 
-pub fn globe_ring(
-    points: &[(i32, i32)],
-    center: ProjectedPoint,
-    quantisation: u32,
-) -> Option<Vec<(f64, f64)>> {
-    globe_rings(points, center, quantisation).into_iter().next()
-}
-
 pub fn globe_rings(
     points: &[(i32, i32)],
     center: ProjectedPoint,
@@ -229,12 +221,12 @@ mod tests {
             .iter()
             .flatten()
             .all(|&(x, y)| (x - CENTER_X).hypot(y - CENTER_Y) <= RADIUS + 1.0));
-        let ring = globe_ring(
+        let rings = globe_rings(
             &[(0, 0), (1200000, 700000), (1200000, -700000), (0, 0)],
             ProjectedPoint::new(0.0, 0.0).unwrap(),
             10000,
         );
-        assert!(ring.is_some());
+        assert!(!rings.is_empty());
     }
 
     #[test]

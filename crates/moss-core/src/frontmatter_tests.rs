@@ -34,6 +34,28 @@ fn test_parse_no_frontmatter() {
 }
 
 #[test]
+fn a_byte_order_mark_is_not_part_of_the_body() {
+    let result = parse("\u{feff}# A heading\n\nText.\n");
+    assert_eq!(result.body, "# A heading\n\nText.\n");
+    assert!(result.frontmatter_range.is_none());
+}
+
+#[test]
+fn body_drops_frontmatter_in_either_dialect_and_a_bare_bom() {
+    for (content, expected) in [
+        ("---\ntitle: Test\n---\nBody content.", "Body content."),
+        ("nav\ntitle: Hi\n---\nBody\n", "Body\n"),
+        ("\u{feff}---\ntitle: T\n---\nBody\n", "Body\n"),
+        ("\u{feff}# A heading\n", "# A heading\n"),
+        ("Just text, no frontmatter.", "Just text, no frontmatter."),
+        // No closing `---`: no frontmatter at all.
+        ("---\ntitle: Test\nNo closing delimiter.", "---\ntitle: Test\nNo closing delimiter."),
+    ] {
+        assert_eq!(body(content), expected, "{content:?}");
+    }
+}
+
+#[test]
 fn test_parse_empty_frontmatter() {
     let input = "---\n---\nBody after empty frontmatter.";
     let doc = parse(input);

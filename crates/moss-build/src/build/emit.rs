@@ -7,9 +7,12 @@
 //! *gates* (the `fullscreen.js` conditional-emission precedent).
 
 pub mod beacon;
+pub mod commerce;
 pub mod inventory;
 pub mod listing_style;
 pub mod math_png;
+pub(crate) mod hosted_png;
+pub mod diagram_png;
 pub mod archival;
 pub mod feature_styles;
 pub mod place_map_assets;

@@ -46,10 +46,6 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// Served-path prefix of the family; the stale-cleanup exemptions in
-/// `media::pipeline::{remove_stale_files, remove_stale_dirs}` key on this.
-pub const MATH_PNG_PREFIX: &str = "_moss/math/";
-
 /// Email body font size in CSS px at 1×. Matches the newsletter's paragraph
 /// style (`font-size: 16px`) so an inline equation sits at text size.
 const EMAIL_FONT_PX: f64 = 16.0;
@@ -151,7 +147,7 @@ impl EmailMathImg {
         } else {
             format!("{}{}", site_url.trim_end_matches('/'), rel)
         };
-        let alt = escape_attr(&moss_core::ast::math_text::math_source(
+        let alt = moss_core::media::html_escape(&moss_core::ast::math_text::math_source(
             &self.tex,
             self.display,
         ));
@@ -249,20 +245,6 @@ impl EmailMathImg {
     }
 }
 
-/// Atomic write: temp + rename, the `og_card.rs` pattern (`.pending.<uuid>`
-/// because iCloud Drive excludes `.tmp` from sync). rename(2) is atomic
-/// within a directory, so a reader sees no file or a complete one; identical
-/// inputs render identical bytes, so whichever writer wins is immaterial.
-fn write_atomic(disk_path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = disk_path.parent() {
-        crate::build::io_utils::create_output_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
-    let tmp = disk_path.with_extension(format!("pending.{}", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;  // allow:raw_write the temp this fn just minted; the rename below is the output write
-    // allow:unlink rename into place: the PNG is replaced, never absent
-    std::fs::rename(&tmp, disk_path).map_err(|e| format!("rename {}: {e}", disk_path.display()))
-}
-
 /// Collect every math event from `markdown`, in source order, delimiter-free.
 /// Parses with the SAME pulldown dialect as the web build and the email
 /// walkers (`moss_core::ast::parser_options`), so the event text — and thus
@@ -315,8 +297,6 @@ pub fn emit_math_pngs(
     output_dir: &Path,
     pending: &mut crate::build::manifest::PendingManifest,
 ) -> Result<(), String> {
-    use crate::build::manifest::HashBucket;
-
     if math_enabled {
         let mut unique: BTreeSet<(String, bool)> = BTreeSet::new();
         for doc in documents {
@@ -332,7 +312,7 @@ pub fn emit_math_pngs(
                 continue; // content-addressed: same hash ⇒ same bytes
             }
             match rasterize_png(&img) {
-                Ok(png) => write_atomic(&disk, &png)?,
+                Ok(png) => super::hosted_png::write_atomic(&disk, &png)?,
                 Err(e) => {
                     log::info!("math png rasterize failed for {tex:?}: {e}");
                 }
@@ -342,43 +322,7 @@ pub fn emit_math_pngs(
 
     // Append-only retention: every PNG on disk — this build's AND every
     // earlier build's — joins the manifest so it ships in this generation.
-    let math_dir = output_dir.join("_moss").join("math");
-    if math_dir.is_dir() {
-        let mut entries: Vec<_> = std::fs::read_dir(&math_dir)
-            .map_err(|e| format!("read {}: {e}", math_dir.display()))?
-            .filter_map(|e| e.ok())
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            // A crash between temp-write and rename leaves `*.pending.<uuid>`
-            // behind. It is never registered; the permitted staging sweep
-            // removes it. Removing it here could take a concurrent
-            // `write_atomic`'s temp mid-rename.
-            if name.contains(".pending.") {
-                continue;
-            }
-            let Some(stem) = name.strip_suffix(".png") else { continue };
-            let Ok(sp) = ServedPath::for_math_png(stem) else { continue };
-            match std::fs::read(entry.path()) {
-                Ok(bytes) if !bytes.is_empty() => {
-                    pending.register(&sp, &bytes, HashBucket::Files);
-                }
-                // Unreadable or a 0-byte eviction stub. Dropping it would let
-                // the next publish remove a URL that is already in somebody's
-                // inbox, which the append-only design forbids — so carry the previous
-                // build's entry instead. The PNG is content-addressed, so that
-                // entry describes these exact bytes; C1 is what makes the file
-                // itself come back.
-                _ => {
-                    if let Some(previous) = pending.files().get(sp.as_str()).cloned() {
-                        pending.register_hashed(&sp, &previous, HashBucket::Files);
-                    }
-                }
-            }
-        }
-    }
+    super::hosted_png::retain(output_dir, crate::build::served_path::MATH_PNG_PREFIX, ServedPath::for_math_png, pending)?;
     Ok(())
 }
 
@@ -409,7 +353,7 @@ pub fn swap_math_svgs_for_email_imgs(html: &str, site_url: &str) -> String {
         let Some(after_svg) = after_open.get(close_rel + "</svg>".len()..) else { break };
 
         let display = open_tag.contains(r#"data-moss-math="display""#);
-        let tex = attr_value(open_tag, "aria-label").map(|v| unescape_attr(v));
+        let tex = crate::build::features::open_tag_attr(open_tag, "aria-label").map(moss_core::html_entities::decode);
 
         // Display math: consume the scroll wrapper around the svg too.
         let (lead, tail) = match (display, after_svg.strip_prefix("</div>")) {
@@ -429,7 +373,7 @@ pub fn swap_math_svgs_for_email_imgs(html: &str, site_url: &str) -> String {
                 let src = tex.unwrap_or_default();
                 out.push_str(&format!(
                     r#"<code class="moss-math">{}</code>"#,
-                    escape_attr(&moss_core::ast::math_text::math_source(&src, display))
+                    moss_core::media::html_escape(&moss_core::ast::math_text::math_source(&src, display))
                 ));
             }
         }
@@ -453,33 +397,6 @@ fn split_at_math_svg(html: &str) -> Option<(&str, &str)> {
         }
     }
     None
-}
-
-/// Extract a double-quoted attribute value from an element open tag.
-fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    let (_, after_name) = tag.split_once(&format!("{name}=\""))?;
-    let (value, _) = after_name.split_once('"')?;
-    Some(value)
-}
-
-/// Inverse of `markdown::math::escape_attr`. `&amp;` is replaced LAST so a
-/// literal `&lt;` in the source (escaped to `&amp;lt;`) round-trips.
-fn unescape_attr(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&")
-}
-
-/// Attribute-escape (the five break-out chars), local copy of
-/// `markdown::math::escape_attr` (private there).
-fn escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
 
 #[cfg(test)]
@@ -927,9 +844,9 @@ mod tests {
     }
 
     #[test]
-    fn unescape_attr_inverts_escape_attr_including_double_escapes() {
+    fn the_aria_label_round_trips_through_escape_and_decode() {
         for s in [r"a<b>c&d", r#"say "hi" & 'bye'"#, "&lt; literal entity text"] {
-            assert_eq!(unescape_attr(&escape_attr(s)), s, "round-trip failed for {s:?}");
+            assert_eq!(moss_core::html_entities::decode(&moss_core::media::html_escape(s)), s, "round-trip failed for {s:?}");
         }
     }
 

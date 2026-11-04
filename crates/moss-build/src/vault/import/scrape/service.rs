@@ -15,9 +15,13 @@ use super::crawler::is_non_page_file_url;
 use super::metadata::ArticleMetadata;
 use super::scope::{is_within_scope, UrlScope};
 
-// `[text](url)` markdown link, captured once and reused across pages.
-static LINK_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").expect("link regex"));
+// `[text](url)` or `[text](url "title")` markdown link, captured once and reused
+// across pages. Group 3 is the title with its leading space, in any of the
+// three CommonMark forms: `"t"`, `'t'` or `(t)`.
+static LINK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[([^\]]*)\]\(([^)\s]+)(\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#)
+        .expect("link regex")
+});
 
 /// User-Agent used by all outbound requests from the scrape pipeline.
 ///
@@ -82,6 +86,9 @@ pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> Str
     push_string(&mut out, "lang", metadata.lang.as_deref());
     push_string(&mut out, "description", metadata.description.as_deref());
     push_string(&mut out, "cover", metadata.cover.as_deref());
+    if !metadata.tags.is_empty() {
+        push_string_list(&mut out, "tags", &metadata.tags);
+    }
     // An event never writes `date`: that stays the page's own published date.
     push_string(&mut out, "start", metadata.event.start.as_deref());
     push_string(&mut out, "end", metadata.event.end.as_deref());
@@ -141,6 +148,16 @@ fn push_string(out: &mut String, key: &str, value: Option<&str>) {
     }
 }
 
+/// `key: ["a", "b"]`, each item escaped as in `push_string`. An empty list
+/// writes `key: []`; callers that want no key skip the call.
+pub(crate) fn push_string_list(out: &mut String, key: &str, values: &[String]) {
+    let items: Vec<String> = values
+        .iter()
+        .map(|v| format!("\"{}\"", escape_yaml_string(v)))
+        .collect();
+    out.push_str(&format!("{}: [{}]\n", key, items.join(", ")));
+}
+
 /// Rewrite in-scope links in markdown to point at the local mirror.
 ///
 /// Only used when running in `--recursive` mode where the same scope contains
@@ -155,7 +172,8 @@ pub fn rewrite_links(markdown: &str, scope: &UrlScope) -> String {
             // downloader's to rewrite, and stays as written when that failed.
             if is_within_scope(scope, url) && !is_non_page_file_url(url) {
                 if let Some(rel) = url_to_relative_md_path(url, scope) {
-                    return format!("[{}]({})", text, rel);
+                    let title = caps.get(3).map_or("", |m| m.as_str());
+                    return format!("[{}]({}{})", text, rel, title);
                 }
             }
             caps[0].to_string()
@@ -214,6 +232,7 @@ pub fn render_error_markdown(source_url: &str, error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::metadata::derive;
 
     #[test]
     /// The regex scan over a whole markdown body, which every recursive page
@@ -233,6 +252,20 @@ mod tests {
         assert!(
             rewritten.contains("[external](https://other.com/page)"),
             "an out-of-scope link must survive untouched: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn rewrite_links_keeps_a_links_title_out_of_its_path() {
+        let scope = UrlScope::new("https://example.test/").unwrap();
+        for title in [r#" "Example Notes""#, " 'Example Notes'", " (Example Notes)"] {
+            let markdown = format!("[second](https://example.test/b/{title})");
+            let rewritten = rewrite_links(&markdown, &scope);
+            assert_eq!(rewritten, format!("[second](./b/index.md{title})"));
+        }
+        assert_eq!(
+            rewrite_links("[second](https://example.test/b/)", &scope),
+            "[second](./b/index.md)"
         );
     }
 
@@ -325,6 +358,7 @@ mod tests {
             cover: Some("./assets/imported/abcd.jpg".into()),
             og_image: None,
             chrome_images: Vec::new(),
+            tags: Vec::new(),
             event: Default::default(),
         };
         let fm = generate_frontmatter(&meta, "https://x.example/post");
@@ -337,6 +371,29 @@ mod tests {
         assert!(fm.contains("description: \"The new diaspora.\""));
         assert!(fm.contains("cover: \"./assets/imported/abcd.jpg\""));
         assert!(fm.contains("origin: \"https://x.example/post\"\n"));
+    }
+
+    #[test]
+    fn article_tag_metas_become_a_tags_list() {
+        let html = r#"<html><head><title>Example Field Notes</title>
+            <meta property="article:tag" content="Field notes">
+            <meta property="article:tag" content="Say &quot;hi&quot;: a #b">
+            <meta property="article:tag" content="Tea &amp; ceremony">
+            <meta property="article:tag" content="Field notes">
+            <meta property="article:tag" content="  ">
+            </head><body><p>Hello</p></body></html>"#;
+        let fm = generate_frontmatter(&derive(html), "https://example.test/notes/first/");
+        assert!(
+            fm.contains("tags: [\"Field notes\", \"Say \\\"hi\\\": a #b\", \"Tea & ceremony\"]\n"),
+            "{fm}"
+        );
+        let yaml = fm.trim_start_matches("---\n").split("---").next().unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed["tags"][1].as_str(), Some("Say \"hi\": a #b"));
+
+        let plain = "<html><head><title>Example Field Notes</title></head><body></body></html>";
+        let fm = generate_frontmatter(&derive(plain), "https://example.test/notes/first/");
+        assert!(!fm.contains("tags"), "{fm}");
     }
 
     #[test]

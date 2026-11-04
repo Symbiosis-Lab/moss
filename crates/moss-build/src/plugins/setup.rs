@@ -97,9 +97,6 @@ pub enum SetupVerdict {
 }
 
 impl SetupVerdict {
-    pub fn is_ready(&self) -> bool {
-        matches!(self, SetupVerdict::Ready)
-    }
 
     /// Did this verdict re-ask the blocker the user just answered, with field
     /// errors? Moss persists submitted values on every answering verdict
@@ -297,7 +294,7 @@ mod tests {
 
     #[test]
     fn the_contract_shapes_parse_as_themselves() {
-        assert!(parse(r#"{"status":"ready"}"#).is_ready());
+        assert!(matches!(parse(r#"{"status":"ready"}"#), SetupVerdict::Ready));
         let v = parse(
             r#"{"status":"blocked","blockers":[{"id":"claim_name",
                 "form":{"fields":[{"key":"onion_name","type":"string",
@@ -342,7 +339,7 @@ mod tests {
 
     #[test]
     fn legacy_ready_and_consent_both_normalize() {
-        assert!(parse(r#"{"ready":true}"#).is_ready());
+        assert!(matches!(parse(r#"{"ready":true}"#), SetupVerdict::Ready));
         let v = parse(
             r#"{"ready":false,"needs":[{"id":"daemon","message":"Daemon is down.",
                 "actions":[{"id":"start","label":"Start",

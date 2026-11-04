@@ -23,6 +23,7 @@ pub enum ServiceKind {
     Analytics,
     Comments,
     Email,
+    Forms,
 }
 
 impl ServiceKind {
@@ -31,10 +32,11 @@ impl ServiceKind {
             Self::Analytics => "analytics",
             Self::Comments => "comments",
             Self::Email => "email",
+            Self::Forms => "forms",
         }
     }
 
-    pub const ALL: [ServiceKind; 3] = [Self::Analytics, Self::Comments, Self::Email];
+    pub const ALL: [ServiceKind; 4] = [Self::Analytics, Self::Comments, Self::Email, Self::Forms];
 
     pub fn from_str(s: &str) -> Option<Self> {
         Self::ALL.iter().find(|k| k.as_str() == s).copied()
@@ -104,6 +106,15 @@ pub struct EmailService {
     pub api_key: Option<String>,
 }
 
+/// `[services.forms]`. Where request forms post: `<endpoint>/<form name>`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(specta::Type)]
+pub struct FormsService {
+    #[serde(flatten)]
+    pub common: ServiceCommon,
+    pub endpoint: Option<String>,
+}
+
 /// Root `[services]` table, one field per `ServiceKind`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[derive(specta::Type)]
@@ -111,6 +122,7 @@ pub struct ServicesConfig {
     pub analytics: Option<AnalyticsService>,
     pub comments: Option<CommentsService>,
     pub email: Option<EmailService>,
+    pub forms: Option<FormsService>,
 }
 
 impl ServicesConfig {
@@ -131,16 +143,25 @@ impl ServicesConfig {
             ServiceKind::Analytics => self.analytics.as_ref().map(|s| &s.common),
             ServiceKind::Comments => self.comments.as_ref().map(|s| &s.common),
             ServiceKind::Email => self.email.as_ref().map(|s| &s.common),
+            ServiceKind::Forms => self.forms.as_ref().map(|s| &s.common),
         };
         match common {
             // Section present: enabled unless explicitly off.
             Some(c) => c.enabled.unwrap_or(true),
             // Section absent: per-kind default. Comments require explicit opt-in.
             None => match kind {
-                ServiceKind::Comments => false,
+                ServiceKind::Comments | ServiceKind::Forms => false,
                 ServiceKind::Analytics | ServiceKind::Email => hosted_on_moss,
             },
         }
+    }
+
+    /// Where request forms post, without a trailing slash: `None` when the
+    /// section is absent, switched off, or has no endpoint.
+    pub fn forms_endpoint(&self) -> Option<String> {
+        let forms = self.forms.as_ref().filter(|_| self.is_enabled(ServiceKind::Forms, false))?;
+        let endpoint = forms.endpoint.as_deref()?.trim().trim_end_matches('/');
+        (!endpoint.is_empty()).then(|| endpoint.to_string())
     }
 
     /// Validate provider values and wiring coherence. Returns the first error.
@@ -193,6 +214,50 @@ impl ServicesConfig {
         if let Some(e) = &self.email {
             check("email", &e.common, &["buttondown"], e.api_key.is_some(), hosted_on_moss)?;
         }
+        if let Some(endpoint) = self.forms.as_ref().and_then(|f| f.endpoint.as_deref()) {
+            if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
+                return Err(format!("[services.forms] endpoint '{endpoint}' must start with https://"));
+            }
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod forms_tests {
+    use super::*;
+
+    fn parse(toml_src: &str) -> ServicesConfig {
+        toml::from_str::<toml::Value>(toml_src).unwrap()["services"].clone().try_into().unwrap()
+    }
+
+    #[test]
+    fn forms_is_a_service_kind_with_its_own_name() {
+        assert_eq!(ServiceKind::Forms.as_str(), "forms");
+        assert_eq!(ServiceKind::from_str("forms"), Some(ServiceKind::Forms));
+        assert!(ServiceKind::ALL.contains(&ServiceKind::Forms));
+    }
+
+    #[test]
+    fn the_endpoint_is_read_and_loses_a_trailing_slash() {
+        let s = parse("[services.forms]\nendpoint = \"https://forms.example/f/\"\n");
+        assert_eq!(s.forms_endpoint().as_deref(), Some("https://forms.example/f"));
+        assert!(s.is_enabled(ServiceKind::Forms, false));
+    }
+
+    #[test]
+    fn no_section_or_no_endpoint_or_disabled_is_no_endpoint() {
+        assert_eq!(ServicesConfig::default().forms_endpoint(), None);
+        assert_eq!(parse("[services.forms]\n").forms_endpoint(), None);
+        let off = parse("[services.forms]\nendpoint = \"https://forms.example\"\nenabled = false\n");
+        assert_eq!(off.forms_endpoint(), None);
+        assert!(!off.is_enabled(ServiceKind::Forms, true));
+    }
+
+    #[test]
+    fn an_endpoint_that_is_not_a_web_address_is_a_load_error() {
+        let bad = parse("[services.forms]\nendpoint = \"forms.example\"\n");
+        assert!(bad.validate(false).unwrap_err().contains("[services.forms] endpoint"));
+        assert!(parse("[services.forms]\nendpoint = \"https://forms.example\"\n").validate(false).is_ok());
     }
 }

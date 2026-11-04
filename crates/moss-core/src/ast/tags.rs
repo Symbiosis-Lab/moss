@@ -155,7 +155,7 @@ fn in_block(block: &Block, out: &mut Vec<String>) {
             Shortcode::Subscribe(_)
             | Shortcode::Buttons(_)
             | Shortcode::Gallery(_)
-            | Shortcode::Recent(_),
+            | Shortcode::Recent(_) | Shortcode::Form(_),
         )
         | Block::ThematicBreak
         | Block::Other(_) => {}

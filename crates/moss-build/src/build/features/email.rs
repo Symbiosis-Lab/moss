@@ -240,7 +240,7 @@ pub fn render_subscribe_form(username: &str, lang: Language, active: bool) -> St
     };
     format!(
         "<form action=\"https://buttondown.com/api/emails/embed-subscribe/{}\" method=\"post\" class=\"{}\" data-position=\"footer\"{}>\
-            <input type=\"email\" name=\"email\" class=\"moss-input\" placeholder=\"{}\" required />\
+            <input type=\"email\" name=\"email\" autocomplete=\"email\" class=\"moss-input\" placeholder=\"{}\" required />\
             <input type=\"hidden\" value=\"1\" name=\"embed\" />\
             <button type=\"submit\" class=\"moss-btn\">{}</button>\
         </form>",
@@ -324,7 +324,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
             input_label: "Email address",
             label: "Subscribe",
             check_email: "Check your email to confirm.",
-            already_subscribed: "You're already subscribed.",
+            already_subscribed: "You’re already subscribed.",
             error: "Something went wrong. Try again?",
         },
         Language::ZhHans => MossSubscribeCopy {
@@ -377,7 +377,7 @@ fn subscribe_form_inner(
     };
     let envelope_svg = r##"<svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6M4 7v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7M4 7l1-1h14l1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     format!(
-        r#"<input type="email" name="email" class="moss-input" placeholder="{placeholder}" aria-label="{input_label}" required>
+        r#"<input type="email" name="email" autocomplete="email" class="moss-input" placeholder="{placeholder}" aria-label="{input_label}" required>
   <span class="moss-btn-slot">
     <button type="submit" class="moss-btn">
       <span class="moss-btn__label">{label}</span>
@@ -424,7 +424,7 @@ pub fn label_subscribe_input(form_html: &str, prompt_id: &str) -> String {
 /// `render_inline_subscribe_form` pair.)
 ///
 /// - `site_id`: `Some(non-empty)` → wired (`action=/sites/{id}/subscribe`);
-///   `None`/empty → pending (`action="#"` + `data-moss-pending-site`), shown
+///   `None`/empty → pending (`action="#"` + `data-moss-pending`), shown
 ///   before first publish (subscribe.ts runs the local success animation).
 /// - `button_override`: `Some(non-empty)` emits `data-button-override="true"`
 ///   so subscribe.ts leaves the author's button label (and placeholder) alone.
@@ -443,16 +443,8 @@ pub fn render_hosted_subscribe_form(
 ) -> String {
     let inner = subscribe_form_inner(lang, placeholder_override, button_override);
     let site = site_id.map(str::trim).filter(|s| !s.is_empty());
-    let (pending_attr, action) = match site {
-        Some(id) => (
-            String::new(),
-            format!("{}/sites/{}/subscribe", seta_base, html_escape(id)),
-        ),
-        None => (
-            r#" data-moss-pending-site="true""#.to_string(),
-            "#".to_string(),
-        ),
-    };
+    let (action, pending_attr) =
+        super::hosted_action(site.map(|id| format!("{}/sites/{}/subscribe", seta_base, html_escape(id))));
     let override_attr = match button_override.map(str::trim).filter(|s| !s.is_empty()) {
         Some(_) => r#" data-button-override="true""#,
         None => "",
@@ -579,8 +571,8 @@ fn landing_copy(
     match (lang, kind) {
         (Language::En, SubscribeLanding::Confirmed) => (
             "Subscribed",
-            "You're subscribed",
-            "You'll get an email when new writing is posted. Thanks for reading.",
+            "You’re subscribed",
+            "You’ll get an email when new writing is posted. Thanks for reading.",
         ),
         (Language::En, SubscribeLanding::Expired) => (
             "Link expired",
@@ -1011,9 +1003,16 @@ mod tests {
     }
 
     #[test]
+    fn test_hosted_form_en_already_subscribed_uses_typographic_apostrophe() {
+        let html = subscribe_form_inner(Language::En, None, None);
+        assert!(html.contains("You\u{2019}re already subscribed."), "{html}");
+    }
+
+    #[test]
     fn test_landing_page_en_copy() {
         let html = render_subscribe_landing_html(Language::En, SubscribeLanding::Confirmed, "/_moss/style.css");
-        assert!(html.contains("You're subscribed"));
+        assert!(html.contains("You\u{2019}re subscribed"));
+        assert!(html.contains("You\u{2019}ll get an email"));
         assert!(html.contains("Back to the site"));
         let html = render_subscribe_landing_html(Language::En, SubscribeLanding::Expired, "/_moss/style.css");
         assert!(html.contains("Link expired") || html.contains("This link has expired"));
@@ -1065,6 +1064,14 @@ mod tests {
     }
 
     #[test]
+    fn test_subscribe_email_inputs_offer_the_readers_address() {
+        let inner = subscribe_form_inner(Language::En, None, None);
+        assert!(inner.contains(r#"name="email" autocomplete="email""#), "inner: {inner}");
+        let footer = render_subscribe_form("mynewsletter", Language::En, true);
+        assert!(footer.contains(r#"name="email" autocomplete="email""#), "footer: {footer}");
+    }
+
+    #[test]
     fn test_subscribe_form_inner_with_button_override() {
         let html = subscribe_form_inner(Language::En, None, Some("Request access"));
         assert!(html.contains(">Request access<"),
@@ -1103,21 +1110,21 @@ mod tests {
             "form is data-position=inline + moss-hosted: {html}");
         assert!(html.contains(r#"action="https://api.mosspub.com/sites/site-abc/subscribe""#),
             "wired action: {html}");
-        assert!(!html.contains("data-moss-pending-site"), "wired form is not pending: {html}");
+        assert!(!html.contains("data-moss-pending"), "wired form is not pending: {html}");
         assert!(!html.contains("data-button-override"), "no override marker without an override: {html}");
     }
 
     #[test]
     fn test_hosted_form_pending_shape() {
         let html = render_hosted_subscribe_form(None, Language::En, "", None, None, "https://api.mosspub.com");
-        assert!(html.contains(r#"data-moss-pending-site="true""#), "None site_id → pending marker: {html}");
+        assert!(html.contains(r#"data-moss-pending="true""#), "None site_id → pending marker: {html}");
         assert!(html.contains(r##"action="#""##), "pending action is #: {html}");
     }
 
     #[test]
     fn test_hosted_form_empty_site_is_pending() {
         let html = render_hosted_subscribe_form(Some(""), Language::En, "", None, None, "https://api.mosspub.com");
-        assert!(html.contains(r#"data-moss-pending-site="true""#), "empty site_id → pending: {html}");
+        assert!(html.contains(r#"data-moss-pending="true""#), "empty site_id → pending: {html}");
         assert!(html.contains(r##"action="#""##), "empty site_id → pending action: {html}");
     }
 

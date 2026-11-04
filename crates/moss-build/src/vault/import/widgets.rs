@@ -316,10 +316,6 @@ fn link_label(el: &Element, row: Option<&Row>, url: &Url) -> String {
         .unwrap_or_else(|| url.host_str().unwrap_or("link").to_string())
 }
 
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
-
 /// The address as a wikilink or markdown-link target: the characters that
 /// would end or split `![[…]]` or `[…](…)` are percent-encoded.
 fn wikilink_target(s: &str) -> String {
@@ -327,7 +323,7 @@ fn wikilink_target(s: &str) -> String {
 }
 
 fn link_html(href: &str, label: &str) -> String {
-    format!("<p><a href=\"{}\">{}</a></p>", escape(&wikilink_target(href)), escape(label))
+    format!("<p><a href=\"{}\">{}</a></p>", moss_core::media::html_escape_attr(&wikilink_target(href)), moss_core::media::html_escape_attr(label))
 }
 
 /// Tag the pre-pass leaves for an embed, or for a carried hosted page's frame
@@ -336,7 +332,8 @@ fn link_html(href: &str, label: &str) -> String {
 /// (Plain text `![[url]]` would be escaped by the converter.)
 const EMBED_TAG: &str = "moss-embed";
 
-/// htmd with two changes: `<moss-embed data-url="…">` becomes the
+/// htmd with three changes: a heading (h2 to h6) that is plainly a paragraph
+/// is written as one (see `is_paragraph_text`), `<moss-embed data-url="…">` becomes the
 /// remote-embed wikilink on its own paragraph, with the label and size its
 /// attributes carry, and an `<img>` whose alt is only a file name is written
 /// with an empty alt (see `describing_alt`).
@@ -351,6 +348,14 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
                 }
                 _ => handlers.fallback(el),
             }
+        })
+        .add_handler(vec!["h2", "h3", "h4", "h5", "h6"], |handlers: &dyn Handlers, el: htmd::Element| {
+            let inner = handlers.walk_children(el.node).content;
+            let text = inner.trim();
+            if is_paragraph_text(text) {
+                return Some(format!("\n\n{text}\n\n").into());
+            }
+            handlers.fallback(el)
         })
         .add_handler(vec![GALLERY_TAG], |handlers: &dyn Handlers, el: htmd::Element| {
             let inner = handlers.walk_children(el.node).content;
@@ -373,6 +378,18 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
         })
         .build()
         .convert(html)
+}
+
+/// Whether the text of a heading (h2 to h6; h1 is the page title) is plainly a
+/// paragraph: at least 40 whitespace-separated words and a final full stop,
+/// closing quotes, brackets and emphasis marks allowed after it. Some builders
+/// offer a heading style that owners use for large body text, and a headline
+/// does not end in a full stop. Text with no spaces between words (Chinese,
+/// Japanese) never counts as long, so it stays a heading.
+fn is_paragraph_text(text: &str) -> bool {
+    const MIN_WORDS: usize = 40;
+    let closers = [')', ']', '*', '_', '"', '\'', '”', '’'];
+    text.trim_end_matches(closers).ends_with('.') && text.split_whitespace().count() >= MIN_WORDS
 }
 
 fn valid_id(id: &str) -> bool {
@@ -443,8 +460,8 @@ fn frame_html(el: &Element, row: Option<&Row>, url: &Url) -> String {
     };
     format!(
         "<{EMBED_TAG} data-url=\"{}\" data-label=\"{}\" data-size=\"{size}\"></{EMBED_TAG}>{}",
-        escape(&wikilink_target(url.as_str())),
-        escape(&label),
+        moss_core::media::html_escape_attr(&wikilink_target(url.as_str())),
+        moss_core::media::html_escape_attr(&label),
         link_html(url.as_str(), &label)
     )
 }
@@ -492,8 +509,8 @@ fn map_html(json: &str) -> Option<String> {
     };
     Some(format!(
         "<{EMBED_TAG} data-url=\"{}\" data-label=\"{}\"></{EMBED_TAG}>{}",
-        escape(&wikilink_target(&frame)),
-        escape(&label),
+        moss_core::media::html_escape_attr(&wikilink_target(&frame)),
+        moss_core::media::html_escape_attr(&label),
         link_html(&directions, "Directions")
     ))
 }
@@ -536,7 +553,7 @@ fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
     match row.map(|r| r.role) {
         Some(Embed) => Outcome::Replace(format!(
             "<{EMBED_TAG} data-url=\"{}\"></{EMBED_TAG}>",
-            escape(&embed_target(&url))
+            moss_core::media::html_escape_attr(&embed_target(&url))
         )),
         Some(Chrome) => Outcome::Leave,
         Some(Carry) | None => Outcome::Carried(frame_html(el, row, &url)),
@@ -610,7 +627,7 @@ fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
             .map(|a| attr(el, a))
             .find(|v| !v.is_empty() && !v.starts_with("data:"));
         if let Some(src) = src.filter(|s| seen.insert(s.to_string())) {
-            items.push_str(&format!("<p><img src=\"{}\" alt=\"{}\"></p>", escape(src), escape(attr(el, "alt"))));
+            items.push_str(&format!("<p><img src=\"{}\" alt=\"{}\"></p>", moss_core::media::html_escape_attr(src), moss_core::media::html_escape_attr(attr(el, "alt"))));
         }
     }
     if items.is_empty() {
@@ -620,9 +637,21 @@ fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
     }
 }
 
+/// Whether an empty custom element belongs to a page builder's layout: an
+/// ancestor, or a sibling with another name, shares its prefix (`demo-` in
+/// `demo-row` beside `demo-column`). A lone empty element has no such family.
+fn in_layout_family(node: NodeRef<Node>, name: &str) -> bool {
+    let Some((prefix, _)) = name.split_once('-') else { return false };
+    let related = |n: NodeRef<Node>| {
+        n.value().as_element().is_some_and(|e| e.name() != name && e.name().split_once('-').is_some_and(|(p, _)| p == prefix))
+    };
+    node.ancestors().any(related) || node.prev_siblings().chain(node.next_siblings()).any(related)
+}
+
 /// A custom element with nothing in it is a widget a third-party script
 /// fills in, which the importer cannot run. Chat and tracking elements are
-/// chrome, and an element with text or pictures is content.
+/// chrome, an element with text or pictures is content, and an empty one
+/// inside a layout family is a spacer, left uncounted.
 fn custom_outcome(node: NodeRef<Node>, el: &Element) -> Outcome {
     let name = el.name();
     // A chat or tracking element is chrome, not a lost widget. Its tag name is
@@ -637,7 +666,7 @@ fn custom_outcome(node: NodeRef<Node>, el: &Element) -> Outcome {
             .select(&Selector::parse("img, picture, video, iframe, form").expect("static selector"))
             .next()
             .is_some();
-    if filled {
+    if filled || in_layout_family(node, name) {
         Outcome::Leave
     } else {
         Outcome::Dropped(vec![format!("script widget {name}")])
@@ -693,6 +722,27 @@ fn form_outcome(node: NodeRef<Node>, el: &Element, base: &Url, doc: &Html, scan:
     }
 }
 
+/// Ghost's own attribute on every signup form, whatever the theme.
+const SIGNUP_FORM_ATTR: &str = "data-members-form";
+
+/// Longest single run of text in a signup block: a title or small print is short, a post's paragraph is not.
+const SIGNUP_BLOCK_TEXT_MAX: usize = 120;
+
+/// The outermost ancestor of a signup form holding only it and short text (no
+/// picture, link or other form outside the form itself; a button's spinner icon
+/// is the form's own), so its title and small print go with it.
+fn signup_block(form: NodeRef<Node>) -> Option<NodeId> {
+    let busy = Selector::parse("img, picture, video, audio, svg, iframe, a, textarea").expect("static selector");
+    let forms = Selector::parse("form").expect("static selector");
+    let fits = |el: ElementRef| {
+        !matches!(el.value().name(), "body" | "html" | "main" | "article")
+            && !el.text().any(|t| t.trim().chars().count() > SIGNUP_BLOCK_TEXT_MAX)
+            && el.select(&busy).all(|b| b.ancestors().any(|a| a.id() == form.id()))
+            && el.select(&forms).count() == 1
+    };
+    form.ancestors().map_while(ElementRef::wrap).take_while(|e| fits(*e)).last().map(|e| e.id())
+}
+
 fn token_outcome(el: &Element, row: &Row, base: &Url) -> Outcome {
     let Href::Attr(name) = row.href else { return Outcome::Leave };
     match http_url(base, attr(el, name)) {
@@ -701,8 +751,21 @@ fn token_outcome(el: &Element, row: &Row, base: &Url) -> Outcome {
     }
 }
 
+/// Repeated kinds folded into one label each, in first-seen order:
+/// `script widget demo-row (×3)`. A kind seen once keeps its plain label.
+pub(crate) fn grouped_kinds(kinds: &[String]) -> Vec<String> {
+    let mut groups: Vec<(&str, usize)> = Vec::new();
+    for kind in kinds {
+        match groups.iter_mut().find(|(k, _)| k == kind) {
+            Some((_, n)) => *n += 1,
+            None => groups.push((kind, 1)),
+        }
+    }
+    groups.into_iter().map(|(k, n)| if n == 1 { k.to_string() } else { format!("{k} (×{n})") }).collect()
+}
+
 fn record_dropped(count: &mut WidgetCount, base_url: &Url, kinds: Vec<String>) {
-    for kind in &kinds {
+    for kind in grouped_kinds(&kinds) {
         log::warn!("import: {base_url}: widget with no static form dropped: {kind}");
     }
     count.dropped_kinds.extend(kinds);
@@ -747,6 +810,15 @@ pub fn carry_widgets(html: &str, base_url: &Url) -> (String, WidgetCount) {
             }
             Outcome::DroppedInPlace(kinds) => record_dropped(&mut count, base_url, kinds),
             Outcome::Leave => {}
+        }
+    }
+    for (id, kind) in &found.widgets {
+        let node = doc.tree.get(*id).expect("scanned node");
+        let signup = matches!(kind, Kind::Form) && node.value().as_element().is_some_and(|e| e.attr(SIGNUP_FORM_ATTR).is_some());
+        if let Some(block) = signup.then(|| signup_block(node)).flatten() {
+            if !replacements.iter().any(|(r, _)| *r == block) {
+                replacements.push((block, String::new()));
+            }
         }
     }
     if replacements.is_empty() {

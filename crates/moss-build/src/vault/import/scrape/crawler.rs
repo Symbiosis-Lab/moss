@@ -4,7 +4,10 @@
 
 use scraper::{Html, Selector};
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use url::Url;
+
+use crate::vault::import::dialects::CHROME_DIALECTS;
 
 /// Extract all links from an HTML document
 ///
@@ -21,6 +24,9 @@ pub fn extract_links(html: &str, base_url: &str) -> HashSet<String> {
     let mut links = HashSet::new();
 
     for element in document.select(&selector) {
+        if is_link_chrome(&element) {
+            continue;
+        }
         if let Some(href) = element.value().attr("href") {
             // Skip empty hrefs
             if href.is_empty() {
@@ -56,6 +62,21 @@ pub fn extract_links(html: &str, base_url: &str) -> HashSet<String> {
     }
 
     links
+}
+
+/// Whether an anchor is one a builder's template adds to every page for a
+/// feature the site may not have (see `ChromeDialect::link_chrome`).
+fn is_link_chrome(anchor: &scraper::ElementRef<'_>) -> bool {
+    static SELECTORS: LazyLock<Vec<Selector>> = LazyLock::new(|| {
+        CHROME_DIALECTS
+            .iter()
+            .flat_map(|d| d.link_chrome)
+            .filter_map(|s| Selector::parse(s).ok())
+            .collect()
+    });
+    std::iter::once(*anchor)
+        .chain(anchor.ancestors().filter_map(scraper::ElementRef::wrap))
+        .any(|el| SELECTORS.iter().any(|sel| sel.matches(&el)))
 }
 
 /// Content types that always qualify a fetched response as an HTML page.

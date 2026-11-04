@@ -102,6 +102,8 @@ const CLUTTER_TOKENS: &[&str] = &[
     "disqus",
     "newsletter",
     "subscribe",
+    // A blogging platform's in-post signup card (`kg-signup-card`), heading and small print included.
+    "signup-card",
     "related",
     "more-stories",
     "more-articles",

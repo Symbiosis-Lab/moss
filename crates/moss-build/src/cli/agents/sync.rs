@@ -207,6 +207,7 @@ fn cli_binding_for(file: &Path, running: &Path) -> String {
     let existing = std::fs::read_to_string(file)
         .ok()
         .and_then(|text| named_cli_path(&text))
+        .map(|p| console_front_door(&p).unwrap_or(p))
         .filter(|p| p.is_absolute() && p.is_file());
     let kept = match existing {
         Some(p) if is_installed_app(running) && !is_installed_app(&p) => None,
@@ -464,9 +465,17 @@ pub fn bundled_cli_path() -> PathBuf {
 /// `(deleted)` case can be tested without unlinking a running binary.
 pub(crate) fn usable_cli_path(current_exe: Option<PathBuf>) -> PathBuf {
     match current_exe {
-        Some(p) if p.exists() => p,
+        Some(p) if p.exists() => console_front_door(&p).unwrap_or(p),
         _ => PathBuf::from("moss"),
     }
+}
+
+/// The `.com` beside a Windows `.exe`. The desktop app's `moss.exe` is a GUI
+/// program that cmd and PowerShell neither wait for nor capture output from;
+/// the console `moss.com` it ships next to it runs it and passes both through.
+fn console_front_door(exe: &Path) -> Option<PathBuf> {
+    let com = exe.with_extension("com");
+    (exe.extension()?.eq_ignore_ascii_case("exe") && com.is_file()).then_some(com)
 }
 
 /// The file a coding agent should read to orient itself in `project`, if one

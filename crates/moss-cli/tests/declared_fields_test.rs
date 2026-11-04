@@ -161,7 +161,7 @@ fn a_placed_field_is_drawn_around_the_title_it_belongs_to() {
     let o = build_strict(&s);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let html = built(&s, "housing/court/index.html");
-    let eyebrow = position(&html, "<p class=\"moss-eyebrow\"><span data-field=\"kind\">Built</span> <span data-field=\"years\">");
+    let eyebrow = position(&html, "<p class=\"moss-eyebrow\"><span data-field=\"kind\" data-value=\"building\">Built</span> <span data-field=\"years\">");
     let h1 = position(&html, "<h1 class=\"moss-article-title\">Riverside Court</h1>");
     let subtitle = position(&html, "<p class=\"moss-subtitle\" data-field=\"district\">Eastbank</p>");
     assert!(eyebrow < h1 && h1 < subtitle, "eyebrow, title, subtitle in that order: {html}");
@@ -269,7 +269,7 @@ fn a_page_in_the_simplified_dialect_is_drawn_and_checked_like_any_other() {
     build_lenient(&s);
     let html = built(&s, "housing/court/index.html");
     assert!(html.contains("<p class=\"moss-subtitle\" data-field=\"district\">Eastbank</p>"), "{html}");
-    assert!(html.contains("<span data-field=\"kind\">Built</span>") && !html.contains("data-field=\"years\""), "{html}");
+    assert!(html.contains("<span data-field=\"kind\" data-value=\"building\">Built</span>") && !html.contains("data-field=\"years\""), "{html}");
 }
 
 #[test]

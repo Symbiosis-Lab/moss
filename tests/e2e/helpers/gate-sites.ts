@@ -1855,6 +1855,35 @@ Text in the second cell.
 
 After the bands.
 `,
+    "screen-page.md": `---
+title: Screen page
+content_width: screen
+---
+
+Before the bands.
+
+:::grid 2 5:7
+Text in the first cell of a default grid.
+
+---
+
+Text in the second cell.
+:::
+
+:::{.band}
+Text in a band with no width word.
+:::
+
+:::grid 2 {body}
+Text in a grid kept at the text width.
+
+---
+
+Text in the second cell.
+:::
+
+After the bands.
+`,
     "sized.md": `---
 title: Sized
 ---
@@ -4220,6 +4249,150 @@ description: What the second note is about.
 Body.
 `,
     "footer.md": `Written by [an editor](/notes/) for this scratch site.
+`,
+  },
+};
+
+const LEAD_TILE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4a7"/></svg>
+`;
+
+// A folder drawn with `children_style: lead`: a first item with a picture and
+// three more. Served by playwright/lead-listing.config.ts.
+export const LEAD_LISTING_GATE: ScratchSiteSpec = {
+  name: "lead-listing-gate",
+  files: {
+    "tile.svg": LEAD_TILE_SVG,
+    "index.md": `---
+title: Lead Listing
+uid: "lead0001"
+---
+
+Welcome.
+`,
+    "notes/index.md": `---
+title: Notes
+uid: "lead0010"
+children_style: lead
+children_group: none
+children_limit: 4
+content_width: wide
+---
+
+Notes.
+`,
+    "notes/one.md": `---
+title: The harbour in winter
+uid: "lead0011"
+date: 2026-04-01
+cover: tile.svg
+description: "The ferries stopped running before the first snow, and the pier went quiet. The fishermen moved their boats to the inner basin, the café by the ticket office put its chairs away, and for three months the only sound at the end of the breakwater was the wind turning the weather vane on the harbour master's roof, back and forth, all night."
+---
+
+The ferries stopped running before the first snow, and the pier went quiet.
+`,
+    "notes/two.md": `---
+title: Second note
+uid: "lead0012"
+date: 2026-03-01
+---
+
+The opening line of the second note.
+`,
+    "notes/three.md": `---
+title: Third note
+uid: "lead0013"
+date: 2026-02-01
+---
+
+The opening line of the third note.
+`,
+    "notes/four.md": `---
+title: Fourth note
+uid: "lead0014"
+date: 2026-01-01
+---
+
+The opening line of the fourth note.
+`,
+  },
+};
+
+// A request form with one of each kind of field, for tests/render-gates/site/request-form.spec.ts
+// and playwright/request-form.config.ts.
+export const REQUEST_FORM: ScratchSiteSpec = {
+  name: "request-form-gate",
+  files: {
+    "index.md": `---
+title: Request form
+uid: "rfm00101"
+---
+
+# Request form
+
+:::form {#booking next=/received/ button="Ask for a date"}
+- Your name * {autocomplete=name}
+- Email * {type=email}
+- Phone {type=tel}
+- Session * {type=radio}
+  - Portrait
+  - Family
+  - Headshots
+- Preferred day {type=date}
+- Colour {type=select}
+  - Red
+  - Blue
+- Anything we should know {type=textarea}
+  Who is coming, and any ideas for the session.
+- Send me the newsletter {type=checkbox}
+:::
+`,
+    "received.md": `---
+title: Received
+uid: "rfm00102"
+---
+
+Thanks.
+`,
+    ".moss/config.toml": `${CONFIG_TOML}\n[services.forms]\nendpoint = "http://127.0.0.1:9/f"\n`,
+  },
+};
+
+// A country map and a page that embeds it, for reading how the map paints and
+// opens its panel. Served by playwright/country-map.config.ts.
+export const COUNTRY_MAP_GATE: ScratchSiteSpec = {
+  name: "country-map-gate",
+  files: {
+    "index.md": `---
+title: Country Map Gate
+---
+
+Before the map.
+
+![[risk-levels|style:map]]
+`,
+    "risk-levels.md": `---
+title: Risk levels
+date: 2026-11-03
+country_map:
+  by: Level
+  levels:
+    - {name: Low, text: "Take normal precautions."}
+    - Guarded
+    - Elevated
+    - High
+  unrated: "No assessment yet."
+---
+| Country | Level | Note |
+|---|---|---|
+| Mexico | Low | |
+| Japan | Guarded | Calm. |
+| Brazil | Elevated | |
+| Chile | High | |
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
 `,
   },
 };

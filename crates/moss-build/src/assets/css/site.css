@@ -1415,26 +1415,9 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
    on any one axis, and neither tracked one line of body text.
    `box-sizing: border-box` folds `.moss-input`'s border and both controls'
    padding inside that line instead of adding to it. */
-.moss-subscribe-form[data-moss-hosted="true"] .moss-input,
-.moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
+.moss-subscribe-form[data-moss-hosted="true"] .moss-input {
   box-sizing: border-box;
   block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
-}
-
-/* Touch floor: one reading-size line is 30px at the default 1.125rem — a
-   real WCAG 2.5.8 AA violation as a tap target, measured on a real build.
-   `max()` keeps the one-line-of-text reasoning above as the shape (it
-   already clears 44px past about 1.4rem of reading size) and raises only
-   the common case, rather than a fixed control height that would fight it.
-   Desktop with a mouse is untouched above the same 48rem boundary the hero
-   and place-locator already treat as the mobile/desktop split; `(pointer:
-   coarse)` also reaches a touch device wider than 48rem, e.g. a tablet in
-   landscape. */
-@media (width < 48rem), (pointer: coarse) {
-  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
-  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
-    block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
-  }
 }
 
 .moss-subscribe-form[data-moss-hosted="true"] .moss-input {
@@ -1462,6 +1445,40 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
 .moss-btn__label {
   display: inline-block;
 }
+
+/* The button in its slot: one line of text tall (a touch floor below), the same
+   for subscribe, comment and request forms. */
+.moss-btn-slot .moss-btn {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
+}
+
+/* Touch floor: one reading-size line is 30px at the default 1.125rem — a
+   real WCAG 2.5.8 AA violation as a tap target, measured on a real build.
+   `max()` keeps the one-line-of-text reasoning above as the shape (it
+   already clears 44px past about 1.4rem of reading size) and raises only
+   the common case, rather than a fixed control height that would fight it.
+   Desktop with a mouse is untouched above the same 48rem boundary the hero
+   and place-locator already treat as the mobile/desktop split; `(pointer:
+   coarse)` also reaches a touch device wider than 48rem, e.g. a tablet in
+   landscape. It must follow the base `.moss-btn-slot .moss-btn` rule: the
+   selectors weigh the same, so the later one wins. */
+@media (width < 48rem), (pointer: coarse) {
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+  .moss-btn-slot .moss-btn {
+    block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
+  }
+}
+
+/* Loading, written once for every form that morphs its button through states. */
+[data-state="loading"] .moss-btn-slot .moss-btn { cursor: wait; }
+[data-state="loading"] .moss-btn-slot .moss-btn__label { opacity: 0; }
+[data-state="loading"] .moss-btn-slot .moss-btn__spinner { opacity: 1; }
 
 .moss-btn__spinner,
 .moss-btn__check {
@@ -1508,11 +1525,6 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
 }
 
 .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
-  position: relative;
-  overflow: hidden;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: none;
   transition:
     background-color 0.3s var(--moss-ease-subscribe),
@@ -1573,9 +1585,6 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
 }
 
 /* --- loading --- */
-.moss-subscribe-form[data-state="loading"] .moss-btn { cursor: wait; }
-.moss-subscribe-form[data-state="loading"] .moss-btn__label { opacity: 0; }
-.moss-subscribe-form[data-state="loading"] .moss-btn__spinner { opacity: 1; }
 .moss-subscribe-form[data-state="loading"] .moss-input {
   pointer-events: none;
   opacity: 0.7;
@@ -2364,7 +2373,8 @@ body > header .site-name {
 .breadcrumb-separator {
   flex-shrink: 0;
   margin: 0 0.35em;
-  color: var(--moss-border-medium);
+  /* A delimiter the reader must see, so the 3:1 non-text token, not a hairline. */
+  color: var(--moss-border-strong);
   font-weight: 300;
 }
 
@@ -7100,6 +7110,30 @@ article a:where(:not(.moss-btn)):focus {
   overflow-wrap: anywhere;
 }
 
+/* The mark after a listed page's title when the page is in another language than
+   the listing: small, muted, outlined, never filled. On a cover band it takes the
+   band's ink, since the muted colour is only checked against the page ground. */
+.moss-lang-mark {
+  display: inline-block;
+  margin-inline-start: 0.5em;
+  padding: 0 0.4em;
+  border: 1px solid var(--moss-border-medium);
+  border-radius: 2px;
+  font-family: var(--moss-font-body);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  color: var(--moss-color-muted);
+  vertical-align: 0.15em;
+  white-space: nowrap;
+}
+
+[data-cover-color] .moss-card-content .moss-lang-mark {
+  color: inherit;
+  border-color: currentColor;
+}
+
 /* A row with a subtitle stacks it under the title; the prefix stays beside both. */
 .moss-prefix-link-text {
   display: flex;
@@ -7226,6 +7260,85 @@ article a:where(:not(.moss-btn)):focus {
   height: 100%;
   border: none;
   margin: 0;
+}
+
+/* Lead listing (`children_style: lead`): the first card leads, the rest form a
+   register. Phone: the lead stacks picture over words, the register is ruled
+   rows with no pictures. Wide: the lead is a picture beside its words and the
+   register is three equal columns. */
+.moss-cards[data-layout="list"][data-lead] {
+  max-inline-size: none;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-row {
+  display: grid;
+  gap: var(--moss-space-md);
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-cover {
+  order: -1;
+  /* 100%, not auto: a grid item with an aspect ratio is not stretched and its
+     only content is absolutely placed, so WebKit draws it 0 px wide */
+  inline-size: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 0;
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-cover img {
+  object-fit: cover;
+}
+.moss-cards[data-lead] .moss-card-title {
+  font-family: var(--moss-font-heading);
+  font-weight: var(--moss-font-heading-weight);
+  font-size: 1.3rem;
+  line-height: 1.45;
+}
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-title {
+  font-size: clamp(1.75rem, 7vw, 2.9rem);
+  line-height: 1.24;
+  max-inline-size: 14em;
+  text-wrap: balance;
+}
+.moss-cards[data-lead] > .moss-card:first-child {
+  padding-block-end: var(--moss-space-xl);
+  margin-block-end: var(--moss-space-md);
+  border-block-end: 1px solid var(--moss-border-light);
+}
+.moss-cards[data-lead] > .moss-card:not(:first-child) {
+  padding-block: var(--moss-space-md);
+  border-block-end: 1px solid var(--moss-border-light);
+}
+/* The lead shows its whole opening line; only the register is clamped. */
+.moss-cards[data-lead] > .moss-card:first-child .moss-card-description {
+  display: block;
+  max-block-size: none;
+}
+.moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-cover { display: none; }
+.moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-description {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+@media (width >= 48rem) {
+  .moss-cards[data-layout="list"][data-lead] {
+    grid-template-columns: repeat(3, 1fr);
+    column-gap: var(--moss-space-xl);
+  }
+  .moss-cards[data-lead] > .moss-card:first-child { grid-column: 1 / -1; }
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-row {
+    grid-template-columns: 7fr 5fr;
+    gap: var(--moss-space-xl);
+    align-items: start;
+  }
+  /* The words hang from the picture's top edge: trim the date line's
+     half-leading so its glyphs meet it. */
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-body > .moss-card-meta:first-child {
+    margin-block-start: calc((1em - 1lh) / 2);
+  }
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-cover { aspect-ratio: 3 / 2; }
+  .moss-cards[data-lead] > .moss-card:first-child .moss-card-title { font-size: clamp(1.9rem, 3.2vw, 2.9rem); }
+  .moss-cards[data-lead] > .moss-card:not(:first-child) { border: 0; padding-block: var(--moss-space-sm) 0; }
+  .moss-cards[data-lead] > .moss-card:not(:first-child) .moss-card-description { -webkit-line-clamp: 3; }
 }
 
 [data-theme="dark"] .moss-card-no-cover {
@@ -10874,3 +10987,10 @@ body[data-moss-preview] .moss-service-inactive {
 }
 
 } /* @layer shortcodes */
+
+/* A hosted form with nowhere to post (no site yet, no forms endpoint) must never
+   face a reader: it would post to "#" and show an error. The preview keeps it so
+   the author sees the flow. Unlayered, so no theme rule outranks the hide. */
+body:not([data-moss-preview]) [data-moss-pending] {
+  display: none;
+}

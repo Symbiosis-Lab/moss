@@ -25,6 +25,7 @@
 //! wrapper: `plan_moves` + `apply_planned_moves` for a batch of exactly one.
 
 mod apply;
+pub(crate) mod destinations;
 mod passthrough;
 mod path_list_folder_index;
 mod served_address;
@@ -88,6 +89,10 @@ pub struct RenamePlan {
     /// each file under a moved folder and its carried home page.
     #[serde(default)]
     pub file_moves: Vec<(String, String)>,
+    /// One entry per link left as authored because only the resolver's name
+    /// search finds its file: the referencing file, at its post-move path.
+    #[serde(default)]
+    pub left_as_written: Vec<String>,
 }
 
 /// One edit actually written by [`apply_planned_moves`], with its position
@@ -121,6 +126,8 @@ pub struct RenameApplyResult {
     pub passthrough: Vec<(String, String)>,
     /// Root-relative folders the rename created for its destinations, shallowest first.
     pub created_dirs: Vec<String>,
+    /// The plan's `left_as_written`, passed through for the caller to report.
+    pub left_as_written: Vec<String>,
 }
 
 /// The result of [`undo_applied`].
@@ -374,6 +381,7 @@ fn plan_one_ref(
     graph_post: &ContentGraph,
     expanded_moves: &[ResolvedMove],
     addresses: &Addresses,
+    left_as_written: &mut Vec<String>,
 ) -> Result<Option<String>, String> {
     // A destination with a scheme and host (or a protocol-relative `//host`)
     // names another site's address. Its tail is not a path in this tree, so
@@ -456,6 +464,9 @@ fn plan_one_ref(
         && exact.is_none()
         && !synthetic_auto_index
     {
+        if map_t != t {
+            left_as_written.push(from_source_post.to_string());
+        }
         return Ok(None);
     }
     let resolves_post = resolve_by_route(route, raw_text, from_source_post, ctx_post, graph_post).as_deref()
@@ -732,6 +743,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
     let addresses = Addresses::new(&canonical_root, &pre_files, &post_files);
 
     let mut edits: Vec<PlannedEdit> = Vec::new();
+    let mut left_as_written: Vec<String> = Vec::new();
     for rel in &pages_to_rewrite(&canonical_root, &pre_files, &resolved) {
         let abs = canonical_root.join(rel);
         let source = match std::fs::read_to_string(&abs) {
@@ -753,6 +765,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
                 &idx_post.graph,
                 &expanded,
                 &addresses,
+                &mut left_as_written,
             )? {
                 edits.push(PlannedEdit {
                     file: from_source_post.clone(),
@@ -777,6 +790,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
                 &idx_post.graph,
                 &expanded,
                 &addresses,
+                &mut left_as_written,
             )? {
                 let new_value = render_bare_value(&span.container, span.quote, &new_path_text, &span.attrs);
                 edits.push(PlannedEdit {
@@ -795,6 +809,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
         moves: resolved.into_iter().map(|m| PlannedMove { old_path: m.old, new_path: m.new, is_dir: m.is_dir }).collect(),
         edits,
         file_moves,
+        left_as_written,
     })
 }
 

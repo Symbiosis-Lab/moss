@@ -12,7 +12,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { initCardVideos } from "../card-video";
+import { initCardVideos } from "../video/card-video";
 
 /** Create a card with video + thumbnail overlay */
 function createCard(): {

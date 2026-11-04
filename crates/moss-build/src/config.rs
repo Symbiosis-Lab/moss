@@ -471,7 +471,7 @@ impl ConfigFile {
                 continue;
             };
             for key in sub.keys() {
-                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in") {
+                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in" | "card") {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }
@@ -524,7 +524,8 @@ impl ConfigFile {
                 Vec::new()
             };
             let scope = Self::string_list(sub, "in", &format!("fields.{name}"), &mut problems);
-            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, text, scope, of });
+            let card = Self::declared_card(sub, name, kind, &mut problems);
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, text, scope, of, card });
         }
         let declared: Vec<String> = decls.iter().filter(|d| d.kind != FieldKind::Group).map(|d| d.name.clone()).collect();
         let groups: Vec<String> = decls.iter().filter(|d| d.kind == FieldKind::Group).map(|d| d.name.clone()).collect();
@@ -579,6 +580,22 @@ impl ConfigFile {
                     None
                 }
             },
+        }
+    }
+
+    /// A declaration's `card`: whether listing cards draw its value. Absent means no.
+    fn declared_card(sub: &toml::Table, name: &str, kind: moss_core::fields::FieldKind, problems: &mut Vec<String>) -> bool {
+        match sub.get("card") {
+            None => false,
+            Some(Value::Boolean(true)) if kind == moss_core::fields::FieldKind::Group => {
+                problems.push(format!("[fields.{name}] is a group, which holds no value for a card to draw; ignoring `card`"));
+                false
+            }
+            Some(Value::Boolean(b)) => *b,
+            Some(_) => {
+                problems.push(format!("[fields.{name}] `card` must be true or false; ignoring it"));
+                false
+            }
         }
     }
 

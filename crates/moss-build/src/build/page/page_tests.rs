@@ -77,7 +77,7 @@ fn test_generate_year_grouped_article_list_filters_index_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
@@ -144,7 +144,7 @@ fn test_generate_year_grouped_article_list_excludes_nav_items() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
@@ -200,7 +200,7 @@ fn test_year_grouped_list_uses_pretty_urls() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     };
 
     let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
@@ -239,7 +239,7 @@ fn make_project() -> ProjectStructure {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
-        empty_folders: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -262,7 +262,7 @@ fn test_generate_children_empty() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
     assert_eq!(result, "");
 }
@@ -292,7 +292,7 @@ fn test_generate_children_list_no_group() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(result.contains("Article A"));
@@ -326,7 +326,7 @@ fn test_generate_children_summary_no_group() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(result.contains("Article A"));
@@ -375,7 +375,7 @@ fn test_generate_children_folders_before_articles() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let folder_pos = result.find("Tutorials").expect("Should contain Tutorials");
@@ -418,7 +418,7 @@ fn test_generate_children_folder_sorted_by_latest_date() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_a = result.find("Folder A").unwrap();
@@ -484,7 +484,7 @@ fn test_generate_children_pre_sorted_card_style() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Should use summary rendering — identified by `data-layout="list"`
@@ -537,7 +537,7 @@ fn test_generate_children_pre_sorted_preserves_order() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_older = result
@@ -589,7 +589,7 @@ fn test_generate_children_summary_has_divider_between_folders_and_articles() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Should have a divider between folder and article sections
@@ -633,7 +633,7 @@ fn test_generate_children_summary_no_divider_when_only_articles() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
     assert!(
         !result.contains("moss-child-section-divider"),
@@ -674,7 +674,7 @@ fn test_year_group_triggered_by_multi_year() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Should contain moss-cards-minimal-year-group sections
@@ -731,7 +731,7 @@ fn test_no_year_group_for_single_year() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Should NOT contain moss-cards-minimal-year-group
@@ -772,7 +772,7 @@ fn test_year_group_with_summary_style() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Should contain moss-cards-minimal-year-group--summary sections for ALL year groups (2025 and 2016)
@@ -899,7 +899,7 @@ fn test_generate_children_renders_frontmatter_description_as_safe_inline_html() 
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // A card is a reader-facing HTML surface: markdown renders as real markup
@@ -948,7 +948,7 @@ fn test_generate_children_renders_content_extracted_description_as_safe_inline_h
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Content-extracted descriptions get the same safe-HTML rendering as an
@@ -977,7 +977,7 @@ fn card_description_renders_markdown_and_never_nests_an_anchor_while_meta_stays_
     for style in ["summary", "grid"] {
         let html = generate_children(
             &docs, &docs, &project, style, "none", Language::En, false,
-            &std::collections::HashMap::new(), None, None, None, true, false, &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+            &std::collections::HashMap::new(), None, None, None, true, false, &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
         assert!(
             html.contains("<em>emph</em> <strong>bold</strong> <code>code</code> a link"),
@@ -1030,7 +1030,7 @@ fn test_generate_children_grid_style_renders_collection_grid() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Should render as data-layout="grid", not data-layout="list"
@@ -1098,7 +1098,7 @@ fn test_generate_children_grid_leaf_description_renders_below_title() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Description renders as a paragraph below the title...
@@ -1149,7 +1149,7 @@ fn test_generate_children_grid_folder_shows_count_not_description() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -1190,7 +1190,7 @@ fn test_generate_children_grid_childless_folder_renders_description() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -1240,7 +1240,7 @@ fn test_generate_children_grid_sorts_date_descending() {
         None,
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Find the positions of each title in the output — date-desc = Gamma, Beta, Alpha

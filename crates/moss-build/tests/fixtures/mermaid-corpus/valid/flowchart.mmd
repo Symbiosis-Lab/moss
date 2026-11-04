@@ -1,0 +1,10 @@
+flowchart LR
+  A[Write markdown] --> B{Has a diagram?}
+  B -->|yes| C[Render SVG]
+  B -->|no| D[Plain page]
+  C --> E((Publish))
+  D --> E
+  subgraph Build
+    C
+    D
+  end

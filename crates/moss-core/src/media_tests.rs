@@ -451,6 +451,15 @@ fn test_parse_attrs_scale_down() {
 // -- html_escape --------------------------------------------------
 
 #[test]
+fn the_escapers_differ_only_in_quotes_and_the_apostrophe() {
+    let s = r#"a & b < c > "d" 'e'"#;
+    assert_eq!(html_escape(s), "a &amp; b &lt; c &gt; &quot;d&quot; &#39;e&#39;");
+    assert_eq!(html_escape_attr(s), "a &amp; b &lt; c &gt; &quot;d&quot; 'e'");
+    assert_eq!(html_escape_text(s), r#"a &amp; b &lt; c &gt; "d" 'e'"#);
+    assert_eq!(xml_escape(s), "a &amp; b &lt; c &gt; &quot;d&quot; &apos;e&apos;");
+}
+
+#[test]
 fn test_html_escape_basic() {
     assert_eq!(html_escape("hello"), "hello");
     assert_eq!(html_escape("a&b"), "a&amp;b");

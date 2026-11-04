@@ -32,11 +32,18 @@ importers:
       esbuild:
         specifier: ^0.25.12
         version: 0.25.12
+      pele:
+        specifier: 1.13.0
+        version: 1.13.0
       vite:
         specifier: ^6.4.3
         version: 6.4.3(@types/node@22.20.3)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.1)
 
   crates/moss-build:
+    dependencies:
+      '@symbiosis-lab/moss-blueprint-grid':
+        specifier: workspace:*
+        version: link:../../packages/moss-blueprint-grid
     devDependencies:
       idiomorph:
         specifier: ^0.7.4
@@ -74,6 +81,21 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@22.20.3)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.13)(yaml@2.9.1)
 
+  packages/moss-blueprint-grid:
+    devDependencies:
+      jsdom:
+        specifier: ^26.1.0
+        version: 26.1.0
+      tsdown:
+        specifier: ^0.18.4
+        version: 0.18.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.3)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.13)(yaml@2.9.1)
+
   packages/moss-syntax:
     devDependencies:
       '@codemirror/lang-markdown':
@@ -100,6 +122,15 @@ importers:
       tsdown:
         specifier: ^0.18.4
         version: 0.18.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.3)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.13)(yaml@2.9.1)
+
+  packages/moss-ui:
+    devDependencies:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -185,6 +216,9 @@ importers:
       d3-contour:
         specifier: 4.0.2
         version: 4.0.2
+      polygon-clipping:
+        specifier: 0.15.7
+        version: 0.15.7
       shpjs:
         specifier: 6.1.0
         version: 6.1.0
@@ -2821,6 +2855,10 @@ packages:
     resolution: {integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==}
     engines: {node: '>= 14.16'}
 
+  pele@1.13.0:
+    resolution: {integrity: sha512-Ie8UKY9x00MsuR3jO6AzUwzK2Z6MIV3Tf4EDdITiuk8Uaz8K7g0R082WqsqNaSU8DdgkrRvZThzhit83mi/uiw==}
+    engines: {node: '>=20'}
+
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
 
@@ -2848,6 +2886,9 @@ packages:
     resolution: {integrity: sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ==}
     engines: {node: '>=18'}
     hasBin: true
+
+  polygon-clipping@0.15.7:
+    resolution: {integrity: sha512-nhfdr83ECBg6xtqOAJab1tbksbBAOMUltN60bU+llHVOL0e5Onm1WpAXXWXVB39L8AJFssoIhEVuy/S90MmotA==}
 
   postcss@8.5.28:
     resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
@@ -2986,6 +3027,9 @@ packages:
 
   rgb2hex@0.2.5:
     resolution: {integrity: sha512-22MOP1Rh7sAo1BZpDG6R5RFYzR2lYEgwq7HEmyW2qcsOqR2lQKmn+O//xV3YG/0rrhMC6KVX2hU+ZXuaw9a5bw==}
+
+  robust-predicates@3.0.3:
+    resolution: {integrity: sha512-NS3levdsRIUOmiJ8FZWCP7LG3QpJyrs/TE0Zpf1yvZu8cAJJ6QMW92H1c7kWpdIHo8RvmLxN/o2JXTKHp74lUA==}
 
   rolldown-plugin-dts@0.20.0:
     resolution: {integrity: sha512-cLAY1kN2ilTYMfZcFlGWbXnu6Nb+8uwUBsi+Mjbh4uIx7IN8uMOmJ7RxrrRgPsO4H7eSz3E+JwGoL1gyugiyUA==}
@@ -3129,6 +3173,10 @@ packages:
 
   spdx-license-ids@3.0.23:
     resolution: {integrity: sha512-CWLcCCH7VLu13TgOH+r8p1O/Znwhqv/dbb6lqWy67G+pT1kHmeD/+V36AVb/vq8QMIQwVShJ6Ssl5FPh0fuSdw==}
+
+  splaytree@3.2.3:
+    resolution: {integrity: sha512-7OXrNWzy6CK+r7Ch9OLPBDTKfB6XlWHjX4P0RU5B3IgFuWPeYN0XtRtlexGRjgbQxpfaUve6jTAwBGWuGntz/w==}
+    engines: {node: '>=18.20 || >=20'}
 
   split2@4.2.0:
     resolution: {integrity: sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==}
@@ -6386,6 +6434,8 @@ snapshots:
 
   pathval@2.0.1: {}
 
+  pele@1.13.0: {}
+
   pend@1.2.0: {}
 
   picocolors@1.1.1: {}
@@ -6403,6 +6453,11 @@ snapshots:
       playwright-core: 1.61.1
     optionalDependencies:
       fsevents: 2.3.2
+
+  polygon-clipping@0.15.7:
+    dependencies:
+      robust-predicates: 3.0.3
+      splaytree: 3.2.3
 
   postcss@8.5.28:
     dependencies:
@@ -6543,6 +6598,8 @@ snapshots:
   reusify@1.1.0: {}
 
   rgb2hex@0.2.5: {}
+
+  robust-predicates@3.0.3: {}
 
   rolldown-plugin-dts@0.20.0(rolldown@1.0.0-beta.57(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0))(typescript@5.9.3):
     dependencies:
@@ -6735,6 +6792,8 @@ snapshots:
       spdx-license-ids: 3.0.23
 
   spdx-license-ids@3.0.23: {}
+
+  splaytree@3.2.3: {}
 
   split2@4.2.0: {}
 

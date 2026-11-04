@@ -6,7 +6,11 @@
 //! and `resolve_url_for_file` Tauri commands in `commands.rs`.
 
 
+mod bounded;
 mod directory;
+mod publish_dates;
+pub use bounded::{bounded_tree, DOCUMENT_TREE_BUDGET};
+pub use publish_dates::{PublishDateCacheView, PublishDateMemo};
 pub use directory::list_directory_inner;
 use directory::list_directory_counted;
 
@@ -207,31 +211,12 @@ pub fn walk_source_files(dir: &str, project_path: &str, visit: &mut dyn FnMut(&D
     }
 }
 
-/// Per-project publish-date cache passed to `list_tree_inner_cached`.
-///
-/// Keyed by `(file_path, mtime_secs)` so a stale entry never gets served.
-/// The outer container is owned by `AppState`; this is a borrowed view.
-///
-/// The cached tuple is `(publish_date, date_source, home_marker)` — the third
-/// element records whether the file's frontmatter set `home: true`, extracted
-/// from the SAME 4 KB frontmatter read that resolves the date (zero extra
-/// I/O), and feeds the per-folder home election in `list_tree_inner_cached`.
-pub type PublishDateCacheView<'a> = std::sync::Mutex<
-    &'a mut std::collections::HashMap<
-        (std::path::PathBuf, u64),
-        (Option<String>, DateSource, bool),
-    >,
->;
-
 /// Inner implementation of `list_tree` for testability.
 ///
 /// `project_path` is the project root, used by `is_hidden` to compute the
 /// relative path when filtering `.moss/` children.
 ///
-/// This is a thin shim that calls `list_tree_inner_cached` with no cache
-/// (every md file is parsed fresh). The Tauri command path passes a real
-/// cache; tests use this shim.
-#[cfg_attr(not(test), allow(dead_code))]
+/// The walk with no memo: every page is read fresh.
 pub fn list_tree_inner(
     path: &str,
     project_path: &str,
@@ -242,7 +227,7 @@ pub fn list_tree_inner(
     list_tree_inner_cached(path, project_path, show_internal, &cache)
 }
 
-/// Cached variant — used by the Tauri command, where `AppState` owns the cache.
+/// The walk with a memo ([`PublishDateMemo::with_folder`] lends one).
 ///
 /// Reads each `.md` file's first 4 KB once per (path, mtime) pair, caches
 /// the resolved publish date, and feeds the result into the five-zone sort.
@@ -505,25 +490,20 @@ fn mtime_to_yyyy_mm_dd(secs: f64) -> Option<String> {
     Some(dt.format("%Y-%m-%d").to_string())
 }
 
-/// Given a desired destination path, append `-2`, `-3`, ... before the
-/// extension until a non-existing path is found. Returns the original path
-/// unchanged if there is no collision.
-///
-/// ## Suffix format (unified in Task 5.1)
-///
-/// Uses **dash** (`-2`, `-3`, …) starting at 2 — consistent with
-/// `copy_files_into` in `copy_in.rs` and `move_one` in `batch.rs`.
-/// The previous underscore scheme (`_1`, `_2`) was retired to eliminate the
-/// divergence between the drag-import path (dash) and the copy/paste path
-/// (was underscore). Callers that documented `_1`-style names in comments or
-/// tests should be updated accordingly.
+/// `path`, or the first of `name-2.ext`, `name-3.ext`, … beside it that
+/// nothing occupies on disk.
 pub fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
+    first_free(path, |_| false)
+}
+
+/// `path`, or the first `-2`, `-3`, … suffixed name beside it that is neither
+/// on disk nor `claimed`.
+pub(crate) fn first_free(path: &std::path::Path, claimed: impl Fn(&std::path::Path) -> bool) -> std::path::PathBuf {
     // symlink_metadata, not exists(): exists() follows symlinks, so a
-    // DANGLING symlink at the destination reads as absent and fs::copy would
-    // then write THROUGH it — outside the vault if it points there (the
-    // same escape shape, one component deeper). Any pre-existing entry,
-    // including a dangling symlink, gets collision-suffixed instead.
-    if path.symlink_metadata().is_err() {
+    // dangling symlink at the destination reads as absent and a write would
+    // go through it, outside the folder if it points there.
+    let taken = |p: &std::path::Path| p.symlink_metadata().is_ok() || claimed(p);
+    if !taken(path) {
         return path.to_path_buf();
     }
 
@@ -541,7 +521,7 @@ pub fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
             None => format!("{}-{}", stem, i),
         };
         let candidate = parent.join(&new_name);
-        if candidate.symlink_metadata().is_err() {
+        if !taken(&candidate) {
             return candidate;
         }
     }

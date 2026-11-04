@@ -137,3 +137,60 @@ fn vendor_keyframes_are_not_selectors() {
 fn split_selector_list_keeps_commas_inside_functions() {
     assert_eq!(split_selector_list(":is(.a, .b) p, .c"), vec![":is(.a, .b) p", ".c"]);
 }
+
+#[test]
+fn a_broad_listing_prefix_does_not_hide_a_dead_rule() {
+    let css = ".moss-folder-title .gone { x: 1 }\n.moss-grid-card { x: 1 }\n.moss-card-title .typo-gone { x: 1 }\n";
+    let found = unmatched(css, &[("index.html", PAGE)], None);
+    assert_eq!(found.len(), 3);
+    assert!(found.iter().all(|r| r.listing.is_empty()), "{found:?}");
+}
+
+#[test]
+fn a_listing_class_some_page_carries_is_not_missing() {
+    let page = "<html><body><h1 class=\"moss-folder-title\">x</h1></body></html>";
+    let found = unmatched(".moss-folder-title .moss-card-title { x: 1 }\n", &[("index.html", page)], None);
+    assert_eq!(found[0].listing, vec!["moss-card-title".to_string()]);
+}
+
+#[test]
+fn a_rule_on_a_listing_class_is_reported_apart_from_dead_rules() {
+    let css = ".moss-cards-container .moss-card-title { x: 1 }\n.gone { x: 1 }\n";
+    let found = unmatched(css, &[("index.html", PAGE)], None);
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].listing, vec!["moss-card-title".to_string(), "moss-cards-container".to_string()]);
+    assert!(found[1].listing.is_empty());
+}
+
+#[test]
+fn a_class_is_not_seen_because_an_attribute_has_its_name() {
+    let page = "<html><head><meta content=\"x\"></head><body></body></html>";
+    let found = unmatched(".moss-card .content { x: 1 }\n", &[("index.html", page)], None);
+    assert!(found[0].listing.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_listing_attribute_counts_like_a_listing_class() {
+    let found = unmatched(".moss-cards[data-layout=\"list\"] .moss-card-title { x: 1 }\n", &[("index.html", PAGE)], None);
+    assert_eq!(found[0].listing.len(), 3, "{found:?}");
+}
+
+#[test]
+fn a_name_inside_not_is_not_required() {
+    let found = unmatched(".moss-card:not(.featured) { x: 1 }\n", &[("index.html", PAGE)], None);
+    assert_eq!(found[0].listing, vec!["moss-card".to_string()]);
+}
+
+#[test]
+fn a_rule_for_the_empty_listing_is_reported_apart_on_a_day_it_has_entries() {
+    let page = "<html><body><h2>x</h2><div class=\"moss-cards-container\"></div></body></html>";
+    let found = unmatched("body h2:not(:has(+ .moss-cards-container)) { x: 1 }\n", &[("index.html", page)], None);
+    assert_eq!(found[0].listing, vec!["moss-cards-container".to_string()]);
+}
+
+#[test]
+fn a_listing_looking_name_in_a_plain_not_does_not_rescue_a_dead_rule() {
+    let page = "<html><body><div class=\"sidebar\"></div></body></html>";
+    let found = unmatched(".sidebar h2:not(.title) { x: 1 }\n", &[("index.html", page)], None);
+    assert!(found[0].listing.is_empty(), "{found:?}");
+}

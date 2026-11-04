@@ -76,13 +76,13 @@ const hoisted = vi.hoisted(() => {
 vi.mock("hls.js", () => ({ default: hoisted.FakeHls }));
 
 const { FakeHls } = hoisted;
-type Player = typeof import("../hls-player");
+type Player = typeof import("../video/hls-player");
 let player: Player;
 
 beforeEach(async () => {
   FakeHls.instances = [];
   vi.resetModules(); // the page-wide estimate is module state
-  player = await import("../hls-player");
+  player = await import("../video/hls-player");
 });
 
 function video(attrs: { preload?: string; autoplay?: boolean } = {}, duration = 8) {

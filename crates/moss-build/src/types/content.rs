@@ -219,7 +219,7 @@ pub struct MediaMetadata {
 ///
 /// Media files use MediaMetadata to include dimensions and dominant color
 /// for placeholder SVG generation during page load.
-#[derive(Serialize, Deserialize, Debug, Clone, Type)]
+#[derive(Serialize, Deserialize, Debug, Clone, Type, Default)]
 pub struct ProjectStructure {
     /// Absolute path to the scanned directory
     pub root_path: String,
@@ -323,6 +323,12 @@ pub struct ProjectStructure {
     #[serde(skip)]
     #[specta(skip)]
     pub empty_folders: Vec<String>,
+    /// Folders left out of `dirs` because they only store files
+    /// (`classify::holds_only_storage`), whose old listing addresses the
+    /// build forwards to the home page.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub storage_folders: Vec<String>,
 }
 
 /// User configuration for site generation and publishing.
@@ -587,21 +593,6 @@ impl SiteHashes {
     /// guaranteed normalized at compile time.
     pub fn insert_file_hash(&mut self, path: &crate::build::served_path::ServedPath, hash_entry: String) {
         self.files.insert(path.as_str().to_string(), hash_entry);
-    }
-
-    /// Insert an image-output marker (typed). Accepts `&ServedPath`.
-    pub fn insert_image_output(&mut self, path: &crate::build::served_path::ServedPath) {
-        self.image_outputs.insert(path.as_str().to_string());
-    }
-
-    /// Insert a video-output marker (typed).
-    pub fn insert_video_output(&mut self, path: &crate::build::served_path::ServedPath) {
-        self.video_outputs.insert(path.as_str().to_string());
-    }
-
-    /// Insert a notebook-output marker (typed).
-    pub fn insert_notebook_output(&mut self, path: &crate::build::served_path::ServedPath) {
-        self.notebook_outputs.insert(path.as_str().to_string());
     }
 
     /// Get changed files by comparing with previous hashes

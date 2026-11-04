@@ -415,11 +415,9 @@ impl BuildServices {
         Some(id)
     }
 
-    /// Read the parent Build Job's id without spawning one (Step 3 Phase 4, review
-    /// fix). Returns `Some` only when a real media child already minted the parent
-    /// via [`ensure_build_parent`](Self::ensure_build_parent). The post-join barrier
-    /// uses this to decide whether a parent needs terminalizing.
-    pub fn current_build_parent(&self) -> Option<crate::tasks::TaskId> {
+    /// The parent Build Job's id, read without spawning one.
+    #[cfg(test)]
+    pub(crate) fn current_build_parent(&self) -> Option<crate::tasks::TaskId> {
         *self
             .build_parent
             .lock()
@@ -743,6 +741,9 @@ mod tests {
     /// deterministically, on an ordering nothing declares.
     #[tokio::test]
     async fn headless_for_a_registered_folder_attaches_that_session() {
+        // Registering drains every other session in the process-global
+        // registry, which would unseat a seal test's vault running beside it.
+        let _serial = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         // The regression this guards: a headless build with no session takes
         // NO stage-write lock — not in the pipeline, not in the seal tail, not
         // in the watcher's admission probe — so `moss build --serve --watch`

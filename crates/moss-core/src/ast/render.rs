@@ -266,12 +266,13 @@ fn render_block<H: RenderHooks + ?Sized>(
             level,
             children,
             id,
+            legacy_id,
             contents_end,
             contents_label,
         } => {
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);
-            let marks = HeadingMarks { id: id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref() };
+            let marks = HeadingMarks { id: id.as_deref(), legacy_id: legacy_id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref() };
             hooks.render_heading(out, *level, marks, meta.source_line, &content);
             out.push('\n');
         }
@@ -452,22 +453,13 @@ fn render_block<H: RenderHooks + ?Sized>(
             }
         }
         Block::CodeBlock { lang, value } => {
-            // `tabindex`: a long line scrolls the block sideways, and only a
-            // focusable box can be scrolled from the keyboard — same as the
-            // table wrapper below.
-            out.push_str("<pre tabindex=\"0\"");
-            push_source_line_attr(out, meta.source_line);
-            out.push('>');
-            match lang {
-                Some(l) => {
-                    out.push_str(r#"<code class="language-"#);
-                    out.push_str(&escape_attr(l));
-                    out.push_str(r#"">"#);
-                }
-                None => out.push_str("<code>"),
+            if let Some(info) = lang.as_deref().filter(|l| super::visit::is_diagram_lang(l)) {
+                let mut code = String::new();
+                push_code_block(&mut code, lang.as_deref(), value, meta.source_line);
+                hooks.render_diagram(out, info, value, meta.source_line, &code);
+            } else {
+                push_code_block(out, lang.as_deref(), value, meta.source_line);
             }
-            out.push_str(&escape_text(value));
-            out.push_str("</code></pre>\n");
         }
         Block::Table {
             header,
@@ -979,6 +971,25 @@ fn render_inline<H: RenderHooks + ?Sized>(
             }
         }
     }
+}
+
+fn push_code_block(out: &mut String, lang: Option<&str>, value: &str, source_line: Option<usize>) {
+    // `tabindex`: a long line scrolls the block sideways, and only a
+    // focusable box can be scrolled from the keyboard, as a table's
+    // wrapper can.
+    out.push_str("<pre tabindex=\"0\"");
+    push_source_line_attr(out, source_line);
+    out.push('>');
+    match lang {
+        Some(l) => {
+            out.push_str(r#"<code class="language-"#);
+            out.push_str(&escape_attr(l));
+            out.push_str(r#"">"#);
+        }
+        None => out.push_str("<code>"),
+    }
+    out.push_str(&escape_text(value));
+    out.push_str("</code></pre>\n");
 }
 
 #[cfg(test)]

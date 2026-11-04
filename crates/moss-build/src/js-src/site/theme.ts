@@ -379,10 +379,10 @@ document.addEventListener("moss-morph-patched", initFontPanel);
 import { initImmersiveMode } from "./immersive-mode";
 initImmersiveMode();
 
-import { initCardVideos } from "./card-video";
+import { initCardVideos } from "./video/card-video";
 initCardVideos();
 
-import { initAmbientVideos } from "./ambient-video";
+import { initAmbientVideos } from "./video/ambient-video";
 initAmbientVideos();
 
 import { initSelectionActions } from "./selection-actions";

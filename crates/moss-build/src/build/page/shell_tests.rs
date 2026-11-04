@@ -2549,31 +2549,11 @@ fn process_preserves_cjk_and_double_brace_tokens_in_content() {
 }
 
 #[test]
-fn select_shell_type_never_returns_visual() {
-    let mut d = make_doc("gallery.html", false);
-    d.hero_html = Some("<section class=\"moss-hero\">x</section>".into());
-    d.html_content = String::new();
-    assert_eq!(
-        ShellRegistry::select_shell_type(Some(&d), false, true),
-        ShellType::Page
-    );
-}
-
-#[test]
 fn article_in_subfolder_uses_article_template() {
     let doc = make_doc("writings/hello/index.html", false);
     assert_eq!(
         ShellRegistry::select_shell_type(Some(&doc), false, true),
         ShellType::Article
-    );
-}
-
-#[test]
-fn root_level_doc_uses_page_template() {
-    let doc = make_doc("about.html", false);
-    assert_eq!(
-        ShellRegistry::select_shell_type(Some(&doc), false, true),
-        ShellType::Page
     );
 }
 
@@ -2674,11 +2654,6 @@ fn root_no_nav_organized_stays_article() {
     // organized mode keeps its existing Article layout (its url_path is
     // `about/index.html`, so the auto-detect leaves it Article) — content
     // essays/articles are NOT flipped to Page.
-    //
-    // NB: `root_level_doc_uses_page_template` above passes `"about.html"`
-    // (no `/`) to exercise the literal `!url_path.contains('/')` Page branch;
-    // production never emits that form (compute_url_path → `about/index.html`).
-    // Both are correct given the literal predicate.
     let doc = make_doc("about/index.html", false);
     assert_eq!(
         ShellRegistry::select_shell_type(Some(&doc), false, true),

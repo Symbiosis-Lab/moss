@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::vault::import::scrape::import_local::import_local_file;
 use crate::vault::import::scrape::run::{dropped_widgets, scrape_to_folder, PageGap, ScrapeProgress, ScrapeResult};
 use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
+use crate::vault::import::widgets::grouped_kinds;
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.
 pub fn run(args: &[String]) -> i32 {
@@ -112,6 +113,12 @@ pub fn run(args: &[String]) -> i32 {
                         res.unreachable_files
                     );
                 }
+                if res.left_by_redirect > 0 {
+                    eprintln!(
+                        "  ↳ {} link(s) left the site by redirect and were not imported",
+                        res.left_by_redirect
+                    );
+                }
                 if res.linked_files_downloaded > 0 {
                     eprintln!(
                         "  ↳ {} linked file(s) downloaded into assets/imported",
@@ -199,7 +206,7 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{}{}{})",
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{}{}{}{})",
         totals.pages,
         folder.display(),
         totals.failed_pages,
@@ -212,6 +219,11 @@ pub fn run(args: &[String]) -> i32 {
         },
         if totals.unreachable_files > 0 {
             format!(", {} linked file(s) unreachable", totals.unreachable_files)
+        } else {
+            String::new()
+        },
+        if totals.left_by_redirect > 0 {
+            format!(", {} link(s) left the site by redirect", totals.left_by_redirect)
         } else {
             String::new()
         },
@@ -251,7 +263,7 @@ fn widget_gap_lines(gaps: &[PageGap]) -> Vec<String> {
     let mut lines: Vec<String> = gaps
         .iter()
         .take(CAP)
-        .map(|g| format!("  ↳ {}: not carried: {}", g.page, g.kinds.join(", ")))
+        .map(|g| format!("  ↳ {}: not carried: {}", g.page, grouped_kinds(&g.kinds).join(", ")))
         .collect();
     if gaps.len() > CAP {
         lines.push(format!("  ↳ and {} more page(s) with widgets not carried", gaps.len() - CAP));
@@ -272,6 +284,7 @@ struct ImportTotals {
     duplicate_pages: usize,
     unreachable_variants: usize,
     unreachable_files: usize,
+    left_by_redirect: usize,
     linked_files_downloaded: usize,
     oversized_files: usize,
     widgets_carried: usize,
@@ -289,6 +302,7 @@ impl ImportTotals {
         self.duplicate_pages += res.duplicate_pages;
         self.unreachable_variants += res.unreachable_variants;
         self.unreachable_files += res.unreachable_files;
+        self.left_by_redirect += res.left_by_redirect;
         self.linked_files_downloaded += res.linked_files_downloaded;
         self.oversized_files += res.oversized_files;
         self.widgets_carried += res.widgets_carried;
@@ -643,5 +657,12 @@ mod tests {
         assert_eq!(lines[0], "  ↳ /p0/: not carried: contact form");
         assert_eq!(lines[19], "  ↳ /p19/: not carried: contact form");
         assert_eq!(lines[20], "  ↳ and 5 more page(s) with widgets not carried");
+    }
+
+    #[test]
+    fn widget_gap_lines_fold_a_repeated_kind_with_its_count() {
+        let kinds = vec!["script widget demo-row".into(), "script widget demo-row".into(), "script widget demo-row".into(), "script widget donate-widget".into()];
+        let gaps = vec![PageGap { page: "/".into(), kinds }];
+        assert_eq!(widget_gap_lines(&gaps), ["  ↳ /: not carried: script widget demo-row (×3), script widget donate-widget"]);
     }
 }

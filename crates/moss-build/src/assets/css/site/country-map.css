@@ -1,0 +1,76 @@
+/* moss site stylesheet partial: country-map
+   Shipped only when some page is a country map. The colour tokens are escape
+   hatches read with a light fallback here and a dark one under
+   [data-theme="dark"]; a site sets `--moss-country-*` on :root to change either
+   theme. Level i of n (at most seven) runs along one warm hue from the low fill to the high fill in OKLCH: light to dark on the light theme, dark to light on the dark one; the
+   build writes each level's share as `--moss-country-share-<i>` on the figure,
+   and `--moss-country-fill-<i>` overrides one step. */
+
+@layer shortcodes {
+
+.moss-country-map {
+  --moss-country-land-now: var(--moss-country-land, #e3dfd6);
+  --moss-country-low-now: var(--moss-country-fill-low, #b85c22);
+  --moss-country-high-now: var(--moss-country-fill-high, #2b0e07);
+  --moss-country-graticule-now: var(--moss-country-graticule, #d2cdc2);
+  --moss-country-chosen-now: var(--moss-country-chosen, #1c1a17);
+  margin: var(--moss-space-lg, 2rem) 0;
+  inline-size: 100%;
+}
+[data-theme="dark"] .moss-country-map {
+  --moss-country-land-now: var(--moss-country-land, #22262a);
+  --moss-country-low-now: var(--moss-country-fill-low, #a2602f);
+  --moss-country-high-now: var(--moss-country-fill-high, #fff6e8);
+  --moss-country-graticule-now: var(--moss-country-graticule, #33383d);
+  --moss-country-chosen-now: var(--moss-country-chosen, #f4f1ea);
+}
+
+/* Each level's share of the ramp is set inline on the map, one per level it draws:
+   allow:runtime-token --moss-country-share-1 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-2 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-3 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-4 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-5 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-6 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-7 set inline by country_map/render.rs
+*/
+.moss-country-map [data-level="1"] { --level: var(--moss-country-fill-1, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-1), var(--moss-country-low-now))); }
+.moss-country-map [data-level="2"] { --level: var(--moss-country-fill-2, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-2), var(--moss-country-low-now))); }
+.moss-country-map [data-level="3"] { --level: var(--moss-country-fill-3, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-3), var(--moss-country-low-now))); }
+.moss-country-map [data-level="4"] { --level: var(--moss-country-fill-4, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-4), var(--moss-country-low-now))); }
+.moss-country-map [data-level="5"] { --level: var(--moss-country-fill-5, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-5), var(--moss-country-low-now))); }
+.moss-country-map [data-level="6"] { --level: var(--moss-country-fill-6, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-6), var(--moss-country-low-now))); }
+.moss-country-map [data-level="7"] { --level: var(--moss-country-fill-7, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-7), var(--moss-country-low-now))); }
+
+.moss-country-map svg { display: block; inline-size: 100%; block-size: auto; writing-mode: horizontal-tb; }
+.moss-country-graticule { fill: none; stroke: var(--moss-country-graticule-now); stroke-width: 0.5; }
+/* A hairline in each shape's own fill hides the seam antialiasing leaves between neighbours; it is not a border, and no two fills differ across it. */
+.moss-country-land path { fill: var(--moss-country-land-now); stroke: var(--moss-country-land-now); stroke-width: 0.4; stroke-linejoin: round; }
+.moss-country-land .moss-country { cursor: pointer; }
+.moss-country-land .moss-country[data-level] { fill: var(--level); stroke: var(--level); }
+.moss-country-land .moss-country.is-chosen { stroke: var(--moss-country-chosen-now); stroke-width: 1.5; stroke-linejoin: round; }
+
+.moss-country-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; margin: var(--moss-space-sm, 0.75rem) 0 0; padding: 0; list-style: none; font-size: var(--moss-size-sm, 0.875rem); }
+.moss-country-legend li { display: flex; align-items: center; gap: 0.4rem; }
+.moss-country-swatch { display: inline-block; inline-size: 0.9em; block-size: 0.9em; border-radius: 2px; background: var(--moss-country-land-now); flex: none; }
+.moss-country-swatch[data-level] { background: var(--level); }
+.moss-country-stamp { margin: var(--moss-space-xs, 0.5rem) 0 0; font-size: var(--moss-size-xs, 0.8125rem); color: var(--moss-color-text-secondary); }
+
+.moss-country-panel { margin-block-start: var(--moss-space-sm, 0.75rem); padding: var(--moss-space-sm, 0.75rem) var(--moss-space-md, 1rem); border: 1px solid var(--moss-border-light); border-radius: 8px; background: var(--moss-color-surface); }
+.moss-country-panel[hidden] { display: none; }
+.moss-country-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.moss-country-panel-name { margin: 0; font-size: var(--moss-size-lg, 1.125rem); font-weight: 600; }
+.moss-country-panel-close { min-inline-size: 2.75rem; min-block-size: 2.75rem; margin: -0.5rem -0.5rem 0 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.moss-country-panel-level { display: flex; align-items: center; gap: 0.4rem; margin: 0.25rem 0 0; }
+.moss-country-panel p { margin-block: 0.5rem 0; }
+.moss-country-panel dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0 0; }
+.moss-country-panel dt { color: var(--moss-color-text-secondary); }
+.moss-country-panel dd { margin: 0; }
+
+.moss-country-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--moss-space-md, 1rem); margin-block-start: var(--moss-space-md, 1rem); }
+.moss-country-group-title { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.25rem; font-weight: 600; }
+.moss-country-group ul { margin: 0; padding: 0; list-style: none; }
+.moss-country-group li { padding-block: 0.15rem; }
+.moss-country-group li:target { background: color-mix(in srgb, var(--moss-color-accent) 14%, transparent); border-radius: 4px; }
+
+}

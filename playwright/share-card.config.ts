@@ -16,7 +16,7 @@
  * Because this is the first gate whose subject is a site script rather than a
  * stylesheet, editing anything under `crates/moss-build/src/js-src/site/`
  * needs `node scripts/build-backend-scripts.mjs` before the gate sees it —
- * that is what writes `crates/moss-build/src/assets/js/share-card.js`, which
+ * that is what writes `crates/moss-build/src/assets/js/share-card/share-card.js`, which
  * a dev moss reads off disk. No `cargo build` is needed for a script-only
  * change, and no stamp to delete by hand: the scratch-site stamp hashes those
  * scripts, so a rebuilt bundle invalidates the cached site on its own.

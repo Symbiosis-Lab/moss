@@ -32,6 +32,21 @@ pub(crate) fn is_language_root(url_path: &str) -> bool {
     }
 }
 
+/// The edition home a `children:` reference names by its file stem
+/// (`[[Field Notes]]` for the root home, `[[Notes]]` for `en/Notes.md`), if any.
+/// Such a listing means what that home's own listing means: its tree, with its
+/// edition scoping (`folder_embed::home_defaults`).
+pub(crate) fn named_edition_home<'a>(reference: &str, docs: &'a [crate::build::types::ParsedDocument]) -> Option<&'a crate::build::types::ParsedDocument> {
+    let stem = crate::build::markdown::frontmatter_ref_to_stem(reference);
+    docs.iter().find(|d| {
+        is_language_root(&d.url_path)
+            && d.source_path
+                .as_deref()
+                .and_then(|p| std::path::Path::new(p).file_stem()?.to_str())
+                .is_some_and(|s| s.eq_ignore_ascii_case(&stem))
+    })
+}
+
 /// Give every document that declared no language of its own the SITE's tag,
 /// before anything reads `lang_tag`.
 ///

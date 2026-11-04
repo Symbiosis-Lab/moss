@@ -310,6 +310,12 @@ pub enum MossEvent {
     /// `paths` are project-root-relative, forward-slash, NO leading slash (the
     /// `path_to_relative_key` domain — NOT the leading-slash moss-source:// domain).
     RawFileCreated { paths: Vec<String> },
+    /// The editor saved the person's text over lines another writer had
+    /// changed, and kept that writer's whole page first as `version_id` in the
+    /// site's history (`moss history <page> --restore --at <version_id>`
+    /// brings it back). `path` is the page's path inside the site. Sent so an
+    /// agent that wrote the page learns its edit is no longer in the file.
+    OutsideEditKept { path: String, version_id: String },
     /// Onboarding T9: ask the app shell (main webview) to open the plugin
     /// catalog filtered to importers. Produced by the editor webview's
     /// "Plugin" card; consumed by `app.ts`'s `onMossEvent("OpenPluginsView", …)`

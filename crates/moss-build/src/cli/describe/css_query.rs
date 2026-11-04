@@ -110,6 +110,7 @@ fn shipping_note(sheet: &str) -> &'static str {
     match sheet {
         "site.css" => "always shipped",
         "site/callouts.css" => "shipped only when some page has a callout",
+        "site/forms.css" => "shipped only when some page has a :::form",
         "site/search.css" => "shipped only when [site].search is on (off by default)",
         "site/sidenotes.css" => {
             "shipped only when some page defines a footnote; the rules themselves \
@@ -120,8 +121,10 @@ fn shipping_note(sheet: &str) -> &'static str {
         "site/places-explorer.css" => {
             "shipped only when the site has a place-typed namespace root with the explorer on"
         }
+        "site/country-map.css" => "shipped only when some page is a country map (`country_map:` in its frontmatter)",
         "site/colophon-credit.css" => "shipped only when [site].credit is set and the colophon is on",
         "site/map-layers.css" => "shipped only when the site declares [map.layers]",
+        "site/diagrams.css" => "shipped only when some page has a mermaid diagram",
         "comments.css" => "linked only when the site has synced comments",
         "email.css" => {
             "linked only when the email channel is installed or a page has :::subscribe"

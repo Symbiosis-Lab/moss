@@ -5,7 +5,7 @@
 //! This is data only. Nothing in this crate places a label on a rendered
 //! map: `emit::place_map_labels` turns [`Labels`] into `labels.<hash>.json`
 //! for the site's own published language(s), and the places-explorer's own
-//! `labels.ts` (`crates/moss-build/src/js-src/site/places-explorer/`) is
+//! `labels.ts` (`crates/moss-build/src/js-src/site/maps/places-explorer/`) is
 //! what reads that JSON client-side to actually place one.
 //!
 //! The wire format is produced by `scripts/place-map/generate.mjs`'s

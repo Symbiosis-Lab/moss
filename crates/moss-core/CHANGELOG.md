@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-03
+
+### Changed
+
+- **BREAKING:** `DefaultHooks::hero_overlay` and `DefaultHooks::grid_cells` are one constructor, `DefaultHooks::without_heading_anchors`. The two built the same hooks; call the new name with the same argument.
+- **BREAKING:** `describe::DescribePayload` gains `config_tables`; a struct literal must name it.
+- **BREAKING:** `Block::Heading` gains `legacy_id: Option<String>`, a second id the heading answers, and `HeadingMarks` gains `legacy_id`; the renderer prints it as an empty `<span id>` first inside the heading. A struct literal must name it. For a derived id it is the id before punctuation was dropped; for a `{#id}` it is that id's slugged spelling.
+- `obsidian_heading_anchor` keeps only letters, digits, `_`, combining marks and the hyphens between words, as GitHub does, and returns `section` for a heading of punctuation only. Before, it kept punctuation such as `,`, `.`, `:` and `?`.
+- A paragraph of two or more pictures and nothing else, at a document's top level or in a grid cell, parses as `Shortcode::Gallery` with `rows: true`. The fenced `:::gallery` reads a wikilink picture's `|` text with `media::read_image_words`, so it becomes the alt.
+- **BREAKING:** `FieldDefinition` gains `applies_when: Option<Vec<AppliesWhen>>` and `BuiltinField` gains `applies_when: Option<&'static [When]>`; a struct literal must name them. The built-in `listed` and `children_depth` no longer name a default, since an absent `listed` means listed and the home lists all descendants, not only direct ones.
+- **BREAKING:** `Shortcode` gains `Form(ast::extract_form::FormShortcode)` and `ShortcodeKind` gains `Form`, the `:::form` request form written as a list; an exhaustive match must name them. The shortcode contract lists `form` with its `next` and `button` attributes.
+- **BREAKING:** `fields::FieldDecl` gains `card: bool` (a declared field with `card = true` is drawn on listing cards); a struct literal must name it or use `..Default::default()`.
+- **BREAKING:** `FrontMatter` gains `country_map: Option<serde_json::Value>`, the `country_map` table carried as written; a struct literal must name it or use `..Default::default()`. The built-in field table lists `country_map`.
+- **BREAKING:** The `link_candidates` module and its `link_candidates` function are removed; nothing called them.
+- The pending-form marker in the component contract is `data-moss-pending`, renamed from `data-moss-pending-site`, and is shared by subscribe and request forms. A theme that styled the old attribute must follow the rename.
+- `children_style` accepts `lead`, a summary listing whose first item leads; the listing contract carries `data-lead`.
+- `children_more` accepts `none`, which draws no More link.
+- `date` accepts an unquoted bare year.
+- The built-in `children_group` and `children_depth` no longer name defaults the build does not use; their descriptions say what an unset value does.
+- The breadcrumb separator in the component contract carries `aria-hidden="true"`.
+
+### Added
+
+- `media::html_escape_attr`, `media::html_escape_text` and `media::xml_escape` beside `media::html_escape`: one escaper per meaning (attribute without the apostrophe, element text, XML with `&apos;`). `resolve::embed_renderer::html_escape_attr` is now a re-export of the first.
+- `ast::link_card::blocks_text` and `push_inlines_text` are public, so every renderer of a link card reads its title text the same way.
+- `contract::describe::ConfigTableInfo` and `DescribePayload::with_config_tables` carry `.moss/config.toml` tables beyond `[site]` in `moss describe --json`, under `config_tables`; today only `[redirects]`.
+- `content_width` accepts `screen`.
+- `AppliesWhen` and `PagePosition`: where a schema field can change a page, as `{"position": "page" | "folder" | "home"}` or `{"set": "<other field>"}`, any one of which is enough. The built-in table sets it on the fields that do nothing elsewhere: `sort`, `cascade` and `color` on a folder index or the home, `logo` on the home, the event fields once `start` is set, the listing fields where a listing draws. An editor can leave such a field out of its add list.
+- Component contract entry `moss-lang-mark`, the language name a listing row carries when its page is in another language than the listing.
+- `RenderHooks::render_diagram(out, info, source, source_line, fallback_html)`: a fenced block whose info string's first word is `mermaid` renders through it. The default emits `fallback_html`, the same code block as before, so output is unchanged unless a host overrides it. `ast::has_diagram_recursive` answers whether a document has one, nested blocks included, and `ast::is_diagram_lang` whether an info string asks for one.
+- `ast::extract_form`: `FormShortcode`, `FormField`, `FieldKind` and `parse_form(args, body)`, which reads a `:::form` fence into fields and returns the problems it found. `ast::forms_recursive` lists a document's forms, nested ones included.
+- `RenderHooks::request_form_html`, the production HTML for a `:::form` when the host supplies one (by default `None`, and `render_shortcode` emits an empty `.moss-form`), and `DefaultHooks::with_request_form(RequestFormFn)` for a host that draws the form.
+- Component contract entries for the request form's classes, the country map's classes and its `--moss-country-*` custom properties, and `moss-card-field`; `moss-credit` and `moss-facts` rows carry `data-term` and `data-value`.
+- `frontmatter::bom_len`, the length of a leading byte-order mark. A page with a byte-order mark and no front matter no longer starts with it.
+
 ## [0.21.0] - 2026-10-30
 
 ### Changed

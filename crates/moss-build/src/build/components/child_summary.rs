@@ -122,16 +122,20 @@ pub fn render_with_sort(
     // clickable now that the outer card is a `<div>`, not an `<a>`);
     // bare `<h3>` for ordinary cards (outer card-anchor handles the
     // click target).
+    let row_lang = child_list::lang_attr(props.lang.as_ref());
+    let row_mark = child_list::lang_mark(props.lang.as_ref());
     let title_html = if is_linkblog {
         format!(
-            r#"<a class="moss-card-title-link" href="{}"><h3 class="moss-card-title">{}</h3></a>"#,
+            r#"<a class="moss-card-title-link" href="{}"><h3 class="moss-card-title"{}>{}{}</h3></a>"#,
             html_escape(&props.url),
+            row_lang,
             html_escape(&props.title),
+            row_mark,
         )
     } else if let Some(links) = &event_links {
-        format!(r#"<h3 class="moss-card-title">{}</h3>"#, links.title)
+        format!(r#"<h3 class="moss-card-title"{}>{}{}</h3>"#, row_lang, links.title, row_mark)
     } else {
-        format!(r#"<h3 class="moss-card-title">{}</h3>"#, html_escape(&props.title))
+        format!(r#"<h3 class="moss-card-title"{}>{}{}</h3>"#, row_lang, html_escape(&props.title), row_mark)
     };
 
     // Kicker, meta, title, in block flow directly inside `.moss-card-body`
@@ -147,7 +151,7 @@ pub fn render_with_sort(
     // Description: wrapped in an anchor for linkblog cards so it
     // remains a click target now that the outer is `<div>`.
     if let Some(ref desc) = props.description {
-        let desc_inner = format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(desc));
+        let desc_inner = format!(r#"<p class="moss-card-description"{}>{}</p>"#, row_lang, render_description_html_in_link(desc));
         if is_linkblog {
             body.push_str(&format!(
                 r#"<a class="moss-card-description-link" href="{}">{}</a>"#,

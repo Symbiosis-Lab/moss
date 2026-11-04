@@ -235,27 +235,6 @@ fn mask_code_regions(text: &str) -> String {
     moss_core::inert_regions::mask_inert(text)
 }
 
-use moss_core::inert_regions::VOID_ELEMENTS;
-
-/// Fix self-closing non-void HTML tags.
-///
-/// Converts `<tag .../>` to `<tag ...></tag>` for any tag NOT in the
-/// HTML5 void elements list. Browsers treat self-closing non-void tags
-/// as unclosed, swallowing subsequent content into the element.
-pub fn fix_self_closing_non_void_tags(html: &str) -> String {
-    use regex::Regex;
-    let re = Regex::new(r"(?i)<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*?)\s*/\s*>").unwrap();
-    re.replace_all(html, |caps: &regex::Captures| {
-        let tag = caps[1].to_lowercase();
-        if VOID_ELEMENTS.contains(&tag.as_str()) {
-            caps[0].to_string()
-        } else {
-            format!("<{}{}></{}>", &caps[1], &caps[2], &caps[1])
-        }
-    })
-    .to_string()
-}
-
 /// Decodes the common HTML entities (`&lt;`, `&gt;`, `&quot;`, `&#39;`,
 /// `&nbsp;` as U+00A0, `&amp;`) in one pass. `&amp;` goes last: decoding it
 /// first would turn `&amp;lt;` into `<` rather than the text `&lt;`. The one
@@ -324,7 +303,7 @@ pub fn strip_html_tags(html: &str) -> String {
 /// Injection is article-only, and the `moss-article-title` class is a stable
 /// contract.
 pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool, visually_hidden: bool) -> String {
-    let escaped = html_escape(title);
+    let escaped = moss_core::media::html_escape(title);
     let escaped = moss_core::heading::range::keep_ranges_together(&escaped);
     let fm_attr = if emit_source_lines { r#" data-source-fm="title""# } else { "" };
     let class = if visually_hidden { "moss-article-title visually-hidden" } else { "moss-article-title" };
@@ -363,8 +342,8 @@ pub(crate) fn prepend_parent_label(
     if split_leading_eyebrow(content).1.starts_with("<h1 class=\"moss-article-title\"") {
         let link = format!(
             "<a class=\"moss-parent-label\" href=\"{}\">{}</a>\n",
-            html_escape(&parent.url),
-            html_escape(&parent.title),
+            moss_core::media::html_escape(&parent.url),
+            moss_core::media::html_escape(&parent.title),
         );
         content.insert_str(0, &link);
     }
@@ -407,7 +386,7 @@ pub(crate) fn prepend_parent_label(
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
 /// rendered above `<main>`. That is where a byline belongs on a page whose
 /// title is a photograph. This mirrors the same anchored test in
-/// `credits::splice_byline_at_page_head`, so moss has one rule for it.
+/// `credits::splice_page_masthead`, so moss has one rule for it.
 pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> String {
     if fragment.is_empty() {
         return html_body.to_string();
@@ -462,23 +441,6 @@ fn split_cover_body_prefix(html_body: &str) -> (&str, &str) {
     } else {
         ("", html_body)
     }
-}
-
-/// Minimal HTML text-content escaper for the five characters that change
-/// document structure or trigger entity parsing.
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 
@@ -1411,55 +1373,6 @@ mod tests {
     #[test]
     fn test_strip_html_tags_trims_whitespace() {
         assert_eq!(strip_html_tags("  <p>  Hello  </p>  "), "Hello");
-    }
-
-    // ── fix_self_closing_non_void_tags tests ─────────────────────────
-
-    #[test]
-    fn test_fix_self_closing_non_void_iframe() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<iframe src="./app/"/>"#),
-            r#"<iframe src="./app/"></iframe>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_non_void_video() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<video src="./video.mp4"/>"#),
-            r#"<video src="./video.mp4"></video>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_void_elements_unchanged() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<img src="./img.jpg"/>"#),
-            r#"<img src="./img.jpg"/>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_already_closed_unchanged() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<iframe src="./app/"></iframe>"#),
-            r#"<iframe src="./app/"></iframe>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_with_spaces() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<iframe src="./app/" />"#),
-            r#"<iframe src="./app/"></iframe>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_mixed_content() {
-        let input = r#"<img src="./img.jpg"/><iframe src="./app/"/>"#;
-        let expected = r#"<img src="./img.jpg"/><iframe src="./app/"></iframe>"#;
-        assert_eq!(fix_self_closing_non_void_tags(input), expected);
     }
 
     // ── adjust_relative_paths tests ───────────────────────────────────

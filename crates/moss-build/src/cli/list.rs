@@ -177,6 +177,18 @@ pub(crate) fn json_error(message: &str) -> String {
         .unwrap_or_else(|_| format!("{{\"error\": {message:?}}}"))
 }
 
+/// Report a CLI failure and return exit code 1: `{"error": ...}` on stdout
+/// under `--json`, so a script reading the JSON always gets valid JSON, else
+/// a line on stderr.
+pub(crate) fn fail(message: &str, json: bool) -> i32 {
+    if json {
+        println!("{}", json_error(message));
+    } else {
+        eprintln!("error: {message}");
+    }
+    1
+}
+
 fn usage() -> &'static str {
     "Usage: moss list [<folder>] [--json]\n  \
      Prints every document the last build parsed: its source file, the URL it\n  \
@@ -332,6 +344,9 @@ mod tests {
             slot_only: hidden.contains(&"slot"),
             hidden: hidden.iter().map(|s| s.to_string()).collect(),
             lang: "zh-Hant".to_string(),
+            resolved: Default::default(),
+            translations: Vec::new(),
+            position: None,
         }
     }
 

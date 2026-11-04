@@ -1,0 +1,10 @@
+classDiagram
+  class Page {
+    +String title
+    +render() Html
+  }
+  class Site {
+    +List~Page~ pages
+    +build()
+  }
+  Site "1" o-- "*" Page : contains

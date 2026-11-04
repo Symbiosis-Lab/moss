@@ -537,11 +537,8 @@ fn is_unsafe_fetch_target(url: &str) -> bool {
 /// Fetch (or serve from a fresh cache) one URL's link metadata. Cache TTL:
 /// 7 days.
 ///
-/// The two callers — [`fetch_all_link_meta_parallel`] (10s per request,
-/// [`FETCH_BUDGET`] total) and [`fetch_new_link_meta_for_build`]
-/// ([`BUILD_FETCH_PER_REQUEST_TIMEOUT`], [`BUILD_FETCH_BUDGET`] total) —
-/// both go through [`fetch_all_link_meta_parallel_bounded`]'s worker pool,
-/// so this function itself takes the timeout as a parameter rather than
+/// Its caller is [`fetch_all_link_meta_parallel_bounded`]'s worker pool,
+/// which hands it the per-request timeout rather than this function
 /// picking one.
 ///
 /// # Visibility
@@ -549,7 +546,7 @@ fn is_unsafe_fetch_target(url: &str) -> bool {
 /// **`private` only — do not widen.** This function does blocking network
 /// I/O (ureq's connect timeout is unreliable and can stall well past the
 /// timeout given). Calling it from the build's render path freezes the
-/// pipeline; both real callers run it on a background thread pool instead.
+/// pipeline; it runs only on the worker pool below.
 fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::Duration) -> LinkMeta {
     // 1. Check fresh cache
     if let Some(cached) = read_fresh_cache(moss_dir, url) {
@@ -703,7 +700,7 @@ fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
     })
 }
 
-/// Number of concurrent in-flight fetches for parallel prewarm.
+/// Number of concurrent in-flight fetches in a parallel fetch.
 ///
 /// 8 is the sweet spot: high enough that ~30 typical URLs finish in roughly
 /// one slow-host's worth of wall time, low enough that we don't open more
@@ -713,7 +710,7 @@ fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
 /// throughput.
 const FETCH_CONCURRENCY: usize = 8;
 
-/// Total wall-time budget for the parallel prewarm. Workers stop pulling new
+/// Total wall-time budget for a parallel fetch. Workers stop pulling new
 /// URLs from the queue once the budget is exceeded; in-flight requests are
 /// not interrupted (ureq lacks a cooperative cancel API), but the queue
 /// drains quickly past that point. Bounds worst-case CLI hang on a long URL
@@ -724,29 +721,22 @@ const FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 /// Fetch metadata for multiple URLs in parallel. Skips URLs whose cache is
 /// already fresh, so calling this repeatedly is cheap (no network). Returns
 /// the count of URLs that were actually fetched (i.e. cold or stale entries).
+/// `on_cold` hears how many need the network, before any request, so a
+/// caller can say why it is waiting.
 ///
-/// Used by the CLI build path to warm the cache *before* render — see
-/// [`prewarm_link_meta_for_build`]. Render then reads from a warm cache.
+/// Callers: a build that exits when done, before its render (so the render
+/// reads a warm cache), and the app's background sync.
 ///
 /// # Visibility
 ///
 /// **`pub(crate)` only — do not widen.** Same blocking-I/O constraint as
 /// `fetch_link_meta_with_timeout`.
-pub(crate) fn fetch_all_link_meta_parallel(urls: &[&str], moss_dir: &Path) -> usize {
-    fetch_all_link_meta_parallel_bounded(
-        urls,
-        moss_dir,
-        FETCH_BUDGET,
-        std::time::Duration::from_secs(10),
-        "prewarm",
-    )
+pub(crate) fn fetch_all_link_meta_parallel(urls: &[&str], moss_dir: &Path, on_cold: impl FnOnce(usize)) -> usize {
+    fetch_all_link_meta_parallel_bounded(urls, moss_dir, FETCH_BUDGET, std::time::Duration::from_secs(10), on_cold)
 }
 
-/// Shared worker pool behind both [`fetch_all_link_meta_parallel`] (the
-/// next-build prewarm, generous budget) and
-/// [`fetch_new_link_meta_for_build`] (this build's own short-budget fetch).
-/// `log_label` names the caller in the budget-exceeded warning, so a log
-/// line can tell which pass ran out of time.
+/// The worker pool behind [`fetch_all_link_meta_parallel`], with the budget
+/// and per-request timeout as parameters so tests can shrink them.
 /// Enforces `budget` in the ORCHESTRATOR, not per request. A prior version
 /// of this function used `std::thread::scope`, which JOINS every worker
 /// before returning — so a single stuck fetch (ureq's own timeout is
@@ -773,7 +763,7 @@ fn fetch_all_link_meta_parallel_bounded(
     moss_dir: &Path,
     budget: std::time::Duration,
     per_request_timeout: std::time::Duration,
-    log_label: &'static str,
+    on_cold: impl FnOnce(usize),
 ) -> usize {
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Instant;
@@ -788,6 +778,7 @@ fn fetch_all_link_meta_parallel_bounded(
     if cold.is_empty() {
         return 0;
     }
+    on_cold(cold.len());
 
     let queue = Arc::new(Mutex::new(cold.clone().into_iter()));
     let moss_dir_owned = moss_dir.to_path_buf();
@@ -843,97 +834,12 @@ fn fetch_all_link_meta_parallel_bounded(
 
     if completed < cold.len() {
         crate::build::cli_output::log_note!(
-            "{log_label} budget ({:?}) exceeded: {} of {} cold URLs fetched before the deadline; \
+            "link-meta fetch budget ({:?}) exceeded: {} of {} cold URLs fetched before the deadline; \
              stragglers keep running and may still warm the cache for a later reader, but this build won't wait on them",
             budget, completed, cold.len()
         );
     }
     completed
-}
-
-/// Total wall-time budget for THIS build's own link-metadata fetch — the
-/// short pass that runs before render so a card can be complete on the
-/// very build that introduces its link, rather than waiting for the next
-/// build's prewarm to catch up. Deliberately much shorter than
-/// [`FETCH_BUDGET`] (60s): this one is on the critical path of every
-/// build, prewarm is a best-effort catch-up for URLs already known from a
-/// previous build's `.urls.json`.
-pub(crate) const BUILD_FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// Per-request timeout for the build-time fetch. Shorter than the prewarm
-/// path's 10s: on a 3s total budget, one slow host must not be allowed to
-/// spend the whole thing.
-const BUILD_FETCH_PER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
-
-/// Fetch metadata for external grid-cell links this build's own pages
-/// introduce, before render — so a card is complete on its first build
-/// instead of showing the no-metadata form until the next one. `urls` is
-/// this build's candidate set (gathered from the already-parsed documents;
-/// see `build::render::grid_cells`); a URL with no fresh cache entry is
-/// fetched, under [`BUILD_FETCH_BUDGET`] total and
-/// [`BUILD_FETCH_PER_REQUEST_TIMEOUT`] per request.
-///
-/// A URL the budget doesn't reach, or that fails/times out, is left cold —
-/// its card renders in the no-metadata form, and `record_urls_for_prewarm`
-/// (called by render as usual) still records it, so the *next* build's
-/// prewarm picks it up exactly as it always has. This function only closes
-/// the one-build lag for the common case (a fast, reachable host); it
-/// never removes the fallback.
-///
-/// # Visibility
-///
-/// **`pub(crate)` only — do not widen.** Same blocking-I/O constraint as
-/// `fetch_link_meta_with_timeout`.
-pub(crate) fn fetch_new_link_meta_for_build(urls: &[&str], moss_dir: &Path) -> usize {
-    fetch_all_link_meta_parallel_bounded(
-        urls,
-        moss_dir,
-        BUILD_FETCH_BUDGET,
-        BUILD_FETCH_PER_REQUEST_TIMEOUT,
-        "build-time link-meta fetch",
-    )
-}
-
-/// Synchronously prewarm the link-meta cache for the persisted URL list,
-/// blocking until all stale or cold entries have been (re)fetched.
-///
-/// Intended for the CLI/headless build path, where the process exits soon
-/// after render and there's no long-lived runtime to host
-/// [`crate::build::features::sync::spawn_native_process_sync`]'s background
-/// task. Calling this *before* render means render reads a warm cache.
-///
-/// First-ever build for a folder is always cold: `.urls.json` doesn't exist
-/// yet, so this returns `0`. The build runs cold, render records URLs, the
-/// next CLI invocation finds `.urls.json` and prewarms successfully.
-///
-/// # Returns
-/// `(urls_seen, urls_fetched)`. `urls_seen` is the size of `.urls.json`;
-/// `urls_fetched` is the number of cold/stale entries we actually hit the
-/// network for. Difference = entries served from fresh cache.
-pub(crate) fn prewarm_link_meta_for_build(moss_dir: &Path) -> (usize, usize) {
-    prewarm_link_meta_for_build_with_progress(moss_dir, |_| {})
-}
-
-/// Same as [`prewarm_link_meta_for_build`], but invokes `on_cold_count`
-/// with the number of cold/stale URLs *before* the network phase begins.
-/// The callback fires once and only when the URL list is non-empty; callers
-/// use it to print progress before a potentially slow network round-trip.
-pub(crate) fn prewarm_link_meta_for_build_with_progress(
-    moss_dir: &Path,
-    on_cold_count: impl FnOnce(usize),
-) -> (usize, usize) {
-    let urls = load_persisted_url_list(moss_dir);
-    if urls.is_empty() {
-        return (0, 0);
-    }
-    let cold_count = urls
-        .iter()
-        .filter(|u| read_fresh_cache(moss_dir, u).is_none())
-        .count();
-    on_cold_count(cold_count);
-    let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-    let fetched = fetch_all_link_meta_parallel(&url_refs, moss_dir);
-    (urls.len(), fetched)
 }
 
 // ---------------------------------------------------------------------------
@@ -1111,7 +1017,7 @@ pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path) -> HashMap<Stri
         // next build will render with full metadata.
         log::info!(
             target: "link-meta",
-            "{} URL(s) not yet in cache (will appear on next build after background prewarm)",
+            "{} URL(s) not yet in cache (a later build shows them once they are fetched)",
             missing
         );
     }
@@ -1732,9 +1638,8 @@ mod tests {
         write_cache(moss_dir, &meta);
     }
 
-    /// Helper: write a STALE (8 days old) cache entry. Stale entries should
-    /// be re-fetched by prewarm; we use this to verify staleness detection
-    /// in `prewarm_link_meta_for_build` without triggering real network.
+    /// Helper: write a STALE (8 days old) cache entry, which a fetch must
+    /// treat as cold.
     fn seed_stale_cache(moss_dir: &Path, url: &str, title: &str) {
         // 8 days ago in ISO 8601. We synthesize the timestamp by hand to
         // avoid pulling chrono into the test path.
@@ -1765,53 +1670,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prewarm_returns_zero_when_no_url_list() {
-        let tmp = std::env::temp_dir().join(format!(
-            "moss_prewarm_no_list_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        // First-ever build for a folder: no `.urls.json` exists yet. Prewarm
-        // must return (0, 0) without attempting any network I/O.
-        let (seen, fetched) = prewarm_link_meta_for_build(&tmp);
-        assert_eq!(seen, 0);
-        assert_eq!(fetched, 0);
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn test_prewarm_skips_fresh_cache() {
-        let tmp = std::env::temp_dir().join(format!(
-            "moss_prewarm_fresh_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        // Seed two fresh cache entries and persist their URLs as if a previous
-        // build had recorded them.
-        seed_fresh_cache(&tmp, "https://a.example.test/", "A");
-        seed_fresh_cache(&tmp, "https://b.example.test/", "B");
-        let urls = vec![
-            "https://a.example.test/".to_string(),
-            "https://b.example.test/".to_string(),
-        ];
-        write_url_list_atomic(&tmp, &urls);
-
-        // Both URLs are fresh — prewarm should hit zero network and return
-        // (2 seen, 0 fetched). This is the steady-state hot path: idempotent,
-        // cheap re-runs.
-        let (seen, fetched) = prewarm_link_meta_for_build(&tmp);
-        assert_eq!(seen, 2);
-        assert_eq!(fetched, 0);
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
     fn test_fetch_all_parallel_skips_fresh() {
         let tmp = std::env::temp_dir().join(format!(
             "moss_parallel_fresh_{}",
@@ -1826,36 +1684,13 @@ mod tests {
         // All URLs fresh → fetched count is 0, no thread is spawned (loop
         // bound is `cold.len()` which is zero).
         let urls = ["https://x.example.test/", "https://y.example.test/"];
-        let fetched = fetch_all_link_meta_parallel(&urls, &tmp);
+        let fetched = fetch_all_link_meta_parallel(&urls, &tmp, |_| {});
         assert_eq!(fetched, 0);
         // And the cached titles are still readable as-is.
         assert_eq!(
             read_cache(&tmp, "https://x.example.test/").and_then(|m| m.title),
             Some("X".to_string())
         );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn test_prewarm_idempotent_after_first_run() {
-        // Two consecutive prewarm calls on a steady-state cache (all entries
-        // fresh) must both report (N, 0). This ensures running CLI builds
-        // back-to-back stays cheap — no redundant fetches.
-        let tmp = std::env::temp_dir().join(format!(
-            "moss_prewarm_idempotent_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        seed_fresh_cache(&tmp, "https://stable.example.test/", "Stable");
-        write_url_list_atomic(&tmp, &["https://stable.example.test/".to_string()]);
-
-        let (s1, f1) = prewarm_link_meta_for_build(&tmp);
-        let (s2, f2) = prewarm_link_meta_for_build(&tmp);
-        assert_eq!((s1, f1), (1, 0));
-        assert_eq!((s2, f2), (1, 0));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1910,7 +1745,7 @@ mod tests {
 
         // Three cold URLs → parallel fetcher actually spawns workers.
         let urls = [url1.as_str(), url2.as_str(), url3.as_str()];
-        let fetched = fetch_all_link_meta_parallel(&urls, &tmp);
+        let fetched = fetch_all_link_meta_parallel(&urls, &tmp, |_| {});
         assert_eq!(fetched, 3, "all 3 cold URLs should have been fetched");
 
         // Each URL now has a populated cache entry with the parsed og:title.
@@ -1920,7 +1755,7 @@ mod tests {
         }
 
         // Re-running on hot cache: zero fetches.
-        let refetch = fetch_all_link_meta_parallel(&urls, &tmp);
+        let refetch = fetch_all_link_meta_parallel(&urls, &tmp, |_| {});
         assert_eq!(refetch, 0, "hot cache must produce zero fetches");
 
         let _ = server.join();
@@ -1961,19 +1796,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&tmp).unwrap();
         tmp
-    }
-
-    #[test]
-    fn build_fetch_budget_and_timeout_are_short_and_named() {
-        // Pins the numbers this feature reports: a regression that silently
-        // widened them back toward the prewarm path's 60s/10s would still
-        // compile and pass every other test here.
-        assert_eq!(BUILD_FETCH_BUDGET, std::time::Duration::from_secs(3));
-        assert_eq!(
-            BUILD_FETCH_PER_REQUEST_TIMEOUT,
-            std::time::Duration::from_millis(1500)
-        );
-        assert!(BUILD_FETCH_BUDGET < FETCH_BUDGET, "must stay well under the prewarm budget");
     }
 
     /// A server that sleeps `delay_ms` before responding, `requests` times —
@@ -2037,7 +1859,7 @@ mod tests {
             &tmp,
             std::time::Duration::from_millis(200),
             std::time::Duration::from_secs(5),
-            "test",
+            |_| {},
         );
         let elapsed = start.elapsed();
 
@@ -2079,7 +1901,7 @@ mod tests {
             &tmp,
             std::time::Duration::from_millis(20),
             std::time::Duration::from_secs(5),
-            "test",
+            |_| {},
         );
         let elapsed = start.elapsed();
 
@@ -2094,100 +1916,34 @@ mod tests {
     }
 
     #[test]
-    fn build_time_fetch_returns_within_budget_against_a_blackholed_connection() {
-        // ureq's own timeout has been unreliable in the
-        // past, and a genuinely blackholed PUBLIC host (packets silently
-        // dropped mid-CONNECT, no RST) can stall well past the timeout
-        // given, up to ~30s in the worst case. A local listener can't
-        // reproduce that exact phase (loopback always completes the TCP
-        // handshake instantly) — this reproduces the nearest local analog,
-        // an accepted connection that never responds, which on this
-        // ureq/OS combination `.timeout_read()` alone already catches in
-        // ~1.5s (measured by ablating `ureq_agent_with_timeout`'s explicit
-        // connect/read lines: same result, timeout() alone also caught it
-        // here). The orchestrator fix is what removes the DEPENDENCY on
-        // that being reliable at all: `the_orchestrator_never_waits_on_in_
-        // flight_work_past_the_deadline` above proves its own budget
-        // enforcement against a real, fast, non-hanging response, with no
-        // ureq timeout involved either way. This test stays as the
-        // regression guard for the scenario actually named in the issue —
-        // generous slack, hard ceiling, proving "nowhere near 30s".
+    fn a_host_that_accepts_and_never_answers_is_given_up_on_at_the_request_timeout() {
+        // Accept and hold: the connection succeeds and no byte ever comes
+        // back, so only the per-request timeout ends the wait. The budget is
+        // far longer, so returning near the timeout proves which one bound it.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
-            // Accept and hold — never read the request, never write a
-            // response, never close. The listener (and every accepted
-            // stream) leaks for the rest of the test process's life, which
-            // is fine: nothing here is ever joined or waited on.
             while let Ok((stream, _)) = listener.accept() {
                 std::mem::forget(stream);
             }
         });
-        let url = format!("http://127.0.0.1:{port}/blackhole");
-        let urls = [url.as_str()];
-        let tmp = fresh_tmp("blackhole_budget");
+        let url = format!("http://127.0.0.1:{port}/silent");
+        let tmp = fresh_tmp("silent_host");
 
         let start = std::time::Instant::now();
-        let _ = fetch_new_link_meta_for_build(&urls, &tmp);
+        let fetched = fetch_all_link_meta_parallel_bounded(
+            &[url.as_str()],
+            &tmp,
+            std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(500),
+            |_| {},
+        );
         let elapsed = start.elapsed();
 
+        assert_eq!(fetched, 1, "the silent host was tried and given up on, not skipped");
         assert!(
-            elapsed < BUILD_FETCH_BUDGET + std::time::Duration::from_secs(3),
-            "the orchestrator must enforce the budget itself rather than trust ureq's own \
-             (documented-unreliable) timeout — nowhere near the ~30s a blackholed \
-             host can otherwise cause: {elapsed:?}"
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn fetch_new_link_meta_for_build_populates_cache_for_a_fast_server() {
-        // The actual public entry point `blocking.rs` calls, against a real
-        // (loopback) server — proves the wiring end to end, not just the
-        // shared bounded-fetch helper.
-        let html = r#"<html><head><meta property="og:title" content="Build Fetched"></head></html>"#;
-        let (base, server) = spawn_test_server(html, 5);
-        let urls: Vec<String> = (0..5).map(|i| format!("{base}/{i}")).collect();
-        let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
-        let tmp = fresh_tmp("build_fetch_fast");
-
-        let fetched = fetch_new_link_meta_for_build(&url_refs, &tmp);
-        assert_eq!(fetched, 5);
-        for u in &urls {
-            let cached = read_cache(&tmp, u).expect("cache miss after build-time fetch");
-            assert_eq!(cached.title.as_deref(), Some("Build Fetched"));
-        }
-
-        let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn fetch_new_link_meta_for_build_finishes_promptly_when_the_server_is_down() {
-        // "Offline build still finishes promptly": bind an ephemeral port,
-        // then drop the listener before fetching — nothing listens there
-        // any more, so the connection is refused immediately (a real local
-        // refusal, not a guess about some fixed port's behavior under a
-        // sandboxed network stack), well under the per-request timeout.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        let url = format!("http://127.0.0.1:{port}/unreachable");
-        let urls = [url.as_str()];
-        let tmp = fresh_tmp("build_fetch_offline");
-        let start = std::time::Instant::now();
-        let fetched = fetch_new_link_meta_for_build(&urls, &tmp);
-        let elapsed = start.elapsed();
-        assert_eq!(fetched, 1, "a failed fetch still counts as attempted, not skipped");
-        assert!(
-            elapsed < BUILD_FETCH_BUDGET,
-            "connection-refused must fail fast, not eat the whole budget: {elapsed:?}"
-        );
-        let cached = read_cache(&tmp, urls[0]);
-        assert!(
-            cached.map(|c| c.title.is_none()).unwrap_or(true),
-            "no metadata on a failed fetch, but no panic either"
+            elapsed < std::time::Duration::from_secs(5),
+            "a silent host must cost about its request timeout, not the budget: {elapsed:?}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

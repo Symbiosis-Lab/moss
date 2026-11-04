@@ -3527,120 +3527,6 @@ fn windows_backslash_user_files_are_watchable() {
     assert!(path_passes_filter(root, Path::new(r"C:\site\.moss\theme\style.css")));
 }
 
-// ── source_image_request_path ────────────────────────────────────────────
-
-/// An image inside the root returns Some with a leading slash.
-#[test]
-fn source_image_request_path_in_root_image() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    let img = root.join("assets").join("photo.jpg");
-    std::fs::create_dir_all(img.parent().unwrap()).unwrap();
-    std::fs::write(&img, b"fake").unwrap();
-
-    let result = source_image_request_path(root, &img);
-    assert_eq!(result, Some("/assets/photo.jpg".to_string()));
-}
-
-/// A non-image file returns None.
-#[test]
-fn source_image_request_path_non_image_returns_none() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    let md = root.join("post.md");
-    std::fs::write(&md, b"content").unwrap();
-
-    let result = source_image_request_path(root, &md);
-    assert!(result.is_none(), "markdown is not an image");
-}
-
-/// A file outside the root returns None.
-#[test]
-fn source_image_request_path_outside_root_returns_none() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    let other_dir = tempfile::tempdir().unwrap();
-    let img = other_dir.path().join("photo.png");
-    std::fs::write(&img, b"fake").unwrap();
-
-    let result = source_image_request_path(root, &img);
-    assert!(result.is_none(), "file outside root must return None");
-}
-
-/// A deleted/missing file (no canonicalize possible) falls back to lexical
-/// strip and still returns Some for an image extension.
-#[test]
-fn source_image_request_path_deleted_file_lexical_fallback() {
-    let dir = tempfile::tempdir().unwrap();
-    // Canonicalize the root so lexical comparison works.
-    let root_canon = std::fs::canonicalize(dir.path()).unwrap();
-    let deleted_img = root_canon.join("图片").join("摄影").join("X.jpeg");
-    // Do NOT write the file — it doesn't exist (simulates a delete event).
-
-    let result = source_image_request_path(&root_canon, &deleted_img);
-    assert_eq!(result, Some("/图片/摄影/X.jpeg".to_string()));
-}
-
-/// Unicode path in the root produces the correct request path.
-#[test]
-fn source_image_request_path_unicode() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    let sub = root.join("图片").join("摄影");
-    std::fs::create_dir_all(&sub).unwrap();
-    let img = sub.join("X.jpeg");
-    std::fs::write(&img, b"fake").unwrap();
-
-    let result = source_image_request_path(root, &img);
-    assert_eq!(result, Some("/图片/摄影/X.jpeg".to_string()));
-}
-
-/// SVG is an image extension.
-#[test]
-fn source_image_request_path_svg() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    let img = root.join("logo.svg");
-    std::fs::write(&img, b"<svg/>").unwrap();
-
-    let result = source_image_request_path(root, &img);
-    assert_eq!(result, Some("/logo.svg".to_string()));
-}
-
-/// CSS is NOT an image extension — returns None.
-#[test]
-fn source_image_request_path_css_not_image() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    let css = root.join("style.css");
-    std::fs::write(&css, b"body{}").unwrap();
-
-    let result = source_image_request_path(root, &css);
-    assert!(result.is_none(), "CSS is not an image");
-}
-
-/// Build outputs under `.moss/` must never be emitted as SourceAssetChanged.
-/// The watcher must exclude any path component that matches `is_excluded_dir_name`.
-#[test]
-fn source_image_request_path_excludes_moss_build_outputs() {
-    let root = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let p = root.path();
-    std::fs::create_dir_all(p.join(".moss/build.nosync/staging/assets")).unwrap();
-    std::fs::write(p.join(".moss/build.nosync/staging/assets/x.webp"), b"o").unwrap();
-    std::fs::create_dir_all(p.join("图片")).unwrap();
-    std::fs::write(p.join("图片/x.webp"), b"o").unwrap();
-    // build output is excluded
-    assert_eq!(
-        source_image_request_path(p, &p.join(".moss/build.nosync/staging/assets/x.webp")),
-        None
-    );
-    // real source still works
-    assert_eq!(
-        source_image_request_path(p, &p.join("图片/x.webp")),
-        Some("/图片/x.webp".to_string())
-    );
-}
-
 // ── source_asset_request_paths ────────────────────────────────────────────
 //
 // Reproduces the stale-editor-resolution bug (2026-08-14 folded-in bug): an
@@ -3648,6 +3534,25 @@ fn source_image_request_path_excludes_moss_build_outputs() {
 // produced NO SourceAssetChanged (the old pass required an image extension on
 // the event path), so the editor's reference resolver never revalidated when
 // the follow-up rebuild's FileChanged was gated out or diff-suppressed.
+
+/// The root as the caller holds it, not canonicalized (a temp dir under
+/// macOS's `/var` symlink), still yields the request path; a path outside the
+/// root yields none; a multi-folder Unicode path keeps every segment.
+#[test]
+fn source_asset_request_paths_resolve_against_the_root_as_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let img = root.join("图片").join("摄影").join("X.jpeg");
+    std::fs::create_dir_all(img.parent().unwrap()).unwrap();
+    std::fs::write(&img, b"fake").unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = elsewhere.path().join("photo.png");
+    std::fs::write(&outside, b"fake").unwrap();
+
+    let kind = EventKind::Create(notify::event::CreateKind::File);
+    let out = source_asset_request_paths(root, kind, &[img, outside]);
+    assert_eq!(out, vec!["/图片/摄影/X.jpeg".to_string()]);
+}
 
 /// A stitched folder rename (`Modify(Name(Both))`, paths = [from, to]) must
 /// notify the editor for BOTH sides — this event's paths are directories, so

@@ -2841,7 +2841,7 @@ mod children_field_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -3475,7 +3475,7 @@ mod children_field_tests {
     }
 
     /// The automatic place line reuses `render_byline_html`/
-    /// `splice_byline_at_page_head`, so it has to reach all four call sites
+    /// `splice_page_masthead`, so it has to reach all four call sites
     /// in `render/html.rs` (homepage page-head, folder title block,
     /// non-homepage page-head, article) — traced directly against the
     /// source rather than re-asserted, and exercised here through the same
@@ -5391,7 +5391,7 @@ mod children_field_tests {
     /// gets its `byline:` — the same `!is_article_page` splice every other
     /// page kind uses, run on the WHOLE already cover-wrapped `content` (one
     /// splice site, no lead-scoping special case). It lands correctly because
-    /// `splice_byline_at_page_head` delegates unconditionally to
+    /// `splice_page_masthead` hands every non-empty masthead to
     /// `splice_after_title_block`, which recognizes the cover wrapper's own
     /// empty `<h1 class="moss-folder-title">` and steps past it to splice
     /// after this page's REAL title — not above the whole cover row, which is
@@ -6054,7 +6054,7 @@ mod typesetting_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -6350,6 +6350,39 @@ mod typesetting_tests {
             html.contains(r#"data-content-width="wide""#),
             "Site-level content_width should appear on body"
         );
+    }
+
+    /// `content_width: screen` (on the page or as the site default) puts the
+    /// `screen` width on a page's un-worded top-level grid and band, keeps the
+    /// `full` column on `<body>`, and leaves a block with its own width word alone.
+    #[test]
+    fn screen_content_width_sets_the_default_block_width() {
+        let render = |page_width: Option<&str>, site_width: Option<&str>| {
+            let mut page = make_doc("Landing", "landing/index.html");
+            page.html_content = r#"<div class="moss-grid" data-columns="2">a</div><div class="band">b</div><div class="moss-grid" data-width="body">c</div>"#.to_string();
+            page.content_width = page_width.map(String::from);
+            let homepage = make_doc("Test Site", "index.html");
+            let all_docs = vec![homepage, page.clone()];
+            let mut layout = make_layout();
+            if let Some(w) = site_width {
+                layout = layout.with_content_width(w.to_string());
+            }
+            generate_html(
+                Some(&page), &all_docs, &make_project(), &layout, false, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(), &localhost_url(), false, false, "favicon.svg",
+                None, std::path::Path::new(""),
+            )
+            .expect("generate_html should succeed")
+        };
+        for html in [render(Some("screen"), None), render(None, Some("screen"))] {
+            assert!(html.contains(r#"data-content-width="full""#), "{html}");
+            assert!(html.contains(r#"data-columns="2" data-width="screen""#), "grid: {html}");
+            assert!(html.contains(r#"<div class="band" data-width="screen">"#), "band: {html}");
+            assert!(html.contains(r#"<div class="moss-grid" data-width="body">"#), "{{body}} opts out: {html}");
+        }
+        let full = render(Some("full"), None);
+        assert!(!full.contains(r#"data-width="screen""#), "`full` keeps its column and adds no width: {full}");
     }
 
     #[test]
@@ -6951,7 +6984,7 @@ mod og_url_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -7728,7 +7761,7 @@ mod listable_page_card_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -8088,7 +8121,7 @@ mod place_locator_position_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -8346,7 +8379,7 @@ mod place_namespace_root_map_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -8516,7 +8549,7 @@ mod folder_index_meta_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
-            empty_folders: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -9699,14 +9732,10 @@ mod registry_clear_tests {
     }
 }
 
-/// End-to-end proof that the build-time link-metadata fetch
-/// (`build::page::link_meta::fetch_new_link_meta_for_build`, wired in
-/// `blocking.rs` right before the per-page render loop) actually reaches a
-/// real build: a fresh site with an external grid link against a local
-/// (loopback) HTTP server, built ONCE, must show the fetched title on that
-/// SAME build — the one-build lag the owner's decision explicitly rejects
-/// ("New links: FETCH DURING THE BUILD... so a card is complete on its
-/// first build").
+/// End-to-end: a build that exits when done fetches link metadata before its
+/// render (`build::page::link_meta::fetch_all_link_meta_parallel`, called from
+/// `blocking.rs`), so a fresh site with an external grid link against a local
+/// server shows the fetched title on that same build.
 mod build_time_link_meta_fetch_tests {
     use crate::build::render::blocking::SiteConfig;
     use std::fs;
@@ -9718,10 +9747,10 @@ mod build_time_link_meta_fetch_tests {
         }
     }
 
-    /// A server that answers every request with the same fixed HTML,
-    /// `requests` times — same shape as `link_meta.rs`'s own test helper
-    /// (kept as a local copy: that one is private to its module).
-    fn spawn_test_server(html: &'static str, requests: usize) -> (String, std::thread::JoinHandle<()>) {
+    /// A server that answers every request with the same fixed HTML after
+    /// `delay`, `requests` times — same shape as `link_meta.rs`'s own test
+    /// helper (kept as a local copy: that one is private to its module).
+    fn spawn_test_server(html: &'static str, requests: usize, delay: std::time::Duration) -> (String, std::thread::JoinHandle<()>) {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
@@ -9732,6 +9761,7 @@ mod build_time_link_meta_fetch_tests {
                 let Ok((mut stream, _)) = listener.accept() else { return };
                 let mut buf = [0u8; 1024];
                 let _ = stream.read(&mut buf);
+                std::thread::sleep(delay);
                 let body = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
                     html.len(),
@@ -9750,7 +9780,7 @@ mod build_time_link_meta_fetch_tests {
     #[test]
     fn a_new_external_link_shows_its_fetched_title_on_the_first_build() {
         let html = r#"<html><head><meta property="og:title" content="Fetched On First Build"></head></html>"#;
-        let (base, server) = spawn_test_server(html, 1);
+        let (base, server) = spawn_test_server(html, 1, std::time::Duration::ZERO);
 
         let test_dir = std::env::temp_dir().join(format!(
             "moss_build_fetch_e2e_{}",
@@ -9778,6 +9808,39 @@ mod build_time_link_meta_fetch_tests {
             index_html.contains("Fetched On First Build"),
             "the title fetched DURING this build must appear in this build's own \
              output, not just the next one's: {index_html}"
+        );
+
+        let _ = server.join();
+    }
+
+    /// A build that exits when done has no next build to finish the card,
+    /// so a host slower than a quick first pass still lands on this build.
+    #[test]
+    fn a_link_whose_host_answers_in_two_seconds_shows_its_title_on_the_first_build() {
+        let html = r#"<html><head><meta property="og:title" content="Fetched From A Slow Host"></head></html>"#;
+        let (base, server) = spawn_test_server(html, 1, std::time::Duration::from_secs(2));
+
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_build_fetch_slow_e2e_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{base}/slow>\n:::\n")).unwrap();
+
+        build_site(&test_dir, true);
+
+        let index_html = fs::read_to_string(
+            test_dir.join(".moss").join("build.nosync").join("site").join("index.html"),
+        )
+        .expect("index.html should exist");
+        assert!(
+            index_html.contains("Fetched From A Slow Host"),
+            "a build with no next build must wait for a slow host: {index_html}"
         );
 
         let _ = server.join();

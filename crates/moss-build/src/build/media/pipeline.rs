@@ -641,7 +641,7 @@ pub(crate) fn remove_stale_files(
             // Gmail's proxy / Apple MPP, so a PNG whose equation was edited
             // or deleted must keep serving its original bytes. Never stale.
             // Only the `.pending.` temp a crashed write left there is.
-            if key.starts_with(crate::build::emit::math_png::MATH_PNG_PREFIX) {
+            if crate::build::served_path::is_append_only(&key) {
                 if key.contains(".pending.") {
                     let _ = fs::remove_file(entry.path());
                     report.record(&key, false);
@@ -700,10 +700,11 @@ pub(crate) fn remove_stale_dirs(
     }
     actual_dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
     for d in &actual_dirs {
-        // `_moss/math/` is append-only — a build whose pages
-        // no longer carry math computes no expected entry for it, but the
-        // PNGs inside are referenced by already-sent emails.
-        if d.starts_with("_moss/math") {
+        // A hosted-picture family is append-only: a build whose pages no
+        // longer carry math or diagrams computes no expected entry for its
+        // dir, but the PNGs inside are referenced by already-sent emails.
+        let rel = moss_core::slug::normalize_separators(&d.to_string_lossy());
+        if crate::build::served_path::is_append_only(&format!("{rel}/")) {
             continue;
         }
         if !expected_dirs.contains(d) && !permit.keeps_dir(d) {
@@ -1652,7 +1653,7 @@ pub(crate) fn copy_deferred_assets(
             log::info!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);
         }
     }
-    log::info!(
+    log::debug!(
         "[background-assets] Sent {} file entries to coordinator",
         site_hashes.files.len()
     );

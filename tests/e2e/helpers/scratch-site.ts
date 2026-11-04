@@ -181,13 +181,18 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
  */
 function siteScriptsHash(): string {
   const h = createHash("sha256");
-  for (const dir of EMBEDDED_DIRS) {
-    if (!fs.existsSync(dir)) continue;
-    for (const name of fs.readdirSync(dir).sort()) {
+  // A directory is walked, not read: bundles sit in feature subfolders.
+  const hashTree = (root: string, rel: string) => {
+    for (const name of fs.readdirSync(path.join(root, rel)).sort()) {
+      const child = path.join(rel, name);
+      if (fs.statSync(path.join(root, child)).isDirectory()) hashTree(root, child);
       // The dir is in the digest, so a bundle moving between crates moves the
       // stamp — that move is exactly what silently emptied this hash once.
-      h.update(dir).update(name).update(fs.readFileSync(path.join(dir, name)));
+      else h.update(root).update(child).update(fs.readFileSync(path.join(root, child)));
     }
+  };
+  for (const dir of EMBEDDED_DIRS) {
+    if (fs.existsSync(dir)) hashTree(dir, "");
   }
   return h.digest("hex");
 }

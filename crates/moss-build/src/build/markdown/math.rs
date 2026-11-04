@@ -576,23 +576,6 @@ fn validate_svg(svg: &str) -> Result<(), MathRefusal> {
     Ok(())
 }
 
-/// HTML-escape for an attribute value (`aria-label`): the five chars that can
-/// break out of a double-quoted attribute or inject markup.
-fn escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-/// HTML-escape for element text (`<title>`): `&`, `<`, `>`.
-fn escape_text(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// Extract `(width, height)` from an SVG's `viewBox="minx miny width height"`.
 fn parse_viewbox(svg: &str) -> Option<(f64, f64)> {
     let (_, after_attr) = svg.split_once("viewBox=\"")?;
@@ -629,8 +612,8 @@ fn assemble(raw: &TypesetMath, tex: &str, display: bool) -> String {
         .unwrap_or_else(|| "0 0 1 1".to_string());
 
     let kind = if display { "display" } else { "inline" };
-    let label = escape_attr(tex);
-    let title = escape_text(tex);
+    let label = moss_core::media::html_escape(tex);
+    let title = moss_core::media::html_escape_text(tex);
     let em_h = raw.height_em + raw.depth_em;
     let em_w = raw.width_em;
 

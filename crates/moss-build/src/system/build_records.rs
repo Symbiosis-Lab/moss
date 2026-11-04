@@ -124,9 +124,11 @@ pub struct BuildRecords {
     /// acceptance could straddle a seal and accept an address the seal had
     /// just stopped reporting.
     removals: FolderSlot<FolderRemovals>,
-    /// `(derivative, picture)` output paths the last seal kept answering as
-    /// redirects — see `feeds::derivative_redirects`.
-    kept_derivatives: FolderSlot<Vec<(String, String)>>,
+    /// `(old, served)` output paths the last seal kept answering — see
+    /// `feeds::kept_addresses`.
+    kept: FolderSlot<Vec<(String, String)>>,
+    /// The last build's file copies and folder redirects, for its seal to write.
+    late_redirects: FolderSlot<crate::build::feeds::kept_addresses::LateRedirects>,
 }
 
 /// See [`BuildRecords::removals`].
@@ -233,12 +235,12 @@ impl BuildRecords {
 
     /// Always called by a seal, empty included, so a rebuild that embeds the
     /// picture again clears the report.
-    pub fn record_kept_derivatives(&self, folder_path: &str, kept: Vec<(String, String)>) {
-        self.kept_derivatives.record(Self::key(folder_path), kept);
+    pub fn record_kept(&self, folder_path: &str, kept: Vec<(String, String)>) {
+        self.kept.record(Self::key(folder_path), kept);
     }
 
-    pub fn kept_derivatives(&self, folder_path: &str) -> Vec<(String, String)> {
-        self.kept_derivatives.get(&Self::key(folder_path)).unwrap_or_default()
+    pub fn kept(&self, folder_path: &str) -> Vec<(String, String)> {
+        self.kept.get(&Self::key(folder_path)).unwrap_or_default()
     }
 
     /// What the last seal of `folder_path` found going offline. `None` means
@@ -301,6 +303,14 @@ impl BuildRecords {
     /// screen is not one.
     pub fn forget_content_hashes(&self, folder_path: &str) {
         self.content_hashes.forget(&Self::key(folder_path));
+    }
+
+    pub fn record_late_redirects(&self, folder_path: &str, late: crate::build::feeds::kept_addresses::LateRedirects) {
+        self.late_redirects.record(Self::key(folder_path), late);
+    }
+
+    pub fn late_redirects(&self, folder_path: &str) -> crate::build::feeds::kept_addresses::LateRedirects {
+        self.late_redirects.get(&Self::key(folder_path)).unwrap_or_default()
     }
 
     /// Record the merged redirect map the just-finished build emitted stubs

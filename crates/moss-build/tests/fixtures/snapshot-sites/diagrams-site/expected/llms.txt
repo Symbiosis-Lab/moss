@@ -1,0 +1,83 @@
+# Diagrams demo
+
+---
+
+## Diagrams
+
+A flowchart with an accessible title, wide enough to get a narrow layout:
+
+```mermaid
+flowchart LR
+  accTitle: How a page is published
+  accDescr: The author writes markdown, moss builds it, the reader reads it.
+  A[Write markdown] --> B{Has a diagram?}
+  B -->|yes| C[Draw it]
+  B -->|no| D[Plain page]
+  C --> E[Publish]
+  D --> E
+```
+
+A chart with no title of its own:
+
+~~~mermaid
+pie
+  "Words" : 60
+  "Pictures" : 30
+  "Diagrams" : 10
+~~~
+
+A title from the diagram's own front matter:
+
+```mermaid
+---
+title: Two states
+---
+stateDiagram-v2
+  [*] --> Draft
+  Draft --> Published
+```
+
+> [!note] Inside a callout
+> ```mermaid
+> sequenceDiagram
+>   Reader->>Site: open page
+>   Site-->>Reader: diagram
+> ```
+
+A broken diagram keeps its source:
+
+```mermaid
+flowchart TD
+  A --> B
+  B -->
+```
+
+Labels and links that try to inject markup:
+
+```mermaid
+flowchart LR
+  A["<script>alert(1)</script>"] --> B["<img src=x onerror=alert(1)>"]
+  click A "javascript:alert(1)"
+  click B "https://example.com/safe"
+```
+
+Obsidian note links: one names a page, one names nothing:
+
+```mermaid
+flowchart LR
+  H[index] --> M[No such note]
+  class H,M internal-link;
+```
+
+An ordinary code block is untouched:
+
+```rust
+fn main() {}
+```
+
+---
+
+## Diagrams demo
+
+See [[diagrams]] for examples.
+

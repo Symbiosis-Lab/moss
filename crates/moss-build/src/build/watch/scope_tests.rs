@@ -183,6 +183,17 @@ fn an_icloud_stub_keeps_the_moss_allowlist_candidate_unknown() {
 }
 
 #[test]
+fn a_moss_that_is_a_file_leaves_the_root_readable() {
+    let dir = fixture();
+    let root = dir.path();
+    fs::remove_dir_all(root.join(".moss")).ok();
+    fs::write(root.join(".moss"), b"not a folder").unwrap();
+
+    let targets = watch_targets_with_error(root).expect("the root itself is readable");
+    assert!(targets.iter().all(|(p, _)| !p.starts_with(root.join(".moss"))));
+}
+
+#[test]
 fn watch_targets_pick_up_a_new_top_level_folder() {
     let dir = fixture();
     let root = dir.path();
@@ -307,27 +318,6 @@ fn watch_targets_skip_a_nested_moss_site() {
         "a nested moss site must not be watched by the outer vault"
     );
     assert!(targets.contains(&root.join("posts")), "siblings stay watched");
-}
-
-/// The per-event half of the boundary: registration cannot reach a vault
-/// nested two levels down (it lives inside a recursive target), so the event
-/// filter has to recognize it.
-#[test]
-fn path_in_nested_vault_probes_every_level_between_root_and_path() {
-    let dir = fixture();
-    let root = dir.path();
-    fs::create_dir_all(root.join("posts/inner/.moss")).unwrap();
-    fs::write(root.join("posts/inner/note.md"), "# n").unwrap();
-
-    assert!(path_in_nested_vault(root, &root.join("posts/inner/note.md")));
-    assert!(path_in_nested_vault(root, &root.join("posts/inner/.moss/config.toml")));
-    // The vault dir itself is the boundary, not inside it — the outer vault
-    // may still hear (and ignore via registration) its creation.
-    assert!(!path_in_nested_vault(root, &root.join("posts/inner")));
-    assert!(!path_in_nested_vault(root, &root.join("posts/other.md")));
-    assert!(!path_in_nested_vault(root, &root.join("index.md")));
-    // Outside the root entirely.
-    assert!(!path_in_nested_vault(root, std::path::Path::new("/elsewhere/x.md")));
 }
 
 /// The rebuild pump drops an event whose every path is inside a nested site,

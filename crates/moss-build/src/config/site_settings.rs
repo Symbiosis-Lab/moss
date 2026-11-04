@@ -45,7 +45,7 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             name: "content_width",
             r#type: "string",
             default: None,
-            description: "Width preset of the reading column, \"wide\" or \"full\". A page's own `content_width:` overrides it.",
+            description: "Width preset of the reading column, \"wide\", \"full\", or \"screen\" (the full column, with every top-level grid and band as wide as the window). A page's own `content_width:` overrides it.",
         },
         SiteSettingInfo {
             name: "credit",

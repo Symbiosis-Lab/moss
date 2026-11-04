@@ -39,6 +39,7 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/site/link-preview.ts", out: "crates/moss-build/src/assets/js/preview.js" },
   { entry: "crates/moss-build/src/js-src/site/comments/artalk.ts", out: "crates/moss-build/src/assets/js/comments-artalk.js" },
   { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "crates/moss-build/src/assets/js/subscribe.js" },
+  { entry: "crates/moss-build/src/js-src/site/forms/forms.ts", out: "crates/moss-build/src/assets/js/forms.js" },
   { entry: "crates/moss-build/src/js-src/site/heading-anchor.ts", out: "crates/moss-build/src/assets/js/heading-anchor.js" },
   // Site search runtime. `external: ["/_moss/pagefind/*"]` is not needed — the
   // pagefind.js specifier is computed at runtime, so esbuild leaves the dynamic
@@ -52,20 +53,21 @@ export const BUNDLES = [
   // code-split chunk because every other bundle is `iife` with no `splitting` —
   // esbuild inlines a dynamic import back into an iife parent, which is exactly
   // how 12.4 kb of canvas rendering ended up in theme.js on every page.
-  { entry: "crates/moss-build/src/js-src/site/share-card.ts", out: "crates/moss-build/src/assets/js/share-card.js", format: "esm" },
+  { entry: "crates/moss-build/src/js-src/site/share-card/index.ts", out: "crates/moss-build/src/assets/js/share-card/share-card.js", format: "esm" },
   // Adaptive video. The boot half is iife and eager on any page with a
   // ladder; the player half is the second `esm` output, carrying hls.js, and
   // is fetched only where MSE exists and native HLS does not.
-  { entry: "crates/moss-build/src/js-src/site/hls-boot.ts", out: "crates/moss-build/src/assets/js/hls-boot.js" },
-  { entry: "crates/moss-build/src/js-src/site/hls-player.ts", out: "crates/moss-build/src/assets/js/hls.js", format: "esm" },
+  { entry: "crates/moss-build/src/js-src/site/video/hls-boot.ts", out: "crates/moss-build/src/assets/js/video/hls-boot.js" },
+  { entry: "crates/moss-build/src/js-src/site/video/hls-player.ts", out: "crates/moss-build/src/assets/js/video/hls.js", format: "esm" },
   { entry: "crates/moss-build/src/js-src/site/sidenotes.ts", out: "crates/moss-build/src/assets/js/sidenotes.js" },
   { entry: "crates/moss-build/src/js-src/site/math-copy.ts", out: "crates/moss-build/src/assets/js/math-copy.js" },
   { entry: "crates/moss-build/src/js-src/site/scroll-row.ts", out: "crates/moss-build/src/assets/js/scroll-row.js" },
-  { entry: "crates/moss-build/src/js-src/site/hero-ends.ts", out: "crates/moss-build/src/assets/js/hero-ends.js" },
+  { entry: "crates/moss-build/src/js-src/site/maps/country-map.ts", out: "crates/moss-build/src/assets/js/maps/country-map.js" },
+  { entry: "crates/moss-build/src/js-src/site/hero/hero-ends.ts", out: "crates/moss-build/src/assets/js/hero/hero-ends.js" },
   // Places-explorer interactive layer, stub for now (see the entry's own
   // module doc). A directory, not a single file, because the runtime this
   // grows into will need several modules.
-  { entry: "crates/moss-build/src/js-src/site/places-explorer/index.ts", out: "crates/moss-build/src/assets/js/places-explorer.js" },
+  { entry: "crates/moss-build/src/js-src/site/maps/places-explorer/index.ts", out: "crates/moss-build/src/assets/js/maps/places-explorer.js" },
 ];
 
 /** The directories BUNDLES writes into — derived, never restated. */

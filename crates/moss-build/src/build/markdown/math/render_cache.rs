@@ -77,6 +77,10 @@ pub fn set_disk_cache(cache: crate::build::cache::TransformCache) {
 /// miss — the caller falls through to a real render either way.
 pub(super) fn disk_cache_lookup(key: &str) -> Option<TypesetMath> {
     let cache = DISK_CACHE.lock().ok()?.clone()?;
+    disk_cache_lookup_in(&cache, key)
+}
+
+fn disk_cache_lookup_in(cache: &crate::build::cache::TransformCache, key: &str) -> Option<TypesetMath> {
     let params = serde_json::json!({ "v": RENDER_CACHE_VERSION });
     let oid = cache.find_cached_output(key, RENDER_CACHE_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
     let blob_path = cache.objects().get_path(&oid)?;
@@ -91,6 +95,10 @@ pub(super) fn disk_cache_store(key: &str, value: &TypesetMath) {
     let Some(cache) = DISK_CACHE.lock().ok().and_then(|c| c.clone()) else {
         return;
     };
+    disk_cache_store_in(&cache, key, value);
+}
+
+fn disk_cache_store_in(cache: &crate::build::cache::TransformCache, key: &str, value: &TypesetMath) {
     let Ok(bytes) = serde_json::to_vec(value) else {
         return;
     };
@@ -209,35 +217,6 @@ pub(super) fn render_on_big_stack(tex: &str) -> Result<RawRender, MathRefusal> {
 }
 
 #[cfg(test)]
-pub(super) fn disk_cache_lock_for_tests() -> DiskCacheTestGuard {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    DiskCacheTestGuard {
-        _lock: LOCK.lock().unwrap_or_else(|e| e.into_inner()),
-    }
-}
-
-/// Serializes tests that arm [`DISK_CACHE`] against each other, and clears it
-/// again on drop — the `parse_cache::store_lock_for_tests` pattern, applied
-/// to this module's own process-global. Any test NOT holding this guard runs
-/// with `DISK_CACHE` at its default `None` unless a guarded test happens to
-/// be concurrently mid-flight; every disk-cache test below therefore uses a
-/// tex string unique to itself so an unrelated concurrent render can never
-/// collide with the key it is asserting on.
-#[cfg(test)]
-pub(super) struct DiskCacheTestGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-#[cfg(test)]
-impl Drop for DiskCacheTestGuard {
-    fn drop(&mut self) {
-        if let Ok(mut slot) = DISK_CACHE.lock() {
-            *slot = None;
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -280,22 +259,16 @@ mod tests {
 
     #[test]
     fn disk_cache_round_trips_a_stored_typeset() {
-        // Exercises `disk_cache_lookup`/`disk_cache_store` directly rather
-        // than through `typeset`, deliberately: `typeset` would also touch
-        // the in-memory level (`parse_cache::math_cache_*`), which is a
-        // process-global shared with every other concurrently running test —
-        // clearing it here to force a disk-only path would risk evicting
-        // ANOTHER test's live entry mid-run. This proves the disk level's own
-        // mechanics in isolation, with no such shared side effect.
-        let _guard = disk_cache_lock_for_tests();
+        // Takes the cache explicitly: the process-global `DISK_CACHE` is
+        // overwritten by any concurrent test that runs a full build.
         let dir = tempfile::tempdir().unwrap();
-        set_disk_cache(crate::build::cache::TransformCache::new(
+        let cache = crate::build::cache::TransformCache::new(
             dir.path().join("transforms"),
             crate::build::cache::ObjectStore::new(dir.path().join("objects")),
-        ));
+        );
 
         let key = "disk-cache-roundtrip-probe-9f3c";
-        assert!(disk_cache_lookup(key).is_none(), "must miss before anything is stored");
+        assert!(disk_cache_lookup_in(&cache, key).is_none(), "must miss before anything is stored");
 
         let value = TypesetMath {
             svg: r#"<svg viewBox="0 0 10 10"><path d="M0 0"/></svg>"#.to_string(),
@@ -303,9 +276,9 @@ mod tests {
             height_em: 0.75,
             depth_em: 0.1,
         };
-        disk_cache_store(key, &value);
+        disk_cache_store_in(&cache, key, &value);
 
-        let round_tripped = disk_cache_lookup(key).expect("must hit after being stored");
+        let round_tripped = disk_cache_lookup_in(&cache, key).expect("must hit after being stored");
         assert_eq!(round_tripped.svg, value.svg);
         assert_eq!(round_tripped.width_em, value.width_em);
         assert_eq!(round_tripped.height_em, value.height_em);

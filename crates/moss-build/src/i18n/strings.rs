@@ -27,6 +27,52 @@ pub fn sources_headings(lang: Language) -> &'static [&'static str] {
     }
 }
 
+/// A diagram's type, as its accessible name when it has no title of its own.
+/// `kind` is the renderer's type id.
+pub fn diagram_type_name(lang: Language, kind: &str) -> &'static str {
+    let [en, de, zh_hans, zh_hant] = match kind {
+        "flowchart" => ["Flowchart", "Flussdiagramm", "流程图", "流程圖"],
+        "sequence" => ["Sequence diagram", "Sequenzdiagramm", "时序图", "時序圖"],
+        "class" => ["Class diagram", "Klassendiagramm", "类图", "類別圖"],
+        "state" => ["State diagram", "Zustandsdiagramm", "状态图", "狀態圖"],
+        "er" => ["Entity relationship diagram", "Entity-Relationship-Diagramm", "实体关系图", "實體關係圖"],
+        "gantt" => ["Gantt chart", "Gantt-Diagramm", "甘特图", "甘特圖"],
+        "pie" => ["Pie chart", "Kreisdiagramm", "饼图", "圓餅圖"],
+        "gitGraph" => ["Git graph", "Git-Graph", "Git 图", "Git 圖"],
+        "mindmap" => ["Mind map", "Mindmap", "思维导图", "心智圖"],
+        "timeline" => ["Timeline", "Zeitleiste", "时间线", "時間軸"],
+        "journey" => ["User journey", "User Journey", "用户旅程图", "使用者旅程圖"],
+        "xychart" => ["XY chart", "XY-Diagramm", "XY 图表", "XY 圖表"],
+        "quadrantChart" => ["Quadrant chart", "Quadrantendiagramm", "象限图", "象限圖"],
+        "requirement" => ["Requirement diagram", "Anforderungsdiagramm", "需求图", "需求圖"],
+        "c4" => ["C4 diagram", "C4-Diagramm", "C4 图", "C4 圖"],
+        "sankey" => ["Sankey diagram", "Sankey-Diagramm", "桑基图", "桑基圖"],
+        "block" => ["Block diagram", "Blockdiagramm", "方块图", "方塊圖"],
+        "packet" => ["Packet diagram", "Paketdiagramm", "数据包图", "封包圖"],
+        "kanban" => ["Kanban board", "Kanban-Board", "看板", "看板"],
+        "architecture" => ["Architecture diagram", "Architekturdiagramm", "架构图", "架構圖"],
+        "radar" => ["Radar chart", "Netzdiagramm", "雷达图", "雷達圖"],
+        "treemap" => ["Treemap", "Treemap", "矩形树图", "矩形樹狀圖"],
+        "agentflow" => ["Agent flow", "Agentenablauf", "智能体流程", "代理流程"],
+        "usecase" => ["Use case diagram", "Anwendungsfalldiagramm", "用例图", "使用案例圖"],
+        "railroad" => ["Railroad diagram", "Syntaxdiagramm", "铁路图", "鐵路圖"],
+        "treeView" => ["Tree view", "Baumansicht", "树视图", "樹狀檢視"],
+        "venn" => ["Venn diagram", "Venn-Diagramm", "维恩图", "文氏圖"],
+        "cynefin" => ["Cynefin diagram", "Cynefin-Diagramm", "Cynefin 图", "Cynefin 圖"],
+        "wardley" => ["Wardley map", "Wardley-Map", "沃德利地图", "沃德利地圖"],
+        "swimlane" => ["Swimlane diagram", "Swimlane-Diagramm", "泳道图", "泳道圖"],
+        "ishikawa" => ["Ishikawa diagram", "Ishikawa-Diagramm", "鱼骨图", "魚骨圖"],
+        "eventmodeling" => ["Event model", "Ereignismodell", "事件模型", "事件模型"],
+        _ => ["Diagram", "Diagramm", "图表", "圖表"],
+    };
+    match lang {
+        Language::En => en,
+        Language::De => de,
+        Language::ZhHans => zh_hans,
+        Language::ZhHant => zh_hant,
+    }
+}
+
 pub fn t(lang: Language, key: &str) -> &'static str {
     match key {
         // Month names (full)
@@ -390,6 +436,61 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "订阅",
             Language::ZhHant => "訂閱",
         },
+        // Request forms
+        "form_send" => match lang {
+            Language::En => "Send",
+            Language::De => "Senden",
+            Language::ZhHans => "发送",
+            Language::ZhHant => "送出",
+        },
+        "form_optional" => match lang {
+            Language::En => "Optional",
+            Language::De => "Optional",
+            Language::ZhHans => "选填",
+            Language::ZhHant => "選填",
+        },
+        "form_hp_label" => match lang {
+            Language::En => "Leave this field empty",
+            Language::De => "Dieses Feld leer lassen",
+            Language::ZhHans => "请留空此项",
+            Language::ZhHant => "請留空此項",
+        },
+        "form_required" => match lang {
+            Language::En => "This field is required.",
+            Language::De => "Dieses Feld ist erforderlich.",
+            Language::ZhHans => "此项必填。",
+            Language::ZhHant => "此項必填。",
+        },
+        "form_format" => match lang {
+            Language::En => "Check this value.",
+            Language::De => "Bitte prüfen Sie diese Eingabe.",
+            Language::ZhHans => "请检查此项的内容。",
+            Language::ZhHant => "請檢查此項的內容。",
+        },
+        "form_invalid" => match lang {
+            Language::En => "Some fields need another look. They are marked below.",
+            Language::De => "Einige Felder müssen noch geprüft werden. Sie sind unten markiert.",
+            Language::ZhHans => "有几项需要再检查，已在下方标出。",
+            Language::ZhHant => "有幾項需要再檢查，已在下方標出。",
+        },
+        "form_rate_limited" => match lang {
+            Language::En => "Too many requests. Please try again in a little while.",
+            Language::De => "Zu viele Anfragen. Bitte versuchen Sie es in Kürze erneut.",
+            Language::ZhHans => "请求太频繁，请稍后再试。",
+            Language::ZhHant => "請求太頻繁，請稍後再試。",
+        },
+        "form_unknown" => match lang {
+            Language::En => "This form is not available right now.",
+            Language::De => "Dieses Formular ist derzeit nicht verfügbar.",
+            Language::ZhHans => "此表单暂时无法使用。",
+            Language::ZhHant => "此表單暫時無法使用。",
+        },
+        "form_network" => match lang {
+            Language::En => "Could not send. Check your connection and try again.",
+            Language::De => "Senden nicht möglich. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.",
+            Language::ZhHans => "无法发送。请检查网络后重试。",
+            Language::ZhHant => "無法送出。請檢查網路後重試。",
+        },
         // Calendar files for events
         "add_to_calendar" => match lang {
             Language::En => "Add to calendar",
@@ -477,6 +578,21 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "实验",
             Language::ZhHant => "實驗",
         },
+
+        // Country map
+        "country_map_as_of" => match lang {
+            Language::En => "As of {date}",
+            Language::De => "Stand: {date}",
+            Language::ZhHans => "截至 {date}",
+            Language::ZhHant => "截至 {date}",
+        },
+        "country_map_not_rated" => match lang {
+            Language::En => "Not rated",
+            Language::De => "Nicht bewertet",
+            Language::ZhHans => "未评级",
+            Language::ZhHant => "未評級",
+        },
+
 
         // Lightbox controls
         "close" => match lang {
@@ -627,6 +743,33 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "最新",
             Language::ZhHant => "最新",
         },
+        // A language's name in the reader's interface language, for the mark a listing
+        // row carries when its page is in another language than the listing. Chinese names
+        // the written language (英文), not the spoken one (英语), since the mark labels text.
+        "lang_name_en" => match lang {
+            Language::En => "English",
+            Language::De => "Englisch",
+            Language::ZhHans => "英文",
+            Language::ZhHant => "英文",
+        },
+        "lang_name_de" => match lang {
+            Language::En => "German",
+            Language::De => "Deutsch",
+            Language::ZhHans => "德文",
+            Language::ZhHant => "德文",
+        },
+        "lang_name_zh_hans" => match lang {
+            Language::En => "Simplified Chinese",
+            Language::De => "Vereinfachtes Chinesisch",
+            Language::ZhHans => "简体中文",
+            Language::ZhHant => "簡體中文",
+        },
+        "lang_name_zh_hant" => match lang {
+            Language::En => "Traditional Chinese",
+            Language::De => "Traditionelles Chinesisch",
+            Language::ZhHans => "繁体中文",
+            Language::ZhHant => "繁體中文",
+        },
         "more_link" => match lang {
             Language::En => "More →",
             Language::De => "Mehr →",
@@ -711,6 +854,64 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::De => "um ",
             Language::ZhHans => "约",
             Language::ZhHant => "約",
+        },
+
+        // A diagram that could not be drawn; {reason} is one of the diagram_* reasons below.
+        "diagram_not_drawn" => match lang {
+            Language::En => "This diagram could not be drawn: {reason}.",
+            Language::De => "Dieses Diagramm konnte nicht gezeichnet werden: {reason}.",
+            Language::ZhHans => "无法绘制此图表：{reason}。",
+            Language::ZhHant => "無法繪製此圖表：{reason}。",
+        },
+        // The reason with the line of the diagram it points at.
+        "diagram_line" => match lang {
+            Language::En => "line {n}: {what}",
+            Language::De => "Zeile {n}: {what}",
+            Language::ZhHans => "第 {n} 行：{what}",
+            Language::ZhHant => "第 {n} 行：{what}",
+        },
+        "diagram_empty" => match lang {
+            Language::En => "it is empty",
+            Language::De => "es ist leer",
+            Language::ZhHans => "内容为空",
+            Language::ZhHant => "內容為空",
+        },
+        "diagram_unsupported" => match lang {
+            Language::En => "moss does not draw “{type}” diagrams",
+            Language::De => "moss zeichnet keine „{type}“-Diagramme",
+            Language::ZhHans => "moss 不绘制“{type}”图表",
+            Language::ZhHant => "moss 不繪製「{type}」圖表",
+        },
+        "diagram_syntax" => match lang {
+            Language::En => "syntax error",
+            Language::De => "Syntaxfehler",
+            Language::ZhHans => "语法错误",
+            Language::ZhHant => "語法錯誤",
+        },
+        // {text} quotes the line of the diagram the error is on.
+        "diagram_syntax_near" => match lang {
+            Language::En => "syntax error near “{text}”",
+            Language::De => "Syntaxfehler bei „{text}“",
+            Language::ZhHans => "“{text}”附近有语法错误",
+            Language::ZhHant => "「{text}」附近有語法錯誤",
+        },
+        "diagram_timed_out" => match lang {
+            Language::En => "it took too long to draw",
+            Language::De => "das Zeichnen hat zu lange gedauert",
+            Language::ZhHans => "绘制耗时过长",
+            Language::ZhHant => "繪製耗時過長",
+        },
+        "diagram_unsafe" => match lang {
+            Language::En => "the drawing failed moss's safety check",
+            Language::De => "die Zeichnung hat die Sicherheitsprüfung von moss nicht bestanden",
+            Language::ZhHans => "绘图未通过 moss 的安全检查",
+            Language::ZhHant => "繪圖未通過 moss 的安全檢查",
+        },
+        "diagram_failed" => match lang {
+            Language::En => "the renderer failed",
+            Language::De => "der Renderer ist fehlgeschlagen",
+            Language::ZhHans => "渲染器出错",
+            Language::ZhHant => "渲染器出錯",
         },
 
         // Unrecognized key — return the key itself.

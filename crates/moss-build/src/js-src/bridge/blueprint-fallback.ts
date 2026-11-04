@@ -29,7 +29,7 @@
  * --------------
  * A folder index can carry many missing covers. Each overlay is gated by an
  * IntersectionObserver: the animated rAF (`startBlueprintGrid`, which owns its
- * own particles/rAF/ResizeObserver/mousemove per call) runs ONLY while the
+ * own particles/rAF/ResizeObserver/pointer listeners per call) runs ONLY while the
  * cover is on-screen and is fully torn down when it scrolls off — so N covers
  * never mean N live rAF loops, only the visible few. Reusing `startBlueprintGrid`
  * keeps ONE source of truth for the animation.
@@ -47,15 +47,7 @@
  * We skip the upgrade entirely; the static SVG blueprint placeholder (itself a
  * still grid) remains — no canvas, no rAF, no motion.
  */
-// SHARED MODULE, duplicated on purpose: `./blueprint-grid.ts` in this
-// directory is a byte-for-byte copy of the desktop app's own
-// `blueprint-grid.ts` component, which the desktop app's own UI
-// also imports directly (preview screen, launcher, editor pane
-// state). It has no I/O and no desktop-only dependency, so duplicating it
-// here is the whole fix for now; the desktop copy should be retired in favor
-// of importing this one from the published moss-build crate/package once
-// that path exists. Keep the two copies identical by hand until then.
-import { startBlueprintGrid } from "./blueprint-grid";
+import { startBlueprintGrid } from "@symbiosis-lab/moss-blueprint-grid";
 
 /** Only <img> the shell already tagged as a missing-image fallback. */
 const FALLBACK_SELECTOR = "img.moss-img-fallback";
@@ -92,13 +84,13 @@ function createHost(doc: Document): HTMLDivElement {
   container.style.position = "absolute";
   container.style.overflow = "hidden";
   const canvas = doc.createElement("canvas");
-  canvas.id = "blueprint-canvas";
   canvas.setAttribute("aria-hidden", "true");
   canvas.style.display = "block";
   canvas.style.width = "100%";
   canvas.style.height = "100%";
   // pointer-events: none on the canvas so the container still receives the
-  // mousemove startBlueprintGrid tracks, and clicks bubble to the card link.
+  // pointer and touch movement startBlueprintGrid tracks, and clicks bubble to
+  // the card link.
   canvas.style.pointerEvents = "none";
   container.appendChild(canvas);
   return container;
@@ -109,7 +101,7 @@ function gate(g: Gated, isLive: () => boolean, beforeStart?: () => void): void {
   const start = (): void => {
     if (g.stopGrid || !isLive()) return;
     beforeStart?.();
-    g.stopGrid = startBlueprintGrid(g.container);
+    g.stopGrid = startBlueprintGrid(g.container, { canvas: g.container.querySelector("canvas")! });
   };
   const stop = (): void => {
     g.stopGrid?.();

@@ -316,17 +316,10 @@ fn video_embed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::params_with;
 
     fn empty_snapshot() -> AssetSnapshot {
         AssetSnapshot::new()
-    }
-
-    fn params_with(kvs: &[(&str, &str)]) -> TitleParams {
-        let mut p = TitleParams::default();
-        for (k, v) in kvs {
-            p.insert(*k, *v);
-        }
-        p
     }
 
     // --- byte-shape parity with the pre-Phase-0 video renderer ---

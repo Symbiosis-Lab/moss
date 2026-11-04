@@ -5,18 +5,19 @@
 //! uid (or a term kind that moved namespace), an address the author redirects
 //! by hand in `[redirects]`, and a path the generator itself used to write
 //! (the feed's former `feed.xml`). Each is a source of entries here; this
-//! module merges them, decides what static form each entry can take, and
-//! renders the one file (`_moss/redirects.json`) a host that can answer a real
-//! HTTP 301 reads. Writing the stubs and copies is `redirects`' job.
+//! module merges them and decides what static form each entry can take.
+//! Writing the stubs and copies is `redirects`' job. No table of the entries is published: no host reads
+//! one, and it would list every old address next to its new one, including an
+//! unlisted page's secret address.
 //!
 //! The static form depends on the old address:
 //!
 //! - a page address (`/old/`, `/old`) or a `.html` file gets the HTML stub;
-//! - any other file gets a byte copy of its target, when the target is a file
-//!   this build serves;
-//! - a file whose target is a page or an external URL has no static form. It
-//!   is still listed, and the build says it works only on a host that reads
-//!   the table.
+//! - any other file gets a copy of its target, when the target is a file this
+//!   build serves: the bytes it serves there, so a folder picture's copy is
+//!   written by the seal (`kept_addresses`), after the image pipeline;
+//! - a file whose target is a page or an external URL has no static form, so
+//!   it is reported and left out.
 //!
 //! A hand-declared entry is checked and reported on; the other two sources are
 //! the build's own record and are trusted, so they skip quietly when they
@@ -30,7 +31,6 @@
 use crate::build::cli_output::log_warn_problem;
 use crate::build::manifest::PendingManifest;
 use crate::build::served_path::ServedPath;
-use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -53,9 +53,9 @@ pub(crate) enum Kind {
 /// An address this site serves (or is asked to), parsed from any slash spelling.
 ///
 /// The address is kept exactly as written, because it is whatever links
-/// outside the site already say and a host reading the table matches that
-/// string. Only the static form's path on disk is derived from it
-/// (percent-decoded once, then named the way every output is named).
+/// outside the site already say, and an internal stub's link carries it.
+/// Only the static form's path on disk is derived from it (percent-decoded
+/// once, then named the way every output is named).
 #[derive(Debug, Clone)]
 pub(crate) struct Addr {
     sp: ServedPath,
@@ -108,6 +108,11 @@ impl Addr {
         self.sp.as_str()
     }
 
+    /// The decoded path, as the file is named in the site folder.
+    pub(crate) fn raw(&self) -> &str {
+        &self.raw
+    }
+
     pub(crate) fn served_path(&self) -> &ServedPath {
         &self.sp
     }
@@ -141,7 +146,7 @@ impl Target {
         Addr::parse(path).map(|a| Self::Internal(a, suffix.to_string()))
     }
 
-    /// What the table and a stub's link carry.
+    /// What a stub's link carries.
     pub(crate) fn href(&self) -> String {
         match self {
             Self::Internal(a, suffix) => format!("{}{suffix}", a.served()),
@@ -161,6 +166,12 @@ pub(crate) struct Probe<'a> {
 }
 
 impl Probe<'_> {
+    /// The old side of a line is a folder holding more than its own page, not one page's address.
+    fn holds_a_folder(&self, a: &Addr) -> bool {
+        let Some(prefix) = a.key().strip_suffix("index.html").filter(|p| !p.is_empty()) else { return false };
+        self.pending.has_registered_under(prefix) || self.source_root.join(a.raw.trim_end_matches('/')).is_dir()
+    }
+
     /// The address is taken. Asked after every page this build registers
     /// before its background phase: rendered, generated (folder indexes, media
     /// collections, subscribe pages) and carried forward from the last build
@@ -193,20 +204,6 @@ impl Probe<'_> {
             _ => Found::Missing,
         }
     }
-
-    /// Where the bytes of a file target are: the stage if this build wrote
-    /// them, else the site folder's own file.
-    pub(crate) fn copy_source(&self, a: &Addr, output_dir: &Path) -> Option<CopySource> {
-        let staged = output_dir.join(a.key());
-        if self.pending.is_registered(a.key()) && staged.is_file() {
-            return Some(CopySource::Stage(staged));
-        }
-        [a.key(), a.raw.as_str()]
-            .iter()
-            .map(|rel| self.source_root.join(rel))
-            .find(|p| p.is_file())
-            .map(CopySource::Folder)
-    }
 }
 
 enum Found {
@@ -214,11 +211,6 @@ enum Found {
     /// Not served, but the default language's page at the same place is.
     DefaultLanguage(Addr),
     Missing,
-}
-
-pub(crate) enum CopySource {
-    Stage(std::path::PathBuf),
-    Folder(std::path::PathBuf),
 }
 
 /// One entry as a source states it, before any check.
@@ -233,8 +225,6 @@ pub(crate) struct Candidate {
 pub(crate) enum Form {
     Stub,
     Copy,
-    /// Listed in the table only.
-    TableOnly,
 }
 
 #[derive(Debug, Clone)]
@@ -244,10 +234,55 @@ pub(crate) struct Planned {
     pub form: Form,
 }
 
-/// Merge the candidates (later sources override earlier ones for the same old
-/// address) into the entries this build serves, sorted by old address.
-pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
+/// A folder line's output prefixes, e.g. `review/old/` and `review/client/old/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FolderMove {
+    pub from: String,
+    pub to: String,
+    /// The site already serves the old folder's own address, so the line
+    /// does something only if it keeps a file under it.
+    pub old_served: bool,
+}
+
+/// What the build serves for the table: its entries, and the folder moves the
+/// seal fills in (`kept_addresses`), since only it knows every file served
+/// under a new folder.
+pub(crate) struct Plan {
+    pub entries: Vec<Planned>,
+    pub folder_moves: Vec<FolderMove>,
+}
+
+/// The folder move a declared line makes, when its two sides both end in `/`
+/// and name two folders of this site, neither of them the root. `Err` is a
+/// folder line that names the root while its old side is a folder holding
+/// files: moving every address of the site is not something one line should
+/// do by accident. A root line whose old side is one page's address is just
+/// that page forwarded.
+fn folder_move(c: &Candidate, from: &Addr, to: &Target, old_served: bool, probe: &Probe) -> Result<Option<FolderMove>, ()> {
+    let Target::Internal(t, suffix) = to else { return Ok(None) };
+    if !c.declared || !c.from.trim().ends_with('/') || !c.to.trim().ends_with('/') || !suffix.is_empty() || !from.carried || t.key() == from.key() {
+        return Ok(None);
+    }
+    let prefix = |a: &Addr| a.key().strip_suffix("index.html").unwrap_or_default().to_string();
+    let (old, new) = (prefix(from), prefix(t));
+    if old.is_empty() || new.is_empty() {
+        return if old.is_empty() || probe.holds_a_folder(from) { Err(()) } else { Ok(None) };
+    }
+    Ok(Some(FolderMove { from: old, to: new, old_served }))
+}
+
+/// Merge the candidates into the entries this build serves. A later candidate
+/// for the same output replaces an earlier one only when it can take a static
+/// form; one that cannot is reported and leaves the earlier entry standing.
+///
+/// A declared line whose two sides both end in `/` also moves everything under
+/// the old folder. Its own page half then forwards the folder's address only
+/// where it can: an old folder that still serves a page (its listing, while
+/// a file is left in it) keeps it, and a new folder with no front page is left
+/// for the seal to report if nothing is served under it either.
+pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Plan {
     let mut table: BTreeMap<String, Planned> = BTreeMap::new();
+    let mut folder_moves: Vec<FolderMove> = Vec::new();
     for c in candidates {
         let from = match Addr::parse(&c.from) {
             Ok(a) => a,
@@ -263,7 +298,23 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
                 continue;
             }
         };
-        if probe.serves(&from) {
+        let old_served = probe.serves(&from);
+        match folder_move(&c, &from, &to, old_served, probe) {
+            Ok(Some(m)) => {
+                folder_moves.push(m);
+                let Target::Internal(t, _) = &to else { unreachable!("a folder move is internal") };
+                if old_served || !matches!(probe.locate(t), Found::Served) {
+                    continue;
+                }
+            }
+            Ok(None) => {}
+            Err(()) => log_warn_problem!(
+                "redirect '{}' to '{}' moves no folder: a folder line cannot name the site root (only the page itself is redirected)",
+                from.served(),
+                to.href()
+            ),
+        }
+        if old_served {
             if c.declared {
                 log_warn_problem!(
                     "redirect '{}' skipped: the site already serves that address, and what it serves wins",
@@ -296,51 +347,42 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
             // while looking as if the redirect worked.
             _ if !from.carried => {
                 log_warn_problem!(
-                    "redirect '{}' to '{}' works only on a host that reads _moss/redirects.json: the address \
-                     has characters (capitals or spaces in a folder name) that a published file path cannot carry",
+                    "redirect '{}' to '{}' skipped: the address has characters (capitals or spaces in a \
+                     folder name) that a published file path cannot carry",
                     from.served(),
                     to.href()
                 );
-                Form::TableOnly
+                continue;
             }
             (Kind::File, Target::Internal(t, _)) if t.kind == Kind::File => Form::Copy,
             (Kind::File, _) => {
                 log_warn_problem!(
-                    "redirect '{}' to '{}' has no file to copy, so it works only on a host that reads \
-                     _moss/redirects.json",
+                    "redirect '{}' to '{}' skipped: a file can only be redirected to another file of this \
+                     site, which it is copied from (an earlier redirect of the address, if any, still stands)",
                     from.served(),
                     to.href()
                 );
-                Form::TableOnly
+                continue;
             }
             _ => Form::Stub,
         };
-        table.insert(from.served(), Planned { from, to, form });
+        table.insert(from.key().to_string(), Planned { from, to, form });
     }
-    table.into_values().collect()
+    Plan { entries: table.into_values().collect(), folder_moves }
 }
 
-#[derive(Serialize, serde::Deserialize)]
-pub(crate) struct TableFile {
-    version: u32,
-    pub(crate) redirects: Vec<Row>,
-}
-
-#[derive(Serialize, serde::Deserialize)]
-pub(crate) struct Row {
-    pub(crate) from: String,
-    pub(crate) to: String,
-    pub(crate) status: u16,
-}
-
-/// The shipped `_moss/redirects.json`: every entry, sorted by old address.
-pub(crate) fn to_json(planned: &[Planned]) -> Vec<u8> {
-    let redirects = planned
-        .iter()
-        .map(|p| Row { from: p.from.served(), to: p.to.href(), status: 301 })
-        .collect();
-    serde_json::to_vec(&TableFile { version: 1, redirects }).expect("a table of strings serializes")
-}
+/// What the build does with a `[redirects]` line, one sentence each, as
+/// `moss describe --json` prints them. Kept here, beside the code they
+/// describe, so a change to one is a change to the other.
+pub(crate) const RULES: [&str; 7] = [
+    "Both sides are site-absolute; the new side is an address this site serves or an https:// URL.",
+    "A page address (/old/ or /old) or an .html file gets a forwarding page.",
+    "Any other file can only be sent to another non-HTML file of the site, and gets a copy of the file the site serves there (for a picture, the processed one), so both addresses give the same bytes; any other target is reported and does not redirect.",
+    "When both sides are folders of this site (ending in /, with no # or ?), the line also moves everything under the old folder: each page and .html file served under the new folder gets a forwarding page at the same path under the old one, and every other file a copy of the served file. A folder line naming the site root on either side moves no folder.",
+    "An old address the site still serves keeps what it serves; a line that changes nothing is reported.",
+    "An old address with capitals or spaces in a folder name cannot be a file path, so it is reported and does not redirect.",
+    "No list of redirects is published: each old address answers through its own forwarding page or copy.",
+];
 
 #[cfg(test)]
 #[path = "redirect_table_tests.rs"]

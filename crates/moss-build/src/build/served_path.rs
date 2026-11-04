@@ -77,6 +77,17 @@ pub fn served_address(output: &str) -> String {
 /// from a live site.
 pub const MATH_PNG_PREFIX: &str = "_moss/math/";
 
+/// Reserved prefix for the email and feed pictures of diagrams. Append-only,
+/// for the same reason as [`MATH_PNG_PREFIX`].
+pub const DIAGRAM_PNG_PREFIX: &str = "_moss/diagrams/";
+
+/// Whether a served path belongs to a hosted-picture family whose URLs are
+/// baked into sent email and cached forever by mail proxies: such a file is
+/// never pruned as stale, and an absent copy is fetched rather than dropped.
+pub fn is_append_only(rel: &str) -> bool {
+    rel.starts_with(MATH_PNG_PREFIX) || rel.starts_with(DIAGRAM_PNG_PREFIX)
+}
+
 /// Directory every downloaded external-link cover image is written under.
 /// See [`ServedPath::for_remote_cover`].
 pub const REMOTE_COVER_PREFIX: &str = "_moss/link/";
@@ -257,16 +268,25 @@ impl ServedPath {
     /// a math PNG — the URL is baked into already-sent emails and cached
     /// forever by Gmail's image proxy / Apple MPP.
     pub fn for_math_png(content_hash: &str) -> Result<Self, ServedPathError> {
+        Self::hosted_png(MATH_PNG_PREFIX, content_hash)
+    }
+
+    /// A diagram's email and feed picture; see [`Self::for_math_png`].
+    pub fn for_diagram_png(content_hash: &str) -> Result<Self, ServedPathError> {
+        Self::hosted_png(DIAGRAM_PNG_PREFIX, content_hash)
+    }
+
+    fn hosted_png(prefix: &str, content_hash: &str) -> Result<Self, ServedPathError> {
         if content_hash.is_empty() {
-            return Err(ServedPathError::InvalidInput("math png hash is empty"));
+            return Err(ServedPathError::InvalidInput("png hash is empty"));
         }
         if content_hash.len() != 16 {
-            return Err(ServedPathError::InvalidInput("math png hash must be 16 hex chars"));
+            return Err(ServedPathError::InvalidInput("png hash must be 16 hex chars"));
         }
         if !content_hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
-            return Err(ServedPathError::InvalidInput("math png hash must be lowercase hex"));
+            return Err(ServedPathError::InvalidInput("png hash must be lowercase hex"));
         }
-        Ok(ServedPath(format!("{}{}.png", MATH_PNG_PREFIX, content_hash)))
+        Ok(ServedPath(format!("{prefix}{content_hash}.png")))
     }
 
     /// A downloaded external-link cover image (an external `:::grid` card's
@@ -351,11 +371,6 @@ impl ServedPath {
         Ok(ServedPath(format!("assets/favicon.{}", ext)))
     }
 
-    /// Apple touch icon. Path is fixed.
-    pub fn for_apple_touch_icon() -> Self {
-        ServedPath("assets/apple-touch-icon.png".to_string())
-    }
-
     /// Sitemap. Path is fixed.
     pub fn for_sitemap() -> Self {
         ServedPath("sitemap.xml".to_string())
@@ -394,6 +409,12 @@ impl ServedPath {
         out.strip_suffix(".html").map(|stem| ServedPath(format!("{stem}.ics")))
     }
 
+    /// The site's public description of its request forms, at a fixed,
+    /// unhashed address so a form service can fetch it by the site's URL.
+    pub fn for_commerce_json() -> Self {
+        ServedPath(crate::build::emit::commerce::COMMERCE_PATH.to_string())
+    }
+
     /// The welcome email of one language tree, read by the hosting server
     /// when a subscriber is confirmed. `edition` is the language-tree folder
     /// name, or `default` for the root tree.
@@ -418,11 +439,6 @@ impl ServedPath {
         Ok(ServedPath(format!("{}/{}", SOURCE_COPY_MOUNT, rel)))
     }
 
-    /// The redirect table a host that can answer a real 301 reads.
-    pub fn for_redirects_manifest() -> Self {
-        ServedPath("_moss/redirects.json".to_string())
-    }
-
     /// LLMs.txt. Path is fixed.
     pub fn for_llms_txt() -> Self {
         ServedPath("llms.txt".to_string())
@@ -437,13 +453,6 @@ impl ServedPath {
     /// robots.txt. Path is fixed.
     pub fn for_robots_txt() -> Self {
         ServedPath("robots.txt".to_string())
-    }
-
-    /// moss default icon — the fallback site icon when the site provides
-    /// none. Embedded in the binary; emitted to disk once per build that
-    /// needs it.
-    pub fn for_moss_default_icon() -> Self {
-        ServedPath("_moss/default-icon.png".to_string())
     }
 
     /// Default theme CSS, emitted from the binary-embedded default stylesheet
@@ -1095,11 +1104,6 @@ mod tests {
     }
 
     #[test]
-    fn for_apple_touch_icon_fixed_path() {
-        assert_eq!(ServedPath::for_apple_touch_icon().as_str(), "assets/apple-touch-icon.png");
-    }
-
-    #[test]
     fn for_sitemap_fixed_path() {
         assert_eq!(ServedPath::for_sitemap().as_str(), "sitemap.xml");
     }
@@ -1127,11 +1131,6 @@ mod tests {
     #[test]
     fn for_robots_txt_fixed_path() {
         assert_eq!(ServedPath::for_robots_txt().as_str(), "robots.txt");
-    }
-
-    #[test]
-    fn for_moss_default_icon_lives_under_underscore_moss() {
-        assert_eq!(ServedPath::for_moss_default_icon().as_str(), "_moss/default-icon.png");
     }
 
     #[test]

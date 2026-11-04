@@ -1,0 +1,11 @@
+requirementDiagram
+  requirement no_script {
+    id: 1
+    text: Pages read without JavaScript
+    risk: low
+    verifymethod: test
+  }
+  element renderer {
+    type: module
+  }
+  renderer - satisfies -> no_script

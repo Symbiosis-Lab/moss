@@ -784,7 +784,7 @@ fn moss_hosted_email_channel_auto_injects_form_into_footer_end() {
 }
 
 /// [channels.email] on, no seta site_id, no footer.md → the seta form
-/// injects in PENDING state (action="#", data-moss-pending-site) so
+/// injects in PENDING state (action="#", data-moss-pending) so
 /// preview shows the real footer before first publish. Replaces the
 /// pre-2026-06-10 behavior (NoProvider warning + silent dropout).
 /// A leaked pending form is hidden from real readers by the email.css rule
@@ -837,7 +837,7 @@ fn email_channel_without_site_id_injects_pending_form() {
     assert!(
         html.contains("class=\"moss-subscribe-form\"")
             && html.contains("data-position=\"inline\"")
-            && html.contains("data-moss-pending-site=\"true\"")
+            && html.contains("data-moss-pending=\"true\"")
             && html.contains("action=\"#\""),
         "footer-end must carry the pending-variant hosted form: {html}"
     );
@@ -897,15 +897,13 @@ fn single_scope_form_covers_synthesized_pages() {
         .get_html("footer-end", "index.html")
         .expect("single-scope form must be Static so synthesized pages get it");
     assert!(
-        html.contains("data-moss-pending-site=\"true\""),
+        html.contains("data-moss-pending=\"true\""),
         "synthesized homepage must carry the (pending) subscribe form: {html}"
     );
 }
 
 /// `site_id = ""` in state must render the PENDING form, never a
-/// "wired" form with action `/sites//subscribe`. Re-establishes
-/// the invariant the deleted `get_email_policy_warnings` command held
-/// (it defended against an empty site_id in state.toml).
+/// "wired" form with action `/sites//subscribe`.
 #[test]
 fn empty_site_id_renders_pending_form() {
     use crate::build::types::ParsedDocument;
@@ -930,10 +928,9 @@ fn empty_site_id_renders_pending_form() {
         ..Default::default()
     }];
 
-    let deploy = DomainDeploymentConfig {
-        site_id: Some(String::new()),
-        ..Default::default()
-    };
+    let deploy = toml::from_str::<crate::config::deployment::DeploymentState>(r#"site_id = """#)
+        .unwrap()
+        .flat_view(None, None);
     let slots = generate_native_slots(
         &ServicesConfig::default(),
         project_path,
@@ -953,7 +950,7 @@ fn empty_site_id_renders_pending_form() {
         .get_html("footer-end", "index.html")
         .expect("subscribe form must still populate footer-end with an empty site_id");
     assert!(
-        html.contains("data-moss-pending-site=\"true\"") && html.contains("action=\"#\""),
+        html.contains("data-moss-pending=\"true\"") && html.contains("action=\"#\""),
         "empty site_id must render the PENDING form, not wired-to-nothing: {html}"
     );
 }

@@ -30,7 +30,7 @@ use super::node::{Block, CalloutKind, ColumnAlignment, Fold, Inline};
 use super::shortcode::Shortcode;
 use super::shortcode_extract::{extract_shortcodes_with_config, parse_placeholder, ExtractedShortcode};
 use super::url::Url;
-use crate::heading::anchor::obsidian_heading_anchor;
+use crate::heading::anchor::{legacy_heading_anchor, obsidian_heading_anchor};
 
 /// Parser configuration flags.
 ///
@@ -333,6 +333,11 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // After the restore, so `[![[x.jpg]]](url)` and `[![x](x.jpg)](url)` reach
     // it as the same `Link(Image)` shape.
     promote_linked_figures(&mut blocks, &line_ctx);
+    // Grid cells run the same rule from `parse_cell_to_blocks`; link cards and
+    // hero overlays do not (a gallery link inside a card link nests anchors).
+    if heading_ids == HeadingIds::Number {
+        super::picture_row::promote(&mut blocks);
+    }
 
     // Implicit-figure gating: the per-paragraph `try_promote_to_figure`
     // inside `parse_block_with_tag` always runs (so the figure promotion
@@ -549,7 +554,7 @@ pub(crate) fn unwrap_implicit_figure(block: &mut Block) {
             Shortcode::Subscribe(_)
             | Shortcode::Buttons(_)
             | Shortcode::Gallery(_)
-            | Shortcode::Recent(_) => {}
+            | Shortcode::Recent(_) | Shortcode::Form(_) => {}
         },
         _ => {}
     }
@@ -797,7 +802,16 @@ fn parse_block_with_tag(
             let trailing_text = matches!(children.last(), Some(Inline::Text(t)) if crate::heading::attrs::heading_attrs(t).is_some());
             let attrs = if trailing_text { crate::heading::attrs::heading_attrs(&heading_text) } else { None };
             let title = attrs.as_ref().map_or(heading_text.as_str(), |a| a.title);
-            let id = attrs.as_ref().and_then(|a| a.id).map_or_else(|| obsidian_heading_anchor(title), str::to_string);
+            let named = attrs.as_ref().and_then(|a| a.id);
+            let id = named.map_or_else(|| obsidian_heading_anchor(title), str::to_string);
+            // A derived id also answers the form it had before punctuation was
+            // dropped. A named id also answers its slugged spelling, which is what
+            // a `[[Page#v1.2]]` wikilink emits.
+            let alias = match named {
+                Some(n) => obsidian_heading_anchor(n),
+                None => legacy_heading_anchor(title),
+            };
+            let legacy_id = Some(alias).filter(|a| *a != id);
             let contents_end = attrs.as_ref().is_some_and(|a| a.contents_end);
             let contents_label = attrs.as_ref().and_then(|a| a.contents_label).map(str::to_string);
             let mut children = children;
@@ -809,6 +823,7 @@ fn parse_block_with_tag(
                     level: level_num,
                     children,
                     id: Some(id),
+                    legacy_id,
                     contents_end,
                     contents_label,
                 }),
@@ -1396,7 +1411,7 @@ fn try_promote_image_only(
 
 /// A standard image's bracket text, sorted. Display words count only after a
 /// `|`, so an alt that happens to be one (`![Cover](c.jpg)`) stays the alt.
-fn standard_image_words(alt: &str) -> crate::media::ImageWords {
+pub(super) fn standard_image_words(alt: &str) -> crate::media::ImageWords {
     if alt.contains('|') {
         return crate::media::read_image_words(alt);
     }
@@ -2152,8 +2167,23 @@ fn flush_pending_paragraph(out: &mut Vec<Block>, pending_inlines: &mut Vec<Inlin
 /// safe-guarded) are left untouched.
 fn assign_heading_id_suffixes(blocks: &mut [Block]) {
     let mut id_counts: HashMap<String, usize> = HashMap::new();
-    for slot in heading_id_slots(blocks) {
-        disambiguate_heading_id(slot, &mut id_counts);
+    let mut legacy_counts: HashMap<String, usize> = HashMap::new();
+    let mut slots = heading_id_slots(blocks);
+    // Replay the numbering the earlier id rule gave every heading, so the
+    // alias is exactly the id a stored link carries.
+    for slot in slots.iter_mut() {
+        let mut old = slot.legacy_id.take().or_else(|| slot.id.clone());
+        disambiguate_heading_id(&mut old, &mut legacy_counts);
+        disambiguate_heading_id(slot.id, &mut id_counts);
+        *slot.legacy_id = old.filter(|o| Some(o) != slot.id.as_ref());
+    }
+    // An alias that is another heading's id would duplicate it: that id
+    // belongs to the heading, not the alias.
+    let live: HashSet<String> = slots.iter().filter_map(|s| s.id.clone()).collect();
+    for slot in slots.iter_mut() {
+        if slot.legacy_id.as_ref().is_some_and(|l| live.contains(l)) {
+            *slot.legacy_id = None;
+        }
     }
 }
 
@@ -2162,13 +2192,14 @@ fn assign_heading_id_suffixes(blocks: &mut [Block]) {
 /// footer), where an id would collide with the page's own.
 pub fn clear_heading_ids(doc: &mut Document) {
     for slot in heading_id_slots(&mut doc.blocks) {
-        *slot = None;
+        *slot.id = None;
+        *slot.legacy_id = None;
     }
 }
 
 /// Every heading's id slot, in the order the headings appear on the rendered
 /// page: the body first, then each hoisted endnote in endnote order.
-fn heading_id_slots(blocks: &mut [Block]) -> Vec<&mut Option<String>> {
+fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
     // Built BEFORE the mutable walk: `entries()` is the order
     // `render_section` emits the `<li id="fn-N">`s, and it needs a shared
     // borrow of the same tree.
@@ -2178,8 +2209,8 @@ fn heading_id_slots(blocks: &mut [Block]) -> Vec<&mut Option<String>> {
         .map(|(_, label)| label.clone())
         .collect();
 
-    let mut body: Vec<&mut Option<String>> = Vec::new();
-    let mut notes: Vec<(String, Vec<&mut Option<String>>)> = Vec::new();
+    let mut body: Vec<HeadingSlot<'_>> = Vec::new();
+    let mut notes: Vec<(String, Vec<HeadingSlot<'_>>)> = Vec::new();
     let mut hoisted: HashSet<String> = HashSet::new();
     let scope = HoistScope {
         document_notes: &note_order,
@@ -2198,6 +2229,12 @@ fn heading_id_slots(blocks: &mut [Block]) -> Vec<&mut Option<String>> {
     });
     body.extend(notes.into_iter().flat_map(|(_, slots)| slots));
     body
+}
+
+/// A heading's id and the id it had before punctuation was dropped from ids.
+struct HeadingSlot<'a> {
+    id: &'a mut Option<String>,
+    legacy_id: &'a mut Option<String>,
 }
 
 /// Apply the `-N` suffix rule to one heading id slot.
@@ -2270,14 +2307,14 @@ impl HoistScope<'_> {
 
 fn collect_heading_id_slots<'a>(
     blocks: &'a mut [Block],
-    sink: &mut Vec<&'a mut Option<String>>,
+    sink: &mut Vec<HeadingSlot<'a>>,
     hoisted: &mut HashSet<String>,
-    notes: &mut Vec<(String, Vec<&'a mut Option<String>>)>,
+    notes: &mut Vec<(String, Vec<HeadingSlot<'a>>)>,
     scope: HoistScope<'_>,
 ) {
     for block in blocks.iter_mut() {
         match block {
-            Block::Heading { id, .. } => sink.push(id),
+            Block::Heading { id, legacy_id, .. } => sink.push(HeadingSlot { id, legacy_id }),
             Block::FootnoteDefinition { label, children } => {
                 let label = label.clone();
                 // A definition is bucketed as an endnote only when the
@@ -2288,7 +2325,7 @@ fn collect_heading_id_slots<'a>(
                 // that is numbered after the whole body, so a heading that
                 // renders first was numbered last.
                 if scope.hoists(&label, hoisted) {
-                    let mut note_sink: Vec<&'a mut Option<String>> = Vec::new();
+                    let mut note_sink: Vec<HeadingSlot<'a>> = Vec::new();
                     collect_heading_id_slots(children, &mut note_sink, hoisted, notes, scope);
                     notes.push((label, note_sink));
                 } else {
@@ -2336,7 +2373,7 @@ fn collect_heading_id_slots<'a>(
                 Shortcode::Subscribe(_)
                 | Shortcode::Buttons(_)
                 | Shortcode::Gallery(_)
-                | Shortcode::Recent(_) => {}
+                | Shortcode::Recent(_) | Shortcode::Form(_) => {}
             },
             // Deliberately exhaustive, no `_` arm: these carry no block
             // children, and the next `Block` variant that gains a

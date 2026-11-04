@@ -80,7 +80,7 @@ fn build_table(rows: &[Vec<String>], opts: &CsvTableOptions) -> String {
     let mut out = String::new();
     out.push_str(&format!("<table class=\"{}\"{}>", opts.class, data_type_attr));
     if let Some(cap) = &opts.caption {
-        out.push_str(&format!("<caption>{}</caption>", escape(cap)));
+        out.push_str(&format!("<caption>{}</caption>", crate::media::html_escape_text(cap)));
     }
     let (header, body) = if opts.has_header {
         (Some(&rows[0]), &rows[1..])
@@ -90,7 +90,7 @@ fn build_table(rows: &[Vec<String>], opts: &CsvTableOptions) -> String {
     if let Some(h) = header {
         out.push_str("<thead><tr>");
         for cell in h {
-            out.push_str(&format!("<th>{}</th>", escape(cell)));
+            out.push_str(&format!("<th>{}</th>", crate::media::html_escape_text(cell)));
         }
         out.push_str("</tr></thead>");
     }
@@ -98,18 +98,12 @@ fn build_table(rows: &[Vec<String>], opts: &CsvTableOptions) -> String {
     for row in body {
         out.push_str("<tr>");
         for cell in row {
-            out.push_str(&format!("<td>{}</td>", escape(cell)));
+            out.push_str(&format!("<td>{}</td>", crate::media::html_escape_text(cell)));
         }
         out.push_str("</tr>");
     }
     out.push_str("</tbody></table>");
     out
-}
-
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

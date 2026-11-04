@@ -42,6 +42,7 @@
 use std::collections::HashMap;
 
 use moss_core::ast::{Block, Inline, ResolvedUrl, Url, UrlKind};
+use moss_core::ast::link_card::{blocks_text, push_inlines_text};
 
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::components::grid_card::{render_external_card, render_item_with_typesetting};
@@ -252,33 +253,6 @@ fn inlines_text(inlines: &[Inline]) -> String {
     out.trim().to_string()
 }
 
-fn blocks_text(blocks: &[Block]) -> String {
-    let mut out = String::new();
-    for block in blocks {
-        match block {
-            Block::Paragraph(inlines) => push_inlines_text(&mut out, inlines),
-            Block::Heading { children, .. } => push_inlines_text(&mut out, children),
-            _ => {}
-        }
-        out.push(' ');
-    }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
-    for inline in inlines {
-        match inline {
-            Inline::Text(t) | Inline::Code(t) => out.push_str(t),
-            Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
-                push_inlines_text(out, children)
-            }
-            Inline::Link { children, .. } => push_inlines_text(out, children),
-            Inline::LineBreak => out.push(' '),
-            Inline::Image { .. } | Inline::Other(_) | Inline::FootnoteRef(_) | Inline::TaskMarker(_) => {}
-        }
-    }
-}
-
 // ── the render-phase entry point ────────────────────────────────────────
 
 /// Resolve one page's `:::grid` cells against the whole build, returning its
@@ -398,6 +372,7 @@ pub(crate) fn apply_summary_grids(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
             "{}\n",
             crate::build::components::cards_container(
                 "list",
+                false,
                 true,
                 &Default::default(),
                 &cards.join("\n"),
@@ -593,9 +568,8 @@ pub(crate) fn external_urls_needing_fetch(plan: &BodyPlan) -> Vec<String> {
 }
 
 /// Every external grid-cell URL across a whole build's already-parsed
-/// documents, deduplicated — the candidate set for
-/// `link_meta::fetch_new_link_meta_for_build`'s once-per-build,
-/// short-budget fetch (`build::render::blocking`'s pre-render step).
+/// documents, deduplicated — the candidate set for the once-per-build
+/// fetch in `build::render::blocking`'s pre-render step.
 ///
 /// Safe to read a document's RAW `body_plan`, before any per-page pass has
 /// run on it: [`apply_collection_cards`] and [`apply_summary_grids`] only

@@ -370,16 +370,22 @@ jobs:
       - name: Backend JS bundles are up to date
         run: pnpm run check:backend-scripts
 
-      # This tree's own copy of the desktop repo's architecture ratchet (rows
-      # a/b/e — prod-lines-per-file, children-per-dir, mirror-comment
-      # markers).
-      # Once the desktop side can no longer scan `open/crates`/`open/packages`,
-      # this repo has to ratchet its own tree.
-      - name: Ratchet (architecture size/marker budget)
+      # cargo metadata only reads the manifests: no build, no network. The
+      # ratchet's dependency row and the diagram check below both use it.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Size, marker and dependency budgets; see the header of scripts/ratchet.mjs.
+      - name: Ratchet (architecture size/marker/dependency budget)
         run: node scripts/ratchet.mjs check
 
       - name: Ratchet tool tests (accept/tighten --path)
         run: node --test scripts/__tests__/ratchet.test.mjs
+
+      - name: Architecture diagrams name only what the code has
+        run: node scripts/gen-architecture-diagrams.mjs --check
+
+      - name: Diagram check tests
+        run: node --test scripts/__tests__/gen-architecture-diagrams.test.mjs
 
       # `check` goes green precisely BECAUSE a ceiling rose, so a raise with
       # no reason is otherwise invisible in review — this audits every
@@ -403,13 +409,22 @@ jobs:
       - name: Typecheck moss-watercolor (source + tests)
         run: cd packages/moss-watercolor && pnpm run typecheck
 
+      - name: Typecheck moss-blueprint-grid (source + tests)
+        run: cd packages/moss-blueprint-grid && pnpm run typecheck
+
+      # The contract itself is checked against the command table by
+      # `cargo test` (commands::tests::the_contract_matches_the_command_table).
+      - name: Typecheck and test moss-ui (the engine contract)
+        run: cd packages/moss-ui && pnpm run typecheck && pnpm run test
+
       - name: Package artifacts are up to date
         run: |
           pnpm --filter @symbiosis-lab/moss-api run build
           pnpm --filter @symbiosis-lab/moss-syntax run build
           pnpm --filter @symbiosis-lab/moss-watercolor run build
-          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist packages/moss-watercolor/dist; then
-            echo "::error::Package artifacts are stale. Run the moss-api, moss-syntax and moss-watercolor builds and commit dist/."
+          pnpm --filter @symbiosis-lab/moss-blueprint-grid run build
+          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist packages/moss-watercolor/dist packages/moss-blueprint-grid/dist; then
+            echo "::error::Package artifacts are stale. Run the moss-api, moss-syntax, moss-watercolor and moss-blueprint-grid builds and commit dist/."
             exit 1
           fi
 
@@ -426,6 +441,9 @@ jobs:
 
       - name: Test moss-watercolor
         run: cd packages/moss-watercolor && npx vitest run
+
+      - name: Test moss-blueprint-grid
+        run: cd packages/moss-blueprint-grid && npx vitest run
 
       - name: Test moss npm wrapper
         run: cd packages/moss && npm test

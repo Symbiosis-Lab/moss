@@ -58,7 +58,7 @@ pub struct PageChangeRecord {
 pub struct RemovedAddressRecord {
     pub path: String,
     pub reason: RemovalReason,
-    /// Where the page that lived here is now served, when known.
+    /// Where the page or file that lived here is now served, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_to: Option<String>,
 }

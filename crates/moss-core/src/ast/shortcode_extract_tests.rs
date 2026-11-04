@@ -3256,7 +3256,7 @@ fn every_shortcode_kind_url_slot_is_accounted_for() {
     fn classify(sc: &Shortcode) -> Tracking {
         match sc {
             // `visit.rs`: no URLs.
-            Shortcode::Subscribe(_) | Shortcode::Recent(_) => Tracking::None,
+            Shortcode::Subscribe(_) | Shortcode::Recent(_) | Shortcode::Form(_) => Tracking::None,
             // `visit.rs`: item.url — buttons items are `[label](url)` lines.
             Shortcode::Buttons(_) => Tracking::GenericOnly,
             // `visit.rs`: cells are typed blocks; every URL in them came from

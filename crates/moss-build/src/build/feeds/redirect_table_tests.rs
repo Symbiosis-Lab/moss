@@ -1,6 +1,5 @@
-//! The redirect table end to end: every source, every static form, and the
-//! `_moss/redirects.json` a capable host reads. Each case builds a real
-//! folder through the blocking render, the same entry the preview and the
+//! The redirect table end to end: every source and every static form. Each
+//! case builds a real folder through the blocking render, the same entry the preview and the
 //! snapshot suite use, so what is asserted is what a site would serve.
 
 use crate::build::cli_output::take_cli_problems;
@@ -21,9 +20,6 @@ impl Built {
     }
     fn has(&self, rel: &str) -> bool {
         self.out.join(rel).exists()
-    }
-    fn table(&self) -> String {
-        self.read("_moss/redirects.json")
     }
 }
 
@@ -72,6 +68,10 @@ fn build(files: &[(&str, &str)]) -> Built {
     )
     .unwrap();
     crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();
+    // The seal writes the file copies and folder moves, from what is served.
+    let mut sealed = pending.seal();
+    let late = crate::system::build_records::records().late_redirects(dir.path().to_str().unwrap());
+    crate::build::feeds::kept_addresses::keep(&crate::moss_paths::MossPaths::new(dir.path()), &out, &mut sealed, &late);
     let problems = take_cli_problems();
     Built { _dir: dir, out, problems }
 }
@@ -116,7 +116,6 @@ fn a_recorded_rename_whose_translation_is_gone_lands_on_the_default_language_pag
     ]);
     assert!(b.read("zh-hans/old-kept/index.html").contains("url=/zh-hans/kept/"));
     assert!(b.read("zh-hans/old-gone/index.html").contains("url=/gone/?from=old"));
-    assert!(b.table().contains(r#"{"from":"/zh-hans/old-gone/","to":"/gone/?from=old","status":301}"#), "{}", b.table());
 }
 
 /// A language's home is its folder, written with or without the slash; when
@@ -206,6 +205,17 @@ fn a_declared_file_address_is_a_byte_copy_of_its_target() {
     assert_eq!(b.problems, 0);
 }
 
+/// A target in a folder named with capitals is served under its lowercased
+/// path; its copy still finds the file as the folder names it. (A case-blind
+/// file system finds it either way, so only a case-sensitive one can fail.)
+#[test]
+fn a_file_redirect_finds_a_target_whose_folder_name_is_slugged() {
+    let cfg = config(r#""/old.csv" = "/My Docs/data.csv""#);
+    let b = build(&[ABOUT, ("My Docs/data.csv", "a,b\n"), (".moss/config.toml", &cfg)]);
+    assert_eq!(b.read("old.csv"), "a,b\n");
+    assert_eq!(b.problems, 0);
+}
+
 #[test]
 fn a_declared_external_target_gets_a_stub_pointing_at_the_url() {
     let cfg = config(r#""/shop/" = "https://example.com/shop""#);
@@ -225,7 +235,6 @@ fn an_address_the_site_really_serves_keeps_its_content() {
     assert!(!b.read("about/index.html").contains("Redirecting"));
     assert!(!b.has("keep.html"), "the folder's own file is copied in later; no stub may sit in its place");
     assert_eq!(b.problems, 2);
-    assert!(!b.table().contains("/about/") && !b.table().contains("keep.html"));
 }
 
 #[test]
@@ -240,11 +249,10 @@ fn a_self_redirect_and_an_unknown_target_are_advisories_not_stubs() {
     for rel in ["gone/index.html", "old/index.html", "plain/index.html"] {
         assert!(!b.has(rel), "{rel}");
     }
-    assert_eq!(b.table(), r#"{"version":1,"redirects":[{"from":"/feed.xml","to":"/rss.xml","status":301}]}"#);
 }
 
 #[test]
-fn a_file_address_with_no_file_target_has_no_static_form_but_is_listed() {
+fn a_file_address_with_no_file_target_has_no_static_form_and_is_reported() {
     let cfg = config(
         r#""/a.pdf" = "https://example.com/a.pdf"
 "/b.csv" = "/about/""#,
@@ -252,13 +260,11 @@ fn a_file_address_with_no_file_target_has_no_static_form_but_is_listed() {
     let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
     assert!(!b.has("a.pdf") && !b.has("b.csv"));
     assert_eq!(b.problems, 2);
-    let table = b.table();
-    assert!(table.contains(r#"{"from":"/a.pdf","to":"https://example.com/a.pdf","status":301}"#), "{table}");
-    assert!(table.contains(r#"{"from":"/b.csv","to":"/about/","status":301}"#), "{table}");
 }
 
+/// No table of redirects is published; each is served by its stub or copy.
 #[test]
-fn the_shipped_table_lists_every_source_in_order() {
+fn every_source_is_served_without_publishing_a_table() {
     let cfg = config(
         r#""/old-post/" = "/about/"
 "/data.csv" = "/assets/data.csv""#,
@@ -269,24 +275,69 @@ fn the_shipped_table_lists_every_source_in_order() {
         (".moss/redirects.json", r#"{"old-about/": "about/"}"#),
         (".moss/config.toml", &cfg),
     ]);
-    assert_eq!(
-        b.table(),
-        concat!(
-            r#"{"version":1,"redirects":["#,
-            r#"{"from":"/data.csv","to":"/assets/data.csv","status":301},"#,
-            r#"{"from":"/feed.xml","to":"/rss.xml","status":301},"#,
-            r#"{"from":"/old-about/","to":"/about/","status":301},"#,
-            r#"{"from":"/old-post/","to":"/about/","status":301}"#,
-            r#"]}"#
-        )
-    );
+    assert_eq!(b.read("data.csv"), "x");
+    assert_eq!(b.read("feed.xml"), b.read("rss.xml"));
+    assert!(b.read("old-about/index.html").contains("url=/about/"));
+    assert!(b.read("old-post/index.html").contains("url=/about/"));
+    assert!(!b.has("_moss/redirects.json"));
+    assert_eq!(b.problems, 0);
 }
 
+/// An unlisted page's address is its secret: after a move, the old address
+/// may appear in its own forwarding page and nowhere else the site publishes.
 #[test]
-fn a_declared_feed_xml_replaces_the_alias() {
+fn a_moved_unlisted_pages_old_address_is_published_only_in_its_own_stub() {
+    let cfg = config(r#""/review/k7x9q2/" = "/review/client/k7x9q2/""#);
+    let b = build(&[
+        ABOUT,
+        (
+            "review/client/k7x9q2/index.html",
+            "<!doctype html><html><head><meta name=\"robots\" content=\"noindex\"><title>Round</title></head><body>Round</body></html>",
+        ),
+        (".moss/config.toml", &cfg),
+    ]);
+    let stub = b.read("review/k7x9q2/index.html");
+    assert!(stub.contains("url=/review/client/k7x9q2/"));
+    assert!(stub.contains(r#"<meta name="robots" content="noindex">"#), "a stub must not be indexed: {stub}");
+    let mut leaks = Vec::new();
+    for entry in walkdir::WalkDir::new(&b.out).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
+        let rel = entry.path().strip_prefix(&b.out).unwrap().to_string_lossy().replace('\\', "/");
+        let text = String::from_utf8_lossy(&fs::read(entry.path()).unwrap()).into_owned();
+        if rel != "review/k7x9q2/index.html" && text.contains("/review/k7x9q2/") {
+            leaks.push(rel);
+        }
+    }
+    assert!(leaks.is_empty(), "the old address is published in {leaks:?}");
+}
+
+/// A folder line naming the site root would copy every address of the site,
+/// so it moves no folder, and the line is reported.
+#[test]
+fn a_folder_line_naming_the_root_moves_no_folder() {
+    let cfg = config(r#""/blog/" = "/""#);
+    let b = build(&[ABOUT, ("blog/post.md", "---\ntitle: Post\n---\n\nBody.\n"), (".moss/config.toml", &cfg)]);
+    assert!(!b.has("blog/about/index.html"));
+    assert_eq!(b.problems, 2, "moves no folder, and the folder's own address is already served");
+}
+
+/// The old side of a line to the root can be one page's address with nothing
+/// under it: the page is forwarded and nothing is reported.
+#[test]
+fn a_single_page_address_forwarded_to_the_root_is_not_reported() {
+    let cfg = config(r#""/home/" = "/""#);
+    let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
+    assert!(b.read("home/index.html").contains("url=/\""));
+    assert_eq!(b.problems, 0);
+}
+
+/// A file can only be kept by a copy, so a declared line sending the old feed
+/// to a page is reported and the generator's own alias stays.
+#[test]
+fn a_declared_feed_xml_with_no_static_form_leaves_the_alias() {
     let cfg = config(r#""/feed.xml" = "/about/""#);
     let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
-    assert!(b.table().contains(r#"{"from":"/feed.xml","to":"/about/","status":301}"#));
+    assert_eq!(b.read("feed.xml"), b.read("rss.xml"));
+    assert_eq!(b.problems, 1);
 }
 
 #[test]
@@ -309,25 +360,22 @@ fn a_target_cannot_inject_markup_into_a_stub() {
 }
 
 #[test]
-fn an_old_address_is_listed_exactly_as_declared() {
+fn an_old_address_is_served_exactly_as_declared() {
     let cfg = config(
         r#""/舊文章/" = "/about/"
 "/Caf%C3%A9.html" = "/about/""#,
     );
     let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
-    let table = b.table();
-    for from in ["/舊文章/", "/Caf%C3%A9.html"] {
-        assert!(table.contains(&format!(r#"{{"from":"{from}","#)), "{from}: {table}");
-    }
+    assert!(b.read("舊文章/index.html").contains("url=/about/"));
     // A percent-escape names the file by its decoded name.
     assert!(b.read("Café.html").contains("url=/about/"));
     assert_eq!(b.problems, 0);
 }
 
 /// A published file path cannot carry `Old Post`, so no stub may stand in at a
-/// rewritten address: the entry is listed and reported, and writes nothing.
+/// rewritten address: the entry is reported and writes nothing.
 #[test]
-fn an_address_a_file_path_cannot_carry_is_listed_but_writes_nothing() {
+fn an_address_a_file_path_cannot_carry_is_reported_and_writes_nothing() {
     let cfg = config(
         r#""/Old Post/" = "/about/"
 "/old-post/" = "/about/""#,
@@ -336,7 +384,6 @@ fn an_address_a_file_path_cannot_carry_is_listed_but_writes_nothing() {
     assert!(b.read("old-post/index.html").contains("url=/about/"), "the plain spelling keeps its stub");
     assert!(!b.has("Old Post"));
     assert_eq!(b.problems, 1);
-    assert!(b.table().contains(r#"{"from":"/Old Post/","to":"/about/","status":301}"#), "{}", b.table());
 }
 
 /// Same, with nothing else to confuse the stub check.
@@ -361,7 +408,9 @@ fn an_ambiguous_or_escaping_address_is_refused_not_guessed() {
     );
     let b = build(&[ABOUT, (".moss/config.toml", &cfg)]);
     assert_eq!(b.problems, 7);
-    assert_eq!(b.table(), r#"{"version":1,"redirects":[{"from":"/feed.xml","to":"/rss.xml","status":301}]}"#);
+    for rel in ["e/index.html", "f/index.html", "g/index.html", "h/index.html"] {
+        assert!(!b.has(rel), "{rel}");
+    }
 }
 
 /// Declared entries arrive through the build's one parse of the config, not a

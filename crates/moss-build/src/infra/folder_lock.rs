@@ -114,13 +114,6 @@ pub(crate) fn folder_id(folder: &Path) -> String {
     format!("{:x}", Sha256::digest(canonical.to_string_lossy().as_bytes()))
 }
 
-/// `<moss_home>/locks/<folder-id>.build` — the lock file [`acquire`] takes
-/// for `folder`. Exposed so a test (or a future `moss doctor`) can name the
-/// file without acquiring it.
-pub fn lock_path_for(folder: &Path) -> Result<PathBuf, String> {
-    lock_path_named(folder, "build")
-}
-
 /// `<moss_home>/locks/<folder-id>.<name>` — one lock file per (folder, name),
 /// so a different job on the same folder can hold its own lock without waiting
 /// on the build's.

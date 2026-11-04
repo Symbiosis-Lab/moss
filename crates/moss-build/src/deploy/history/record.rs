@@ -1,8 +1,9 @@
-//! The record itself, and the three ways one gets written: a landed publish
-//! ([`snapshot`]), an author-named save ([`snapshot_manual`]), and the
-//! automatic save a restore takes of the present before overwriting it
-//! ([`save_before_restore`]). All three end up in [`write_snapshot`], which is
-//! the one place that reads real bytes off disk and stores them.
+//! The record itself, and the ways one gets written: a landed publish
+//! ([`snapshot`]), an author-named save ([`snapshot_manual`]), the automatic
+//! save a restore takes of the present before overwriting it
+//! ([`save_before_restore`]), all three through [`write_snapshot`]; and one
+//! page another writer left, kept when the editor saved over it
+//! ([`snapshot_displaced`]).
 //!
 //! # What happens at each publish
 //!
@@ -38,6 +39,11 @@ pub enum Trigger {
     Publish,
     Manual,
     Restore,
+    /// One page as another writer left it, kept when the editor saved the
+    /// person's text over lines that writer had changed. A one-page record:
+    /// it is never a site version, so the site timeline and a site restore
+    /// skip it.
+    Displaced,
 }
 
 /// One landed publish, author-named save, or pre-restore save: every source
@@ -74,6 +80,14 @@ pub struct PublishRecord {
     pub entries: BTreeMap<String, Entry>,
 }
 
+impl PublishRecord {
+    /// Where this record was published, or `None` for a kept outside edit,
+    /// which was published nowhere.
+    pub fn published_target(&self) -> Option<&str> {
+        (self.trigger != Trigger::Displaced).then_some(self.target.as_str())
+    }
+}
+
 /// One source file as it stood at a publish. `mode` follows the deploy
 /// manifest's own tags ([`MODE_FILE`], [`MODE_SYMLINK`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -98,7 +112,7 @@ pub(crate) fn snapshot(
     sealed: &SealedManifest,
     target: &str,
     published_at: &str,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     write_snapshot(root, vault_root, sealed, target, published_at, Trigger::Publish, None)
 }
 
@@ -112,7 +126,7 @@ pub(crate) fn snapshot_manual(
     sealed: &SealedManifest,
     target: &str,
     label: Option<String>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let published_at = chrono::Utc::now().to_rfc3339();
     write_snapshot(root, vault_root, sealed, target, &published_at, Trigger::Manual, label)
 }
@@ -125,13 +139,14 @@ pub(crate) fn snapshot_manual(
 ///
 /// `restoring_id` is the version *being restored to* — a different record
 /// from "the newest one", and the one whose date the automatic label names.
+/// Answers the id of the record it wrote, or `None` when it wrote none.
 pub(crate) fn save_before_restore(
     root: &Path,
     vault_root: &Path,
     current: &SealedManifest,
     target: &str,
     restoring_id: &str,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let restoring =
         store::load_record(root, restoring_id).ok_or_else(|| format!("no such version: {restoring_id}"))?;
 
@@ -146,7 +161,7 @@ pub(crate) fn save_before_restore(
         Some((_, newest)) => current_hashes != flat_hashes(newest),
     };
     if !differs {
-        return Ok(());
+        return Ok(None);
     }
 
     let label = Some(format!("Before restoring {}", format_date(&restoring.published_at)));
@@ -186,10 +201,10 @@ pub(crate) fn format_date(rfc3339: &str) -> String {
 
 /// The shared writer behind [`snapshot`], [`snapshot_manual`] and
 /// [`save_before_restore`]: build entries from real bytes on disk and write
-/// one record. The only difference between the three callers is which
-/// `Trigger`/`label` the record carries. `root` is the resolved site
-/// directory ([`super::HistoryStore`]'s own field) — never re-derived from
-/// an app-data root here.
+/// one record, answering its id (`None` with history off). The only
+/// difference between the three callers is which `Trigger`/`label` the record
+/// carries. `root` is the resolved site directory ([`super::HistoryStore`]'s
+/// own field) — never re-derived from an app-data root here.
 fn write_snapshot(
     root: &Path,
     vault_root: &Path,
@@ -198,9 +213,9 @@ fn write_snapshot(
     published_at: &str,
     trigger: Trigger,
     label: Option<String>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     if !store::history_enabled(vault_root) {
-        return Ok(());
+        return Ok(None);
     }
 
     let object_store = store::object_store(root);
@@ -215,11 +230,43 @@ fn write_snapshot(
         label,
         entries,
     };
-    write_record(root, &record)
+    write_record(root, &record)?;
+    Ok(Some(record_id(&record)))
+}
+
+/// Keep `bytes`, the whole of `path` as another writer left it, as a
+/// one-page `Displaced` record, and answer its id. The caller is about to
+/// write over those bytes, so this stores them from memory rather than
+/// re-reading a file that may already be changing. Unlike the snapshots above
+/// it is not best-effort: a caller that cannot keep the bytes must not write.
+pub(crate) fn snapshot_displaced(root: &Path, path: &str, bytes: &[u8]) -> Result<String, String> {
+    let hash = store::object_store(root).store_bytes(bytes, crate::build::cache::RecordMode::Wait)?;
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        path.to_string(),
+        Entry { mode: MODE_FILE.to_string(), hash: hash.clone(), size: Some(bytes.len() as u64) },
+    );
+    let record = PublishRecord {
+        version: 1,
+        published_at: chrono::Utc::now().to_rfc3339(),
+        // Published nowhere, so it matches no deploy target.
+        target: String::new(),
+        generation_id: format!("displaced-{}", &hash[..12.min(hash.len())]),
+        git_head: None,
+        trigger: Trigger::Displaced,
+        label: None,
+        entries,
+    };
+    write_record(root, &record)?;
+    Ok(record_id(&record))
+}
+
+fn record_id(record: &PublishRecord) -> String {
+    format!("{}-{}", record.published_at.replace(':', "-"), record.generation_id)
 }
 
 fn write_record(root: &Path, record: &PublishRecord) -> Result<(), String> {
-    let filename = format!("{}-{}.json", record.published_at.replace(':', "-"), record.generation_id);
+    let filename = format!("{}.json", record_id(record));
     crate::infra::atomic_write::write_json_atomic(&root.join("publishes").join(filename), record)
 }
 

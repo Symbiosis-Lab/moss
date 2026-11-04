@@ -1,0 +1,5 @@
+sequenceDiagram
+  participant A as <img src=x onerror=alert(1)>
+  A->>B: <script>alert(2)</script>
+  Note over A,B: <iframe src="javascript:alert(3)"></iframe>
+  link A: Dashboard @ javascript:alert(4)

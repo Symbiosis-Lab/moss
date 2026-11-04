@@ -24,6 +24,8 @@ import zipfile
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/source-manifest.toml"
+COUNTRIES_MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/countries-source-manifest.toml"
+COUNTRIES_NAMES = {"countries", "breakaway_disputed_areas"}
 ELEVATION_MANIFEST_ARTIFACT = "earth_gebco_server.txt"
 EXPECTED_NAMES = {
     "land",
@@ -98,12 +100,56 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_manifest() -> tuple[dict, str]:
+def validate_source(source: dict) -> None:
+    """The checks every pinned source passes, whichever manifest lists it."""
+    name = source.get("name")
+    artifact = source.get("artifact")
+    if not isinstance(artifact, str) or Path(artifact).name != artifact:
+        raise VerificationError(f"{name}: artifact must be a plain filename")
+    digest = source.get("sha256", "")
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise VerificationError(f"{name}: invalid lowercase SHA-256")
+    size = source.get("size_bytes")
+    if not isinstance(size, int) or size <= 0:
+        raise VerificationError(f"{name}: positive size_bytes is required")
+    members = source.get("members")
+    member = source.get("member")
+    if members is not None and (member is not None or not members or any("*" in value for value in members)):
+        raise VerificationError(f"{name}: members must be an exact list, not a wildcard")
+    if members is None and (not isinstance(member, str) or "*" in member):
+        raise VerificationError(f"{name}: one exact member is required")
+
+
+def load_manifest(path: Path = MANIFEST) -> tuple[dict, str]:
     try:
-        raw = MANIFEST.read_bytes()
+        raw = path.read_bytes()
         return tomllib.loads(raw.decode("utf-8")), hashlib.sha256(raw).hexdigest()
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        raise VerificationError(f"cannot read {MANIFEST}: {error}") from error
+        raise VerificationError(f"cannot read {path}: {error}") from error
+
+
+def validate_countries_manifest(manifest: dict) -> list[dict]:
+    """The country shapes' two sources. Their manifest stays separate: listing them in the landscape pack's would change the manifest digest embedded in that pack and force regenerating it."""
+    if manifest.get("schema") != 1:
+        raise VerificationError("unsupported country-shapes manifest schema")
+    if "public domain" not in manifest.get("natural_earth_license", "").lower():
+        raise VerificationError("Natural Earth public-domain notice is missing")
+    sources = manifest.get("sources")
+    if not isinstance(sources, list) or {s.get("name") for s in sources} != COUNTRIES_NAMES or len(sources) != len(COUNTRIES_NAMES):
+        raise VerificationError("country-shapes manifest source set differs from the pinned source set")
+    for source in sources:
+        name = source["name"]
+        if not source.get("url", "").startswith("https://naturalearth.s3.amazonaws.com/50m_cultural/"):
+            raise VerificationError(f"{name}: URL is not the pinned 50m cultural source")
+        validate_source(source)
+    return sources
+
+
+def verify_countries(source_dir: Path) -> dict:
+    manifest, manifest_sha256 = load_manifest(COUNTRIES_MANIFEST)
+    sources = validate_countries_manifest(manifest)
+    receipts = [verify_source(source, source_dir) for source in sorted(sources, key=lambda item: item["name"])]
+    return {"schema": 1, "generator": manifest["generator"], "generator_version": manifest["generator_version"], "source_manifest_sha256": manifest_sha256, "sources": receipts}
 
 
 def validate_manifest(manifest: dict) -> list[dict]:
@@ -134,21 +180,7 @@ def validate_manifest(manifest: dict) -> list[dict]:
             raise VerificationError(f"{name}: URL is not the pinned source")
         if name not in ELEVATION_SOURCE_NAMES and source.get("published_version") != EXPECTED_PUBLISHED_VERSIONS[name]:
             raise VerificationError(f"{name}: published version is not the pinned layer version")
-        artifact = source.get("artifact")
-        if not isinstance(artifact, str) or Path(artifact).name != artifact:
-            raise VerificationError(f"{name}: artifact must be a plain filename")
-        digest = source.get("sha256", "")
-        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-            raise VerificationError(f"{name}: invalid lowercase SHA-256")
-        size = source.get("size_bytes")
-        if not isinstance(size, int) or size <= 0:
-            raise VerificationError(f"{name}: positive size_bytes is required")
-        members = source.get("members")
-        member = source.get("member")
-        if members is not None and (member is not None or not members or any("*" in value for value in members)):
-            raise VerificationError(f"{name}: members must be an exact list, not a wildcard")
-        if members is None and (not isinstance(member, str) or "*" in member):
-            raise VerificationError(f"{name}: one exact member is required")
+        validate_source(source)
     elevation_hash = manifest.get("elevation_manifest_sha256", "")
     if len(elevation_hash) != 64 or any(char not in "0123456789abcdef" for char in elevation_hash):
         raise VerificationError("GMT server manifest hash is required")
@@ -242,6 +274,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, default=None, help="offline cache containing the pinned source objects")
     parser.add_argument("--check", action="store_true", help="verify the manifest and every cached source")
+    parser.add_argument("--countries", action="store_true", help="verify only the two country-shape sources (no elevation grid needed)")
     parser.add_argument("--generate", type=Path, metavar="OUTPUT", help="write a deterministic verified-source receipt")
     args = parser.parse_args(argv)
     source_dir = args.source_dir or (Path(os.environ["MOSS_PLACE_MAP_SOURCE_DIR"]) if os.environ.get("MOSS_PLACE_MAP_SOURCE_DIR") else None)
@@ -250,7 +283,7 @@ def main(argv: list[str]) -> int:
     if not args.check and args.generate is None:
         parser.error("choose --check or --generate OUTPUT")
     try:
-        receipt = verify(source_dir.resolve())
+        receipt = (verify_countries if args.countries else verify)(source_dir.resolve())
         if args.generate is not None:
             write_receipt(args.generate, receipt)
         print(f"verified {len(receipt['sources'])} sources; manifest {receipt['source_manifest_sha256']}")

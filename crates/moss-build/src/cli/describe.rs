@@ -4,7 +4,7 @@
 //! is answering — comes in as `binary_version`.
 
 use moss_core::contract::describe::{
-    DescribePayload, ManifestFieldInfo, PluginHookInfo, SlotInfo,
+    ConfigTableInfo, DescribePayload, ManifestFieldInfo, PluginHookInfo, SlotInfo,
 };
 use moss_core::contract::tokens::load_tokens;
 
@@ -41,10 +41,7 @@ pub fn run(args: &[String], binary_version: &'static str) -> i32 {
             return 1;
         }
     };
-    let payload = DescribePayload::new(&tokens)
-        .with_binary_version(binary_version)
-        .with_plugin_contract(plugin_hooks(), manifest_fields(), slots(), cli_commands())
-        .with_site_settings(site_settings());
+    let payload = full_payload(&tokens, binary_version);
 
     if json {
         match serde_json::to_string_pretty(&payload) {
@@ -270,6 +267,37 @@ fn slots() -> Vec<SlotInfo> {
         .collect()
 }
 
+/// Everything `moss describe` answers with.
+fn full_payload<'a>(tokens: &'a moss_core::contract::tokens::Tokens, binary_version: &'static str) -> DescribePayload<'a> {
+    DescribePayload::new(tokens)
+        .with_binary_version(binary_version)
+        .with_plugin_contract(plugin_hooks(), manifest_fields(), slots(), cli_commands())
+        .with_site_settings(site_settings())
+        .with_config_tables(config_tables())
+}
+
+/// The config tables describe documents beyond `[site]`. Not every table yet:
+/// the guide covers the rest. Each table's rules are owned by the code that
+/// applies them.
+fn config_tables() -> Vec<ConfigTableInfo> {
+    vec![ConfigTableInfo {
+        name: "redirects",
+        entry: "\"/old-post/\" = \"/writings/new-post/\"",
+        description: "Keep an old address answering after a move: old address = new address, both site-absolute. Once the site has been published, a page renamed under the same uid is redirected without an entry.",
+        rules: crate::build::feeds::redirect_table::RULES.to_vec(),
+    },
+    ConfigTableInfo {
+        name: "services.forms",
+        entry: "endpoint = \"https://forms.example/f\"",
+        description: "Where the site's `:::form` blocks post: a form named `booking` posts to `<endpoint>/booking`. With no endpoint the build warns, published pages do not show the forms, and the preview shows them with sending simulated.",
+        rules: vec![
+            "A post is application/x-www-form-urlencoded, with `_next` (the form's next= path) and an empty honeypot `_hp`.",
+            "The build writes the site's forms to /_moss/commerce.json whenever the site has a form or this table.",
+            "`enabled = false` turns the table off.",
+        ],
+    }]
+}
+
 fn print_human(payload: &DescribePayload) {
     println!("moss describe");
     println!("  describe_schema_version: {}", payload.describe_schema_version);
@@ -329,6 +357,11 @@ fn print_human(payload: &DescribePayload) {
     println!("Plugin hooks ({}):", payload.plugin_hooks.len());
     for h in &payload.plugin_hooks {
         println!("  {} ({}) — {}", h.name, h.arity, h.description);
+    }
+    println!();
+    println!("Config tables documented here ({}; the guide has the others):", payload.config_tables.len());
+    for t in &payload.config_tables {
+        println!("  [{}] {} — {}", t.name, t.entry, t.description);
     }
     println!();
     println!("Template slots ({}):", payload.slots.len());
@@ -401,6 +434,20 @@ mod tests {
             "[site] keys read in code but missing from site_settings(): {}",
             missing.join(", ")
         );
+    }
+
+    /// An agent reads `describe --json` before the guide, so the `[redirects]`
+    /// table and its folder rule have to be in it.
+    #[test]
+    fn describe_json_lists_the_redirects_table_and_its_folder_rule() {
+        let tokens = load_tokens().unwrap();
+        let json = serde_json::to_value(full_payload(&tokens, "test")).unwrap();
+        let redirects = json["config_tables"]
+            .as_array()
+            .and_then(|tables| tables.iter().find(|t| t["name"] == "redirects"))
+            .unwrap_or_else(|| panic!("no [redirects] entry: {}", json["config_tables"]));
+        let rules: Vec<&str> = redirects["rules"].as_array().unwrap().iter().filter_map(|r| r.as_str()).collect();
+        assert!(rules.iter().any(|r| r.contains("moves everything under the old folder") && r.contains("site root")), "{rules:?}");
     }
 
     /// The `moss describe` manifest table mirrors `PluginManifest` field by

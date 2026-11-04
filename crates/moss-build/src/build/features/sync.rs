@@ -383,13 +383,13 @@ fn run_native_process_sync(
     let url_list = crate::build::page::link_meta::load_persisted_url_list(&moss_dir);
     if !url_list.is_empty() {
         let phase_start = Instant::now();
-        // Reuse the parallel fetcher so GUI and CLI prewarm follow the same
+        // Reuse the parallel fetcher a CLI build runs before render, so both follow the same
         // path (parallelism + per-URL freshness skip + budget). The fetcher
         // has its own internal budget, but we keep this watchdog as a belt-
         // and-braces signal in case the bound is breached.
         let watchdog = spawn_watchdog("link-meta prewarm", Duration::from_secs(120));
         let url_refs: Vec<&str> = url_list.iter().map(|s| s.as_str()).collect();
-        let fetched = crate::build::page::link_meta::fetch_all_link_meta_parallel(&url_refs, &moss_dir);
+        let fetched = crate::build::page::link_meta::fetch_all_link_meta_parallel(&url_refs, &moss_dir, |_| {});
         watchdog.cancel();
         stats.link_meta_prewarmed = url_list.len();
         log::info!(target: "sync", "link-meta: prewarmed {} URLs ({} fetched, rest fresh) in {:?}", url_list.len(), fetched, phase_start.elapsed());

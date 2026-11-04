@@ -71,6 +71,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.callouts,
     },
     CssPartial {
+        name: "forms",
+        source: include_str!("../../assets/css/site/forms.css"),
+        gate: |a| a.forms,
+    },
+    CssPartial {
         name: "search",
         source: include_str!("../../assets/css/site/search.css"),
         gate: |a| a.search,
@@ -96,9 +101,19 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.places_explorer,
     },
     CssPartial {
+        name: "country-map",
+        source: include_str!("../../assets/css/site/country-map.css"),
+        gate: |a| a.country_map,
+    },
+    CssPartial {
         name: "colophon-credit",
         source: include_str!("../../assets/css/site/colophon-credit.css"),
         gate: |a| a.colophon_credit,
+    },
+    CssPartial {
+        name: "diagrams",
+        source: include_str!("../../assets/css/site/diagrams.css"),
+        gate: |a| a.diagrams,
     },
     CssPartial {
         name: "map-layers",

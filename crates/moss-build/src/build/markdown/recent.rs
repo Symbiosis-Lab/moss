@@ -206,40 +206,13 @@ pub fn render_html(posts: &[&ParsedDocument]) -> String {
         out.push_str(&format!(
             "  <li><a href=\"/{href}\">{title}</a><div class=\"moss-recent__date\">{date}</div><div class=\"moss-recent__desc\">{desc}</div></li>\n",
             href = p.url_path.trim_start_matches('/'),
-            title = html_escape(&p.title),
+            title = moss_core::media::html_escape_text(&p.title),
             date = date_str,
             desc = crate::build::page::meta::render_description_html(p.description.as_deref().unwrap_or("")),
         ));
     }
     out.push_str("</ul>\n");
     out
-}
-
-/// Render the resolved posts as plain text (for email body_text).
-pub fn render_plaintext(posts: &[&ParsedDocument]) -> String {
-    if posts.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    for p in posts {
-        let date_str = parse_doc_date(p, DateBound::Earliest)
-            .map(|d| d.format("%Y-%m-%d").to_string())
-            .unwrap_or_default();
-        out.push_str(&format!(
-            "- {title} ({date}) - /{href}\n  {desc}\n\n",
-            title = p.title,
-            date = date_str,
-            href = p.url_path.trim_start_matches('/'),
-            desc = crate::build::page::meta::strip_markdown_inline(p.description.as_deref().unwrap_or("")),
-        ));
-    }
-    out
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -359,15 +332,6 @@ mod tests {
     }
 
     #[test]
-    fn render_plaintext_emits_dashed_list() {
-        let d = doc("posts/a.html", "Hello", Some("2026-05-01"), Some("summary"));
-        let text = render_plaintext(&[&d]);
-        assert!(text.contains("- Hello (2026-05-01)"));
-        assert!(text.contains("/posts/a.html"));
-        assert!(text.contains("summary"));
-    }
-
-    #[test]
     fn render_html_renders_description_markdown_as_safe_inline_html() {
         // Same bug as the card/listing description: a bare `html_escape`
         // left `_emphasis_` as literal underscores instead of `<em>`.
@@ -377,19 +341,6 @@ mod tests {
             html.contains(r#"<div class="moss-recent__desc"><em>The Common Reader, 1925.</em></div>"#),
             "description markdown should render as safe inline HTML: {html}"
         );
-    }
-
-    #[test]
-    fn render_plaintext_reduces_description_markdown_to_plain_text() {
-        // The email body_text field: markdown has no meaning in plain text,
-        // and used to ship completely unstripped.
-        let d = doc("posts/a.html", "Hello", Some("2026-05-01"), Some("_The Common Reader, 1925._"));
-        let text = render_plaintext(&[&d]);
-        assert!(
-            text.contains("The Common Reader, 1925."),
-            "description markdown should reduce to plain text: {text}"
-        );
-        assert!(!text.contains('_'), "no raw markdown syntax should survive: {text}");
     }
 
     #[test]

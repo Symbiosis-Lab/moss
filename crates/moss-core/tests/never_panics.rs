@@ -161,15 +161,10 @@ proptest! {
     }
 }
 
-// ── link candidates / heading anchors ───────────────────────────────────────
+// ── heading anchors ───────────────────────────────────────
 
 proptest! {
     #![proptest_config(cfg())]
-
-    #[test]
-    fn link_candidates_never_panics(target in any_str()) {
-        let _ = moss_core::link_candidates::link_candidates(&target);
-    }
 
     #[test]
     fn obsidian_heading_anchor_never_panics(heading in any_str()) {

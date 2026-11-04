@@ -1278,9 +1278,11 @@ pub fn generate_blocking_content_for_build(
         // The names a `cards = true` kind shows on listing cards: the same
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
+        crate::build::components::field_places::set_card_fields(&mut documents, &site_config.field_decls, site_config.typesetting.as_deref());
         if let Some(maps) = site_config.place_maps.as_ref() {
             crate::build::terms::places::warn_unknown_places(&documents, &site_config.term_kinds, maps.gazetteer());
         }
+        crate::build::place_map::country_map::warn_problems(&documents);
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
         // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,
@@ -1306,6 +1308,43 @@ pub fn generate_blocking_content_for_build(
             site_config.site_url_override.as_deref(),
         )?;
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
+
+        // A listing row names its page's language, so every page has its tag before any listing is drawn.
+        super::lang_roots::fill_missing_lang_tags(&mut documents, &site_config.lang);
+
+        // Translation links between documents sharing the same stem or translationKey, before any listing is drawn so a listing can show a translated piece once
+        {
+            use crate::i18n::link::{build_translation_links, DocumentInfo};
+            let doc_infos: Vec<DocumentInfo> = documents
+                .iter()
+                .enumerate()
+                .map(|(i, doc)| {
+                    // Source path minus a leading language folder, so `a/x.md` and
+                    // `zh-hans/a/x.md` share a directory (url_path keeps the folder).
+                    let directory = doc.source_path.as_deref()
+                        .map(|sp| &sp[moss_core::home::lang_tree_prefix(sp).map_or(0, |p| p.len() + 1)..])
+                        .and_then(|sp| std::path::Path::new(sp).parent())
+                        .and_then(|p| p.to_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    DocumentInfo {
+                        index: i,
+                        clean_stem: doc.clean_stem.clone(),
+                        directory,
+                        // The tag the doc's OWN page emits, so siblings advertise the
+                        // same string back. Filled above; the fallback is only so a
+                        // missed fill degrades to the site tag, not `hreflang=""`.
+                        lang_tag: doc.lang_tag.clone().unwrap_or_else(|| crate::i18n::lang_tag(&site_config.lang)),
+                        url_path: doc.url_path.clone(),
+                        translation_key: doc.translation_key.clone(),
+                    }
+                })
+                .collect();
+            let all_links = build_translation_links(&doc_infos);
+            for (i, links) in all_links.into_iter().enumerate() {
+                documents[i].translations = links;
+            }
+        }
 
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`) and settle `from=` heroes.
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
@@ -1341,41 +1380,6 @@ pub fn generate_blocking_content_for_build(
             &seta_url_for_build,
         );
 
-        super::lang_roots::fill_missing_lang_tags(&mut documents, &site_config.lang);
-
-        // Build translation links between documents sharing the same stem or translationKey
-        {
-            use crate::i18n::link::{build_translation_links, DocumentInfo};
-            let doc_infos: Vec<DocumentInfo> = documents
-                .iter()
-                .enumerate()
-                .map(|(i, doc)| {
-                    // Source path minus a leading language folder, so `a/x.md` and
-                    // `zh-hans/a/x.md` share a directory (url_path keeps the folder).
-                    let directory = doc.source_path.as_deref()
-                        .map(|sp| &sp[moss_core::home::lang_tree_prefix(sp).map_or(0, |p| p.len() + 1)..])
-                        .and_then(|sp| std::path::Path::new(sp).parent())
-                        .and_then(|p| p.to_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_default();
-                    DocumentInfo {
-                        index: i,
-                        clean_stem: doc.clean_stem.clone(),
-                        directory,
-                        // The tag the doc's OWN page emits, so siblings advertise the
-                        // same string back. Filled above; the fallback is only so a
-                        // missed fill degrades to the site tag, not `hreflang=""`.
-                        lang_tag: doc.lang_tag.clone().unwrap_or_else(|| crate::i18n::lang_tag(&site_config.lang)),
-                        url_path: doc.url_path.clone(),
-                        translation_key: doc.translation_key.clone(),
-                    }
-                })
-                .collect();
-            let all_links = build_translation_links(&doc_infos);
-            for (i, links) in all_links.into_iter().enumerate() {
-                documents[i].translations = links;
-            }
-        }
         log::debug!(target: "timing", "[reduce] translation_links: {:?}", reduce_start.elapsed());
         log::debug!(target: "timing", "[reduce] total (uid_dedup..translation_links): {:?}", reduce_pre_start.elapsed());
 
@@ -1932,28 +1936,27 @@ pub fn generate_blocking_content_for_build(
             std::collections::HashSet::new()
         };
 
-        // Fetch metadata for external grid-cell links THIS build's own pages
-        // introduce, before ANY page below reads the cache — so a card is
-        // complete on its first build rather than waiting for the next
-        // build's prewarm (moss's usual one-build lag). Gated on
-        // `exits_after_build`: an interactive rebuild must not block on the
-        // network (see the parameter's doc comment on
-        // `generate_blocking_content_for_build`). Reads all of `documents`,
-        // not just `to_render`: the homepage and the folder/term
-        // auto-generated indexes are rendered by their own dedicated code
-        // further down this function, outside the `to_render`/`to_carry`
-        // partition, and their grid cells are candidates too. A page this
-        // build carries unchanged costs nothing extra here — its URLs are
-        // already fresh-cached, so `fetch_new_link_meta_for_build`'s own
-        // freshness filter skips them for free. Candidate URLs come from
-        // the ALREADY-PARSED `body_plan`, no extra markdown parse.
+        // Fetch metadata for the external grid-cell links this build shows,
+        // before any page below reads the cache, so a card is complete on
+        // this build. Only a build that exits when done fetches here: it has
+        // no next build to finish a card for it, so it gets the full fetch
+        // budget; an interactive rebuild never blocks on the network (the
+        // app fetches in the background). All of `documents`, not just
+        // `to_render`, because the homepage and the generated indexes render
+        // further down, outside that partition. URLs already fresh in the
+        // cache cost nothing.
         let external_urls_this_build = crate::build::render::grid_cells::external_urls_across_build(
             documents.iter(),
         );
         if exits_after_build && !external_urls_this_build.is_empty() {
             let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
             let _trace = PhaseTrace::start("link_meta_build_fetch");
-            crate::build::page::link_meta::fetch_new_link_meta_for_build(&url_refs, &moss_dir);
+            crate::build::page::link_meta::fetch_all_link_meta_parallel(&url_refs, &moss_dir, |cold| {
+                // A slow site can hold this up to the full budget; say why.
+                if reporter.is_terminal() {
+                    eprintln!("Fetching {cold} link previews…");
+                }
+            });
         }
 
         // Materialize any downloaded cover into THIS build's output — every
@@ -2269,6 +2272,7 @@ pub fn generate_blocking_content_for_build(
                     home.depth_all,
                     home.scoped,
                     home.scoped,
+                    &documents[entry.document_index].edition,
                     &documents,
                     project_structure,
                 );
@@ -2339,7 +2343,9 @@ pub fn generate_blocking_content_for_build(
                 None,
                 site_config.math, false,
                 &Default::default(),
-                false, None, now,
+                false, None,
+                Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())),
+                now,
             );
             // The generated half of the same split the claimed term page gets
             // in `folder_embed`, through the same function: a term no page
@@ -2577,9 +2583,9 @@ pub fn generate_blocking_content_for_build(
     }
     // Only the moss host keeps `.moss-email/` private; any other host would
     // publish the templates.
-    if crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some() {
-        crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?;
-    }
+    let on_moss_host = crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some();
+    if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
+    crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), on_moss_host, output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
     send_progress(
         progress_sender,
@@ -2707,6 +2713,7 @@ pub fn generate_blocking_content_for_build(
         &moss_dir,
         project_structure.has_content_folders,
         &layout_config.lang_tag,
+        layout_config.typesetting.as_deref(),
     ) {
         log::info!("⚠️ Failed to save inventory: {}", e);
     }
@@ -2968,7 +2975,10 @@ pub fn generate_blocking_content_for_build(
     // gated on `math_enabled` inside).
     crate::build::emit::math_png::emit_math_pngs(&documents, site_config.math, output_dir, pending)
         .map_err(|e| format!("Failed to emit math PNGs: {}", e))?;
-    log::debug!(target: "timing", "[render] prelude: scripts+math_png: {:?}", total_start.elapsed());
+    // The diagrams' email and feed pictures, the same append-only shape.
+    crate::build::emit::diagram_png::emit_diagram_pngs(&documents, output_dir, pending)
+        .map_err(|e| format!("Failed to emit diagram pictures: {}", e))?;
+    log::debug!(target: "timing", "[render] prelude: scripts+math_png+diagram_png: {:?}", total_start.elapsed());
 
     send_progress(
         progress_sender,
