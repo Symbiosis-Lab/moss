@@ -1520,6 +1520,7 @@ fn build_inner(
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
         forms_endpoint,
+        booking: cfg.as_ref().and_then(crate::config::services::booking::read),
         place_maps,
         incremental,
         derivations: derived.clone(),

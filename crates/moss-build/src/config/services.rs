@@ -115,6 +115,15 @@ pub struct FormsService {
     pub endpoint: Option<String>,
 }
 
+pub mod booking;
+pub use booking::BookingService;
+
+/// A service address must be a web address; the message names the table it came from.
+pub(crate) fn endpoint_problem(table: &str, endpoint: &str) -> Option<String> {
+    (!endpoint.starts_with("https://") && !endpoint.starts_with("http://"))
+        .then(|| format!("[services.{table}] endpoint '{endpoint}' must start with https:// or http://"))
+}
+
 /// Root `[services]` table, one field per `ServiceKind`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[derive(specta::Type)]
@@ -214,10 +223,8 @@ impl ServicesConfig {
         if let Some(e) = &self.email {
             check("email", &e.common, &["buttondown"], e.api_key.is_some(), hosted_on_moss)?;
         }
-        if let Some(endpoint) = self.forms.as_ref().and_then(|f| f.endpoint.as_deref()) {
-            if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
-                return Err(format!("[services.forms] endpoint '{endpoint}' must start with https://"));
-            }
+        if let Some(problem) = self.forms.as_ref().and_then(|f| f.endpoint.as_deref()).and_then(|e| endpoint_problem("forms", e)) {
+            return Err(problem);
         }
         Ok(())
     }

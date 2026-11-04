@@ -135,6 +135,8 @@ pub struct SiteConfig {
     /// `[services.forms] endpoint`, without a trailing slash: where request
     /// forms post. `None` leaves forms pending.
     pub forms_endpoint: Option<String>,
+    /// `[services.booking]` as read: the offer, or why it could not be read.
+    pub booking: Option<Result<crate::config::services::BookingService, String>>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -198,6 +200,7 @@ impl Default for SiteConfig {
             term_nav: Vec::new(),
             field_decls: Vec::new(),
             forms_endpoint: None,
+            booking: None,
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

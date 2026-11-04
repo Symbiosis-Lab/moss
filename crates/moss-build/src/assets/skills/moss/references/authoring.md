@@ -571,6 +571,29 @@ endpoint = "https://forms.example/f"
 
 The post is `application/x-www-form-urlencoded`, with the fields plus `_next` (the `next=` path) and `_hp`, an empty honeypot that readers never see or reach by keyboard. With no script the browser checks `required` and each type, and the service answers with a redirect to `next`; with script the form stays on the page, goes to `next` when the post is accepted, marks each refused field and moves focus to the first, and keeps everything typed. A link can fill visible fields from the address (`/booking/?session=Family` selects that choice); it never sets `_next`, `_hp` or any hidden field. With no endpoint the build warns naming `[services.forms] endpoint`, published pages do not show the form, and the preview shows it with sending simulated. The build also writes `/_moss/commerce.json`, the site's forms (names, types, required, choices, `next`) for the service to read; labels and help text stay in the page, and who receives a form is set in the service, never in the folder.
 
+A site that takes bookings describes what it offers in `[services.booking]`, and the build publishes it as the `booking` object of `/_moss/commerce.json` for a booking service to read. Amounts are integer cents; a service is hourly (`per_hour` and `hours = { min, max }`) or fixed (`minutes` and `price`, where `0` books with no payment); `fields` names what it asks beyond name, email and mobile, each `"required"` or `"optional"`, and `labels` gives a field the words to show for it:
+
+```toml
+[services.booking]
+endpoint = "https://booking.example/sites/demo/booking"
+timezone = "America/Los_Angeles"
+currency = "usd"
+start_every = 60
+notice_hours = 12
+horizon_days = 60
+open = { mon = ["09:00-23:00"], sat = ["14:00-24:00"] }
+cancel = { full_before_hours = 24, late_percent = 50 }
+pages = { book = "/book/", done = "/book/done/", manage = "/book/manage/" }
+
+[services.booking.services.consultation]
+name = "Consultation"
+minutes = 30
+price = 0
+fields = { about = "optional" }
+```
+
+`open` lists, for each day, the windows a booking may start in. `timezone` is a time zone name such as `America/Los_Angeles`, checked against the time zone list moss carries. `pages` are the site's own booking page, the page a client returns to after paying, and the page the emailed manage link opens, each a path on the site that the build must write. A paid service may take a share first: `deposit = { percent = 50, hold_hours = 12, balance_days_before = 7 }` holds half at booking, keeps it after 12 hours unless the booking is declined, and charges the rest 7 days before the start; a site with a deposit also names `pages.desk`, the page staff open from the link in each booking email to see a booking and decline it. `enabled = false` turns the table off. A misspelt key or a rule the offer breaks (an hourly service with no `hours`, a window such as `9:00-17:00`, a page such as `//elsewhere.example/`) is a build problem naming it, and the offer stays out of `commerce.json` until it is fixed, so the service never charges from a broken description; the site's forms and other services are not affected.
+
 ### Welcome email
 
 A `welcome-email.md` at the top of the site is the email each new subscriber gets once, right after they confirm. It is not a page: it has no address and no nav item. Write it in `zh-hans/welcome-email.md` (or any other language folder) for subscribers of that language; a subscriber of a language without its own file gets the top-level letter.

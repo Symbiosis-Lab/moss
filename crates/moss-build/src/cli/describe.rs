@@ -295,6 +295,17 @@ fn config_tables() -> Vec<ConfigTableInfo> {
             "The build writes the site's forms to /_moss/commerce.json whenever the site has a form or this table.",
             "`enabled = false` turns the table off.",
         ],
+    },
+    ConfigTableInfo {
+        name: "services.booking",
+        entry: "timezone = \"America/Los_Angeles\"",
+        description: "What the site offers for booking, published as the `booking` object of /_moss/commerce.json for a booking service to read: `endpoint`, `timezone`, `currency`, `services.<id>` (hourly: `per_hour`, `hours.min`, `hours.max`; fixed: `minutes`, `price`; then `fields`, `labels` and an optional `deposit` of `percent`, `hold_hours` and `balance_days_before`), `open.<day>` start windows, `start_every`, `notice_hours`, `horizon_days`, `cancel.full_before_hours`, `cancel.late_percent`, and `pages.book`, `pages.done`, `pages.manage`, with `pages.desk` when a service takes a deposit.",
+        rules: vec![
+            "Amounts are integer cents in `currency`, a lowercase ISO code.",
+            "A key moss does not know, or an offer that breaks a rule, is a build problem, and the offer is left out of commerce.json until it is fixed; the site's forms and other services are not affected.",
+            "Each page is a path on the site, starting with a single `/`, that the build must write.",
+            "`enabled = false` turns the table off.",
+        ],
     }]
 }
 
