@@ -2969,7 +2969,7 @@ dependencies = [
 
 [[package]]
 name = "moss-cli"
-version = "0.15.18-dev"
+version = "0.15.18"
 dependencies = [
  "base64 0.21.7",
  "dotenvy",
