@@ -25,6 +25,15 @@
   --moss-country-chosen-now: var(--moss-country-chosen, #f4f1ea);
 }
 
+/* Each level's share of the ramp is set inline on the map, one per level it draws:
+   allow:runtime-token --moss-country-share-1 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-2 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-3 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-4 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-5 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-6 set inline by country_map/render.rs
+   allow:runtime-token --moss-country-share-7 set inline by country_map/render.rs
+*/
 .moss-country-map [data-level="1"] { --level: var(--moss-country-fill-1, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-1), var(--moss-country-low-now))); }
 .moss-country-map [data-level="2"] { --level: var(--moss-country-fill-2, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-2), var(--moss-country-low-now))); }
 .moss-country-map [data-level="3"] { --level: var(--moss-country-fill-3, color-mix(in oklch, var(--moss-country-high-now) var(--moss-country-share-3), var(--moss-country-low-now))); }
