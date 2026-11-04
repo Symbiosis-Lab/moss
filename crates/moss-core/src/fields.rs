@@ -75,7 +75,7 @@ pub struct FieldDecl {
     pub scope: Vec<String>,
     /// For a group: the fields it draws, in order.
     pub of: Vec<String>,
-    /// Whether every listing card and row draws this field's value for a page, as plain text.
+    /// Whether every listing card and row draws this field's value for a page (never a link).
     pub card: bool,
 }
 

@@ -1357,22 +1357,32 @@ fn resolve_wikilinks(text: &str) -> String {
 /// than being silently dropped, since [`render_description_html`] must
 /// never lose author content the way deletion-based stripping can. `*`/`**`
 /// have no CommonMark intraword exception (unlike `_`/`__` — see
-/// [`find_underscore_emphasis`]), so a plain left-to-right pairing is
-/// correct for them without a word-boundary guard.
+/// [`find_underscore_emphasis`]), so no word-boundary guard is needed, but
+/// they do follow its flanking rule: an opener is followed by a non-space
+/// and a closer preceded by one, so `2* and 3*` pairs nothing.
 fn wrap_delimited(text: &str, delim: &str, open: &str, close: &str) -> String {
+    let flanking = delim.starts_with('*');
     let mut out = String::new();
     let mut rest = text;
     while let Some(start) = rest.find(delim) {
         let after_open = &rest[start + delim.len()..];
-        match after_open.find(delim) {
-            Some(end) if end > 0 => {
+        let can_open = !flanking || after_open.chars().next().is_some_and(|c| !c.is_whitespace());
+        let close_at = can_open
+            .then(|| {
+                after_open.match_indices(delim).map(|(i, _)| i).find(|&i| {
+                    i > 0 && (!flanking || after_open[..i].chars().next_back().is_some_and(|c| !c.is_whitespace()))
+                })
+            })
+            .flatten();
+        match close_at {
+            Some(end) => {
                 out.push_str(&rest[..start]);
                 out.push_str(open);
                 out.push_str(&after_open[..end]);
                 out.push_str(close);
                 rest = &after_open[end + delim.len()..];
             }
-            _ => {
+            None => {
                 out.push_str(&rest[..start + delim.len()]);
                 rest = after_open;
             }

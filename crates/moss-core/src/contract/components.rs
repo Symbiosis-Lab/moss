@@ -543,7 +543,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "A declared field with `card = true`, drawn on a listing card or row of a page that has a value for it, in the meta after the date and the term credits, in the fields' declaration order. Plain text, never a link. `data-field` is the field's name; `data-value` is the slug of a choice's key in config (the text is its label), as on a placed choice, and for any other type the text itself, so `.moss-card:has(.moss-card-field[data-field=\"mark\"][data-value=\"wanted\"])` selects the cards of one value.",
+        description: "A declared field with `card = true`, drawn on a listing card or row of a page that has a value for it, in the meta after the date and the term credits, in the fields' declaration order. Never a link; a text value keeps inline emphasis (`<em>`, `<strong>`, `<code>`) and drops a markdown link's target. `data-field` is the field's name; `data-value` is the slug of a choice's key in config (the text is its label), as on a placed choice, and for any other type the text itself without markup, so `.moss-card:has(.moss-card-field[data-field=\"mark\"][data-value=\"wanted\"])` selects the cards of one value.",
     },
     ComponentEntry {
         class: "moss-credit-role",

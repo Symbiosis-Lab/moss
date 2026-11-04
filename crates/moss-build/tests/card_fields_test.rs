@@ -1,5 +1,6 @@
-//! A declared field with `card = true` is drawn, as plain text, on every
-//! listing card and row of a page that has a value for it.
+//! A declared field with `card = true` is drawn on every listing card and
+//! row of a page that has a value for it: never a link, and a text value with
+//! only inline emphasis.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -285,4 +286,100 @@ fn card_on_a_group_warns_and_draws_nothing() {
     );
     let page = fs::read_to_string(out.join("bare/index.html")).unwrap();
     assert!(!page.contains("moss-card-field"), "{page}");
+}
+
+const JOURNAL_CONFIG: &str = r#"schema_version = 6
+
+[site]
+lang = "en"
+
+[fields.journal]
+type = "text"
+card = true
+place = "facts"
+"#;
+
+fn journal_site() -> (Cleanup, PathBuf) {
+    build_site(
+        "journal",
+        &[
+            (".moss/config.toml", JOURNAL_CONFIG),
+            ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+            ("papers/index.md", "---\ntitle: Papers\nchildren_style: list\nchildren_group: none\n---\n\nPapers.\n"),
+            ("papers/a.md", "---\ntitle: Paper A\njournal: \"*Example Journal of Gardens,* 4(35): 1-7\"\n---\n\nA.\n"),
+            ("papers/b.md", "---\ntitle: Paper B\njournal: \"**Bold** and `code` in [Example Press](https://example.test/press)\"\n---\n\nB.\n"),
+            ("papers/d.md", "---\ntitle: Paper D\njournal: a_b_c\n---\n\nD.\n"),
+            ("papers/e.md", "---\ntitle: Paper E\njournal: \"2* and 3*\"\n---\n\nE.\n"),
+            ("papers/c.md", "---\ntitle: Paper C\njournal: \"<script>alert(1)</script> _Quiet_\"\n---\n\nC.\n"),
+        ],
+    )
+}
+
+fn card_field(page: &str, source: &str) -> String {
+    let start = page.find(&format!(r#"data-source-file="{source}""#)).unwrap_or_else(|| panic!("{source}:\n{page}"));
+    let rest = &page[start..];
+    let open = rest.find(r#"<span class="moss-card-field""#).unwrap_or_else(|| panic!("no card field after {source}:\n{page}"));
+    let rest = &rest[open..];
+    rest[..rest.find("</span>").unwrap() + 7].to_string()
+}
+
+#[test]
+fn a_text_card_field_keeps_inline_emphasis_and_a_plain_data_value() {
+    let (_guard, out) = journal_site();
+    let page = fs::read_to_string(out.join("papers/index.html")).unwrap();
+    assert_eq!(
+        card_field(&page, "papers/a.md"),
+        r#"<span class="moss-card-field" data-field="journal" data-value="Example Journal of Gardens, 4(35): 1-7"><em>Example Journal of Gardens,</em> 4(35): 1-7</span>"#,
+        "{page}"
+    );
+}
+
+#[test]
+fn a_card_field_link_keeps_its_words_and_drops_its_target() {
+    let (_guard, out) = journal_site();
+    let page = fs::read_to_string(out.join("papers/index.html")).unwrap();
+    assert_eq!(
+        card_field(&page, "papers/b.md"),
+        r#"<span class="moss-card-field" data-field="journal" data-value="Bold and code in Example Press"><strong>Bold</strong> and <code>code</code> in Example Press</span>"#,
+        "{page}"
+    );
+    assert!(!page.contains("example.test/press"), "{page}");
+}
+
+#[test]
+fn a_card_field_script_stays_escaped_text() {
+    let (_guard, out) = journal_site();
+    let page = fs::read_to_string(out.join("papers/index.html")).unwrap();
+    assert_eq!(
+        card_field(&page, "papers/c.md"),
+        r#"<span class="moss-card-field" data-field="journal" data-value="&lt;script&gt;alert(1)&lt;/script&gt; Quiet">&lt;script&gt;alert(1)&lt;/script&gt; <em>Quiet</em></span>"#,
+        "{page}"
+    );
+    assert!(!page.contains("<script>alert"), "{page}");
+}
+
+#[test]
+fn a_placed_text_field_reads_the_same_emphasis_on_its_page() {
+    let (_guard, out) = journal_site();
+    let page = fs::read_to_string(out.join("papers/a/index.html")).unwrap();
+    assert!(
+        page.contains("<dd><em>Example Journal of Gardens,</em> 4(35): 1-7</dd>"),
+        "{page}"
+    );
+}
+
+#[test]
+fn text_that_is_not_emphasis_stays_as_written() {
+    let (_guard, out) = journal_site();
+    let page = fs::read_to_string(out.join("papers/index.html")).unwrap();
+    assert_eq!(
+        card_field(&page, "papers/d.md"),
+        r#"<span class="moss-card-field" data-field="journal" data-value="a_b_c">a_b_c</span>"#,
+        "{page}"
+    );
+    assert_eq!(
+        card_field(&page, "papers/e.md"),
+        r#"<span class="moss-card-field" data-field="journal" data-value="2* and 3*">2* and 3*</span>"#,
+        "{page}"
+    );
 }
