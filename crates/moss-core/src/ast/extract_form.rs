@@ -139,14 +139,14 @@ fn flow(text: &str) -> String {
 fn first_line(item: &Item, body: &str) -> (String, Vec<String>) {
     let mut help = Vec::new();
     let Some(first) = item.paragraphs.first() else { return (String::new(), help) };
-    let text = &body[first.clone()];
+    let text = body.get(first.clone()).unwrap_or_default();
     let (line, rest) = text.split_once('\n').unwrap_or((text, ""));
     let rest = flow(rest);
     if !rest.is_empty() {
         help.push(rest);
     }
     for p in item.paragraphs.iter().skip(1) {
-        let t = flow(&body[p.clone()]);
+        let t = flow(body.get(p.clone()).unwrap_or_default());
         if !t.is_empty() {
             help.push(t);
         }
@@ -159,8 +159,9 @@ fn split_attrs(line: &str) -> (&str, Option<&str>) {
     let trimmed = line.trim_end();
     if trimmed.ends_with('}') {
         if let Some(open) = trimmed.rfind('{') {
-            if open == 0 || trimmed[..open].ends_with(char::is_whitespace) {
-                return (trimmed[..open].trim_end(), Some(&trimmed[open..]));
+            let (label, block) = trimmed.split_at(open);
+            if label.is_empty() || label.ends_with(char::is_whitespace) {
+                return (label.trim_end(), Some(block));
             }
         }
     }
