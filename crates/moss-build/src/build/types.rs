@@ -387,6 +387,10 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub has_own_map_embed: bool,
+    /// Country maps whose list this page places itself with `style:levels`, and how.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[specta(skip)]
+    pub country_lists: std::collections::BTreeMap<String, crate::build::folder_embed::ListPlacement>,
     /// URL paths of the pages this page's body embeds list.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     #[specta(skip)]

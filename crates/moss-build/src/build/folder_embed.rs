@@ -29,6 +29,7 @@
 //! `folder_id` because those carry on-disk paths.
 
 mod maps;
+pub(crate) use maps::ListPlacement;
 pub(crate) mod hero_from;
 pub(crate) mod members;
 mod calendar_tokens;
@@ -822,7 +823,7 @@ pub fn expand_markers_in_documents_with_place_maps(
             .source_path
             .clone()
             .unwrap_or_else(|| documents[i].url_path.clone());
-        documents[i].has_own_map_embed = maps::has_own_embed(&documents[i].html_content, &from);
+        maps::record_placements(&mut documents[i], &from);
         let lang = documents[i].lang; // hosting page's language, not site default
         let typesetting = crate::build::render::config::effective_typesetting(
             documents[i].typesetting.as_deref(),
@@ -1508,6 +1509,9 @@ fn render_one(
     } else {
         parsed.from
     };
+    if parsed.style.as_deref() == Some("levels") {
+        return Ok(maps::render_levels(parsed, all_docs));
+    }
     if parsed.style.as_deref() == Some("map") {
         if !parsed.path.ends_with('/') {
             return Ok(maps::render(parsed, ordinal, all_docs, place_maps));

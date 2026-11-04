@@ -262,3 +262,42 @@ test.describe("without script", () => {
     await expect(page.locator(".moss-country-list")).toHaveAttribute("id", "moss-country-rows");
   });
 });
+
+test.describe("a list placed apart with style:levels", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize(WIDE);
+  });
+
+  test("the list leaves the map, sits where it is written, and keeps its colours", async ({ page }) => {
+    await page.goto("/apart/");
+    await expect(page.locator(".moss-country-list")).toHaveCount(1);
+    await expect(page.locator(".moss-country-map .moss-country-list")).toHaveCount(0);
+    const after = await page.evaluate(() => {
+      const para = [...document.querySelectorAll("p")].find((p) => p.textContent?.includes("Between the map and its list."))!;
+      return !!(para.compareDocumentPosition(document.querySelector(".moss-country-list")!) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    expect(after, "the list follows the paragraph written above it").toBe(true);
+    const swatch = page.locator('.moss-country-list .moss-country-swatch[data-level="4"]').first();
+    expect(await swatch.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await fillOf(path(page, "chile")));
+  });
+
+  test("a row opened from the keyboard focuses the panel, and Esc returns to the row", async ({ page }) => {
+    await page.goto("/apart/");
+    const row = page.locator('.moss-country-list a[href="#japan"]');
+    await row.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".moss-country-panel")).toContainText("Japan");
+    await expect(page.locator(".moss-country-panel-name")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(row).toBeFocused();
+  });
+});
+
+test.describe("a list placed apart, without script", () => {
+  test.use({ javaScriptEnabled: false });
+  test("the search field links to the list where it is written", async ({ page }) => {
+    await page.goto("/apart/");
+    await expect(page.locator("a.moss-country-search")).toHaveAttribute("href", "#moss-country-rows");
+    await expect(page.locator(".moss-country-list")).toHaveAttribute("id", "moss-country-rows");
+  });
+});

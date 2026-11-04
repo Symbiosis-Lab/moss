@@ -454,7 +454,8 @@ pub(in crate::resolve) fn lower_embed(
 
     let pothole_raw = inner.split_once('|').map_or("", |(_, params)| params);
     let params = embed_renderer::folder_list::classify_folder_segments(pothole_raw);
-    if params.style.as_deref() == Some("map") {
+    // `levels` is a country map's list on its own, placed where the author writes it.
+    if matches!(params.style.as_deref(), Some("map" | "levels")) {
         let target = if file_part.is_empty() && anchor == Some("") {
             source_path.to_string()
         } else {

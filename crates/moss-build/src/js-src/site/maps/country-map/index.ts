@@ -125,14 +125,19 @@ function setup(figure: HTMLElement): void {
     if (path) choose(path.dataset.slug || "");
     else if (!target.closest(".moss-country-disputed")) clear();
   });
-  figure.addEventListener("click", (event) => {
-    const link = (event.target as Element).closest<HTMLAnchorElement>(".moss-country-list a");
+  // A row of this map's list, inside the figure or apart from it where `style:levels`
+  // put it. Listening on the document keeps a list a preview morph replaced working.
+  const key = figure.dataset.mossCountryMap;
+  document.addEventListener("click", (event: MouseEvent) => {
+    const list = (event.target as Element).closest<HTMLElement>(".moss-country-list");
+    if (!list || !(figure.contains(list) || (key && list.dataset.mossCountryList === key))) return;
+    const link = (event.target as Element).closest<HTMLAnchorElement>("a");
     const slug = (link?.getAttribute("href") || "").slice(1);
     if (!link || !countries.has(slug)) return;
     event.preventDefault();
-    choose(slug, { from: (event as MouseEvent).detail === 0 ? link : undefined });
+    choose(slug, { from: event.detail === 0 ? link : undefined });
     stage.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
-  });
+  }, { signal });
   window.addEventListener("hashchange", () => choose(location.hash.slice(1)), { signal });
   document.addEventListener("keydown", (event) => event.key === "Escape" && clear(), { signal });
 

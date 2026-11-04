@@ -4370,6 +4370,16 @@ Before the map.
 
 ![[risk-levels|style:map]]
 `,
+    "apart.md": `---
+title: List apart
+---
+
+![[risk-levels|style:map]]
+
+Between the map and its list.
+
+![[risk-levels|style:levels]]
+`,
     "risk-levels.md": `---
 title: Risk levels
 date: 2026-11-03

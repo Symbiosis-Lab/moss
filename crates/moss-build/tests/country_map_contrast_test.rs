@@ -51,7 +51,8 @@ fn ratio(a: f64, b: f64) -> f64 {
 
 /// The sRGB colour a `--moss-country-<name>` fallback gives in the light or the dark block.
 fn fallback(name: &str, dark: bool) -> [f64; 3] {
-    let after = if dark { CSS.split("[data-theme=\"dark\"] .moss-country-map {").nth(1) } else { CSS.split(".moss-country-map {").nth(1) };
+    let selector = ":is(.moss-country-map, .moss-country-list) {";
+    let after = if dark { CSS.split(&format!("[data-theme=\"dark\"] {selector}")).nth(1) } else { CSS.split(selector).nth(1) };
     let block = after.unwrap().split('}').next().unwrap();
     let line = block.lines().find(|l| l.contains(&format!("var(--moss-country-{name},"))).unwrap_or_else(|| panic!("no {name}"));
     rgb(line.rsplit(", ").next().unwrap().trim_end_matches(");").trim_end_matches(')').trim_end_matches(';').trim_end_matches(')'))

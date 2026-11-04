@@ -1664,6 +1664,7 @@ pub fn process_markdown_file(
         explorer_places_hash: None,
         passthrough_root: None,
         has_own_map_embed: false,
+        country_lists: Default::default(),
         embedded_listing_urls: Default::default(),
         map,
         route,

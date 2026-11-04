@@ -17,11 +17,14 @@ const WIDTH: f64 = 1000.0;
 
 /// Where the map is drawn.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Place {
+pub(crate) enum Place<'a> {
     /// On its own page, which goes on to show its table.
     OwnPage,
     /// On another page, which gets the rows as a list as well.
     Embedded,
+    /// On another page that places the list itself with `style:levels`; the
+    /// key ties that list to this map.
+    EmbeddedListApart(&'a str),
 }
 
 fn num(v: f64) -> String {
@@ -91,21 +94,21 @@ fn graticule(project: &impl Fn(f64, f64) -> (f64, f64)) -> String {
     d
 }
 
-pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Language, place: Place) -> String {
+pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Language, place: Place<'_>) -> String {
     let atlas = Atlas::get();
     let (height, project) = projection::frame(WIDTH);
     let n = model.spec.levels.len();
     let by_country: std::collections::HashMap<usize, &super::resolve::Row> = model.rows.iter().map(|r| (r.country, r)).collect();
     let stamp = date.map(|d| (d, t(lang, "country_map_as_of").replace("{date}", &crate::build::components::date::format_display_date(d, lang, None))));
 
-    let mut vars = String::new();
-    for i in 1..=n {
-        let share = if n > 1 { (i - 1) * 100 / (n - 1) } else { 0 };
-        let _ = write!(vars, "--moss-country-share-{i}:{share}%;");
-    }
+    let vars = shares(n);
 
     let search_index = ServedPath::for_place_map_asset(&atlas.shapes.digest, search::FILE).map(|p| format!("/{}", p.as_str())).unwrap_or_default();
-    let mut out = format!(r#"<figure class="moss-country-map" data-moss-country-map data-not-rated="{}""#, html_escape(t(lang, "country_map_not_rated")));
+    let key = match place {
+        Place::EmbeddedListApart(key) => html_escape(key),
+        _ => String::new(),
+    };
+    let mut out = format!(r#"<figure class="moss-country-map" data-moss-country-map="{key}" data-not-rated="{}""#, html_escape(t(lang, "country_map_not_rated")));
     if model.spec.search {
         let _ = write!(out, r#" data-search="{}""#, html_escape(&search_index));
     }
@@ -143,8 +146,8 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
         let _ = write!(out, r#"<p class="moss-country-stamp"><time datetime="{}">{}</time></p>"#, html_escape(raw), html_escape(text));
     }
     if place == Place::Embedded {
-        out.push_str(&list(model, lang, atlas));
-    } else if model.spec.search {
+        out.push_str(&list(model, lang, ""));
+    } else if place == Place::OwnPage && model.spec.search {
         out.push_str(r#"<span id="moss-country-rows"></span>"#);
     }
     let as_of = stamp.as_ref().map(|(_, text)| text.as_str());
@@ -165,6 +168,16 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
     let _ = write!(out, r#"<template data-not-rated>{}</template>"#, panel(lang, "", &html_escape(t(lang, "country_map_not_rated")), &unrated, as_of, model.spec.action.as_ref(), None));
     out.push_str("</figure>");
     out
+}
+
+/// Each level's share of the colour ramp, set inline wherever its swatches draw.
+fn shares(n: usize) -> String {
+    let mut vars = String::new();
+    for i in 1..=n {
+        let share = if n > 1 { (i - 1) * 100 / (n - 1) } else { 0 };
+        let _ = write!(vars, "--moss-country-share-{i}:{share}%;");
+    }
+    vars
 }
 
 fn swatch(level: usize) -> String {
@@ -203,8 +216,14 @@ fn safe_link(link: &str) -> bool {
 }
 
 /// The rows grouped by level, lowest first, each an anchor the panel opens from.
-fn list(model: &Model, lang: Language, atlas: &Atlas) -> String {
-    let mut out = String::from(r#"<div class="moss-country-list" id="moss-country-rows">"#);
+/// Apart from its map (`key` set) it carries the map's shares for its swatches.
+pub(crate) fn list(model: &Model, lang: Language, key: &str) -> String {
+    let atlas = Atlas::get();
+    let mut out = if key.is_empty() {
+        String::from(r#"<div class="moss-country-list" id="moss-country-rows">"#)
+    } else {
+        format!(r#"<div class="moss-country-list" id="moss-country-rows" data-moss-country-list="{}" style="{}">"#, html_escape(key), shares(model.spec.levels.len()))
+    };
     for g in 0..=model.spec.levels.len() {
         let level = (g < model.spec.levels.len()).then_some(g);
         let rows: Vec<_> = model.rows.iter().filter(|r| r.level == level).collect();

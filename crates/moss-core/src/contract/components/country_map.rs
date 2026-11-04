@@ -1,18 +1,23 @@
 //! Contract entries for the country map's classes.
 
-use super::{ComponentEntry, Status};
+use super::{ComponentEntry, DataAttr, Status};
 
 pub(super) const ENTRIES: &[ComponentEntry] = &[
     ComponentEntry {
         class: "moss-country-map",
         kind: "container",
         parent: "",
-        data_attrs: &[],
-        example_html: r#"<figure class="moss-country-map" data-moss-country-map></figure>"#,
+        data_attrs: &[DataAttr {
+            name: "data-moss-country-map",
+            values: &[],
+            default: "",
+            description: "Marks the figure the country map script sets up. Empty, unless the page places the map's list apart with `style:levels`; then it holds the key that list carries in `data-moss-country-list`.",
+        }],
+        example_html: r#"<figure class="moss-country-map" data-moss-country-map=""></figure>"#,
         example_markdown: r#"![[Risk levels|style:map]]"#,
         status: Status::Emerging,
         since: "1",
-        description: "A country map: inline SVG with one path per country, a legend, the as-of stamp and the panel a reader's choice fills; embedded on another page it also carries the rows as a list. Drawn from a page's `country_map:` frontmatter and its table.",
+        description: "A country map: inline SVG with one path per country, a legend, the as-of stamp and the panel a reader's choice fills; embedded on another page it also carries the rows as a list, unless that page places the list itself with `style:levels`, when `data-moss-country-map` holds the key that list carries. Drawn from a page's `country_map:` frontmatter and its table.",
     },
     ComponentEntry {
         class: "moss-country",
@@ -149,13 +154,18 @@ pub(super) const ENTRIES: &[ComponentEntry] = &[
     ComponentEntry {
         class: "moss-country-list",
         kind: "container",
-        parent: "moss-country-map",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-country-list"></div>"#,
-        example_markdown: "",
+        parent: "",
+        data_attrs: &[DataAttr {
+            name: "data-moss-country-list",
+            values: &[],
+            default: "",
+            description: "Set only on a list placed apart from its map with `style:levels`: the key of the map it belongs to, the same as that map's `data-moss-country-map`.",
+        }],
+        example_html: r#"<div class="moss-country-list" id="moss-country-rows"></div>"#,
+        example_markdown: r#"![[Risk levels|style:levels]]"#,
         status: Status::Emerging,
         since: "1",
-        description: "An embedded country map's rows as text, grouped by level; every row has its own anchor, so the list works without script.",
+        description: "An embedded country map's rows as text, grouped by level; every row has its own anchor, so the list works without script. A `style:levels` embed places it apart from its map, with `data-moss-country-list` naming the map it belongs to and the map's colour shares set inline.",
     },
     ComponentEntry {
         class: "moss-country-group",
