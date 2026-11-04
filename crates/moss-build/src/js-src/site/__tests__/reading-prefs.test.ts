@@ -228,6 +228,21 @@ describe("Morphing font control", () => {
     expect(trigger.classList.contains("size-large")).toBe(true);
   });
 
+  test("font control still works when storage access throws", () => {
+    const blocked = vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    try {
+      expect(() => initFontPanel()).not.toThrow();
+      (document.querySelector(".font-trigger") as HTMLElement).click();
+      flushAnimations();
+      (document.querySelector('[data-scale="large"]') as HTMLElement).click();
+      expect(document.documentElement.classList.contains("scale-large")).toBe(true);
+    } finally {
+      blocked.mockRestore();
+    }
+  });
+
   test("does not run when .font-trigger is absent", () => {
     document.body.innerHTML = "<p>No trigger here</p>";
     // Should not throw

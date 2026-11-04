@@ -3,7 +3,7 @@
  * localStorage["moss-theme"], the key shell.html's pre-paint script reads.
  */
 
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 
 describe("toggleTheme", () => {
   beforeEach(async () => {
@@ -23,5 +23,18 @@ describe("toggleTheme", () => {
     window.toggleTheme();
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     expect(localStorage.getItem("moss-theme")).toBe("light");
+  });
+
+  test("still flips when storage access throws", () => {
+    const blocked = vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    try {
+      document.documentElement.setAttribute("data-theme", "light");
+      expect(() => window.toggleTheme()).not.toThrow();
+      expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    } finally {
+      blocked.mockRestore();
+    }
   });
 });
