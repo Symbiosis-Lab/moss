@@ -20,6 +20,11 @@
 //! read). This is the right tradeoff — a 90-minute hang is much worse than a
 //! one-cycle stale comments display.
 //!
+//! A build whose process exits when it returns (`moss build`, `moss deploy`)
+//! has no next build, and its process ends the background task. It waits for
+//! the comment refresh instead, up to a time limit, and says when the comments
+//! it ships may be stale ([`start_for_build`] picks the path).
+//!
 //! ## Per-folder singleflight
 //!
 //! Rapid rebuilds (e.g. file watcher firing multiple times in quick succession)
@@ -31,7 +36,7 @@
 //! - [build.rs](../build.rs) for where this is invoked.
 //! - [comment.rs](comment.rs) and [review.rs](review.rs) for the sync work itself.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -108,12 +113,10 @@ pub fn load_comment_sync_state(folder_path: &str) -> CommentSyncState {
 
 fn store_comment_sync_state(folder_path: &str, state: &CommentSyncState) {
     let path = comment_sync_state_path(Path::new(folder_path));
+    // Atomic: a build may read this while a refresh it stopped waiting for writes it.
     let write = || -> Result<(), String> {
-        let parent = path.parent().expect("state path always has a parent");
-        // allow:raw_write .moss/data, not the build tree
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
-        std::fs::write(&path, json).map_err(|e| e.to_string())  // allow:raw_write user state under .moss/data, not regenerable output
+        crate::infra::atomic_write::write_atomic(&path, &json)
     };
     if let Err(e) = write() {
         // Advisory state only — losing a write degrades the settings row's
@@ -219,7 +222,7 @@ fn comment_sync_failure_advisory(err: &CommentSyncError) -> crate::advisory::Adv
 /// - A sync for this folder is already in-flight (singleflight)
 /// - `article-map.json` does not yet exist (first build)
 /// - The site has no comments or review services configured
-pub fn spawn_native_process_sync(
+fn spawn_native_process_sync(
     folder_path: String,
     services_config: ServicesConfig,
     domain_config: DomainDeploymentConfig,
@@ -237,17 +240,23 @@ pub fn spawn_native_process_sync(
         let started = Instant::now();
         let result = tokio::task::spawn_blocking({
             let folder_path = folder_path.clone();
-            move || run_native_process_sync(&folder_path, &services_config, &domain_config)
+            move || {
+                let mut advisories = Vec::new();
+                if let Some(article_map) = load_synced_article_map(&folder_path) {
+                    if let Some(Err(e)) = refresh_comments(&folder_path, &services_config, &domain_config, &article_map) {
+                        advisories.push(comment_sync_failure_advisory(&e));
+                    }
+                    refresh_reviews(&folder_path, &article_map);
+                    prewarm_link_meta(&folder_path);
+                }
+                advisories
+            }
         }).await;
         release(&folder_path);
 
         match result {
-            Ok((stats, advisories)) => {
-                log::info!(
-                    target: "sync",
-                    "native-process sync done in {:?} (reviews={}, comments_changed={}, link_meta={})",
-                    started.elapsed(), stats.reviews_fetched, stats.comments_changed, stats.link_meta_prewarmed
-                );
+            Ok(advisories) => {
+                log::info!(target: "sync", "native-process sync done in {:?}", started.elapsed());
                 // Always emit the completion event (success or failure) so the
                 // frontend (Services > Comments) can update its "last synced"
                 // status line regardless of outcome. Empty advisories = success.
@@ -265,35 +274,67 @@ pub fn spawn_native_process_sync(
     }));
 }
 
-#[derive(Default)]
-struct SyncStats {
-    reviews_fetched: usize,
-    comments_changed: usize,
-    link_meta_prewarmed: usize,
-}
-
-/// Body of the background sync. Runs on a `spawn_blocking` worker; the network
-/// calls inside are synchronous (`ureq`) and that's fine here because the
-/// blocking pool exists for exactly this use case.
-///
-/// Returns `(stats, advisories)` — advisories are non-empty only when the
-/// comment sync fails. The caller emits them as a `BackgroundProgress` event.
-fn run_native_process_sync(
-    folder_path: &str,
-    services_config: &ServicesConfig,
-    domain_config: &DomainDeploymentConfig,
-) -> (SyncStats, Vec<crate::advisory::Advisory>) {
-    let mut stats = SyncStats::default();
-    let mut advisories: Vec<crate::advisory::Advisory> = Vec::new();
-
+/// The previous build's article map, or `None` before a site's first build
+/// (nothing to sync yet).
+fn load_synced_article_map(folder_path: &str) -> Option<HashMap<String, ArticleInfo>> {
     let article_map_path = crate::moss_paths::MossPaths::new(Path::new(folder_path)).article_map();
     if !article_map_path.exists() {
         log::debug!(target: "sync", "no article-map.json yet — nothing to sync");
-        return (stats, advisories);
+        return None;
     }
-    let article_map = crate::build::load_article_map_for_features(&article_map_path);
+    Some(crate::build::load_article_map_for_features(&article_map_path))
+}
 
-    // Review: filter for articles with review_of URLs
+/// Refresh `.moss/data/social/comment.json` from the site's comment server
+/// and record the outcome. `None` when the site has no comment server or no
+/// pages. Blocking network I/O: callers run it off the build's critical path.
+fn refresh_comments(
+    folder_path: &str,
+    services_config: &ServicesConfig,
+    domain_config: &DomainDeploymentConfig,
+    article_map: &HashMap<String, ArticleInfo>,
+) -> Option<Result<super::comment::sync_remote::CommentSyncOutcome, CommentSyncError>> {
+    // Explicit self-hosted override → env-derived moss-operated server →
+    // empty = never deployed / skip.
+    let env = crate::build::site_config::resolve_environment(folder_path);
+    let server_url = services_config
+        .comments
+        .as_ref()
+        .filter(|c| c.common.enabled != Some(false))
+        .map(|c| {
+            c.resolved_server_url(
+                domain_config.domain.as_deref(),
+                domain_config.site_id.as_deref(),
+                &env,
+            )
+        })
+        .filter(|u| !u.is_empty())?;
+    // Sync must use the same Artalk site_name as render/submission.
+    // For moss-hosted sites, that's the deployed site_id; undeployed custom
+    // server_url setups still fall back to "localhost".
+    let site_name = domain_config.site_id.as_deref().unwrap_or("localhost");
+    let comment_articles: Vec<(String, String)> = article_map
+        .iter()
+        .map(|(uid, info)| (uid.clone(), info.url_path.clone()))
+        .collect();
+    if comment_articles.is_empty() {
+        return None;
+    }
+    let phase_start = Instant::now();
+    let watchdog = spawn_watchdog("comment fetch", Duration::from_secs(60));
+    let result = super::comment::process_comments(folder_path, &server_url, site_name, &comment_articles);
+    watchdog.cancel();
+    record_comment_sync_result(folder_path, &result, unix_now_secs());
+    match &result {
+        Ok(outcome) => log::info!(target: "sync", "comments: synced {} articles against {} in {:?} (changed={})", comment_articles.len(), server_url, phase_start.elapsed(), outcome.changed),
+        Err(e) => log::info!(target: "sync", "comment sync failed ({:?}): {}", e.kind, e.detail),
+    }
+    Some(result)
+}
+
+/// Review metadata: blocking network I/O, like [`refresh_comments`], that no
+/// build waits for.
+fn refresh_reviews(folder_path: &str, article_map: &HashMap<String, ArticleInfo>) {
     let review_inputs: Vec<super::review::ReviewArticleInput> = article_map
         .iter()
         .filter_map(|(uid, info): (&String, &ArticleInfo)| {
@@ -308,7 +349,6 @@ fn run_native_process_sync(
         let phase_start = Instant::now();
         match super::review::process_reviews(folder_path, &review_inputs) {
             Ok(n) => {
-                stats.reviews_fetched = n;
                 if n > 0 {
                     log::info!(target: "sync", "reviews: fetched metadata for {} articles in {:?}", n, phase_start.elapsed());
                 }
@@ -316,86 +356,130 @@ fn run_native_process_sync(
             Err(e) => log::info!(target: "sync", "reviews fetch failed after {:?}: {}", phase_start.elapsed(), e),
         }
     }
+}
 
-    // Comments: gate on resolved server URL (explicit self-hosted override →
-    // env-derived moss-operated server → empty = never deployed / skip).
-    let env = crate::build::site_config::resolve_environment(folder_path);
-    let comments_server = services_config
-        .comments
-        .as_ref()
-        .filter(|c| c.common.enabled != Some(false))
-        .map(|c| {
-            c.resolved_server_url(
-                domain_config.domain.as_deref(),
-                domain_config.site_id.as_deref(),
-                &env,
-            )
-        })
-        .filter(|u| !u.is_empty());
-    if let Some(server_url) = comments_server {
-        // Sync must use the same Artalk site_name as render/submission.
-        // For moss-hosted sites, that's the deployed site_id; undeployed custom
-        // server_url setups still fall back to "localhost".
-        let site_name = domain_config
-            .site_id
-            .as_deref()
-            .unwrap_or("localhost");
-        let comment_articles: Vec<(String, String)> = article_map
-            .iter()
-            .map(|(uid, info)| (uid.clone(), info.url_path.clone()))
-            .collect();
-        if !comment_articles.is_empty() {
-            let phase_start = Instant::now();
-            // Hard deadline: even though each request has its own ureq timeout,
-            // the loop iterates per-article and could pile up. Bound the total
-            // wall-clock time with a separate watchdog thread that logs a loud
-            // warning if we blow past the budget.
-            let watchdog = spawn_watchdog(
-                "comment fetch",
-                Duration::from_secs(60),
-            );
-            let result = super::comment::process_comments(
-                folder_path,
-                &server_url,
-                site_name,
-                &comment_articles,
-            );
-            record_comment_sync_result(folder_path, &result, unix_now_secs());
-            match result {
-                Ok(outcome) => {
-                    stats.comments_changed = outcome.changed as usize;
-                    log::info!(target: "sync", "comments: synced {} articles against {} in {:?} (changed={})", comment_articles.len(), server_url, phase_start.elapsed(), outcome.changed);
-                }
-                Err(e) => {
-                    log::info!(target: "sync", "comment sync failed ({:?}): {}", e.kind, e.detail);
-                    advisories.push(comment_sync_failure_advisory(&e));
-                }
-            }
-            watchdog.cancel();
-        }
-    }
-
-    // Link metadata prewarm: refresh the cache for any external URLs the most
-    // recent build needed (persisted at .moss/build.nosync/link-meta-urls.json).
-    // Render reads from cache only — this is what makes those reads fast and
-    // keeps the build off the network.
+/// Link metadata prewarm for the next interactive build: refresh the cache for
+/// any external URLs the most recent build needed (persisted at
+/// .moss/build.nosync/link-meta-urls.json). Render reads from cache only — this
+/// is what makes those reads fast and keeps the build off the network. A build
+/// that exits when done fetches its own before render, so only the background
+/// sync runs this.
+fn prewarm_link_meta(folder_path: &str) {
     let moss_dir = Path::new(folder_path).join(".moss");
     let url_list = crate::build::page::link_meta::load_persisted_url_list(&moss_dir);
     if !url_list.is_empty() {
         let phase_start = Instant::now();
-        // Reuse the parallel fetcher a CLI build runs before render, so both follow the same
-        // path (parallelism + per-URL freshness skip + budget). The fetcher
-        // has its own internal budget, but we keep this watchdog as a belt-
-        // and-braces signal in case the bound is breached.
+        // The fetcher has its own budget; this watchdog is a belt-and-braces
+        // signal in case the bound is breached.
         let watchdog = spawn_watchdog("link-meta prewarm", Duration::from_secs(120));
         let url_refs: Vec<&str> = url_list.iter().map(|s| s.as_str()).collect();
         let fetched = crate::build::page::link_meta::fetch_all_link_meta_parallel(&url_refs, &moss_dir, |_| {});
         watchdog.cancel();
-        stats.link_meta_prewarmed = url_list.len();
         log::info!(target: "sync", "link-meta: prewarmed {} URLs ({} fetched, rest fresh) in {:?}", url_list.len(), fetched, phase_start.elapsed());
     }
+}
 
-    (stats, advisories)
+/// Start the sync for a build. A build whose process exits when it returns
+/// has no next build and ends any background task, so it waits for the comment
+/// refresh ([`refresh_comments_for_exiting_build`]); every other build spawns
+/// the whole sync in the background and returns at once.
+pub async fn start_for_build(
+    exits_after_build: bool,
+    folder_path: String,
+    domain_config: DomainDeploymentConfig,
+    reporter: std::sync::Arc<dyn crate::build::ports::reporter::BuildReporter>,
+    spawner: &dyn crate::build::ports::spawner::Spawner,
+) {
+    let services_config = crate::build::site_config::get_services_config(&folder_path).unwrap_or_default();
+    if exits_after_build {
+        // Off the executor: the process hooks spawned before this run on it.
+        let _ = tokio::task::spawn_blocking(move || {
+            refresh_comments_for_exiting_build(folder_path, services_config, domain_config)
+        })
+        .await;
+    } else {
+        spawn_native_process_sync(folder_path, services_config, domain_config, reporter, spawner);
+    }
+}
+
+/// How long a build that exits when done waits for the comment refresh: the
+/// server request's own 15 s timeout plus a margin for it overrunning.
+const COMMENT_WAIT: Duration = Duration::from_secs(20);
+
+/// [`COMMENT_WAIT`], or `MOSS_COMMENT_WAIT_SECS` when set: a whole number of
+/// seconds, where `0` means do not wait (the build ships the cached comments).
+fn comment_wait() -> Option<Duration> {
+    let Ok(value) = std::env::var("MOSS_COMMENT_WAIT_SECS") else {
+        return Some(COMMENT_WAIT);
+    };
+    match value.trim().parse::<u64>() {
+        Ok(0) => None,
+        Ok(secs) => Some(Duration::from_secs(secs)),
+        Err(_) => {
+            crate::build::cli_output::log_note!(
+                "MOSS_COMMENT_WAIT_SECS={value:?} is not a whole number of seconds; waiting {}s for comments",
+                COMMENT_WAIT.as_secs()
+            );
+            Some(COMMENT_WAIT)
+        }
+    }
+}
+
+/// Refresh the comment cache for a build that exits when done, waiting at most
+/// [`comment_wait`] so this build's pages carry it. Blocks; call it before
+/// the build renders. When the comments may be stale (the limit passed, the
+/// refresh failed, or another refresh holds the folder) a note says so and how
+/// old they are. Reviews follow unwaited.
+fn refresh_comments_for_exiting_build(
+    folder_path: String,
+    services_config: ServicesConfig,
+    domain_config: DomainDeploymentConfig,
+) {
+    let Some(budget) = comment_wait() else { return };
+    if !try_acquire(&folder_path) {
+        crate::build::cli_output::log_note!(
+            "comments may be stale: another comment refresh is running for this folder; {}",
+            comment_cache_age(&folder_path)
+        );
+        return;
+    }
+    let folder = folder_path.clone();
+    let outcome = crate::system::deadline::wait_at_most(budget, move || {
+        let article_map = load_synced_article_map(&folder);
+        let refreshed = article_map
+            .as_ref()
+            .and_then(|map| refresh_comments(&folder, &services_config, &domain_config, map));
+        release(&folder);
+        if let Some(article_map) = article_map {
+            std::thread::spawn(move || refresh_reviews(&folder, &article_map));
+        }
+        refreshed
+    });
+    match outcome {
+        Some(Some(Err(e))) => crate::build::cli_output::log_note!(
+            "{}; {}",
+            comment_sync_failure_advisory(&e).what,
+            comment_cache_age(&folder_path)
+        ),
+        None => crate::build::cli_output::log_note!(
+            "comments may be stale: the comment server did not answer within {}s; {}",
+            budget.as_secs(),
+            comment_cache_age(&folder_path)
+        ),
+        // Refreshed, or nothing to refresh.
+        Some(_) => {}
+    }
+}
+
+/// How old the comments this build ships are, from the last successful refresh.
+fn comment_cache_age(folder_path: &str) -> String {
+    match load_comment_sync_state(folder_path)
+        .last_success_at
+        .and_then(|at| chrono::DateTime::from_timestamp(at as i64, 0))
+    {
+        Some(at) => format!("this build shows comments as of {}", at.format("%Y-%m-%d")),
+        None => "this site's comments have never been refreshed".to_string(),
+    }
 }
 
 /// Lightweight watchdog: if `budget` elapses before `cancel` is called, log a
@@ -554,6 +638,23 @@ mod tests {
         let s = load_comment_sync_state(folder);
         assert_eq!(s.last_success_at, Some(3_000.0));
         assert!(s.last_error.is_none(), "a success must clear the error");
+    }
+
+    /// The state is replaced whole, so a build reading it for the cache's age
+    /// while a late refresh records its outcome never reads a truncated file.
+    #[test]
+    fn sync_state_is_never_truncated_under_a_reader() {
+        use std::io::Read;
+        let dir = tmp_dir();
+        let folder = dir.path().to_str().unwrap();
+        record_comment_sync_success(folder, 1_000.0);
+        let before = std::fs::read_to_string(comment_sync_state_path(dir.path())).unwrap();
+        let mut reader = std::fs::File::open(comment_sync_state_path(dir.path())).unwrap();
+        record_comment_sync_success(folder, 2_000.0);
+        let mut seen = String::new();
+        reader.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, before, "the open reader saw the file rewritten in place");
+        assert_eq!(load_comment_sync_state(folder).last_success_at, Some(2_000.0));
     }
 
     #[test]

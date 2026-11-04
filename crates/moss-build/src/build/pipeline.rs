@@ -557,47 +557,31 @@ fn run_notebook_processing(
         TimedOut,
     }
 
-    // Per-notebook I/O timeout — bounds the time any single notebook's
-    // synchronous filesystem operations can hold up the build thread.
-    // Cloud-storage paths (Dropbox CloudStorage, iCloud) can stall
-    // `fs::read_to_string` and `fs::copy` indefinitely while the
-    // sync client reconciles or hydrates a dehydrated file. Pre-2026-05
-    // a single stuck notebook would freeze the entire build pipeline
-    // at "Generating pages... (i / N)" with no escape; see
-    // investigation 2026-05-16. The helper spawns the I/O block on a
-    // detached worker thread, waits up to `NOTEBOOK_IO_TIMEOUT_SECS`
-    // (module-level const) on a channel, and on timeout returns
-    // `TimedOut` so the caller can surface a UI warning. The leaked
-    // worker thread completes silently when the OS eventually unblocks
-    // the syscall.
+    // Per-notebook I/O timeout: cloud-storage paths (Dropbox CloudStorage,
+    // iCloud) can stall `fs::read_to_string` and `fs::copy` indefinitely
+    // while the sync client hydrates a file, which would otherwise freeze the
+    // whole build on one notebook.
     fn with_io_timeout<F>(item_path: &str, f: F) -> IoOutcome
     where
         F: FnOnce() -> Result<Vec<NotebookReceipt>, String> + Send + 'static,
     {
-        use std::sync::mpsc;
-        use std::time::Duration;
-        let (tx, rx) = mpsc::sync_channel(1);
-        let label = item_path.to_string();
-        std::thread::spawn(move || {
-            let r = f();
-            let _ = tx.send(r);
-        });
-        match rx.recv_timeout(Duration::from_secs(NOTEBOOK_IO_TIMEOUT_SECS)) {
-            Ok(Ok(paths)) => IoOutcome::Done(paths),
-            Ok(Err(e)) => {
+        let budget = std::time::Duration::from_secs(NOTEBOOK_IO_TIMEOUT_SECS);
+        match crate::system::deadline::wait_at_most(budget, f) {
+            Some(Ok(paths)) => IoOutcome::Done(paths),
+            Some(Err(e)) => {
                 log::info!(
                     "[notebook] I/O for '{}' returned an error: {}; continuing",
-                    label, e
+                    item_path, e
                 );
                 IoOutcome::Errored(e)
             }
-            Err(_) => {
+            None => {
                 crate::build::cli_output::log_note!(
                     "[notebook] I/O for '{}' timed out after {}s. Likely cloud-storage \
                      dehydration (Dropbox CloudStorage / iCloud). The notebook is \
                      skipped on this build; the next rebuild will retry. Worker \
                      thread is detached and will exit when the OS unblocks.",
-                    label, NOTEBOOK_IO_TIMEOUT_SECS
+                    item_path, NOTEBOOK_IO_TIMEOUT_SECS
                 );
                 IoOutcome::TimedOut
             }

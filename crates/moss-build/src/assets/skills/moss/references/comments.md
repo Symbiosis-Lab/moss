@@ -6,7 +6,7 @@ Nothing reviews a new comment before it goes live. Whatever is in the site's com
 
 ## Where comments come from
 
-Comments are synced into `.moss/data/social/*.json`, one file per source (the moss comment service, a syndication target, and so on). Each comment has an `id`, a `source`, sanitized HTML `content`, a creation time and an author. The build reads those files and bakes the visible comments into each page; a page with comments switched off (`comments: false`) shows none whatever the data holds. Listing needs no build.
+Comments are synced into `.moss/data/social/*.json`, one file per source (the moss comment service, a syndication target, and so on). Each comment has an `id`, a `source`, sanitized HTML `content`, a creation time and an author. `moss build` and `moss deploy` first refresh the moss comment service's file, waiting up to 20 seconds, and print a note with the date of the last refresh when they could not. The build reads those files and bakes the visible comments into each page; a page with comments switched off (`comments: false`) shows none whatever the data holds. Listing needs no build.
 
 ## List
 

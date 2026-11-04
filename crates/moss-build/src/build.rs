@@ -299,10 +299,10 @@ pub struct PipelineConfig {
     pub trigger: BuildTrigger,
     /// True when this build is invoked from a process that will exit shortly
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
-    /// callers cannot rely on `spawn_native_process_sync`'s background task
-    /// to populate the link-meta cache — it gets killed before completion.
-    /// When set, the render fetches link metadata for this build's external
-    /// links before it renders them (`build::render::blocking`). Defaults to
+    /// callers cannot rely on a background task to fill the link-meta or
+    /// comment cache — it gets killed before completion. When set, the build
+    /// waits, under time limits, for comments (`features::sync::start_for_build`)
+    /// and link metadata (`build::render::blocking`) before it renders. Defaults to
     /// `false`; only `start_cli_build` and `build_sync` flip it.
     ///
     /// Note: this is NOT derivable from `progress` or the host ports. The
@@ -1063,13 +1063,13 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // critical path. We spawn them as a background task; their output (written
     // to .moss/data/social/*.json) is read by the NEXT build's enhance phase.
     //
-    // Architectural invariant: `run_pipeline` does no network fetches itself
-    // **except for the link-meta fetch before render (`build::render::blocking`)**, which is gated on
-    // `config.exits_after_build` (CLI / snapshot tests) where there's no
-    // long-lived runtime to host `spawn_native_process_sync`. GUI builds
-    // never fetch inline — the background task handles them async.
-    // If you find yourself wanting to add a NEW network fetch — don't.
-    // Spawn it from `features::sync` so build still returns immediately
+    // Architectural invariant: `run_pipeline` waits on the network only where
+    // `config.exits_after_build` (CLI / snapshot tests) leaves no long-lived
+    // runtime and no next build: the link-meta fetch before render
+    // (`build::render::blocking`) and the comment refresh here, both under a
+    // time limit. GUI builds never fetch inline — the background task handles
+    // them async. If you find yourself wanting to add a NEW network fetch —
+    // don't. Spawn it from `features::sync` so build still returns immediately
     // when the upstream is slow or unreachable.
     //
     // Skipped during SlotsOnly (watch rebuilds) — those run frequently and
@@ -1078,11 +1078,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // rebuilds don't compound.
     if !skip_process {
         let _trace = PhaseTrace::start("native_process_spawn");
-        let services_config = crate::build::site_config::get_services_config(&folder_path)
-            .unwrap_or_default();
-        crate::build::features::sync::spawn_native_process_sync(
+        crate::build::features::sync::start_for_build(
+            config.exits_after_build,
             folder_path.clone(),
-            services_config,
             cached_domain_config.clone(),
             // The typed bus, not `config.progress`: this completion event is a
             // frontend signal, and in CLI mode the progress sink prints to
@@ -1090,7 +1088,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // never printed.
             config.host.events.clone(),
             &*config.host.spawner,
-        );
+        )
+        .await;
     }
 
     // Build the site.
