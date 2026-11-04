@@ -10980,7 +10980,7 @@ body[data-moss-preview] .moss-service-inactive {
 }
 .moss-derived--skipped {
   padding: 0.75em 1em;
-  color: var(--moss-text-secondary);
+  color: var(--moss-color-text-secondary);
   background: var(--moss-color-surface);
   border: 1px solid var(--moss-border-medium);
   border-inline-start: 3px solid var(--moss-border-strong);
