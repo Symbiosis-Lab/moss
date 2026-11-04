@@ -4004,11 +4004,14 @@ fn hero_header_over_marks_only_the_opening_hero() {
     );
     assert!(opening.contains(r#"data-header="over""#), "got: {opening}");
 
-    let later = render_hero_with_graph(
+    // A hero after other content stays in the body, where header=over does not apply.
+    let later = parse_with_graph(
         "Intro.\n\n:::hero {image=h.jpg header=over}\n# Title\n:::\n",
         &["h.jpg"],
     );
-    assert!(!later.contains("data-header"), "got: {later}");
+    assert!(later.hero_html.is_none(), "a later hero is not lifted out of the body");
+    assert!(later.html_content.contains("moss-hero"), "got: {}", later.html_content);
+    assert!(!later.html_content.contains("data-header"), "got: {}", later.html_content);
 }
 
 #[test]

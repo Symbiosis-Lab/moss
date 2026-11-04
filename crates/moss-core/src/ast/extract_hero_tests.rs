@@ -135,9 +135,7 @@ fn extract_hero_overlay_text_skips_leading_heading() {
 
 #[test]
 fn extract_hero_finds_only_first_hero_when_multiple_present() {
-    // Hero-hoisting semantics: the FIRST hero wins; subsequent
-    // hero blocks stay in the body (rare authoring shape; the body
-    // renderer will then have to decide what to do with them).
+    // Only the opening hero leaves the body; later heroes stay in place.
     let mut doc = Document::from_blocks(vec![
         hero_block(Some("a.jpg"), vec![]),
         Block::Paragraph(vec![Inline::Text("middle".into())]),
@@ -227,4 +225,35 @@ fn dark_picture_is_read_from_the_attribute_block() {
     assert_eq!(hero.dark, Some(Url::unresolved("night.jpg")));
     let (plain, _, _) = parse_hero("{image=day.jpg}", "", &cfg);
     assert_eq!(plain.dark, None);
+}
+
+/// Only a hero that opens the page leaves the body: one written after other
+/// content stays where the author put it.
+#[test]
+fn a_hero_after_body_content_stays_in_place() {
+    let mut doc = Document::from_blocks(vec![
+        Block::Paragraph(vec![Inline::Text("first".into())]),
+        hero_block(Some("hero.jpg"), vec![]),
+    ]);
+    let hooks = DefaultHooks::new();
+    assert!(extract_hero(&mut doc, &hooks).is_none());
+    assert_eq!(doc.blocks.len(), 2, "the hero stays in the body");
+}
+
+/// A comment is not content: a hero under one still opens the page, and keeps
+/// `header=over`, which only an opening hero takes.
+#[test]
+fn a_comment_above_the_hero_does_not_stop_it_opening_the_page() {
+    let mut hero = hero_block(Some("hero.jpg"), vec![]);
+    if let Block::Shortcode(Shortcode::Hero(args)) = &mut hero {
+        args.header = Some("over".into());
+        args.from = Some("work/".into());
+    }
+    let mut doc = Document::from_blocks(vec![Block::Other("<!-- a note for the editor -->\n".into()), hero]);
+    let hooks = DefaultHooks::new();
+    let extraction = extract_hero(&mut doc, &hooks).expect("the hero opens the page");
+    assert_eq!(extraction.image_url.as_deref(), Some("hero.jpg"));
+    assert_eq!(doc.blocks.len(), 1, "the comment stays, the hero leaves");
+    let drawn = extraction.drawn_from.expect("a from= hero is kept for its second render");
+    assert_eq!(drawn.shortcode.header.as_deref(), Some("over"));
 }

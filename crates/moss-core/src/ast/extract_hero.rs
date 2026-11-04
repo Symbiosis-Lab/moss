@@ -66,20 +66,30 @@ pub struct HeroDrawnFrom {
     pub source_line: Option<usize>,
 }
 
-/// Find and extract the first top-level Hero shortcode from `doc`.
+/// Extract the page's opening hero: a top-level Hero with nothing but
+/// comments before it.
 ///
-/// Returns `Some(HeroExtraction)` if a Hero was found (and removed from
-/// `doc.blocks`); returns `None` if the document has no Hero at the top
-/// level.
+/// Returns `Some(HeroExtraction)` with the hero removed from `doc.blocks`, or
+/// `None` when the page does not open with a hero. A hero written after other
+/// content stays in the body, where the author put it.
 ///
 /// The Hero is rendered via `hooks.render_shortcode(&mut out, sc)` — the
 /// caller's `RenderHooks` impl decides the exact byte shape (production
 /// uses `PipelineHooks::render_shortcode` with the Hero arm calling
 /// `render_hero_html_typed`).
 pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroExtraction> {
-    let hero_idx = doc.blocks.iter().position(|b| {
-        matches!(b, Block::Shortcode(Shortcode::Hero(_)))
-    })?;
+    let opening = doc.blocks.iter().position(|b| !is_comment(b))
+        .filter(|&i| matches!(doc.blocks[i], Block::Shortcode(Shortcode::Hero(_))));
+    // `header=over` lays the header over the opening hero only, so every hero
+    // left in the body keeps the header band.
+    for (i, block) in doc.blocks.iter_mut().enumerate() {
+        if let Block::Shortcode(Shortcode::Hero(other)) = block {
+            if Some(i) != opening {
+                other.header = None;
+            }
+        }
+    }
+    let hero_idx = opening?;
 
     // Pop the block from the document. Keep `block_meta` in sync — both
     // vecs must remain the same length per the Document invariant
@@ -103,10 +113,7 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
         _ => return None,
     };
 
-    // OG-fallback fields, read directly from the typed AST (post URL
-    // resolution by `resolve_urls`). The plan's Decision 1 calls this out:
-    //   "captures `image_url` from `args.image` (Url::Resolved → href);
-    //    captures `overlay_text` from the existing `args.overlay_text` field"
+    // OG-fallback fields, read from the typed AST after `resolve_urls`.
     let image_url = match &hero_args.image {
         Some(Url::Resolved(r)) => Some(r.href.clone()),
         Some(Url::Unresolved(s)) => {
@@ -123,16 +130,8 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
         None => None,
     };
 
-    // overlay_text: walk the typed overlay first; fall back to the
-    // captured-at-parse-time markdown source if the typed walk yields
-    // empty.
-    //
-    // Plan Decision 1 notes the existing `overlay_text` field is the
-    // one PR4.5 flagged as the TODO(phase4-cleanup) consumed at
-    // extract-at-caller. Today we still also walk the typed Vec<Block>
-    // (production builds overlay_text alongside the typed overlay, so
-    // either source works); when the TODO is closed, only the typed
-    // walk remains.
+    // overlay_text: the typed overlay first, else the markdown source
+    // captured at parse time.
     let walked = first_paragraph_plain_text(&hero_args.overlay);
     let overlay_text = if !walked.trim().is_empty() {
         Some(walked)
@@ -148,24 +147,9 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     // Hero is hoisted out of the body to the article template's hero slot.
     // The slot IS in the preview DOM and clickable, so we pass source_line
     // so the rendered section carries data-source-range for click-to-source.
-    // `header=over` lays the header over the page's opening hero only. Every
-    // hero left in the body keeps the header band, so the option is dropped
-    // from all of them, and from the extracted one unless it opens the page.
-    for block in doc.blocks.iter_mut() {
-        if let Block::Shortcode(Shortcode::Hero(later)) = block {
-            later.header = None;
-        }
-    }
-    let cleared;
-    let render_target = if hero_idx != 0 && hero_args.header.is_some() {
-        cleared = Shortcode::Hero(HeroShortcode { header: None, ..hero_args.clone() });
-        &cleared
-    } else {
-        hero_shortcode
-    };
-    hooks.render_shortcode(&mut html, render_target, hero_source_line);
+    hooks.render_shortcode(&mut html, hero_shortcode, hero_source_line);
 
-    let drawn_from = match render_target {
+    let drawn_from = match hero_shortcode {
         Shortcode::Hero(args) if args.from.is_some() => {
             Some(HeroDrawnFrom { shortcode: args.clone(), source_line: hero_source_line })
         }
@@ -794,3 +778,16 @@ pub(crate) fn hero_asset_spans(
 #[cfg(test)]
 #[path = "extract_hero_tests.rs"]
 mod tests;
+
+/// A block that holds only HTML comments, which a reader never sees.
+fn is_comment(block: &Block) -> bool {
+    let Block::Other(html) = block else { return false };
+    let mut rest = html.trim();
+    while let Some(after) = rest.strip_prefix("<!--") {
+        match after.find("-->") {
+            Some(end) => rest = after[end + 3..].trim_start(),
+            None => return false,
+        }
+    }
+    rest.is_empty()
+}
