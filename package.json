@@ -5,7 +5,7 @@
   "scripts": {
     "prepare": "node scripts/install-git-hooks.mjs",
     "build:backend-scripts": "node scripts/build-backend-scripts.mjs",
-    "check:backend-scripts": "node scripts/build-backend-scripts.mjs && git diff --exit-code -- crates/moss-build/src/assets/js crates/moss-build/src/ops/serve/js",
+    "check:backend-scripts": "node scripts/build-backend-scripts.mjs --check",
     "test:render-gates": "bash scripts/render-gates.sh",
     "test:demo-player": "node --test scripts/demo-player.test.mjs && node scripts/check-demo-scenes.mjs",
     "docs:after-harvest": "node scripts/capture-editor-guide-assets.mjs && npm run -s test:demo-player"

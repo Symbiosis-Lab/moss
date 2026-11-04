@@ -17,6 +17,7 @@
 //   node scripts/check-dist-freshness.mjs
 
 import { spawnSync } from 'node:child_process';
+import { OUTPUTS } from './build-backend-scripts.mjs';
 
 const PACKAGES = [
   {
@@ -68,7 +69,7 @@ const PACKAGES = [
   {
     label: 'backend scripts',
     build: ['node', ['scripts/build-backend-scripts.mjs']],
-    distPath: ['crates/moss-build/src/assets/js', 'crates/moss-build/src/ops/serve/js'],
+    distPath: OUTPUTS,
     triggers: [
       'crates/moss-build/src/js-src/',
       'scripts/build-backend-scripts.mjs',

@@ -116,7 +116,16 @@
         status.textContent = '';
         delete status.dataset.state;
         try {
-          const response = await request(input.value.trim());
+          const email = input.value.trim();
+          let response = await request(email);
+          // The host asks for its bot check (home/captcha.js); post again once passed.
+          if (response.status === 403) {
+            const asked = await response.json().catch(() => ({}));
+            if (asked.need_captcha && asked.captcha_url && window.mossCaptcha) {
+              if (!(await window.mossCaptcha.solveCaptcha(asked.captcha_url))) return;
+              response = await request(email);
+            }
+          }
           if (!response.ok) throw new Error(`Request failed (${response.status})`);
           let payload;
           if (form.dataset.subscription) {

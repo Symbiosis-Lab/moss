@@ -1,27 +1,20 @@
-import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { build } from "esbuild";
 
 /**
- * Every bundle esbuild emits for the Rust side, as one table.
+ * Every bundle esbuild emits, as one table: from a TS source to the file a
+ * crate embeds, or, for the one entry outside the crates, to the file the
+ * project's own site serves.
  *
  * `out` decides which crate embeds the bundle, so it is the load-bearing
  * column: a bundle must land in the crate whose `include_str!` reads it, and
- * writing one to the wrong crate fails no build — it leaves that crate
- * embedding a stale copy that no longer tracks its TS source (moss, 2026-08-28).
+ * writing one to the wrong crate fails no build; it leaves that crate
+ * embedding a stale copy that no longer tracks its TS source.
  *
- * The two destinations are two runtimes, not two folders that drifted apart:
- * `js-src/site/` is the published site a visitor loads (moss-build compiles
- * it), `js-src/bridge/` is preview-only JS the app injects into its iframe
- * and never deploys. The entry path and the outfile crate always agree.
- *
- * Ported from the desktop repo's scripts/build-backend-scripts.mjs:
- * these 15 outputs (plus the hand-written comment-owner-controls.js) already
- * live in this repo, so their TS sources and the bundler that produces them
- * belong here too. Desktop's own build.rs stops invoking this script once
- * it lands and builds green here.
- *
- * Exported because it is the single owner of that mapping: check-embedded-js.mjs
- * derives from it rather than restating it.
+ * The two crate destinations are two runtimes, not two folders that drifted
+ * apart: `js-src/site/` is the published site a visitor loads (moss-build
+ * compiles it), `js-src/bridge/` is preview-only JS the app injects into its
+ * iframe and never deploys. The entry path and the outfile crate always agree.
  */
 export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/bridge/iframe-bridge.ts", out: "crates/moss-build/src/ops/serve/js/iframe-bridge.js" },
@@ -68,22 +61,33 @@ export const BUNDLES = [
   // module doc). A directory, not a single file, because the runtime this
   // grows into will need several modules.
   { entry: "crates/moss-build/src/js-src/site/maps/places-explorer/index.ts", out: "crates/moss-build/src/assets/js/maps/places-explorer.js" },
+  // Not embedded: the project's own hand-built landing page answers the
+  // host's bot check with the same module the hosted forms use. It loads the
+  // page as a classic script, so the bundle exposes `window.mossCaptcha`.
+  { entry: "crates/moss-build/src/js-src/site/subscribe/captcha.ts", out: "site/home/captcha.js", globalName: "mossCaptcha" },
 ];
-
-/** The directories BUNDLES writes into — derived, never restated. */
-export const EMBEDDED_DIRS = [...new Set(BUNDLES.map((b) => path.dirname(b.out)))].sort();
 
 export async function buildBackendScripts() {
   await Promise.all(
-    BUNDLES.map(({ entry, out, format = "iife" }) =>
-      build({ entryPoints: [entry], bundle: true, minify: true, format, outfile: out }),
+    BUNDLES.map(({ entry, out, format = "iife", globalName }) =>
+      build({ entryPoints: [entry], bundle: true, minify: true, format, globalName, outfile: out }),
     ),
   );
 }
 
+/** Every file the table writes: what a freshness check compares after a build. */
+export const OUTPUTS = BUNDLES.map((b) => b.out);
+
+// `--check` builds, then fails if any output differs from the committed copy.
 if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  buildBackendScripts().catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+  buildBackendScripts()
+    .then(() => {
+      if (process.argv.includes("--check")) {
+        process.exit(spawnSync("git", ["diff", "--exit-code", "--", ...OUTPUTS], { stdio: "inherit" }).status ?? 1);
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }
