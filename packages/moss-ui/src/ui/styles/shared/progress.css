@@ -1,0 +1,92 @@
+/* ============================================================
+   Shared progress vocabulary — ONE spin keyframe, ONE ring, ONE
+   reduced-motion rule.
+
+   Everything that spins names `moss-spin`; per-use character (speed,
+   steps() ticking) stays a per-use animation-timing-function, not a new
+   keyframe.
+
+   Imported by every CSS entry that imports primitives.css — primitives'
+   setup rows reference `moss-spin`, so the two must travel together.
+   ============================================================ */
+
+@keyframes moss-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── InstallRing (components/install-ring.ts) ───────────────────────────
+   The plugin tile's install affordance: a plus that bends into a ring around
+   the 48px icon and collapses into a minus. This file styles PAINT ONLY —
+   every bit of geometry is in `d`, rewritten per frame from JS, because CSS
+   `d: path()` is unshipped in stable WebKit.
+
+   64 units over a 48px tile, offset −8px, so the ring encircles the icon with
+   8px of air. `overflow: visible` because the strokes deliberately leave the
+   box; pointer-transparent because the tile owns the hit area. */
+.install-ring {
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 64px;
+  height: 64px;
+  overflow: visible;
+  pointer-events: none;
+}
+/* Weight, like the track's opacity, is written per frame from the pose
+   (`Marks.draw`): light while the stroke is a straight mark, full while it is
+   the progress ring. The fallback is the ring weight — if the var is ever
+   missing the readout stays legible and only the resting mark is heavy. */
+.install-ring__mk {
+  fill: none;
+  stroke-width: var(--install-ring-w, 2.5);
+  stroke-linecap: round;
+  stroke: var(--moss-color-accent);
+  transition: stroke 180ms ease;
+}
+/* The track is the same hue at low opacity, not a separate neutral — so it
+   stays correct when the hue is re-pointed per pose. The opacity itself is
+   written per frame from the pose (see Marks.draw). */
+.install-ring__mk--track {
+  stroke-opacity: var(--install-ring-track-op, 1);
+}
+.install-ring[data-tone="muted"] .install-ring__mk {
+  stroke: var(--moss-color-text-secondary);
+}
+.install-ring[data-tone="error"] .install-ring__mk {
+  stroke: var(--moss-error);
+}
+
+/* ── The ONE reduced-motion rule for the progress family ────────────────
+   Indeterminate animations stop but their static partial shape (an open
+   arc, a part-colored ring) still reads as "busy" at reduced opacity —
+   the fp-loader precedent. Determinate transitions become
+   jump-cuts. `!important` is deliberate: this partial is imported early,
+   and the rules it must beat are written later at higher specificity. */
+@media (prefers-reduced-motion: reduce) {
+  .channel-icon-badge--spinner svg.channel-icon-spinner,
+  .moss-spinner,
+  .first-publish-spinner,
+  .moss-publish-button.loading .moss-publish-icon-loader,
+  .moss-setup-row__icon--checking::before {
+    animation: none !important;
+    opacity: 0.6;
+  }
+  /* Pulsing dot loaders: equally-lit static dots instead of a wave. */
+  .moss-dot-loader span,
+  .moss-pill-waiting-dots > .d {
+    animation: none !important;
+    opacity: 1;
+  }
+  /* The install ring's TRANSITIONS are gone under reduce — `InstallRing`
+     checks the preference at call time and draws each end pose directly, and
+     it keeps the holds so those poses are still seen. What continues either
+     way is the arc growing while work is in flight: that is the progress
+     readout itself, not decoration, and freezing it would leave a user who
+     asked for less motion with no indication that anything is happening. The
+     rule the family follows is that an indeterminate animation stops while
+     its static shape still reads as busy; a determinate arc IS its value. */
+  .install-ring__mk {
+    transition: none !important;
+  }
+}

@@ -58,7 +58,8 @@
         "crates/moss-build/src/vault/import/widgets.rs": 900,
         "crates/moss-build/src/i18n/strings.rs": 1000,
         "crates/moss-build/src/build/manifest/change_set.rs": 900,
-        "crates/moss-build/src/deploy.rs": 900
+        "crates/moss-build/src/deploy.rs": 900,
+        "packages/moss-ui/src/ui/i18n/ui-strings.ts": 6200
       },
       "oversized": {
         "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately tauri-free via the HostPorts ports pattern that replaced tauri::AppHandle, not a Tauri-command surface — retires by splitting run_pipeline's own body into its own file, which nothing here currently plans.",
@@ -89,7 +90,8 @@
         "crates/moss-core/src/render/image.rs": "The single entry point every <img>/<picture> call site converges on, by explicit architectural choice recorded in the module doc; splitting it back into per-call-site emitters is the exact regression the migration that produced this file was written to retire.",
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": "This dispatcher is the single entry point for wikilink embeds; the remaining growth path is more embed types registering through the shared renderer lookup, which is the intended way to add one, not a sign this file needs splitting.",
         "crates/moss-core/src/schema_fields.rs": "BUILTIN_FIELDS is deliberately one flat table, co-located by convention with frontmatter_typed.rs per the module doc, so a new field is a two-file one-commit change; it grows exactly one entry per frontmatter field moss adds, which is the design working as intended.",
-        "packages/moss-api/src/testing/mock-tauri.ts": "In-memory Tauri IPC mocks for plugin integration tests, one mock per real IPC command moss-api exposes; it grows in lockstep with the command surface and retires only if the mocks are generated from the bindings instead of hand-written."
+        "packages/moss-api/src/testing/mock-tauri.ts": "In-memory Tauri IPC mocks for plugin integration tests, one mock per real IPC command moss-api exposes; it grows in lockstep with the command surface and retires only if the mocks are generated from the bindings instead of hand-written.",
+        "packages/moss-ui/src/ui/i18n/ui-strings.ts": "The UI's string table, every key in every locale: data, not logic. It retires when each locale's strings move to a file of their own that the i18n module loads."
       }
     },
     "children_per_dir": {
@@ -114,7 +116,8 @@
         "crates/moss-build/src/build/components": 16,
         "crates/moss-build/src/build/emit": 18,
         "crates/moss-build/src/assets/js": 15,
-        "crates/moss-build/src/build/place_map": 16
+        "crates/moss-build/src/build/place_map": 16,
+        "packages/moss-ui/src/ui/shared/ui": 18
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",

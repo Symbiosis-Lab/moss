@@ -1,0 +1,585 @@
+/* moss Design System — Shared Design Tokens */
+
+:root {
+  /* Scope color-scheme to the APP theme, not the OS. `light dark` made WKWebView
+     render UA form controls (textarea/input/select/scrollbars) per the OS
+     appearance regardless of [data-theme] — so a bare control showed OS-dark
+     white text on the app's light surface (and vice versa). The dark blocks
+     below flip this to `dark` so UA chrome tracks the app theme. */
+  color-scheme: light;
+
+  /* ── 11-Variable Customization Contract ──
+     Tokens below that share a name with crates/moss-core/src/contract/tokens.json
+     are classified into buckets:
+       Bucket A (mirrored): value must match tokens.json — guarded by
+         the desktop app's token guard test.
+       Bucket B (intentionally divergent): same name, different value — listed,
+         with its reason, as intentionally divergent in that test.
+       Bucket C (app-only): name not in tokens.json at all — no constraint.
+  */
+
+  /* [B] diverges from tokens.json: app-shell uses compact system-ui stack;
+     the site's full CJK stack (PingFang SC, Microsoft YaHei, Noto Sans SC …)
+     is not needed in app-chrome UI text. */
+  --moss-font-body: "Segoe UI Variable Text", system-ui, -apple-system, sans-serif;
+  /* [A] MIRRORED — must match tokens.json moss-font-heading.
+     Heading font stack — serif by default for editorial weight. If the two
+     ever drift, surfaces like the folder-mode <h1> and the preview
+     .moss-folder-title will look like two different titles for the same string.
+     Previously aliased to --moss-font-body; revised in T5/Wave2 to match
+     tokens.json's serif stack. */
+  --moss-font-heading: 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSongti', 'NSimSun', 'SimSun', 'Source Serif 4', 'Source Serif Pro', 'Times New Roman', Times, serif;
+  /* [B] diverges from tokens.json: compact 3-face mono stack; site stack
+     includes Cascadia Code, JetBrains Mono, Menlo, Consolas etc. */
+  --moss-font-mono: ui-monospace, SFMono-Regular, monospace;
+  /* [C] App-chrome (editor / panel UI) body size — a SEPARATE namespace from
+     the published site contract. The site's reading-text token is
+     `--moss-reading-size` (see tokens.json / site.css); do NOT rename this to
+     match it — editor chrome isn't "reading" text. */
+  --moss-font-size: 1.125rem;
+  /* [A] MIRRORED — must match tokens.json moss-font-weight-body. */
+  --moss-font-weight-body: 320;
+
+  /* [A] MIRRORED — must match tokens.json moss-size-2xl.
+     Typography scale token — kept in sync so the app-shell folder-mode
+     <h1> and preview .moss-folder-title match site-rendered heading sizes.
+     Added in T5/Wave2. Extend the scale (xs, sm, lg, xl) only when an
+     app-shell consumer needs it. */
+  --moss-size-2xl: 1.625rem; /* 26px — folder-mode site header, preview .moss-folder-title */
+  /* [B] diverges from tokens.json (dark): tokens.json is single-value (#2d5a2d);
+     this file adds a dark variant (#4a7c4a) in the [data-theme="dark"] block below. */
+  --moss-color-accent: #2d5a2d;
+  /* [B] diverges from tokens.json (dark): app-shell dark #1a1816 vs site dark
+     #1c1914 (WKWebView gamma calibration). Light values match. */
+  --moss-color-bg: #faf8f5;
+  /* [B] diverges from tokens.json (dark): app-shell dark #c8c3bc vs site dark
+     #d4cbba (app chrome has lighter bg → slightly lower contrast target). Light match. */
+  --moss-color-text: #2c2825;
+  /* [B] diverges from tokens.json (dark): app-shell dark #8a8580 vs site dark
+     #9a9080. Light values match — this one is darkened from #8a8580 to clear
+     4.5:1 (WCAG 1.4.3); the app dark value already clears it. */
+  --moss-color-muted: #716d69;
+  /* [B] diverges from tokens.json (dark): app-shell dark #242018 vs site dark
+     #252017. Light values match. */
+  --moss-color-surface: #f4f1ec;
+
+  /* ── Spacing scale (8pt grid) ──
+     [A] moss-space-xs/sm/md/lg/xl/2xl are MIRRORED — must match tokens.json.
+     [C] moss-space-2xs (0.25rem/4px) is app-only — not in tokens.json. */
+  --moss-space-2xs: 0.25rem; /* 4px — [C] app-only */
+  --moss-space-xs: 0.5rem;   /* 8px  — [A] mirrored */
+  --moss-space-sm: 1rem;     /* 16px — [A] mirrored */
+  --moss-space-md: 1.5rem;   /* 24px — [A] mirrored */
+  --moss-space-lg: 2rem;     /* 32px — [A] mirrored */
+  --moss-space-xl: 3rem;     /* 48px — [A] mirrored */
+  --moss-space-2xl: 4rem;    /* 64px — [A] mirrored */
+
+  /* Settings modal sidebar pill gutter.
+     Horizontal breathing room between tab-pill highlight and sidebar edges. */
+  --moss-settings-sidebar-gutter: var(--moss-space-xs); /* 8px */
+
+  /* ── Derived tokens ── */
+  /* [B] diverges from tokens.json (dark): app-shell dark #a8a39c vs site dark
+     #b0a696. Light values match. */
+  --moss-color-text-secondary: #5d5853;
+  /* [B] diverges from tokens.json: tokens.json uses color-mix(in oklch, …);
+     app-shell uses hardcoded pre-computed swatches (#1e3d1e light / #5a8c5a dark). */
+  --moss-color-accent-hover: #1e3d1e;
+  /* [C] App-only — not in tokens.json. */
+  --moss-accent-light: rgba(45, 90, 45, 0.15);
+  /* [A] MIRRORED in both themes — tokens.json has the dark variant too, so the two agree and the test guards them.
+     Quiet accent for ambient indicators (hairlines, tree-row left-borders).
+     Ambient only — never a focus ring; it is too close to the page to pass 1.4.11. */
+  --moss-color-accent-quiet: rgba(45, 90, 45, 0.28);
+  /* [B] diverges from tokens.json (dark): app-shell dark #3a362f vs site dark
+     #332e25. Light values match. */
+  --moss-border-light: #e6e2db;
+  /* [B] diverges from tokens.json (dark): app-shell dark #4a453c vs site dark
+     #443d32. Light values match. */
+  --moss-border-medium: #d1cdc4;
+  /* [A] mirrored from tokens.json. The only border that carries MEANING rather
+     than decoration — an input's underline is the sole thing distinguishing a
+     text field from the prose around it, so it has to clear 3:1 against the
+     surface (WCAG 1.4.11). border-medium does not, and is fine
+     because a rule or a card edge conveys nothing on its own. */
+  --moss-border-strong: #8e8b85;
+  /* App-only, not in tokens.json. Consumers are container corners, not buttons: the toast
+     card, the progress panel, the dropdown menu — see --moss-radius-capsule
+     below for the button shape. */
+  --moss-border-radius: 8px;
+
+  /* Transitions */
+  --moss-transition-fast: 150ms ease;  /* hover/focus state changes */
+  --moss-transition-base: 250ms ease;  /* larger UI transitions */
+
+  /* Focus ring */
+  --moss-focus-ring: 0 0 0 2px var(--moss-color-accent);
+
+  /* Placeholder text — slightly lighter than muted */
+  --moss-text-placeholder: #b5b0ab;
+
+  /* Semantic colors — danger / error / success / warning */
+  --moss-color-danger: #c85450;
+  --moss-color-danger-hover: #a84340;
+  --moss-error: var(--moss-color-danger);
+  --moss-warning: #f59e0b;
+
+  /* Interaction overlays */
+  --moss-hover-overlay: rgba(0, 0, 0, 0.06);
+  --moss-active-overlay: rgba(0, 0, 0, 0.10);
+
+  /* Syntax highlight tokens
+     [A] moss-hl-keyword/string/comment/attr/operator are MIRRORED — must match
+     tokens.json. Dark values also match.
+     [C] moss-hl-link and moss-hl-punct are app-only — not in tokens.json.
+         Previously hardcoded in cm-highlight.ts (#78788a / #5a5550) with no
+         dark variant; moved here so dark variants can be added. */
+  --moss-hl-keyword: #7a5834;  /* [A] mirrored */
+  --moss-hl-string: #4a6a2a;   /* [A] mirrored */
+  --moss-hl-comment: #787064;  /* [A] mirrored */
+  --moss-hl-attr: #5a6a4a;     /* [A] mirrored */
+  --moss-hl-operator: #5d5853; /* [A] mirrored */
+  --moss-hl-link: #78788a;     /* [C] app-only */
+  --moss-hl-punct: #5a5550;    /* [C] app-only */
+
+  /* Status foreground colors. Both lamps are tuned to clear WCAG 1.4.11's
+     3:1 for non-text state marks against their WORST adjacent light backdrop —
+     the chip's hover surface #f4f1ec (green 3.26:1, amber 3.30:1; the resting
+     rail is ~3.5:1). These are the least-dark values that get there; darker
+     buys nothing and drifts toward brown/forest. Dark theme passes with the
+     untouched values. The green/amber pair itself lands at ~1:1 luminance —
+     unavoidable once each must clear the light background — so that
+     distinction is carried by hue plus the tooltip naming the state. */
+  --moss-success: #0d9869;
+  /* [C] app-only. Ink for a glyph drawn ON TOP OF a --moss-success disc (the
+     channel-icon morph badge's +/-/check strokes). It is deliberately NOT
+     theme-flipping: the disc is green in both themes (#0d9869 light, #34d399
+     dark), so a foreground that lightened in dark mode would get *worse*.
+     White here was under the 3:1 WCAG 1.4.11 minimum for non-text graphics in
+     both themes. This deep evergreen is 4.12:1 and 7.88:1 respectively.
+     Contrast is generous on purpose: the badge is 14px with a ~1.5px stroke,
+     so the glyph is thin. */
+  --moss-success-ink: #022c22;
+  --moss-warning-amber: #c07200;
+  --moss-color-env-chip: oklch(0.62 0.13 75);
+
+  /* Status backgrounds (subtle tints for badges/pills) */
+  --moss-success-subtle: rgba(16, 185, 129, 0.1);
+  --moss-warning-subtle: rgba(245, 158, 11, 0.1);
+  --moss-error-subtle: rgba(200, 84, 80, 0.1);
+
+  /* Invisible drag target at the action-panel/preview seam. In tiled mode
+     the whole strip extends into the preview: the editor is a separate native
+     webview, so a CSS overhang cannot catch presses on its side of the seam. */
+  --moss-divider-width: 32px;
+
+  /* ── Glass Pill System ── */
+  --moss-pill-size: 36px;
+  --moss-pill-radius: 18px;
+  /* Every standalone button is a capsule (radius = half its rendered height). A single length far past any
+     button's half-height forces CSS's corner-overlap clamp (a value that
+     would make adjacent radii overlap is scaled down to the largest value
+     that still fits) to resolve to exactly min(width, height)/2 on every
+     side — a true capsule for a rectangular text button, a circle for a
+     square icon button, with no per-component height arithmetic. Kept
+     distinct from --moss-pill-radius: that token is a fixed 18px (half of
+     the 36px glass-pill size) baked into a `calc()` "one clock" shared by
+     the nav-pill/control-panel weld transition, where two elements must
+     read the identical literal mid-animation — a capsule token that
+     recomputes per box would desync that weld. */
+  --moss-radius-capsule: 9999px;
+  /* ── Windows Caption Button Tokens ── */
+  --moss-caption-btn-w: 46px;
+  --moss-caption-btn-h: 48px;
+  --moss-caption-close-hover: #C42B1C;
+  --moss-caption-close-pressed: color-mix(in srgb, #C42B1C 80%, black);
+  /* Horizontal space reserved on the right edge of the window for shell chrome
+     (channel column, device toggle, publish pill). Read this as "space carved
+     out from the preview area," not "the visual width of the control panel"
+     (they coincide today). Used by .moss-preview-container margin-right and
+     .moss-titlebar right, so preview-centered elements (nav pill, mobile
+     phone frame) align to the preview midpoint, not the window midpoint. */
+  --moss-control-column-width: calc(var(--moss-pill-size) + 12px);
+  /* Horizontal midpoint of the VISIBLE preview region: the shell spans the
+     full window (stable-shell geometry), so inset by half the action panel
+     and half the control column. Degrades to the old 50%-column/2 when no
+     panel is open (var = 0px). Fallback 0px: documents that consume tokens.css
+     without the shell's --action-panel-width must not invalidate the calc.
+     Use with `transform: translateX(-50%)` on absolutely positioned elements
+     (nav pill, centered overlays) so they land above the preview midpoint
+     rather than the window midpoint. Sibling of --moss-safe-center-y
+     (vertical analog below the titlebar). */
+  --moss-safe-center-x: calc(50% + var(--action-panel-width, 0px) / 2 - var(--moss-control-column-width) / 2);
+  /* What occupies the title row's trailing end: the rail's device toggle
+     (macOS, Linux), or the window buttons where moss draws them (Windows,
+     redeclared below). The nav pill stops 8px short of it. */
+  --moss-title-end-reserve: var(--moss-control-column-width);
+  /* Vertical midpoint of the region BELOW the floating titlebar. The titlebar
+     is position:absolute (out of flow), so .moss-preview-container fills the
+     full window height behind it; centering at a bare 50% pushes the mobile
+     phone frame up into the titlebar band on short windows. Shifting the
+     center down by half the titlebar height centers content in the visible
+     area instead. Use with a transform that includes `translateY(-50%)` (the
+     mobile-preview rules use `translate(-50%, -50%)`); paired with
+     `max-height: calc(100% - titlebar - 16px)` this yields an 8px gap above
+     AND below the frame. Vertical sibling of --moss-safe-center-x. */
+  --moss-safe-center-y: calc(50% + var(--moss-titlebar-height) / 2);
+  /* Window corner radius. Keep in sync with the desktop app's native window
+     corner (its WINDOW_CORNER_RADIUS); that constant applies to the NSWindow
+     CALayer, this token applies
+     in CSS for nested surfaces (mobile preview frame) that should visually
+     match the window corner. */
+  --moss-radius-window: 24px;
+  /* Overridden at runtime from Rust TITLEBAR_HEIGHT (see generate_compile_init_script).
+     The value here is a fallback for browser-preview / standalone CSS inspection;
+     moss always sets it authoritatively via the webview initialization script. */
+  --moss-titlebar-height: 48px;
+  /* [C] App-chrome only. The blueprint grid's pitch (`GRID_SPACING` in
+     @symbiosis-lab/moss-blueprint-grid; a unit test holds the two equal), so
+     CSS can put a mark on a line the grid strokes before any script runs. */
+  --moss-grid-spacing: 40px;
+  /* [C] App-chrome only (NOT a published-site contract token). Left inset that
+     reserves room for the macOS traffic lights so every title bar's content —
+     the shell Edit button, the editor breadcrumb, the email-composer titlebar —
+     clears them. Collapsed to 0 in fullscreen (the lights are hidden) by the
+     body.fullscreen-mode rule below. MUST stay a concrete px value: the file
+     tree reads it via getComputedStyle().getPropertyValue() + parseFloat,
+     which would get the literal "var(...)" string for an aliased value. */
+  --moss-traffic-light-inset: 0px;
+  --moss-glass-surface-bg: rgba(248, 245, 240, 0.88);
+  --moss-glass-blur: 20px;
+  --moss-glass-saturate: 100%;
+  /* Pills should be clearly brighter than the page-color surface behind them */
+  --moss-glass-pill-bg: rgba(255, 255, 255, 0.9);
+  --moss-pill-filled-bg: rgba(45, 90, 45, 0.9);
+  --moss-pill-filled-text: #ffffff;
+  /* Floating preview-chrome tokens — light base; overridden by
+     [data-chrome-theme] at end of file (driven by the previewed page's
+     backdrop). Dedicated (not the shared --moss-glass-* / --moss-color-text-
+     secondary) so settings inputs, the editor find-pill, and panels — which
+     follow the app theme — are unaffected. */
+  --moss-chrome-icon-color: #5d5853;
+  --moss-chrome-surface-bg: rgba(248, 245, 240, 0.88);
+  --moss-chrome-pill-bg: rgba(255, 255, 255, 0.9);
+  /* Depth on the backdrop axis: the same one-light model as --moss-elevation-N,
+     re-declared per pole so a floating pill or panel casts the previewed page's
+     shadow, not the app theme's. Two levels: a pill level and a panel/menu level. The
+     three inputs are read only by the two level strings beside them; they exist
+     so a retune is one number per pole, not a percentage recomputed inside four
+     color-mix() calls. */
+  --moss-chrome-shadow-color: #2b2117;
+  --moss-chrome-shadow-strength: 0.5;
+  --moss-chrome-edge-light: rgba(255, 255, 255, 0.45);
+  --moss-chrome-elevation-1: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-chrome-edge-light), calc(var(--moss-light-x) * -6.8px) calc(var(--moss-light-y) * -6.8px) 4.8px 0.8px color-mix(in srgb, var(--moss-chrome-shadow-color) calc(32% * var(--moss-chrome-shadow-strength)), transparent);
+  --moss-chrome-elevation-2: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-chrome-edge-light), calc(var(--moss-light-x) * -13.6px) calc(var(--moss-light-y) * -13.6px) 9.6px 0.8px color-mix(in srgb, var(--moss-chrome-shadow-color) calc(24% * var(--moss-chrome-shadow-strength)), transparent);
+  /* The advisory panel's own theme. The pill is a CONTROL — glyphs over the
+     shell-painted ambient band, which `backdrop-filter` really can blur, so its
+     glass premise holds and it is unchanged. The panel is a READING surface:
+     wrapping sentences in three type registers and three locales, hanging below
+     the titlebar over the preview iframe, where `backdrop-filter` "cannot cross"
+     the webview boundary, so the blur behind it is inert and alpha alone
+     decides legibility.
+
+     It carries INK as well as material, and both on this axis. Everything the
+     panel renders reads the app-axis --moss-color-* family, while its
+     background reads the backdrop axis; when the two disagree (OS dark over a
+     light site, the case the backdrop axis exists for), the text can measure
+     1.02:1. The app shell's stylesheet re-binds it locally, and
+     panel-contrast.test.ts composites all of this over the whole backdrop
+     space.
+
+     0.94, not the pill's 0.14/0.9: at this density the author's page can no
+     longer move the text's contrast (spread 1.15-1.19x, floor 4.4:1; the pill's
+     0.9 alpha allowed 6.8x and 1.3:1). */
+  --moss-chrome-panel-bg: rgba(250, 248, 245, 0.94);
+  --moss-chrome-panel-fg: #2c2825;
+  --moss-chrome-panel-fg-secondary: #5d5853;
+  --moss-chrome-panel-fg-muted: #66625e;
+  --moss-chrome-panel-accent: #2d5a2d;
+  --moss-chrome-panel-accent-quiet: rgba(45, 90, 45, 0.45);
+  --moss-chrome-panel-danger: #a84340;
+  --moss-chrome-panel-broken: #c85450;
+  --moss-chrome-panel-degraded: #a86200;
+  --moss-chrome-panel-border: rgba(44, 40, 37, 0.16);
+  --moss-chrome-panel-hover: rgba(44, 40, 37, 0.05);
+  /* The publish pill is INK, not green. Green was doing six jobs at once in the
+     chrome, and the resting change-set ring encircling this button needs green
+     for "added" — a green ring on a green button reads as one blob. Ink also
+     frees color to mean something: `.moss-publish-button.success` flashing
+     --moss-success is now a real state change rather than a shade shift.
+     Keyed on the PAGE's backdrop (--moss-chrome-*), not the app theme, so the
+     pill stays legible over whatever the author's site renders. */
+  --moss-chrome-publish-bg: #26221e;
+  --moss-chrome-publish-fg: #f8f5f0;
+  /* Change-set verbs. Purpose-minted rather than reused from the semantic
+     palette, because both obvious reuses are wrong:
+     --moss-success (#0d9869) and --moss-color-accent (#2d5a2d) are BOTH green,
+     so "added" and "edited" would sit adjacent on a 44px ring as one smear —
+     the exact collision that moved the publish pill to ink; and --moss-error
+     would paint a deleted page in the app's danger hue, framing a routine
+     authoring act as a failure.
+     Keyed on the PAGE backdrop like the pill above: the ring floats over the
+     author's own site, not over app chrome. */
+  --moss-verb-added: #4a7c4a;
+  --moss-verb-edited: #4a80b8;
+  --moss-verb-deleted: #b86a66;
+
+  /* --- Settings modal --- */
+  --moss-window-radius: 24px;               /* mirrors Rust WINDOW_CORNER_RADIUS; runtime override in init script */
+
+  /* --- Analytics geo map --- */
+  --moss-color-land-neutral: #eeece7;
+
+  /* ── Preview Surface ── */
+  /* Width shared by .moss-nav-pill and .moss-progress-panel so they form one
+     equal-width surface. Narrow override below (≤700px). */
+  --moss-surface-width: 300px;
+  /* Severity colours for .moss-severity-dot and the status line --failed state.
+     broken = danger (blocking issue); degraded = amber (degraded/needs-action).
+     Contrast verified ≥3:1 on the REAL glass backing (WCAG SC 1.4.11):
+       light glass rgba(255,255,255,0.90) over #faf8f5 → ~#fffefe
+       broken #c85450 → 4.31:1 ✓  degraded #c97a00 → 3.33:1 ✓ */
+  --moss-severity-broken: var(--moss-color-danger);
+  --moss-severity-degraded: #c97a00;
+
+  /* ── Stacking scale ───────────────────────────────────────────────────
+     One ladder for every moss webview, in the shared partial each entry
+     point imports, so every surface names a step instead of writing a raw
+     z-index against a scale it cannot see (`21` meaning panel + 1).
+
+     -----------------------------------------------------------------------
+     Layer           Var                  Value  Usage
+     -----------------------------------------------------------------------
+     backdrop        --z-backdrop           10   Dim/wait overlays behind chrome
+     panel           --z-panel              20   Titlebar, control panel, dividers
+     preview chrome  --z-preview-chrome     40   Transient badges over the preview
+     modal           --z-modal              50   Modal backdrop (content = modal + 1)
+     popup           --z-popup             100   Tooltips, drop hints, find pill
+     overlay         --z-overlay           150   Menus/popovers/pane-covering overlays
+     toast           --z-toast             200   Notifications — always topmost
+     -----------------------------------------------------------------------
+
+     Rules:
+     1. Use the variables. A raw number is only correct inside a self-contained
+        stacking context, where it orders siblings and nothing else.
+     2. One step above a tier is `calc(var(--z-tier) + 1)`, not the number.
+     3. Toast is the ceiling: nothing that can be dismissed-by-waiting may be
+        raised above it (see #moss-preview-overlay.home-gate-active, which is
+        held down at the JS level for exactly this reason).
+
+     Why the two middle steps exist:
+     - `--z-preview-chrome` names the tier the zoom badge and swipe indicator
+       already occupied at 40: over the titlebar, under any modal.
+     - `--z-overlay` names the editor's menu tier (.pop/.omenu/.dropdown/
+       .cm-slash-menu/.cm-comment-popover/the composer recap), which sat at a
+       hard-coded 200 — tied with toasts, so a notification could lose to a
+       dropdown. 150 keeps the menus' order among themselves and restores
+       rule 3. */
+  --z-backdrop: 10;
+  --z-panel: 20;
+  --z-preview-chrome: 40;
+  --z-modal: 50;
+  --z-popup: 100;
+  --z-overlay: 150;
+  --z-toast: 200;
+
+  /* ── Elevation: one light ── [A] MIRRORED from tokens.json `elevation`.
+     Every box-shadow reads a level; none writes a literal. The level strings
+     are repeated in the [data-theme="dark"] block so they re-evaluate on the
+     element carrying the theme (a custom property substitutes its var()s where
+     it is declared, not where it is read). On the app root that is the same
+     node as :root and the repeat is inert; it binds wherever data-theme lands
+     on a subtree — the design-system strips, a themed site section — where an
+     inherited level would keep the light umbra. */
+  --moss-light-x: 0;
+  --moss-light-y: -0.5;
+  --moss-shadow-color: #2b2117;
+  --moss-shadow-strength: 0.5;
+  --moss-edge-light: rgba(255, 255, 255, 0.45);
+  --moss-elevation-1: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -6.8px) calc(var(--moss-light-y) * -6.8px) 4.8px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(32% * var(--moss-shadow-strength)), transparent);
+  --moss-elevation-2: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -13.6px) calc(var(--moss-light-y) * -13.6px) 9.6px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(24% * var(--moss-shadow-strength)), transparent);
+  --moss-elevation-3: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -20.4px) calc(var(--moss-light-y) * -20.4px) 14.4px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(16% * var(--moss-shadow-strength)), transparent);
+}
+
+body.own-titlebar {
+  --moss-traffic-light-inset: 76px;
+}
+
+/* Windows also gets own-titlebar (it draws icon+moss itself) but its
+   controls sit trailing rather than needing macOS's 76px left reserve for
+   traffic lights it doesn't have. NOT `body.own-titlebar:not(.controls-trailing)`
+   on the rule above: `:not()` counts its argument's specificity, so that form
+   would make the 76px rule itself (0,2,1) — strictly higher than
+   `body.fullscreen-mode` below, which is (0,1,1) same as plain `body.own-titlebar`
+   — and a higher-specificity rule always wins regardless of source order, so
+   fullscreen-mode could never win back a real macOS window, stuck at 76px.
+   This rule is the (0,2,1) one instead, and by DESIGN: it outranks the plain
+   (0,1,1) `body.own-titlebar` above on specificity alone whenever both classes
+   are present (Windows), no ordering involved. The rule that DOES rely on
+   source order is the pair `body.own-titlebar` / `body.fullscreen-mode` below
+   — both (0,1,1), a genuine tie, and fullscreen-mode wins it by appearing
+   later in the file, exactly as it did before Windows needed a second class
+   to distinguish at all. */
+body.own-titlebar.controls-trailing {
+  --moss-traffic-light-inset: 0px;
+  /* Where moss draws the Windows window buttons, they own the window's
+     top-right corner: 138px wide (three --moss-caption-btn-w), as tall as
+     the title row (48px), on every window size. Two reserves follow, neither
+     of them the rail: the title row ends where the buttons start
+     (--moss-title-end-reserve), and the rail starts below them
+     (--moss-caption-zone-height). The rail keeps its 48px, as on macOS. */
+  --moss-caption-zone-width: calc(3 * var(--moss-caption-btn-w));
+  --moss-caption-zone-height: var(--moss-caption-btn-h);
+  --moss-title-end-reserve: var(--moss-caption-zone-width);
+}
+
+/* Native fullscreen hides the macOS traffic lights, so the reserved left inset
+   is dead space — collapse it to 0 (one source for every title bar in both the
+   shell and the editor webview, which each toggle `fullscreen-mode` on <body> via
+   utils/fullscreen-class.ts). A state-keyed token value, like the [data-theme]
+   overrides below. 0px (not 0) so it stays valid inside the tree-row calc(). */
+body.fullscreen-mode {
+  --moss-traffic-light-inset: 0px;
+}
+
+@media (max-width: 700px) {
+  :root {
+    --moss-surface-width: 280px;
+  }
+}
+
+/* Dark mode - explicit toggle */
+[data-theme="dark"] {
+  color-scheme: dark; /* UA form controls / scrollbars follow the app theme */
+  --moss-color-accent: #4a7c4a;
+  --moss-color-bg: #1a1816;
+  --moss-color-text: #c8c3bc;
+  --moss-color-muted: #8a8580;
+  --moss-color-surface: #242018;
+
+  --moss-color-text-secondary: #a8a39c;
+  --moss-color-accent-hover: #5a8c5a;
+  --moss-accent-light: rgba(74, 124, 74, 0.2);
+  /* Dark variant of --moss-color-accent-quiet — slightly higher opacity
+     for legibility against dark titlebar / preview backgrounds. Mirrored into
+     tokens.json so site and app agree; guarded by the token test. */
+  --moss-color-accent-quiet: rgba(74, 124, 74, 0.4);
+  --moss-border-light: #3a362f;
+  --moss-border-medium: #4a453c;
+  --moss-border-strong: #6f6a61;
+  --moss-color-danger: #d96960;
+  --moss-color-danger-hover: #c85450;
+  --moss-text-placeholder: #6a6560;
+  --moss-success: #34d399;
+  --moss-warning: #fbbf24;
+  --moss-warning-amber: #e09a20;
+  --moss-color-env-chip: oklch(0.72 0.13 75);
+
+  --moss-hover-overlay: rgba(255, 255, 255, 0.08);
+  --moss-active-overlay: rgba(255, 255, 255, 0.14);
+  --moss-success-subtle: rgba(16, 185, 129, 0.15);
+  --moss-warning-subtle: rgba(245, 158, 11, 0.15);
+  --moss-error-subtle: rgba(200, 84, 80, 0.15);
+  /* Shared glass tokens stay theme-keyed (consumed by settings pill-inputs,
+     the editor find-pill, the progress panel — surfaces that follow the app
+     theme). The FLOATING preview chrome instead uses the dedicated
+     --moss-chrome-* tokens on [data-chrome-theme] (end of file). */
+  --moss-glass-surface-bg: rgba(26, 24, 22, 0.88);
+  --moss-glass-pill-bg: rgba(255, 255, 255, 0.08);
+  --moss-pill-filled-bg: rgba(74, 124, 74, 0.9);
+  --moss-hl-keyword: #d4a06a;
+  --moss-hl-string: #8aba6a;
+  --moss-hl-comment: #8e8578;
+  --moss-hl-attr: #a0b880;
+  --moss-hl-operator: #b0a696;
+  --moss-hl-link: #a0a0b4;
+  --moss-hl-punct: #8a8490;
+
+  /* --- Analytics geo map --- */
+  --moss-color-land-neutral: #2a2a2a;
+
+  /* ── Preview Surface ── */
+  /* severity-broken aliases the already-overridden danger token above. */
+  --moss-severity-broken: var(--moss-color-danger);
+  /* degraded amber dark value pinned by severity-contrast.test.ts:
+     #e6a93a → 6.87:1 on glass rgba(255,255,255,0.08) over #1a1816 (~#2c2a29). */
+  --moss-severity-degraded: #e6a93a;
+
+  /* ── Elevation: one light ── [A] MIRRORED; see the :root block. ── */
+  --moss-shadow-color: #000000;
+  --moss-shadow-strength: 0.8;
+  --moss-edge-light: rgba(255, 255, 255, 0.07);
+  --moss-elevation-1: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -6.8px) calc(var(--moss-light-y) * -6.8px) 4.8px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(32% * var(--moss-shadow-strength)), transparent);
+  --moss-elevation-2: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -13.6px) calc(var(--moss-light-y) * -13.6px) 9.6px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(24% * var(--moss-shadow-strength)), transparent);
+  --moss-elevation-3: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -20.4px) calc(var(--moss-light-y) * -20.4px) 14.4px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(16% * var(--moss-shadow-strength)), transparent);
+}
+
+/* ── Floating-chrome appearance, driven by the previewed page's backdrop ──
+   `data-chrome-theme` is set pre-paint by an inline <script> in the host page
+   (mirrors data-theme), then refined by NavigationManager on each
+   moss-page-color event. It governs ONLY the four glass-chrome tokens below —
+   NOT page/text/surface tokens. Light is the :root base; this is the
+   dark-backdrop override. It lives OUTSIDE [data-theme] and later in source
+   so it wins regardless of the OS/app theme. Material floor: a
+   higher min pill opacity + a faint edge/shadow keep pills legible even when
+   the backdrop signal is wrong or stale (e.g. a dark hero behind a
+   "light"-resolved bar). */
+[data-chrome-theme="dark"] {
+  --moss-chrome-surface-bg: rgba(26, 24, 22, 0.88);
+  --moss-chrome-pill-bg: rgba(255, 255, 255, 0.14); /* floor: up from 0.08 */
+  --moss-chrome-panel-bg: rgba(26, 24, 22, 0.94);
+  --moss-chrome-panel-fg: #c8c3bc;
+  --moss-chrome-panel-fg-secondary: #a8a39c;
+  --moss-chrome-panel-fg-muted: #9a958e;
+  --moss-chrome-panel-accent: #6a9a5a;
+  --moss-chrome-panel-accent-quiet: rgba(106, 154, 90, 0.55);
+  --moss-chrome-panel-danger: #e07a71;
+  --moss-chrome-panel-broken: #d96960;
+  --moss-chrome-panel-degraded: #e6a93a;
+  --moss-chrome-panel-border: rgba(200, 195, 188, 0.20);
+  --moss-chrome-panel-hover: rgba(200, 195, 188, 0.07);
+  --moss-chrome-shadow-color: #000000;
+  --moss-chrome-shadow-strength: 0.8;
+  --moss-chrome-edge-light: rgba(255, 255, 255, 0.07);
+  --moss-chrome-elevation-1: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-chrome-edge-light), calc(var(--moss-light-x) * -6.8px) calc(var(--moss-light-y) * -6.8px) 4.8px 0.8px color-mix(in srgb, var(--moss-chrome-shadow-color) calc(32% * var(--moss-chrome-shadow-strength)), transparent);
+  --moss-chrome-elevation-2: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-chrome-edge-light), calc(var(--moss-light-x) * -13.6px) calc(var(--moss-light-y) * -13.6px) 9.6px 0.8px color-mix(in srgb, var(--moss-chrome-shadow-color) calc(24% * var(--moss-chrome-shadow-strength)), transparent);
+  --moss-chrome-icon-color: #a8a39c;
+  /* Ink inverts to bone over a dark page — same contrast job, opposite pole. */
+  --moss-chrome-publish-bg: #ece7e0;
+  --moss-chrome-publish-fg: #1a1816;
+  /* Lifted toward the light end so a 2.5px arc still separates from a dark
+     page; the hues themselves are unchanged so a verb keeps its identity
+     across backdrops. */
+  --moss-verb-added: #6faa6f;
+  --moss-verb-edited: #6fa3d6;
+  --moss-verb-deleted: #d18d89;
+}
+/* Explicit light block (mirrors the :root base) so a `[data-chrome-theme]`
+   probe element reads these values directly, unmasked by any inline
+   :root override that NavigationManager applies for WebKit re-resolution. */
+[data-chrome-theme="light"] {
+  --moss-chrome-surface-bg: rgba(248, 245, 240, 0.88);
+  --moss-chrome-pill-bg: rgba(255, 255, 255, 0.9);
+  --moss-chrome-panel-bg: rgba(250, 248, 245, 0.94);
+  --moss-chrome-panel-fg: #2c2825;
+  --moss-chrome-panel-fg-secondary: #5d5853;
+  --moss-chrome-panel-fg-muted: #66625e;
+  --moss-chrome-panel-accent: #2d5a2d;
+  --moss-chrome-panel-accent-quiet: rgba(45, 90, 45, 0.45);
+  --moss-chrome-panel-danger: #a84340;
+  --moss-chrome-panel-broken: #c85450;
+  --moss-chrome-panel-degraded: #a86200;
+  --moss-chrome-panel-border: rgba(44, 40, 37, 0.16);
+  --moss-chrome-panel-hover: rgba(44, 40, 37, 0.05);
+  --moss-chrome-shadow-color: #2b2117;
+  --moss-chrome-shadow-strength: 0.5;
+  --moss-chrome-edge-light: rgba(255, 255, 255, 0.45);
+  --moss-chrome-elevation-1: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-chrome-edge-light), calc(var(--moss-light-x) * -6.8px) calc(var(--moss-light-y) * -6.8px) 4.8px 0.8px color-mix(in srgb, var(--moss-chrome-shadow-color) calc(32% * var(--moss-chrome-shadow-strength)), transparent);
+  --moss-chrome-elevation-2: inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-chrome-edge-light), calc(var(--moss-light-x) * -13.6px) calc(var(--moss-light-y) * -13.6px) 9.6px 0.8px color-mix(in srgb, var(--moss-chrome-shadow-color) calc(24% * var(--moss-chrome-shadow-strength)), transparent);
+  --moss-chrome-icon-color: #5d5853;
+  --moss-chrome-publish-bg: #26221e;
+  --moss-chrome-publish-fg: #f8f5f0;
+  --moss-verb-added: #4a7c4a;
+  --moss-verb-edited: #4a80b8;
+  --moss-verb-deleted: #b86a66;
+}

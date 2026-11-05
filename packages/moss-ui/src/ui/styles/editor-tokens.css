@@ -1,0 +1,104 @@
+/* moss Editor — Cool Neutral Palette Override
+ *
+ * Overrides the shared warm design tokens for the editor webview only.
+ * The editor ("tool") uses cool grays with a teal whisper accent,
+ * while the website preview ("content") keeps its warm browns and moss green.
+ *
+ * The editor's stylesheet imports this after tokens.css, so these
+ * declarations win via CSS custom property cascade order. */
+
+/* ── Reading measure (theme-independent; declared once) ──────────────────
+ *
+ * The editor's BODY text is reading text, so it gets its own size token —
+ * deliberately neither `--moss-font-size` (app-chrome UI text, 1.125rem) nor
+ * the site contract's `--moss-reading-size` (tokens.json, which themes may
+ * retune per site; the editor must not inherit a site's typographic choices
+ * — the editor renders SOURCE, not the theme).
+ *
+ * `--moss-editor-measure` is a content column, so it must be a
+ * FONT-STABLE length — a multiple of a single inherited reading size, never
+ * `ch`. `ch` is font-relative and resolves against each element's own
+ * font-size, so a `ch` cap silently means different widths on the heading,
+ * the body, and an image widget. 42× matches the site's default column
+ * (site.css `--moss-content-width`), so the editor and the published page
+ * present the same measure.
+ *
+ * `--moss-editor-spine` is the 16px chrome spine (chip pills, inline title,
+ * CM6 block decorations, traffic lights), applied by the editor's
+ * `.moss-editor` rule. The spine is a MINIMUM, not the inset itself: below
+ * the measure threshold the inset resolves to exactly the spine.
+ *
+ * `--moss-editor-reading-font` is the one face for everything the user reads
+ * INSIDE the document — body, in-document headings, and the inline title.
+ * Before it, the title hardcoded a Georgia serif stack while the body used the
+ * UI sans, so the surface disagreed with itself. It is the editor's own face,
+ * not `--moss-font-body`: that token is the SITE's, and a loose file in
+ * document mode has no site, which would make the same file look
+ * different depending on which folder it sits in. */
+:root {
+  /* --moss-editor-font-scale is the app's editor-font-size dial (Settings ▸
+     Editor aA stepper, ⌘+/−/0 in the editor webview) — a unitless ratio set
+     inline on the editor documentElement by shared/editor-font-size.ts,
+     default 1. Multiplying it HERE is what makes the dial coherent: the CM6
+     body (.cm-scroller), the in-document headings and inline title (1.75×
+     this token), and the 42× measure all derive from --moss-editor-reading-size,
+     so one variable scales the whole reading surface together. */
+  --moss-editor-reading-size: calc(1.0625rem * var(--moss-editor-font-scale, 1));  /* 17px at scale 1 */
+  --moss-editor-measure: calc(42 * var(--moss-editor-reading-size));
+  --moss-editor-spine: 16px;
+  --moss-editor-reading-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* Provisional, tuned against Dropbox Paper's text (#1b2733). Separate from
+     --moss-color-text (app chrome) for the same reason reading-size and
+     reading-font are: prose and chrome are allowed to diverge. */
+  --moss-editor-body-color: #1b2733;
+  --moss-editor-line-height: 1.625;
+
+  /* The faint role: every marker, bracket, URL and delimiter that is not the
+     prose (markdown syntax, CriticMarkup, shortcode fences). The shared
+     value (tokens.css, #5a5550) is nearly the body text's own darkness, so
+     "faint" markup did not read as fainter. This one sits ~0.24 of relative
+     luminance above the body text (#1b2733) and keeps 3.2:1 on the editor
+     background; the dark value (4.7:1) is the shared one, restated because
+     this block would otherwise win over tokens.css's dark rule. Both values
+     must keep a luminance gap from the body text AND 3:1 contrast. Only the
+     editor webview reads --moss-hl-punct, so nothing else moves. */
+  --moss-hl-punct: #858b96;
+  /* The wash behind CriticMarkup text: a comment's highlighted span, a substitution. */
+  --moss-editor-highlight: rgba(245, 200, 0, 0.25);
+  --moss-editor-highlight-soft: rgba(245, 200, 0, 0.12);
+
+  --moss-color-bg: #f6f7f9;
+  --moss-color-surface: #eef0f3;
+  --moss-color-text: #24262b;
+  --moss-color-text-secondary: #555a62;
+  --moss-color-muted: #7a7f8a;
+  --moss-color-accent: #3a7a8a;
+  --moss-color-accent-hover: #2a6070;
+  --moss-accent-light: rgba(58, 122, 138, 0.15);
+  --moss-border-light: #dfe2e8;
+  --moss-border-medium: #cdd1d8;
+  --moss-hover-overlay: rgba(0, 0, 0, 0.05);
+  --moss-active-overlay: rgba(0, 0, 0, 0.09);
+}
+
+/* Dark mode - explicit toggle */
+[data-theme="dark"] {
+  --moss-color-bg: #1c1c20;
+  --moss-color-surface: #24242a;
+  --moss-color-text: #c5c5cc;
+  --moss-color-text-secondary: #9a9aa4;
+  --moss-color-muted: #78788a;
+  --moss-editor-body-color: #d7dbe0; /* PROVISIONAL, see :root */
+  --moss-hl-punct: #8a8490; /* see :root */
+  --moss-editor-highlight: rgba(245, 200, 0, 0.3);
+  --moss-editor-highlight-soft: rgba(245, 200, 0, 0.18);
+  --moss-color-accent: #5a8fa0;
+  --moss-color-accent-hover: #6ba0b2;
+  --moss-accent-light: rgba(90, 143, 160, 0.2);
+  --moss-border-light: #35353e;
+  --moss-border-medium: #45454f;
+  --moss-hover-overlay: rgba(180, 200, 220, 0.08);
+  --moss-active-overlay: rgba(180, 200, 220, 0.12);
+}
+

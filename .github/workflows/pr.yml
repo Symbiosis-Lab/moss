@@ -413,8 +413,9 @@ jobs:
         run: cd packages/moss-blueprint-grid && pnpm run typecheck
 
       # The contract itself is checked against the command table by
-      # `cargo test` (commands::tests::the_contract_matches_the_command_table).
-      - name: Typecheck and test moss-ui (the engine contract)
+      # `cargo test` (commands::tests::the_contract_matches_the_command_table);
+      # the tests here cover the shared UI and the gate that it is fit to publish.
+      - name: Typecheck and test moss-ui (the engine contract and the shared UI)
         run: cd packages/moss-ui && pnpm run typecheck && pnpm run test
 
       - name: Package artifacts are up to date

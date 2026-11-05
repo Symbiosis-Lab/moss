@@ -2,11 +2,14 @@
   "name": "@symbiosis-lab/moss-ui",
   "version": "0.1.0",
   "private": true,
-  "description": "The moss UI's side of the engine: the typed contract of every command the UI sends to the moss engine",
+  "description": "The moss UI: its typed contract with the moss engine, and the UI code every host of moss shares",
   "type": "module",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./ui/*.css": "./src/ui/*.css",
+    "./ui/*.json": "./src/ui/*.json",
+    "./ui/*": "./src/ui/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -14,7 +17,17 @@
   },
   "author": "Guo Liu",
   "license": "MIT",
+  "peerDependencies": {
+    "@codemirror/view": "^6"
+  },
+  "peerDependenciesMeta": {
+    "@codemirror/view": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@codemirror/view": "^6.43.6",
+    "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
   }

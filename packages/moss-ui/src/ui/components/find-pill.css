@@ -1,0 +1,122 @@
+.find-pill {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 280px;
+  max-width: 420px;
+  background: var(--moss-glass-surface-bg);
+  border: 1px solid var(--moss-border-light);
+  border-radius: 10px;
+  box-shadow: var(--moss-elevation-1);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  z-index: var(--z-popup); /* over the document, under the editor's menus */
+}
+
+.find-pill__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.find-pill__label {
+  font-size: 10px;
+  color: var(--moss-color-muted);
+  width: 42px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.find-pill__input {
+  flex: 1;
+  height: 24px;
+  background: var(--moss-color-bg);
+  border: 1px solid var(--moss-border-medium);
+  border-radius: 5px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--moss-color-text);
+  font-family: inherit;
+  outline: none;
+}
+
+.find-pill__input:focus {
+  border-color: var(--moss-color-accent);
+  box-shadow: var(--moss-focus-ring);
+}
+
+.find-pill__input--no-matches {
+  border-color: var(--moss-color-danger);
+}
+
+.find-pill__counter {
+  font-size: 10px;
+  color: var(--moss-color-muted);
+  white-space: nowrap;
+  min-width: 42px;
+  text-align: right;
+}
+
+.find-pill__counter:empty {
+  display: none;
+}
+
+.find-pill__btn {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--moss-radius-capsule); /* square footprint — capsule token resolves to a circle */
+  background: var(--moss-hover-overlay);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--moss-color-text);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: inherit;
+  padding: 0;
+}
+
+/* Hit-target extender: visuals stay 22px, the clickable area reaches the
+   WCAG 2.2 SC 2.5.8 24px floor. -1px each side still leaves 3px of the 5px
+   row gap between adjacent buttons' hit areas. */
+.find-pill__btn::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+}
+
+.find-pill__btn:hover {
+  background: var(--moss-active-overlay);
+}
+
+.find-pill__btn--close {
+  background: none;
+  color: var(--moss-color-muted);
+  font-size: 14px;
+  margin-left: 2px;
+}
+
+.find-pill__btn--replace,
+.find-pill__btn--replace-all {
+  width: auto;
+  /* Wider than the icon-only base's 7px: the capsule's half-height (11px at
+     this 22px height) would otherwise crowd these text labels. */
+  padding: 0 11px;
+  font-size: 10px;
+  color: var(--moss-color-accent);
+  background: var(--moss-accent-light);
+  font-weight: 500;
+}
+
+.find-pill__divider {
+  height: 1px;
+  background: var(--moss-border-light);
+  margin: 1px 0;
+}

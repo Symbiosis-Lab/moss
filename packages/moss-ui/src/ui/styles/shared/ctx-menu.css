@@ -1,0 +1,89 @@
+/* moss context menu — the shared primitive's styles
+   (shared/ui/ctx-menu.ts). Used by both the main shell and the editor
+   action panel, so a menu renders styled in either webview. Every surface
+   owns its right-click. */
+
+/* Above the toast tier: a context menu is a direct answer to a click the user
+   just made, so a queued notification must not land on top of it. */
+/* Width is content-driven but never past the viewport's 8px reserve: a
+   right-pinned menu in a 280px panel widens leftward, and a long template
+   name (a user string) ellipsizes instead of pushing the left edge off-screen
+   (measured in both engines). Height is
+   capped the same way and scrolls: the vertical clamp moves a menu up to
+   keep its bottom inside the reserve, and a list taller than the viewport
+   (twelve templates in a short panel) went off the TOP instead — the clamp
+   cannot see what the box will not shrink. */
+.ctx-menu { position: fixed; z-index: calc(var(--z-toast) + 50); background: var(--moss-color-bg); border-radius: 6px; padding: 4px; box-shadow: var(--moss-elevation-2); min-width: 160px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
+.ctx-item { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; color: var(--moss-color-text-secondary); transition: background .08s; }
+.ctx-item .ctx-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-item:hover { background: var(--moss-hover-overlay); }
+/* Roving keyboard focus paints the same highlight as hover — one visual
+   language for "this item activates on Enter/click". */
+.ctx-item:focus { background: var(--moss-hover-overlay); outline: none; }
+.ctx-item.danger { color: var(--moss-color-danger); }
+.ctx-item.danger:hover, .ctx-item.danger:focus { background: var(--moss-error-subtle); }
+.ctx-item.disabled { opacity: .5; cursor: default; }
+.ctx-item.disabled:hover { background: transparent; }
+.ctx-sep { border-top: 1px solid var(--moss-border-light); margin: 3px 0; }
+/* Right-aligned shortcut chip on an item, and the muted note entry (a group
+   label, "No templates yet…", or the create flow's "Creates in {folder}"). */
+.ctx-item .ctx-kbd { margin-left: auto; color: var(--moss-color-muted); font-size: 11px; }
+.ctx-hint { font-size: 11px; color: var(--moss-color-muted); padding: 5px 10px 4px; }
+.ctx-hint b { color: var(--moss-color-text); font-weight: 500; }
+/* A note that reports a failure (the domain picker's search error, a refused confirm). */
+.ctx-hint--error { color: var(--moss-color-danger); }
+/* Drill-in levels:
+   the chevron is keyed off the attribute a submenu row already carries — no
+   node to create or hide — and takes the kbd chip's slot (a submenu row never
+   has one). The back row paints as every other row; no swap animation, a
+   level change is a jump cut. */
+.ctx-item[aria-haspopup]::after { content: '›'; margin-left: auto; color: var(--moss-color-muted); }
+.ctx-back { color: var(--moss-color-muted); }
+.ctx-back::before { content: '‹'; margin-right: 2px; }
+
+/* Right-aligned muted detail on a row or on a level's back row ("127 of 129"),
+   in the same slot as the kbd chip. A submenu's own chevron then hugs it. */
+.ctx-detail { margin-left: auto; padding-left: 12px; color: var(--moss-color-muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ctx-item:has(.ctx-detail)::after { margin-left: 0; }
+.ctx-current { color: var(--moss-color-text); font-weight: 500; }
+
+/* Two-target submenu row (CtxMenuSubmenu.action): the row chooses, the chevron
+   zone drills in. A real node, not ::after, so it can take its own click. */
+.ctx-item.ctx-dual::after { content: none; }
+.ctx-chev { align-self: stretch; display: flex; align-items: center; margin: -5px -10px -5px 0; padding: 0 10px 0 8px; margin-left: auto; border-radius: 0 calc(var(--moss-radius-window) / 6) calc(var(--moss-radius-window) / 6) 0; color: var(--moss-color-muted); }
+.ctx-chev::before { content: '›'; }
+.ctx-chev:hover { background: var(--moss-hover-overlay); color: var(--moss-color-text); }
+.ctx-detail ~ .ctx-chev { margin-left: 0; }
+
+/* Checklist row (CtxMenuCheckbox): the tick box takes the label's leading slot. */
+.ctx-check::before { content: ''; flex: none; box-sizing: border-box; width: 14px; height: 14px; border: 1.5px solid var(--moss-border-medium); border-radius: calc(var(--moss-radius-window) / 6); background: transparent; }
+.ctx-check[aria-checked="true"]::before { border-color: var(--moss-color-accent); background: var(--moss-color-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.2 7.4l2.4 2.4 5.2-5.4' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat; }
+
+/* A wide, tall list level (the composer's audience menu): one width for every
+   level so a drill-in does not jump, and the back row and filter line stay put
+   while the rows scroll under them. */
+.ctx-menu--list { width: 300px; max-height: min(380px, calc(100vh - 16px)); }
+.ctx-menu--list .ctx-head { position: sticky; top: -4px; z-index: var(--z-toast); background: var(--moss-color-bg); }
+/* The filter shares the back row's block: no rule or gap between them. */
+.ctx-head .ctx-back { padding-bottom: 3px; }
+.ctx-filter { padding: 0 10px 4px; font-size: 11px; color: var(--moss-color-text); }
+.ctx-menu .ctx-filter-input { display: block; box-sizing: border-box; width: calc(100% - 8px); height: 26px; margin: 0 4px 4px; padding: 0 12px; font-size: 12px; border-radius: var(--moss-radius-capsule); box-shadow: none; border: 1px solid var(--moss-border-medium); background: transparent; caret-color: var(--moss-color-text); }
+.ctx-menu .ctx-filter-input:focus, .ctx-menu .ctx-filter-input:focus-visible { border-color: var(--moss-color-accent); box-shadow: none; }
+/* A combobox level keeps DOM focus in the field; the arrow keys paint this instead. */
+.ctx-item.is-active { background: var(--moss-hover-overlay); }
+
+/* A list whose rows carry sentences (the domain picker's "use a domain you already
+   own" offer and its verify prompt): a label wraps instead of ellipsizing, and a
+   detail too long for the row's line drops onto the next one. */
+.ctx-menu--wrap .ctx-item { flex-wrap: wrap; }
+.ctx-menu--wrap .ctx-item .ctx-label { white-space: normal; overflow: visible; }
+.ctx-menu--wrap .ctx-detail { white-space: normal; text-align: right; }
+.ctx-menu--wrap .ctx-hint { white-space: normal; }
+
+/* Entry is a jump-cut under prefers-reduced-motion (design-vocabulary:
+   reduced motion jump-cuts; the end state carries everything). The fade is
+   affordance only — the final frame is identical either way. */
+@media (prefers-reduced-motion: no-preference) {
+  .ctx-menu { animation: ctx-menu-in 120ms ease-out; }
+}
+@keyframes ctx-menu-in { from { opacity: 0; } }

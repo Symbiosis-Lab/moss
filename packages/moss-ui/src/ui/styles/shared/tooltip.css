@@ -1,0 +1,93 @@
+/* moss tooltip — portal tooltip rendered at document.body level.
+   Paired with components/tooltip.ts. Used by both the main shell and the
+   editor action panel — duplicating the rules in both webviews would drift;
+   this shared module is the single source of truth.
+   Usage: <button data-tooltip="..."> or data-tooltip-style="muted". */
+
+.moss-tooltip {
+  position: fixed;
+  z-index: var(--z-popup);
+  padding: 4px 8px;
+  background: var(--moss-color-text);
+  color: var(--moss-color-bg);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+  box-shadow: var(--moss-elevation-2);
+}
+.moss-tooltip.visible { opacity: 1; }
+.moss-tooltip.muted { background: var(--moss-color-text-secondary); }
+
+/* Keyboard-shortcut chip (data-tooltip-kbd) — a small boxed hint after the
+   text. Mixed from the tooltip's own fg/bg so it holds up in both themes. */
+.moss-tooltip .moss-tooltip-kbd {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--moss-color-bg) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--moss-color-bg) 30%, transparent);
+  color: color-mix(in srgb, var(--moss-color-bg) 85%, var(--moss-color-text));
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* Arrow — points toward the trigger element.
+
+   `--moss-tooltip-arrow` is the arrow's distance along whichever edge it sits
+   on, measured from that edge's start corner and written by tooltip.ts's
+   `show()`. It is NOT half the tooltip: the box centres on the trigger and is
+   then clamped into the visible band, so a hardcoded 50% points at the trigger
+   only when the clamp did not fire, and near a panel edge it fires often. The
+   `50%` fallbacks below are for a tooltip painted before `show()`
+   has run; nothing renders one, and they keep the rule readable on its own. */
+.moss-tooltip::after {
+  content: "";
+  position: absolute;
+  top: var(--moss-tooltip-arrow, 50%);
+  transform: translateY(-50%);
+  border: 4px solid transparent;
+}
+/* Arrow on right side pointing right (tooltip is LEFT of trigger) */
+.moss-tooltip.arrow-left::after {
+  left: 100%;
+  border-left-color: var(--moss-color-text);
+}
+.moss-tooltip.arrow-left.muted::after {
+  border-left-color: var(--moss-color-text-secondary);
+}
+/* Arrow on left side pointing left (tooltip is RIGHT of trigger) */
+.moss-tooltip.arrow-right::after {
+  right: 100%;
+  border-right-color: var(--moss-color-text);
+}
+.moss-tooltip.arrow-right.muted::after {
+  border-right-color: var(--moss-color-text-secondary);
+}
+/* Arrow on bottom edge pointing down (tooltip is ABOVE trigger) */
+.moss-tooltip.arrow-top::after {
+  top: 100%;
+  left: var(--moss-tooltip-arrow, 50%);
+  transform: translateX(-50%);
+  border-top-color: var(--moss-color-text);
+}
+.moss-tooltip.arrow-top.muted::after {
+  border-top-color: var(--moss-color-text-secondary);
+}
+/* Arrow on top edge pointing up (tooltip flipped BELOW trigger) */
+.moss-tooltip.arrow-bottom::after {
+  top: auto;
+  bottom: 100%;
+  left: var(--moss-tooltip-arrow, 50%);
+  transform: translateX(-50%);
+  border-bottom-color: var(--moss-color-text);
+}
+.moss-tooltip.arrow-bottom.muted::after {
+  border-bottom-color: var(--moss-color-text-secondary);
+}

@@ -127,6 +127,7 @@ Every file over 1000 production lines (tests excluded, counted the same way `scr
 <!-- ratchet:known-debt:start -->
 | File | Prod lines | Disposition |
 |---|---:|---|
+| `packages/moss-ui/src/ui/i18n/ui-strings.ts` | 6127 | The UI's string table, every key in every locale: data, not logic. It retires when each locale's strings move to a file of their own that the i18n module loads. |
 | `crates/moss-core/src/contract/components.rs` | 4849 | One ComponentEntry per emitted moss-* class, the federated contract's Source 2. It is a homogeneous data table, one row per class with almost no branching, so its length measures the class vocabulary rather than tangled logic: accepted as healthy but big. Forms, country-map and place-map rows already sit in sibling files and COMPONENTS is assembled from the family slices. |
 | `crates/moss-build/src/build/render/blocking.rs` | 3673 | The blocking build coordinates source readiness, parsing, typed document preparation, and distinct authored, term, and place bodies. Folder planning and common page chrome now have single owners; further reduction should give document preparation an explicit result consumed by those body renderers. |
 | `crates/moss-build/src/build/media/image.rs` | 3073 | Mirrors video.rs's cache-then-convert-then-CAS shape for the image side (WebP encode, EXIF, resize, CAS store); retires the same way video.rs does, by factoring the shared cache/CAS/dispatch skeleton the module doc says the two files mirror by hand today. |
