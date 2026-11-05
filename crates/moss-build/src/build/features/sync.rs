@@ -218,13 +218,14 @@ fn comment_sync_failure_advisory(err: &CommentSyncError) -> crate::advisory::Adv
 /// PREVIOUS build's article-map. The next build cycle picks up whatever this
 /// task has written by then. A build whose process exits when done does not
 /// use this: it refreshes comments itself once its own pages are known
-/// ([`refresh_comments_for_exiting_build`]).
+/// ([`refresh_comments_for_exiting_build`]). The app also calls it when the
+/// person asks for a refresh outside any build.
 ///
 /// No-op when:
 /// - A sync for this folder is already in-flight (singleflight)
 /// - `article-map.json` does not yet exist (first build in the app)
 /// - The site has no comments or review services configured
-pub(crate) fn start_background_sync(
+pub fn start_background_sync(
     folder_path: String,
     domain_config: DomainDeploymentConfig,
     reporter: std::sync::Arc<dyn crate::build::ports::reporter::BuildReporter>,
