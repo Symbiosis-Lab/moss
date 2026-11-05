@@ -15,7 +15,6 @@ const CITIES: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/pla
 
 #[derive(Deserialize)]
 struct Cities {
-    manifest_sha256: String,
     /// (city, admin code of the country that holds it), largest first.
     cities: Vec<(String, String)>,
 }
@@ -88,7 +87,8 @@ mod tests {
 
     #[test]
     fn the_city_list_was_cut_from_the_same_sources_as_the_shapes() {
-        assert!(cities().manifest_sha256.starts_with(&Atlas::get().shapes.digest));
+        let digest = serde_json::from_str::<Value>(CITIES).unwrap()["manifest_sha256"].as_str().unwrap().to_string();
+        assert!(digest.starts_with(&Atlas::get().shapes.digest));
     }
 
     #[test]
