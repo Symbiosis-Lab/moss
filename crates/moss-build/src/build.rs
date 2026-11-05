@@ -301,8 +301,10 @@ pub struct PipelineConfig {
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
     /// callers cannot rely on a background task to fill the link-meta or
     /// comment cache — it gets killed before completion. When set, the build
-    /// waits, under time limits, for comments (`features::sync::start_for_build`)
-    /// and link metadata (`build::render::blocking`) before it renders. Defaults to
+    /// waits, under time limits, for link metadata (`build::render::blocking`)
+    /// before it renders and for comments
+    /// (`features::sync::refresh_comments_for_exiting_build`) before they are
+    /// read into its pages. Defaults to
     /// `false`; only `start_cli_build` and `build_sync` flip it.
     ///
     /// Note: this is NOT derivable from `progress` or the host ports. The
@@ -1066,9 +1068,11 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // Architectural invariant: `run_pipeline` waits on the network only where
     // `config.exits_after_build` (CLI / snapshot tests) leaves no long-lived
     // runtime and no next build: the link-meta fetch before render
-    // (`build::render::blocking`) and the comment refresh here, both under a
-    // time limit. GUI builds never fetch inline — the background task handles
-    // them async. If you find yourself wanting to add a NEW network fetch —
+    // (`build::render::blocking`) and the comment refresh in the slot resolver
+    // below (it needs this build's article map), both under a time limit. The
+    // refresh runs while the build holds the folder lock, so an app building
+    // the same folder waits on it for up to that limit. GUI builds never
+    // fetch inline — the background task handles them async. If you find yourself wanting to add a NEW network fetch —
     // don't. Spawn it from `features::sync` so build still returns immediately
     // when the upstream is slow or unreachable.
     //
@@ -1076,10 +1080,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // would otherwise pile up sync tasks. The `features::sync` module also has
     // a per-folder singleflight so even if SlotsOnly's behavior changes, rapid
     // rebuilds don't compound.
-    if !skip_process {
+    if !skip_process && !config.exits_after_build {
         let _trace = PhaseTrace::start("native_process_spawn");
-        crate::build::features::sync::start_for_build(
-            config.exits_after_build,
+        crate::build::features::sync::start_background_sync(
             folder_path.clone(),
             cached_domain_config.clone(),
             // The typed bus, not `config.progress`: this completion event is a
@@ -1088,8 +1091,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // never printed.
             config.host.events.clone(),
             &*config.host.spawner,
-        )
-        .await;
+        );
     }
 
     // Build the site.
@@ -1151,6 +1153,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // having gone three months with no implementation in any plugin, bundled
     // or WIP.
     let listing_host = (!skip_plugins).then(|| crate::build::emit::listing_style::ListingHost::new(&config.host.plugins, &folder_path));
+    let refresh_comments_first = config.exits_after_build && !skip_process;
     let make_slot_resolver = |folder_path_for_slots: String,
                               cached_domain_config_for_slots: crate::config::deployment::DomainDeploymentConfig,
                               project_structure_for_slots: ProjectStructure|
@@ -1158,6 +1161,14 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         let start_server_for_slots = config.start_server;
         let listing_host = listing_host.clone();
         Box::new(move |pages, site_lang, site_comments| {
+            // The article map this build just wrote names the pages to ask about.
+            if refresh_comments_first {
+                let _refresh_trace = PhaseTrace::start("comment_refresh");
+                crate::build::features::sync::refresh_comments_for_exiting_build(
+                    folder_path_for_slots.clone(),
+                    cached_domain_config_for_slots.clone(),
+                );
+            }
             let _slots_trace = PhaseTrace::start("slot_resolution");
             let mut slots = collect_native_slots_for_documents(
                 &folder_path_for_slots,

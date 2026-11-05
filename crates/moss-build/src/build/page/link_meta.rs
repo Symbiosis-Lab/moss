@@ -979,7 +979,7 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
 /// **Returns stale entries too** (no freshness gate). Rationale: a stale title
 /// is much better UX than "no title". The background prewarm refreshes stale
 /// entries on its next run, so staleness is bounded by sync cadence
-/// (currently every build cycle that triggers `spawn_native_process_sync`).
+/// (currently every build cycle that triggers `start_background_sync`).
 pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path) -> HashMap<String, LinkMeta> {
     let mut map = HashMap::new();
     let mut missing = 0usize;

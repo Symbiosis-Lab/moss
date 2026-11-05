@@ -328,7 +328,8 @@ pub struct ReviewArticleInput {
 ///
 /// **`pub(in crate::build::features)` — do not widen.** Blocking network I/O.
 /// Always go through
-/// [`crate::build::features::sync::start_for_build`].
+/// [`crate::build::features::sync::start_background_sync`] or
+/// `refresh_comments_for_exiting_build`.
 pub(in crate::build::features) fn process_reviews(
     project_path: &str,
     articles: &[ReviewArticleInput],

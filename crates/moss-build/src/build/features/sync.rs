@@ -10,20 +10,20 @@
 //!
 //! ## How
 //!
-//! `spawn_native_process_sync` returns immediately after spawning a background
+//! `start_background_sync` returns immediately after spawning a background
 //! Tokio task. The task does the slow network work and writes its output to the
 //! site's `.moss/data/social/comment.json` and `.moss/data/social/review.json`.
 //! The NEXT build's enhance phase reads whatever files currently exist on disk.
 //!
-//! Tradeoff: the first time a user opens a site, comments are missing from the
-//! preview until the second build (the enhance phase has no cached file to
-//! read). This is the right tradeoff — a 90-minute hang is much worse than a
+//! Tradeoff: the first time a user opens a site in the app, comments are
+//! missing from the preview until the second build (no article map yet to ask
+//! the server about). This is the right tradeoff — a 90-minute hang is much worse than a
 //! one-cycle stale comments display.
 //!
 //! A build whose process exits when it returns (`moss build`, `moss deploy`)
 //! has no next build, and its process ends the background task. It waits for
 //! the comment refresh instead, up to a time limit, and says when the comments
-//! it ships may be stale ([`start_for_build`] picks the path).
+//! it ships may be stale ([`refresh_comments_for_exiting_build`]).
 //!
 //! ## Per-folder singleflight
 //!
@@ -162,7 +162,7 @@ fn unix_now_secs() -> f64 {
 
 /// Tracks folders currently being synced so we don't pile up overlapping tasks.
 ///
-/// A folder is added on `spawn_native_process_sync` and removed when the task
+/// A folder is added on `start_background_sync` and removed when the task
 /// finishes. If `try_acquire` returns `false`, a sync is already running and
 /// this request is dropped (next rebuild will try again).
 fn inflight() -> &'static Mutex<HashSet<String>> {
@@ -214,21 +214,23 @@ fn comment_sync_failure_advisory(err: &CommentSyncError) -> crate::advisory::Adv
 /// Spawn a background task that refreshes comment + review caches for `folder`.
 /// Returns immediately. Does NOT block the build pipeline on network I/O.
 ///
-/// Called from `run_pipeline` AFTER the build has produced the latest
-/// article-map but BEFORE returning. The next build cycle will pick up
-/// whatever this task has written by then.
+/// Called from `run_pipeline` before the build starts, so it reads the
+/// PREVIOUS build's article-map. The next build cycle picks up whatever this
+/// task has written by then. A build whose process exits when done does not
+/// use this: it refreshes comments itself once its own pages are known
+/// ([`refresh_comments_for_exiting_build`]).
 ///
 /// No-op when:
 /// - A sync for this folder is already in-flight (singleflight)
-/// - `article-map.json` does not yet exist (first build)
+/// - `article-map.json` does not yet exist (first build in the app)
 /// - The site has no comments or review services configured
-fn spawn_native_process_sync(
+pub(crate) fn start_background_sync(
     folder_path: String,
-    services_config: ServicesConfig,
     domain_config: DomainDeploymentConfig,
     reporter: std::sync::Arc<dyn crate::build::ports::reporter::BuildReporter>,
     spawner: &dyn crate::build::ports::spawner::Spawner,
 ) {
+    let services_config = crate::build::site_config::get_services_config(&folder_path).unwrap_or_default();
     if !try_acquire(&folder_path) {
         log::debug!(target: "sync", "skipping native-process sync — another sync is in flight for {}", folder_path);
         return;
@@ -379,29 +381,6 @@ fn prewarm_link_meta(folder_path: &str) {
     }
 }
 
-/// Start the sync for a build. A build whose process exits when it returns
-/// has no next build and ends any background task, so it waits for the comment
-/// refresh ([`refresh_comments_for_exiting_build`]); every other build spawns
-/// the whole sync in the background and returns at once.
-pub async fn start_for_build(
-    exits_after_build: bool,
-    folder_path: String,
-    domain_config: DomainDeploymentConfig,
-    reporter: std::sync::Arc<dyn crate::build::ports::reporter::BuildReporter>,
-    spawner: &dyn crate::build::ports::spawner::Spawner,
-) {
-    let services_config = crate::build::site_config::get_services_config(&folder_path).unwrap_or_default();
-    if exits_after_build {
-        // Off the executor: the process hooks spawned before this run on it.
-        let _ = tokio::task::spawn_blocking(move || {
-            refresh_comments_for_exiting_build(folder_path, services_config, domain_config)
-        })
-        .await;
-    } else {
-        spawn_native_process_sync(folder_path, services_config, domain_config, reporter, spawner);
-    }
-}
-
 /// How long a build that exits when done waits for the comment refresh: the
 /// server request's own 15 s timeout plus a margin for it overrunning.
 const COMMENT_WAIT: Duration = Duration::from_secs(20);
@@ -426,15 +405,14 @@ fn comment_wait() -> Option<Duration> {
 }
 
 /// Refresh the comment cache for a build that exits when done, waiting at most
-/// [`comment_wait`] so this build's pages carry it. Blocks; call it before
-/// the build renders. When the comments may be stale (the limit passed, the
+/// [`comment_wait`] so this build's pages carry it. Blocks; call it after the
+/// build has written its article map (the refresh asks the server about those
+/// pages, so a site's first build has them too) and before it reads the cache
+/// into its pages. When the comments may be stale (the limit passed, the
 /// refresh failed, or another refresh holds the folder) a note says so and how
 /// old they are. Reviews follow unwaited.
-fn refresh_comments_for_exiting_build(
-    folder_path: String,
-    services_config: ServicesConfig,
-    domain_config: DomainDeploymentConfig,
-) {
+pub(crate) fn refresh_comments_for_exiting_build(folder_path: String, domain_config: DomainDeploymentConfig) {
+    let services_config = crate::build::site_config::get_services_config(&folder_path).unwrap_or_default();
     let Some(budget) = comment_wait() else { return };
     if !try_acquire(&folder_path) {
         crate::build::cli_output::log_note!(

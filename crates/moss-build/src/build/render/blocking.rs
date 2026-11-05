@@ -289,7 +289,7 @@ pub fn generate_blocking_content(
 /// when the build returns (CLI, snapshot tests), same condition
 /// `search_lane::Freshness::of` already reads for the same reason: an
 /// interactive rebuild must not block on the network, so it keeps relying on
-/// `spawn_native_process_sync`'s background task instead. The only caller
+/// `start_background_sync`'s background task instead. The only caller
 /// that needs this distinction is `pipeline::run`; every other caller wants
 /// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
 /// rendered pages in `pending` for the slot pass to write. `defer_title_cards`

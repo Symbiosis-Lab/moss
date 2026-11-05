@@ -1,4 +1,4 @@
-//! `moss build` refreshes the comment cache before it renders, so a publish
+//! `moss build` refreshes the comment cache before its pages read it, so a publish
 //! from the command line ships the comments the server has now, and says so
 //! when it could not. The comment server is a local stand-in; all names and
 //! text are invented.
@@ -101,6 +101,27 @@ fn a_build_ships_the_comment_the_server_has_now() {
     assert!(
         html.contains("A comment left yesterday"),
         "the build must ship the refreshed comment; stderr: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&o.stderr).contains("comments may be stale"));
+}
+
+/// A folder copied without its build cache has no article map, which is what
+/// the refresh asks the server about; the first build must still ship the
+/// server's comment.
+#[test]
+fn the_first_build_of_a_fresh_folder_ships_the_comment_the_server_has_now() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let server = serve_new_comment(Duration::from_millis(200), tmp.path().join("uid.txt"));
+    let site = site_with_stale_cache(tmp.path(), &home, &server);
+    std::fs::remove_dir_all(site.join(".moss/build.nosync")).unwrap();
+
+    let o = build(&home, &site, &[]);
+    assert!(
+        page(&site).contains("A comment left yesterday"),
+        "the first build must ship the refreshed comment; stderr: {}",
         String::from_utf8_lossy(&o.stderr)
     );
     assert!(!String::from_utf8_lossy(&o.stderr).contains("comments may be stale"));
