@@ -341,12 +341,8 @@ fn dispatch_embed_form(
 ) -> WikilinkEmit {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
-    // External URL embed: bypass ContentGraph resolution entirely.
-    // Any http:// or https:// URL other than an image file is synthesized as
-    // an iframe directly. Provider detection (YouTube/Vimeo/CodePen) happens
-    // inside synthesize_url_embed_html; unrecognised URLs get a generic
-    // <iframe>.
-    if split.file.starts_with("http://") || split.file.starts_with("https://") {
+    // A web address other than an image file is a player or a generic frame.
+    if crate::resolve::ext_kind::is_web_address(split.file) {
         let full_url = reassemble_url(split);
         // A link to an image file is an image, not a frame around one: it
         // lowers to the standard spelling, which renders it as `<img>`.
@@ -368,13 +364,6 @@ fn dispatch_embed_form(
             diagnostics: vec![],
         };
     }
-
-    // A trailing-slash embed (`![[/journal/]]`, the folder-list form) never
-    // reaches this dispatcher for a real document: `resolve.rs`'s pre-pass
-    // (`lower_transclusion_and_folder_wikilinks`) claims and emits the
-    // folder-list marker itself, before pulldown-cmark — and therefore this
-    // function — ever sees the document. This branch used to duplicate that
-    // handling here as dead code; deleted rather than kept unreachable.
 
     // Resolve. Same logic as resolve_embed: empty file → same file;
     // non-empty → fuzzy resolve.

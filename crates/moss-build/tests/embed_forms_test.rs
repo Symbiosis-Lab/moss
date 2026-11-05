@@ -453,3 +453,13 @@ fn a_linked_image_of_a_media_file_stays_an_image_inside_the_link() {
     );
     assert!(!h.contains("<video"), "{h}");
 }
+
+#[test]
+fn a_web_address_ending_in_a_slash_is_a_frame_not_a_folder_listing() {
+    let s = site(&["index.md"]);
+    let h = render(&s, "![[https://player.example.org/embed/album=1/size=large/|An album|700x120]]\n");
+    assert!(h.contains(r#"src="https://player.example.org/embed/album=1/size=large/""#), "{h}");
+    assert!(h.contains("<iframe"), "{h}");
+    assert!(h.contains(r#"width="700"#), "the size is kept: {h}");
+    assert!(!h.contains("No pages under"), "read as a folder listing: {h}");
+}

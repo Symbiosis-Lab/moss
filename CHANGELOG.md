@@ -275,6 +275,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A wiki embed of a web address that ends in `/`, such as `![[https://player.example.org/embed/album=1/|An album|700x120]]`, is now a frame. It was read as a folder listing and printed "No pages under …" on the page.
 - A theme stylesheet with `/*` or a brace inside a quoted string, as in `a[title="/*"]` or `content: "}"`, is now read whole. Before, everything after it was lost to the build's theme checks, the hero's text colours, `moss describe`'s CSS query and `moss doctor --surface`.
 - The search box and a long scroll row's previous and next buttons now read a page's `<html lang>` the way every other site script does. A `zh-Hans-HK` page showed them in Traditional Chinese while the rest of the page was Simplified, and `deu`, `yue-HK` and `cmn-Hant` pages showed them in English.
 - After subscribing, the confirmation ("Check your email to confirm.") sits beside the check mark on one line, where the email field was. It used to take a line of its own below an empty row, so on a wide footer the check mark sat far to the right of the words.

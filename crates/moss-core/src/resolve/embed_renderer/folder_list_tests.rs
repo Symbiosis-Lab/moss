@@ -241,4 +241,5 @@ fn listing_marker_names_a_folder_and_its_options_and_nothing_else() {
     assert_eq!(listing_marker("shows", "index.md"), None);
     assert_eq!(listing_marker("|when:upcoming", "index.md"), None);
     assert_eq!(listing_marker("", "index.md"), None);
+    assert_eq!(listing_marker("https://x.org/a/|t", "index.md"), None);
 }

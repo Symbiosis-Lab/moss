@@ -490,7 +490,7 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Blo
         let inner_is_plain_text = !inner_trimmed.contains('!')
             && !inner_trimmed.contains('[')
             && !inner_trimmed.contains('\n');
-        let is_external = url.starts_with("http://") || url.starts_with("https://");
+        let is_external = crate::resolve::ext_kind::is_web_address(&url);
         if inner_is_plain_text && is_external {
             // Re-emit as standard markdown link inside a paragraph so the
             // host's link-preview pass owns the rendering.
@@ -551,7 +551,7 @@ fn detect_bare_url_cell(cell_text: &str) -> Option<String> {
     if trimmed.lines().count() > 1 {
         return None;
     }
-    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+    if !crate::resolve::ext_kind::is_web_address(trimmed) {
         return None;
     }
     if trimmed.chars().any(char::is_whitespace) {

@@ -303,10 +303,11 @@ pub fn marker_decode(value: &str) -> String {
 
 /// The listing marker for a folder embed `inner` (the content of `![[…]]`,
 /// `folder/|options`), or `None` unless its target names a folder, ending in
-/// `/`. One lowering for an embed in a body and for a hero's `from=`.
+/// `/`. A web address that ends in `/` is a frame, not a folder. One lowering
+/// for an embed in a body and for a hero's `from=`.
 pub fn listing_marker(inner: &str, source_path: &str) -> Option<String> {
     let (target, _) = crate::resolve::embeds::split_embed_target(inner);
-    if !target.ends_with('/') {
+    if !target.ends_with('/') || crate::resolve::ext_kind::is_web_address(target) {
         return None;
     }
     let options = inner.split_once('|').map_or("", |(_, options)| options);

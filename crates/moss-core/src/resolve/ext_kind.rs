@@ -67,12 +67,18 @@ pub fn is_transclusion_site_embed(dest: &str) -> bool {
         )
 }
 
+/// Whether `dest` is an `http(s)` address: an embed of one is a frame, a
+/// player or a remote image, never a site file or a folder.
+pub(crate) fn is_web_address(dest: &str) -> bool {
+    dest.starts_with("http://") || dest.starts_with("https://")
+}
+
 /// Whether `dest` is a web page the wiki spelling turns into a player:
 /// an `http(s)` URL one of the known providers (YouTube, Vimeo, CodePen)
 /// recognises. Any other URL, an image URL included, stays an `<img>` in the
 /// standard spelling.
 pub fn is_remote_player_embed(dest: &str) -> bool {
-    (dest.starts_with("http://") || dest.starts_with("https://"))
+    is_web_address(dest)
         && !crate::render::url_embed::detect_provider(dest).provider_name.is_empty()
 }
 
@@ -80,7 +86,7 @@ pub fn is_remote_player_embed(dest: &str) -> bool {
 /// claims. Both spellings render it as `<img>`; a frame around an image file
 /// shows nothing a browser would not show on its own.
 pub fn is_remote_image_url(dest: &str) -> bool {
-    (dest.starts_with("http://") || dest.starts_with("https://"))
+    is_web_address(dest)
         && !is_remote_player_embed(dest)
         && reference_kind_for_ext(&crate::path_ext::path_extension_lower(dest)) == ExtKind::Image
 }
