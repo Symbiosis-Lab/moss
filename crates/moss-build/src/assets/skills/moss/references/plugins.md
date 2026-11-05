@@ -105,13 +105,6 @@ The old spellings — `config_schema` and the other `config_*` maps, `setup.cred
 
 ## Distribution
 
-**How a user actually gets a plugin today: it ships bundled in the moss
-binary**, and they install it from the plugin installer or the first-publish
-flow. There is no remote-install path yet, so a plugin you write independently
-has no route to a user's site — it has to be contributed upstream and bundled
-into a moss release, not published for them to fetch.
+**How a user gets a plugin: `moss plugin install <id> [<folder>]`.** It puts the plugin into the site and allows it, either from moss's plugin registry or, for a plugin moss ships, by copying it out of moss. In the app, the plugin installer and the first-publish flow install plugins too. The registry is moss's own (`Symbiosis-Lab/moss-registry`) and its catalog is fetched on every install, so a plugin you write reaches a user's site by being added to that registry, not by publishing it somewhere for users to fetch.
 
-First-party source is mirrored to `Symbiosis-Lab/moss-registry`, and the
-packages are also published to npm as `@symbiosis-lab/moss-plugin-*`, but
-neither is the install mechanism. There is no scaffolding command — copy an
-existing plugin and adapt.
+The packages are also published to npm as `@symbiosis-lab/moss-plugin-*`, but moss does not install from npm. There is no scaffolding command: copy an existing plugin and adapt it.
