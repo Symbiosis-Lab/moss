@@ -4361,6 +4361,9 @@ The opening line of the fourth note.
   },
 };
 
+// A theme rule with no layer, the way real themes ship one: a boxed field must not draw it as a second box.
+const THEME_FOCUS_RING = `:focus-visible { outline: 2px solid rgb(255, 0, 0); outline-offset: 2px; }\n`;
+
 // A request form with one of each kind of field, for tests/render-gates/site/request-form.spec.ts
 // and playwright/request-form.config.ts.
 export const REQUEST_FORM: ScratchSiteSpec = {
@@ -4398,6 +4401,7 @@ uid: "rfm00102"
 Thanks.
 `,
     ".moss/config.toml": `${CONFIG_TOML}\n[services.forms]\nendpoint = "http://127.0.0.1:9/f"\n`,
+    ".moss/theme/style.css": THEME_FOCUS_RING,
   },
 };
 
@@ -4451,5 +4455,6 @@ country_map:
 [site]
 lang = "en"
 `,
+    ".moss/theme/style.css": THEME_FOCUS_RING,
   },
 };

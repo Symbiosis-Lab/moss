@@ -33,7 +33,7 @@ export function mountSearch({ figure, link, countries, levels, signal, choose }:
 
   const root = document.createElement("div");
   root.className = "moss-country-search";
-  root.innerHTML = `<input type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false"><ul role="listbox" hidden></ul><p class="moss-country-search-none" hidden></p><p class="moss-country-search-status" role="status"></p>`;
+  root.innerHTML = `<input class="moss-input--boxed" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false"><ul role="listbox" hidden></ul><p class="moss-country-search-none" hidden></p><p class="moss-country-search-status" role="status"></p>`;
   const input = root.querySelector("input")!;
   const list = root.querySelector("ul")!;
   const none = root.querySelector<HTMLElement>(".moss-country-search-none")!;

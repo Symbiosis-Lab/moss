@@ -112,7 +112,6 @@
 .moss-country-search { position: relative; max-inline-size: 22rem; margin-block-end: var(--moss-space-sm, 0.75rem); }
 a.moss-country-search { display: flex; align-items: center; min-block-size: 2.75rem; padding-inline: var(--moss-space-sm, 0.75rem); border: 1px solid var(--moss-border-light); border-radius: 8px; color: var(--moss-color-text-secondary); text-decoration: none; }
 .moss-country-search input { box-sizing: border-box; inline-size: 100%; min-block-size: 2.75rem; padding-inline: var(--moss-space-sm, 0.75rem); border: 1px solid var(--moss-border-strong); border-radius: 8px; background: var(--moss-color-bg); color: var(--moss-color-text); font: inherit; font-size: 1rem; }
-.moss-country-search input:focus-visible { outline: 2px solid var(--moss-color-accent); outline-offset: 2px; }
 .moss-country-search ul, .moss-country-search-none { position: absolute; z-index: 10; inset-inline: 0; inset-block-start: calc(100% + 4px); margin: 0; padding: 4px; border: 1px solid var(--moss-border-light); border-radius: 8px; background: var(--moss-color-surface); box-shadow: 0 12px 32px -16px rgb(0 0 0 / 0.4); list-style: none; }
 .moss-country-search-none { padding: var(--moss-space-sm, 0.75rem); color: var(--moss-color-text-secondary); }
 .moss-country-search ul[hidden], .moss-country-search-none[hidden] { display: none; }

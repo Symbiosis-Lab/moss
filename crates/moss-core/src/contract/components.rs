@@ -2534,6 +2534,17 @@ const CORE: &[ComponentEntry] = &[
         description: "Horizontal flex row of equal-flex `.moss-field` children. Form-row layout helper shipped in the default theme.",
     },
     ComponentEntry {
+        class: "moss-input--boxed",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<textarea class="moss-input moss-input--boxed"></textarea>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0",
+        description: "A text field with a full border. While focused it takes the accent on its own edge instead of an outline.",
+    },
+    ComponentEntry {
         class: "moss-input-feedback",
         kind: "instance",
         parent: "moss-field",

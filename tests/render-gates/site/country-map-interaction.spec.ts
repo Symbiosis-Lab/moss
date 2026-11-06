@@ -7,6 +7,7 @@
  *   npx playwright test -c playwright/country-map-interaction.config.ts
  */
 import { test, expect, type Page, type Locator } from "@playwright/test";
+import { expectFocusOnOwnEdge } from "./field-focus-edge";
 
 // Plain Tab reaches only form fields in macOS WebKit unless the system's "Keyboard navigation" setting is on;
 // Option+Tab reaches every control regardless, as a Mac keyboard user would press it.
@@ -127,13 +128,18 @@ test.describe("wide screen", () => {
     expect(await page.evaluate(() => !document.activeElement?.closest(".moss-country-panel, .moss-country-search")), "a tap leaves focus where the click put it").toBe(true);
   });
 
+  test("search: a click into the field shows focus on its own edge, under a theme focus ring", async ({ page }) => {
+    await page.goto("/");
+    await expectFocusOnOwnEdge(page, page.locator(".moss-country-search input"), "country search");
+  });
+
   test("search: the combobox finds a country or a city, chooses it and frames it beside the panel", async ({ page }) => {
     await page.goto("/");
     const field = page.locator(".moss-country-search input");
     await page.keyboard.press(TAB);
     await page.keyboard.press(TAB);
     await field.focus();
-    expect(await field.evaluate((el) => parseFloat(getComputedStyle(el).outlineWidth)), "the field shows focus").toBeGreaterThanOrEqual(2);
+    expect(await field.evaluate((el) => getComputedStyle(el).boxShadow), "the field shows focus").not.toBe("none");
     await expect(field).toHaveAttribute("role", "combobox");
     await field.fill("sao pa");
     const rows = page.locator(".moss-country-search [role=option]");
