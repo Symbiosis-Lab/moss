@@ -7428,7 +7428,9 @@ article a:where(:not(.moss-btn)):focus {
     animation-play-state: var(--moss-marquee-hover, paused);
   }
 
-  [data-marquee-ready]:focus-within > .moss-marquee-track {
+  /* A listing row's strip sits inside the card's link, so the link's own focus counts. */
+  [data-marquee-ready]:focus-within > .moss-marquee-track,
+  a:focus-visible [data-marquee-ready] > .moss-marquee-track {
     animation-play-state: paused;
   }
 

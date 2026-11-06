@@ -4625,3 +4625,40 @@ lang = "en"
     ".moss/theme/style.css": THEME_FOCUS_RING,
   },
 };
+
+// Sliding picture strips: three `motion:marquee` rows of a work feed, then a
+// `:::gallery marquee`. Served by playwright/marquee.config.ts.
+export const MARQUEE_GATE: ScratchSiteSpec = {
+  name: "marquee-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    "pics/4.png": syntheticBusyImage(640, 360),
+    "pics/5.png": syntheticBusyImage(300, 450),
+    "index.md": `---
+title: Work feed
+uid: "marq0001"
+children: false
+---
+
+![[work/|style:summary,pictures:5,motion:marquee]]
+
+:::gallery marquee
+![One](pics/1.png)
+![Two](pics/2.png)
+![Three](pics/3.png)
+![Four](pics/4.png)
+:::
+`,
+    "work/index.md": `---
+title: Work
+uid: "marq0010"
+children: false
+---
+`,
+    "work/alpha.md": STRIP_PROJECT("Alpha Ventures"),
+    "work/beta.md": STRIP_PROJECT("Beta Ventures"),
+    "work/gamma.md": STRIP_PROJECT("Gamma Ventures"),
+  },
+};

@@ -67,6 +67,7 @@ GATES_BUILD=(
   card-cover-auto
   lead-listing
   listing-picture-strip
+  marquee
   grid-card-image-inline-size
   hero-caption
   hero-links
