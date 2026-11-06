@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `route` is a known frontmatter field: it no longer draws an unknown-field hint, and the schema, the frontmatter contract and the editor list it.
+
 ## [0.22.0] - 2026-11-03
 
 ### Changed

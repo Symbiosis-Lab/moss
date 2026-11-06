@@ -548,6 +548,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "route",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        score: 79,
+        description: "Draws this page's `location:` places as a route on its place map, in their listed order. No effect on listing maps.",
+        label_key: "chip.route.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "jury",
         // Same union shape as `author`/`editor`.
         field_type: FieldType::OneOf,

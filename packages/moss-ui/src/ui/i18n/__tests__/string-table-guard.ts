@@ -89,6 +89,8 @@ const GERMAN_IDENTICAL = [
   'upload.rate',
   // "Version" is the German word too
   'plugin.version.installed',
+  // "Route" is the German word too
+  'chip.route.label',
   // slash-menu block name, WordPress de_DE keeps "Buttons"
   'slash.buttons.label',
 ].map((key) => `de:${key}`);
