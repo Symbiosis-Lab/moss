@@ -67,8 +67,8 @@ pub fn run(args: &[String], binary_version: &'static str) -> i32 {
 /// Arity rules:
 /// - "single": at most one plugin may be active for this hook per project
 ///   (deploy — two plugins publishing the same site would conflict).
-/// - "multiple": many plugins may coexist for this hook (process, syndicate,
-///   login are additive / independent).
+/// - "multiple": many plugins may coexist for this hook (process, the copy
+///   hooks and login are additive / independent).
 fn plugin_hooks() -> Vec<PluginHookInfo> {
     vec![
         PluginHookInfo {
@@ -85,9 +85,33 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "syndicate",
-            description: "POSSE-distribute published content after deployment (e.g. cross-post to Matters, RSS).",
+            description: "Being removed: the earlier way to cross-post, one call for every article. A channel posts through the copy hooks instead.",
             arity: "multiple",
             context: "SyndicateContext",
+        },
+        PluginHookInfo {
+            name: "publish_copy",
+            description: "Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address.",
+            arity: "multiple",
+            context: "CopyJob",
+        },
+        PluginHookInfo {
+            name: "update_copy",
+            description: "Edit a posted copy after its post's source changed; optional, absent means the network cannot edit a copy.",
+            arity: "multiple",
+            context: "CopyJob",
+        },
+        PluginHookInfo {
+            name: "delete_copy",
+            description: "Remove a deleted post's copy, when the author asks; optional.",
+            arity: "multiple",
+            context: "CopyJob",
+        },
+        PluginHookInfo {
+            name: "find_copy",
+            description: "Look a copy up after a send whose outcome is unknown, or a draft left for the author to publish on the network; optional.",
+            arity: "multiple",
+            context: "CopyJob",
         },
         PluginHookInfo {
             name: "listing",

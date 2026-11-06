@@ -75,9 +75,13 @@ fn too_long_for_the_network_becomes_a_teaser_cut_at_a_sentence() {
 fn an_article_is_long_where_the_network_has_articles_and_a_teaser_elsewhere() {
     let mut p = post("Autumn", "A long essay.\n");
     p.frontmatter.insert("description".into(), serde_json::json!("About the season."));
+    p.frontmatter.insert("cover".into(), serde_json::json!("covers/maple.jpg"));
     let long = shape(&p, &spec(&[Form::Long, Form::Teaser], 300), SITE).unwrap();
     assert_eq!(long.form, Form::Long);
-    assert_eq!(long.article.unwrap().html, "<p>html</p>");
+    let article = long.article.unwrap();
+    assert_eq!(article.html, "<p>html</p>");
+    assert_eq!(article.description.as_deref(), Some("About the season."));
+    assert_eq!(article.cover.as_deref(), Some("https://example.org/covers/maple.jpg"), "a cover path is from the site's root, as the scan resolved it");
 
     let teaser = shape(&p, &spec(&[Form::Short, Form::Teaser], 300), SITE).unwrap();
     assert_eq!(teaser.parts[0].text, format!("Autumn\n\nAbout the season.\n\n{PAGE}"));

@@ -27,7 +27,11 @@ pub enum Counting {
     /// grapheme clusters a network counts, so a copy that fits here fits there.
     #[default]
     Graphemes,
+    /// Unicode scalar values.
     Chars,
+    /// UTF-16 code units, as a JavaScript string's length counts them: an
+    /// emoji outside the basic plane counts two.
+    Utf16,
     /// Latin text counts one, everything else two, and every link
     /// `link_chars` (X's rule).
     Weighted,
@@ -84,10 +88,18 @@ impl ChannelSpec {
                 let bare = word.trim_end();
                 match link {
                     Some(n) if bare.starts_with("http://") || bare.starts_with("https://") => n as usize + word[bare.len()..].chars().count(),
-                    _ => word.chars().map(|c| if weighted && !is_light(c) { 2 } else { 1 }).sum(),
+                    _ => word.chars().map(|c| self.width(c)).sum(),
                 }
             })
             .sum()
+    }
+
+    fn width(&self, c: char) -> usize {
+        match self.counting {
+            Counting::Weighted if !is_light(c) => 2,
+            Counting::Utf16 => c.len_utf16(),
+            _ => 1,
+        }
     }
 
     pub fn fits(&self, text: &str) -> bool {
@@ -123,6 +135,13 @@ mod tests {
         assert_eq!(x.length("hello"), 5);
         assert_eq!(x.length("秋天"), 4);
         assert_eq!(x.length("see https://example.org/a/very/long/path/indeed"), 4 + 23);
+    }
+
+    #[test]
+    fn utf16_counting_is_a_javascript_strings_length() {
+        let js = spec(Counting::Utf16, 240);
+        assert_eq!(js.length("秋天 🍁"), 5);
+        assert_eq!(spec(Counting::Chars, 240).length("秋天 🍁"), 4);
     }
 
     #[test]

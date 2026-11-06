@@ -548,6 +548,87 @@ interface ArticleInfo {
   tags: string[];
 }
 /**
+ * One post of a copy, ready to post: plain text, with every address in it, in
+ * order, for networks that mark links up.
+ *
+ * @category Copies
+ */
+interface CopyPart {
+  text: string;
+  links: string[];
+}
+/** A copy's id and address on its network. @category Copies */
+interface CopyRef {
+  id: string;
+  url: string;
+}
+/**
+ * The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or
+ * `find_copy` receives, already shaped to the limits its manifest declares
+ * under `contributes.channel.syndication`.
+ *
+ * @category Copies
+ */
+interface CopyJob {
+  op: "publish" | "update" | "delete" | "find";
+  channel: string;
+  /** The same on every send of this post to this channel, on every computer. */
+  idempotency_key: string;
+  /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
+  post: {
+    url: string;
+    source_path: string;
+    title: string;
+    lang?: string | null;
+    date?: string | null;
+    tags?: string[];
+  };
+  /** Absent for a delete, whose page is gone. */
+  form?: "short" | "thread" | "long" | "teaser" | "handoff";
+  parts?: CopyPart[];
+  teaser?: {
+    title: string;
+    description: string;
+    url: string;
+    cover?: string | null;
+  } | null;
+  article?: {
+    title: string;
+    html: string;
+    description?: string | null;
+    cover?: string | null;
+  } | null;
+  /** The copy already on the network (for an update, delete or lookup), or the draft a hand-off left there. */
+  previous?: (CopyRef & {
+    parts?: CopyRef[];
+  }) | null;
+  /** The channel's resolved settings. */
+  config: Record<string, unknown>;
+}
+/**
+ * A copy hook's answer, in {@link HookResult.copy}: the copy's id and address;
+ * or, with `success: false`, why the network refused; or a hand-off, a copy
+ * the author posts by hand (`text` to paste at `open_url`) or a draft on the
+ * network for the author to publish (empty `text`, the draft's `id`).
+ *
+ * @category Copies
+ */
+interface CopyOutcome {
+  id?: string;
+  url?: string;
+  /** A thread's later parts, in order. */
+  parts?: CopyRef[];
+  handoff?: {
+    text: string;
+    open_url?: string;
+    id?: string;
+  };
+  refused?: {
+    cause: "auth" | "content" | "rate" | "network" | "unknown";
+    message?: string;
+  };
+}
+/**
  * Deployment result information
  *
  * @category Hook contexts
@@ -685,6 +766,8 @@ interface HookResult {
   deployment?: DeploymentInfo;
   /** Setup verdict (populated by the optional `check_setup` hook) */
   setup?: SetupVerdict | LegacySetupVerdict;
+  /** A copy hook's answer (populated by `publish_copy` and its siblings) */
+  copy?: CopyOutcome | null;
 }
 /**
  * One field of a {@link SetupForm} — the same vocabulary a manifest's
@@ -2301,4 +2384,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };
+export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };

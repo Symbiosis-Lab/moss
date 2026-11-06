@@ -37,12 +37,18 @@ pub struct RemoteRef {
     pub url: String,
 }
 
-/// A copy the author posts by hand: the text to paste and where.
+/// A copy the author posts by hand: the text to paste and where, or a draft
+/// the network holds for the author to finish there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Handoff {
+    /// Empty for a draft on the network, which already holds the copy.
     pub text: String,
     #[serde(default)]
     pub open_url: Option<String>,
+    /// The draft's id on the network. Each later send asks the channel's
+    /// `find_copy` whether the author has published it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 /// A copy hook's answer, carried in `HookResult.copy`.
@@ -130,8 +136,15 @@ impl CopyRecord {
             State::Sending if !idempotent => Some(Op::Find),
             State::Due | State::Refused | State::Sending => Some(Op::Publish),
             State::Posted if self.update_due => Some(Op::Update),
+            State::HandedOff if self.draft().is_some() => Some(Op::Find),
             State::Posted | State::HandedOff => None,
         }
+    }
+
+    /// The draft a handed-off copy waits in on its network.
+    pub fn draft(&self) -> Option<RemoteRef> {
+        let h = self.handoff.as_ref()?;
+        Some(RemoteRef { id: h.id.clone()?, url: h.open_url.clone().unwrap_or_default() })
     }
 
     /// The site address the copy links to: the one planned, else `reported`.
@@ -261,6 +274,11 @@ mod tests {
         assert_eq!(at(State::Posted, true, false), Some(Op::Update));
         assert_eq!(at(State::Posted, false, false), None);
         assert_eq!(at(State::HandedOff, false, false), None);
+
+        let mut drafted = CopyRecord::due("ab12cd34", "c", "a.md", "a/");
+        drafted.state = State::HandedOff;
+        drafted.handoff = Some(Handoff { text: String::new(), open_url: None, id: Some("d-1".into()) });
+        assert_eq!(drafted.next_op(false), Some(Op::Find), "a draft on the network is asked about again");
     }
 
     #[test]

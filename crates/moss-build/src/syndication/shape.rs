@@ -31,6 +31,11 @@ pub struct Teaser {
 pub struct Article {
     pub title: String,
     pub html: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Absolute, like a teaser's.
+    #[serde(default)]
+    pub cover: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,7 +91,12 @@ pub fn shape(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str) -> Result<S
             return Ok(Shaped { form: if handoff { Form::Handoff } else { Form::Short }, parts: vec![joined], teaser: None, article: None });
         }
     } else if spec.takes(Form::Long) {
-        let article = Article { title: post.title.clone(), html: post.html_content.clone().unwrap_or_default() };
+        let article = Article {
+            title: post.title.clone(),
+            html: post.html_content.clone().unwrap_or_default(),
+            description: described(post),
+            cover: cover(post, site_url),
+        };
         return Ok(Shaped { form: Form::Long, parts: Vec::new(), teaser: None, article: Some(article) });
     }
 
@@ -219,24 +229,29 @@ fn absolute(dest: &str, page_url: &str, site_url: &str) -> String {
 /// last sentence end that fits), and the address, together within the limit.
 fn teaser(post: &ArticleInfo, spec: &ChannelSpec, page_url: &str, site_url: &str) -> Result<(Teaser, Part), String> {
     let title = if post.title.trim().is_empty() { String::new() } else { post.title.trim().to_string() };
-    let description = post
-        .frontmatter
-        .get("description")
-        .and_then(|d| d.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            let first = split_parts(&post.content).into_iter().next().unwrap_or_default();
-            lower(&first, page_url, site_url).text.split("\n\n").next().unwrap_or_default().to_string()
-        });
+    let description = described(post).unwrap_or_else(|| {
+        let first = split_parts(&post.content).into_iter().next().unwrap_or_default();
+        lower(&first, page_url, site_url).text.split("\n\n").next().unwrap_or_default().to_string()
+    });
     let compose = |desc: &str| {
         [title.as_str(), desc, page_url].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n\n")
     };
     let fitted = fit(&description, |d| spec.fits(&compose(d)))
         .ok_or_else(|| "the post's title and address alone are longer than this network allows".to_string())?;
-    let cover = post.frontmatter.get("cover").and_then(|c| c.as_str()).map(|c| absolute(c, page_url, site_url));
+    let cover = cover(post, site_url);
     let text = compose(&fitted);
     let part = Part { links: addresses(&text), text };
     Ok((Teaser { title, description: fitted, url: page_url.to_string(), cover }, part))
+}
+
+fn described(post: &ArticleInfo) -> Option<String> {
+    post.frontmatter.get("description").and_then(|d| d.as_str()).map(str::to_string)
+}
+
+/// The scan has already resolved a cover to a path from the site's root.
+fn cover(post: &ArticleInfo, site_url: &str) -> Option<String> {
+    let c = post.frontmatter.get("cover")?.as_str()?;
+    Some(if c.contains("://") { c.to_string() } else { page_url(site_url, c) })
 }
 
 /// The longest prefix of `text` that `fits` and ends a sentence; else the

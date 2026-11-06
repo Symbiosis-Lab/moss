@@ -134,6 +134,7 @@ pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &Article
         let rank = by_uid.get(&r.uid).and_then(|p| p.syndicate.as_ref()).and_then(|c| c.iter().position(|c| *c == r.channel));
         (r.url_path.clone(), rank.unwrap_or(usize::MAX), r.channel.clone())
     });
+    let site_lang = crate::build::site_config::get_site_lang(&folder.to_string_lossy()).ok().flatten();
     let mut sent_per_channel: BTreeMap<String, usize> = BTreeMap::new();
     let mut out = Vec::new();
     let mut push = |s: Sent| {
@@ -157,11 +158,23 @@ pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &Article
             }
             continue;
         };
+        let lang = post_lang(post, articles, site_lang.as_deref());
         // An uncertain copy is looked up before anything is sent again.
         let op = if op == Op::Find {
-            match reconcile(manager, &record, channel, post, opts).await {
+            match reconcile(manager, &record, channel, post, lang.clone(), opts).await {
                 Found::Copy(outcome) => {
                     push(adopt(folder, &records, record, outcome));
+                    continue;
+                }
+                // A draft still waiting for the author is reported once, when
+                // it first becomes one; a draft the author deleted is absent.
+                Found::Waiting(handoff) => {
+                    if record.handoff.as_ref() != Some(&handoff) {
+                        record.state = State::HandedOff;
+                        record.handoff = Some(handoff.clone());
+                        record.reason = None;
+                        push(settle(&records, record, Outcome::HandedOff { text: handoff.text, open_url: handoff.open_url }));
+                    }
                     continue;
                 }
                 Found::Absent => Op::Publish,
@@ -170,7 +183,7 @@ pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &Article
                     if record.state == State::Sending {
                         mark_unconfirmed(&records, &mut record, INTERRUPTED);
                     }
-                    let reason = format!("{}; {why}", record.reason.clone().unwrap_or_default());
+                    let reason = [record.reason.clone().unwrap_or_default(), why].into_iter().filter(|r| !r.is_empty()).collect::<Vec<_>>().join("; ");
                     push(sent(&record, Outcome::Unconfirmed { reason }));
                     continue;
                 }
@@ -194,7 +207,7 @@ pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &Article
                 }
             }
         }
-        if let Some(s) = send_one(folder, manager, &records, record, channel, post, op, opts).await {
+        if let Some(s) = send_one(folder, manager, &records, record, channel, post, lang, op, opts).await {
             push(s);
         }
     }
@@ -209,13 +222,14 @@ async fn send_one(
     mut record: CopyRecord,
     channel: &CopyChannel,
     post: &ArticleInfo,
+    lang: Option<String>,
     op: Op,
     opts: &SendOptions<'_>,
 ) -> Option<Sent> {
     record.source_path.clone_from(&post.source_path);
     record.url_path.clone_from(&post.url_path);
 
-    let (job, hash) = match build_job(&record, channel, post, op, record.site(opts.site_url)) {
+    let (job, hash) = match build_job(&record, channel, post, lang, op, record.site(opts.site_url)) {
         Ok(j) => j,
         Err(reason) => return Some(settle(records, record, Outcome::Refused { cause: Cause::Content, reason })),
     };
@@ -354,20 +368,23 @@ async fn answers(url: &str) -> bool {
 
 enum Found {
     Copy(CopyOutcome),
+    /// A draft on the network, still for the author to publish.
+    Waiting(super::record::Handoff),
     /// The network says there is no such copy, so sending is safe.
     Absent,
     Unknown(String),
 }
 
 /// Ask the channel's `find_copy` whether the copy of an uncertain send exists.
-async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, opts: &SendOptions<'_>) -> Found {
-    let (job, _) = match build_job(record, channel, post, Op::Find, record.site(opts.site_url)) {
+async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, lang: Option<String>, opts: &SendOptions<'_>) -> Found {
+    let (job, _) = match build_job(record, channel, post, lang, Op::Find, record.site(opts.site_url)) {
         Ok(j) => j,
         Err(e) => return Found::Unknown(e),
     };
     match manager.send_copy(&job).await {
         CopyCall::Answered(r) if r.success => match r.copy {
             Some(c @ CopyOutcome { id: Some(_), url: Some(_), .. }) => Found::Copy(c),
+            Some(CopyOutcome { handoff: Some(h), .. }) => Found::Waiting(h),
             _ => Found::Absent,
         },
         CopyCall::Answered(r) => Found::Unknown(r.message.unwrap_or_else(|| "the lookup failed".into())),
@@ -397,8 +414,16 @@ fn mark_unconfirmed(records: &Records, record: &mut CopyRecord, reason: &str) {
     let _ = records.save(record);
 }
 
+/// The post's language: its own `lang:`, else its language edition's, else
+/// the site's.
+fn post_lang(post: &ArticleInfo, articles: &ArticleMap, site_lang: Option<&str>) -> Option<String> {
+    let own = post.frontmatter.get("lang").and_then(|l| l.as_str()).map(str::to_string);
+    let edition = Some(articles.editions.of(&post.url_path)).filter(|e| !e.is_empty());
+    own.or(edition).or_else(|| site_lang.map(str::to_string))
+}
+
 /// The job for one copy, and the hash of the copy it carries.
-fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, op: Op, site_url: &str) -> Result<(CopyJob, String), String> {
+fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, lang: Option<String>, op: Op, site_url: &str) -> Result<(CopyJob, String), String> {
     let copy = shape(post, &channel.spec, site_url)?;
     let hash = copy.hash();
     let job = CopyJob {
@@ -409,12 +434,12 @@ fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, op:
             url: page_url(site_url, &post.url_path),
             source_path: post.source_path.clone(),
             title: post.title.clone(),
-            lang: post.frontmatter.get("lang").and_then(|l| l.as_str()).map(str::to_string),
+            lang,
             date: post.date.clone(),
             tags: post.tags.clone(),
         },
         copy: Some(copy),
-        previous: record.remote.clone().map(|copy| Previous { copy, parts: record.parts.clone() }),
+        previous: record.remote.clone().or_else(|| record.draft()).map(|copy| Previous { copy, parts: record.parts.clone() }),
         config: HashMap::new(),
     };
     Ok((job, hash))
@@ -465,6 +490,9 @@ pub fn render(sent: &[Sent]) -> String {
             Outcome::CannotEdit => format!("{} cannot edit its copy; the page changed after it was posted", s.channel),
             Outcome::Posted { url } => format!("posted to {}: {url}", s.channel),
             Outcome::Updated { url } => format!("updated on {}: {url}", s.channel),
+            Outcome::HandedOff { text, open_url } if text.is_empty() => {
+                format!("waiting for you to publish it on {}: {}", s.channel, open_url.as_deref().unwrap_or_default())
+            }
             Outcome::HandedOff { text, open_url } => format!(
                 "ready to paste into {}{}:\n{}\n",
                 s.channel,
@@ -590,6 +618,77 @@ mod tests {
         assert_eq!(records.get("aaaa0001", "two").unwrap().remote.unwrap().id, "https://publish.example.net/notes/a/");
     }
 
+    /// A copy left as a draft for the author to finish on the network waits
+    /// quietly, is recorded as posted once the network says it was published,
+    /// and is sent again if the author deleted the draft.
+    #[tokio::test]
+    async fn a_draft_left_for_the_author_is_adopted_once_published_and_resent_once_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let finds = |state: &str| {
+            format!(
+                "{{ publish_copy: async function () {{ return {{ success: false, message: 'sent again' }}; }}, \
+                 find_copy: async function (job) {{ if (job.previous.id !== 'd-1') return {{ success: false }}; \
+                   return '{state}' === 'published' ? {{ success: true, copy: {{ id: 'a-1', url: 'https://articles.example.net/a-1' }} }} \
+                     : '{state}' === 'waiting' ? {{ success: true, copy: {{ handoff: {{ text: '', open_url: 'https://articles.example.net/draft/d-1', id: 'd-1' }} }} }} \
+                     : {{ success: true, copy: null }}; }} }}"
+            )
+        };
+        super::super::test_channel(root, "drafts", &finds("waiting"));
+        std::fs::create_dir_all(root.join("essays")).unwrap();
+        std::fs::write(root.join("essays/a.md"), "---\ntitle: A\n---\nBody.\n").unwrap();
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        let handoff = super::super::record::Handoff { text: String::new(), open_url: Some("https://articles.example.net/draft/d-1".into()), id: Some("d-1".into()) };
+        let mut r = CopyRecord::due("aaaa0001", "drafts", "essays/a.md", "essays/a/");
+        r.state = State::HandedOff;
+        r.handoff = Some(handoff);
+        records.save(&r).unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "essays/a.md", "title": "A", "content": "Body.\n", "url_path": "essays/a/", "date": null,
+            "uid": "aaaa0001", "syndicate": ["drafts"]
+        }))
+        .unwrap();
+        let mut articles = ArticleMap::default();
+        articles.articles.insert(post.url_path.clone(), post);
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = &opts;
+        let send = |state: &str| {
+            std::fs::write(root.join(".moss/plugins/drafts/main.bundle.js"), format!("window.DRAFTSPlugin = {};", finds(state))).unwrap();
+            let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+            let articles = articles.clone();
+            async move { send_due(root, &manager, &articles, opts).await.into_iter().map(|s| s.outcome).collect::<Vec<_>>() }
+        };
+
+        assert!(send("waiting").await.is_empty(), "an unpublished draft waits quietly");
+        assert_eq!(records.get("aaaa0001", "drafts").unwrap().state, State::HandedOff);
+
+        assert_eq!(send("published").await, [Outcome::Posted { url: "https://articles.example.net/a-1".into() }]);
+        assert!(std::fs::read_to_string(root.join("essays/a.md")).unwrap().contains("https://articles.example.net/a-1"));
+
+        r.state = State::HandedOff;
+        records.save(&r).unwrap();
+        assert_eq!(send("gone").await, [Outcome::Refused { cause: Cause::Unknown, reason: "sent again".into() }], "a deleted draft is sent again");
+    }
+
+    #[test]
+    fn a_copy_is_in_the_posts_own_language_else_its_editions_else_the_sites() {
+        let post = |path: &str, lang: Option<&str>| -> ArticleInfo {
+            let mut fm = serde_json::json!({});
+            if let Some(l) = lang {
+                fm["lang"] = l.into();
+            }
+            serde_json::from_value(serde_json::json!({
+                "source_path": format!("{path}.md"), "title": "", "content": "", "url_path": format!("{path}/"), "frontmatter": fm
+            }))
+            .unwrap()
+        };
+        let articles = ArticleMap { editions: moss_core::home::Editions::new("zh", ["de/a.md"]), ..Default::default() };
+        assert_eq!(post_lang(&post("notes/a", Some("en")), &articles, Some("zh")).as_deref(), Some("en"));
+        assert_eq!(post_lang(&post("de/a", None), &articles, Some("zh")).as_deref(), Some("de"));
+        assert_eq!(post_lang(&post("notes/a", None), &articles, Some("zh")).as_deref(), Some("zh"));
+    }
+
     #[test]
     fn a_handoff_prints_its_text_and_where_to_paste_it() {
         let s = Sent {
@@ -601,5 +700,16 @@ mod tests {
         let text = render(&[s]);
         assert!(text.contains("ready to paste into substack (https://example.substack.com/publish)"));
         assert!(text.contains("Autumn\n\nhttps://example.org/a/"));
+    }
+
+    #[test]
+    fn a_draft_on_the_network_says_where_to_publish_it_and_nothing_to_paste() {
+        let s = Sent {
+            source_path: "essays/a.md".into(),
+            channel: "matters".into(),
+            outcome: Outcome::HandedOff { text: String::new(), open_url: Some("https://articles.example.net/draft/d-1".into()) },
+            write_back: None,
+        };
+        assert_eq!(render(&[s]), "essays/a.md — waiting for you to publish it on matters: https://articles.example.net/draft/d-1\n");
     }
 }
