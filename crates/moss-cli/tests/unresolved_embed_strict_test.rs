@@ -68,6 +68,29 @@ fn unknown_folder_embed_option_fails_strict_and_keeps_the_known_ones() {
     assert!(!html.contains("style:grid,bogus:1"), "option string must not leak as a caption");
 }
 
+#[test]
+fn unresolved_more_link_target_fails_strict_and_names_page_and_target() {
+    let moss_home = tempfile::tempdir().unwrap();
+    let site = tempfile::tempdir().unwrap();
+    std::fs::create_dir(site.path().join("work")).unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(site.path().join(format!("work/{name}.md")), format!("---\ntitle: Show {name}\n---\n\nBody\n")).unwrap();
+    }
+    std::fs::write(site.path().join("index.md"), "---\ntitle: Home\n---\n\n![[work/|limit:2,more:Nowhere]]\n").unwrap();
+    let site_dir = std::fs::canonicalize(site.path()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .arg("build")
+        .arg(&site_dir)
+        .args(["--no-plugins", "--strict"])
+        .env("MOSS_HOME", moss_home.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success(), "--strict must fail; stderr:\n{stderr}");
+    assert!(stderr.contains("index.md") && stderr.contains("Nowhere"), "stderr:\n{stderr}");
+}
+
 fn find_home_html(site: &std::path::Path) -> Option<String> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {

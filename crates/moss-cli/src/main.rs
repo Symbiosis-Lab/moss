@@ -66,6 +66,7 @@ fn usage() -> String {
 }
 
 fn main() {
+    moss_build::build::cli_output::exit_quietly_on_closed_output();
     let args: Vec<String> = std::env::args().collect();
     // Rendering a supplied buffer is independent of the current directory and
     // environment files; every other crossed verb keeps app-binary parity.

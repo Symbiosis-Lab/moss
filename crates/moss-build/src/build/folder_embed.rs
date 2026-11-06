@@ -1667,9 +1667,8 @@ fn render_one(
                 Some((href, format!("{} →", html_escape(&doc.title))))
             }
             None => {
-                eprintln!(
-                    "Warning: the More link target \"{}\" does not resolve to a page. Omitting the More link.",
-                    more_ref
+                crate::build::cli_output::log_warn_problem!(
+                    "[{from_md_path}] the More link target \"{more_ref}\" does not resolve to a page. Omitting the More link."
                 );
                 None
             }
