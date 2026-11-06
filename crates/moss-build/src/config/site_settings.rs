@@ -96,6 +96,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "Header layout: \"brand\" shows the site name first; \"nav\" shows the link list first, opening with a Home link.",
         },
         SiteSettingInfo {
+            name: "header_scroll",
+            r#type: "string",
+            default: Some("static"),
+            description: "Whether the header stays at the top while the reader scrolls: \"static\" scrolls away with the page; \"sticky\" stays; \"hide\" stays, slides out of view once the reader scrolls down past it and slides back on any scroll up. Without JavaScript or under reduced motion \"hide\" is \"sticky\". Ignored when `header` is \"none\".",
+        },
+        SiteSettingInfo {
             name: "heading_anchors",
             r#type: "bool",
             default: Some("true"),

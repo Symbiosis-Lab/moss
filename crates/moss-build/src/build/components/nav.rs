@@ -25,7 +25,7 @@ pub(crate) mod footer;
 /// two above (nothing here reads `NavigationBuilder`'s privates), just a
 /// sibling kept close to its one reader.
 mod header_mode;
-pub use header_mode::HeaderMode;
+pub use header_mode::{HeaderMode, HeaderScroll};
 
 /// A single segment of a breadcrumb trail
 pub struct BreadcrumbSegment {

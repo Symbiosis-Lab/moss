@@ -132,6 +132,7 @@ const GATE_PORT_KEYS = [
   'closing-picture:busy',
   'header-none',
   'header-none:band',
+  'header-scroll',
   'contents-lens',
   'contents-lens:fallback',
   'content-grid:default',

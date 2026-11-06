@@ -419,6 +419,11 @@ import "./nav/hint-place";
 // a breadcrumb trail.
 import "./nav/nav-island";
 
+// `[site].header_scroll` — measures the header for anchor clearance and, for
+// `hide`, slides it away while the reader scrolls down. Self-wires on import;
+// no-ops on a page whose <body> carries no `data-header-scroll`.
+import "./nav/header-scroll";
+
 // The blurred placeholder an image is painted with until it loads. Its own
 // module so the scan and the load listener can be tested without this
 // bundle's side effects; wired here because theme.js is on every page.

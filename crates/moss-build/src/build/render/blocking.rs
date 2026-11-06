@@ -1441,7 +1441,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
+        let layout_config = layout_config.with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
         let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.

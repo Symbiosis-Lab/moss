@@ -137,6 +137,12 @@ impl PageChromeContext<'_, '_> {
         let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
         body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
         if contents_pictures { body_attrs.push_str(r#" data-contents="pictures""#); }
+        // A site with no header has nothing to keep at the top.
+        if self.layout.header != crate::build::components::nav::HeaderMode::None {
+            if let Some(value) = self.layout.header_scroll.attr_value() {
+                body_attrs.push_str(&format!(r#" data-header-scroll="{value}""#));
+            }
+        }
         if let Some(section) = doc.and_then(|d| d.section.as_ref()) {
             if !section.segment.is_empty() {
                 body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));

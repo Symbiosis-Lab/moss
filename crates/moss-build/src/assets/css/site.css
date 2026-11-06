@@ -882,6 +882,38 @@ body > header {
   background: var(--moss-header-bg, transparent);
 }
 
+/* `[site].header_scroll`: the header stays at the top; under "hide" the script
+   (header-scroll.ts) slides it away with `data-hidden` while the reader scrolls
+   down. A header laid over a hero keeps its own placement. The band needs a
+   paint of its own once page content scrolls beneath it. Both motions are off
+   under reduced motion: the header just stays. */
+body[data-header-scroll] > header:not(:has(+ .moss-hero[data-header="over"])) {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  background: var(--moss-header-bg, var(--moss-color-bg));
+}
+
+html:has(body[data-header-scroll]) {
+  scroll-padding-top: calc(var(--moss-header-height, 4.5rem) + var(--moss-space-sm));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body[data-header-scroll="hide"] > header {
+    transition: transform var(--moss-header-scroll-duration, 0.2s) var(--moss-header-scroll-ease, ease-out);
+  }
+
+  body[data-header-scroll="hide"] > header[data-hidden] {
+    transform: translateY(-100%);
+  }
+}
+
+/* The header is always there, so the island's bar would repeat it. The island
+   stays for its contents ruler. */
+body[data-header-scroll] > .moss-nav-island :is(.moss-nav-island-bar, .moss-nav-island-menu) {
+  display: none;
+}
+
 /* Chrome clearance is NOT applied here. The moss app shell insets its
    preview iframe below the floating titlebar, so the previewed document never
    paints under the chrome and needs no compensating padding. site.css therefore

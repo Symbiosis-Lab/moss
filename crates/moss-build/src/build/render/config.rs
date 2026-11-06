@@ -110,6 +110,8 @@ pub struct SiteConfig {
     /// carries the default and the unrecognized-value fallback), so
     /// consumers never re-decide either.
     pub header: crate::build::components::nav::HeaderMode,
+    /// `[site].header_scroll` — resolved (`HeaderScroll::from_config`).
+    pub header_scroll: crate::build::components::nav::HeaderScroll,
     /// CLI `--site-url` override. When set, `resolve_site_url` will use this
     /// value instead of deriving the URL from `.moss/state.toml`. `None` means
     /// "derive from deployment state as usual". Consumed by Task 2.5.
@@ -205,6 +207,7 @@ impl Default for SiteConfig {
             colophon: true,
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
+            header_scroll: crate::build::components::nav::HeaderScroll::Static,
             site_url_override: None,
             declared_redirects: Vec::new(),
             ai: Default::default(),

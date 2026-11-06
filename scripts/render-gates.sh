@@ -85,6 +85,7 @@ GATES_BUILD=(
   contents-ruler
   contents-lens
   header-none
+  header-scroll
   edge-clamp
   vertical-nav-chrome
   video-embed-shape
