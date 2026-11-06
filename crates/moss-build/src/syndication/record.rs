@@ -181,6 +181,9 @@ fn now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Held while one run sends a site's copies; see [`Records::turn`].
+pub struct SendTurn(#[allow(dead_code)] std::fs::File);
+
 /// The records of one site.
 pub struct Records {
     dir: PathBuf,
@@ -235,6 +238,32 @@ impl Records {
         match std::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("remove {}: {e}", path.display())),
             _ => Ok(()),
+        }
+    }
+
+    /// This run's turn to send the site's copies, or `None` while another
+    /// run in the folder holds it: two runs working from the same due records
+    /// would both post. The turn is an OS lock, so it ends with the process
+    /// that took it, however that process ends.
+    pub fn turn(&self) -> Option<SendTurn> {
+        let path = self.dir.with_extension("lock");
+        let taken = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            // allow:raw_write the lock file under .moss/deploy, opened without truncating; its bytes are never read
+            .and_then(|()| std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path))
+            .map_err(std::fs::TryLockError::Error)
+            .and_then(|file| file.try_lock().map(|()| file));
+        match taken {
+            Ok(file) => Some(SendTurn(file)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                log::info!(target: "syndication", "another run is sending this site's copies; the rest stay due for the next run");
+                None
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                log::warn!(target: "syndication", "copies not sent: {} could not be locked ({e})", path.display());
+                None
+            }
         }
     }
 

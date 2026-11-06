@@ -94,9 +94,11 @@ pub async fn after_live(
     manager: impl FnOnce() -> Result<std::sync::Arc<PluginManager>, String>,
 ) -> Vec<Sent> {
     let mp = crate::moss_paths::MossPaths::new(folder);
-    if Records::in_vault(&mp).all().is_empty() {
+    let records = Records::in_vault(&mp);
+    if records.all().is_empty() {
         return Vec::new();
     }
+    let Some(_turn) = records.turn() else { return Vec::new() };
     let articles: ArticleMap = match std::fs::read(mp.article_map()).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string())) {
         Ok(map) => map,
         Err(e) => {
@@ -111,13 +113,19 @@ pub async fn after_live(
             return Vec::new();
         }
     };
-    send_due(folder, &manager, &articles, opts).await
+    send_in_turn(folder, &manager, &articles, opts).await
 }
 
 /// Send every due copy in the folder's records. `articles` is what is live.
 pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &ArticleMap, opts: &SendOptions<'_>) -> Vec<Sent> {
-    let mp = crate::moss_paths::MossPaths::new(folder);
-    let records = Records::in_vault(&mp);
+    let Some(_turn) = Records::in_vault(&crate::moss_paths::MossPaths::new(folder)).turn() else { return Vec::new() };
+    send_in_turn(folder, manager, articles, opts).await
+}
+
+/// [`send_due`] for a caller already holding the folder's turn: a second
+/// lock on it from this process would be refused, and nothing sent.
+async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &ArticleMap, opts: &SendOptions<'_>) -> Vec<Sent> {
+    let records = Records::in_vault(&crate::moss_paths::MossPaths::new(folder));
     let channels = manager.copy_channels();
     let by_uid: HashMap<String, &ArticleInfo> = articles
         .articles
@@ -319,6 +327,7 @@ async fn send_one(
 /// post the author deleted; nothing calls this on its own.
 pub async fn delete_copies(folder: &Path, manager: &PluginManager, uid: &str, site_url: &str, emit: &(dyn Fn(&Sent) + Sync)) -> Vec<Sent> {
     let records = Records::in_vault(&crate::moss_paths::MossPaths::new(folder));
+    let Some(_turn) = records.turn() else { return Vec::new() };
     let mut out = Vec::new();
     for record in records.all().into_iter().filter(|r| r.uid == uid) {
         let Some(previous) = record.remote.clone().filter(|_| record.state == State::Posted) else { continue };
@@ -563,6 +572,34 @@ mod tests {
         assert_eq!(events.lock().unwrap().iter().filter(|o| **o == Outcome::Sending).count(), 2);
     }
 
+    /// While another run holds the folder's turn, neither a send nor a delete
+    /// loads a channel or touches a copy.
+    #[tokio::test]
+    async fn a_run_that_finds_the_folder_busy_loads_no_channel_and_sends_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        super::super::test_channel(root, "removes", "{ publish_copy: async function () { return { success: true }; }, delete_copy: async function () { return { success: true }; } }");
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        let mut r = CopyRecord::due("ab12cd34", "removes", "notes/a.md", "notes/a/");
+        r.state = State::Posted;
+        r.remote = Some(super::super::record::RemoteRef { id: "r-1".into(), url: "https://example.social/r-1".into() });
+        records.save(&r).unwrap();
+        let mp = crate::moss_paths::MossPaths::new(root);
+        std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
+        std::fs::write(mp.article_map(), serde_json::to_vec(&ArticleMap::default()).unwrap()).unwrap();
+        let held = records.turn().expect("the turn is free");
+
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        assert!(after_live(root, &opts, || panic!("no channel may load")).await.is_empty());
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        assert!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await.is_empty());
+        assert!(records.exists("ab12cd34", "removes"), "the copy and its record stay");
+
+        drop(held);
+        assert_eq!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await[0].outcome, Outcome::Deleted);
+    }
+
     /// What a host asks for: one post's copy on one channel now, or the held
     /// rest under its own limit.
     #[tokio::test]
@@ -616,6 +653,54 @@ mod tests {
         assert_eq!(got.iter().filter(|s| matches!(s.2, Outcome::Posted { .. })).count(), 2, "one new copy per channel: {got:?}");
         assert_eq!(got.iter().filter(held).count(), 3, "{got:?}");
         assert_eq!(records.get("aaaa0001", "two").unwrap().remote.unwrap().id, "https://publish.example.net/notes/a/");
+    }
+
+    /// Two runs in one folder, the second started once the first has read its
+    /// records and is about to post: the second sends nothing, so the copy
+    /// goes out once.
+    #[tokio::test]
+    async fn a_second_run_in_the_folder_sends_nothing_while_the_first_is_sending() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        super::super::test_channel(root, "once", "{ publish_copy: async function () { return { success: true, copy: { id: 'c-1', url: 'https://example.social/c-1' } }; } }");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "Hello.\n").unwrap();
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        records.save(&CopyRecord::due("aaaa0001", "once", "notes/a.md", "notes/a/")).unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "notes/a.md", "title": "", "content": "Hello.\n", "url_path": "notes/a/", "date": null,
+            "uid": "aaaa0001", "syndicate": ["once"]
+        }))
+        .unwrap();
+        let mut articles = ArticleMap::default();
+        articles.articles.insert(post.url_path.clone(), post);
+        async fn run(root: &Path, articles: &ArticleMap, emit: &(dyn Fn(&Sent) + Sync)) -> Vec<Sent> {
+            let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: false };
+            send_due(root, &manager, articles, &opts).await
+        }
+        let posted = |sent: &[Sent]| sent.iter().filter(|s| matches!(s.outcome, Outcome::Posted { .. })).count();
+
+        let second: std::sync::Mutex<Option<Vec<Sent>>> = std::sync::Mutex::new(None);
+        let start_second = |s: &Sent| {
+            if s.outcome != Outcome::Sending || second.lock().unwrap().is_some() {
+                return;
+            }
+            let quiet = |_: &Sent| {};
+            let sent = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(run(root, &articles, &quiet)))
+                    .join()
+                    .unwrap()
+            });
+            *second.lock().unwrap() = Some(sent);
+        };
+        let first = run(root, &articles, &start_second).await;
+
+        let second = second.into_inner().unwrap().expect("the second run started");
+        assert_eq!(posted(&first), 1, "{first:?}");
+        assert_eq!(posted(&second), 0, "the second run posted the copy again: {second:?}");
+        assert_eq!(records.get("aaaa0001", "once").unwrap().state, State::Posted);
     }
 
     /// A copy left as a draft for the author to finish on the network waits
