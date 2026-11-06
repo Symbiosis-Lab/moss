@@ -297,6 +297,21 @@ pub(crate) fn tab_title(page_title: &str, site_title: &str, is_homepage: bool) -
     }
 }
 
+/// A home page's name followed by its `tagline:` when it has one, for the tab
+/// title and the share tags. Everything else that names the site (nav,
+/// `og:site_name`, feeds, structured data) keeps the bare name.
+pub(crate) fn with_tagline(name: &str, doc: Option<&ParsedDocument>) -> String {
+    let tagline = doc
+        .and_then(|d| d.raw_frontmatter.get("tagline"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    match tagline {
+        Some(t) => format!("{name} - {t}"),
+        None => name.to_string(),
+    }
+}
+
 /// The one line the build says when a real folder index at a place
 /// namespace root composes its own intro with the term map below it,
 /// naming the site-relative source file that supplied the intro. Pulled out
@@ -1006,7 +1021,12 @@ pub(super) fn render_page<'d>(
     // index at /docs/ gets "<title>Documentation - moss</title>"; the homepage (and
     // any page whose title already equals the site title) keeps just the site name.
     // Templates all use a bare `{title}` — there is no `{site_name}` template var.
-    let title_for_tab = tab_title(&page_title, &site_title, is_homepage);
+    let home_title = with_tagline(&site_title, doc);
+    let title_for_tab = if is_homepage {
+        with_tagline(&tab_title(&page_title, &site_title, true), doc)
+    } else {
+        tab_title(&page_title, &site_title, false)
+    };
 
     let post_article = doc
         .filter(|_| is_article_page)
@@ -1418,10 +1438,10 @@ pub(super) fn render_page<'d>(
             // root (`zh-hans/index.html`) needs its OWN absolute URL here,
             // the same derivation the non-homepage branch already does.
             let (og_title, og_url): (&str, String) = if is_homepage && d.url_path == "index.html" {
-                (site_title.as_str(), homepage_meta_url.clone())
+                (home_title.as_str(), homepage_meta_url.clone())
             } else {
                 let url = crate::build::page::meta::page_meta_url(d, site_url)?;
-                let title = if is_homepage { site_title.as_str() } else { d.label.as_str() };
+                let title = if is_homepage { home_title.as_str() } else { d.label.as_str() };
                 (title, url)
             };
             Some(crate::build::page::meta::build_og_tags_website(
@@ -1457,7 +1477,7 @@ pub(super) fn render_page<'d>(
             // site title on the homepage, the page label on nav landing /
             // folder index pages. Auto-card visible text matches.
             let d = doc.unwrap();
-            let card_title: &str = if is_homepage { site_title.as_str() } else { d.label.as_str() };
+            let card_title: &str = if is_homepage { home_title.as_str() } else { d.label.as_str() };
             Some(crate::build::page::meta::build_twitter_tags(
                 card_title,
                 share_card_description_str,

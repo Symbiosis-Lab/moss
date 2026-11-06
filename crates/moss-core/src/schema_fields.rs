@@ -1284,6 +1284,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "tagline",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=2, Importance=3 → score=76
+        score: 76,
+        description: "A phrase that follows the site name in the home page's browser-tab title and its link-preview title (\"Name - tagline\"). Every other page's title, the nav and the feed keep the plain site name",
+        label: Some("Tagline"),
+        label_key: "chip.tagline.label",
+        group: "Whole Site",
+        applies_when: Some(&[HOME]),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "nav",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,
