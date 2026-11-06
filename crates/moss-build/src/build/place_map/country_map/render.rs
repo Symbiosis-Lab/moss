@@ -113,7 +113,15 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
     if model.spec.search {
         let _ = write!(out, r#" data-search="{}""#, html_escape(&search_index));
     }
-    let _ = write!(out, r#" style="{vars}">"#);
+    let _ = write!(
+        out,
+        r#" data-zoom-group="{}" data-zoom-in="{}" data-zoom-out="{}" data-zoom-reset="{}" data-zoom-hint="{}" style="{vars}">"#,
+        html_escape(t(lang, "country_map_controls")),
+        html_escape(t(lang, "country_map_zoom_in")),
+        html_escape(t(lang, "country_map_zoom_out")),
+        html_escape(t(lang, "country_map_reset")),
+        html_escape(t(lang, "country_map_zoom_hint")),
+    );
     if model.spec.search {
         let _ = write!(
             out,
@@ -125,7 +133,7 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
             html_escape(t(lang, "country_map_search")),
         );
     }
-    let _ = write!(out, r#"<div class="moss-country-stage"><div class="moss-country-scroll"><svg viewBox="0 0 {} {}" role="img" aria-label="{}">"#, num(WIDTH), num(height), html_escape(title));
+    let _ = write!(out, r#"<div class="moss-country-stage"><svg viewBox="0 0 {} {}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="{}">"#, num(WIDTH), num(height), html_escape(title));
     let _ = write!(out, r#"<path class="moss-country-graticule" d="{}"/><g class="moss-country-land">"#, graticule(&project));
     let _ = write!(out, r#"<path class="moss-country-disputed" d="{}"/>"#, rings_path(&atlas.shapes.disputed, &project));
     for (i, c) in atlas.shapes.countries.iter().enumerate() {
@@ -135,7 +143,7 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
         let level = by_country.get(&i).and_then(|r| r.level).map(|l| format!(r#" data-level="{}" style="--i:{l}""#, l + 1)).unwrap_or_default();
         let _ = write!(out, r#"<path class="moss-country" data-slug="{}" data-name="{}"{level} data-box="{}" d="{}"/>"#, atlas.slug_of(i), html_escape(&c.name_long), frame_box(&c.rings, &project), rings_path(&c.rings, &project));
     }
-    out.push_str("</g></svg></div>");
+    out.push_str("</g></svg>");
     out.push_str(r#"<div class="moss-country-panel" role="region" aria-live="polite" hidden></div></div>"#);
 
     out.push_str(r#"<ul class="moss-country-legend">"#);

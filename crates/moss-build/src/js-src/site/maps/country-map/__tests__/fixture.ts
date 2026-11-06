@@ -5,14 +5,14 @@ const HEAD = (name: string) =>
 export function page(extra = ""): void {
   Element.prototype.scrollIntoView = () => {};
   Element.prototype.scrollTo = () => {};
-  document.body.innerHTML = `<figure data-moss-country-map data-not-rated="Not rated" data-search="/_moss/map.x/country-search.json">
+  document.body.innerHTML = `<figure data-moss-country-map data-not-rated="Not rated" data-search="/_moss/map.x/country-search.json" data-zoom-group="Map controls" data-zoom-in="Zoom in" data-zoom-out="Zoom out" data-zoom-reset="Show the whole map" data-zoom-hint="Use + and − to zoom.">
     <a class="moss-country-search" href="#moss-country-rows" data-count-one="{n} result" data-count-other="{n} results" data-none="Nothing matches “{q}”." data-see-list="See the list.">Search a country or city</a>
-    <div class="moss-country-stage"><div class="moss-country-scroll"><svg viewBox="0 0 1000 435"><path class="moss-country-graticule" id="sea"/><g>
+    <div class="moss-country-stage"><svg viewBox="0 0 1000 435"><path class="moss-country-graticule" id="sea"/><g>
       <path class="moss-country-disputed" id="disputed"/>
       <path class="moss-country" id="japan" data-slug="japan" data-name="Japan" data-level="1" data-box="800 150 840 200"/>
       <path class="moss-country" id="mexico" data-slug="mexico" data-name="Mexico" data-level="2" data-box="200 180 260 230"/>
       <path class="moss-country" id="chad" data-slug="chad" data-name="Chad" data-box="480 200 520 250"/>
-    </g></svg></div><div class="moss-country-panel" hidden></div></div>
+    </g></svg><div class="moss-country-panel" hidden></div></div>
     <ul class="moss-country-legend"><li><span data-level="1"></span>Low</li><li><span data-level="2"></span>High</li></ul>
     <div class="moss-country-list" id="moss-country-rows"><a id="row" href="#mexico">Mexico</a></div>
     <template data-slug="japan">${HEAD("Japan")}<p class="moss-country-panel-level">Low</p><p>Take normal precautions.</p><p><a href="/ask/?to=Japan">Ask us</a></p></template>

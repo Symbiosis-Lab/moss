@@ -111,15 +111,47 @@ describe("framing", () => {
     await boot();
     expect(svg().getAttribute("viewBox")).not.toBe("0 0 1000 435");
   });
-  test("on a phone the view stays and the sideways box scrolls the country to the middle", async () => {
-    media({ [REDUCED]: true });
+});
+
+describe("closing the panel", () => {
+  const svg = () => document.querySelector("svg")!;
+  const viewBox = () => svg().getAttribute("viewBox");
+  const esc = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  const zoomIn = () => document.querySelector<HTMLElement>('[data-control="zoom-in"]')!.click();
+  beforeEach(async () => {
+    page();
+    location.hash = "";
+    media({ [WIDE]: true, [REDUCED]: true });
     await boot();
-    const scroll = document.querySelector<HTMLElement>(".moss-country-scroll")!;
-    rect(svg(), { width: 2000 });
-    Object.defineProperty(scroll, "clientWidth", { value: 390, configurable: true });
+  });
+  test("returns to the view the reader had before choosing", () => {
+    zoomIn();
+    const before = viewBox();
+    expect(before).not.toBe("0 0 1000 435");
+    click("japan");
+    expect(viewBox()).not.toBe(before);
+    esc();
+    expect(viewBox()).toBe(before);
+  });
+  test("leaves the view where it is when the reader zoomed while the country was open", () => {
+    click("japan");
+    zoomIn();
+    const after = viewBox();
+    esc();
+    expect(viewBox()).toBe(after);
+  });
+  test("choosing a second country does not replace the view to return to", () => {
+    click("japan");
     click("mexico");
-    expect(svg().getAttribute("viewBox")).toBe("0 0 1000 435");
-    expect(scroll.scrollLeft).toBe((230 / 1000) * 2000 - 195);
+    esc();
+    expect(viewBox()).toBe("0 0 1000 435");
+  });
+  test("reset shows the whole view and keeps the country", () => {
+    click("japan");
+    document.querySelector<HTMLElement>('[data-control="reset"]')!.click();
+    expect(viewBox()).toBe("0 0 1000 435");
+    expect(panel().hidden).toBe(false);
+    expect(document.getElementById("japan")!.classList.contains("is-chosen")).toBe(true);
   });
 });
 

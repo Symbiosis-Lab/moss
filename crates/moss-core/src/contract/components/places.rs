@@ -346,7 +346,7 @@ pub(super) const ENTRIES: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "1",
-        description: "Top-right floating control stack: the zoom capsule and the reset-to-cover circle, sharing one glass material.",
+        description: "Floating control stack, top right in the places explorer and bottom right in a country map: the zoom capsule and the reset circle (hidden while the view is the whole view), sharing one glass material.",
     },
     ComponentEntry {
         class: "moss-places-capsule",

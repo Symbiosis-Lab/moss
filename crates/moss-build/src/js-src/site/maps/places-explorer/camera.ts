@@ -431,3 +431,24 @@ export function fitWork(
   );
   return clampCamera({ x: centered.x, y: centered.y, zoom }, viewport, maxZoom);
 }
+
+/** `from` moved as if its content followed the pointer by (dx, dy) screen px, clamped. */
+export function pannedCamera(from: Camera, dx: number, dy: number, viewport: Viewport, maxZoom: number): Camera {
+  const scale = screenScale(from, viewport);
+  return clampCamera({ x: from.x - dx / (scale * aspectX(from, viewport)), y: from.y - dy / scale, zoom: from.zoom }, viewport, maxZoom);
+}
+
+/** `camera` zoomed by `factor` with the world point under the screen point `anchor` held fixed: the inverse of `worldToScreen` solved for the new centre at the target zoom, then clamped. `maxZoomAt` gives the detail ceiling for that anchor. */
+export function zoomedCameraAt(camera: Camera, viewport: Viewport, factor: number, anchor: Point, maxZoomAt: (anchorWorld: Point) => number): Camera {
+  const anchorWorld = screenToWorld(anchor, camera, viewport);
+  const targetZoom = camera.zoom * factor;
+  const scaleAtTarget = screenScale({ x: camera.x, y: camera.y, zoom: targetZoom }, viewport);
+  const y = anchorWorld.y - (anchor.y - viewport.height / 2) / scaleAtTarget;
+  const target: Camera = { x: camera.x, y, zoom: targetZoom };
+  const candidate: Camera = {
+    x: anchorWorld.x - (anchor.x - viewport.width / 2) / (scaleAtTarget * aspectX(target, viewport)),
+    y,
+    zoom: targetZoom,
+  };
+  return clampCamera(candidate, viewport, maxZoomAt(anchorWorld));
+}

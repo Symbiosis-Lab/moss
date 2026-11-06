@@ -584,7 +584,7 @@ test.describe("style:map embed", () => {
     await expect.poll(() => new URL(embedFrame.url()).searchParams.get("z")).not.toBe(before);
   });
 
-  test("plain wheel zooms the collapsed embed without scrolling its host page", async ({ page }) => {
+  test("a plain wheel over the collapsed embed scrolls the host page and leaves the map", async ({ page }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
     const viewport = page.frameLocator(IFRAME).locator(".moss-places-viewport");
@@ -592,9 +592,9 @@ test.describe("style:map embed", () => {
     const before = new URL(embedFrame.url()).searchParams.get("z");
     await viewport.hover();
     const scrollBefore = await page.evaluate(() => window.scrollY);
-    await page.mouse.wheel(0, -200);
-    await expect.poll(() => new URL(embedFrame.url()).searchParams.get("z")).not.toBe(before);
-    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    await page.mouse.wheel(0, 200);
+    await expect.poll(() => page.evaluate(() => window.scrollY), "the wheel chains from the iframe to the host page").toBeGreaterThan(scrollBefore);
+    expect(new URL(embedFrame.url()).searchParams.get("z")).toBe(before);
     await expect(page.frameLocator(IFRAME).locator(".moss-places-coop-hint")).toHaveCount(0);
   });
 

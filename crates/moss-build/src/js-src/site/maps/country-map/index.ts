@@ -10,12 +10,13 @@
  * build emits what the panel shows as one <template> per rated row and one for
  * a country with no row; this script only clones the right one.
  */
-import { createCamera, framed, parseBox, scrollLeftFor } from "./frame";
+import { createCamera, framed, parseBox, type ViewBox } from "./frame";
 import { mountHover, mountLegend } from "./hover";
 import { reducedMotion, media, WIDE } from "../media";
 import { mountSearch } from "./search";
 import { levelName } from "./shared";
 import { tintIn } from "./tint";
+import { mountZoom } from "./zoom";
 
 /** The panel sits over the map's right side; the map keeps clear of it by this much (px). */
 const PANEL_GAP = 24;
@@ -31,8 +32,7 @@ function setup(figure: HTMLElement): void {
   const panel = figure.querySelector<HTMLElement>(".moss-country-panel");
   const svg = figure.querySelector("svg");
   const stage = figure.querySelector<HTMLElement>(".moss-country-stage");
-  const scroll = figure.querySelector<HTMLElement>(".moss-country-scroll");
-  if (!panel || !svg || !stage || !scroll) return;
+  if (!panel || !svg || !stage) return;
   const controller = new AbortController();
   live.set(figure, controller);
   const { signal } = controller;
@@ -40,12 +40,17 @@ function setup(figure: HTMLElement): void {
   figure.querySelectorAll<SVGPathElement>(".moss-country").forEach((p) => countries.set(p.dataset.slug || "", p));
   const levels = [...figure.querySelectorAll(".moss-country-legend li")].map((li) => li.textContent || "");
   const notRated = figure.dataset.notRated || "";
-  const camera = createCamera(svg);
+  let sync = (): void => {};
+  const camera = createCamera(svg, () => sync());
 
   /** The one thing the panel, the outline and the address derive from. */
   let chosen: string | null = null;
   /** Where focus goes back to when the country is cleared; set only by a keyboard open. */
   let returnFocusTo: HTMLElement | null = null;
+  /** The view the reader had before the first country was chosen, which closing the panel restores. */
+  let before: ViewBox | null = null;
+  /** The reader moved or zoomed the map since the last country was framed; closing then leaves the view alone. */
+  let touched = false;
 
   /** Share of the map's width not under the panel. */
   const freeSpace = (): number => {
@@ -57,13 +62,13 @@ function setup(figure: HTMLElement): void {
   const frame = (animate: boolean): void => {
     const instant = !animate || reducedMotion();
     const box = chosen ? parseBox(countries.get(chosen)?.dataset.box) : null;
-    if (media(WIDE)) {
-      if (!chosen) camera.to(camera.base, !instant);
-      else if (box) camera.to(framed(box, camera.base, freeSpace()), !instant);
+    if (!chosen) {
+      if (before && !touched) camera.to(before, !instant);
+      before = null;
     } else if (box) {
-      const left = scrollLeftFor((box.x0 + box.x1) / 2, camera.base[2], svg.getBoundingClientRect().width, scroll.clientWidth);
-      if (instant) scroll.scrollLeft = left;
-      else scroll.scrollTo({ left, behavior: "smooth" });
+      // Under 56rem the panel is a sheet over the page, not beside the map.
+      camera.to(framed(box, camera.whole, media(WIDE) ? freeSpace() : 1), !instant);
+      touched = false;
     }
   };
 
@@ -106,6 +111,7 @@ function setup(figure: HTMLElement): void {
   /** `from` is the element a keyboard open came from; the panel's heading takes focus and Esc returns to `from`. */
   const choose = (slug: string, { animate = true, from }: { animate?: boolean; from?: HTMLElement } = {}): void => {
     if (!countries.has(slug)) return;
+    if (chosen === null) before = camera.goal();
     chosen = slug;
     returnFocusTo = from ?? null;
     render(animate);
@@ -145,6 +151,26 @@ function setup(figure: HTMLElement): void {
   mountLegend(figure);
   const link = figure.querySelector<HTMLAnchorElement>("a.moss-country-search");
   if (link) mountSearch({ figure, link, countries, levels, signal, choose: (slug, from) => choose(slug, { from }) });
+  const { dataset } = figure;
+  sync = mountZoom({
+    stage,
+    svg,
+    camera,
+    labels: { group: dataset.zoomGroup || "", zoomIn: dataset.zoomIn || "", zoomOut: dataset.zoomOut || "", reset: dataset.zoomReset || "", hint: dataset.zoomHint || "" },
+    onUserMove: () => (touched = true),
+  });
+  const fit = (): void => {
+    const box = svg.getBoundingClientRect();
+    const world = camera.world[2] / camera.world[3];
+    const aspect = box.width && box.height ? box.width / box.height : world;
+    camera.fit(Math.abs(aspect / world - 1) < 0.01 ? world : aspect);
+  };
+  fit();
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(fit);
+    observer.observe(svg);
+    signal.addEventListener("abort", () => observer.disconnect());
+  }
   tintIn(figure);
   choose(location.hash.slice(1), { animate: false });
 }

@@ -224,6 +224,11 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "country_map_result_other" => ["{n} results", "{n} Treffer", "{n} 个结果", "{n} 個結果"],
         "country_map_no_match" => ["No country or city matches \u{201c}{q}\u{201d}.", "Kein Land und keine Stadt passt zu \u{201e}{q}\u{201c}.", "没有与“{q}”匹配的国家或城市。", "沒有與「{q}」相符的國家或城市。"],
         "country_map_see_list" => ["See the full list below.", "Siehe die ganze Liste unten.", "请查看下方的完整列表。", "請查看下方的完整列表。"],
+        "country_map_controls" => ["Map controls", "Kartensteuerung", "地图控制", "地圖控制"],
+        "country_map_zoom_in" => ["Zoom in", "Vergrößern", "放大地图", "放大地圖"],
+        "country_map_zoom_out" => ["Zoom out", "Verkleinern", "缩小地图", "縮小地圖"],
+        "country_map_reset" => ["Show the whole map", "Ganze Karte anzeigen", "显示整张地图", "顯示整張地圖"],
+        "country_map_zoom_hint" => ["Use + and − to zoom, and the arrow keys to move.", "Mit Plus und Minus zoomen, mit den Pfeiltasten verschieben.", "使用加号和减号缩放，使用方向键移动。", "使用加號和減號縮放，使用方向鍵移動。"],
 
 
         // Lightbox controls

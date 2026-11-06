@@ -100,6 +100,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.vertical,
     },
     CssPartial {
+        name: "map-controls",
+        source: include_str!("../../assets/css/site/map-controls.css"),
+        gate: |a| a.places_explorer || a.country_map,
+    },
+    CssPartial {
         name: "places-explorer",
         source: include_str!("../../assets/css/site/places-explorer.css"),
         gate: |a| a.places_explorer,

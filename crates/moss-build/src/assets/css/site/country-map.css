@@ -57,8 +57,13 @@
 .moss-country-stamp { margin: var(--moss-space-xs, 0.5rem) 0 0; font-size: var(--moss-size-xs, 0.8125rem); color: var(--moss-color-text-secondary); }
 
 /* The panel opens over the map's right side; under 56rem it is a sheet from the bottom of the viewport. */
-.moss-country-stage { position: relative; }
-.moss-country-panel { position: absolute; inset-block-start: var(--moss-space-sm, 0.75rem); inset-inline-end: var(--moss-space-sm, 0.75rem); z-index: 2; inline-size: min(22rem, calc(100% - 2 * var(--moss-space-sm, 0.75rem))); max-block-size: calc(100% - 1.5rem); overflow-y: auto; padding: var(--moss-space-sm, 0.75rem) var(--moss-space-md, 1rem); border: 1px solid var(--moss-border-light); border-radius: 8px; background: var(--moss-color-surface); box-shadow: 0 12px 32px -16px rgb(0 0 0 / 0.4); }
+.moss-country-stage { position: relative; touch-action: pan-y; }
+.moss-country-stage:focus-visible { outline: 2px solid var(--moss-color-ui-accent); outline-offset: 2px; }
+.moss-country-stage[data-zoomed] { cursor: grab; }
+.moss-country-stage[data-dragging], .moss-country-stage[data-dragging] .moss-country { cursor: grabbing; }
+/* The zoom controls (map-controls.css) sit bottom right; the panel above them stops short of their 116px column and its two 12px gaps. */
+.moss-country-stage .moss-places-controls { inset-block-end: 12px; inset-inline-end: 12px; }
+.moss-country-panel { position: absolute; inset-block-start: var(--moss-space-sm, 0.75rem); inset-inline-end: var(--moss-space-sm, 0.75rem); z-index: 2; inline-size: min(22rem, calc(100% - 2 * var(--moss-space-sm, 0.75rem))); max-block-size: calc(100% - 0.75rem - 140px); overflow-y: auto; padding: var(--moss-space-sm, 0.75rem) var(--moss-space-md, 1rem); border: 1px solid var(--moss-border-light); border-radius: 8px; background: var(--moss-color-surface); box-shadow: 0 12px 32px -16px rgb(0 0 0 / 0.4); }
 .moss-country-panel[hidden] { display: none; }
 .moss-country-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 .moss-country-panel-name { margin: 0; font-size: var(--moss-size-lg, 1.125rem); font-weight: 600; }
@@ -119,16 +124,16 @@ a.moss-country-search { display: flex; align-items: center; min-block-size: 2.75
 .moss-country-search li[aria-selected="true"] { background: color-mix(in srgb, var(--moss-color-accent) 14%, transparent); }
 .moss-country-search-name { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
 .moss-country-search-level { color: var(--moss-color-text-secondary); font-size: var(--moss-size-xs, 0.8125rem); letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
-.moss-country-search-status { position: absolute; inline-size: 1px; block-size: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); }
+.moss-country-search-status, .moss-country-key-hint { position: absolute; inline-size: 1px; block-size: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); }
 
 @keyframes moss-country-sheet { from { translate: 0 100%; } }
 
-/* Under 56rem the world is wider than the screen and scrolls sideways, and the panel is a sheet. */
+/* Under 56rem the map is a squarer box the camera opens on the world's full height, and the panel is a sheet. */
 @media (width < 56rem) {
-  .moss-country-scroll { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x pan-y; }
-  .moss-country-scroll::-webkit-scrollbar { display: none; }
-  .moss-country-scroll svg { inline-size: 200%; max-inline-size: none; }
+  .moss-country-map svg { aspect-ratio: 23 / 20; }
   .moss-country-panel { position: fixed; inset: auto 0 0; z-index: 50; inline-size: auto; max-block-size: 72svh; padding-block: 1.75rem calc(var(--moss-space-md, 1rem) + env(safe-area-inset-bottom)); border-block-end: 0; border-radius: 14px 14px 0 0; box-shadow: 0 -12px 32px -12px rgb(0 0 0 / 0.4); }
+  /* The sheet covers the bottom of the map, so the controls leave until it closes. */
+  .moss-country-panel:not([hidden]) ~ .moss-places-controls { visibility: hidden; }
   .moss-country-panel::before { content: ""; position: absolute; inset-block-start: 0.625rem; inset-inline: 0; margin-inline: auto; inline-size: 2.25rem; block-size: 0.25rem; border-radius: 0.125rem; background: var(--moss-border-strong); }
   @media (prefers-reduced-motion: no-preference) {
     .moss-country-panel { animation: moss-country-sheet 260ms ease-out backwards; }

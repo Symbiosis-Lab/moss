@@ -1,7 +1,8 @@
 /**
  * A country map in a real browser: hover previews, the legend lift, framing
- * beside the panel, the sideways box and bottom sheet on a phone, the first-view
- * tint, and the keyboard path through the legend and the search field.
+ * beside the panel, zoom (controls, ctrl/⌘ + wheel, pinch, drag, keyboard), the
+ * bottom sheet on a phone, the first-view tint, and the keyboard path through
+ * the legend and the search field.
  *
  * Run via:
  *   npx playwright test -c playwright/country-map-interaction.config.ts
@@ -16,6 +17,7 @@ const WIDE = { width: 1280, height: 800 };
 const PHONE = { width: 390, height: 800 };
 const path = (page: Page, slug: string) => page.locator(`.moss-country[data-slug="${slug}"]`);
 const viewBox = async (page: Page) => (await page.locator(".moss-country-map svg").getAttribute("viewBox"))!.split(" ").map(Number);
+const WORLD_HEIGHT = 435;
 const box = async (locator: Locator) => (await locator.boundingBox())!;
 const fillOf = (locator: Locator) => locator.evaluate((el) => getComputedStyle(el).fill);
 
@@ -210,17 +212,19 @@ test.describe("phone", () => {
     await page.setViewportSize(PHONE);
   });
 
-  test("the world scrolls sideways inside its box and the page does not", async ({ page }) => {
+  test("the map is one box with no sideways scroll box, opening on the world's full height", async ({ page }) => {
     await page.goto("/");
-    const scroll = page.locator(".moss-country-scroll");
-    const m = await scroll.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflowY: getComputedStyle(el).overflowY, touch: getComputedStyle(el).touchAction }));
-    expect(m.scrollWidth).toBeGreaterThan(m.clientWidth * 1.5);
-    expect(m.overflowY).toBe("hidden");
-    expect(m.touch).toBe("pan-x pan-y");
+    await expect(page.locator(".moss-country-scroll")).toHaveCount(0);
+    const stage = await box(page.locator(".moss-country-stage"));
+    expect(stage.height / stage.width, "about the square it was").toBeGreaterThan(0.8);
+    const [x, y, w, h] = await viewBox(page);
+    expect(y).toBe(0);
+    expect(h, "the world's full height").toBeCloseTo(WORLD_HEIGHT, 0);
+    expect(x + w / 2, "centred on the world's middle").toBeCloseTo(500, 0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test("choosing rises a bottom sheet and scrolls the country to the middle", async ({ page }) => {
+  test("choosing rises a bottom sheet and frames the country in the middle of the map", async ({ page }) => {
     await page.goto("/");
     const field = page.locator(".moss-country-search input");
     await field.fill("brazil");
@@ -234,11 +238,10 @@ test.describe("phone", () => {
     expect(await panel.evaluate((el) => getComputedStyle(el, "::before").content)).not.toBe("none");
     await expect(panel.locator(".moss-country-panel-close")).toBeVisible();
     await expect(panel.locator("a", { hasText: "Plan a trip" })).toBeVisible();
-    const scroll = await box(page.locator(".moss-country-scroll"));
+    const stage = await box(page.locator(".moss-country-stage"));
     const brazil = await box(path(page, "brazil"));
-    expect(Math.abs(brazil.x + brazil.width / 2 - (scroll.x + scroll.width / 2))).toBeLessThanOrEqual(8);
+    expect(Math.abs(brazil.x + brazil.width / 2 - (stage.x + stage.width / 2))).toBeLessThanOrEqual(8);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    expect((await viewBox(page))[2], "the view is not zoomed on a phone").toBe(1000);
 
     await expect(panel.locator(".moss-country-panel-name"), "opened from the keyboard").toBeFocused();
     await page.keyboard.press(TAB);
@@ -251,9 +254,252 @@ test.describe("phone", () => {
 
   test("a tap on a country chooses it at once", async ({ page }) => {
     await page.goto("/");
-    await path(page, "brazil").evaluate((el) => el.scrollIntoView({ inline: "center" }));
     await path(page, "brazil").click();
     await expect(page.locator(".moss-country-panel")).toContainText("Brazil");
+  });
+});
+
+const stageOf = (page: Page) => page.locator(".moss-country-stage");
+const control = (page: Page, name: string) => page.locator(`.moss-country-stage [data-control="${name}"]`);
+const widthOf = async (page: Page) => (await viewBox(page))[2];
+
+test.describe("zoom", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 500 });
+  });
+
+  test("the shared controls sit bottom right, named, each with a 44px hit area", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator('.moss-country-stage [role="group"][aria-label="Map controls"]')).toHaveCount(1);
+    await expect(control(page, "zoom-in")).toHaveAccessibleName("Zoom in");
+    await expect(control(page, "zoom-out")).toHaveAccessibleName("Zoom out");
+    await expect(control(page, "reset"), "out of sight and out of the tab order at the whole view").toBeHidden();
+    // Zoomed in once, every control is live: a disabled one takes no pointer, so it has no hit area to measure.
+    await control(page, "zoom-in").click();
+    await expect(control(page, "reset")).toHaveAccessibleName("Show the whole map");
+    for (const name of ["zoom-in", "zoom-out", "reset"]) {
+      await control(page, name).evaluate((el) => ((el as HTMLElement).hidden = false));
+      // elementFromPoint answers null outside the viewport, and the short viewport leaves the controls below the fold.
+      await control(page, name).evaluate((el) => el.scrollIntoView({ block: "center" }));
+      const hit = await control(page, name).evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        // The painted circle is 36px; a point 3px outside it still lands on the button through its ::after.
+        const hits = (x: number, y: number) => document.elementFromPoint(x, y) === el;
+        return { painted: [r.width, r.height], outside: [hits(r.left - 3, r.top + r.height / 2), hits(r.right + 3, r.top + r.height / 2), hits(r.left + r.width / 2, r.top - 3), hits(r.left + r.width / 2, r.bottom + 3)] };
+      });
+      expect(hit.painted, name).toEqual([36, 36]);
+      // The capsule's two cells abut, so the side facing the other cell is the other cell's.
+      const shared = name === "zoom-in" ? 3 : name === "zoom-out" ? 2 : -1;
+      expect(hit.outside.filter((_, side) => side !== shared).every(Boolean), `${name}: hit area reaches 44px`).toBe(true);
+      await control(page, name).evaluate((el) => ((el as HTMLElement).hidden = name === "reset"));
+    }
+    await page.reload();
+    const stage = await box(stageOf(page));
+    const controls = await box(page.locator(".moss-country-stage .moss-places-controls"));
+    expect(Math.abs(stage.x + stage.width - 12 - (controls.x + controls.width))).toBeLessThanOrEqual(1);
+    expect(Math.abs(stage.y + stage.height - 12 - (controls.y + controls.height))).toBeLessThanOrEqual(1);
+    await path(page, "brazil").click();
+    const panel = await box(page.locator(".moss-country-panel"));
+    expect(panel.y + panel.height <= controls.y || controls.y + controls.height <= panel.y || panel.x + panel.width <= controls.x, "the controls stay clear of the panel").toBe(true);
+  });
+
+  test("at the whole view only + works and reset is out of the tab order; + then − changes and restores the view", async ({ page }) => {
+    await page.goto("/");
+    const start = await viewBox(page);
+    await expect(control(page, "zoom-out")).toBeDisabled();
+    await expect(control(page, "zoom-in")).toBeEnabled();
+    await expect(control(page, "reset")).toBeHidden();
+    await control(page, "zoom-in").click();
+    await expect.poll(() => widthOf(page), { timeout: 3000 }).toBeCloseTo(1000 / 1.5, 0);
+    await expect(control(page, "zoom-out")).toBeEnabled();
+    await expect(control(page, "reset")).toBeVisible();
+    await control(page, "zoom-out").click();
+    await expect.poll(async () => (await viewBox(page)).join(" "), { timeout: 3000 }).toBe(start.join(" "));
+    await expect(control(page, "reset")).toBeHidden();
+  });
+
+  test("zooming in stops at 8 times the whole view and + disables there; reset returns", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    for (let i = 0; i < 12; i++) if (await control(page, "zoom-in").isEnabled()) await control(page, "zoom-in").click();
+    expect(await widthOf(page)).toBeCloseTo(125, 0);
+    await expect(control(page, "zoom-in")).toBeDisabled();
+    await control(page, "reset").click();
+    expect(await widthOf(page)).toBe(1000);
+  });
+
+  test("reduced motion jumps on the buttons", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    await control(page, "zoom-in").click();
+    expect(await widthOf(page)).toBeCloseTo(1000 / 1.5, 0);
+  });
+
+  test("ctrl + wheel zooms at the pointer; a plain wheel scrolls the page and leaves the map", async ({ page }) => {
+    await page.goto("/");
+    const stage = await box(stageOf(page));
+    await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2);
+    await page.mouse.wheel(0, 300);
+    await expect.poll(() => page.evaluate(() => window.scrollY), "a plain wheel scrolls the page").toBeGreaterThan(0);
+    expect(await widthOf(page)).toBe(1000);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.mouse.move(stage.x + 100, stage.y + stage.height / 2);
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0, -200);
+    await page.keyboard.up("Control");
+    await expect.poll(() => widthOf(page)).toBeLessThan(1000);
+    expect(await page.evaluate(() => window.scrollY), "ctrl + wheel does not scroll").toBe(0);
+  });
+
+  test("the stage is a named, described region; + − 0 and the arrows work while it has focus", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    const stage = stageOf(page);
+    await expect(stage).toHaveAttribute("role", "region");
+    await expect(stage).toHaveAccessibleName(/.+/);
+    await expect(stage).toHaveAccessibleDescription("Use + and − to zoom, and the arrow keys to move.");
+    await stage.focus();
+    expect(await stage.evaluate((el) => parseFloat(getComputedStyle(el).outlineWidth))).toBeGreaterThanOrEqual(0);
+    await page.keyboard.press("+");
+    expect(await widthOf(page)).toBeCloseTo(1000 / 1.5, 0);
+    const x0 = (await viewBox(page))[0];
+    await page.keyboard.press("ArrowRight");
+    const x1 = (await viewBox(page))[0];
+    expect(x1).toBeGreaterThan(x0);
+    await page.keyboard.press("Shift+ArrowRight");
+    expect((await viewBox(page))[0] - x1, "Shift moves further").toBeGreaterThan(x1 - x0);
+    await page.keyboard.press("0");
+    expect(await widthOf(page)).toBe(1000);
+    await page.keyboard.press("+");
+    await page.keyboard.press("-");
+    expect(await widthOf(page)).toBe(1000);
+  });
+
+  test("a mouse drag moves the map when zoomed in and never chooses the country it started on", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    await control(page, "zoom-in").click();
+    await control(page, "zoom-in").click();
+    const before = await viewBox(page);
+    // Press on land that is on screen: a country's own middle can sit below the short viewport or off the zoomed view.
+    const landOnScreen = () => page.evaluate(() => {
+      const r = document.querySelector(".moss-country-stage")!.getBoundingClientRect();
+      for (let x = r.left + 60; x < r.right - 60; x += 20)
+        for (let y = r.top + 20; y < Math.min(r.bottom, innerHeight) - 60; y += 20) {
+          const slug = document.elementFromPoint(x, y)?.closest<SVGElement>(".moss-country")?.dataset.slug;
+          if (slug) return { x, y, slug };
+        }
+      return null;
+    });
+    const start = await landOnScreen();
+    expect(start, "land to press on").not.toBeNull();
+    const { x, y, slug } = start!;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - 120, y, { steps: 6 });
+    await page.mouse.up();
+    expect((await viewBox(page))[0]).toBeGreaterThan(before[0]);
+    await expect(page.locator(".moss-country-panel")).toBeHidden();
+    await page.waitForTimeout(100); // the click that ends a drag is swallowed for 50 ms; a later press is a new gesture
+    const after = await landOnScreen();
+    await page.mouse.click(after!.x, after!.y);
+    await expect(page.locator(".moss-country-panel"), "a click on land still chooses it").toBeVisible();
+  });
+
+  test("closing the panel returns to the view from before choosing, unless the reader moved meanwhile", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    await control(page, "zoom-in").click();
+    const before = (await viewBox(page)).join(" ");
+    await path(page, "brazil").click();
+    expect((await viewBox(page)).join(" ")).not.toBe(before);
+    await page.keyboard.press("Escape");
+    expect((await viewBox(page)).join(" ")).toBe(before);
+
+    await path(page, "brazil").click();
+    await control(page, "zoom-in").click();
+    const moved = (await viewBox(page)).join(" ");
+    await page.locator(".moss-country-panel-close").click();
+    expect((await viewBox(page)).join(" "), "a view the reader chose stays").toBe(moved);
+  });
+
+  test("reset shows the whole view and keeps the chosen country; choosing works at every zoom", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    await path(page, "japan").click();
+    await control(page, "reset").click();
+    expect(await widthOf(page)).toBe(1000);
+    await expect(page.locator(".moss-country-panel")).toContainText("Japan");
+    await expect(path(page, "japan")).toHaveClass(/is-chosen/);
+    for (let i = 0; i < 4; i++) await control(page, "zoom-in").click();
+    const field = page.locator(".moss-country-search input");
+    await field.fill("brazil");
+    await field.press("Enter");
+    await expect(page.locator(".moss-country-panel")).toContainText("Brazil");
+    expect(await widthOf(page)).toBeLessThanOrEqual(1000);
+    expect(await widthOf(page), "framed on the country, closer than one + step").toBeLessThan(1000 / 1.5);
+  });
+});
+
+test.describe("zoom on a phone", () => {
+  test.use({ hasTouch: true });
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 600 });
+  });
+
+  /** One finger, as a real touch stream, through the protocol (chromium only). */
+  async function swipe(page: Page, from: [number, number], to: [number, number]) {
+    const cdp = await page.context().newCDPSession(page);
+    const at = (type: string, p: [number, number] | null) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: p ? [{ x: p[0], y: p[1] }] : [] });
+    await at("touchStart", from);
+    for (let i = 1; i <= 8; i++) await at("touchMove", [from[0] + ((to[0] - from[0]) * i) / 8, from[1] + ((to[1] - from[1]) * i) / 8]);
+    await at("touchEnd", null);
+  }
+
+  test("− zooms out to the whole world width, letterboxed in the box, and + zooms back in", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    const opening = await viewBox(page);
+    for (let i = 0; i < 6 && (await control(page, "zoom-out").isEnabled()); i++) await control(page, "zoom-out").click();
+    const whole = await viewBox(page);
+    expect(whole[2]).toBe(1000);
+    expect(whole[3], "the box is squarer than the world, so the whole view has room above and below").toBeGreaterThan(WORLD_HEIGHT);
+    await expect(control(page, "zoom-out")).toBeDisabled();
+    await control(page, "zoom-in").click();
+    expect((await viewBox(page))[2]).toBeCloseTo(1000 / 1.5, 0);
+    expect(opening[2]).toBeLessThan(1000);
+  });
+
+  test("the stage hands vertical drags to the page", async ({ page }) => {
+    await page.goto("/");
+    expect(await stageOf(page).evaluate((el) => getComputedStyle(el).touchAction)).toBe("pan-y");
+  });
+
+  test("a sideways one-finger drag moves the map and a vertical one scrolls the page", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "touch input through the protocol is chromium's");
+    await page.goto("/");
+    const stage = await box(stageOf(page));
+    const y = stage.y + stage.height / 2;
+    const before = await viewBox(page);
+    await swipe(page, [300, y], [140, y]);
+    const after = await viewBox(page);
+    expect(after[0], "the map moved with the finger").toBeGreaterThan(before[0]);
+    await expect(page.locator(".moss-country-panel")).toBeHidden();
+    const scrolled = await page.evaluate(() => window.scrollY);
+    await swipe(page, [200, stage.y + 250], [200, stage.y + 60]);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrolled);
+    expect((await viewBox(page))[0], "the vertical drag left the map where it was").toBeCloseTo(after[0], 0);
+  });
+
+  test("the controls leave while the bottom sheet is open and return when it closes", async ({ page }) => {
+    await page.goto("/");
+    const field = page.locator(".moss-country-search input");
+    await field.fill("brazil");
+    await field.press("Enter");
+    await expect(page.locator(".moss-country-panel")).toContainText("Brazil");
+    await expect(control(page, "zoom-in"), "hidden, so also out of the tab order").toBeHidden();
+    await page.locator(".moss-country-panel-close").click();
+    await expect(control(page, "zoom-in")).toBeVisible();
   });
 });
 
@@ -285,7 +531,8 @@ test.describe("a map shows its rows as colour; their words stay for assistive te
     await expect(row, "still in the accessibility tree").toHaveCount(1);
     expect((await box(list)).width, "clipped to a point").toBeLessThanOrEqual(1);
     await page.locator(".moss-country-search input").focus();
-    await page.keyboard.press(TAB);
+    // The focusable map and its controls come first in the tab order, then the list.
+    for (let i = 0; i < 5 && !(await list.locator("a:focus").count()); i++) await page.keyboard.press(TAB);
     await expect(list.locator("a").first()).toBeFocused();
     expect(await sized(list), "visible while focus is inside").toBe(true);
     await page.locator(".moss-country-search input").focus();

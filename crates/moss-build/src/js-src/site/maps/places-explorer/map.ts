@@ -48,7 +48,9 @@ import {
   screenScale,
   tileDetailMaxZoom,
   worldDetailOpacity,
+  pannedCamera,
   viewWorldRect,
+  zoomedCameraAt,
   worldCleanMaxZoom,
   worldToScreen,
 } from "./camera";
@@ -62,7 +64,8 @@ import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
 import { rasterizeFlat, rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type Surface } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
-import { attachGestures } from "./gestures";
+import { attachGestures } from "../gestures";
+import { buildControls } from "../controls";
 import { TileLayer } from "./tiles";
 import * as urlState from "./state";
 import { hasPoint, type Camera, type EdgeFade, type ExplorerFit, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
@@ -89,15 +92,6 @@ const WORLD_RASTER_REBAKE_RATIO = 1.3;
  */
 const WORLD_REBAKE_DEBOUNCE_MS = 250;
 
-function buildControlButton(control: "zoom-in" | "zoom-out" | "reset", label: string): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "moss-places-control";
-  button.dataset.control = control;
-  button.setAttribute("aria-label", label);
-  return button;
-}
-
 export interface MountOptions {
   worldSvgText: string;
   tilesBaseUrl: string;
@@ -120,8 +114,8 @@ export interface MountOptions {
   lang: string;
 }
 
-/** A camera to show, and the deeper one it holds short of until the tiles that view needs have decoded. */
-type Fit = { camera: Camera; deeper?: Camera };
+/** A camera to show, and the deeper one it holds short of until the tiles that view needs have decoded. `whole`: the view of every place, where reset has nothing to do. */
+type Fit = { camera: Camera; deeper?: Camera; whole?: true };
 
 export interface PlacesMapController {
   /** The scope seam: `all` or `place` this landing, the breadcrumb chip's own dig-down included. Re-fits the camera and re-renders. */
@@ -296,18 +290,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   const markersEl = document.createElement("div");
   markersEl.className = "moss-places-markers";
 
-  const controlsEl = document.createElement("div");
-  controlsEl.className = "moss-places-controls";
-  controlsEl.setAttribute("role", "group");
-  controlsEl.setAttribute("aria-label", strings.mapControls);
-  const capsule = document.createElement("div");
-  capsule.className = "moss-places-capsule";
-  capsule.setAttribute("role", "group");
-  const zoomInBtn = buildControlButton("zoom-in", strings.zoomIn);
-  const zoomOutBtn = buildControlButton("zoom-out", strings.zoomOut);
-  capsule.append(zoomInBtn, zoomOutBtn);
-  const resetBtn = buildControlButton("reset", strings.reset);
-  controlsEl.append(capsule, resetBtn);
+  const controls = buildControls({ group: strings.mapControls, zoomIn: strings.zoomIn, zoomOut: strings.zoomOut, reset: strings.reset });
+  const { element: controlsEl, zoomIn: zoomInBtn, zoomOut: zoomOutBtn, reset: resetBtn } = controls;
 
   const cardsEl = document.createElement("div");
   cardsEl.className = "moss-places-cards";
@@ -537,24 +521,27 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     // One frame for both cameras, so comparing their zooms compares like with like (the collapsed embed gives up no part of itself to overlays).
     const fitFrame = frame && workFrame(viewport);
     const cover = coverCamera(points, viewport, fitFrame);
-    if (!points.length) return { camera: cover };
+    if (!points.length) return { camera: cover, whole: true };
     // Places that all lie inside one layer's extent open fitted to themselves, down to the layer's depth; otherwise the opening depth caps the fit.
     const layerZoom = layerCeilingZoom(layers, viewport, points);
     const opening = openingMaxZoom(viewport, options.fit.openingDegreesPerPx);
     const fit = layerZoom === null ? options.fit : { ...options.fit, minSpanDegrees: LAYER_FIT_MIN_SPAN_DEGREES };
     const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, fit, fitFrame, maxZoom), layerZoom === null ? opening : Math.max(opening, layerZoom), viewport);
-    if (!deep) return { camera: cover };
+    if (!deep) return { camera: cover, whole: true };
     const shown = deep === clean || layerCoversView(deep, viewport) || tileLayer.hasOpaqueViewportCoverage(deep, viewport) ? deep : clean;
     const opened = shown.zoom > cover.zoom ? shown : cover;
-    return deep.zoom > opened.zoom ? { camera: opened, deeper: deep } : { camera: opened };
+    return deep.zoom > opened.zoom ? { camera: opened, deeper: deep, whole: true } : { camera: opened, whole: true };
   }
 
   /** The view held short of a deeper fit; the tile layer loads the deeper fit's cells, hidden, meanwhile. */
   let held: { camera: Camera; deeper: Camera } | null = null;
+  /** The whole view as last shown. Stored, not refitted on each settle: the fit reads the overlays' live boxes, which keep changing after it (a card row growing as its covers load) while the camera stays put. */
+  let home: Camera | null = null;
 
   /** Shows `fit`. A held view moves to its deeper camera once the tiles that view needs have decoded, unless the reader moved or the frame resized meanwhile; a failure keeps the held view. */
   function showFit(fit: Fit): void {
     camera = fit.camera;
+    home = fit.whole ? fit.camera : null;
     const hold = fit.deeper ? { camera: fit.camera, deeper: fit.deeper } : null;
     held = hold;
     applyCamera(true);
@@ -565,7 +552,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       while (result === "superseded" && held === hold) result = await tileLayer.waitForVisibleTiles();
       if (held !== hold) return;
       const { width, height } = getViewport();
-      if (result === "ready" && width === heldViewport.width && height === heldViewport.height) return showFit({ camera: hold.deeper });
+      if (result === "ready" && width === heldViewport.width && height === heldViewport.height) return showFit({ camera: hold.deeper, whole: fit.whole });
       held = null;
       applyCamera(true);
     })();
@@ -712,6 +699,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     zoomOutBtn.disabled = camera.zoom <= MIN_ZOOM;
 
     if (settled) {
+      resetBtn.hidden = !scopedIds && !!home && Math.abs(camera.zoom / home.zoom - 1) < 0.01 && Math.hypot(camera.x - home.x, camera.y - home.y) < 1;
       // The gesture marker gates label visibility while the camera moves.
       worldEl.removeAttribute("data-gesture");
       // A settled physical scale can request a sharper world surface;
@@ -739,19 +727,29 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   // ---- gestures ------------------------------------------------------------
   let cooperativeGestures = false;
+  let panFrom = camera;
+  const paint = (): void => {
+    // Keep the camera authoritative immediately, but paint at most once per
+    // frame when wheel or pointer events arrive faster than the display.
+    if (gestureFrame === null) {
+      gestureFrame = requestAnimationFrame(() => {
+        gestureFrame = null;
+        applyCamera(false);
+      });
+    }
+  };
   attachGestures(viewportEl, {
-    getCamera: () => camera,
-    getViewport,
-    setCamera(next) {
-      camera = next;
-      // Keep the camera authoritative immediately, but paint at most once per
-      // frame when wheel or pointer events arrive faster than the display.
-      if (gestureFrame === null) {
-        gestureFrame = requestAnimationFrame(() => {
-          gestureFrame = null;
-          applyCamera(false);
-        });
-      }
+    panStart: () => {
+      panFrom = camera;
+    },
+    // A pan never clamps the zoom below where the camera already is: dragging off the tile patch that raised the ceiling must not snap the zoom back.
+    panTo(dx, dy) {
+      camera = pannedCamera(panFrom, dx, dy, getViewport(), Math.max(currentMaxZoom(getViewport()), panFrom.zoom));
+      paint();
+    },
+    zoomBy(factor, at) {
+      camera = zoomedCameraAt(camera, getViewport(), factor, at, (anchor) => currentMaxZoom(getViewport(), anchor));
+      paint();
     },
     onSettle: () => applyCamera(true),
     onGestureStart: () => {
@@ -761,12 +759,18 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       }
       worldEl.setAttribute("data-gesture", "");
     },
-    maxZoom: (anchor) => currentMaxZoom(getViewport(), anchor),
     cooperative: () => cooperativeGestures,
     // The same deselect a card or marker click on the open work performs; `selectWork(null)` leaves the camera alone.
     onDismiss: () => {
       if (selectedId) selectWork(null);
     },
+  }, {
+    ownJob: "button, a, .moss-card, .moss-places-chip, .moss-places-controls",
+    // The works row scrolls itself (wheel, touch); a plain wheel over it never zooms the map.
+    wheelPassThrough: ".moss-places-cards",
+    keyZoomStep: 1.2,
+    // An embed shares its page with the reader's scroll, so only ctrl/⌘ + wheel zooms it.
+    wheelNeedsModifier: () => cooperativeGestures,
   });
 
   // One Escape closes exactly the innermost open thing: a cluster ring, else the

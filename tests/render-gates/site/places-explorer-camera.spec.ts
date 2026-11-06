@@ -1148,3 +1148,14 @@ test("a tile's outer coverage edge carries its own fade; a shared inner edge car
     expect(mask, `${cell} has every neighbour at this camera — no outer edge to fade`).toBe("none");
   }
 });
+
+test("the reset circle is out of sight and the tab order at the opening view, and appears once the view moves", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await gotoReady(page);
+  const reset = page.locator('.moss-places-controls [data-control="reset"]');
+  await expect(reset).toBeHidden();
+  await page.locator('[data-control="zoom-in"]').click();
+  await expect(reset).toBeVisible();
+  await reset.click();
+  await expect(reset).toBeHidden();
+});
