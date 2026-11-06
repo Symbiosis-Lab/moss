@@ -112,12 +112,27 @@ export function* comments(src, rust) {
   }
 }
 
+// Files whose `description: "..."` strings `moss describe` prints, so they are
+// public output and held to the same rule as comments.
+const DESCRIBE_FILES = [/^crates\/moss-core\/src\/contract\//, /^crates\/moss-core\/src\/schema_fields\.rs$/];
+
+/** Yields { line, text } for each `description: "..."` line. */
+export function* describeStrings(src) {
+  const lines = src.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (/\bdescription:\s*"/.test(lines[i])) yield { line: i + 1, text: lines[i] };
+  }
+}
+
 export function check(root) {
   const hits = [];
   for (const file of sourceFiles(root)) {
     const rel = relative(root, file).split(sep).join("/");
     const rust = file.endsWith(".rs");
-    for (const { line, text } of comments(readFileSync(file, "utf8"), rust)) {
+    const src = readFileSync(file, "utf8");
+    const texts = [...comments(src, rust)];
+    if (DESCRIBE_FILES.some((re) => re.test(rel))) texts.push(...describeStrings(src));
+    for (const { line, text } of texts) {
       for (const [label, re] of PATTERNS) {
         const m = re.exec(text);
         if (!m) continue;
@@ -134,7 +149,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const hits = check(root);
   if (hits.length) {
     console.error(hits.join("\n"));
-    console.error(`\n${hits.length} private process label(s) in comments. Say the technical reason instead (see .claude/CLAUDE.md, "This repository is public").`);
+    console.error(`\n${hits.length} private process label(s) in comments or describe strings. Say the technical reason instead (see .claude/CLAUDE.md, "This repository is public").`);
     process.exit(1);
   }
 }

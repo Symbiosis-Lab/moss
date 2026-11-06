@@ -1819,7 +1819,7 @@ mod tests {
         DefaultHooks::new().render_shortcode(&mut out, &sc, None);
         assert!(
             out.contains("<picture"),
-            "expected <picture> wrap even without snapshot (PR1: every <img> is synth), got: {out}",
+            "expected <picture> wrap even without snapshot (every <img> is synthesized), got: {out}",
         );
         assert!(out.contains(r#"src="photos/cat.jpg""#), "got: {out}");
         assert!(out.contains(r#"alt="photo""#), "got: {out}");

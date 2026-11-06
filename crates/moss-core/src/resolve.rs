@@ -1117,7 +1117,7 @@ mod tests {
         // syntax passes through verbatim for downstream parsing.
         assert!(
             result.content_markdown.contains("> [!warning] Watch Out"),
-            "Expected callout markdown to pass through verbatim post-PR7a, got: {}",
+            "Expected callout markdown to pass through verbatim, got: {}",
             result.content_markdown
         );
     }
@@ -1198,7 +1198,7 @@ mod tests {
         // Body wikilinks pass through; no diagnostics from this layer.
         assert!(
             result.diagnostics.is_empty(),
-            "Expected zero diagnostics post-PR2 (body wikilinks deferred), got: {:?}",
+            "Expected zero diagnostics (body wikilinks are resolved later), got: {:?}",
             result.diagnostics
         );
         // Raw wikilinks pass through to the markdown handed back.
@@ -1237,7 +1237,7 @@ mod tests {
 
         assert!(
             wikilinks.is_empty(),
-            "Expected zero wikilink outgoing links from resolve_content post-PR2; got {}: {:?}",
+            "Expected zero wikilink outgoing links from resolve_content; got {}: {:?}",
             wikilinks.len(),
             wikilinks
         );
@@ -1343,7 +1343,7 @@ mod tests {
             .collect();
         assert!(
             standard_links.is_empty(),
-            "Expected zero standard outgoing links from resolve_content post-PR7a, got: {:?}",
+            "Expected zero standard outgoing links from resolve_content, got: {:?}",
             standard_links
         );
     }

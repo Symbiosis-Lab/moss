@@ -319,7 +319,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-cards[data-layout=grid]`.",
+        description: "Retired — collapsed into `.moss-cards[data-layout=grid]`.",
     },
     ComponentEntry {
         class: "moss-cards-list",
@@ -332,7 +332,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-cards[data-layout=list]`.",
+        description: "Retired — collapsed into `.moss-cards[data-layout=list]`.",
     },
     ComponentEntry {
         class: "moss-cards-minimal-year-group",
@@ -675,7 +675,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=grid]`).",
+        description: "Retired — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=grid]`).",
     },
     ComponentEntry {
         class: "moss-card-grid-cover",
@@ -686,7 +686,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-cover`.",
+        description: "Retired — collapsed into `.moss-card-cover`.",
     },
     ComponentEntry {
         class: "moss-card-grid-no-cover",
@@ -697,7 +697,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-no-cover`.",
+        description: "Retired — collapsed into `.moss-card-no-cover`.",
     },
     ComponentEntry {
         class: "moss-card-grid-content",
@@ -708,7 +708,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-content`.",
+        description: "Retired — collapsed into `.moss-card-content`.",
     },
     ComponentEntry {
         class: "moss-card-grid-kicker",
@@ -719,7 +719,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-kicker`.",
+        description: "Retired — collapsed into `.moss-card-kicker`.",
     },
     ComponentEntry {
         class: "moss-card-grid-title",
@@ -730,7 +730,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-title`.",
+        description: "Retired — collapsed into `.moss-card-title`.",
     },
     ComponentEntry {
         class: "moss-card-grid-meta",
@@ -741,7 +741,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-meta`.",
+        description: "Retired — collapsed into `.moss-card-meta`.",
     },
     ComponentEntry {
         class: "moss-card-list",
@@ -752,7 +752,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=list]`).",
+        description: "Retired — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=list]`).",
     },
     ComponentEntry {
         class: "moss-card-list-row",
@@ -763,7 +763,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-row`.",
+        description: "Retired — collapsed into `.moss-card-row`.",
     },
     ComponentEntry {
         class: "moss-card-list-cover",
@@ -774,7 +774,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-cover`.",
+        description: "Retired — collapsed into `.moss-card-cover`.",
     },
     ComponentEntry {
         class: "moss-card-list-body",
@@ -785,7 +785,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-body`.",
+        description: "Retired — collapsed into `.moss-card-body`.",
     },
     ComponentEntry {
         class: "moss-card-list-head",
@@ -796,7 +796,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-body`.",
+        description: "Retired — collapsed into `.moss-card-body`.",
     },
     ComponentEntry {
         class: "moss-card-list-kicker",
@@ -807,7 +807,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-kicker`.",
+        description: "Retired — collapsed into `.moss-card-kicker`.",
     },
     ComponentEntry {
         class: "moss-card-list-title",
@@ -818,7 +818,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-title`.",
+        description: "Retired — collapsed into `.moss-card-title`.",
     },
     ComponentEntry {
         class: "moss-card-list-meta",
@@ -829,7 +829,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-meta`.",
+        description: "Retired — collapsed into `.moss-card-meta`.",
     },
     ComponentEntry {
         class: "moss-card-list-description",
@@ -840,7 +840,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-description`.",
+        description: "Retired — collapsed into `.moss-card-description`.",
     },
     ComponentEntry {
         class: "moss-card-minimal",
@@ -853,7 +853,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=minimal]`).",
+        description: "Retired — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=minimal]`).",
     },
     ComponentEntry {
         class: "moss-folder-item",
@@ -1041,7 +1041,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!note]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=note]`.",
+        description: "Retired — type lives on `.callout[data-type=note]`.",
     },
     ComponentEntry {
         class: "callout-info",
@@ -1052,7 +1052,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!info]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=info]`.",
+        description: "Retired — type lives on `.callout[data-type=info]`.",
     },
     ComponentEntry {
         class: "callout-tip",
@@ -1063,7 +1063,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!tip]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=tip]`.",
+        description: "Retired — type lives on `.callout[data-type=tip]`.",
     },
     ComponentEntry {
         class: "callout-warning",
@@ -1074,7 +1074,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!warning]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=warning]`.",
+        description: "Retired — type lives on `.callout[data-type=warning]`.",
     },
     ComponentEntry {
         class: "callout-pending",
@@ -1085,7 +1085,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!pending]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=pending]`.",
+        description: "Retired — type lives on `.callout[data-type=pending]`.",
     },
     // -------------------------------------------------------------------
     // Embeds — `![[file.ext]]` shortcode renderers (audio, video, pdf,
@@ -1125,7 +1125,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[clip.mp4|loop]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Base class on every typed embed. Kind on `data-type` (v1), including `audio` and `video`. Ambient video: add `data-loop` via `![[clip.mp4|loop]]`. `.moss-embed-audio` and `.moss-embed-video` still ride alongside as co-classes on the element (see their own entries) — `.moss-embed-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` are the ones retired in Phase 1c, collapsed into `data-type`.",
+        description: "Base class on every typed embed. Kind on `data-type` (v1), including `audio` and `video`. Ambient video: add `data-loop` via `![[clip.mp4|loop]]`. `.moss-embed-audio` and `.moss-embed-video` still ride alongside as co-classes on the element (see their own entries) — `.moss-embed-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` are the retired ones, collapsed into `data-type`.",
     },
     ComponentEntry {
         class: "moss-derived",
@@ -1203,7 +1203,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[track.mp3]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Co-class alongside `.moss-embed` on every audio element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=audio]` rather than this class, so it is a hook for themes, not a style dependency.",
+        description: "Co-class alongside `.moss-embed` on every audio element — kept, unlike the other kind co-classes, which collapsed into `data-type`. The default CSS keys off `[data-type=audio]` rather than this class, so it is a hook for themes, not a style dependency.",
     },
     ComponentEntry {
         class: "moss-embed-video",
@@ -1214,7 +1214,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[clip.mp4]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Co-class alongside `.moss-embed` on every video element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency. Its `poster` is the video's 800-pixel thumbnail (`clip.thumb.jpg`); inside a `:::hero` it is `clip.poster.jpg` instead, the same frame at the video's own size (up to 1920x1080), once the build has cut it, because a hero shows the poster across the whole window until the video plays.",
+        description: "Co-class alongside `.moss-embed` on every video element — kept, unlike the other kind co-classes, which collapsed into `data-type`. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency. Its `poster` is the video's 800-pixel thumbnail (`clip.thumb.jpg`); inside a `:::hero` it is `clip.poster.jpg` instead, the same frame at the video's own size (up to 1920x1080), once the build has cut it, because a hero shows the poster across the whole window until the video plays.",
     },
     ComponentEntry {
         class: "moss-embed-pdf",
@@ -1225,7 +1225,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[paper.pdf]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=pdf]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=pdf]`.",
     },
     ComponentEntry {
         class: "moss-embed-iframe",
@@ -1236,7 +1236,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[page.html]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=iframe]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=iframe]`.",
     },
     ComponentEntry {
         class: "moss-embed-notebook",
@@ -1247,7 +1247,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[analysis.ipynb]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=notebook]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=notebook]`.",
     },
     ComponentEntry {
         class: "moss-embed-ipynb",
@@ -1269,7 +1269,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[data.csv]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=table]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=table]`.",
     },
     ComponentEntry {
         class: "moss-embed-3d",
@@ -1280,7 +1280,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[model.glb]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=3d]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=3d]`.",
     },
     ComponentEntry {
         class: "moss-embed-error",
@@ -1835,7 +1835,7 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-kind",
                 values: &["link", "friend", "card"],
                 default: "card",
-                description: "v1 grid-card variant. Today expressed via co-emitted classes (`.link-card`, `.friend-card`, `.no-cards`); Phase 1c collapses to this `data-kind` attribute.",
+                description: "v1 grid-card variant. Expressed through this `data-kind` attribute, which replaced the classes `.link-card`, `.friend-card` and `.no-cards`.",
             },
             DataAttr {
                 name: "data-cover-color",

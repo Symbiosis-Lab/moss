@@ -3312,7 +3312,7 @@ fn pipeline_author_raw_img_html_unchanged() {
 }
 
 #[test]
-fn pipeline_unknown_kind_does_not_dispatch_under_pr4() {
+fn pipeline_unknown_kind_does_not_dispatch() {
     // `moss:kind=…` titles no longer dispatch — even
     // unknown values emit the default anchor (because the channel
     // itself is gone, not because of the kind switch's fallthrough).

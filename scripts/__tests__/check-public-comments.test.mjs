@@ -56,6 +56,12 @@ describe('flags private process vocabulary in comments', () => {
     assert.match(r.stderr, /a\.rs:5:/);
   });
 
+  it('a describe-facing description string', () => {
+    const r = run('crates/moss-core/src/contract/components.rs', `const X: E = E {\n    description: "Retired in Phase 1c, collapsed",\n};\n`);
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /components\.rs:2:/);
+  });
+
   it('TypeScript comments', () => {
     const r = run('packages/p/src/x.ts', `const a = 1; // T6 toast\n`);
     assert.equal(r.status, 1);
@@ -63,6 +69,11 @@ describe('flags private process vocabulary in comments', () => {
 });
 
 describe('leaves legitimate text alone', () => {
+  it('a description string outside the describe-facing files', () => {
+    const r = run(RS, `const X: E = E { description: "Phase 4" };\n`);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
   it('the same phrase inside a string literal', () => {
     const r = run(RS, `fn f() { let _ = "Phase 4 and LOG-8D03-T1-0 and // PR7a"; }\n`);
     assert.equal(r.status, 0, r.stderr);
