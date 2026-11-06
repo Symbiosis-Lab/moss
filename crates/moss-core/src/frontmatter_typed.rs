@@ -676,6 +676,45 @@ impl Serialize for BreadcrumbSetting {
     }
 }
 
+/// Shared visitor behind the lenient field deserializers. A missing or null
+/// value is `None`; a bool, string or number goes through the matching
+/// converter, and a number with no converter is a type error naming `expecting`.
+struct Lenient<T> {
+    expecting: &'static str,
+    from_bool: fn(bool) -> T,
+    from_str: fn(&str) -> Result<T, String>,
+    from_number: Option<fn(String) -> T>,
+}
+
+impl<T> Lenient<T> {
+    fn number<E: serde::de::Error>(&self, unexpected: serde::de::Unexpected, text: String) -> Result<Option<T>, E> {
+        match self.from_number {
+            Some(convert) => Ok(Some(convert(text))),
+            None => Err(E::invalid_type(unexpected, &self.expecting)),
+        }
+    }
+}
+
+impl<'de, T> serde::de::Visitor<'de> for Lenient<T> {
+    type Value = Option<T>;
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str(self.expecting) }
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> { Ok(Some((self.from_bool)(v))) }
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+        (self.from_str)(v).map(Some).map_err(E::custom)
+    }
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+        self.number(serde::de::Unexpected::Signed(v), v.to_string())
+    }
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+        self.number(serde::de::Unexpected::Unsigned(v), v.to_string())
+    }
+    fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+        self.number(serde::de::Unexpected::Float(v), v.to_string())
+    }
+    fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+}
+
 /// Deserialize `breadcrumb:` from a bool, the string "true"/"false", or "label".
 /// Any other string is a per-field error, which `project_typed` reports as a
 /// build warning naming the file and the allowed values.
@@ -683,40 +722,17 @@ pub fn deserialize_breadcrumb_setting<'de, D>(deserializer: D) -> Result<Option<
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de;
-
-    struct BreadcrumbVisitor;
-
-    impl<'de> de::Visitor<'de> for BreadcrumbVisitor {
-        type Value = Option<BreadcrumbSetting>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("true, false or label")
-        }
-
-        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
-            Ok(Some(if v { BreadcrumbSetting::On } else { BreadcrumbSetting::Off }))
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            match v {
-                "true" => Ok(Some(BreadcrumbSetting::On)),
-                "false" => Ok(Some(BreadcrumbSetting::Off)),
-                "label" => Ok(Some(BreadcrumbSetting::Label)),
-                _ => Err(E::custom(format!("\"{v}\" is not valid; use true, false or label"))),
-            }
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-    }
-
-    deserializer.deserialize_any(BreadcrumbVisitor)
+    deserializer.deserialize_any(Lenient {
+        expecting: "true, false or label",
+        from_bool: |v| if v { BreadcrumbSetting::On } else { BreadcrumbSetting::Off },
+        from_str: |v| match v {
+            "true" => Ok(BreadcrumbSetting::On),
+            "false" => Ok(BreadcrumbSetting::Off),
+            "label" => Ok(BreadcrumbSetting::Label),
+            _ => Err(format!("\"{v}\" is not valid; use true, false or label")),
+        },
+        from_number: None,
+    })
 }
 
 /// Deserialize a bool that may be a YAML string ("true"/"false") or a native bool.
@@ -725,39 +741,16 @@ pub fn deserialize_bool_lenient<'de, D>(deserializer: D) -> Result<Option<bool>,
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de;
-
-    struct BoolLenientVisitor;
-
-    impl<'de> de::Visitor<'de> for BoolLenientVisitor {
-        type Value = Option<bool>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a boolean or string \"true\"/\"false\"")
-        }
-
-        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
-            Ok(Some(v))
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            match v {
-                "true" => Ok(Some(true)),
-                "false" => Ok(Some(false)),
-                _ => Err(E::custom(format!("invalid bool string: {}", v))),
-            }
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-    }
-
-    deserializer.deserialize_any(BoolLenientVisitor)
+    deserializer.deserialize_any(Lenient {
+        expecting: "a boolean or string \"true\"/\"false\"",
+        from_bool: |v| v,
+        from_str: |v| match v {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(format!("invalid bool string: {v}")),
+        },
+        from_number: None,
+    })
 }
 
 /// Lenient deserializer for the `children` union field.
@@ -768,45 +761,19 @@ where
 /// reference carried by a string is recovered separately by calling
 /// `normalize_children` on the raw value in the pipeline (this deserializer only
 /// produces the resolved `Option<bool>`; it cannot write the sibling
-/// `children_source`). This replaces the old pre-parse YAML rewrite.
+/// `children_source`).
 pub fn deserialize_children_lenient<'de, D>(
     deserializer: D,
 ) -> Result<Option<bool>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de;
-
-    struct ChildrenLenientVisitor;
-
-    impl<'de> de::Visitor<'de> for ChildrenLenientVisitor {
-        type Value = Option<bool>;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a boolean or a wikilink/path string")
-        }
-
-        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
-            Ok(Some(v))
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-            let norm = crate::frontmatter_union::normalize_children(
-                &serde_yaml::Value::String(v.to_string()),
-            );
-            Ok(Some(norm.children))
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-    }
-
-    deserializer.deserialize_any(ChildrenLenientVisitor)
+    deserializer.deserialize_any(Lenient {
+        expecting: "a boolean or a wikilink/path string",
+        from_bool: |v| v,
+        from_str: |v| Ok(crate::frontmatter_union::normalize_children(&serde_yaml::Value::String(v.to_string())).children),
+        from_number: None,
+    })
 }
 
 /// Lenient deserializer for string fields YAML may have implicitly typed as a
@@ -820,25 +787,12 @@ pub fn deserialize_string_lenient<'de, D>(deserializer: D) -> Result<Option<Stri
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de;
-    struct StringLenientVisitor;
-    impl<'de> de::Visitor<'de> for StringLenientVisitor {
-        type Value = Option<String>;
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a string, or a number/bool YAML coerced from one")
-        }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> { Ok(Some(v.to_string())) }
-        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> { Ok(Some(v)) }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { Ok(Some(v.to_string())) }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { Ok(Some(v.to_string())) }
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> { Ok(Some(v.to_string())) }
-        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> { Ok(Some(v.to_string())) }
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
-        fn visit_some<D2>(self, d: D2) -> Result<Self::Value, D2::Error>
-        where D2: de::Deserializer<'de> { d.deserialize_any(StringLenientVisitor) }
-    }
-    deserializer.deserialize_any(StringLenientVisitor)
+    deserializer.deserialize_any(Lenient {
+        expecting: "a string, or a number/bool YAML coerced from one",
+        from_bool: |v| v.to_string(),
+        from_str: |v| Ok(v.to_string()),
+        from_number: Some(|text| text),
+    })
 }
 
 /// Extract a meaningful name from a frontmatter reference that may be either
@@ -2186,5 +2140,121 @@ mod url_path_tests {
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].key, "breadcrumb");
         assert!(warnings[0].message.contains("true, false or label"), "{}", warnings[0].message);
+    }
+
+    macro_rules! lenient_table {
+        ($ty:ty, $de:literal, [$(($doc:literal, $want:literal)),* $(,)?]) => {{
+            #[derive(Debug, Deserialize)]
+            struct W {
+                #[serde(default, deserialize_with = $de)]
+                v: $ty,
+            }
+            $(
+                let got = serde_yaml::from_str::<W>($doc)
+                    .map(|w| w.v)
+                    .map_err(|e| e.to_string());
+                assert_eq!(format!("{got:?}"), $want, "input {:?}", $doc);
+            )*
+        }};
+    }
+
+    #[test]
+    fn breadcrumb_deserializer_input_table() {
+        lenient_table!(Option<BreadcrumbSetting>, "deserialize_breadcrumb_setting", [
+            ("v: true", r#"Ok(Some(On))"#),
+            ("v: false", r#"Ok(Some(Off))"#),
+            ("v: 'true'", r#"Ok(Some(On))"#),
+            ("v: 'false'", r#"Ok(Some(Off))"#),
+            ("v: label", r#"Ok(Some(Label))"#),
+            ("v: Label", r#"Err("v: \"Label\" is not valid; use true, false or label at line 1 column 4")"#),
+            ("v: yes", r#"Err("v: \"yes\" is not valid; use true, false or label at line 1 column 4")"#),
+            ("v: ''", r#"Err("v: \"\" is not valid; use true, false or label at line 1 column 4")"#),
+            ("v: '[[Notes]]'", r#"Err("v: \"[[Notes]]\" is not valid; use true, false or label at line 1 column 4")"#),
+            ("v: notes/", r#"Err("v: \"notes/\" is not valid; use true, false or label at line 1 column 4")"#),
+            ("v: null", r#"Ok(None)"#),
+            ("v: ~", r#"Ok(None)"#),
+            ("v:", r#"Ok(None)"#),
+            ("{}", r#"Ok(None)"#),
+            ("v: 5", r#"Err("v: invalid type: integer `5`, expected true, false or label at line 1 column 4")"#),
+            ("v: -5", r#"Err("v: invalid type: integer `-5`, expected true, false or label at line 1 column 4")"#),
+            ("v: 1.5", r#"Err("v: invalid type: floating point `1.5`, expected true, false or label at line 1 column 4")"#),
+            ("v: [a]", r#"Err("v: invalid type: sequence, expected true, false or label at line 1 column 4")"#),
+            ("v: {a: b}", r#"Err("v: invalid type: map, expected true, false or label at line 1 column 4")"#),
+        ]);
+    }
+
+    #[test]
+    fn bool_lenient_deserializer_input_table() {
+        lenient_table!(Option<bool>, "deserialize_bool_lenient", [
+            ("v: true", r#"Ok(Some(true))"#),
+            ("v: false", r#"Ok(Some(false))"#),
+            ("v: 'true'", r#"Ok(Some(true))"#),
+            ("v: 'false'", r#"Ok(Some(false))"#),
+            ("v: label", r#"Err("v: invalid bool string: label at line 1 column 4")"#),
+            ("v: Label", r#"Err("v: invalid bool string: Label at line 1 column 4")"#),
+            ("v: yes", r#"Err("v: invalid bool string: yes at line 1 column 4")"#),
+            ("v: ''", r#"Err("v: invalid bool string:  at line 1 column 4")"#),
+            ("v: '[[Notes]]'", r#"Err("v: invalid bool string: [[Notes]] at line 1 column 4")"#),
+            ("v: notes/", r#"Err("v: invalid bool string: notes/ at line 1 column 4")"#),
+            ("v: null", r#"Ok(None)"#),
+            ("v: ~", r#"Ok(None)"#),
+            ("v:", r#"Ok(None)"#),
+            ("{}", r#"Ok(None)"#),
+            ("v: 5", r#"Err("v: invalid type: integer `5`, expected a boolean or string \"true\"/\"false\" at line 1 column 4")"#),
+            ("v: -5", r#"Err("v: invalid type: integer `-5`, expected a boolean or string \"true\"/\"false\" at line 1 column 4")"#),
+            ("v: 1.5", r#"Err("v: invalid type: floating point `1.5`, expected a boolean or string \"true\"/\"false\" at line 1 column 4")"#),
+            ("v: [a]", r#"Err("v: invalid type: sequence, expected a boolean or string \"true\"/\"false\" at line 1 column 4")"#),
+            ("v: {a: b}", r#"Err("v: invalid type: map, expected a boolean or string \"true\"/\"false\" at line 1 column 4")"#),
+        ]);
+    }
+
+    #[test]
+    fn children_lenient_deserializer_input_table() {
+        lenient_table!(Option<bool>, "deserialize_children_lenient", [
+            ("v: true", r#"Ok(Some(true))"#),
+            ("v: false", r#"Ok(Some(false))"#),
+            ("v: 'true'", r#"Ok(Some(true))"#),
+            ("v: 'false'", r#"Ok(Some(false))"#),
+            ("v: label", r#"Ok(Some(true))"#),
+            ("v: Label", r#"Ok(Some(true))"#),
+            ("v: yes", r#"Ok(Some(true))"#),
+            ("v: ''", r#"Ok(Some(false))"#),
+            ("v: '[[Notes]]'", r#"Ok(Some(true))"#),
+            ("v: notes/", r#"Ok(Some(true))"#),
+            ("v: null", r#"Ok(None)"#),
+            ("v: ~", r#"Ok(None)"#),
+            ("v:", r#"Ok(None)"#),
+            ("{}", r#"Ok(None)"#),
+            ("v: 5", r#"Err("v: invalid type: integer `5`, expected a boolean or a wikilink/path string at line 1 column 4")"#),
+            ("v: -5", r#"Err("v: invalid type: integer `-5`, expected a boolean or a wikilink/path string at line 1 column 4")"#),
+            ("v: 1.5", r#"Err("v: invalid type: floating point `1.5`, expected a boolean or a wikilink/path string at line 1 column 4")"#),
+            ("v: [a]", r#"Err("v: invalid type: sequence, expected a boolean or a wikilink/path string at line 1 column 4")"#),
+            ("v: {a: b}", r#"Err("v: invalid type: map, expected a boolean or a wikilink/path string at line 1 column 4")"#),
+        ]);
+    }
+
+    #[test]
+    fn string_lenient_deserializer_input_table() {
+        lenient_table!(Option<String>, "deserialize_string_lenient", [
+            ("v: true", r#"Ok(Some("true"))"#),
+            ("v: false", r#"Ok(Some("false"))"#),
+            ("v: 'true'", r#"Ok(Some("true"))"#),
+            ("v: 'false'", r#"Ok(Some("false"))"#),
+            ("v: label", r#"Ok(Some("label"))"#),
+            ("v: Label", r#"Ok(Some("Label"))"#),
+            ("v: yes", r#"Ok(Some("yes"))"#),
+            ("v: ''", r#"Ok(Some(""))"#),
+            ("v: '[[Notes]]'", r#"Ok(Some("[[Notes]]"))"#),
+            ("v: notes/", r#"Ok(Some("notes/"))"#),
+            ("v: null", r#"Ok(None)"#),
+            ("v: ~", r#"Ok(None)"#),
+            ("v:", r#"Ok(None)"#),
+            ("{}", r#"Ok(None)"#),
+            ("v: 5", r#"Ok(Some("5"))"#),
+            ("v: -5", r#"Ok(Some("-5"))"#),
+            ("v: 1.5", r#"Ok(Some("1.5"))"#),
+            ("v: [a]", r#"Err("v: invalid type: sequence, expected a string, or a number/bool YAML coerced from one at line 1 column 4")"#),
+            ("v: {a: b}", r#"Err("v: invalid type: map, expected a string, or a number/bool YAML coerced from one at line 1 column 4")"#),
+        ]);
     }
 }
