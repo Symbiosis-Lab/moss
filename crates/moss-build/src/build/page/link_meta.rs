@@ -399,21 +399,40 @@ fn read_capped_body(reader: impl std::io::Read) -> (String, bool) {
     (String::from_utf8_lossy(&buf).into_owned(), read_ok)
 }
 
-/// Build a ureq agent with `timeout` set THREE ways: the overall per-call
-/// timeout (`.timeout`, already in use), plus the connect and read phases
-/// individually. Belt and suspenders, not redundant: ureq's overall/connect
-/// timeout has been found unreliable against some stalls, so a
-/// caller that only trusted `.timeout()` could still hang past the budget
-/// it asked for. Neither line alone is proven reliable in every case; the
-/// orchestrator (`fetch_all_link_meta_parallel_bounded`) is the actual
-/// backstop — it stops WAITING on a stuck worker at the deadline regardless
-/// of what ureq does internally. These are the second line, not the fix.
-fn ureq_agent_with_timeout(timeout: std::time::Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(timeout)
+/// A ureq agent that resolves the system proxy for `url` and does not follow
+/// redirects (see [`get_checked`]), with `timeout` set THREE ways: the overall
+/// per-call timeout, plus the connect and read phases individually. Belt and
+/// suspenders: ureq's overall/connect timeout has been found unreliable against
+/// some stalls. The orchestrator (`fetch_all_link_meta_parallel_bounded`) is the
+/// actual backstop: it stops WAITING on a stuck worker at the deadline whatever
+/// ureq does internally.
+fn link_agent(url: &str, timeout: std::time::Duration) -> ureq::Agent {
+    crate::system::proxy::proxied_agent_builder(url, timeout, 0)
         .timeout_connect(timeout)
         .timeout_read(timeout)
         .build()
+}
+
+/// GET `url` through the system proxy, re-checking every redirect target with
+/// [`is_unsafe_fetch_target`] before it is requested. A refused hop is an
+/// `Err`, which every caller already degrades to "no card this build".
+fn get_checked(url: &str, timeout: std::time::Duration) -> Result<ureq::Response, ureq::Error> {
+    let validate = |next: &str| {
+        if is_unsafe_fetch_target(next) {
+            Err("private or link-local address".to_string())
+        } else {
+            Ok(())
+        }
+    };
+    crate::system::redirects::get_following_redirects(
+        &link_agent(url, timeout),
+        url,
+        "moss/0.1 (+https://moss.sh)",
+        None,
+        None,
+        validate,
+        |next| next,
+    )
 }
 
 /// The bare host from an `http(s)://` URL — same lightweight ad-hoc parsing
@@ -455,11 +474,11 @@ fn bare_host(url: &str) -> &str {
 /// (`exits_after_build`: a CI runner or a hosted build), where a linked
 /// THIRD-PARTY page's own link could otherwise point the build machine's
 /// request at its own private network or cloud metadata endpoint. It is a
-/// literal-host check only: a hostname that resolves to one of these
-/// addresses only at connect time (DNS rebinding), or a redirect `Location`
-/// pointing at one, is NOT caught here — closing those needs a custom
-/// resolver/connector, more machinery than this proportional guard is
-/// trying to be.
+/// literal-host check, applied to the start URL and to every redirect target
+/// ([`get_checked`]). A hostname that resolves to one of these addresses only at
+/// connect time (DNS rebinding) is NOT caught: closing that needs a custom
+/// resolver/connector, more machinery than this proportional guard is trying
+/// to be.
 fn is_unsafe_fetch_target(url: &str) -> bool {
     let host = bare_host(url);
     match host.parse::<std::net::IpAddr>() {
@@ -499,10 +518,7 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
     }
 
     // 3. Try HTTP fetch
-    let result = ureq_agent_with_timeout(timeout)
-        .get(url)
-        .set("User-Agent", "moss/0.1 (+https://moss.sh)")
-        .call();
+    let result = get_checked(url, timeout);
 
     match result {
         Ok(resp) => {
@@ -575,11 +591,7 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
     if is_unsafe_fetch_target(image_url) {
         return None;
     }
-    let resp = ureq_agent_with_timeout(timeout)
-        .get(image_url)
-        .set("User-Agent", "moss/0.1 (+https://moss.sh)")
-        .call()
-        .ok()?;
+    let resp = get_checked(image_url, timeout).ok()?;
     // Cheap early exit on an explicit non-image Content-Type. Not the
     // authoritative check — a server can omit or lie about it — but avoids
     // downloading a body we're going to discard.
@@ -2223,5 +2235,46 @@ mod tests {
         assert!(result.is_some(), "an ordinary small image must still download");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_a_private_address_is_refused_not_followed() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/start")
+            .with_status(302)
+            .with_header("Location", "http://169.254.169.254/latest/meta-data/")
+            .create_async()
+            .await;
+        let url = format!("{}/start", server.url());
+        let err = tokio::task::spawn_blocking(move || get_checked(&url, std::time::Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .expect_err("a redirect to a link-local address must be refused");
+        match err {
+            ureq::Error::Status(_, resp) => assert!(resp.status_text().contains("disallowed"), "{}", resp.status_text()),
+            other => panic!("expected a refusal, got a transport error: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_a_safe_address_is_still_followed() {
+        let mut server = mockito::Server::new_async().await;
+        let _old = server.mock("GET", "/old").with_status(301).with_header("Location", "/new").create_async().await;
+        let _new = server
+            .mock("GET", "/new")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><head><title>Moved Here</title></head></html>")
+            .create_async()
+            .await;
+        let url = format!("{}/old", server.url());
+        let tmp = fresh_tmp("redirect_followed");
+        let meta = tokio::task::spawn_blocking(move || {
+            fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(5))
+        })
+        .await
+        .unwrap();
+        assert_eq!(meta.title.as_deref(), Some("Moved Here"));
     }
 }

@@ -15,6 +15,7 @@ pub mod folder_session;
 pub mod large_download;
 pub mod proxy;
 pub mod proxy_reqwest;
+pub mod redirects;
 pub mod reveal;
 pub mod stack_exec;
 pub mod tar_safe;
