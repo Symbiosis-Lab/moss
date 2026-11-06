@@ -10,6 +10,8 @@ search = true
 ai_policy = "unrestricted"
 lang = "en"
 rss_footer = false
+# Share and Copy on selected text, with each page's QR code: on, as this site has always had them.
+selection_tools = true
 
 [redirects]
 # The apply pages are gone with the closed beta; the app still links /apply.
