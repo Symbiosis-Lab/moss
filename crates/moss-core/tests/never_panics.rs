@@ -250,15 +250,11 @@ proptest! {
     #![proptest_config(cfg())]
 
     #[test]
-    fn csv_table_render_never_panics(content in any_str(), separator in prop::char::any()) {
-        let opts = moss_core::csv_table::CsvTableOptions {
-            separator,
-            has_header: true,
-            caption: None,
-            class: "moss-table".to_string(),
-            data_type: None,
-        };
-        let _ = moss_core::csv_table::render(&content, &opts);
+    fn csv_table_render_never_panics(content in any_str(), separator in prop::char::any(), pothole in any_str()) {
+        let opts = moss_core::csv_table::DataOptions::parse(&pothole);
+        let _ = moss_core::csv_table::render(&content, separator, &opts, ", ");
+        let list = moss_core::csv_table::DataOptions { style: moss_core::csv_table::Style::List, ..opts };
+        let _ = moss_core::csv_table::render(&content, separator, &list, ", ");
     }
 }
 

@@ -516,6 +516,11 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "版本",
             Language::ZhHant => "版本",
         },
+        // Between a row's title and its description in a data file's list.
+        "data_item_separator" => match lang {
+            Language::En | Language::De => ", ",
+            Language::ZhHans | Language::ZhHant => "，",
+        },
         // Between the names of a page's authors in its citation.
         "name_separator" => match lang {
             Language::En | Language::De => ", ",

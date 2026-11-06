@@ -213,9 +213,10 @@ pub fn resolve_content_with_derivations(
     diagnostics.extend(embed_result.diagnostics);
     let mut embed_deps = embed_result.embed_deps;
 
-    // Step 3.5: Resolve Deferred markers (notebook, table, plugins). All
-    // built-in handlers emit pure HTML (`<iframe>`, `<table>`); plugin
-    // handlers must do the same (no raw `[[…]]` in handler output).
+    // Step 3.5: Resolve Deferred markers (notebook, table, plugins). The
+    // output is parsed as markdown, but embeds were lowered above, so a
+    // handler must not emit `![[…]]`: built-in handlers emit HTML, or (a
+    // table's `style:list`) a markdown list whose cells have embeds escaped.
     // Skipped cheaply if handlers is empty.
     let deferred_result = embeds::resolve_deferred_markers(&embed_result.content, handlers);
     diagnostics.extend(deferred_result.diagnostics);
@@ -389,6 +390,11 @@ fn lower_transclusion_and_folder_wikilinks(
                 Some(replacement) if embeds::derived::parse_marker(&replacement).is_some() && line.trim() != token => {
                     rewritten.push_str(token)
                 }
+                // A table that shares its line, indentation included, cannot become a list
+                // without splitting what holds it.
+                Some(replacement) if line.trim_end() != token && replacement.starts_with(&format!("<!-- {}:", embed_renderer::MARKER_TABLE)) => {
+                    rewritten.push_str(&replacement.replace(" -->", "|inline -->"))
+                }
                 Some(replacement) => rewritten.push_str(&replacement),
                 None => rewritten.push_str(token),
             }
@@ -529,7 +535,14 @@ pub(in crate::resolve) fn lower_embed(
         // produce HTML inline, not deferred markers.
         _ => return None,
     };
-    Some(format!("<!-- {marker_prefix}:{target_path} -->"))
+    // A table carries its options and its page, which the build's warnings name.
+    let query = if marker_prefix == embed_renderer::MARKER_TABLE {
+        let enc = embed_renderer::folder_list::marker_encode;
+        format!("?opts={}|from={}", enc(pothole_raw), enc(source_path))
+    } else {
+        String::new()
+    };
+    Some(format!("<!-- {marker_prefix}:{target_path}{query} -->"))
 }
 
 pub struct FrontmatterResolveResult {

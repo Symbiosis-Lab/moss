@@ -112,9 +112,12 @@ pub const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "c
 /// A segment is keyed when it has at least one known key.
 /// Unknown keys beside a known one are ignored and reported.
 fn is_keyed_segment(segment: &str) -> bool {
-    if is_size_token(segment) {
-        return true;
-    }
+    is_size_token(segment) || has_known_key(segment, KNOWN_KEYS)
+}
+
+/// Whether a pothole segment names at least one of `known` keys, which makes
+/// it options rather than a caption. Shared with the data-file embed.
+pub(crate) fn has_known_key(segment: &str, known: &[&str]) -> bool {
     let tokens: Vec<&str> = segment
         .split([',', ' '])
         .map(str::trim)
@@ -126,7 +129,7 @@ fn is_keyed_segment(segment: &str) -> bool {
     let mut has_known_key = false;
     for t in &tokens {
         match t.split_once([':', '=']) {
-            Some((k, _)) if KNOWN_KEYS.contains(&k.trim()) => has_known_key = true,
+            Some((k, _)) if known.contains(&k.trim()) => has_known_key = true,
             Some(_) => {} // unknown key: the segment stays keyed, the key is reported
             None => {} // colon-less bare token — tolerated
         }
