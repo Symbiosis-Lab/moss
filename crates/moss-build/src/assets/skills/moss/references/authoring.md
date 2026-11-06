@@ -342,7 +342,7 @@ A single newline inside a paragraph is a line break (`<br>`), not a space as in 
 
 ### Folder cascade
 
-A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `author`, `description`, `content_width`, `title_block`, `reader_controls`, `sort` and `timezone`. It also carries declared fields (see Declared fields), such as `credit_holder: "Example Museum"`. A cascaded field is checked as the page's own value would be: its type, and its `in` scope, so a page outside that scope gets nothing. The page that declares it is not included. A page that sets one of these keys or fields itself keeps its own value, and a blank one counts: to switch a cascaded key or field off for one page, set it to an empty value there, such as `description: ""`, and the page then has no value for it rather than the folder's. A blank value in a cascade is ignored, as a blank value on a page is. A nested folder's value does not replace an outer folder's, even one that does not fit: the outer folder's value wins, as for the other cascaded keys. A key that is neither a cascade key nor a declared field has no effect; the build warns once per source page and names what cascade does carry.
+A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `author`, `description`, `content_width`, `title_block`, `reader_controls`, `sort`, `timezone` and `syndicate`. It also carries declared fields (see Declared fields), such as `credit_holder: "Example Museum"`. A cascaded field is checked as the page's own value would be: its type, and its `in` scope, so a page outside that scope gets nothing. The page that declares it is not included. A page that sets one of these keys or fields itself keeps its own value, and a blank one counts: to switch a cascaded key or field off for one page, set it to an empty value there, such as `description: ""`, and the page then has no value for it rather than the folder's. A blank value in a cascade is ignored, as a blank value on a page is. A nested folder's value does not replace an outer folder's, even one that does not fit: the outer folder's value wins, as for the other cascaded keys. A key that is neither a cascade key nor a declared field has no effect; the build warns once per source page and names what cascade does carry.
 
 ### Shortcodes
 
@@ -546,7 +546,19 @@ The newsletter form that a footer or a `:::subscribe` block draws appears for a 
 
 ### Copies on other sites
 
-`syndicated:` in a page's frontmatter is a list of the addresses of copies of the page on other sites (a Matters article, a Bluesky or Mastodon post). The Matters plugin writes it after publishing; an author or another tool can write it by hand. moss shows it as one quiet line at the end of an article, "Also on", with a link per copy named by its platform (Bluesky, Mastodon, X, Matters, LinkedIn, Substack, Threads, Medium; any other address shows its host) in `.moss-syndication`. Each link is `<a rel="syndication" class="u-syndication">`, the IndieWeb markup that tools such as Bridgy use to match a copy to its original. Entries that are not http or https addresses are skipped, and a page with no list, or a folder page, shows no line.
+`syndicate:` names the networks a page's copies go to, by the ids of channels the site has set up (a channel plugin installed with `moss plugin install`, its settings under `[channels.<id>]` in `.moss/config.toml`, its keys stored with `moss plugin secret set`). It is usually written once, on a folder's home page, so every post in the folder is copied to the same networks:
+
+```yaml
+---
+title: Notes
+cascade:
+  syndicate: [bluesky, mastodon]
+---
+```
+
+A page's own `syndicate:` replaces its folder's list, and `syndicate: false` posts no copy of that page. The networks are tried in the order listed; `email` in the list names the site's newsletter, which is not a channel. After `moss deploy` lands a publish, moss posts one copy of each new page on each network it names, at most ten new copies per network per run, the rest held for the next run, and updates a posted copy when its page changes, where the network can edit one. A post that was already live before its folder named a network is not copied there, so naming a network on a folder does not post the folder's whole history: name the network in that page's own `syndicate:` to post it. `moss deploy --dry-run --json` lists each copy a publish would send, shaped for its network. A network name with no channel set up, or a copy a network refuses, is reported by the deploy and never stops the publish.
+
+`syndicated:` in a page's frontmatter is a list of the addresses of copies of the page on other sites (a Matters article, a Bluesky or Mastodon post). moss adds each copy's address after posting it; an author or another tool can write it by hand, and a network that already has an address listed there gets no second copy. moss shows it as one quiet line at the end of an article, "Also on", with a link per copy named by its platform (Bluesky, Mastodon, X, Matters, LinkedIn, Substack, Threads, Medium; any other address shows its host) in `.moss-syndication`. Each link is `<a rel="syndication" class="u-syndication">`, the IndieWeb markup that tools such as Bridgy use to match a copy to its original. Entries that are not http or https addresses are skipped, and a page with no list, or a folder page, shows no line.
 
 ### Request forms
 
