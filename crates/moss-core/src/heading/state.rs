@@ -301,17 +301,24 @@ pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> 
 /// different `# Text`, makes this false.
 pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
     let title = same_heading_text_key(title);
-    if title.is_empty() {
-        return false;
-    }
+    !title.is_empty() && opening_h1(body_markdown).is_some_and(|text| same_heading_text_key(text) == title)
+}
+
+/// The text of the `# Text` heading a body opens with, in the sense of [`body_opens_with_title`]: its first block, or the first heading of an opening `:::grid`.
+pub fn opening_h1(body_markdown: &str) -> Option<&str> {
     let mut lines = body_markdown.lines().filter(|line| !line.trim().is_empty());
     let first = lines.next();
-    let text = if first.is_some_and(|l| l.starts_with(":::grid")) {
+    if first.is_some_and(|l| l.starts_with(":::grid")) {
         lines.take_while(|l| l.trim() != ":::").find_map(h1_text)
     } else {
         first.and_then(h1_text)
-    };
-    text.is_some_and(|text| same_heading_text_key(text) == title)
+    }
+}
+
+/// The heading a body opens with when its text is not `title`: a case study's question over its name. `None` when the body opens with no heading, or with the title itself.
+pub fn opening_heading_beyond_title(body_markdown: &str, title: &str) -> Option<String> {
+    let heading = opening_h1(body_markdown)?.trim();
+    (!heading.is_empty() && !body_opens_with_title(body_markdown, title)).then(|| heading.to_string())
 }
 
 /// The text of a `# Text` line, or `None` for any other line.

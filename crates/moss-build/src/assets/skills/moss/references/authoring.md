@@ -825,6 +825,19 @@ A count's digits follow the page's language. On a German page `.` groups digits 
 | `subtitle` | a line under the title; only the first subtitle field is drawn (a page's own `subtitle:` is drawn there too, unless a declared field already shows the same text) | `moss-subtitle` |
 | `key-figure` | a large number under the title, then its noun, for a number or a count; any other value, such as `Start` or a text field, draws as one `<span>`, so a theme can style `.moss-key-figure > span:only-child`; one line per field | `moss-key-figure` |
 | `facts` | a label and value row per field, in a list | `moss-facts` |
+| `end` | for a `page` or `pages` field: a section after the page's body, headed by the field's label, with one card per linked page (see below) | `moss-field-end` |
+
+`end` ends a page with the pages its `page` or `pages` field links to, drawn as the cards a summary listing draws, so a case study can close on a hand-picked next project that a folder's order cannot say. The section sits inside the article after the body, before comments and series navigation, headed by the field's `label` (else its capitalised name) as an `<h2>`, and carries `data-field`. Each card links to the page and shows its headline and its pictures. The headline is the opening `# Heading` of the linked page's body when that differs from its title (a case study's question), else its title. `pictures = 2` draws the first two pictures of the page as a strip (1 to 12; the default is the cover alone). A link that names no page of the site draws nothing, and a page with no value draws no section. `end` on any other type is a build warning. A theme styles the section by `.moss-field-end` and `[data-field="next"]`.
+
+```toml
+[fields.next]
+type     = "page"
+place    = "end"
+label    = "next project"
+pictures = 2
+```
+
+A page then writes `next: "[[harbour-pavilion]]"`.
 
 Dates and periods are `<time datetime>` elements carrying the EDTF value (`1927/1933`, or `1923/..` when open). A count is a `<data value>` element with the number as displayed, then its noun. A choice shows its label. A `page` or `pages` value links to the page where moss can resolve it, and shows the link as written (the text after `|` if there is one, else the last part of the name); where it cannot resolve, it shows the same text without a link; several pages are joined with ", ". A field whose value is missing or does not fit is not drawn on that page.
 

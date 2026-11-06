@@ -572,6 +572,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub body_cover_candidates: Vec<String>,
+    /// The `# Heading` the body opens with when its text is not the title: a
+    /// case study's question over its name. A card for the page headlines it.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub opening_heading: Option<String>,
     /// Hero overlay text — the opening prose of `HeroShortcode.overlay_markdown`
     /// after running through `meta::extract_description`: its first paragraph,
     /// or that paragraph plus the next where the first is only a fragment (an

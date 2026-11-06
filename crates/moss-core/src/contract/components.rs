@@ -1783,6 +1783,17 @@ const CORE: &[ComponentEntry] = &[
         description: "A list of the page's declared fields whose `place` is `facts`: one `<div data-field>` per field in declaration order, with the field's label in `<dt>` and its value in `<dd>`. A row for a `choice` field also carries `data-value`, the slug of the choice's key as written in config. On a wide screen the list sits in the right margin beside the title; on a narrow, vertical, full-width or sidebar page, or one with sidenotes, it stays in the flow. Emitted only on a page that has a value for such a field.",
     },
     ComponentEntry {
+        class: "moss-field-end",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<section class="moss-field-end" data-field="next"><h2 class="moss-field-end-label">next project</h2><div class="moss-cards-container"><div class="moss-cards" data-layout="list"><a href="/harbour-pavilion/" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Can a pier be a room?</h3></div></div></a></div></div></section>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The section a page field of type `page` or `pages` draws when its `place` is `end`: after the page's body, inside the article and before comments and series navigation. A `<h2 class=\"moss-field-end-label\">` carries the field's label, then one summary card per linked page that resolves, headlined by the linked page's own opening heading when it has one that differs from its title, with `pictures` of its pictures as a strip. Emitted only on a page that has a value for the field.",
+    },
+    ComponentEntry {
         class: "moss-align-end",
         kind: "standalone",
         parent: "",
