@@ -1049,6 +1049,22 @@ const CORE: &[ComponentEntry] = &[
         description: "Obsidian-compat class co-emitted on every callout for theme parity. Type lives on `data-type` (v1).",
     },
     ComponentEntry {
+        class: "moss-accordion",
+        kind: "container",
+        parent: "",
+        data_attrs: &[DataAttr {
+            name: "data-accordion",
+            values: &[],
+            default: "",
+            description: "The group's name, generated from the page and the line the fence opens on. Every folded callout directly inside carries it as its `<details name>`, so the browser closes the others when one opens.",
+        }],
+        example_html: r#"<div class="moss-accordion" data-accordion="moss-accordion-1a2b3c4d-3"><details class="callout" data-type="faq" name="moss-accordion-1a2b3c4d-3">...</details></div>"#,
+        example_markdown: "::: {accordion}\n\n> [!faq]- First question\n> Answer.\n\n> [!faq]- Second question\n> Answer.\n\n:::",
+        status: Status::Confirmed,
+        since: "0.22",
+        description: "A fenced div written `::: {accordion}`: the folded callouts directly inside it open one at a time. Callouts outside the fence, and in another fence, are not part of the group.",
+    },
+    ComponentEntry {
         class: "callout-title",
         kind: "instance",
         parent: "moss-callout",

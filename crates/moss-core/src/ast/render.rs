@@ -290,6 +290,7 @@ fn render_block<H: RenderHooks + ?Sized>(
         }
         Block::Callout {
             unknown_kind: _,
+            group,
             kind,
             fold,
             title,
@@ -316,6 +317,11 @@ fn render_block<H: RenderHooks + ?Sized>(
             out.push_str(r#" class="callout" data-type=""#);
             out.push_str(kind.as_slug());
             out.push_str(r#"""#);
+            if let (Some(name), true) = (group, fold.is_some()) {
+                out.push_str(r#" name=""#);
+                out.push_str(&escape_text(name));
+                out.push_str(r#"""#);
+            }
             push_source_line_attr(out, meta.source_line);
             if let Some(fold_state) = fold {
                 let fold_attr = match fold_state {

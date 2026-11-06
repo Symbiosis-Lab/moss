@@ -233,6 +233,11 @@ pub enum Block {
         /// knows; the callout then renders as a note.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unknown_kind: Option<String>,
+        /// The `name` of the exclusive group a folded callout belongs to: set
+        /// by [`crate::ast::accordion::group_callouts`] for a folded callout
+        /// directly inside `::: {accordion}`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
         children: Vec<Block>,
     },
     /// `- item` / `1. item`. Each item is a list of blocks (so list items
@@ -861,6 +866,7 @@ mod tests {
     fn block_callout_round_trips_through_serde() {
         let original = Block::Callout {
             unknown_kind: None,
+            group: None,
             kind: CalloutKind::Warning,
             fold: Some(Fold::Open),
             title: Some("Hey".to_string()),

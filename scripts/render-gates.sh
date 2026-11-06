@@ -86,6 +86,7 @@ GATES_BUILD=(
   contents-lens
   header-none
   header-scroll
+  folded-callouts
   edge-clamp
   vertical-nav-chrome
   video-embed-shape

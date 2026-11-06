@@ -1703,11 +1703,20 @@ fn extract_with_state(
                 let body_config = config_at_body_line(config, body_start);
                 let body_processed =
                     extract_with_state(&body, nonce, collected, &body_config);
+                let mut extra_attrs = data_attrs_for(&parsed.kvs);
+                let mut classes = parsed.classes.clone();
+                if parsed.accordion {
+                    classes.insert(0, "moss-accordion".to_string());
+                    extra_attrs.push_str(&format!(
+                        r#" data-accordion="moss-accordion-{nonce}-{}""#,
+                        config.warning_line_offset + i + 1
+                    ));
+                }
                 output.push_str(&render_div_open(
-                    &parsed.classes,
+                    &classes,
                     parsed.id.as_deref(),
                     parsed.width,
-                    Some(&data_attrs_for(&parsed.kvs)),
+                    Some(&extra_attrs),
                 ));
                 output.push_str("\n\n");
                 output.push_str(&body_processed);

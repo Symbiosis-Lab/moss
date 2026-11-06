@@ -121,7 +121,7 @@
         "crates/moss-build/src/vault/import/scrape/run.rs::scrape_to_folder": 350,
         "crates/moss-core/src/ast/hooks.rs::render_shortcode": 350,
         "crates/moss-core/src/ast/parser.rs::parse_block_with_tag": 300,
-        "crates/moss-core/src/ast/render.rs::render_block": 400,
+        "crates/moss-core/src/ast/render.rs::render_block": 450,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs::dispatch_embed_form": 250,
         "packages/moss-api/src/testing/mock-tauri.ts::setupMockTauri": 450,
         "packages/moss-ui/src/ui/shared/ui/ctx-menu.ts::openCtxMenu": 400,

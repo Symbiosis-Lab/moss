@@ -755,6 +755,7 @@ mod tests {
     fn detects_a_callout_anywhere_it_can_appear() {
         let callout = || Block::Callout {
             unknown_kind: None,
+            group: None,
             kind: super::super::node::CalloutKind::Note,
             fold: None,
             title: None,
@@ -852,6 +853,7 @@ mod tests {
     fn visits_urls_inside_callout() {
         let mut doc = Document::from_blocks(vec![Block::Callout {
             unknown_kind: None,
+            group: None,
             kind: super::super::node::CalloutKind::Note,
             fold: None,
             title: None,
@@ -1051,6 +1053,7 @@ mod tests {
             },
             Block::Callout {
                 unknown_kind: None,
+                group: None,
                 kind: CalloutKind::Note,
                 fold: None,
                 title: None,

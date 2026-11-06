@@ -332,6 +332,7 @@ impl Restore<'_> {
             // author's bytes go back.
             Block::Callout {
                 unknown_kind: _,
+                group: _,
                 title,
                 children,
                 kind: _,

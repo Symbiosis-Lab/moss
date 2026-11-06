@@ -133,6 +133,7 @@ const GATE_PORT_KEYS = [
   'header-none',
   'header-none:band',
   'header-scroll',
+  'folded-callouts',
   'contents-lens',
   'contents-lens:fallback',
   'content-grid:default',

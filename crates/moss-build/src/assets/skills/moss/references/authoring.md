@@ -375,7 +375,9 @@ A folder's home page can declare `cascade:` to push values to every page beneath
 Shortcodes are fenced blocks (`:::hero`, `:::grid`, …); callouts use
 `> [!note]`; a minus after the type (`> [!note]- Title`) makes a folded callout that starts closed and a plus (`> [!note]+ Title`) one that starts open, each a native `<details>` with the title as its `<summary>`, so write that rather than raw `<details>`. The type must be one moss knows (`moss describe --json | jq -r '.components[] | select(.class=="callout") | .data_attrs[].values[]'` lists them, and the entry's description names the aliases); any other name, such as `[!bio]`, renders as a note and `moss build` warns with the page and the name, which fails `--strict`. The set is version-specific, so read it rather than assuming:
 
+A folded callout opens and closes with a short motion: the answer's height eases over `--moss-callout-fold-duration` (0.4s) along `--moss-callout-fold-ease` (an expo ease-out). It needs a browser with animated `<details>` content and is off for a reader who asks for reduced motion; elsewhere the answer simply appears, so there is nothing to write.
 
+To make folded callouts open one at a time, as a list of questions usually should, put them in a fenced div with the bare word `accordion`: `::: {accordion}`, the callouts, then `:::`. Every folded callout directly inside the fence gets the same generated `name`, which is the native `<details name>`, so opening one closes the others without script. A callout outside the fence, or inside a different fence, is not part of the group, and a page may hold any number of groups. The fence carries `class="moss-accordion"`; a class written beside the word (`::: {accordion .faq}`) is kept.
 
 ```
 moss describe --json | jq -r '.components[] | select(.authorable) | .class'

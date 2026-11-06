@@ -192,6 +192,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "The header's height in px, written by the site runtime on a site with `[site].header_scroll` set; the root's `scroll-padding-top` is this plus a small gap, so a heading reached by a link is not left under the sticky header. Not a theme hook.",
     },
     CustomProp {
+        name: "--moss-callout-fold-duration",
+        owner: "details.callout",
+        default: "0.4s",
+        description: "How long a folded callout's answer takes to open or close. Browsers without animated `<details>` content, and readers who ask for reduced motion, get no motion at all.",
+    },
+    CustomProp {
+        name: "--moss-callout-fold-ease",
+        owner: "details.callout",
+        default: "cubic-bezier(0.19, 1, 0.22, 1)",
+        description: "The easing of that motion, any CSS timing function: an expo ease-out by default.",
+    },
+    CustomProp {
         name: "--moss-nav-island-display",
         owner: "moss-nav-island",
         default: "block",

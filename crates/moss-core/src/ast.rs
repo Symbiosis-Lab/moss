@@ -30,6 +30,7 @@
 //!   `Url::Resolved`; emitting `Url::Unresolved` is a bug.
 //! - moss-core stays pure Rust: zero I/O, zero async.
 
+mod accordion;
 pub mod attrs;
 pub mod cells;
 pub mod dispatch_wikilink_embeds;

@@ -241,6 +241,7 @@ use super::super::node::{CalloutKind, Fold};
 fn renders_basic_callout_with_title() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Note,
         fold: None,
         title: Some("Heads up".into()),
@@ -265,6 +266,7 @@ fn renders_basic_callout_with_title() {
 fn renders_callout_falls_back_to_default_title() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Warning,
         fold: None,
         title: None,
@@ -280,6 +282,7 @@ fn renders_callout_falls_back_to_default_title() {
 fn folded_callout_renders_closed_details_with_summary_title() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Tip,
         fold: Some(Fold::Closed),
         title: Some("More".into()),
@@ -304,6 +307,7 @@ fn folded_callout_renders_closed_details_with_summary_title() {
 fn unfolded_plus_callout_renders_open_details() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Tip,
         fold: Some(Fold::Open),
         title: None,
@@ -325,6 +329,7 @@ fn callout_alias_renders_canonical_data_type_slug() {
     // appears in HTML.
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Abstract,
         fold: None,
         title: Some("TL;DR".into()),
@@ -344,6 +349,7 @@ fn callout_title_is_html_escaped() {
     // attribute values, and title sits between `<div>` tags as text.
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Warning,
         fold: None,
         title: Some(r#"Use <script> & "quotes""#.into()),
