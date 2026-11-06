@@ -178,6 +178,19 @@ describe('hydrateSubscribeForm', () => {
     expect(checkEmail.hidden).toBe(true);
   });
 
+  test('a 2xx that does not say the address is subscribed is an error', async () => {
+    for (const body of ['{}', 'not json', JSON.stringify({ subscribed: true }), JSON.stringify({ confirmationSent: true })]) {
+      const form = mount('en');
+      hydrateSubscribeForm(form);
+      form.querySelector('input')!.value = 'odd@example.com';
+      fetchSpy.mockResolvedValue(new Response(body, { status: 200 }));
+      form.requestSubmit();
+      await vi.waitFor(() => expect(form.dataset.state, body).toBe('error'));
+      expect(form.querySelector<HTMLElement>('[data-copy="error"]')!.hidden, body).toBe(false);
+      form.remove();
+    }
+  });
+
   test('error path: state = error, error copy visible', async () => {
     const form = mount('en');
     hydrateSubscribeForm(form);
@@ -293,7 +306,7 @@ describe('hydrateSubscribeForm', () => {
     const form = mount('en');
     hydrateSubscribeForm(form);
     const input = form.querySelector<HTMLInputElement>('input')!;
-    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
+    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
 
     input.value = 'first@example.com';
     form.requestSubmit();
@@ -328,7 +341,7 @@ describe('hydrateSubscribeForm', () => {
     // jsdom has no layout engine (offsetWidth is 0). Stub it to simulate the
     // real-browser path where lockSlotWidth() captures a natural width.
     Object.defineProperty(btn, 'offsetWidth', { configurable: true, value: 96 });
-    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
+    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ subscribed: true, confirmationSent: true }), { status: 200 }));
 
     input.value = 'first@example.com';
     form.requestSubmit();

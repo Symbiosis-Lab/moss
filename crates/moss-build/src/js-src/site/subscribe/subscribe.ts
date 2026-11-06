@@ -113,7 +113,10 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
         }
         [res, data] = await post();
       }
-      if (!res.ok) {
+      // A 2xx that does not say the address is subscribed (an empty or
+      // unreadable body, a proxy's page) is not a subscription.
+      const subscribed = data.subscribed === true && (data.confirmationSent === true || data.alreadySubscribed === true);
+      if (!res.ok || !subscribed) {
         showStatus(form, 'error', copy);
         setState(form, 'error', btn);
         return;

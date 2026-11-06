@@ -8,6 +8,7 @@
 // created. In Chromium and WebKit, with reduced motion, plus one pass with
 // motion on, where the spinner must actually turn.
 //   node scripts/check-landing-subscription.mjs [url-or-build-dir] [--shots <dir>]
+import { execFileSync } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
@@ -22,6 +23,8 @@ const ENDPOINT = 'https://api.mosspub.com/api/sites/landing/subscribe';
 const CAPTCHA = 'https://api.mosspub.com/captcha/';
 const EMAIL = 'verification@example.invalid';
 const fail = (message) => { throw new Error(message); };
+// The landing as it was before its form became moss's (the last commit with closing.js's own submit).
+const OLD_HTML = execFileSync('git', ['show', '3211bf2c8:site/index.html'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
 
 // The messages come from moss's own copy table; read it rather than restate it.
 const copySource = await readFile(new URL('../crates/moss-build/src/js-src/site/subscribe/i18n.ts', import.meta.url), 'utf8');
@@ -34,10 +37,14 @@ const COPY = Object.fromEntries(['en', 'zh-hans', 'zh-hant'].map((lang) => {
 /** One page with the network mocked; `next` sets how the next subscribe request is answered. */
 async function openForm(browser, locale, { reducedMotion = 'reduce', width = 1280, colorScheme = 'dark' } = {}) {
   const page = await browser.newPage({ reducedMotion, colorScheme, viewport: { width, height: width < 600 ? 844 : 900 } });
-  const mock = { calls: [], checks: [], answer: { status: 200, body: { subscribed: true, confirmationSent: true } }, challenge: false, verdict: 'passed', held: null, holdCaptcha: false };
+  const mock = { calls: [], checks: [], tracked: [], answer: { status: 200, body: { subscribed: true, confirmationSent: true } }, challenge: false, verdict: 'passed', held: null, holdCaptcha: false };
   await page.route('https://api.mosspub.com/**', async (route) => {
     const url = new URL(route.request().url());
-    if (/\/beacon$/.test(url.pathname)) return route.fulfill({ status: 204 });
+    if (/\/beacon$/.test(url.pathname)) {
+      const event = JSON.parse(route.request().postData() || '{}').event;
+      if (event) mock.tracked.push(event);
+      return route.fulfill({ status: 204 });
+    }
     if (url.pathname === '/captcha/') {
       mock.checks.push(url.search);
       const report = `<script>parent.postMessage({moss_captcha:"${mock.holdCaptcha ? 'interactive' : mock.verdict}"},"*")</script>`;
@@ -118,7 +125,7 @@ async function shot(page, name) {
 /** After a success, back to idle the way a reader does it: tap the circle. */
 async function reset(page) {
   if (await page.evaluate(() => document.querySelector('#beta-form').dataset.state) === 'success') {
-    await page.locator('#beta-form .moss-btn').click({ force: true });
+    await page.locator('#beta-form .moss-btn').click();
     await waitState(page, 'idle');
   }
 }
@@ -127,6 +134,19 @@ try {
   for (const engine of [chromium, webkit]) {
     const browser = await engine.launch();
     try {
+      // A page cached from before the sign-up became moss's form, run against
+      // today's scripts: its form must stay hidden, never a form that posts the
+      // address in a URL.
+      {
+        const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+        await page.route('https://api.mosspub.com/**', (route) => route.fulfill({ status: 204 }));
+        await page.route(new URL('/', baseURL).href, (route) => route.fulfill({ contentType: 'text/html; charset=utf-8', body: OLD_HTML }));
+        await page.goto(new URL('/', baseURL).href);
+        const old = await page.evaluate(() => getComputedStyle(document.querySelector('#beta-form')).visibility);
+        if (old !== 'hidden') fail(`${engine.name()}: a cached old page shows a form nothing submits (visibility ${old})`);
+        console.log(engine.name(), 'cached old page: form stays hidden: PASS');
+        await page.close();
+      }
       for (const locale of ['', 'zh-hans/', 'zh-hant/']) {
         const { page, mock } = await openForm(browser, locale);
         const idle = await look(page);
@@ -160,11 +180,15 @@ try {
         if (success.status !== 1 || !success.statusInRow) fail(`The success message is not in the button's row: ${JSON.stringify(success)}`);
         says(success, 'check-email');
         if (success.slotWidth !== loading.slotWidth) fail('The button slot moved on success');
-        // tapping the circle returns to idle with an empty field (the circle keeps
-        // moss's aria-disabled from the send, so the tap is forced)
-        await page.locator('#beta-form .moss-btn').click({ force: true });
+        // tapping the circle returns to idle with an empty field, and is not counted as a sign-up
+        await page.waitForTimeout(300); // the send's own beacon settles first
+        const tracked = mock.tracked.length;
+        await page.locator('#beta-form .moss-btn').click();
         await waitState(page, 'idle');
         if ((await look(page)).email !== '') fail('Tapping the circle kept the address');
+        await page.waitForTimeout(300);
+        if (mock.tracked.length !== tracked) fail(`Tapping the circle was counted as a sign-up: ${JSON.stringify(mock.tracked.slice(tracked))}`);
+        if (!mock.tracked.includes('subscribe-submit')) fail('A sign-up was not counted');
 
         await submit(page, mock, { status: 200, body: { subscribed: true, alreadySubscribed: true } });
         await waitState(page, 'success');
@@ -172,7 +196,8 @@ try {
         await reset(page);
 
         // errors: a refusal, and a request that never answers in a way the page can read
-        for (const answer of [{ status: 503, body: {} }, 'offline']) {
+        // a 2xx that does not say the address is subscribed is an error too
+        for (const answer of [{ status: 503, body: {} }, 'offline', { status: 200, body: {} }]) {
           await submit(page, mock, answer);
           await waitState(page, 'error');
           const error = await look(page);

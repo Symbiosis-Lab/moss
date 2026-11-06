@@ -11,8 +11,9 @@
     : fn();
 
   ready(() => {
-    if (document.documentElement.dataset.closingWired === 'true') return;
-    document.documentElement.dataset.closingWired = 'true';
+    // Not `closingWired`: older cached pages show their form on that flag, and nothing here would submit it.
+    if (document.documentElement.dataset.landingWired === 'true') return;
+    document.documentElement.dataset.landingWired = 'true';
     const downloads = document.querySelector('#downloads');
     const release = {
       macos: 'https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg',
@@ -104,6 +105,18 @@
     const scope = document.querySelector('#beta-form input[name="scope"]');
     if (scope) scope.value = subscriptionScope();
     if (window.mossSubscribe) document.documentElement.dataset.signupWired = 'true';
+    // The visit counter counts a click on [data-track]; on success the button
+    // only resets the form, so that click is not a sign-up.
+    const form = document.querySelector('#beta-form');
+    const button = form?.querySelector('button[type="submit"]');
+    if (form && button) {
+      const track = button.dataset.track;
+      form.addEventListener('click', () => {
+        if (form.dataset.state !== 'success') return;
+        delete button.dataset.track;
+        setTimeout(() => { button.dataset.track = track; });
+      }, true);
+    }
 
     document.querySelectorAll('a[href="#downloads"]').forEach((link) => {
       link.addEventListener('click', (event) => {
