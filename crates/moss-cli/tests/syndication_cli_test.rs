@@ -302,6 +302,25 @@ fn a_dry_run_shows_each_copy_shaped_and_sends_nothing() {
     assert!(!s.root.join(".moss/deploy/copies").exists(), "and records nothing");
 }
 
+/// A note named only by its date has no title, so its copy is its own text:
+/// one paragraph a short post, parts a thread. The build gives it a label from
+/// its opening words, which must not make it a titled article sent as a teaser.
+#[test]
+fn a_note_named_by_its_date_goes_out_as_its_own_text() {
+    let net = Arc::new(Mutex::new(Network::default()));
+    let s = site(serve(net.clone()), true, true);
+    std::fs::write(s.root.join("notes/202611061432.md"), "Hello from the river.\n").unwrap();
+    std::fs::write(s.root.join("notes/2026-11-06 1500.md"), "A thread, in three parts.\n\n---\n\nThe second part.\n\n---\n\nAnd the third.\n").unwrap();
+    let o = deploy(&s, &["--dry-run", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&o.stdout).expect("the dry run prints JSON");
+    let form = |name: &str| {
+        let copy = report["copies"].as_array().unwrap().iter().find(|c| c["source_path"].as_str().is_some_and(|p| p.ends_with(name)));
+        copy.unwrap_or_else(|| panic!("no copy of {name}: {report}"))["form"].clone()
+    };
+    assert_eq!(form("202611061432.md"), "short", "{report}");
+    assert_eq!(form("2026-11-06 1500.md"), "thread", "{report}");
+}
+
 #[test]
 fn a_copy_waits_until_its_page_answers() {
     let net = Arc::new(Mutex::new(Network { pages_down: true, ..Default::default() }));

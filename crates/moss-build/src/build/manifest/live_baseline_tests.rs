@@ -71,6 +71,7 @@ fn legacy_bytes(pages: &[(&str, &str, &str)]) -> String {
                 tags: vec![],
                 uid: Some((*uid).to_string()),
                 syndicate: None,
+                untitled: false,
             },
         );
     }
@@ -527,6 +528,7 @@ fn from_article_map_carries_the_title_through() {
             tags: vec![],
             uid: Some("aaaa1111".into()),
             syndicate: None,
+            untitled: false,
         },
     );
 

@@ -500,6 +500,7 @@ mod tests {
             tags: vec![],
             uid: uid.map(|s| s.to_string()),
             syndicate: None,
+            untitled: false,
         }
     }
 

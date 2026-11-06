@@ -257,6 +257,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub syndicate: Option<Vec<String>>,
+    /// A post with no title of its own: its `title` and `label` are its
+    /// opening words. See `moss_core::heading::is_untitled_stamp`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub untitled: bool,
     /// Editor names from frontmatter `editor:` — field-agnostic sibling of
     /// `author`, feeding whichever term kind's `fields` names "editor".
     /// Unread until `build::terms::derive_terms` is rewritten over kinds.

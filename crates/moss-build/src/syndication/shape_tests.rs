@@ -17,6 +17,7 @@ fn post(title: &str, content: &str) -> ArticleInfo {
         tags: vec![],
         uid: Some("ab12cd34".into()),
         syndicate: None,
+        untitled: false,
     }
 }
 

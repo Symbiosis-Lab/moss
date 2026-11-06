@@ -75,7 +75,7 @@ pub fn page_url(site_url: &str, url_path: &str) -> String {
 /// Shape `post` for a channel, linking to it on the site at `site_url`.
 pub fn shape(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str) -> Result<Shaped, String> {
     let page_url = &page_url(site_url, &post.url_path);
-    let untitled = post.title.trim().is_empty();
+    let untitled = post.untitled || post.title.trim().is_empty();
     let handoff = spec.takes(Form::Handoff);
 
     if untitled {

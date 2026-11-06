@@ -14,6 +14,7 @@ fn make_article(source_path: &str, url_path: &str) -> ArticleInfo {
         tags: vec![],
         uid: None,
         syndicate: None,
+        untitled: false,
     }
 }
 

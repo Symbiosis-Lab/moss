@@ -13,6 +13,7 @@ fn post(source: &str, url: &str, uid: &str, syndicate: &[&str], fm: serde_json::
         tags: vec![],
         uid: Some(uid.into()),
         syndicate: Some(syndicate.iter().map(|s| s.to_string()).collect()),
+        untitled: false,
     }
 }
 

@@ -455,6 +455,7 @@ mod tests {
             tags: vec![],
             uid: None,
             syndicate: None,
+            untitled: false,
         }
     }
 

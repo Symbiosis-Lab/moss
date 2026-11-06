@@ -98,6 +98,7 @@ fn folder_listing_carries_folder_detail() {
             tags: vec![],
             uid: None,
             syndicate: None,
+            untitled: false,
         },
     );
     let moss_dir = root.join(".moss");
@@ -198,6 +199,7 @@ fn folder_embed_whose_index_source_is_gone_has_nothing_to_follow() {
             tags: vec![],
             uid: None,
             syndicate: None,
+            untitled: false,
         },
     );
     let moss_dir = root.join(".moss");
@@ -396,6 +398,7 @@ fn folder_embed_with_a_synthesized_index_has_nothing_to_follow() {
             tags: vec![],
             uid: None,
             syndicate: None,
+            untitled: false,
         },
     );
     let moss_dir = root.join(".moss");

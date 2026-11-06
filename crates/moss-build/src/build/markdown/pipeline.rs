@@ -1333,14 +1333,11 @@ pub fn process_markdown_file(
     // The chrome label: an untitled post's opening words, else `state.text`
     // (`title:`, else the file or folder name), else the filename, so
     // `title: ""` never gives an empty <title>.
-    let label = if moss_core::heading::is_untitled_stamp(file_path, frontmatter.title.as_deref(), dated) {
+    let untitled = moss_core::heading::is_untitled_stamp(file_path, frontmatter.title.as_deref(), dated);
+    let label = if untitled {
         let excerpt = crate::build::page::meta::extract_description(&markdown_content_raw, site.math);
         moss_core::heading::opening_words(&excerpt).unwrap_or_else(|| filename_title.clone())
-    } else if heading.text.is_empty() {
-        filename_title.clone()
-    } else {
-        heading.text.clone()
-    };
+    } else if heading.text.is_empty() { filename_title.clone() } else { heading.text.clone() };
 
     // Title source: NEVER the document body. For index/folder pages,
     // `title:` if set, else the filename/folder name (`filename_title`,
@@ -1746,6 +1743,7 @@ pub fn process_markdown_file(
         source_path: Some(file_path.to_string()),
         url_override: frontmatter.url,
         syndicate,
+        untitled,
         raw_frontmatter,
         sort: frontmatter.sort.clone(),
         direct_children_sort: None,
