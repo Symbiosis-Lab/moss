@@ -2930,6 +2930,7 @@ dependencies = [
  "regex",
  "reqwest",
  "resvg",
+ "ring",
  "roxmltree",
  "rquickjs",
  "same-file",

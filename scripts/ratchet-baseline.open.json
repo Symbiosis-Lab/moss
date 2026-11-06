@@ -135,7 +135,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/Cargo.toml": 84,
+        "crates/moss-build/Cargo.toml": 85,
         "crates/moss-cli/Cargo.toml": 5,
         "crates/moss-core/Cargo.toml": 6
       }
