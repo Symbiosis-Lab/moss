@@ -40,6 +40,7 @@
  */
 
 import { isVertical } from "../writing-mode";
+import { teardownStack } from "./teardown";
 
 /** Widths (px) of everything a one-row masthead has to seat. */
 export interface RowWidths {
@@ -68,17 +69,8 @@ export function oneRowFits(w: RowWidths): boolean {
 const PHONE_QUERY = "(max-width: 48rem)";
 
 /** Everything the previous `initNavSplit()` bound, undone on the next call. */
-let teardown: Array<() => void> = [];
-
-function on(
-  target: Window | Document | Element,
-  type: string,
-  handler: (event: Event) => void,
-  options?: AddEventListenerOptions,
-): void {
-  target.addEventListener(type, handler, options);
-  teardown.push(() => target.removeEventListener(type, handler, options));
-}
+const stack = teardownStack();
+const { on } = stack;
 
 function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | null): void {
   el.removeAttribute("data-nav-split");
@@ -154,8 +146,7 @@ function columnGap(el: Element, fallback: number): number {
 }
 
 export function initNavSplit(): void {
-  teardown.forEach((undo) => undo());
-  teardown = [];
+  stack.release();
 
   const navContent = document.querySelector<HTMLElement>(".nav-content");
   if (!navContent) return;
@@ -233,7 +224,7 @@ export function initNavSplit(): void {
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => layout());
     ro.observe(navContent);
-    teardown.push(() => ro.disconnect());
+    stack.add(() => ro.disconnect());
   }
   on(window, "resize", () => layout(), { passive: true });
   document.fonts?.ready.then(() => layout()).catch(() => {});

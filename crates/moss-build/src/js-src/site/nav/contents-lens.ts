@@ -23,6 +23,8 @@
  * `layoutRows`) is unit-tested; the mount below only wires events to it.
  */
 
+import { teardownStack } from "./teardown";
+
 /** A dash's row, at rest. */
 export const REST_ROW = 20;
 /** An open row far from the focus: its name on one line. */
@@ -259,15 +261,8 @@ export function mountContentsLens({ nav, links }: LensOptions): () => void {
     links[i].parentElement!.getBoundingClientRect().top + REST_ROW / 2;
   const restTop = (): number => links[0].parentElement!.getBoundingClientRect().top;
 
-  const undo: Array<() => void> = [];
-  const on = <K extends keyof HTMLElementEventMap>(
-    target: HTMLElement | Window,
-    type: K,
-    fn: (e: HTMLElementEventMap[K]) => void,
-  ): void => {
-    target.addEventListener(type, fn as EventListener);
-    undo.push(() => target.removeEventListener(type, fn as EventListener));
-  };
+  const stack = teardownStack();
+  const { on } = stack;
 
   const mouse = (e: PointerEvent): boolean => e.pointerType !== "touch";
   on(nav, "pointerenter", (e) => {
@@ -314,7 +309,7 @@ export function mountContentsLens({ nav, links }: LensOptions): () => void {
 
   return () => {
     close();
-    undo.forEach((off) => off());
+    stack.release();
     veil.remove();
   };
 }

@@ -220,13 +220,7 @@ export function unmountTaskToastSubscriber(): void {
 
 // ── Test hooks ────────────────────────────────────────────────────────────
 
-export function __resetForTests(): void {
-  if (unlistenFn) {
-    unlistenFn();
-    unlistenFn = null;
-  }
-  seen.clear();
-}
+export const __resetForTests = unmountTaskToastSubscriber;
 
 export function __seenCountForTests(): number {
   return seen.size;

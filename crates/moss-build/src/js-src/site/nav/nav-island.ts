@@ -32,6 +32,7 @@ import { mountContentsRuler } from "./contents-ruler";
 import { contentsPictures, pictureImg, sectionPictures } from "./section-pictures";
 import { markRows, SECTION_SYNC_EVENT } from "./section-event";
 import { mountSectionName } from "./section-name";
+import { teardownStack } from "./teardown";
 
 /**
  * Fallback clearance below the island's own bottom edge before a heading
@@ -79,17 +80,8 @@ const MIN_SECTIONS = 2;
 // ---------------------------------------------------------------------------
 
 /** Everything the previous `initNavIsland()` bound, undone on the next call. */
-let teardown: Array<() => void> = [];
-
-function on(
-  target: Window | Document | Element,
-  type: string,
-  handler: (event: Event) => void,
-  options?: AddEventListenerOptions,
-): void {
-  target.addEventListener(type, handler, options);
-  teardown.push(() => target.removeEventListener(type, handler, options));
-}
+const stack = teardownStack();
+const { on } = stack;
 
 /**
  * This page's sections: every heading at the shallowest level the body uses.
@@ -143,8 +135,7 @@ export function initNavIsland(): void {
   // no island leaves the old nodes detached, and listeners still holding them
   // keep that dead subtree alive for as long as the tab does. Doing this after
   // the early return below would skip exactly the case that needs it.
-  teardown.forEach((undo) => undo());
-  teardown = [];
+  stack.release();
 
   const mounted = document.querySelector<HTMLElement>(".moss-nav-island");
   if (!mounted) return;
@@ -245,7 +236,7 @@ export function initNavIsland(): void {
     document.body.style.setProperty("--moss-nav-title-line", `${centre - top}px`);
   }
 
-  teardown.push(() => {
+  stack.add(() => {
     for (const name of ["--moss-nav-island-controls", "--moss-nav-title-line"]) document.body.style.removeProperty(name);
   });
 
@@ -330,7 +321,7 @@ export function initNavIsland(): void {
     const main = mainSectionCount(headings, end);
     const label = sectionsBtn.getAttribute("aria-label") ?? "";
     if (main >= MIN_SECTIONS) {
-      teardown.push(
+      stack.add(
         mountContentsRuler({
           headings: headings.slice(0, main),
           titles: titles.slice(0, main),
@@ -343,7 +334,7 @@ export function initNavIsland(): void {
         }),
       );
     }
-    teardown.push(mountSectionName({ button: sectionsBtn, island, titles }));
+    stack.add(mountSectionName({ button: sectionsBtn, island, titles }));
   }
 
   // -------------------------------------------------------------------------
@@ -445,7 +436,7 @@ export function initNavIsland(): void {
   if (typeof MutationObserver !== "undefined") {
     const mo = new MutationObserver(yieldToRuler);
     mo.observe(island, { attributes: true, attributeFilter: ["data-ruler"] });
-    teardown.push(() => mo.disconnect());
+    stack.add(() => mo.disconnect());
   }
 
   let frame = 0;
@@ -453,7 +444,7 @@ export function initNavIsland(): void {
   const schedule = (): void => {
     if (!frame) frame = requestAnimationFrame(pass);
   };
-  teardown.push(() => cancelAnimationFrame(frame));
+  stack.add(() => cancelAnimationFrame(frame));
 
   on(window, "scroll", schedule, { passive: true });
 
@@ -527,9 +518,9 @@ export function initNavIsland(): void {
         schedule();
       });
       ro2.observe(title);
-      teardown.push(() => ro2.disconnect());
+      stack.add(() => ro2.disconnect());
     }
-    teardown.push(() => ro.disconnect());
+    stack.add(() => ro.disconnect());
   }
   on(window, "resize", () => {
     relayout = true;

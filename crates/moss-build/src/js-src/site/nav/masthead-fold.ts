@@ -22,26 +22,17 @@
  */
 
 import { applyFold, inlineAvailableExtent, placePanel } from "./breadcrumb-fold";
+import { teardownStack } from "./teardown";
 
 /** Everything the previous `initMastheadFold()` bound, undone on the next call. */
-let teardown: Array<() => void> = [];
-
-function on(
-  target: Window | Document | Element,
-  type: string,
-  handler: (event: Event) => void,
-  options?: AddEventListenerOptions,
-): void {
-  target.addEventListener(type, handler, options);
-  teardown.push(() => target.removeEventListener(type, handler, options));
-}
+const stack = teardownStack();
+const { on } = stack;
 
 export function initMastheadFold(): void {
   // Undo the previous wiring FIRST and unconditionally — a morph can replace
   // the nav with markup that has no fold controls, and listeners still
   // holding the old nodes would keep that dead subtree alive.
-  teardown.forEach((undo) => undo());
-  teardown = [];
+  stack.release();
 
   const navLeft = document.querySelector<HTMLElement>(".nav-left");
   if (!navLeft) return;
@@ -142,7 +133,7 @@ export function initMastheadFold(): void {
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => layout());
     ro.observe(navLeft);
-    teardown.push(() => ro.disconnect());
+    stack.add(() => ro.disconnect());
   }
   on(window, "resize", () => layout(), { passive: true });
 
