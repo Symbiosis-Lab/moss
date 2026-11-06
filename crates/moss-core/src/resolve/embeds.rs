@@ -45,8 +45,6 @@ pub struct EmbedResult {
 /// Resolve embed placeholders by inlining target file content.
 ///
 /// Convenience wrapper that creates the visited set internally.
-/// Use [`resolve_embeds_with_visited`] if you need to supply your own set
-/// (e.g. to pre-seed cycle detection from an outer context).
 pub fn resolve_embeds(
     content: &str,
     from_path: &str,
@@ -54,21 +52,6 @@ pub fn resolve_embeds(
 ) -> EmbedResult {
     let mut visited = HashSet::new();
     resolve_embeds_inner(content, from_path, file_reader, &mut visited, 0)
-}
-
-/// Resolve embed placeholders with an externally-managed visited set.
-///
-/// `file_reader` is a closure that reads a file by its relative path.
-/// This keeps moss-core I/O-free — the caller provides the reader.
-///
-/// `visited` tracks paths in the current embed chain for cycle detection.
-pub fn resolve_embeds_with_visited(
-    content: &str,
-    from_path: &str,
-    file_reader: &dyn Fn(&str) -> Option<String>,
-    visited: &mut HashSet<String>,
-) -> EmbedResult {
-    resolve_embeds_inner(content, from_path, file_reader, visited, 0)
 }
 
 /// Inner recursive implementation with depth tracking.
