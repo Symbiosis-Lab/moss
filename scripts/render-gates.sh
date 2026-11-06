@@ -68,6 +68,7 @@ GATES_BUILD=(
   lead-listing
   listing-picture-strip
   marquee
+  field-place-end
   grid-card-image-inline-size
   hero-caption
   hero-links

@@ -4531,6 +4531,56 @@ children: false
   },
 };
 
+// A case study that ends on a hand-picked next project: `place = "end"` on a page field.
+// Served by playwright/field-place-end.config.ts.
+export const FIELD_PLACE_END_GATE: ScratchSiteSpec = {
+  name: "field-place-end-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    ".moss/config.toml": `[fields.next]
+type = "page"
+place = "end"
+label = "next project"
+pictures = 2
+`,
+    "index.md": `---
+title: Studio
+uid: "end00001"
+children: false
+---
+
+Two case studies.
+`,
+    "work/mill-house.md": `---
+title: Mill House
+uid: "end00010"
+next: "[[harbour-pavilion]]"
+---
+
+The mill opens onto the weir.
+
+## Method
+
+${Array.from({ length: 12 }, (_, i) => `Paragraph ${i + 1} of the long body, so the end of the page is well below the fold.`).join("\n\n")}
+`,
+    "work/harbour-pavilion.md": `---
+title: Harbour Pavilion
+uid: "end00020"
+---
+
+# Can a pier be a room?
+
+![Quay, one](../pics/1.png)
+
+![Quay, two](../pics/2.png)
+
+![Quay, three](../pics/3.png)
+`,
+  },
+};
+
 // A request form with one of each kind of field, for tests/render-gates/site/request-form.spec.ts
 // and playwright/request-form.config.ts.
 export const REQUEST_FORM: ScratchSiteSpec = {

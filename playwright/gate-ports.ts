@@ -71,6 +71,7 @@ const GATE_PORT_KEYS = [
   'lead-listing',
   'listing-picture-strip',
   'marquee',
+  'field-place-end',
   'grid-card-image-inline-size',
   'hero-caption',
   'content-width-escape',
