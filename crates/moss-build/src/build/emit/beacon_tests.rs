@@ -38,7 +38,7 @@ fn site_without_a_site_id_emits_no_beacon_file() {
 }
 
 #[test]
-fn script_sends_raw_address_referrer_and_width_and_no_derived_fields() {
+fn script_sends_address_without_fragment_referrer_and_width_and_no_derived_fields() {
     let vault = vault_with_state("[deployment]\nsite_id = \"blog\"\ndeploy_method = \"moss\"\n");
     let out = tempdir().unwrap();
     let mut pending = PendingManifest::new(SiteHashes::default());
@@ -48,9 +48,10 @@ fn script_sends_raw_address_referrer_and_width_and_no_derived_fields() {
     emit(&deploy, p, out.path(), &mut pending).unwrap();
 
     let js = std::fs::read_to_string(out.path().join("_moss/js/beacon.js")).unwrap();
-    assert!(js.contains("{url:location.href,referrer:document.referrer||null,screen_width:innerWidth}"), "pageview body:\n{js}");
-    assert!(js.contains("{url:location.href,event:t.getAttribute('data-track')}"), "click body:\n{js}");
-    for derived in ["URLSearchParams", "screen_bucket", "utm_source", "utm_medium", "path:"] {
+    assert!(js.contains("{url:u(),referrer:document.referrer||null,screen_width:innerWidth}"), "pageview body:\n{js}");
+    assert!(js.contains("{url:u(),event:t.getAttribute('data-track')}"), "click body:\n{js}");
+    assert!(js.contains("u=function(){return location.origin+location.pathname+location.search}"), "address without its fragment:\n{js}");
+    for derived in ["location.href", "URLSearchParams", "screen_bucket", "utm_source", "utm_medium", "path:"] {
         assert!(!js.contains(derived), "script still derives or sends {derived}:\n{js}");
     }
 }

@@ -35,7 +35,8 @@ async function open(browser) {
     return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*' } });
   });
   const page = await context.newPage();
-  await page.goto(`${ORIGIN}/`);
+  // The fragment stands in for a sign-in token; the query must still arrive.
+  await page.goto(`${ORIGIN}/?utm_source=check#token=secret`);
   await page.waitForFunction(() => document.querySelector('#downloads a[data-platform="macos"]'));
   await page.waitForTimeout(1500);
   return { page, posts, context };
@@ -49,7 +50,7 @@ for (const engineName of engines) {
     const { page, posts, context } = await open(browser);
     const views = () => posts.filter(p => !p.event);
     assert.equal(views().length, 1, `${engineName}: expected one pageview, got ${JSON.stringify(posts)}`);
-    assert.equal(new URL(views()[0].url).pathname, '/', `${engineName}: pageview url`);
+    assert.equal(views()[0].url, `${ORIGIN}/?utm_source=check`, `${engineName}: pageview url keeps the query, drops the fragment`);
     assert.equal(views()[0].screen_width, 1440, `${engineName}: screen width`);
 
     // A page restored from the back-forward cache is counted again.
@@ -60,9 +61,9 @@ for (const engineName of engines) {
     await page.locator('#downloads a[data-platform="macos"]').dispatchEvent('click');
     await page.waitForTimeout(800);
     const clicks = posts.filter(p => p.event);
-    assert.deepEqual(clicks.map(p => [new URL(p.url).pathname, p.event]), [['/', 'download-macos']], `${engineName}: click events ${JSON.stringify(clicks)}`);
+    assert.deepEqual(clicks.map(p => [p.url, p.event]), [[`${ORIGIN}/?utm_source=check`, 'download-macos']], `${engineName}: click events ${JSON.stringify(clicks)}`);
     await context.close();
-    console.log(`ok ${engineName}: one pageview at /, one more on pageshow, download-macos click`);
+    console.log(`ok ${engineName}: one pageview at / without the fragment, one more on pageshow, download-macos click`);
   } catch (error) { console.error(`FAIL ${error.message.split('\n')[0]}`); failed = true; }
   finally { await browser.close(); }
 }
