@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::media::output_emit::summarize_coherence_violations;
 use crate::build::lifecycle::cas_heal::rematerialize;
 use crate::types::assets::{AssetRegistry, AssetState};
 use crate::types::content::{MediaMetadata, SiteHashes};
@@ -4157,7 +4158,7 @@ async fn emit_image_outputs_registers_suppressed_path_that_exists() {
 #[test]
 fn coherence_summary_collapses_many_missing_into_one_line() {
     let missing: Vec<String> = (0..5967).map(|i| format!("img{i}.webp")).collect();
-    let lines = summarize_coherence_violations(&missing, &[]);
+    let lines = summarize_coherence_violations(&IMAGE_OUTPUTS, &missing, &[]);
     assert_eq!(
         lines.len(),
         1,
@@ -4178,12 +4179,13 @@ fn coherence_summary_collapses_many_missing_into_one_line() {
 
 #[test]
 fn coherence_summary_empty_when_no_violations() {
-    assert!(summarize_coherence_violations(&[], &[]).is_empty());
+    assert!(summarize_coherence_violations(&IMAGE_OUTPUTS, &[], &[]).is_empty());
 }
 
 #[test]
 fn coherence_summary_one_line_per_class() {
     let lines = summarize_coherence_violations(
+        &IMAGE_OUTPUTS,
         &["a.webp".to_string()],
         &[("b.webp".to_string(), "permission denied".to_string())],
     );

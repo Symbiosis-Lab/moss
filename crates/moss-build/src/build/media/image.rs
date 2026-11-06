@@ -2383,50 +2383,13 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     false
 }
 
-/// Send produced `.webp` paths to the manifest coordinator via channel.
+/// Send produced `.webp` paths to the manifest coordinator, one
+/// `HashBucket::ImageVariants` message each, called at every exit of
+/// `run_image_conversion`. Runs inside `Spawner::spawn_blocking`.
 ///
-/// Called at every exit point of `run_image_conversion` when a coordinator
-/// channel is available. Uses `blocking_send` since this function runs inside
-/// `Spawner::spawn_blocking` (a sync worker thread, not an async task).
-///
-/// Each path is sent as `HashBucket::ImageVariants`, which inserts into both
-/// `image_outputs` (stale-cleanup preservation) AND `inner.files`
-/// (content-addressed deploy upload). The xxh3_64 hash is computed from the
-/// on-disk bytes at `staging_dir/<path>` — without it the wire manifest would
-/// carry an empty hash and the server-side content-addressed diffing would
-/// not be able to detect changes to the .webp content (the path would only
-/// upload once, then never refresh on re-encode).
-///
-/// **Producer-side coherence invariant:** every path passed in must exist at
-/// `staging_dir/<path>` before this function emits its `EmitMessage`. A
-/// pre-flight existence check enforces it, and now heals first: a path found
-/// `Absent` or `Evicted` whose caller supplied a CAS `oid` is re-linked from
-/// the object store on the spot (`objects.link_to`) before the check runs
-/// again in effect — only a path that is still missing after that attempt,
-/// or that came with no `oid` to heal from, is skipped (logged at error
-/// level) and never reaches the manifest. The heal exists because a cloud
-/// sync provider's exclusion marker on the staging directory can silently
-/// fail to stick — measured absent on a real vault's staging directory
-/// while present on its CAS blob store at the same time — so the provider
-/// can evict a just-staged `.webp` between its own successful `link_to` at
-/// encode time and this batch-wide registration pass reading it back — the
-/// CAS blob keeps its exclusion marker far more reliably, so re-linking from there
-/// recovers the bytes without a full re-encode. Without either the heal or
-/// the check, a silent failure in `convert_single_image`'s staging-link step
-/// would still register the path in `image_outputs` and `inner.files`,
-/// breaking deploy with `"Manifest claims '<path>' exists but it's missing on
-/// disk"`. Together with the fatal staging-link guard in `convert_single_image`,
-/// this closes the register-without-write class of bugs.
-///
-/// No-op when `paths` is empty (no images were produced).
-///
-/// `suppressed` (the ship-time prune's verdict, `suppressed_variants_for`)
-/// excludes paths from the violation report only — an absent suppressed path
-/// is an expected prune, not a bug. Registration is unaffected: it still
-/// depends only on presence (an earlier fix gated the self-heal on this set
-/// but not the report, hence the false violation on every settled vault).
-///
-/// Returns the violation lines logged, for tests (no log-capture harness here).
+/// Probe, heal, settle and hash are the shared `output_emit` pass; `suppressed`
+/// is the ship-time prune's verdict. Returns the violation lines logged, for
+/// tests.
 fn emit_image_outputs_via_channel(
     root: &Path,
     tx: &Option<mpsc::Sender<EmitMessage>>,
@@ -2436,154 +2399,14 @@ fn emit_image_outputs_via_channel(
     suppressed: &std::collections::HashSet<String>,
     registry: Option<&crate::types::assets::AssetRegistry>,
 ) -> Vec<String> {
-    let Some(tx) = tx else { return Vec::new() };
-    if paths.is_empty() {
-        return Vec::new();
-    }
-    // Producer-side coherence: never register a manifest entry for a file that
-    // is not on disk. If a path reaches these branches, an upstream step
-    // (convert_single_image staging-link, ship phase, etc.) reported success
-    // without actually landing the bytes. Skip emit; let the missing variant
-    // resurface in the next build's scan rather than poisoning the deploy
-    // manifest. Violations are COLLECTED and summarized once after the loop —
-    // a single root cause (e.g. iCloud evicting every staged .webp) previously
-    // logged once per file: 5,967 identical lines in one real bundle.
-    let mut missing: Vec<String> = Vec::new();
-    let mut suppressed_absent_count: usize = 0;
-    let mut read_failures: Vec<(String, String)> = Vec::new();
-    // Settling `Failed` — not merely skipping — is what lets `degrade` strip the
-    // `<source>`; a skipped variant left `Pending` ships a live 404 that
-    // `<picture>` cannot fall back from (a rule added 2026-09-09).
-    // Suppressed paths stay excluded: absent by the prune's intent, and failing
-    // each would make `degrade` read every page on every build of a settled vault.
-    let settle_failed = |path: &String, why: Failure| {
-        if let Some(registry) = registry {
-            registry.set_failed(path.clone(), why);
-        }
-    };
-    // An I/O error that is not a positive `NotFound` settles nothing: `Failed`
-    // strips the `<source>` from the page, and an unreadable variant is not a
-    // missing one. The coordinator records it instead, which withholds the
-    // generation rather than shipping a page repaired from a blind read.
-    let unverified = |path: &String, err: &std::io::Error| {
-        let _ = tx.blocking_send(EmitMessage::Unverified { rel_path: path.clone(), detail: err.to_string() });
-    };
-    for (path, oid) in paths {
-        let abs = staging_dir.join(path);
-        match crate::build::io_utils::probe_path(&abs) {
-            crate::build::io_utils::Presence::Present => {}
-            crate::build::io_utils::Presence::Unverified(e) => {
-                unverified(path, &e);
-                continue;
-            }
-            crate::build::io_utils::Presence::Absent | crate::build::io_utils::Presence::Evicted => {
-                // Heal on the spot from the CAS blob when the caller already
-                // knows the oid behind these exact bytes — the just-encoded
-                // main path's own `produced_webp_paths`. `link_to`, not
-                // `ensure_staged`: `ensure_staged` short-circuits on
-                // `out.exists()`, true for a 0-byte evicted stub, so it
-                // would treat the placeholder as already present. On
-                // success, fall through to the present-path handling below
-                // instead of `continue`-ing past it.
-                let healed = oid
-                    .as_deref()
-                    .is_some_and(|oid| objects.link_to(oid, &abs).is_ok());
-                if !healed {
-                    if suppressed.contains(path) {
-                        suppressed_absent_count += 1;
-                    } else {
-                        settle_failed(path, Failure::encode("missing at manifest registration"));
-                        missing.push(abs.display().to_string());
-                    }
-                    continue;
-                }
-            }
-        }
-        let hash = match std::fs::read(&abs) {
-            Ok(bytes) => crate::build::assets::paths::compute_binary_hash(&bytes),
-            Err(e) if !crate::build::icloud::is_definitely_absent(&abs, &e) => {
-                unverified(path, &e);
-                continue;
-            }
-            Err(e) => {
-                // Race: existed at the pre-flight check, gone now. Treat as the
-                // same coherence violation as the missing case and skip —
-                // never register without a hash.
-                let text = e.to_string();
-                if let Some(failure) = Failure::unreadable("unreadable at manifest registration", crate::build::outcome::classify_unreadable(root, &abs, e)) {
-                    settle_failed(path, failure);
-                }
-                read_failures.push((abs.display().to_string(), text));
-                continue;
-            }
-        };
-        let msg = EmitMessage::File {
-            rel_path: path.clone(),
-            hash,
-            bucket: HashBucket::ImageVariants,
-            // `Some` only when the caller already knows the CAS oid backing
-            // these exact bytes (the just-encoded main path's own
-            // `produced_webp_paths`) — the carry-forward skip path below
-            // passes `None` for every entry, since self-heal never surfaces
-            // the oid it relinked from. `ship_phase`'s fingerprint fallback
-            // covers a `None` entry just as it always has.
-            oid: oid.clone(),
-        };
-        // blocking_send: safe because run_image_conversion runs inside spawn_blocking
-        // (dispatched via Spawner::spawn_blocking, not an async spawn).
-        // A send failure means the coordinator was dropped (coordinator task panicked
-        // or the BackgroundHandle was abandoned). Log and continue — the conversion
-        // output is still on disk; the coordinator failure is already propagated
-        // through the BackgroundHandle machinery.
-        if let Err(e) = tx.blocking_send(msg) {
-            log::info!("[image] Failed to register .webp in coordinator: {}", e);
-        }
-    }
-    if suppressed_absent_count > 0 {
-        log::info!(
-            "[image] {} orphan-pruned .webp variant(s) absent from staging as expected; \
-             not registered, not reported as a violation",
-            suppressed_absent_count
-        );
-    }
-    let lines = summarize_coherence_violations(&missing, &read_failures);
-    for line in &lines {
-        log::error!("{}", line);
-    }
-    lines
+    super::output_emit::OutputEmit { kind: &IMAGE_OUTPUTS, root, tx, staging_dir, objects, suppressed, registry }.run(paths)
 }
 
-/// Collapse per-file coherence violations into at most one log line per class
-/// (missing / unreadable), each carrying the suppressed count and a
-/// representative sample — journald "suppressed N" style. Without this, one
-/// root cause (e.g. iCloud evicting every staged `.webp` in a build) logs once
-/// per file: a real "Send logs" bundle had 5,967 identical lines from a single
-/// build.
-fn summarize_coherence_violations(
-    missing: &[String],
-    read_failures: &[(String, String)],
-) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some(first) = missing.first() {
-        lines.push(format!(
-            "[image] coherence violation: staged .webp missing ({}× this build); \
-             skipping manifest registration. First: {}. Upstream staging-link \
-             reported success but the bytes are not on disk.",
-            missing.len(),
-            first
-        ));
-    }
-    if let Some((path, err)) = read_failures.first() {
-        lines.push(format!(
-            "[image] coherence violation: staged .webp unreadable after existence \
-             check ({}× this build); skipping manifest registration. First: {} ({})",
-            read_failures.len(),
-            path,
-            err
-        ));
-    }
-    lines
-}
+static IMAGE_OUTPUTS: super::output_emit::OutputKind = super::output_emit::OutputKind {
+    label: "image",
+    what: "staged .webp",
+    bucket: HashBucket::ImageVariants,
+};
 
 // `update_image_hashes` was removed. It used to perform a read-modify-write
 // on `hashes.json::image_outputs`; the runner now sends

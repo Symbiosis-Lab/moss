@@ -63,17 +63,21 @@ pub fn compute_binary_hash_file_with_heartbeat(
     path: &std::path::Path,
     on_chunk: &dyn Fn(),
 ) -> Result<String, String> {
-    use std::io::Read;
-    use xxhash_rust::xxh3::Xxh3Default;
-
     let mut file = std::fs::File::open(path)
         .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
+    hash_reader(&mut file, on_chunk).map_err(|e| format!("Failed to read {}: {}", path.display(), e))
+}
+
+/// The streaming form of [`compute_binary_hash`] over everything `reader`
+/// yields. The `io::Error` comes back unflattened, for a caller that must
+/// classify it (absent, still in the cloud, unreadable).
+pub fn hash_reader(reader: &mut impl std::io::Read, on_chunk: &dyn Fn()) -> std::io::Result<String> {
+    use xxhash_rust::xxh3::Xxh3Default;
+
     let mut hasher = Xxh3Default::new();
     let mut buf = vec![0u8; HASH_FILE_BUF_SIZE];
     loop {
-        let n = file
-            .read(&mut buf)
-            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }

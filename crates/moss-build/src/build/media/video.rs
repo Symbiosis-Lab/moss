@@ -1538,6 +1538,12 @@ pub(crate) fn run_video_conversion(
     end
 }
 
+static VIDEO_OUTPUTS: super::output_emit::OutputKind = super::output_emit::OutputKind {
+    label: "video",
+    what: "staged output",
+    bucket: HashBucket::VideoOutputs,
+};
+
 /// Send produced video paths to the manifest coordinator, one
 /// `HashBucket::VideoOutputs` message each. `blocking_send`, because this runs
 /// inside `Spawner::spawn_blocking`. No-op when `paths` is empty.
@@ -1549,123 +1555,16 @@ fn emit_video_outputs_via_channel(
     objects: &crate::build::cache::ObjectStore,
     registry: Option<&crate::types::assets::AssetRegistry>,
 ) {
-    let Some(tx) = tx else { return };
-    if paths.is_empty() {
-        return;
+    super::output_emit::OutputEmit {
+        kind: &VIDEO_OUTPUTS,
+        root,
+        tx,
+        staging_dir,
+        objects,
+        suppressed: &std::collections::HashSet::new(),
+        registry,
     }
-    // Producer-side coherence: never register a manifest entry for a file that is
-    // not on disk. A path that reaches the skip branches means an upstream step
-    // reported success without landing the bytes; let it resurface in the next
-    // build's scan rather than poisoning the deploy manifest. Violations are
-    // collected and summarized once — one root cause (iCloud evicting every
-    // staged .mp4) used to log once per file.
-    //
-    // The hash is a REAL content hash, as in emit_image_outputs_via_channel.
-    // Without one, `verify_file_bytes(body, "")` fails the integrity check on a
-    // first deploy, and — because to_mp4/to_thumb are stable, not content-hashed,
-    // filenames — a re-encoded video reads as "unchanged" in the deploy diff and
-    // its new bytes are never uploaded.
-    let mut missing: Vec<String> = Vec::new();
-    let mut read_failures: Vec<(String, String)> = Vec::new();
-    // Settling `Failed` is what lets the page drop the reference; a skipped
-    // output left `Pending` keeps its promise open forever.
-    let settle_failed = |path: &String, why: Failure| {
-        if let Some(registry) = registry {
-            registry.set_failed(path.clone(), why);
-        }
-    };
-    // An I/O error that is not a positive `NotFound` settles nothing: an
-    // unreadable output is not a missing one. The coordinator records it, which
-    // withholds the generation.
-    let unverified = |path: &String, err: &std::io::Error| {
-        let _ = tx.blocking_send(EmitMessage::Unverified { rel_path: path.clone(), detail: err.to_string() });
-    };
-    for (path, oid) in paths {
-        let abs = staging_dir.join(path);
-        match crate::build::io_utils::probe_path(&abs) {
-            crate::build::io_utils::Presence::Present => {}
-            crate::build::io_utils::Presence::Unverified(e) => {
-                unverified(path, &e);
-                continue;
-            }
-            crate::build::io_utils::Presence::Absent | crate::build::io_utils::Presence::Evicted => {
-                // `link_to`, not `ensure_staged`: the latter short-circuits on
-                // `exists()`, true for a 0-byte evicted stub.
-                let healed = oid.as_deref().is_some_and(|oid| objects.link_to(oid, &abs).is_ok());
-                if !healed {
-                    settle_failed(path, Failure::encode("missing at manifest registration"));
-                    missing.push(abs.display().to_string());
-                    continue;
-                }
-            }
-        }
-        // Streaming hash: KeptOriginal legitimately stages multi-GB films, so
-        // never load a whole video output into memory here.
-        let hash = match crate::build::assets::paths::compute_binary_hash_file(&abs) {
-            Ok(h) => h,
-            Err(e) => {
-                // Gone or unreadable between the probe and the read: never
-                // register without a hash.
-                let text = e.to_string();
-                // The hash helper flattens the error to text; reopen for the kind.
-                let io = fs::File::open(&abs).err().unwrap_or_else(|| std::io::Error::other(text.clone()));
-                if crate::build::icloud::is_definitely_absent(&abs, &io) {
-                    if let Some(failure) = Failure::unreadable("unreadable at manifest registration", crate::build::outcome::classify_unreadable(root, &abs, io)) {
-                        settle_failed(path, failure);
-                    }
-                    read_failures.push((abs.display().to_string(), text));
-                } else {
-                    unverified(path, &io);
-                }
-                continue;
-            }
-        };
-        let msg = EmitMessage::File {
-            rel_path: path.clone(),
-            hash,
-            bucket: HashBucket::VideoOutputs,
-            // `Some` only from the just-encoded main path's own delivered
-            // set — the carry-forward skip/carry-forward paths in
-            // `dispatch_video_conversions` pass `None` for every entry.
-            oid: oid.clone(),
-        };
-        // blocking_send: safe because run_video_conversion runs inside spawn_blocking.
-        // A send failure means the coordinator was dropped; log and continue.
-        if let Err(e) = tx.blocking_send(msg) {
-            log::info!("[video] Failed to register video output in coordinator: {}", e);
-        }
-    }
-    for line in summarize_video_coherence_violations(&missing, &read_failures) {
-        log::error!("{}", line);
-    }
-}
-
-/// Collapse per-file video coherence violations into at most one log line per
-/// class (missing / unreadable), each carrying the suppressed count and a
-/// representative sample — matching the image pipeline's pattern.
-fn summarize_video_coherence_violations(
-    missing: &[String],
-    read_failures: &[(String, String)],
-) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some(first) = missing.first() {
-        lines.push(format!(
-            "[video] coherence violation: staged output missing ({}× this build); \
-             first: {}",
-            missing.len(),
-            first,
-        ));
-    }
-    if let Some((first_path, first_err)) = read_failures.first() {
-        lines.push(format!(
-            "[video] coherence violation: staged output unreadable ({}× this build); \
-             first: {} ({})",
-            read_failures.len(),
-            first_path,
-            first_err,
-        ));
-    }
-    lines
+    .run(paths);
 }
 
 /// A SHA-256 over one video's `(path, size, mtime)` plus the compression
