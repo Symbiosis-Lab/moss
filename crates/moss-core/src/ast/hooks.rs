@@ -650,8 +650,11 @@ pub trait RenderHooks {
         true
     }
 
-    /// A class for a paragraph's `<p>`, from what it holds. Default: none.
-    fn paragraph_class(&self, _children: &[super::node::Inline]) -> Option<&'static str> { None }
+    /// A class for a paragraph's `<p>`, from what it holds. Default: `moss-links` on a
+    /// paragraph of nothing but links, which CSS cannot tell from a sentence holding one.
+    fn paragraph_class(&self, children: &[super::node::Inline]) -> Option<&'static str> {
+        super::node::is_text_link_row(children).then_some("moss-links")
+    }
 
     /// Whether a heading at `level` carries the `moss-heading-anchor`
     /// permalink. The `id` is kept regardless of the answer, so a fragment
@@ -970,7 +973,11 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
     }
 
     fn paragraph_class(&self, children: &[super::node::Inline]) -> Option<&'static str> {
-        (self.hero_words && super::node::is_link_row(children)).then_some("moss-hero-actions")
+        if self.hero_words && super::node::is_link_row(children) {
+            Some("moss-hero-actions")
+        } else {
+            super::node::is_text_link_row(children).then_some("moss-links")
+        }
     }
 
     fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {

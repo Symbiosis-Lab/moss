@@ -65,7 +65,7 @@ fn renders_resolved_link_internal() {
         is_wikilink: false,
         has_pothole: false,
     }])]);
-    assert_eq!(html, "<p><a href=\"docs/\">Docs</a></p>\n");
+    assert_eq!(html, "<p class=\"moss-links\"><a href=\"docs/\">Docs</a></p>\n");
 }
 
 #[test]
@@ -1633,4 +1633,38 @@ fn a_named_id_also_answers_the_spelling_a_wikilink_gives_it() {
     let html = render_md("## Release {#v1.2}\n");
     assert!(html.contains("<h2 id=\"v1.2\"><span id=\"v12\"></span>Release"), "{html}");
     assert_eq!(crate::ast::resolve_urls::slug_wikilink_suffix("#v1.2"), "#v12");
+}
+
+fn render_resolved(md: &str) -> String {
+    let mut doc = super::super::parser::parse(md);
+    super::super::visit::visit_urls_mut(&mut doc, |u| {
+        if let Url::Unresolved(s) = u {
+            *u = Url::resolved(s.clone(), UrlKind::Internal);
+        }
+    });
+    render_document(&doc, &DefaultHooks::new())
+}
+
+#[test]
+fn a_paragraph_of_only_links_is_marked_moss_links() {
+    for md in [
+        "[Book now](https://e.com/x)\n",
+        "[Book now](https://e.com/x)\\\n[Contact](https://e.com/y)\n",
+        "[**Book now**](https://e.com/x)\n",
+    ] {
+        let html = render_resolved(md);
+        assert!(html.starts_with("<p class=\"moss-links\""), "{md:?} gave {html}");
+    }
+}
+
+#[test]
+fn a_sentence_or_a_picture_link_is_not_marked_moss_links() {
+    for md in [
+        "Please [book now](https://e.com/x) today.\n",
+        "[![A harbour](https://e.com/a.jpg)](https://e.com/p)\n",
+        "[Book now](https://e.com/x) [![A harbour](https://e.com/a.jpg)](https://e.com/p)\n",
+    ] {
+        let html = render_resolved(md);
+        assert!(!html.contains("moss-links"), "{md:?} gave {html}");
+    }
 }

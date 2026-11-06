@@ -915,3 +915,17 @@ pub fn is_link_row(inlines: &[Inline]) -> bool {
             _ => false,
         })
 }
+
+/// [`is_link_row`] where every link has words in it. A link around nothing but
+/// a picture belongs to a figure or gallery, not to a row of buttons.
+pub fn is_text_link_row(inlines: &[Inline]) -> bool {
+    is_link_row(inlines)
+        && inlines.iter().all(|i| match i {
+            Inline::Link { children, .. } => children.iter().any(|c| match c {
+                Inline::Image { .. } => false,
+                Inline::Text(t) => !t.trim().is_empty(),
+                _ => true,
+            }),
+            _ => true,
+        })
+}

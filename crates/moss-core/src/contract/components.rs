@@ -1489,6 +1489,17 @@ const CORE: &[ComponentEntry] = &[
         description: "Text content slot inside `.moss-hero` — text laid ON the image. For text ABOUT the image, see `.moss-hero-caption`.",
     },
     ComponentEntry {
+        class: "moss-links",
+        kind: "instance",
+        parent: "p",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-links"><a href="/book/">Book now</a></p>"#,
+        example_markdown: "[Book now](book.md)\n",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Marks a paragraph made only of links, with nothing between them but spaces and line breaks (a link around a picture does not count): a row of buttons or a call to action, which CSS alone cannot tell from a sentence holding a link. moss draws nothing for it; it is a hook for themes. `.moss-links > a` is each link of the row and `.moss-links > a:only-child` is a lone call to action.",
+    },
+    ComponentEntry {
         class: "moss-hero-actions",
         kind: "instance",
         parent: "moss-hero-content",
