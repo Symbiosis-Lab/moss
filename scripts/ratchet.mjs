@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ratchet.mjs — shrink-only architecture ratchet for this repo. Five rows:
+// ratchet.mjs — shrink-only architecture ratchet for this repo. Six rows:
 //
 //   (a) prod_lines_per_file — files over 800 code lines (not blank, not
 //                             comment-only; Rust counted #[cfg(test)]-aware)
@@ -24,6 +24,12 @@
 //                             in `oversized{}`. A file ceiling invites moving
 //                             code around a long function; this row measures
 //                             the function itself.
+//   (h) string_slices_per_crate — `clippy::string_slice` warnings (byte-index
+//                             slices of a `&str`, which panic off a character
+//                             boundary) in moss-build's and moss-cli's
+//                             production code, keyed by crate. Measured by a
+//                             clippy build, so `check` only validates the
+//                             row's shape; `slices` measures it.
 //
 // Roots: this repo's own `crates/*/src` and `packages/*/src` (rows a/b);
 // mirror_markers never scanned packages.
@@ -35,6 +41,13 @@
 //                                             the ONLY way a baseline grows;
 //                                             prints the Ratchet-Accept trailer(s)
 //                                             the commit message must carry
+//   node scripts/ratchet.mjs slices [--from <clippy-json>] [--tighten] [--accept "<reason>"]
+//                                             run clippy (or read a saved
+//                                             `--message-format=json` file),
+//                                             count `clippy::string_slice` per
+//                                             crate, compare with row (h);
+//                                             --tighten lowers it, --accept
+//                                             raises it and prints the trailers
 //   node scripts/ratchet.mjs verify-accepts <commit-msg-file>
 //                                             commit-msg hook body: every
 //                                             row/key that rose between HEAD's
@@ -667,11 +680,12 @@ const ROWS = {
   mirror_markers: { letter: 'e', disposition: 'permanent' },
   direct_deps_per_crate: { letter: 'f', disposition: 'permanent' },
   lines_per_function: { letter: 'g', disposition: 'permanent' },
+  string_slices_per_crate: { letter: 'h', disposition: 'permanent' },
 };
 
 export function collectCurrent(root, baseline) {
   const out = {};
-  for (const key of Object.keys(ROWS)) out[key] = collectors[key](root, baseline);
+  for (const key of Object.keys(ROWS)) if (collectors[key]) out[key] = collectors[key](root, baseline);
   return out;
 }
 
@@ -899,7 +913,7 @@ function runSelfChecks(root, baseline, current, violations) {
 
   // 2. stale entries (path no longer on disk) — fail-on-stale.
   for (const [key, row] of Object.entries(baseline.rows ?? {})) {
-    if (!row.armed || typeof row.value !== 'object' || row.value === null) continue;
+    if (!row.armed || !collectors[key] || typeof row.value !== 'object' || row.value === null) continue;
     for (const p of Object.keys(row.value)) {
       const abs = path.join(root, ...fileOf(p).split('/'));
       if (!fs.existsSync(abs)) {
@@ -1112,7 +1126,7 @@ function cmdCheck(root) {
       continue;
     }
     const before = violations.length;
-    const summary = checkRow(key, row, current[key], violations);
+    const summary = key === SLICE_ROW ? checkSliceShape(row, violations) : checkRow(key, row, current[key], violations);
     const mark = violations.length > before ? 'RED' : 'OK ';
     console.log(`  ${mark} (${spec.letter}) ${key.padEnd(24)} ${summary}`);
   }
@@ -1332,6 +1346,111 @@ function cmdAccept(root, rowKey, reason, only = []) {
 
   saveBaseline(baseline);
   printTrailers(rowKey, named, reason);
+}
+
+// ---------------------------------------------------------------------------
+// slices — row (h). Needs a clippy build, so `check` never runs it.
+// ---------------------------------------------------------------------------
+
+const SLICE_ROW = 'string_slices_per_crate';
+const SLICE_CRATES = ['moss-build', 'moss-cli'];
+const SLICE_LINT = 'clippy::string_slice';
+// `-A clippy::all` silences every other lint; the restriction lint is outside
+// that group, so `-W` still enables it. `--cap-lints warn` keeps moss-core's
+// own `deny` of the lint from failing the build before moss-build is checked.
+const SLICE_CLIPPY = ['clippy', '-p', 'moss-build', '-p', 'moss-cli', '--lib', '--bins', '--message-format=json', '--', '-A', 'clippy::all', '-W', SLICE_LINT, '--cap-lints', 'warn'];
+
+function checkSliceShape(row, violations) {
+  const v = row.value;
+  const bad = SLICE_CRATES.filter((c) => !Number.isInteger(v?.[c]) || v[c] < 0);
+  for (const c of bad) violations.push(`(h) ${SLICE_ROW}: '${c}' must be a non-negative integer in the baseline`);
+  return bad.length ? `${bad.length} bad entr${bad.length === 1 ? 'y' : 'ies'}` : 'measured by `ratchet.mjs slices`';
+}
+
+/** `{crate: sorted ["file:line:col", ...]}` from clippy's JSON lines: only
+ *  string_slice messages, one entry per distinct primary span (lib and bin
+ *  builds can report the same one twice). The crate comes from the span's path. */
+export function sliceSpans(jsonLines) {
+  const seen = {};
+  for (const line of jsonLines.split('\n')) {
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (msg.reason !== 'compiler-message' || msg.message?.code?.code !== SLICE_LINT) continue;
+    const span = msg.message.spans?.find((s) => s.is_primary);
+    const crate = /(?:^|\/)crates\/([^/]+)\//.exec(span?.file_name ?? '')?.[1];
+    if (!crate) continue;
+    (seen[crate] ??= new Set()).add(`${span.file_name}:${span.line_start}:${span.column_start}`);
+  }
+  return Object.fromEntries(Object.entries(seen).map(([c, set]) => [c, [...set].sort()]));
+}
+
+function measureSlices(root, from) {
+  if (from) return sliceSpans(read(path.resolve(from)));
+  const r = spawnSync('cargo', SLICE_CLIPPY, { cwd: root, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
+  if (r.error || r.status !== 0) {
+    console.error(`RED ${SLICE_ROW}: \`cargo clippy\` failed in ${root}: ${r.error?.message ?? r.stderr.trim().split('\n').slice(-15).join('\n')}`);
+    process.exit(1);
+  }
+  return sliceSpans(r.stdout);
+}
+
+function cmdSlices(root, { from, tighten, accept }) {
+  if (tighten && accept !== undefined) {
+    console.error('--tighten and --accept are opposites; pass one');
+    process.exit(1);
+  }
+  const baseline = loadBaseline();
+  const row = baseline.rows?.[SLICE_ROW];
+  if (!row?.armed) {
+    console.error(`row '${SLICE_ROW}' is missing or not armed in the baseline`);
+    process.exit(1);
+  }
+  if (accept !== undefined && reasonIsWeak(accept, SLICE_ROW)) {
+    console.error(
+      `reason too weak: needs >= ${WEAK_REASON_MIN_LENGTH} characters, and can't be just the row name ` +
+      `or one of ${[...WEAK_REASON_WORDS].join(', ')} — say what changed and why.`,
+    );
+    process.exit(1);
+  }
+  const spans = measureSlices(root, from);
+  const base = row.value ?? {};
+  const over = [];
+  const lowered = [];
+  for (const c of SLICE_CRATES) {
+    const n = spans[c]?.length ?? 0;
+    const b = base[c];
+    if (b === undefined || n > b) over.push(c);
+    else if (n < b) lowered.push(c);
+    const first = (spans[c] ?? []).slice(0, 5).join(', ');
+    console.log(`  ${n > (b ?? 0) ? 'RED' : 'OK '} ${c.padEnd(12)} ${n} string slices (baseline ${b ?? 'none'})${n > (b ?? 0) ? `; first: ${first}` : ''}`);
+  }
+
+  if (accept !== undefined) {
+    if (!over.length) {
+      console.error('nothing to accept: no crate is over its baseline');
+      process.exit(1);
+    }
+    for (const c of over) base[c] = spans[c]?.length ?? 0;
+    row.value = base;
+    saveBaseline(baseline);
+    printTrailers(SLICE_ROW, over, accept);
+    return;
+  }
+  if (tighten) {
+    for (const c of lowered) base[c] = spans[c]?.length ?? 0;
+    if (lowered.length) saveBaseline(baseline);
+    console.log(lowered.length ? `tightened: ${lowered.join(', ')}` : 'baseline already tight — no changes written.');
+    if (over.length) {
+      console.log(`REFUSED to raise ${over.join(', ')} — tighten NEVER raises; fix the code or use 'slices --accept "<reason>"'`);
+      process.exit(1);
+    }
+    return;
+  }
+  if (over.length) {
+    console.log(`\nRED ${SLICE_ROW}: ${over.join(', ')} over baseline — a byte-index slice panics off a character boundary; use \`.get(..)\`, \`char_indices\` or \`split_at_checked\`.`);
+    process.exit(1);
+  }
+  console.log('\nGREEN — string slices within baseline.');
 }
 
 // ---------------------------------------------------------------------------
@@ -1705,6 +1824,9 @@ function main(argv) {
   let root = process.cwd();
   let range;
   let checkOnly = false;
+  let from;
+  let tighten = false;
+  let accept;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--root') root = path.resolve(args[++i]);
     else if (args[i] === '--path') {
@@ -1715,6 +1837,9 @@ function main(argv) {
       only.push(args[++i]);
     } else if (args[i] === '--range') range = args[++i];
     else if (args[i] === '--check') checkOnly = true;
+    else if (args[i] === '--from') from = args[++i];
+    else if (args[i] === '--tighten') tighten = true;
+    else if (args[i] === '--accept') accept = args[++i] ?? '';
     else positional.push(args[i]);
   }
   const cmd = positional[0];
@@ -1725,8 +1850,9 @@ function main(argv) {
     if (range) cmdVerifyAcceptsRange(root, range);
     else cmdVerifyAccepts(root, positional[1]);
   } else if (cmd === 'docs') cmdDocs(root, { check: checkOnly });
+  else if (cmd === 'slices') cmdSlices(root, { from, tighten, accept });
   else {
-    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts|docs> [args] [--path <file>]... [--range <A>..<B>] [--check] [--root <path>]');
+    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts|docs|slices> [args] [--path <file>]... [--range <A>..<B>] [--check] [--root <path>]');
     process.exit(1);
   }
 }

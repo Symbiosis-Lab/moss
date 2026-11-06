@@ -116,6 +116,8 @@ A file ceiling alone invites moving code around a long function without improvin
 
 Each crate's production dependencies (`[dependencies]` and `[target.*.dependencies]`) are counted the same way: the count can only shrink, and a new dependency needs an `accept` whose reason says what needs it, since one direct entry can bring in hundreds of transitive crates.
 
+Byte-index slices of a `&str` (`&s[..n]`) panic when `n` falls inside a multi-byte character, so moss-core denies `clippy::string_slice` in production code. moss-build and moss-cli do not, and a count per crate (`string_slices_per_crate`) lets existing slices be fixed one at a time while no new one lands: `node scripts/ratchet.mjs slices` measures it with a clippy build (so `check` only validates the row's shape), `--tighten` lowers it, and `--accept "<reason>"` raises it.
+
 ## Where new code goes
 
 New code lands in the module that already owns the concern it touches. A relocation — moving existing code to a different module — is never scheduled for its own sake; it happens only alongside a change that already has a reason to touch that code.

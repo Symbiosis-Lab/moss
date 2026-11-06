@@ -213,6 +213,11 @@ jobs:
       - name: Clippy (workspace, all targets, all features, open crates)
         run: cargo clippy --workspace --all-targets --all-features -p moss-core -p moss-build -p moss-cli
 
+      # Counts byte-index `&str` slices in moss-build and moss-cli against the
+      # ratchet (it runs its own clippy pass; node ships on the runner image).
+      - name: String-slice ratchet
+        run: node scripts/ratchet.mjs slices
+
   # ==========================================================================
   # Lifted verbatim from pr.yml:475-487 ("Rust advisories") — it already runs
   # from repo root with no path assumptions. .cargo/audit.toml here carries

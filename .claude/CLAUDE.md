@@ -40,7 +40,7 @@ Land a finished branch on `develop` as one squashed commit, with a conventional-
 
 ## The size gate
 
-`scripts/ratchet.mjs` enforces shrink-only budgets on file size (code lines, not comments or blanks), function length and directory-child counts (see ARCHITECTURE.md's "Size rules"). A pure data table can be listed in `prod_lines_per_file.data_tables{}` if it stays a table (few functions, almost no branches; `check` re-measures it). A function over 200 code lines is a `<path>::<fn name>` entry in the `lines_per_function` row, and `accept` takes that whole key as its `--path`. A disposition that waits on something is written `{"reason": ..., "waits_on": "<path>"}`; `check` goes red when the path appears. Run it yourself before committing:
+`scripts/ratchet.mjs` enforces shrink-only budgets on file size (code lines, not comments or blanks), function length and directory-child counts (see ARCHITECTURE.md's "Size rules"). A pure data table can be listed in `prod_lines_per_file.data_tables{}` if it stays a table (few functions, almost no branches; `check` re-measures it). A function over 200 code lines is a `<path>::<fn name>` entry in the `lines_per_function` row, and `accept` takes that whole key as its `--path`. The `string_slices_per_crate` row counts byte-index `&str` slices (`clippy::string_slice`) in moss-build and moss-cli production code; it needs a clippy build, so `check` only validates its shape and `node scripts/ratchet.mjs slices` (with `--tighten` or `--accept "<reason>"`) measures it, in CI's clippy job and before landing. A disposition that waits on something is written `{"reason": ..., "waits_on": "<path>"}`; `check` goes red when the path appears. Run it yourself before committing:
 
 ```sh
 node scripts/ratchet.mjs check

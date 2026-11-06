@@ -85,6 +85,7 @@ const fullBaseline = (value, deps = {}) => ({
   mirror_markers: { letter: 'e', disposition: 'permanent', armed: true, value: 0 },
   direct_deps_per_crate: { letter: 'f', disposition: 'permanent', armed: true, value: deps },
   lines_per_function: { letter: 'g', disposition: 'permanent', armed: true, value: {}, oversized: {} },
+  string_slices_per_crate: { letter: 'h', disposition: 'permanent', armed: true, value: { 'moss-build': 0, 'moss-cli': 0 } },
 });
 
 /** a and b are over their baselines, c sits exactly at its own. */
@@ -1339,6 +1340,110 @@ describe('row (f) direct_deps_per_crate', () => {
       const red = t.run('check');
       assert.notEqual(red.status, 0);
       assert.match(red.stderr, /cargo metadata.* failed/);
+    });
+  });
+});
+
+const SLICE_ROW = 'string_slices_per_crate';
+
+/** One clippy JSON message line; `code` null is a different lint's neighbour. */
+const clippyLine = (code, file, line, col = 1) =>
+  JSON.stringify({
+    reason: 'compiler-message',
+    message: { code: code && { code }, spans: [{ file_name: file, line_start: line, column_start: col, is_primary: true }] },
+  });
+const STRING_SLICE = 'clippy::string_slice';
+
+describe('row (h) string_slices_per_crate', () => {
+  /** A tree whose baseline holds `value`, and a saved clippy file of `lines`. */
+  function sliceTree(value, lines) {
+    const t = tree({}, { ...fullBaseline({}), [SLICE_ROW]: { letter: 'h', disposition: 'permanent', armed: true, value } });
+    const from = path.join(t.root, 'clippy.json');
+    fs.writeFileSync(from, lines.join('\n') + '\n');
+    return { ...t, slices: (...argv) => t.run('slices', '--from', from, ...argv) };
+  }
+  const build = (n, line = 1) => clippyLine(STRING_SLICE, `crates/moss-build/src/f${n}.rs`, line);
+
+  it('counts only string_slice, per crate', () => {
+    const t = sliceTree({ 'moss-build': 2, 'moss-cli': 1 }, [
+      build(1), build(2), clippyLine(STRING_SLICE, 'crates/moss-cli/src/main.rs', 3),
+      clippyLine('clippy::too_many_lines', 'crates/moss-build/src/g.rs', 1), clippyLine(null, 'crates/moss-build/src/h.rs', 1), 'not json',
+    ]);
+    within(t, () => {
+      const r = t.slices();
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /moss-build\s+2 string slices \(baseline 2\)/);
+      assert.match(r.stdout, /moss-cli\s+1 string slices \(baseline 1\)/);
+    });
+  });
+
+  it('counts a span reported by both the lib and bin builds once', () => {
+    const t = sliceTree({ 'moss-build': 1, 'moss-cli': 0 }, [build(1), build(1), build(1, 2)]);
+    within(t, () => assert.match(t.slices().stdout, /moss-build\s+2 string slices/));
+  });
+
+  it('is red over the baseline, naming the crate and spans, and green at or under it', () => {
+    const t = sliceTree({ 'moss-build': 1, 'moss-cli': 0 }, [build(1), build(2)]);
+    within(t, () => {
+      const red = t.slices();
+      assert.equal(red.status, 1);
+      assert.match(red.stdout, /RED moss-build\s+2 string slices \(baseline 1\); first: crates\/moss-build\/src\/f1\.rs:1:1, crates\/moss-build\/src\/f2\.rs:1:1/);
+      assert.match(red.stdout, /moss-build over baseline/);
+    });
+    const under = sliceTree({ 'moss-build': 5, 'moss-cli': 0 }, [build(1)]);
+    within(under, () => assert.equal(under.slices().status, 0));
+  });
+
+  it('--tighten lowers the baseline and never raises it', () => {
+    const t = sliceTree({ 'moss-build': 5, 'moss-cli': 0 }, [build(1), build(2)]);
+    within(t, () => {
+      assert.equal(t.slices('--tighten').status, 0);
+      assert.deepEqual(t.baseline().rows[SLICE_ROW].value, { 'moss-build': 2, 'moss-cli': 0 });
+    });
+    const up = sliceTree({ 'moss-build': 1, 'moss-cli': 0 }, [build(1), build(2)]);
+    within(up, () => {
+      const before = up.bytes();
+      const r = up.slices('--tighten');
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /REFUSED to raise moss-build/);
+      assert.deepEqual(up.bytes(), before);
+    });
+    const mixed = sliceTree({ 'moss-build': 1, 'moss-cli': 3 }, [build(1), build(2), clippyLine(STRING_SLICE, 'crates/moss-cli/src/main.rs', 3)]);
+    within(mixed, () => {
+      assert.equal(mixed.slices('--tighten').status, 1);
+      assert.deepEqual(mixed.baseline().rows[SLICE_ROW].value, { 'moss-build': 1, 'moss-cli': 1 });
+    });
+  });
+
+  it('--accept raises to the measured count and prints the trailer; a weak reason is refused', () => {
+    const t = sliceTree({ 'moss-build': 1, 'moss-cli': 0 }, [build(1), build(2)]);
+    within(t, () => {
+      const before = t.bytes();
+      const weak = t.slices('--accept', 'wip');
+      assert.equal(weak.status, 1);
+      assert.match(weak.stderr, /reason too weak/);
+      assert.deepEqual(t.bytes(), before);
+      const ok = t.slices('--accept', 'a new slice on checked ASCII input');
+      assert.equal(ok.status, 0, ok.stderr);
+      assert.match(ok.stdout, new RegExp(`Ratchet-Accept: ${SLICE_ROW} moss-build — a new slice on checked ASCII input`));
+      assert.deepEqual(t.baseline().rows[SLICE_ROW].value, { 'moss-build': 2, 'moss-cli': 0 });
+    });
+  });
+
+  it('check validates the row shape and does not run cargo', () => {
+    const bad = sliceTree({ 'moss-build': -1 }, []);
+    within(bad, () => {
+      const r = bad.run('check');
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /'moss-build' must be a non-negative integer/);
+      assert.match(r.stdout, /'moss-cli' must be a non-negative integer/);
+    });
+    const good = sliceTree({ 'moss-build': 3, 'moss-cli': 0 }, []);
+    within(good, () => {
+      // No cargo project here: a run of clippy would fail the check.
+      const r = good.run('check');
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /\(h\) string_slices_per_crate\s+measured by `ratchet\.mjs slices`/);
     });
   });
 });
