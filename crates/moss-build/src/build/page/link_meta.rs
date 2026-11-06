@@ -282,40 +282,7 @@ fn resolve_url(href: &str, origin: &Option<String>) -> String {
 
 /// Return current time as ISO 8601 string (UTC, second precision).
 fn now_iso8601() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    // Simple UTC timestamp without pulling in chrono
-    let days = secs / 86400;
-    let rem = secs % 86400;
-    let h = rem / 3600;
-    let m = (rem % 3600) / 60;
-    let s = rem % 60;
-
-    // Convert days since epoch to Y-M-D (simplified Gregorian)
-    let (y, mo, d) = days_to_ymd(days);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
-fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
-    let z = days + 719468;
-    let era = z / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 /// Cache directory for link metadata.
@@ -327,64 +294,37 @@ fn cache_dir(moss_dir: &Path) -> std::path::PathBuf {
 fn cache_path(moss_dir: &Path, url: &str) -> std::path::PathBuf {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(url.as_bytes());
-    let hex = bytes_to_hex(&hash);
+    let hex = hex::encode(hash);
     cache_dir(moss_dir).join(format!("{hex}.json"))
 }
 
 /// Maximum age (in days) for a cached entry to be considered fresh.
-const CACHE_FRESHNESS_DAYS: u64 = 7;
+const CACHE_FRESHNESS_DAYS: i64 = 7;
 
 /// Check if a cached entry is still fresh (< CACHE_FRESHNESS_DAYS old).
-///
-/// Uses the same epoch-day algorithm as `now_iso8601` (round-trip consistent).
-/// A prior review found the previous arithmetic mixed `m*30+d` which
-/// double-counted month boundaries (a Jan 31 → Feb 1 diff read as 0 days,
-/// while the threshold "7" was actually 217 because we compared in the same
-/// broken metric). Fixed by going through the inverse of `days_to_ymd`.
 fn is_fresh(fetched_at: &str) -> bool {
-    let cached_days = match parse_iso8601_to_days(fetched_at) {
-        Some(d) => d,
-        None => return false, // unparseable → treat as stale
-    };
-    let now_days = epoch_days_now();
-    now_days.saturating_sub(cached_days) < CACHE_FRESHNESS_DAYS
+    match parse_iso8601_to_days(fetched_at) {
+        Some(cached) => epoch_days_now() - cached < CACHE_FRESHNESS_DAYS,
+        None => false, // unparseable → treat as stale
+    }
 }
 
 /// Days since 1970-01-01 for the current system time.
-fn epoch_days_now() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() / 86400)
-        .unwrap_or(0)
+fn epoch_days_now() -> i64 {
+    days_since_epoch(chrono::Utc::now().date_naive())
 }
 
-/// Parse "YYYY-MM-DDTHH:MM:SSZ" → days since 1970-01-01.
-/// Returns `None` on any parse error. Inverse of `days_to_ymd`.
-fn parse_iso8601_to_days(s: &str) -> Option<u64> {
-    // `get` rather than `s[0..4]`: the old `len() < 10` guard counted bytes, so
-    // a non-ASCII value long enough in bytes reached a mid-character slice.
-    let mut parts = s.get(..10)?.split('-');
-    let y: u64 = parts.next()?.parse().ok()?;
-    let m: u64 = parts.next()?.parse().ok()?;
-    let d: u64 = parts.next()?.parse().ok()?;
-    Some(ymd_to_days(y, m, d))
+fn days_since_epoch(date: chrono::NaiveDate) -> i64 {
+    use chrono::Datelike;
+    const DAYS_CE_TO_UNIX_EPOCH: i64 = 719_163;
+    i64::from(date.num_days_from_ce()) - DAYS_CE_TO_UNIX_EPOCH
 }
 
-/// Convert (year, month, day) to days since 1970-01-01.
-/// Inverse of `days_to_ymd`. Algorithm from
-/// http://howardhinnant.github.io/date_algorithms.html
-fn ymd_to_days(y: u64, m: u64, d: u64) -> u64 {
-    if m == 0 || d == 0 {
-        return 0;
-    }
-    let y = if m <= 2 { y.saturating_sub(1) } else { y };
-    let era = y / 400;
-    let yoe = y - era * 400;
-    let mp = if m > 2 { m - 3 } else { m + 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    (era * 146097 + doe).saturating_sub(719468)
+/// Parse the date part of "YYYY-MM-DDTHH:MM:SSZ" → days since 1970-01-01.
+/// Returns `None` on any parse error.
+fn parse_iso8601_to_days(s: &str) -> Option<i64> {
+    let date = chrono::NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok()?;
+    Some(days_since_epoch(date))
 }
 
 /// Read cached metadata, returning it if fresh.
@@ -1349,40 +1289,36 @@ mod tests {
     }
 
     #[test]
-    fn ymd_to_days_round_trips_with_days_to_ymd() {
-        // Exercise some boundaries: leap year, month transitions, century rule.
-        let cases = [
-            (1970, 1, 1),
-            (1970, 1, 2),
-            (1970, 2, 1),
-            (1970, 12, 31),
-            (1971, 1, 1),
-            (2000, 2, 29), // leap (divisible by 400)
-            (2024, 2, 29),
-            (2026, 4, 26),
-        ];
-        for &(y, m, d) in &cases {
-            let days = ymd_to_days(y, m, d);
-            let (y2, m2, d2) = days_to_ymd(days);
-            assert_eq!((y2, m2, d2), (y, m, d), "round-trip failed for {y}-{m}-{d}");
-        }
+    fn now_iso8601_is_second_precision_utc_and_parses_back() {
+        let ts = now_iso8601();
+        let b = ts.as_bytes();
+        assert_eq!(ts.len(), 20, "{ts}");
+        assert!(ts.ends_with('Z'), "{ts}");
+        assert_eq!((b[4], b[7], b[10], b[13], b[16]), (b'-', b'-', b'T', b':', b':'), "{ts}");
+        assert_eq!(parse_iso8601_to_days(&ts), Some(epoch_days_now()));
+    }
+
+    #[test]
+    fn parse_iso8601_to_days_counts_from_unix_epoch() {
+        assert_eq!(parse_iso8601_to_days("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_to_days("1970-12-31T23:59:59Z"), Some(364));
+        assert_eq!(parse_iso8601_to_days("2000-02-29T00:00:00Z"), Some(11016));
+        assert_eq!(parse_iso8601_to_days("2026-04-26T00:00:00Z"), Some(20569));
+        assert_eq!(parse_iso8601_to_days("not a timestamp"), None);
     }
 
     #[test]
     fn is_fresh_is_actually_seven_days() {
-        // Build a "now" string and a "now - 6 days" string, both should be fresh.
-        // Then a "now - 8 days" should be stale.
-        let now_d = epoch_days_now();
-
-        let to_iso = |d: u64| -> String {
-            let (y, m, day) = days_to_ymd(d);
-            format!("{y:04}-{m:02}-{day:02}T00:00:00Z")
+        let to_iso = |days_ago: i64| -> String {
+            (chrono::Utc::now() - chrono::Duration::days(days_ago))
+                .format("%Y-%m-%dT00:00:00Z")
+                .to_string()
         };
 
-        assert!(is_fresh(&to_iso(now_d)), "today is fresh");
-        assert!(is_fresh(&to_iso(now_d.saturating_sub(6))), "6 days old is fresh");
-        assert!(!is_fresh(&to_iso(now_d.saturating_sub(8))), "8 days old is stale");
-        assert!(!is_fresh(&to_iso(now_d.saturating_sub(365))), "1 year old is stale");
+        assert!(is_fresh(&to_iso(0)), "today is fresh");
+        assert!(is_fresh(&to_iso(6)), "6 days old is fresh");
+        assert!(!is_fresh(&to_iso(8)), "8 days old is stale");
+        assert!(!is_fresh(&to_iso(365)), "1 year old is stale");
         assert!(!is_fresh("not a timestamp"), "garbage is stale");
     }
 
@@ -1641,16 +1577,9 @@ mod tests {
     /// Helper: write a STALE (8 days old) cache entry, which a fetch must
     /// treat as cold.
     fn seed_stale_cache(moss_dir: &Path, url: &str, title: &str) {
-        // 8 days ago in ISO 8601. We synthesize the timestamp by hand to
-        // avoid pulling chrono into the test path.
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-            .saturating_sub(8 * 86400);
-        let days = secs / 86400;
-        let (y, m, d) = days_to_ymd(days);
-        let stale_ts = format!("{y:04}-{m:02}-{d:02}T00:00:00Z");
+        let stale_ts = (chrono::Utc::now() - chrono::Duration::days(8))
+            .format("%Y-%m-%dT00:00:00Z")
+            .to_string();
         let meta = LinkMeta {
             url: url.to_string(),
             title: Some(title.to_string()),
