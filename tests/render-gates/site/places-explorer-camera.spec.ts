@@ -612,6 +612,8 @@ test("past the world ceiling, the coast at a tile boundary is pixel-continuous",
     points.push({ x: edgeX - 3, y }, { x: edgeX + 3, y });
   }
   const clip = { x: Math.floor(edgeX - 20), y: Math.floor(top), width: 40, height: Math.max(1, Math.ceil(bottom - top)) };
+  // The lower samples fall where the card row, markers and labels draw over the map: a card's text would be compared across the seam instead of the coast, and pass or fail with where its glyphs happen to land.
+  await page.addStyleTag({ content: ".moss-places-viewport > :not(.moss-places-world) { visibility: hidden !important; }" });
   const png = await page.screenshot({ clip, animations: "disabled", scale: "css" });
   const localPoints = points.map((p) => ({ x: p.x - clip.x, y: p.y - clip.y }));
   const pixels = await samplePixelsAt(page, png, localPoints);
