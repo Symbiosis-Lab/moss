@@ -6752,6 +6752,8 @@ article a:where(:not(.moss-btn)):focus {
      photographs instead of beside them. */
   .moss-cards[data-layout="grid"] .moss-card-cover {
     grid-row: 1;
+    /* A cover with no ratio would stretch to the tallest one in its row. */
+    align-self: start;
   }
 
   .moss-cards[data-layout="grid"] .moss-card-content {
@@ -6819,6 +6821,7 @@ article a:where(:not(.moss-btn)):focus {
   .moss-cards[data-layout="grid"] .moss-card-cover,
   .moss-cards[data-layout="grid"] .moss-card-content {
     grid-row: auto;
+    align-self: auto;
   }
 }
 
@@ -6864,29 +6867,18 @@ article a:where(:not(.moss-btn)):focus {
   background-color: var(--moss-color-surface);
 }
 
-/* Cover children (img, video, iframe) fill the aspect-ratio box.
- * The container owns geometry; children are presentational fill only.
- *
- * `bottom: -1px` overshoots the box by 1px to defeat a WebKit sub-pixel
- * rendering artifact: with `aspect-ratio: 4/3` producing a fractional
- * height (e.g. 156.77px), a stacked <video> + <img.cover-thumb> sometimes
- * leaves a 1px hairline at the bottom edge in WKWebView (not reproducible
- * in Chromium). The overshoot is clipped by the cover's `overflow: hidden`,
- * mirroring the `-1px` overlap pattern already used on
- * `.moss-card-content` to close the seam from the other side. */
-/* `> picture > img` variants: the WebP post-pass wraps eligible <img> in
-   <picture><source><img></picture>, so the direct-child selector alone
-   would miss covers whose source image has a webp variant, pending a
-   migration that will retire this duplication. */
-.moss-card-cover > img,
-.moss-card-cover > picture > img,
-.moss-card-cover > video,
-.moss-card-cover > iframe,
-.moss-card-cover > .cover-thumb {
-  position: absolute;
-  inset: 0 0 -1px 0;
-  width: 100%;
-  height: calc(100% + 1px);
+/* Cover media sit in the box's flow and fill it. A ratio set on the box crops
+   them (the box's `overflow: hidden` keeps an image from stretching it), and
+   `--moss-card-cover-ratio: auto` leaves the box no ratio of its own, so each
+   cover takes its image's shape. The selector outranks `article figure img`
+   (0,1,3), whose `block-size: auto` would shorten a cropped cover in a
+   captioned listing. The `<picture>` the WebP
+   pass wraps an image in fills the box the same way. */
+.moss-card .moss-card-cover > :is(img:not(.cover-thumb), picture, video, iframe),
+.moss-card .moss-card-cover > picture > img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
   margin: 0;
   border: 0;
   border-radius: 0;
@@ -6899,16 +6891,6 @@ article a:where(:not(.moss-btn)):focus {
   object-fit: var(--moss-card-cover-fit, cover);
 }
 
-/* The <picture> wrapper itself needs to span the cover too, otherwise
-   the absolute-positioned <img> inside would be measured against the
-   intrinsic <picture> size (zero) rather than the card. */
-.moss-card-cover > picture {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
 
 /* Cover children must not steal pointer events from the parent <a> card link.
    Shared across layouts — applies to grid (full-width 4:3 covers) and
@@ -7253,44 +7235,19 @@ article a:where(:not(.moss-btn)):focus {
 
 /* A fixed length at the inline end of the row — 120px across the page,
    transposed to 120px down the column at its foot, the same place on every
-   card. The cross extent stretches to the body's own (`.moss-card-row`'s
-   `align-items: stretch`); `aspect-ratio: none` drops the base rule's 4/3
-   default, which would otherwise floor the stretched size at a fixed 90px
-   — exactly the bug this replaces, where 90px suited three lines of Latin
-   by coincidence and fell 12.5px short of three columns of CJK. */
+   card. Its cross extent is the cover ratio's, stretched further when the
+   row's words are taller (`.moss-card-row`'s `align-items: stretch`). */
 .moss-cards[data-layout="list"] .moss-card-cover {
   position: relative;
   flex: 0 0 auto;
   inline-size: 120px;
-  aspect-ratio: none;
   border-radius: 4px;
   overflow: hidden;
 }
 
-/* No object-fit here: the shared `.moss-card-cover > img` rule reads
-   --moss-card-cover-fit, and re-declaring `cover` at this specificity made
-   list listings ignore the token (2026-09-23). */
-.moss-cards[data-layout="list"] .moss-card-cover img {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  border-radius: 0;
-}
-
-/* Video covers — same sizing as images.
-   pointer-events: none is set by the shared .moss-card-cover > video rule
-   above (alongside the iframe rule), so it isn't repeated here. */
-.moss-cards[data-layout="list"] .moss-card-cover video {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  border-radius: 0;
-}
-
-/* Video thumbnail overlay — fades out during playback.
- * `inset: 0 0 -1px 0` matches the cover-children rule's overshoot (see
- * `.moss-card-cover > *` above) so this rule, which is more
- * specific for `.cover-thumb`, doesn't undo the hairline fix. */
+/* Video thumbnail overlay — fades out during playback. It overshoots the
+ * box by 1px, which `overflow: hidden` clips, because WebKit can leave a
+ * hairline of the video showing under a fractional-height thumb. */
 .cover-thumb {
   position: absolute;
   inset: 0 0 -1px 0;
@@ -7304,14 +7261,6 @@ article a:where(:not(.moss-btn)):focus {
 
 .cover-thumb.is-playing {
   opacity: 0;
-}
-
-/* Iframe covers */
-.moss-cards[data-layout="list"] .moss-card-cover iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  margin: 0;
 }
 
 /* Lead listing (`children_style: lead`): the first card leads, the rest form a
@@ -7330,14 +7279,10 @@ article a:where(:not(.moss-btn)):focus {
 }
 .moss-cards[data-lead] > .moss-card:first-child .moss-card-cover {
   order: -1;
-  /* 100%, not auto: a grid item with an aspect ratio is not stretched and its
-     only content is absolutely placed, so WebKit draws it 0 px wide */
+  /* 100%, not auto: a grid item with an aspect ratio is not stretched */
   inline-size: 100%;
   aspect-ratio: 4 / 3;
   border-radius: 0;
-}
-.moss-cards[data-lead] > .moss-card:first-child .moss-card-cover img {
-  object-fit: cover;
 }
 .moss-cards[data-lead] .moss-card-title {
   font-family: var(--moss-font-heading);
@@ -8058,8 +8003,7 @@ body > footer.container:has(> .moss-hero-closing) {
 }
 
 /* Grow to fit overlay text instead of clipping it: media goes absolute and
-   fills via inset (mirrors `.moss-card-cover > picture`'s sizing idiom, not
-   its stacking — that one has no in-flow sibling to stay behind). Content
+   fills via inset. Content
    flows and sets the height; `min-block-size` is the old cap as a FLOOR.
    Mirrored below for mobile-overlay, which also adds a reserved image band
    above the panel (`padding-block-start`, --moss-hero-mobile-band) and uses
@@ -8919,7 +8863,7 @@ a.moss-grid-card:hover {
   .moss-grid[data-rows="equal"] > .moss-grid-card > * > :last-child { margin-block-end: 0; }
   /* A collection card has two parts, its cover and its content, as in a
      listing's grid. */
-  .moss-grid[data-rows="equal"] > .moss-card .moss-card-cover { grid-row: 1; }
+  .moss-grid[data-rows="equal"] > .moss-card .moss-card-cover { grid-row: 1; align-self: start; }
   .moss-grid[data-rows="equal"] > .moss-card .moss-card-content { grid-row: 2; }
   .moss-grid[data-rows="equal"] > .moss-card .moss-card-no-cover { display: none; }
 }

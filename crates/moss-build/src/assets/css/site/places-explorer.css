@@ -1157,16 +1157,6 @@ button.moss-places-chip-crumb {
   border-radius: 8px;
   overflow: hidden;
 }
-/* The box above is one fixed size, but `article figure:not(.video-figure) img`
-   (site.css) out-ranks the generic cover rule and gives the image
-   `block-size: auto`, so each image kept its own natural height inside the
-   box. Out-rank it back: the image fills the box and is cropped. */
-.moss-places-cards .moss-card-cover > img,
-.moss-places-cards .moss-card-cover > picture > img {
-  inline-size: 100%;
-  block-size: calc(100% + 1px);
-  object-fit: cover;
-}
 .moss-places-card-select:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: -2px;

@@ -741,6 +741,71 @@ link_preview = false
   },
 };
 
+// ── `--moss-card-cover-ratio: auto` keeps each cover's own shape ─────────────
+// Covers of two shapes (3:2 and 2:3) in a folder's grid listing, in hand-picked
+// `:::grid {rows=equal}` cards and in a summary list. The spec sets the token
+// itself, so the same pages also show the default fixed ratio. A captioned
+// listing sits in a figure, whose `img` rule must not shorten a cropped cover.
+// Served by playwright/card-cover-auto.config.ts.
+const WIDE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="300" height="200" fill="#a47"/></svg>`;
+const TALL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300"><rect width="200" height="300" fill="#47a"/></svg>`;
+const coverPage = (title: string, uid: string, cover: string) => `---
+title: ${title}
+uid: "${uid}"
+date: 2024-01-0${uid.slice(-1)}
+cover: ${cover}
+---
+
+A few words about ${title.toLowerCase()}.
+`;
+
+export const CARD_COVER_AUTO_GATE: ScratchSiteSpec = {
+  name: "card-cover-auto-gate",
+  files: {
+    "wide.svg": WIDE_SVG,
+    "tall.svg": TALL_SVG,
+    "index.md": `---
+title: Covers
+uid: "cca00001"
+---
+
+## Grid
+
+![[/prints/|style:grid]]
+
+## Shelf
+
+:::grid 2 {rows=equal}
+[[Wide print]]
++++
+[[Tall print]]
+:::
+
+## Summary
+
+![[/prints/|style:summary]]
+
+## Captioned
+
+![[/prints/|style:grid|The prints, cropped]]
+`,
+    "prints/index.md": `---
+title: Prints
+uid: "cca00002"
+---
+`,
+    "prints/Wide print.md": coverPage("Wide print", "cca00003", "../wide.svg"),
+    "prints/Tall print.md": coverPage("Tall print", "cca00004", "../tall.svg"),
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+link_preview = false
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── A grid-card image fills the card's inline size ───────────────────────────
 // An internal whole-cell image link renders as `a.moss-grid-card[data-kind=
 // "link"]` wrapping a `<figure class="moss-image">`; nothing stretches that

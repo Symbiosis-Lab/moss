@@ -339,7 +339,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",
-        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for the cards of a folder listing rather than the cells of a `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
+        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for the cards of a folder listing rather than the cells of a `:::grid`. `auto` gives each picture cover its own shape, uncropped, for a collection of pictures of different shapes; a video or iframe cover needs a ratio. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
     },
     CustomProp {
         name: "--moss-card-cover-fit",
