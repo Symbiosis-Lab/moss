@@ -31,3 +31,12 @@ test("a cluster click over a layer does not zoom out", async ({ page }) => {
   await expect(page.locator('.moss-places-marker[data-count="3"]'), "the cluster has split").toHaveCount(0);
   expect(await page.locator(".moss-places-marker").count(), "its members are still on screen").toBeGreaterThanOrEqual(2);
 });
+
+test("a work's locator over a layer opens at the layer's depth, not a regional view", async ({ page }) => {
+  await open(page);
+  const all = zoomOf(page);
+  await page.goto("places/?article=/gate-morning/&embed=1", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("figure[data-moss-places-explorer]")).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  await page.waitForTimeout(500);
+  expect(zoomOf(page), "framed on the layer like the places page, not on the region").toBeGreaterThanOrEqual(all - 1e-6);
+});
