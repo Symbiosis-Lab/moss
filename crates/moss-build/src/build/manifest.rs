@@ -334,6 +334,7 @@ impl PendingManifest {
         // sweep compares file mtimes against the moment hashing began, and a
         // stale capture time would mark nothing suspect ever again.
         inner.captured_at = crate::build::stat::recording_clock();
+        inner.render_id = Some(uuid::Uuid::new_v4().simple().to_string());
         let carried_source_to_output = std::mem::take(&mut inner.source_to_output);
         let carried_page_meta = std::mem::take(&mut inner.page_meta);
         let carried_page_sources: HashMap<String, crate::build::types::SourceMetadata> = inner
@@ -365,6 +366,11 @@ impl PendingManifest {
     /// Construct a render attempt with its existing input-read evidence.
     pub fn for_build(carry_forward: SiteHashes, evidence: crate::build::cloud_ledger::InputEvidence) -> Self {
         Self { input_evidence: Some(evidence), ..Self::new(carry_forward) }
+    }
+
+    /// See [`SiteHashes::render_id`].
+    pub(crate) fn render_id(&self) -> Option<&str> {
+        self.inner.render_id.as_deref()
     }
 
     pub(crate) fn input_evidence(&self) -> Option<crate::build::cloud_ledger::InputEvidence> {

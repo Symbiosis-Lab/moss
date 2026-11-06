@@ -80,6 +80,8 @@ struct Harness {
     overrides: std::collections::HashMap<String, String>,
     skip: bool,
     globals_salt: bool,
+    render_id: Option<String>,
+    sealed_render_id: Option<String>,
 }
 
 impl Harness {
@@ -95,6 +97,8 @@ impl Harness {
             overrides: std::collections::HashMap::new(),
             skip: true,
             globals_salt: false,
+            render_id: None,
+            sealed_render_id: None,
         }
     }
 
@@ -116,6 +120,8 @@ impl Harness {
                 typesetting: None,
                 math: false,
                 term_nav: &[],
+                render_id: self.render_id.as_deref(),
+                sealed_render_id: self.sealed_render_id.as_deref(),
             },
         )
     }
@@ -290,6 +296,44 @@ fn a_body_edit_below_the_lede_renders_one_page_and_no_host() {
             assert_eq!((*changed, *by_listing_group), (1, 0));
         }
         other => panic!("expected an incremental verdict, got {other:?}"),
+    }
+}
+
+/// A carried page registers the entry `hashes.json` holds, and that file is
+/// written when a generation ships, while this cache is written at render time.
+/// A page rendered after the manifest the carry reads from has bytes on the
+/// stage that manifest never hashed, so it renders again until a manifest of
+/// that render, or a later one, is the sealed one.
+#[test]
+fn a_page_rendered_since_the_sealed_manifest_is_not_carried() {
+    let mut h = Harness::new();
+    h.render_id = Some("w".into());
+    h.run(&vault());
+
+    // A renders its edit; its generation has not shipped.
+    let mut edited = vault();
+    edited[2].content = "Alpha lede.\n\nA COMPLETELY DIFFERENT tail.".into();
+    h.render_id = Some("a".into());
+    h.sealed_render_id = Some("w".into());
+    assert!(!h.run(&edited).may_skip("writings/alpha/index.md"));
+
+    // B changes nothing since A, but the manifest is still W's.
+    h.render_id = Some("b".into());
+    let b = h.run(&edited);
+    assert!(!b.may_skip("writings/alpha/index.md"), "the stage holds A's bytes, W's manifest another page's");
+    assert!(b.may_skip("writings/beta/index.md"), "a page no render since W touched is carried");
+    match b.basis() {
+        VerdictBasis::Incremental { changed, by_unsealed, .. } => assert_eq!((*changed, *by_unsealed), (0, 1)),
+        other => panic!("expected an incremental verdict, got {other:?}"),
+    }
+
+    // B's generation ships: its manifest describes the stage again.
+    h.render_id = Some("c".into());
+    h.sealed_render_id = Some("b".into());
+    let c = h.run(&edited);
+    for d in &edited {
+        let src = d.source_path.as_deref().unwrap();
+        assert!(c.may_skip(src), "{src} is carried once its render is sealed");
     }
 }
 

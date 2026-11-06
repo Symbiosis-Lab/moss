@@ -435,6 +435,13 @@ pub struct SiteHashes {
     /// treats unknown provenance as stale and rebuilds once.
     #[serde(default)]
     pub site_url: Option<String>,
+    /// The render this manifest describes, minted by `PendingManifest::new`.
+    /// The facade cache records the render that wrote it too: when the two
+    /// differ, a newer render has left pages on the stage that this manifest
+    /// has no entry for, and none of those may be carried under this
+    /// manifest's hash. Two `None`s read as one render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_id: Option<String>,
     /// Set of derived video output paths (converted .mp4 and .thumb.jpg files).
     /// These are tracked separately from source files because they're generated
     /// artifacts, not direct copies. Used by stale cleanup to preserve converted videos.
@@ -560,19 +567,7 @@ pub struct PageMeta {
 impl SiteHashes {
     /// Create a new empty hash map
     pub fn new() -> Self {
-        Self {
-            files: HashMap::new(),
-            sources: HashMap::new(),
-            captured_at: None,
-            site_url: None,
-            video_outputs: HashSet::new(),
-            image_outputs: HashSet::new(),
-            pruned_image_outputs: HashSet::new(),
-            notebook_outputs: HashSet::new(),
-            builder_fingerprint: None,
-            source_to_output: HashMap::new(),
-            page_meta: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Insert a file hash

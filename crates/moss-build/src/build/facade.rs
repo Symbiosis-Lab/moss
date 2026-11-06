@@ -580,6 +580,15 @@ pub struct FacadeCache {
     /// See `nav_globals`'s field docs.
     #[serde(default)]
     home_breadcrumb_globals: std::collections::BTreeMap<String, String>,
+    /// The render that wrote this cache; see [`SiteHashes::render_id`].
+    ///
+    /// [`SiteHashes::render_id`]: crate::types::content::SiteHashes::render_id
+    #[serde(default)]
+    render_id: Option<String>,
+    /// Pages rendered since the render `hashes.json` describes: on the stage,
+    /// their bytes may be ones that manifest never hashed.
+    #[serde(default)]
+    unsealed_pages: std::collections::BTreeSet<String>,
 }
 
 /// Which keys differ between two digest maps — sorted, and including keys
@@ -662,6 +671,8 @@ impl FacadeCache {
             nav_globals: std::collections::BTreeMap::new(),
             home_title_globals: std::collections::BTreeMap::new(),
             home_breadcrumb_globals: std::collections::BTreeMap::new(),
+            render_id: None,
+            unsealed_pages: std::collections::BTreeSet::new(),
         }
     }
 
@@ -732,6 +743,23 @@ impl FacadeCache {
     /// global invalidator — see the `asset_versions` field docs.
     pub fn asset_versions_changed(&self, current: &str) -> bool {
         self.asset_versions != current
+    }
+
+    /// Record the render writing this cache and the pages it leaves on the
+    /// stage that no sealed manifest has hashed yet.
+    pub fn with_unsealed_pages(mut self, render_id: Option<&str>, pages: std::collections::BTreeSet<String>) -> Self {
+        self.render_id = render_id.map(str::to_string);
+        self.unsealed_pages = pages;
+        self
+    }
+
+    /// The pages whose stage bytes the manifest of `sealed_render_id` may not
+    /// describe: none when that manifest is this cache's own render.
+    pub fn unsealed_pages_since(&self, sealed_render_id: Option<&str>) -> std::collections::BTreeSet<String> {
+        if self.render_id.as_deref() == sealed_render_id {
+            return Default::default();
+        }
+        self.unsealed_pages.clone()
     }
 
     /// True when this cache holds nothing — a cold or unreadable cache, which

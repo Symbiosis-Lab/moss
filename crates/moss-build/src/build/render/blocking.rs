@@ -338,11 +338,8 @@ pub fn generate_blocking_content_for_build(
     // 1. Video conversion caching (sources) — needed by BackgroundContext
     // 2. Carry-forward is already in `pending.inner` (seeded by caller via PendingManifest::new)
     let hashes_path = paths.hashes();
-    let previous_hashes: SiteHashes = if let Ok(content) = fs::read_to_string(&hashes_path) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        SiteHashes::default()
-    };
+    let previous_hashes: SiteHashes =
+        fs::read_to_string(&hashes_path).ok().and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default();
     // Note: the carry-forward of files/video_outputs/image_outputs/notebook_outputs is now
     // implicit in `pending` (caller seeded it with PendingManifest::new(previous_hashes)).
     // We still need `previous_hashes` for BackgroundContext.previous_hashes.
@@ -1753,6 +1750,8 @@ pub fn generate_blocking_content_for_build(
             typesetting: layout_config.typesetting.as_deref(),
             math: site_config.math,
             term_nav: &layout_config.term_nav,
+            render_id: pending.render_id(),
+            sealed_render_id: previous_hashes.render_id.as_deref(),
         },
     );
     // The carry machinery's own price, and on a real vault the largest single
