@@ -13,6 +13,10 @@ release heading.
 
 ## [Unreleased]
 
+### Added
+
+- Types for the copy contract a syndication plugin implements: `CopyJob` (the `op` moss asks for, `publish`, `update`, `delete` or `find`, with the post, its planned `form` and `parts`, a `teaser` or `article`, the `previous` copy and the channel's `config`), `CopyOutcome` (the copy's `id`, `url` and `parts`, a `handoff` draft waiting on the network, or `refused` with a `cause` of `auth`, `content`, `rate`, `network` or `unknown`), `CopyPart` and `CopyRef`. `HookResult.copy` carries a copy hook's `CopyOutcome`.
+
 ## [0.15.0] - 2026-10-29
 
 ### Added
