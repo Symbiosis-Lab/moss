@@ -291,6 +291,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - The visit counter on a site published to the moss host no longer sends the part of a page's address after `#`. The host never read it, and some sign-in links carry a token there. A site gets this when it is next published.
+- A page titled with its own place (`title: Harbor`, `location: Harbor`) no longer shows a place line that only repeats its title. Its cards, maps and place page still name it, and a page with several places keeps the line for the others.
 - Headings in German, Dutch, Danish, Norwegian, Swedish and Finnish may now hyphenate words of ten letters or more, so a long compound word no longer pushes a lone word or a closing question mark onto the heading's last line on a phone. Headings in other languages still keep whole words.
 - A places root with `explorer = false` is an ordinary folder page again: its title shows, its map follows its words, and its places are listed.
 - A text field (the country map's search, a form's text area) shows focus on its own border instead of a second box 2px outside it.

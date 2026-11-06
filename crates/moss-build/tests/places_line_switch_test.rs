@@ -203,3 +203,10 @@ fn place_pages_omit_geographic_parent_annotations_but_keep_authored_text_and_hie
     let village = data["places"].as_array().unwrap().iter().find(|place| place["id"] == "places/village").unwrap();
     assert_eq!(village["parent"], "places/region", "internal geographic hierarchy must remain");
 }
+
+#[test]
+fn a_page_titled_with_its_place_gets_no_line_but_its_card_still_names_the_place() {
+    let (article, listing) = build_located_site("", "", "", "Report");
+    assert!(!article.contains("moss-place-line"), "the line would only repeat the title: {article}");
+    assert!(listing.contains("moss-card-meta") && listing.contains("Report"), "card meta must still name the place: {listing}");
+}
