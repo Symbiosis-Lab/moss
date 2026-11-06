@@ -1705,12 +1705,12 @@ fn extract_with_state(
                     extract_with_state(&body, nonce, collected, &body_config);
                 let mut extra_attrs = data_attrs_for(&parsed.kvs);
                 let mut classes = parsed.classes.clone();
-                if parsed.accordion {
+                let accordion = parsed
+                    .accordion
+                    .then(|| format!("moss-accordion-{nonce}-{}", config.warning_line_offset + i + 1));
+                if let Some(name) = &accordion {
                     classes.insert(0, "moss-accordion".to_string());
-                    extra_attrs.push_str(&format!(
-                        r#" data-accordion="moss-accordion-{nonce}-{}""#,
-                        config.warning_line_offset + i + 1
-                    ));
+                    extra_attrs.push_str(&format!(r#" data-accordion="{name}""#));
                 }
                 output.push_str(&render_div_open(
                     &classes,
@@ -1724,6 +1724,9 @@ fn extract_with_state(
                     output.push('\n');
                 }
                 output.push_str("\n</div>\n");
+                if let Some(name) = &accordion {
+                    output.push_str(&format!("\n{}\n", super::accordion::end_marker(name)));
+                }
                 i = j + 1;
                 continue;
             }
