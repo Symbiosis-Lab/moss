@@ -171,6 +171,9 @@ where
                     visit_urls_in_inline(inline, v);
                 }
             }
+            for inline in &mut args.caption {
+                visit_urls_in_inline(inline, v);
+            }
         }
         Shortcode::Hero(args) => {
             if let Some(image) = args.image.as_mut() {

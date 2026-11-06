@@ -43,6 +43,18 @@ fn italic_line_under_a_picture_is_its_caption() {
 }
 
 #[test]
+fn italic_line_under_several_pictures_on_one_line_captions_the_row() {
+    match &blocks("![A](a.jpg) ![B](b.jpg) ![C](c.jpg)\n*Three covers*")[..] {
+        [Block::Shortcode(crate::ast::Shortcode::Gallery(g))] => {
+            assert_eq!(g.items.len(), 3);
+            assert!(g.items.iter().all(|i| i.caption.is_empty()), "no picture owns it: {g:?}");
+            assert!(!g.caption.is_empty(), "the row owns it: {g:?}");
+        }
+        other => panic!("expected one gallery, got {other:?}"),
+    }
+}
+
+#[test]
 fn bare_pipe_keeps_alt_only() {
     same_as_fenced("![A door|](a.jpg)\n![B](b.jpg)", "![A door|](a.jpg)\n![B](b.jpg)");
 }

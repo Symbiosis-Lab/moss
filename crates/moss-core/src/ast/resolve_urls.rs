@@ -701,10 +701,8 @@ where
         Shortcode::Gallery(args) => {
             // An item's src is a structural `Url`, resolved by
             // `resolve_shortcode_image_urls`; only its caption holds inlines.
-            for item in &mut args.items {
-                for inline in &mut item.caption {
-                    walk_images_in_inline(inline, f);
-                }
+            for inline in args.items.iter_mut().flat_map(|i| i.caption.iter_mut()).chain(args.caption.iter_mut()) {
+                walk_images_in_inline(inline, f);
             }
         }
         Shortcode::Hero(args) => {
@@ -857,10 +855,8 @@ where
         }
         Shortcode::Gallery(args) => {
             // An item's src is an image URL; a link can only be in its caption.
-            for item in &mut args.items {
-                for inline in &mut item.caption {
-                    walk_links_in_inline(inline, f);
-                }
+            for inline in args.items.iter_mut().flat_map(|i| i.caption.iter_mut()).chain(args.caption.iter_mut()) {
+                walk_links_in_inline(inline, f);
             }
         }
         Shortcode::Hero(args) => {

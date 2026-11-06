@@ -242,14 +242,10 @@ pub trait RenderHooks {
                     class_attr.push(' ');
                     class_attr.push_str(&args.classes);
                 }
-                // An author-specified column count is emitted TWICE on
-                // purpose: `--moss-gallery-columns` is the value `repeat()` can
-                // compute with, and `data-columns` is the selector hook that
-                // lets site.css give the counted and count-less galleries
-                // different track rules (CSS cannot branch on "is this custom
-                // property set?"). Mirrors `.moss-grid[data-columns]`.
-                // Without the split, an explicit N inherits auto-fill's 200px
-                // track floor and the gallery overflows its container.
+                // A column count is written twice: `--moss-gallery-columns`
+                // for `repeat()` to compute with, and `data-columns` for
+                // site.css to select on, since CSS cannot ask whether a custom
+                // property is set (as `.moss-grid[data-columns]` does).
                 let count_attrs = match args.columns {
                     Some(n) => format!(r#" data-columns="{n}" style="--moss-gallery-columns: {n}""#),
                     None => String::new(),
@@ -267,21 +263,11 @@ pub trait RenderHooks {
                     out.push_str(r#" data-layout="rows""#);
                 }
                 out.push('>');
-                // Phase 4 PR1 (2026-05-27): every gallery item routes
-                // through `render::image::synthesize_image_html` with
-                // `ImageContext::GalleryThumb`. When the impl carries an
-                // `AssetSnapshot` (production path via
-                // `DefaultHooks::with_snapshot`), the synth emits the
-                // canonical byte shape — `<picture><source srcset=*.webp>`
-                // wrap, dims from the snapshot, LQIP, `loading="lazy"`.
-                // When the impl carries no snapshot (test / fragment-render
-                // paths), an empty `AssetSnapshot` is threaded through:
-                // synth still emits `<picture>` for raster originals but
-                // with fallback dims (800×600) and no LQIP/color style.
-                // The legacy bare-`<img>` fallback was retired in Phase 4
-                // PR1 — every `<img>` must be synth-emitted (or a
-                // documented carve-out) per the `img_contract_test`
-                // invariant.
+                // Every item goes through `synthesize_image_html` as a
+                // `GalleryThumb`, so every `<img>` is synth-emitted (the
+                // `img_contract_test` invariant). With no snapshot (tests,
+                // fragment renders) an empty one gives fallback dims and no
+                // LQIP.
                 let empty_snapshot = crate::asset_snapshot::AssetSnapshot::new();
                 let assets_for_synth = self.gallery_assets().unwrap_or(&empty_snapshot);
                 let total = args.items.len();
@@ -363,6 +349,11 @@ pub trait RenderHooks {
                     out.push_str("</div>");
                 }
                 out.push_str("</div>");
+                if !args.caption.is_empty() {
+                    out.push_str(r#"<p class="moss-gallery-caption">"#);
+                    out.push_str(&super::render::render_inlines_html(self, &args.caption));
+                    out.push_str("</p>");
+                }
             }
             Shortcode::Buttons(args) => {
                 if args.items.is_empty() {
@@ -1529,6 +1520,28 @@ mod tests {
         assert!(
             html.contains(r#"</a><p class="moss-gallery-caption">Dusk, <a href="../quay/">Quay</a></p></div>"#),
             "the caption follows the image link and keeps its own link: {html}"
+        );
+    }
+
+    #[test]
+    fn gallery_row_caption_follows_the_whole_gallery() {
+        let item = |src: &str| GalleryItem {
+            src: Url::resolved(src, UrlKind::Asset),
+            alt: "Alt".to_string(),
+            alt_only: false,
+            attrs: String::new(),
+            caption: Vec::new(),
+            title: None,
+        };
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![item("a.jpg"), item("b.jpg")],
+            caption: vec![Inline::Text("Both covers".to_string())],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert!(
+            html.ends_with(r#"</div></div><p class="moss-gallery-caption">Both covers</p>"#),
+            "the caption follows the gallery, not an item: {html}"
         );
     }
 

@@ -1948,7 +1948,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: ":::gallery\nphoto.jpg\n*Dusk, [the quay](quay/)*\n:::\n",
         status: Status::Confirmed,
         since: "0.17",
-        description: "The visible caption of a gallery item: the italic line under the image in `:::gallery`, inline markdown so it may hold a link. It sits under the image link, never inside it, and the full-screen viewer shows it, links and credit included, as the large view's caption. An item without the line has none, and `:::gallery rows` keeps the caption under its item.",
+        description: "The visible caption of a gallery item: the italic line under the image in `:::gallery`, inline markdown so it may hold a link. It sits under the image link, never inside it, and the full-screen viewer shows it, links and credit included, as the large view's caption. An item without the line has none, and `:::gallery rows` keeps the caption under its item. Under a line of several pictures in running text, the italic line captions the whole row and follows the gallery.",
     },
     ComponentEntry {
         class: "moss-gallery-link",

@@ -129,6 +129,10 @@ pub struct GalleryShortcode {
     /// the width and every photo keeps its proportions) instead of the grid.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rows: bool,
+    /// A caption for the whole gallery: the italic line under a line of several
+    /// pictures, which no single picture owns. Empty when the author wrote none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption: Vec<Inline>,
 }
 
 /// One image in a [`GalleryShortcode`].
@@ -734,6 +738,7 @@ mod tests {
             ],
             width: None,
             rows: false,
+            caption: Vec::new(),
         });
         match &sc {
             Shortcode::Gallery(args) => {
@@ -769,6 +774,7 @@ mod tests {
             }],
             width: None,
             rows: false,
+            caption: Vec::new(),
         });
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");

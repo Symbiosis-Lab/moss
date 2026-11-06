@@ -1252,6 +1252,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
             items,
             width: attrs.width,
             rows,
+            caption: Vec::new(),
         },
         warnings,
     )
