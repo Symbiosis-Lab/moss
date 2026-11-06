@@ -274,7 +274,9 @@ pub trait RenderHooks {
                 let total = args.items.len();
                 // A marquee draws the items twice: the second set is the copy
                 // that makes the loop seamless, so it is hidden from assistive
-                // technology and the viewer and carries no names of its own.
+                // technology and the viewer and carries no alt text or link
+                // names of its own. It keeps the captions: they slide with
+                // their pictures across the loop boundary.
                 let draw_items = |out: &mut String, copy: bool| {
                 for (index, item) in args.items.iter().enumerate() {
                     let src_str = match &item.src {
@@ -346,7 +348,7 @@ pub trait RenderHooks {
                     );
                     out.push_str(&item_html);
                     out.push_str("</a>");
-                    if !item.caption.is_empty() && !copy {
+                    if !item.caption.is_empty() {
                         out.push_str(r#"<p class="moss-gallery-caption">"#);
                         out.push_str(&super::render::render_inlines_html(self, &item.caption));
                         out.push_str("</p>");

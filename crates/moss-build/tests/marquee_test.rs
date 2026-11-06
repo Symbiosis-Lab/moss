@@ -147,3 +147,13 @@ fn a_marquee_of_ten_pictures_draws_ten_and_ten() {
     site.rebuild();
     assert_hidden_copy(&site.html("index.html"), 10);
 }
+
+#[test]
+fn a_gallery_marquee_copy_keeps_the_captions() {
+    let (site, _) = work_site(":::gallery marquee\n![A](work/pics/p1.jpg)\n*Dusk*\n\n![B](work/pics/p2.jpg)\n*Dawn*\n:::");
+    let doc = scraper::Html::parse_document(&site.html("index.html"));
+    let (real, copy) = sets(&doc);
+    let captions = |set: scraper::ElementRef<'_>| set.select(&scraper::Selector::parse("p.moss-gallery-caption").unwrap()).map(|p| p.text().collect::<String>()).collect::<Vec<_>>();
+    assert_eq!(captions(real), ["Dusk", "Dawn"]);
+    assert_eq!(captions(copy), ["Dusk", "Dawn"], "a caption must not vanish where the loop wraps");
+}
