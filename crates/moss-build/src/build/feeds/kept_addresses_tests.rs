@@ -153,6 +153,21 @@ fn a_folder_line_whose_new_folder_serves_no_public_file_is_reported() {
     assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
 }
 
+/// A moved folder's pages keep their QR codes' addresses.
+#[test]
+fn a_moved_folder_keeps_its_pages_qr_codes() {
+    let (_vault, mp) = setup();
+    let stage = mp.staging_dir();
+    let pages: [(&str, &[u8]); 5] = [("new/index.html", b"N"), ("new/a/index.html", b"A"), ("qr/new.svg", b"QN"), ("qr/new/a.svg", b"QA"), ("qr/other.svg", b"QO")];
+    let mut sealed = build(&stage, &pages, true);
+    let late = super::LateRedirects { copies: Vec::new(), folder_moves: vec![mv("old/", "new/")] };
+    keep(&mp, &stage, &mut sealed, &late);
+    for (old, bytes) in [("qr/old/a.svg", &b"QA"[..])] {
+        assert!(sealed.files().contains_key(old), "{old}");
+        assert_eq!(std::fs::read(stage.join(old)).unwrap(), bytes, "{old}");
+    }
+}
+
 /// A declared file redirect and a folder move can both reach one old address;
 /// the declared line wins, as a hand-declared line wins everywhere in the table.
 #[test]

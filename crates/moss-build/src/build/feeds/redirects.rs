@@ -242,12 +242,11 @@ pub fn emit_redirect_table(
     };
     // Folder homes have no article UID entry. Their unchanged source path
     // still identifies an output moved by slug rules or a `url:` edit.
-    // The same published mapping preserves QR files for all unchanged page
-    // sources. Copies go through the table's normal output/collision checks.
     use crate::build::manifest::{backfill, published_record};
     use crate::build::media::qr::qr_key_for_url_path;
     use crate::build::scan::article_map::to_pretty_url;
-    if let Some(previous) = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref()) {
+    let previous = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref());
+    if let Some(previous) = &previous {
         let folder_sources: HashSet<&str> = current_article_map.pages.values().map(String::as_str).collect();
         for (source, old) in &previous.source_to_output {
             let Some(new) = pending.source_to_output().get(source) else { continue };
@@ -255,23 +254,12 @@ pub fn emit_redirect_table(
             if folder_sources.contains(source.as_str()) {
                 new_renames.insert(to_pretty_url(old), to_pretty_url(new));
             }
-            let (old_qr, new_qr) = (qr_key_for_url_path(old), qr_key_for_url_path(new));
-            if previous.files.contains_key(&old_qr) && pending.is_registered(&new_qr) {
-                new_renames.insert(old_qr, new_qr);
-            }
-        }
-    }
-    // A moved term page keeps its QR code's old address too, like a renamed source.
-    if let Some(previous) = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref()) {
-        for (old, new) in &inputs.term_stubs {
-            let (old_qr, new_qr) = (qr_key_for_url_path(old), qr_key_for_url_path(new));
-            if previous.files.contains_key(&old_qr) && pending.is_registered(&new_qr) {
-                new_renames.insert(old_qr, new_qr);
-            }
         }
     }
     let current_urls = current_build_urls(current_article_map);
-    let merged = merge_redirects(existing.as_ref().unwrap_or(&BTreeMap::new()), &new_renames, &current_urls);
+    let mut merged = merge_redirects(existing.as_ref().unwrap_or(&BTreeMap::new()), &new_renames, &current_urls);
+    // QR codes are derived from the stubs on every build; drop the ones older builds saved.
+    merged.retain(|from, _| !from.starts_with("qr/"));
 
     match existing {
         Some(_) => {
@@ -300,7 +288,20 @@ pub fn emit_redirect_table(
         inputs.declared.iter().map(|(from, to)| Candidate { from: from.clone(), to: to.clone(), declared: true }),
     );
     let project_root = paths.project_root();
-    let table::Plan { entries: planned, folder_moves } = table::plan(candidates, &Probe { pending, source_root: project_root, written_later: &inputs.written_later });
+    let probe = Probe { pending, source_root: project_root, written_later: &inputs.written_later };
+    let table::Plan { entries: mut planned, folder_moves } = table::plan(candidates, &probe);
+    // A page kept by a redirect keeps its QR code's address too, as a copy of its target's code.
+    let kept_qr: Vec<Candidate> = planned
+        .iter()
+        .filter(|p| p.form == Form::Stub)
+        .filter_map(|p| match &p.to {
+            table::Target::Internal(t, _) => Some((qr_key_for_url_path(p.from.key()), qr_key_for_url_path(t.key()))),
+            table::Target::External(_) => None,
+        })
+        .filter(|(old_qr, new_qr)| previous.as_ref().is_some_and(|p| p.files.contains_key(old_qr)) && pending.is_registered(new_qr))
+        .map(|(old_qr, new_qr)| trusted(&old_qr, &new_qr))
+        .collect();
+    planned.extend(table::plan(kept_qr, &probe).entries);
 
     // Every build re-derives the table regardless (no I/O of its own), but
     // writing every stub's bytes to stage on every build — the loop below — is
@@ -510,6 +511,16 @@ mod tests {
     // detect_renames
     // ---------------------------------------------------------------
 
+    /// A folder under `target/test-tmp`, its paths, and its output directory.
+    fn qr_fixture() -> (tempfile::TempDir, crate::moss_paths::MossPaths, std::path::PathBuf) {
+        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().join("target/test-tmp");
+        std::fs::create_dir_all(&test_tmp).unwrap();
+        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
+        let paths = crate::moss_paths::MossPaths::new(tmp.path());
+        let output = tmp.path().join("output");
+        (tmp, paths, output)
+    }
+
     #[test]
     fn published_folder_paths_and_qr_files_survive_slug_changes() {
         use crate::build::context::BuildContext;
@@ -517,15 +528,9 @@ mod tests {
         use crate::build::media::qr::qr_key_for_url_path;
         use crate::build::scan::article_map::to_pretty_url;
         use crate::build::served_path::ServedPath;
-        use crate::moss_paths::MossPaths;
         use crate::types::content::SiteHashes;
 
-        let test_tmp = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
-            .parent().unwrap().join("target/test-tmp");
-        std::fs::create_dir_all(&test_tmp).unwrap();
-        let tmp = tempfile::TempDir::new_in(&test_tmp).unwrap();
-        let paths = MossPaths::new(tmp.path());
-        let output = tmp.path().join("output");
+        let (_tmp, paths, output) = qr_fixture();
         let cases = [
             ("cafe\u{301}/index.md", "cafe/index.html", "café/index.html", None),
             ("folder/index.md", "share-id/index.html", "share/id/index.html", None),
@@ -568,6 +573,48 @@ mod tests {
             assert!(sealed.files().contains_key(&old_qr), "old QR missing from seal: {old_qr}");
             assert_eq!(std::fs::read(output.join(&old_qr)).unwrap(), std::fs::read(output.join(qr_key_for_url_path(new))).unwrap());
         }
+        let saved = load_redirects(&paths).unwrap();
+        assert!(!saved.keys().any(|k| k.starts_with("qr/")), "QR codes are derived each build, never saved: {saved:?}");
+    }
+
+    /// A page whose source is gone but whose address a redirect keeps, from
+    /// redirects.json or a `[redirects]` line, keeps its QR code's address as a
+    /// copy of the target's code, whatever `#part` or capitals the target has.
+    #[test]
+    fn a_redirected_pages_qr_code_keeps_its_address() {
+        use crate::build::context::BuildContext;
+        use crate::build::manifest::{change_set::PublishedSnapshot, published_record, HashBucket, PendingManifest};
+        use crate::build::media::qr::qr_key_for_url_path;
+        use crate::build::served_path::ServedPath;
+        use crate::types::content::SiteHashes;
+
+        let (_tmp, paths, output) = qr_fixture();
+        let mut record = PublishedSnapshot { target: "moss:fixture".into(), ..Default::default() };
+        for (source, old) in [("notes/a.md", "notes/a/index.html"), ("sources.md", "sources/index.html"), ("frag.md", "frag/index.html"), ("caps.md", "caps/index.html")] {
+            record.source_to_output.insert(source.into(), old.into());
+            record.files.insert(old.into(), "old-page".into());
+            record.files.insert(qr_key_for_url_path(old), "old-qr".into());
+        }
+        published_record::save(&paths, &record).unwrap();
+        let saved_by_an_older_build = ("qr/notes/a.svg".to_string(), "qr/records.svg".to_string());
+        save_redirects(&paths, &BTreeMap::from([("notes/a/".to_string(), "records/".to_string()), saved_by_an_older_build])).unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        let page = ServedPath::from_source("records/index.html").unwrap();
+        pending.register_source_mapping("records.md".into(), &page);
+        for (key, bytes) in [("records/index.html", b"<html>records</html>".as_slice()), ("qr/records.svg", b"<svg>records QR</svg>".as_slice())] {
+            BuildContext::for_render(&output, &mut pending).emit(&ServedPath::from_source(key).unwrap(), bytes, HashBucket::Files).unwrap();
+        }
+        let declared = [("/sources/", "/records/"), ("/frag/", "/records/#held"), ("/caps/", "/Records/")];
+        let inputs = TableInputs { has_deployed_url: true, declared: declared.iter().map(|(f, t)| (f.to_string(), t.to_string())).collect(), ..Default::default() };
+        emit_redirect_table(&paths, &ArticleMap::new(), &inputs, &output, &mut pending).unwrap();
+        let mut sealed = pending.seal();
+        let late = crate::system::build_records::records().late_redirects(&paths.project_root().to_string_lossy());
+        crate::build::feeds::kept_addresses::keep(&paths, &output, &mut sealed, &late);
+        for old_qr in ["qr/notes/a.svg", "qr/sources.svg", "qr/frag.svg", "qr/caps.svg"] {
+            assert!(sealed.files().contains_key(old_qr), "old QR missing from seal: {old_qr}");
+            assert_eq!(std::fs::read(output.join(old_qr)).unwrap(), b"<svg>records QR</svg>", "{old_qr}");
+        }
+        assert!(!load_redirects(&paths).unwrap().keys().any(|k| k.starts_with("qr/")), "a QR entry an older build saved is retired");
     }
 
     #[test]
