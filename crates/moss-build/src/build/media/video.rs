@@ -12,6 +12,7 @@
 //! `AssetReady`, the registry, the UiBound budget) is applied in one place.
 
 use crate::moss_paths::MossPaths;
+use crate::types::assets::Failure;
 use crate::types::services::{BackgroundContext, BuildServices};
 use std::fs;
 use std::path::Path;
@@ -961,12 +962,13 @@ fn finish_run(
     ctx: &BackgroundContext,
     tx: &Option<mpsc::Sender<EmitMessage>>,
     produced_video_paths: &[(String, Option<String>)],
+    objects: &crate::build::cache::ObjectStore,
     advisories: Vec<Advisory>,
     converted_count: u32,
     videos_processed: u32,
 ) {
     let total = ctx.video_items.len() as u32;
-    emit_video_outputs_via_channel(tx, produced_video_paths, &ctx.staging_dir);
+    emit_video_outputs_via_channel(Path::new(&ctx.source_path), tx, produced_video_paths, &ctx.staging_dir, objects, services.assets.as_deref());
 
     // CLI stderr summary (headless only)
     if services.reporter.is_terminal() {
@@ -1526,6 +1528,7 @@ pub(crate) fn run_video_conversion(
         ctx,
         &tx,
         &produced_video_paths,
+        &objects,
         advisories,
         converted_count,
         // The receipt counts videos the encoder reached; with no FFmpeg it
@@ -1539,9 +1542,12 @@ pub(crate) fn run_video_conversion(
 /// `HashBucket::VideoOutputs` message each. `blocking_send`, because this runs
 /// inside `Spawner::spawn_blocking`. No-op when `paths` is empty.
 fn emit_video_outputs_via_channel(
+    root: &Path,
     tx: &Option<mpsc::Sender<EmitMessage>>,
     paths: &[(String, Option<String>)],
     staging_dir: &Path,
+    objects: &crate::build::cache::ObjectStore,
+    registry: Option<&crate::types::assets::AssetRegistry>,
 ) {
     let Some(tx) = tx else { return };
     if paths.is_empty() {
@@ -1561,21 +1567,56 @@ fn emit_video_outputs_via_channel(
     // its new bytes are never uploaded.
     let mut missing: Vec<String> = Vec::new();
     let mut read_failures: Vec<(String, String)> = Vec::new();
+    // Settling `Failed` is what lets the page drop the reference; a skipped
+    // output left `Pending` keeps its promise open forever.
+    let settle_failed = |path: &String, why: Failure| {
+        if let Some(registry) = registry {
+            registry.set_failed(path.clone(), why);
+        }
+    };
+    // An I/O error that is not a positive `NotFound` settles nothing: an
+    // unreadable output is not a missing one. The coordinator records it, which
+    // withholds the generation.
+    let unverified = |path: &String, err: &std::io::Error| {
+        let _ = tx.blocking_send(EmitMessage::Unverified { rel_path: path.clone(), detail: err.to_string() });
+    };
     for (path, oid) in paths {
         let abs = staging_dir.join(path);
-        if !abs.exists() {
-            missing.push(abs.display().to_string());
-            continue;
+        match crate::build::io_utils::probe_path(&abs) {
+            crate::build::io_utils::Presence::Present => {}
+            crate::build::io_utils::Presence::Unverified(e) => {
+                unverified(path, &e);
+                continue;
+            }
+            crate::build::io_utils::Presence::Absent | crate::build::io_utils::Presence::Evicted => {
+                // `link_to`, not `ensure_staged`: the latter short-circuits on
+                // `exists()`, true for a 0-byte evicted stub.
+                let healed = oid.as_deref().is_some_and(|oid| objects.link_to(oid, &abs).is_ok());
+                if !healed {
+                    settle_failed(path, Failure::encode("missing at manifest registration"));
+                    missing.push(abs.display().to_string());
+                    continue;
+                }
+            }
         }
         // Streaming hash: KeptOriginal legitimately stages multi-GB films, so
         // never load a whole video output into memory here.
         let hash = match crate::build::assets::paths::compute_binary_hash_file(&abs) {
             Ok(h) => h,
             Err(e) => {
-                // Race: existed at the pre-flight check, gone (or unreadable)
-                // now. Treat as the same coherence violation as the missing
-                // case and skip — never register without a hash.
-                read_failures.push((abs.display().to_string(), e));
+                // Gone or unreadable between the probe and the read: never
+                // register without a hash.
+                let text = e.to_string();
+                // The hash helper flattens the error to text; reopen for the kind.
+                let io = fs::File::open(&abs).err().unwrap_or_else(|| std::io::Error::other(text.clone()));
+                if crate::build::icloud::is_definitely_absent(&abs, &io) {
+                    if let Some(failure) = Failure::unreadable("unreadable at manifest registration", crate::build::outcome::classify_unreadable(root, &abs, io)) {
+                        settle_failed(path, failure);
+                    }
+                    read_failures.push((abs.display().to_string(), text));
+                } else {
+                    unverified(path, &io);
+                }
                 continue;
             }
         };
@@ -2127,11 +2168,10 @@ pub(crate) fn dispatch_video_conversions(
             // a tick.
             let dropped_advisory = svc.cancellation.retain_item_fingerprints(&current_paths);
 
-            if !skip_paths.is_empty() {
-                emit_video_outputs_via_channel(&tx, &skip_paths, &background_ctx.staging_dir);
-            }
-            if !carry_forward_paths.is_empty() {
-                emit_video_outputs_via_channel(&tx, &carry_forward_paths, &background_ctx.staging_dir);
+            let root = Path::new(&background_ctx.source_path);
+            let objects = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(background_ctx.moss_dir.clone()));
+            for paths in [&skip_paths, &carry_forward_paths] {
+                emit_video_outputs_via_channel(root, &tx, paths, &background_ctx.staging_dir, &objects, svc.assets.as_deref());
             }
             svc.cancellation.forget_landed(
                 skip_paths.iter().map(|(p, _)| p).chain(carry_forward_paths.iter().map(|(p, _)| p)),
@@ -3325,9 +3365,12 @@ pub(crate) mod tests {
         // output missing" log line this test is proving absent.
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         emit_video_outputs_via_channel(
+            Path::new(""),
             &Some(tx),
             &candidates.iter().cloned().map(|k| (k, None)).collect::<Vec<_>>(),
             &staging,
+            &crate::build::cache::ObjectStore::new(tmp.path().join("cache")),
+            None,
         );
         let mut registered = 0;
         while let Ok(msg) = rx.try_recv() {
@@ -4276,7 +4319,7 @@ pub(crate) mod tests {
         let paths = vec![(mp4_key.clone(), None), (thumb_key.clone(), None)];
         // blocking_send requires a non-async thread.
         tokio::task::spawn_blocking(move || {
-            emit_video_outputs_via_channel(&Some(tx), &paths, &staging);
+            emit_video_outputs_via_channel(Path::new(""), &Some(tx), &paths, &staging, &crate::build::cache::ObjectStore::new(staging.join("cache")), None);
         })
         .await
         .unwrap();
@@ -4293,6 +4336,71 @@ pub(crate) mod tests {
             "absent thumbnail must not be registered; got files: {:?}",
             files.keys().collect::<Vec<_>>()
         );
+    }
+
+    /// A 0-byte cloud-evicted stub passes `exists()`, so it must be probed, not
+    /// merely stat'd: never registered as the output, and rebuilt from the CAS
+    /// blob when the caller knows the oid behind the bytes.
+    #[tokio::test]
+    async fn emit_video_outputs_does_not_register_a_zero_byte_stub_and_heals_it() {
+        use crate::build::assets::paths::compute_binary_hash;
+        use crate::build::coordinator::test_utils;
+        use crate::types::content::{file_entry, SiteHashes};
+
+        let tmp = portable_tmpdir();
+        let staging = tmp.path().join("stage");
+        std::fs::create_dir_all(&staging).unwrap();
+        let objects = crate::build::cache::ObjectStore::new(tmp.path().join("cache"));
+        let blob = tmp.path().join("blob.mp4");
+        std::fs::write(&blob, b"REAL-MP4-BYTES").unwrap();
+        let oid = objects.store_file(&blob, crate::build::cache::RecordMode::Wait).unwrap();
+        for key in ["a.mp4", "b.mp4"] {
+            std::fs::write(staging.join(key), b"").unwrap();
+        }
+
+        // `a.mp4` has no known oid: nothing to heal from, so it must not register.
+        // `b.mp4` carries the oid: healed, registered with the real hash.
+        let (tx, rx) = test_utils::build_test_coordinator();
+        let paths = vec![("a.mp4".to_string(), None), ("b.mp4".to_string(), Some(oid))];
+        let staging_c = staging.clone();
+        tokio::task::spawn_blocking(move || {
+            emit_video_outputs_via_channel(Path::new(""), &Some(tx), &paths, &staging_c, &objects, None);
+        })
+        .await
+        .unwrap();
+        let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
+        let files = sealed.files();
+        assert!(!files.contains_key("a.mp4"), "a 0-byte stub must not be registered; got {:?}", files.keys().collect::<Vec<_>>());
+        assert_eq!(files.get("b.mp4"), Some(&file_entry(&compute_binary_hash(b"REAL-MP4-BYTES"))));
+        assert_eq!(std::fs::read(staging.join("b.mp4")).unwrap(), b"REAL-MP4-BYTES");
+    }
+
+    /// A staged output missing at registration settles its promise `Failed`;
+    /// otherwise the page's promise stays pending for a file that never ships.
+    #[tokio::test]
+    async fn emit_video_outputs_settles_a_missing_output_failed() {
+        use crate::build::coordinator::test_utils;
+        use crate::types::assets::{AssetRegistry, AssetState};
+
+        let tmp = portable_tmpdir();
+        let staging = tmp.path().join("stage");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("here.mp4"), b"BYTES").unwrap();
+        let objects = crate::build::cache::ObjectStore::new(tmp.path().join("cache"));
+        let registry = std::sync::Arc::new(AssetRegistry::new());
+        registry.set_pending("here.mp4".to_string(), None, None);
+        registry.set_pending("gone.mp4".to_string(), None, None);
+
+        let (tx, _rx) = test_utils::build_test_coordinator();
+        let paths = vec![("here.mp4".to_string(), None), ("gone.mp4".to_string(), None)];
+        let reg = registry.clone();
+        tokio::task::spawn_blocking(move || {
+            emit_video_outputs_via_channel(Path::new(""), &Some(tx), &paths, &staging, &objects, Some(reg.as_ref()));
+        })
+        .await
+        .unwrap();
+        assert!(matches!(registry.get("gone.mp4"), Some(AssetState::Failed(_))), "got {:?}", registry.get("gone.mp4"));
+        assert!(!matches!(registry.get("here.mp4"), Some(AssetState::Failed(_))));
     }
 
     /// Content-hash correctness: the emitted manifest hash must equal
@@ -4327,7 +4435,7 @@ pub(crate) mod tests {
         let paths = vec![(mp4_key.clone(), None), (thumb_key.clone(), None)];
         let staging_a_clone = staging_a.clone();
         tokio::task::spawn_blocking(move || {
-            emit_video_outputs_via_channel(&Some(tx_a), &paths, &staging_a_clone);
+            emit_video_outputs_via_channel(Path::new(""), &Some(tx_a), &paths, &staging_a_clone, &crate::build::cache::ObjectStore::new(staging_a_clone.join("cache")), None);
         })
         .await
         .unwrap();
@@ -4368,7 +4476,7 @@ pub(crate) mod tests {
         let paths_b = vec![(mp4_key.clone(), None), (thumb_key.clone(), None)];
         let staging_b_clone = staging_b.clone();
         tokio::task::spawn_blocking(move || {
-            emit_video_outputs_via_channel(&Some(tx_b), &paths_b, &staging_b_clone);
+            emit_video_outputs_via_channel(Path::new(""), &Some(tx_b), &paths_b, &staging_b_clone, &crate::build::cache::ObjectStore::new(staging_b_clone.join("cache")), None);
         })
         .await
         .unwrap();
