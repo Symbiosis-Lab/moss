@@ -41,12 +41,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         let source_path = (!info.source_path.is_empty())
             .then(|| existing(&info.source_path))
             .flatten();
-        let syndicated = info
-            .frontmatter
-            .get("syndicated")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
+        let syndicated = crate::build::types::syndicated_urls(info.frontmatter.get("syndicated"));
         if source_path.is_some() {
             return Ok(PageSource {
                 source_path,

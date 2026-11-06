@@ -735,7 +735,22 @@ pub fn folder_within(root: &str, folder: &str) -> bool {
     folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// Addresses of a page's copies on other sites, from its frontmatter
+/// `syndicated:` value (a list, or one string).
+pub(crate) fn syndicated_urls(value: Option<&serde_json::Value>) -> Vec<String> {
+    match value {
+        Some(serde_json::Value::Array(items)) => items.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(serde_json::Value::String(one)) => vec![one.clone()],
+        _ => Vec::new(),
+    }
+}
+
 impl ParsedDocument {
+    /// [`syndicated_urls`] of this page.
+    pub fn syndicated_urls(&self) -> Vec<String> {
+        syndicated_urls(self.raw_frontmatter.get("syndicated"))
+    }
+
     /// The text the site's own navigation shows for this page: `nav_label`
     /// when set, else the chrome `label`.
     pub fn nav_text(&self) -> &str {
@@ -1179,6 +1194,14 @@ impl moss_core::sort::SortableLabel for ParsedDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn syndicated_takes_a_list_or_one_address() {
+        let value = |v: serde_json::Value| syndicated_urls(Some(&v));
+        assert_eq!(value(serde_json::json!(["https://a.example/1", 3, "https://b.example/2"])), ["https://a.example/1", "https://b.example/2"]);
+        assert_eq!(value(serde_json::json!("https://a.example/1")), ["https://a.example/1"]);
+        assert!(value(serde_json::json!(true)).is_empty() && syndicated_urls(None).is_empty());
+    }
 
     #[test]
     fn parsed_document_implements_sortable_doc() {

@@ -1653,16 +1653,7 @@ pub fn load_article_map_for_features(
                 .and_then(|fm| fm.get("lang"))
                 .and_then(|l| l.as_str())
                 .map(|s| s.to_string()),
-            syndicated: article
-                .get("frontmatter")
-                .and_then(|fm| fm.get("syndicated"))
-                .and_then(|s| s.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            syndicated: crate::build::types::syndicated_urls(article.get("frontmatter").and_then(|fm| fm.get("syndicated"))),
         };
 
         result.insert(uid, info);

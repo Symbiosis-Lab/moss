@@ -84,8 +84,7 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
         let uid = stored_uid.clone().or_else(|| post.uid.clone()).unwrap_or_default();
         let own: Vec<String> =
             post.frontmatter.get("syndicate").and_then(|v| super::parse_choice(v).ok()).unwrap_or_default();
-        let listed: Vec<&str> =
-            post.frontmatter.get("syndicated").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()).collect();
+        let listed = crate::build::types::syndicated_urls(post.frontmatter.get("syndicated"));
         let already_live = was_live.contains(uid.as_str()) || was_live.contains(post.url_path.as_str());
 
         let mut entries = Vec::new();

@@ -1365,6 +1365,11 @@ pub(super) fn render_page<'d>(
         // does not need before the piece.
         if let Some(d) = doc {
             credits::push_colophon(&mut homepage_content, &d.colophon, emit_source_lines);
+            if d.kind != moss_core::PageKind::Folder {
+                if let Some(line) = crate::build::features::syndication::render_syndication_line(&d.syndicated_urls(), d.lang) {
+                    homepage_content.push_str(&line);
+                }
+            }
         }
     }
     // The `breadcrumb: label` link is chrome around the finished title block,

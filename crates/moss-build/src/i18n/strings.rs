@@ -739,6 +739,14 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHant => "去 {} 回覆 ↗",
         },
 
+        // Label of the line listing the other sites a page was also published on.
+        "also_on" => match lang {
+            Language::En => "Also on",
+            Language::De => "Auch auf",
+            Language::ZhHans => "也发在",
+            Language::ZhHant => "也發在",
+        },
+
         // Defaults / fallbacks
         "untitled" => match lang {
             Language::En => "Untitled",

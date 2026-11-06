@@ -104,6 +104,16 @@ fn a_copy_already_listed_in_syndicated_is_adopted_not_posted() {
 }
 
 #[test]
+fn a_copy_listed_as_one_address_is_adopted_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let records = Records::at(dir.path().into());
+    let fm = serde_json::json!({"uid": "aa11aa11", "syndicated": "https://bsky.app/profile/a/post/1"});
+    let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky"], fm)]);
+    let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    assert_eq!(actions(&plans)[0].2, Action::Adopt { url: "https://bsky.app/profile/a/post/1".into() });
+}
+
+#[test]
 fn a_channel_nobody_set_up_is_reported_and_false_plans_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let records = Records::at(dir.path().into());

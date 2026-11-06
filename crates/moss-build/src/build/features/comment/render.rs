@@ -101,9 +101,8 @@ pub(super) fn syndicated_link_for_source(syndicated: &[String], source: &str) ->
 }
 
 /// Human-readable "reply on X" label per source, localized.
-fn source_reply_label(source: &str, lang: Language) -> String {
+fn source_reply_label(source: &str, url: &str, lang: Language) -> String {
     let display = match source {
-        "matters" => "Matters",
         // zh: 豆瓣 (no script mixing, both scripts); en: "Douban" (not "豆瓣 ↗").
         "douban" => {
             if lang.is_cjk() {
@@ -112,7 +111,8 @@ fn source_reply_label(source: &str, lang: Language) -> String {
                 "Douban"
             }
         }
-        other => other,
+        "matters" => "Matters",
+        other => crate::build::features::syndication::platform_name(url).unwrap_or(other),
     };
     t(lang, "comment_reply_on").replace("{}", display)
 }
@@ -379,7 +379,7 @@ fn render_comment_item(
             pad, html_escape(&comment.id), html_escape(author_label), format_args!("↩\u{FE0E} {}", i18n.reply_btn)
         ));
     } else if let Some(url) = syndicated_link_for_source(syndicated, &comment.source) {
-        let label = source_reply_label(&comment.source, lang);
+        let label = source_reply_label(&comment.source, &url, lang);
         html.push_str(&format!(
             "{}    <a class=\"comment-source-link\" href=\"{}\" target=\"_blank\" rel=\"noopener nofollow\">{}</a>\n",
             pad, html_escape(&url), html_escape(&label)
@@ -412,6 +412,16 @@ fn render_comment_item(
 mod tests {
     use super::*;
     use crate::build::features::comment::{get_i18n, CommentAuthor};
+
+    /// A comment's own source names its network whatever host its link is on;
+    /// the host is read only for a source moss does not know.
+    #[test]
+    fn a_reply_link_names_its_source_before_its_host() {
+        let en = Language::En;
+        assert!(source_reply_label("matters", "https://matters.example/p/1", en).contains("Matters"));
+        assert!(source_reply_label("bluesky", "https://bsky.app/profile/a/post/1", en).contains("Bluesky"));
+        assert!(source_reply_label("forum", "https://forum.example/t/1", en).contains("forum"));
+    }
 
     fn sample_comments() -> Vec<NormalizedComment> {
         vec![

@@ -12,6 +12,7 @@ pub mod email;
 pub mod forms;
 pub mod review;
 pub mod sync;
+pub mod syndication;
 
 /// Get the inactive tooltip text for the given language.
 pub(crate) fn inactive_label(lang: crate::i18n::Language) -> &'static str {
