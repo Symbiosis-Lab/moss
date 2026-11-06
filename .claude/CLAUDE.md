@@ -38,7 +38,7 @@ Land a finished branch on `develop` as one squashed commit, with a conventional-
 
 ## The size gate
 
-`scripts/ratchet.mjs` enforces shrink-only budgets on file size and directory-child counts (see ARCHITECTURE.md's "Size rules"). Run it yourself before committing:
+`scripts/ratchet.mjs` enforces shrink-only budgets on file size (code lines, not comments or blanks), function length and directory-child counts (see ARCHITECTURE.md's "Size rules"). A pure data table can be listed in `prod_lines_per_file.data_tables{}` if it stays a table (few functions, almost no branches; `check` re-measures it). A function over 200 code lines is a `<path>::<fn name>` entry in the `lines_per_function` row, and `accept` takes that whole key as its `--path`. A disposition that waits on something is written `{"reason": ..., "waits_on": "<path>"}`; `check` goes red when the path appears. Run it yourself before committing:
 
 ```sh
 node scripts/ratchet.mjs check
@@ -50,7 +50,7 @@ If it's red because your change grew something and that growth is deliberate, us
 node scripts/ratchet.mjs accept prod_lines_per_file "<reason>" --path <file>
 ```
 
-The reason must say why the growth is worth it, in at least 15 characters; `wip`, the row name or the path alone are refused. Include the printed `Ratchet-Accept: <row> <key> — <reason>` line(s) in your commit message; a `commit-msg` hook checks for it whenever the baseline file is staged. If your change only shrank something, run `tighten` instead — it lowers the baseline and never raises it.
+The reason must say why the growth is worth it, in at least 15 characters; `wip`, the row name or the path alone are refused. Include the printed `Ratchet-Accept: <row> <key> — <reason>` line(s) in your commit message; a `commit-msg` hook checks for it whenever the baseline file is staged. If your change only shrank something, run `tighten` instead — it lowers the baseline, drops entries and dispositions that no longer apply, and never raises it.
 
 Hooks live in `.githooks/` and install automatically via `pnpm install`'s `prepare` script. If they aren't active, `git config core.hooksPath .githooks` from the repo root wires them in.
 

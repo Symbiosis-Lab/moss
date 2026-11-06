@@ -2542,12 +2542,7 @@ pub fn generate_blocking_content_for_build(
     // not the site has a deployed address, so a preview serves the links the
     // pages carry.
     shared.calendar.emit(output_dir, pending)?;
-    if let Some(did) = site_config.identity.atproto_did() {
-        let path = ServedPath::for_atproto_did();
-        BuildContext::for_render(output_dir, pending)
-            .emit(&path, format!("{did}\n").as_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit {}: {}", path.as_str(), e))?;
-    }
+    emit_atproto_did(&site_config.identity, output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: rss+sitemap+robots+qr: {:?}", total_start.elapsed());
 
     // Search indexing (Pagefind) does NOT run here. Pagefind walks rendered
@@ -3514,6 +3509,19 @@ pub(super) struct ResolvedFavicon {
     /// every size in `SIZES` for an SVG favicon, the sizes that fit a supplied
     /// PNG, or none. The pages link exactly these.
     pub raster_sizes: Vec<u32>,
+}
+
+/// Writes the file an AT Protocol handle check reads, when the site names its DID.
+fn emit_atproto_did(
+    identity: &crate::config::site_identity::SiteIdentity,
+    output_dir: &Path,
+    pending: &mut PendingManifest,
+) -> Result<(), String> {
+    let Some(did) = identity.atproto_did() else { return Ok(()) };
+    let path = ServedPath::for_atproto_did();
+    BuildContext::for_render(output_dir, pending)
+        .emit(&path, format!("{did}\n").as_bytes(), HashBucket::Files)
+        .map_err(|e| format!("Failed to emit {}: {}", path.as_str(), e))
 }
 
 /// Registers the favicon PNGs that `resolve_favicon` wrote in the build's
