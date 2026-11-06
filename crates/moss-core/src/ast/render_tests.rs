@@ -1651,6 +1651,7 @@ fn a_paragraph_of_only_links_is_marked_moss_links() {
         "[Book now](https://e.com/x)\n",
         "[Book now](https://e.com/x)\\\n[Contact](https://e.com/y)\n",
         "[**Book now**](https://e.com/x)\n",
+        "[*Book* **now**](https://e.com/x)\n",
     ] {
         let html = render_resolved(md);
         assert!(html.starts_with("<p class=\"moss-links\""), "{md:?} gave {html}");
@@ -1663,6 +1664,10 @@ fn a_sentence_or_a_picture_link_is_not_marked_moss_links() {
         "Please [book now](https://e.com/x) today.\n",
         "[![A harbour](https://e.com/a.jpg)](https://e.com/p)\n",
         "[Book now](https://e.com/x) [![A harbour](https://e.com/a.jpg)](https://e.com/p)\n",
+        "[**![A harbour](https://e.com/a.jpg)**](https://e.com/p)\n",
+        "[*__![A harbour](https://e.com/a.jpg)__*](https://e.com/p)\n",
+        "[Harbour **![A harbour](https://e.com/a.jpg)**](https://e.com/p)\n",
+        "[~~![A harbour](https://e.com/a.jpg)~~](https://e.com/p)\n",
     ] {
         let html = render_resolved(md);
         assert!(!html.contains("moss-links"), "{md:?} gave {html}");

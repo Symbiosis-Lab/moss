@@ -917,15 +917,29 @@ pub fn is_link_row(inlines: &[Inline]) -> bool {
 }
 
 /// [`is_link_row`] where every link has words in it. A link around nothing but
-/// a picture belongs to a figure or gallery, not to a row of buttons.
+/// a picture belongs to a figure or gallery, not to a row of buttons, and a
+/// picture anywhere inside the link, however it is bolded or emphasised,
+/// keeps it out.
 pub fn is_text_link_row(inlines: &[Inline]) -> bool {
+    /// Whether the inlines hold some words and no image at any depth.
+    fn words_without_picture(inlines: &[Inline]) -> Option<bool> {
+        let mut words = false;
+        for i in inlines {
+            match i {
+                Inline::Image { .. } => return None,
+                Inline::Text(t) => words |= !t.trim().is_empty(),
+                Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) | Inline::Link { children: c, .. } => {
+                    words |= words_without_picture(c)?;
+                }
+                Inline::LineBreak => {}
+                _ => words = true,
+            }
+        }
+        Some(words)
+    }
     is_link_row(inlines)
         && inlines.iter().all(|i| match i {
-            Inline::Link { children, .. } => children.iter().any(|c| match c {
-                Inline::Image { .. } => false,
-                Inline::Text(t) => !t.trim().is_empty(),
-                _ => true,
-            }),
+            Inline::Link { children, .. } => words_without_picture(children) == Some(true),
             _ => true,
         })
 }
