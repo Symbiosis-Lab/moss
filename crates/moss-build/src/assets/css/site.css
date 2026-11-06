@@ -605,13 +605,11 @@ article h6 {
   white-space: nowrap;
 }
 
-/* Section permalink anchors (moss-heading-anchor). Emitted inside body
-   headings by render_heading(). Hover/focus reveal only (a tap reveals it on
-   touch, where hover sticks; focus-visible covers keyboard nav).
-   Quiet at rest, confident on hover: subordinate size (smaller than the
-   heading, which it would otherwise inherit at 1em) and a faint tone mixed
-   most of the way to the background, so even when revealed it stays a soft
-   affordance. Firms up to the accent on direct hover/focus (rule below). */
+/* Section permalink anchors (moss-heading-anchor), inside body headings.
+   Revealed on hover or focus only (a tap reveals it on touch, where hover
+   sticks). Quiet at rest: a glyph smaller than the heading in a faint tone
+   mixed most of the way to the background, firming up to the accent on direct
+   hover or focus (rule below). */
 :is(h1, h2, h3, h4, h5, h6):has(> .moss-heading-anchor) {
   position: relative;
 }
@@ -619,35 +617,33 @@ article h6 {
   /* Hung in the heading's inline-start gutter, out of the line: it takes no
      room hidden or shown, so no line wraps or moves, a no-break range keeps
      its line, and overflow on the start side never scrolls. It stays
-     focusable. The gap is padding so the pointer can cross it. */
+     focusable. */
   position: absolute;
   inset-block-start: 0;
   inset-inline-end: 100%;
+  /* The containing block is the heading's padding box: repeating the
+     heading's top padding puts the mark on its first line. It keeps the
+     heading's line box (only the glyph shrinks, on ::after), so the two
+     share a baseline. */
+  padding-block-start: inherit;
   /* The gutter's own width, glyph against the heading, so the mark and its
      inset ring stay inside the window at the page's edge. */
   box-sizing: border-box;
   inline-size: var(--moss-container-padding);
   text-align: end;
-  /* `content: none` on ::after would remove it; the glyph lives there and
-     nowhere else. Generated content is not part of the document text, so it
-     cannot be selected and cannot be copied — in any engine. This used to be
-     a real `<span>#</span>` held back by the `user-select: none` below, and
-     that only ever worked in Blink: WebKit puts the text of a
-     `user-select: none` node into the clipboard anyway, so on Safari (and in
-     moss's own WebKit preview) copying a heading yielded "Introduction#".
-     The one-line `user-select` fix shipped 2026-05-31 unverified in a
-     browser; it stays as a second line of defence against double-click
-     selection, but the `::after` is what makes the promise true. */
-  font-size: min(0.8em, var(--moss-container-padding));
   font-weight: 400;
   color: color-mix(in oklch, var(--moss-color-text-secondary) 45%, var(--moss-color-bg));
   text-decoration: none;
   opacity: 0;
   transition: opacity 0.12s ease, color 0.12s ease;
+  /* The glyph is generated content on ::after, so copying a heading never
+     carries it: WebKit copies the text of a `user-select: none` node anyway.
+     `user-select` only keeps a double-click from selecting the link. */
   user-select: none;
 }
 .moss-heading-anchor::after {
   content: "#";
+  font-size: min(0.8em, var(--moss-container-padding));
 }
 :is(h1, h2, h3, h4, h5, h6):hover .moss-heading-anchor,
 .moss-heading-anchor:hover,
@@ -1252,13 +1248,13 @@ body > footer.container > .moss-hero-closing[data-align="top"] .moss-hero-conten
 /* The call to action is a button with a ground of its own, the page colour at 80%, in the text
    colour with its border, so it reads on any picture whatever the words' ink; hovered it inverts.
    The ink measurement leaves the link row out of what the words' ink is read over. */
-body > footer.container > .moss-hero-closing .moss-hero-content a {
+body > footer.container > .moss-hero-closing .moss-hero-content :where(.moss-hero-actions, .moss-buttons) a {
   font-weight: 500;
   color: var(--moss-color-text);
   border-color: var(--moss-color-text);
   background: color-mix(in srgb, var(--moss-color-bg) 80%, transparent);
 }
-body > footer.container > .moss-hero-closing .moss-hero-content a:hover {
+body > footer.container > .moss-hero-closing .moss-hero-content :where(.moss-hero-actions, .moss-buttons) a:hover {
   color: var(--moss-color-bg);
   background: var(--moss-color-text);
 }
@@ -7563,11 +7559,18 @@ body > footer.container:has(> .moss-hero-closing) {
   margin-inline: auto;
 }
 
+/* The gap above a hero's credit is the hero's own bottom margin, never a
+   negative margin on the caption, which climbed into a phone hero whose
+   layout shrinks that margin. */
+.moss-hero:has(+ .moss-hero-caption) {
+  margin-block-end: calc(var(--moss-space-lg) - var(--moss-space-md));
+}
+
 /* The caption itself: below the image, in the reading column, never over the
    photograph. Quiet, like a figcaption. */
 .moss-hero-caption {
   max-inline-size: var(--moss-content-width);
-  margin-block: calc(-1 * var(--moss-space-md)) var(--moss-space-lg);
+  margin-block: 0 var(--moss-space-lg);
   margin-inline: auto;
   padding-inline: var(--moss-space-md);
   color: var(--moss-color-muted);
@@ -7830,11 +7833,18 @@ body > footer.container:has(> .moss-hero-closing) {
   font-size: var(--moss-hero-title-size, 2.5rem);
 }
 
+/* A link in a sentence reads in the words' own ink. */
 .moss-hero-content a {
+  color: inherit;
+  text-decoration-line: underline;
+}
+
+/* A paragraph of nothing but links (the build marks it `.moss-hero-actions`)
+   is the hero's call to action, each link a button, as is a `:::buttons` row. */
+.moss-hero-content :where(.moss-hero-actions, .moss-buttons) a {
   display: inline-block;
   /* currentColor so the button tracks whatever the container resolves to —
      white over the image, body text in the mobile stacked block. */
-  color: inherit;
   border: 1px solid currentColor;
   font-size: var(--moss-hero-link-size, 1em);
   padding: var(--moss-hero-link-padding, 0.5em 1.2em);
@@ -7844,7 +7854,7 @@ body > footer.container:has(> .moss-hero-closing) {
   transition: background 0.2s;
 }
 
-.moss-hero-content a:hover {
+.moss-hero-content :where(.moss-hero-actions, .moss-buttons) a:hover {
   background: rgba(255,255,255,0.15);
 }
 

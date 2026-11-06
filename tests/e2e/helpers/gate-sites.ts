@@ -980,6 +980,36 @@ const VERTICAL_BODY = Array.from({ length: 12 }, () =>
   "這是一段用來填滿版面的測試文字。每一段的長度大致相同，足以讓直排的欄位向左延伸好幾列。",
 ).join("\n\n");
 
+// A hero's words with a link inside a sentence and a paragraph that is only a
+// link, on a page and on the closing picture. Served by
+// playwright/hero-links.config.ts.
+const HERO_LINK_WORDS = `[A text link](/notes/) runs on into the rest of a sentence.
+
+[Plan a visit](/visit/)`;
+export const HERO_LINKS_GATE: ScratchSiteSpec = {
+  name: "hero-links-gate",
+  files: {
+    "cover.svg": HERO_PORTRAIT_SVG,
+    "index.md": `---
+title: Hero links
+uid: "hlg00101"
+---
+
+:::hero {image=cover.svg}
+# Example title
+
+${HERO_LINK_WORDS}
+:::
+
+Body text.
+`,
+    "footer.md": `:::hero {image=cover.svg align=top}
+${HERO_LINK_WORDS}
+:::
+`,
+  },
+};
+
 export const HERO_CAPTION_GATE: ScratchSiteSpec = {
   name: "hero-caption-gate",
   files: {
@@ -990,6 +1020,20 @@ uid: "hcg00101"
 ---
 
 :::hero {image=cover.svg caption="Cover: the memorial wall at the monastery gate (photo: A. Photographer)"}
+:::
+
+Body text.
+`,
+    "overlay.md": `---
+title: Phone overlay with a credit
+uid: "hcg00105"
+---
+
+:::hero {mobile=overlay align=end caption="Photograph credit line long enough to wrap on a phone."}
+![[cover.svg]]
+# Example title
+
+A second line
 :::
 
 Body text.

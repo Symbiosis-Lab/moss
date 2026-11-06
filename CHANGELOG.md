@@ -275,6 +275,10 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A hero's credit line (`caption=`) no longer slips under the hero on a phone: with `mobile=overlay` its first line used to sit beneath the words' panel at the picture's foot.
+- A heading's `#` permalink sits on the baseline of the heading's first line, in the heading's own line box, so a heading with a rule or top padding above its words no longer draws the mark above them.
+- A closing picture (the last `:::hero` of `footer.md`) whose fence holds only the picture and its `caption=` keeps its credit at the foot, its `align=` crop and its `fade=top`; before, a picture with no words lost all three.
+- In a hero's words, only a paragraph of nothing but links (or a `:::buttons` row) is drawn as buttons; a link inside a sentence is a text link in the words' colour, underlined. The row of buttons carries `moss-hero-actions`, for a theme that styles the buttons alone.
 - A wiki embed of a web address that ends in `/`, such as `![[https://player.example.org/embed/album=1/|An album|700x120]]`, is now a frame. It was read as a folder listing and printed "No pages under …" on the page.
 - A theme stylesheet with `/*` or a brace inside a quoted string, as in `a[title="/*"]` or `content: "}"`, is now read whole. Before, everything after it was lost to the build's theme checks, the hero's text colours, `moss describe`'s CSS query and `moss doctor --surface`.
 - The search box and a long scroll row's previous and next buttons now read a page's `<html lang>` the way every other site script does. A `zh-Hans-HK` page showed them in Traditional Chinese while the rest of the page was Simplified, and `deu`, `yue-HK` and `cmn-Hant` pages showed them in English.

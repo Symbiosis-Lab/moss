@@ -912,3 +912,14 @@ mod tests {
         }
     }
 }
+
+/// Whether a paragraph's inlines are nothing but links, with only spaces or
+/// line breaks between them: a row of links, not a sentence holding one.
+pub fn is_link_row(inlines: &[Inline]) -> bool {
+    inlines.iter().any(|i| matches!(i, Inline::Link { .. }))
+        && inlines.iter().all(|i| match i {
+            Inline::Link { .. } | Inline::LineBreak => true,
+            Inline::Text(t) => t.trim().is_empty(),
+            _ => false,
+        })
+}

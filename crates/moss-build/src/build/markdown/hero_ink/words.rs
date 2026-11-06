@@ -5,6 +5,8 @@
 //! hero rules where one does not (`site_css_sets_the_type_the_words_are_modelled_in`
 //! and the `closing-picture` render gate hold the model to the stylesheet).
 
+use moss_core::ast::{self as md, inlines_to_plain_text, is_link_row, Inline, Shortcode};
+
 /// A text's width in ems: a letter is half an em and a CJK character a whole
 /// one. The theme's face is not seen, so a narrower one sets fewer lines than
 /// this counts.
@@ -25,27 +27,33 @@ pub struct Words {
 }
 
 impl Words {
-    /// Reads the hero's overlay source: a `#` block is the heading, a block
-    /// of nothing but `[text](url)` links is the links, any other is text.
-    pub fn read(overlay: &str, credit: &str) -> Self {
+    /// Reads the hero's words as the renderer draws them: the first heading is
+    /// the heading, a paragraph of nothing but links (`is_link_row`) or a
+    /// `:::buttons` row is the buttons, any other paragraph is text. Lists,
+    /// quotes and other blocks are not modelled.
+    pub fn read(overlay: &[md::Block], credit: &str) -> Self {
         let mut words = Words { credit: em(credit), ..Self::default() };
-        for block in overlay.split("\n\n").map(str::trim).filter(|b| !b.is_empty()) {
-            let (mut texts, mut rest, mut left) = (Vec::new(), String::new(), block);
-            while let Some((before, after)) = left.split_once('[') {
-                let Some((text, tail)) = after.split_once("](") else { break };
-                let Some((_, tail)) = tail.split_once(')') else { break };
-                texts.push(text);
-                rest.push_str(before);
-                left = tail;
-            }
-            rest.push_str(left);
-            if block.starts_with('#') {
-                words.heading = if words.heading > 0.0 { words.heading } else { em(block.trim_start_matches('#').trim()) };
-            } else if !texts.is_empty() && rest.trim().is_empty() {
-                words.links += texts.iter().map(|t| em(t)).sum::<f32>();
-                words.link_count += texts.len() as u32;
-            } else {
-                words.text += em(block);
+        for block in overlay {
+            match block {
+                md::Block::Heading { children, .. } => {
+                    if words.heading == 0.0 {
+                        words.heading = em(&inlines_to_plain_text(children));
+                    }
+                }
+                md::Block::Paragraph(inlines) if is_link_row(inlines) => {
+                    for link in inlines.iter().filter_map(|i| match i { Inline::Link { children, .. } => Some(children), _ => None }) {
+                        words.links += em(&inlines_to_plain_text(link));
+                        words.link_count += 1;
+                    }
+                }
+                md::Block::Paragraph(inlines) => words.text += em(&inlines_to_plain_text(inlines)),
+                md::Block::Shortcode(Shortcode::Buttons(row)) => {
+                    for item in &row.items {
+                        words.links += em(&item.text);
+                        words.link_count += 1;
+                    }
+                }
+                _ => {}
             }
         }
         words

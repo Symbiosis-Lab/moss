@@ -571,16 +571,8 @@ pub trait RenderHooks {
                     }
                 }
                 if !args.overlay.is_empty() {
-                    // Render via `render_blocks`, then collapse
-                    // tag-adjacent newlines to match the byte shape of
-                    // `render_markdown_to_html_with` (pulldown-cmark's
-                    // `push_html` emits none).
-                    //
-                    // `DefaultHooks::without_heading_anchors` suppresses
-                    // moss-heading-anchor on overlay headings. We rebuild
-                    // DefaultHooks from gallery_assets() rather than coercing
-                    // `self` to `&dyn RenderHooks` — the coercion requires
-                    // `Self: Sized`, which the trait default cannot guarantee.
+                    // Tag-adjacent newlines collapse to the byte shape
+                    // pulldown-cmark's `push_html` emits.
                     let mut overlay_html = String::new();
                     render_hero_overlay_blocks(
                         self.gallery_assets(),
@@ -651,6 +643,9 @@ pub trait RenderHooks {
     fn emit_footnote_anchors(&self) -> bool {
         true
     }
+
+    /// A class for a paragraph's `<p>`, from what it holds. Default: none.
+    fn paragraph_class(&self, _children: &[super::node::Inline]) -> Option<&'static str> { None }
 
     /// Whether a heading at `level` carries the `moss-heading-anchor`
     /// permalink. The `id` is kept regardless of the answer, so a fragment
@@ -828,6 +823,8 @@ pub struct DefaultHooks<'a> {
     suppress_heading_anchors: bool,
     /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
     vertical: bool,
+    /// See [`DefaultHooks::hero_words`].
+    hero_words: bool,
     /// Overrides [`RenderHooks::gallery_link_template`] when set.
     gallery_link_template: Option<&'a str>,
     /// Body images emitted by [`RenderHooks::render_image`] load eagerly
@@ -939,6 +936,12 @@ impl<'a> DefaultHooks<'a> {
             ..Self::default()
         }
     }
+
+    /// Hooks for a hero's words: no permalinks, and a paragraph of nothing but links is
+    /// `moss-hero-actions`, the buttons, which CSS cannot tell from a link in a sentence.
+    pub fn hero_words(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
+        Self { hero_words: true, ..Self::without_heading_anchors(assets) }
+    }
 }
 
 const GALLERY_LINK_TEMPLATE_EN: &str = "Open image {n} of {m}";
@@ -962,6 +965,10 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
 
     fn emit_heading_anchors(&self, level: u8) -> bool {
         level != 1 && !self.suppress_heading_anchors
+    }
+
+    fn paragraph_class(&self, children: &[super::node::Inline]) -> Option<&'static str> {
+        (self.hero_words && super::node::is_link_row(children)).then_some("moss-hero-actions")
     }
 
     fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {
@@ -1102,9 +1109,7 @@ fn push_bare_img(
     out.push_str(" />");
 }
 
-/// Render hero overlay blocks into `out` via [`DefaultHooks::without_heading_anchors`]
-/// so that headings inside the overlay don't carry a `moss-heading-anchor`
-/// permalink.
+/// Render hero overlay blocks into `out` via [`DefaultHooks::hero_words`].
 ///
 /// Accepts an optional `AssetSnapshot` reference (from the caller's
 /// `gallery_assets()`) to route inline images through the synth path when
@@ -1123,7 +1128,7 @@ fn render_hero_overlay_blocks(
     metas: &[super::document::BlockMeta],
     out: &mut String,
 ) {
-    super::render::render_blocks_with_meta(&DefaultHooks::without_heading_anchors(snapshot), out, blocks, metas);
+    super::render::render_blocks_with_meta(&DefaultHooks::hero_words(snapshot), out, blocks, metas);
 }
 
 /// Collapse `\n` that follows a heading or paragraph closing tag when the

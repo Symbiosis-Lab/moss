@@ -152,6 +152,17 @@ fn a_closing_hero_caption_is_its_credit_inside_the_picture() {
 }
 
 #[test]
+fn a_closing_picture_with_no_words_keeps_its_credit_and_layout() {
+    let footer = site_with(":::hero {image=day.png dark=night.png align=top fade=top caption=\"Etching, 1643.\"}\n:::\n", false);
+    let section = &footer[..footer.find("</section>").unwrap()];
+    assert!(section.contains(r#"<p class="moss-hero-credit""#) && section.contains(">Etching, 1643.</p>"), "the credit is inside the picture: {footer}");
+    for attr in [r#"data-align="top""#, r#"data-fade="top""#, "data-overlay", "data-credit=\"", "data-foot=\""] {
+        assert!(section.contains(attr), "{attr}: {footer}");
+    }
+    assert!(!section.contains("moss-hero-content"), "no words, no words' box: {footer}");
+}
+
+#[test]
 fn an_ordinary_hero_keeps_its_panel_unless_it_asks_to_measure() {
     let page = |hero: &str| {
         let site = Site::new(&[("index.md", &format!("---\ntitle: Harbour\n---\n\n{hero}\n"))]);

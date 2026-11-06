@@ -67,6 +67,7 @@ GATES_BUILD=(
   lead-listing
   grid-card-image-inline-size
   hero-caption
+  hero-links
   hero-from
   hero-pause
   hero-caption-stack

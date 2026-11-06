@@ -145,6 +145,8 @@ const GATE_PORT_KEYS = [
   'diagrams',
   'archival-footer',
   'type-defaults',
+  'closing-picture:wordless',
+  'hero-links',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

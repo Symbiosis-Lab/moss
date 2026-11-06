@@ -278,6 +278,11 @@ fn render_block<H: RenderHooks + ?Sized>(
         }
         Block::Paragraph(children) => {
             out.push_str("<p");
+            if let Some(class) = hooks.paragraph_class(children) {
+                out.push_str(" class=\"");
+                out.push_str(class);
+                out.push('"');
+            }
             push_source_line_attr(out, meta.source_line);
             out.push('>');
             render_inlines(hooks, out, children, fnotes);
