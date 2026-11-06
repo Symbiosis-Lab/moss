@@ -39,3 +39,18 @@ fn a_site_without_a_header_has_nothing_to_keep() {
     let site = Site::with_config("header = \"none\"\nheader_scroll = \"hide\"\n", &PAGES);
     assert!(!site.html("index.html").contains("data-header-scroll"));
 }
+
+#[test]
+fn a_header_laid_over_the_opening_hero_is_not_kept() {
+    let site = Site::with_config(
+        "header_scroll = \"sticky\"\n",
+        &[
+            ("index.md", "---\ntitle: Harbour\n---\n\n:::hero {header=over}\nWords\n:::\n\nBody.\n"),
+            ("plain.md", "---\ntitle: Plain\n---\n\n:::hero\nWords\n:::\n\nBody.\n"),
+        ],
+    );
+    let over = site.html("index.html");
+    assert!(over.contains(r#"data-header="over""#), "{over}");
+    assert!(!over.contains("data-header-scroll"), "{over}");
+    assert!(site.html("plain/index.html").contains(r#"data-header-scroll="sticky""#));
+}

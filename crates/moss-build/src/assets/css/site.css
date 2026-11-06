@@ -884,10 +884,11 @@ body > header {
 
 /* `[site].header_scroll`: the header stays at the top; under "hide" the script
    (header-scroll.ts) slides it away with `data-hidden` while the reader scrolls
-   down. A header laid over a hero keeps its own placement. The band needs a
+   down. A page whose header is laid over its hero carries no attribute, so it
+   keeps its own placement and its island bar. The band needs a
    paint of its own once page content scrolls beneath it. Both motions are off
    under reduced motion: the header just stays. */
-body[data-header-scroll] > header:not(:has(+ .moss-hero[data-header="over"])) {
+body[data-header-scroll] > header {
   position: sticky;
   top: 0;
   z-index: 90;

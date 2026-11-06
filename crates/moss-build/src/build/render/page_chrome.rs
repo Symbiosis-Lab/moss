@@ -137,8 +137,14 @@ impl PageChromeContext<'_, '_> {
         let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
         body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
         if contents_pictures { body_attrs.push_str(r#" data-contents="pictures""#); }
-        // A site with no header has nothing to keep at the top.
-        if self.layout.header != crate::build::components::nav::HeaderMode::None {
+        // The body names the mode only where the header really stays: a site
+        // with no header has nothing to keep, and a header laid over the
+        // page's opening hero scrolls away with it, so the island keeps its bar.
+        let header_over = doc
+            .and_then(|d| d.hero_html.as_deref())
+            .and_then(|h| h.split('>').next())
+            .is_some_and(|open_tag| open_tag.contains(r#" data-header="over""#));
+        if self.layout.header != crate::build::components::nav::HeaderMode::None && !header_over {
             if let Some(value) = self.layout.header_scroll.attr_value() {
                 body_attrs.push_str(&format!(r#" data-header-scroll="{value}""#));
             }
