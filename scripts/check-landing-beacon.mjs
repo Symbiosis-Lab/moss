@@ -25,14 +25,18 @@ async function fromDisk(route) {
   return route.fulfill({ status: 200, contentType: MIME[extname(file)] || 'application/octet-stream', body });
 }
 
-async function open(browser) {
+// `answer(n)` is the status for the n-th beacon POST (0-based); 204 by default.
+// `init` runs in the page before any of its scripts.
+async function open(browser, answer = () => 204, init = null) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  if (init) await context.addInitScript(init);
   const posts = [];
   await context.route(`${ORIGIN}/**`, fromDisk);
   await context.route('https://github.com/**', route => route.abort());
   await context.route(BEACON, route => {
-    posts.push(route.request().postDataJSON());
-    return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*' } });
+    const status = answer(posts.length);
+    posts.push({ ...route.request().postDataJSON(), at: Date.now() });
+    return route.fulfill({ status, headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'Retry-After', 'retry-after': '1' } });
   });
   const page = await context.newPage();
   // The fragment stands in for a sign-in token; the query must still arrive.
@@ -62,8 +66,38 @@ for (const engineName of engines) {
     await page.waitForTimeout(800);
     const clicks = posts.filter(p => p.event);
     assert.deepEqual(clicks.map(p => [p.url, p.event]), [[`${ORIGIN}/?utm_source=check`, 'download-macos']], `${engineName}: click events ${JSON.stringify(clicks)}`);
+
+    // What leaves the browser: only these fields, and a fresh random id per event.
+    const PAGEVIEW = ['id', 'referrer', 'screen_width', 'url'];
+    for (const p of posts) {
+      const { at, ...body } = p;
+      assert.deepEqual(Object.keys(body).sort(), p.event ? ['event', 'id', 'url'] : PAGEVIEW, `${engineName}: fields sent ${JSON.stringify(body)}`);
+      assert.match(p.id, /^[0-9a-f]{16}$/, `${engineName}: event id ${p.id}`);
+    }
+    assert.equal(new Set(posts.map(p => p.id)).size, posts.length, `${engineName}: ids repeat across events`);
     await context.close();
-    console.log(`ok ${engineName}: one pageview at / without the fragment, one more on pageshow, download-macos click`);
+
+    // A 503 is retried once its Retry-After has passed, with the same id.
+    const retried = await open(browser, n => (n === 0 ? 503 : 204));
+    await retried.page.waitForTimeout(1500);
+    const [first, second, ...more] = retried.posts;
+    assert.ok(second && more.length === 0, `${engineName}: one retry after a 503, got ${retried.posts.length} posts`);
+    assert.equal(second.id, first.id, `${engineName}: the retry keeps the event's id`);
+    assert.ok(second.at - first.at >= 900, `${engineName}: retried after ${second.at - first.at} ms, before Retry-After`);
+    await retried.context.close();
+
+    // A server that keeps refusing gets the first try and two retries, then nothing.
+    const refused = await open(browser, () => 503);
+    await refused.page.waitForTimeout(3000);
+    assert.equal(refused.posts.length, 3, `${engineName}: tries against a refusing server, got ${refused.posts.length}`);
+    await refused.context.close();
+
+    // Without an id the server cannot tell a retry from a new visit, so there is none.
+    const noId = await open(browser, () => 503, () => { crypto.getRandomValues = () => { throw new Error('unavailable'); }; });
+    await noId.page.waitForTimeout(3000);
+    assert.deepEqual(noId.posts.map(p => p.id), [null], `${engineName}: an event without an id is sent once`);
+    await noId.context.close();
+    console.log(`ok ${engineName}: one pageview at / without the fragment, one more on pageshow, download-macos click, only the agreed fields, one bounded retry, none without an id`);
   } catch (error) { console.error(`FAIL ${error.message.split('\n')[0]}`); failed = true; }
   finally { await browser.close(); }
 }

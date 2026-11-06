@@ -12,9 +12,15 @@ use crate::config::deployment::{DomainDeploymentConfig, MOSS_TARGET_ID};
 
 /// The script body. `ENDPOINT` is replaced by the JSON-encoded endpoint URL.
 /// The hosting server decides which events count, so this carries no
-/// hostname checks of its own. The address goes without its `#fragment`:
-/// the server never reads one, and sign-in links put tokens there.
-const BEACON_TEMPLATE: &str = r#"(function(){var b=ENDPOINT;var u=function(){return location.origin+location.pathname+location.search};var s=function(d){fetch(b,{method:'POST',body:JSON.stringify(d),keepalive:true}).catch(function(){})};var v=function(){s({url:u(),referrer:document.referrer||null,screen_width:innerWidth})};v();addEventListener('pageshow',function(e){if(e.persisted)v()});document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-track]');if(t)s({url:u(),event:t.getAttribute('data-track')})})})();"#;
+/// hostname checks of its own.
+///
+/// Each event carries a random id, new per event and kept only in memory, so
+/// the server counts a retry once; a browser that cannot make one sends the
+/// event once, never retried. A 429, a 503 or a network failure is
+/// retried at most twice, after the server's Retry-After (capped at 30 s) or
+/// 2 s then 4 s; at most ten retries wait at once, and the rest are dropped.
+/// The body stays a CORS-simple request: no headers, so no preflight.
+const BEACON_TEMPLATE: &str = r#"(function(){var b=ENDPOINT,w=0;var u=function(){return location.origin+location.pathname+location.search};var r=function(){try{var a=crypto.getRandomValues(new Uint8Array(8)),h='';for(var i=0;i<8;i++)h+=(a[i]|256).toString(16).slice(1);return h}catch(_){return null}};var s=function(d,n){var again=function(sec){if(n<2&&w<10){w++;setTimeout(function(){w--;s(d,n+1)},Math.min(sec||2<<n,30)*1e3)}};fetch(b,{method:'POST',body:JSON.stringify(d),keepalive:true}).then(function(x){if(x.status==429||x.status==503)again(+x.headers.get('Retry-After'))},function(){again(0)})};var e=function(d){d.id=r();s(d,d.id?0:2)};var v=function(){e({url:u(),referrer:document.referrer||null,screen_width:innerWidth})};v();addEventListener('pageshow',function(x){if(x.persisted)v()});document.addEventListener('click',function(x){var t=x.target.closest&&x.target.closest('[data-track]');if(t)e({url:u(),event:t.getAttribute('data-track')})})})();"#;
 
 /// Whether this site gets the visit counter: moss-hosted, with a site id. The
 /// tag and the file both gate on this, so a tag never names a file that was not written.
