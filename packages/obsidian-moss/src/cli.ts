@@ -173,6 +173,14 @@ export function parseProblemCount(text: string): number {
   return m ? Number(m[1]) : 0;
 }
 
+/**
+ * The moss app's deep link that opens a folder for building, previewing and
+ * publishing. The app percent-decodes the whole path, separators included.
+ */
+export function publishInAppUrl(folder: string): string {
+  return `moss://deploy?path=${encodeURIComponent(folder)}`;
+}
+
 /** Substring that identifies a real moss preview server's health body. */
 export const MOSS_HEALTH_MARKER = '"moss-preview-server"';
 

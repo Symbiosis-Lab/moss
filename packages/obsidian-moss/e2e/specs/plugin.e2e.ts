@@ -80,5 +80,22 @@ describe("moss plugin", () => {
     } catch {
       throw new Error(`status bar never returned to idle (last: "${lastStatus}")`);
     }
+    // The pane says the preview stopped instead of showing the last page.
+    expect(await browser.$("iframe.moss-preview-iframe").isExisting()).toBe(false);
+    expect(await browser.$(".moss-preview-message").getText()).toContain("No preview running");
+  });
+
+  it("stops the server when the preview pane is closed", async () => {
+    await browser.executeObsidianCommand("moss:preview");
+    const status = browser.$(".status-bar-item.plugin-moss");
+    await browser.waitUntil(async () => (await status.getText()).includes("serving"), {
+      timeout: 30000,
+      timeoutMsg: "preview never started",
+    });
+    await browser.executeObsidian(({ app }) => app.workspace.detachLeavesOfType("moss-preview"));
+    await browser.waitUntil(async () => (await status.getText()).includes("moss: idle"), {
+      timeout: 15000,
+      timeoutMsg: "closing the pane left the server running",
+    });
   });
 });

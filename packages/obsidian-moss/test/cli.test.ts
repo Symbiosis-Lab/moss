@@ -9,6 +9,7 @@ import {
   parseProblemCount,
   parseServerEvents,
   parseServerUrl,
+  publishInAppUrl,
   splitFlags,
   type DetectEnv,
 } from "../src/cli";
@@ -169,5 +170,17 @@ describe("binary detection", () => {
     const e = env({ pathVar: "/usr/local/bin:/usr/local/bin" });
     const candidates = candidateBinaryPaths("", e);
     expect(new Set(candidates).size).toBe(candidates.length);
+  });
+});
+
+describe("publishInAppUrl", () => {
+  it("percent-encodes the whole folder path into the moss app's deep link", () => {
+    expect(publishInAppUrl("/Users/me/My Vault/在場")).toBe(
+      "moss://deploy?path=%2FUsers%2Fme%2FMy%20Vault%2F%E5%9C%A8%E5%A0%B4",
+    );
+  });
+
+  it("keeps characters that would end the query intact", () => {
+    expect(publishInAppUrl("/a/b&c?d#e")).toBe("moss://deploy?path=%2Fa%2Fb%26c%3Fd%23e");
   });
 });
