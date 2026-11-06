@@ -127,9 +127,14 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
     plans
 }
 
+/// Whether `url` is on one of a channel's domains, which are already in
+/// [`host_of`](crate::plugins::manager::copies::host_of)'s form.
 fn on_host(url: &str, domains: &[String]) -> bool {
-    let Some(host) = url.split("://").nth(1).and_then(|rest| rest.split(['/', '?', '#']).next()) else { return false };
-    domains.iter().any(|d| host == d || host.ends_with(&format!(".{d}")))
+    if !url.contains("://") {
+        return false;
+    }
+    let Some(host) = crate::plugins::manager::copies::host_of(url) else { return false };
+    domains.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
 /// Carry the plan out: write the uid where a post lacks one, then the records.

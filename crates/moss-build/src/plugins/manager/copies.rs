@@ -49,7 +49,8 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
         .filter(|p| installed.is_installed(&p.manifest.name))
         .filter_map(|p| {
             let spec = copy_spec(&p.manifest)?.clone();
-            let mut domains = p.manifest.domains.clone().unwrap_or_else(|| p.manifest.domain.iter().cloned().collect());
+            let declared = p.manifest.domains.clone().unwrap_or_else(|| p.manifest.domain.iter().cloned().collect());
+            let mut domains: Vec<String> = declared.iter().filter_map(|d| host_of(d)).collect();
             if let Some(key) = &spec.host_setting {
                 let config = super::hook_context::hook_config_for_plugin(project_path, p);
                 domains.extend(config.get(key).and_then(|v| v.as_str()).and_then(host_of));
@@ -59,10 +60,15 @@ pub fn copy_channels_of(project_path: &str, plugins: &[Plugin]) -> BTreeMap<Stri
         .collect()
 }
 
-/// The host of an address an author typed, with or without its scheme.
-fn host_of(address: &str) -> Option<String> {
-    let rest = address.trim().split("://").last()?;
-    rest.split(['/', '?', '#']).next().filter(|h| !h.is_empty()).map(str::to_string)
+/// The host of an address or bare domain, with or without its scheme, in
+/// the one form two spellings of it share: lowercase, with no port and no
+/// trailing dot. `BSKY.APP`, `bsky.app.` and `https://bsky.app:443/x` are all
+/// `bsky.app`.
+pub(crate) fn host_of(address: &str) -> Option<String> {
+    let address = address.trim();
+    let parsed = url::Url::parse(address).ok().filter(|u| u.has_host()).or_else(|| url::Url::parse(&format!("https://{address}")).ok())?;
+    let host = parsed.host_str()?.trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 impl PluginManager {

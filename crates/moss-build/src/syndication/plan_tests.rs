@@ -104,6 +104,20 @@ fn a_copy_already_listed_in_syndicated_is_adopted_not_posted() {
     assert_eq!(records.get("aa11aa11", "bluesky").unwrap().state, State::Posted);
 }
 
+/// The same address spelled another way is the same copy: the host's case,
+/// its default port and a trailing dot do not make it a stranger.
+#[test]
+fn a_copy_listed_with_another_spelling_of_its_host_is_adopted() {
+    for listed in ["https://BSKY.APP/profile/a/post/1", "https://bsky.app:443/profile/a/post/1", "https://bsky.app./profile/a/post/1"] {
+        let dir = tempfile::tempdir().unwrap();
+        let records = Records::at(dir.path().into());
+        let fm = serde_json::json!({"uid": "aa11aa11", "syndicated": [listed]});
+        let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky"], fm)]);
+        let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+        assert_eq!(actions(&plans)[0].2, Action::Adopt { url: listed.into() }, "{listed}");
+    }
+}
+
 #[test]
 fn a_copy_listed_as_one_address_is_adopted_too() {
     let dir = tempfile::tempdir().unwrap();
