@@ -60,6 +60,11 @@ pub struct PageSource {
     /// Syndication URLs from the article's frontmatter (empty if not an article).
     #[serde(default)]
     pub syndicated: Vec<String>,
+    /// The channels this article's copies go to, its folder's cascade applied:
+    /// what `syndicated` will list once they are sent. `None` when neither the
+    /// page nor a folder names any; empty for `syndicate: false`.
+    #[serde(default)]
+    pub syndicate: Option<Vec<String>>,
     /// What an author would create to take over this page when moss generates
     /// it — a home note for an index-less folder or the root, a claim file
     /// for an unclaimed term, a translation for a language home. `None` for
