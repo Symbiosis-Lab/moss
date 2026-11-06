@@ -94,10 +94,10 @@ pub fn render_with_sort(
             let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), count_label.as_deref(), None);
             if text.is_empty() { String::new() } else { format!(r#"<div class="moss-card-meta">{}</div>"#, text) }
         }
-        (None, axis) if axis.shows_date() && date_merged_into_kicker => {
-            // The kicker carries the year; the meta slot keeps the event's
-            // time (when it has one), the place and the listed names, and is
-            // never empty.
+        (None, axis) if !axis.shows_date() || date_merged_into_kicker => {
+            // No date here: either the axis shows none or the kicker carries
+            // the year. The meta slot keeps the event's time (when it has
+            // one), the place and the listed names, and is never empty.
             let text = child_list::leaf_meta("", props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
             if text.is_empty() {
                 String::new()

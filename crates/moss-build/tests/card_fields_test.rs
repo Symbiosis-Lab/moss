@@ -383,3 +383,20 @@ fn text_that_is_not_emphasis_stays_as_written() {
         "{page}"
     );
 }
+
+/// A summary row on a weight- or title-sorted listing shows no date, but still
+/// draws its card fields.
+#[test]
+fn summary_rows_sorted_by_weight_still_draw_card_fields() {
+    let (_guard, out) = build_site("weight", &[
+        (".moss/config.toml", CONFIG),
+        ("index.md", "---\ntitle: Home\nchildren: false\n---\n\n![[work/|style:summary,sort:weight]]\n"),
+        ("work/index.md", "---\ntitle: Work\nchildren: false\n---\n"),
+        ("work/a.md", "---\ntitle: Record A\nweight: 1\nholder: Example Archive\n---\n\nA.\n"),
+        ("work/b.md", "---\ntitle: Record B\nweight: 2\nholder: Other Archive\n---\n\nB.\n"),
+    ]);
+    let page = fs::read_to_string(out.join("index.html")).unwrap();
+    for holder in ["Example Archive", "Other Archive"] {
+        assert!(page.contains(&span("holder", holder)), "{holder} is drawn:\n{page}");
+    }
+}
