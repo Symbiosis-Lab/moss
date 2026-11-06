@@ -1805,6 +1805,17 @@ const CORE: &[ComponentEntry] = &[
         description: "The section a page field of type `page` or `pages` draws when its `place` is `end`: after the page's body, inside the article and before comments and series navigation. A `<h2 class=\"moss-field-end-label\">` carries the field's label, then one summary card per linked page that resolves, headlined by the linked page's own opening heading when it has one that differs from its title, with `pictures` of its pictures as a strip. Emitted only on a page that has a value for the field.",
     },
     ComponentEntry {
+        class: "moss-field-end-label",
+        kind: "instance",
+        parent: "moss-field-end",
+        data_attrs: &[],
+        example_html: r#"<h2 class="moss-field-end-label">next project</h2>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The heading of a `moss-field-end` section: the field's `label`, or its name capitalised when it has none.",
+    },
+    ComponentEntry {
         class: "moss-align-end",
         kind: "standalone",
         parent: "",
