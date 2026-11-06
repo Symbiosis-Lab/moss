@@ -74,13 +74,23 @@ pub fn install_url(ctx: &Ctx<'_>) -> Result<()> {
     .with_constructor(true);
     ctx.globals().set("URL", ctor)?;
     let install: rquickjs::Function = ctx.eval(SEARCH_PARAMS_JS)?;
-    install.call::<_, ()>((rquickjs::prelude::Func::from(form_parse), rquickjs::prelude::Func::from(form_serialize)))?;
+    install.call::<_, ()>((rquickjs::prelude::Func::from(form_parse), rquickjs::prelude::Func::from(form_serialize), rquickjs::prelude::Func::from(with_query)))?;
     Ok(())
 }
 
 /// A query's name-value pairs, by the URL standard's form-urlencoded parser.
 fn form_parse(query: String) -> Vec<Vec<String>> {
     url::form_urlencoded::parse(query.as_bytes()).map(|(k, v)| vec![k.into_owned(), v.into_owned()]).collect()
+}
+
+/// `href` with its query replaced by `query` (none when `None`), encoded as
+/// the URL standard's `search` setter encodes it, so a `#` in it is part of the
+/// query and not the start of a fragment. Answers the new href and `search`.
+fn with_query(href: String, query: Option<String>) -> Vec<String> {
+    let Ok(mut url) = url::Url::parse(&href) else { return vec![href, String::new()] };
+    url.set_query(query.as_deref());
+    let search = url.query().filter(|q| !q.is_empty()).map(|q| format!("?{q}")).unwrap_or_default();
+    vec![url.to_string(), search]
 }
 
 fn form_serialize(pairs: Vec<Vec<String>>) -> String {
@@ -94,7 +104,7 @@ fn form_serialize(pairs: Vec<Vec<String>>) -> String {
 /// `URLSearchParams` over the parser and serialiser above, and each URL's
 /// `searchParams`: it and `search` stay in step with each other and with
 /// `href`. A URL's other fields are values read once, at construction.
-const SEARCH_PARAMS_JS: &str = r##"(parse, serialize) => {
+const SEARCH_PARAMS_JS: &str = r##"(parse, serialize, withQuery) => {
   const lists = new WeakMap();
   const changed = new WeakMap();
   const query = (s) => (s.startsWith("?") ? s.slice(1) : s);
@@ -151,17 +161,19 @@ const SEARCH_PARAMS_JS: &str = r##"(parse, serialize) => {
     let search = url.search;
     const params = new URLSearchParams(search);
     const write = (q) => {
-      search = q ? "?" + q : "";
-      url.href = url.href.split("#")[0].split("?")[0] + search + url.hash;
+      [url.href, search] = withQuery(url.href, q);
     };
-    changed.set(params, () => write(params.toString()));
+    changed.set(params, () => {
+      const q = params.toString();
+      write(q === "" ? undefined : q);
+    });
     Object.defineProperty(url, "search", {
       enumerable: true,
       get: () => search,
       set: (value) => {
-        const q = query(usv(value));
-        lists.set(params, parse(q));
-        write(q);
+        const v = usv(value);
+        write(v === "" ? undefined : query(v));
+        lists.set(params, parse(query(search)));
       },
     });
     url.searchParams = params;
@@ -257,5 +269,25 @@ mod tests {
             "abc|123|a1,b2,c3|a=1&b=2&c=3",
             "2,3|https://x.io/?b=2&b=3#f|?b=2&b=3",
         ]);
+    }
+
+    /// A `#` written into the query stays in it, as a browser's `search` setter
+    /// keeps it, instead of cutting the query short as the start of a fragment.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hash_set_into_the_query_is_part_of_the_query() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let out: String = async_with!(ctx => |ctx| {
+            install_url(&ctx).unwrap();
+            ctx.eval(r#"
+                const u = new URL("https://x.io/p#old");
+                u.search = "q=a#b c";
+                const set = [u.href, u.search, u.searchParams.get("q")].join("|");
+                u.search = "";
+                [set, u.href, u.search].join("\n")
+            "#).unwrap()
+        })
+        .await;
+        assert_eq!(out.split('\n').collect::<Vec<_>>(), ["https://x.io/p?q=a%23b%20c#old|?q=a%23b%20c|a#b c", "https://x.io/p#old", ""]);
     }
 }
