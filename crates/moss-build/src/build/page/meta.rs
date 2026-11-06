@@ -89,78 +89,18 @@ pub fn build_og_tags(
     locale: &str,
     site_url: &SiteUrl,
 ) -> String {
-    let cover_url = cover.map(|c| c.to_meta_url(site_url));
-
-    // Skip empty title/description rather than emitting empty `content=""`.
-    // Absent is better than empty: an empty meta tells scrapers "we deliberately
-    // have no value here" instead of falling through to other sources.
-    let mut tags_html = vec![
-        r#"<meta property="og:type" content="article">"#.to_string(),
-    ];
-    if !title.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:title" content="{}">"#,
-            escape_html_attr(title)
-        ));
-    }
-    tags_html.push(format!(
-        r#"<meta property="og:url" content="{}">"#,
-        escape_html_attr(url)
-    ));
-    tags_html.push(format!(
-        r#"<meta property="og:site_name" content="{}">"#,
-        escape_html_attr(site_name)
-    ));
-    if !description.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:description" content="{}">"#,
-            escape_html_attr(description)
-        ));
-    }
-
-    if let Some(date) = date {
-        tags_html.push(format!(
-            r#"<meta property="article:published_time" content="{}">"#,
-            escape_html_attr(date)
-        ));
-    }
-
-    if let Some(image) = cover_url.as_deref() {
-        tags_html.push(format!(
-            r#"<meta property="og:image" content="{}">"#,
-            escape_html_attr(image)
-        ));
-        tags_html.push(format!(
-            r#"<meta property="og:image:alt" content="{}">"#,
-            escape_html_attr(title)
-        ));
-        if let Some((w, h)) = cover_dims {
-            tags_html.push(format!(
-                r#"<meta property="og:image:width" content="{}">"#,
-                w
-            ));
-            tags_html.push(format!(
-                r#"<meta property="og:image:height" content="{}">"#,
-                h
-            ));
-        }
-    }
-
-    if !locale.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:locale" content="{}">"#,
-            escape_html_attr(locale)
-        ));
-    }
-
-    for tag in tags {
-        tags_html.push(format!(
-            r#"<meta property="article:tag" content="{}">"#,
-            escape_html_attr(tag)
-        ));
-    }
-
-    tags_html.join("\n    ")
+    og_tags(
+        "article",
+        title,
+        url,
+        site_name,
+        description,
+        cover,
+        cover_dims,
+        locale,
+        site_url,
+        Some((date, tags)),
+    )
 }
 
 /// Generate Open Graph meta tags for a website homepage.
@@ -182,63 +122,80 @@ pub fn build_og_tags_website(
     locale: &str,
     site_url: &SiteUrl,
 ) -> String {
-    let cover_url = cover.map(|c| c.to_meta_url(site_url));
+    og_tags(
+        "website",
+        title,
+        url,
+        site_name,
+        description,
+        cover,
+        cover_dims,
+        locale,
+        site_url,
+        None,
+    )
+}
 
-    // Skip empty fields rather than emitting empty `content=""`. `title` is the
-    // page label (== site name on the homepage); `site_name` is the real site
-    // name, kept separate so per-page Pages emit og:site_name = site, not label.
-    let mut tags_html = vec![
-        r#"<meta property="og:type" content="website">"#.to_string(),
-    ];
+/// Shared Open Graph builder. Empty title, description and locale are skipped
+/// rather than emitted as `content=""`: an absent tag lets scrapers fall back
+/// to other sources, an empty one says "deliberately none". `title` is the
+/// page label; `site_name` is the real site name, kept separate so per-page
+/// Pages emit og:site_name = site, not label. Articles always emit
+/// og:site_name; websites only when it is non-empty. `article` carries the
+/// article-only `(published_time, tags)`.
+fn og_tags(
+    og_type: &str,
+    title: &str,
+    url: &str,
+    site_name: &str,
+    description: &str,
+    cover: Option<&CoverRef>,
+    cover_dims: Option<(u32, u32)>,
+    locale: &str,
+    site_url: &SiteUrl,
+    article: Option<(Option<&str>, &[String])>,
+) -> String {
+    let cover_url = cover.map(|c| c.to_meta_url(site_url));
+    let meta = |property: &str, content: &str| {
+        format!(
+            r#"<meta property="{property}" content="{}">"#,
+            escape_html_attr(content)
+        )
+    };
+
+    let mut tags_html = vec![format!(r#"<meta property="og:type" content="{og_type}">"#)];
     if !title.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:title" content="{}">"#,
-            escape_html_attr(title)
-        ));
+        tags_html.push(meta("og:title", title));
     }
-    tags_html.push(format!(
-        r#"<meta property="og:url" content="{}">"#,
-        escape_html_attr(url)
-    ));
-    if !site_name.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:site_name" content="{}">"#,
-            escape_html_attr(site_name)
-        ));
+    tags_html.push(meta("og:url", url));
+    if article.is_some() || !site_name.is_empty() {
+        tags_html.push(meta("og:site_name", site_name));
     }
     if !description.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:description" content="{}">"#,
-            escape_html_attr(description)
-        ));
+        tags_html.push(meta("og:description", description));
+    }
+
+    if let Some((Some(date), _)) = article {
+        tags_html.push(meta("article:published_time", date));
     }
 
     if let Some(image) = cover_url.as_deref() {
-        tags_html.push(format!(
-            r#"<meta property="og:image" content="{}">"#,
-            escape_html_attr(image)
-        ));
-        tags_html.push(format!(
-            r#"<meta property="og:image:alt" content="{}">"#,
-            escape_html_attr(title)
-        ));
+        tags_html.push(meta("og:image", image));
+        tags_html.push(meta("og:image:alt", title));
         if let Some((w, h)) = cover_dims {
-            tags_html.push(format!(
-                r#"<meta property="og:image:width" content="{}">"#,
-                w
-            ));
-            tags_html.push(format!(
-                r#"<meta property="og:image:height" content="{}">"#,
-                h
-            ));
+            tags_html.push(format!(r#"<meta property="og:image:width" content="{w}">"#));
+            tags_html.push(format!(r#"<meta property="og:image:height" content="{h}">"#));
         }
     }
 
     if !locale.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:locale" content="{}">"#,
-            escape_html_attr(locale)
-        ));
+        tags_html.push(meta("og:locale", locale));
+    }
+
+    if let Some((_, tags)) = article {
+        for tag in tags {
+            tags_html.push(meta("article:tag", tag));
+        }
     }
 
     tags_html.join("\n    ")
