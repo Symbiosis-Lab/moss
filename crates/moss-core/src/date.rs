@@ -78,35 +78,86 @@ fn date_from_frontmatter(frontmatter: &HashMap<String, Value>) -> Option<String>
     normalize_date(&raw)
 }
 
-/// Parse a `YYYY-MM-DD-…` prefix from a filename.
+/// Parse a `YYYY-MM-DD-…` prefix from a filename (extension optional).
 ///
-/// The filename must START with the date in the exact form, optionally
-/// followed by `-rest` and an extension. `news-2025-11-15.md` does NOT match.
+/// The filename must START with the date stamp. `news-2025-11-15.md` does NOT match.
 fn date_from_filename_prefix(filename: &str) -> Option<String> {
-    // Operate on bytes throughout: `&filename[..10]` panics when byte 10 lands
-    // inside a multi-byte char (e.g. `纽约诸法门.md`). All bytes we *match*
-    // against (digits, `-`, `.`) are ASCII, so byte comparisons are
-    // semantically equivalent to char comparisons here.
-    let bytes = filename.as_bytes();
-    if bytes.len() < 10 {
-        return None;
-    }
-    if bytes[4] != b'-' || bytes[7] != b'-' {
-        return None;
-    }
-    let y = std::str::from_utf8(&bytes[0..4]).ok()?.parse::<u32>().ok()?;
-    let m = std::str::from_utf8(&bytes[5..7]).ok()?.parse::<u32>().ok()?;
-    let d = std::str::from_utf8(&bytes[8..10]).ok()?.parse::<u32>().ok()?;
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || y == 0 {
-        return None;
-    }
+    let stem = match filename.rsplit_once('.') {
+        Some((stem, ext)) if ext.starts_with(|c: char| c.is_ascii_alphabetic()) => stem,
+        _ => filename,
+    };
+    parse_filename_stamp(stem).map(|s| s.date)
+}
 
-    match bytes.get(10) {
-        None | Some(b'-') | Some(b'.') => {}
-        _ => return None,
-    }
+/// The date stamp a file stem starts with, and what follows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilenameStamp {
+    /// `YYYY-MM-DD`.
+    pub date: String,
+    /// `HH:MM`, a local time.
+    pub time: Option<String>,
+    /// The words after the stamp, separators trimmed; `None` for a bare stamp.
+    pub words: Option<String>,
+}
 
-    Some(format!("{:04}-{:02}-{:02}", y, m, d))
+impl FilenameStamp {
+    /// The page date: `YYYY-MM-DD`, or `YYYY-MM-DDTHH:MM` when a time was written.
+    pub fn page_date(&self) -> String {
+        match &self.time {
+            Some(t) => format!("{}T{t}", self.date),
+            None => self.date.clone(),
+        }
+    }
+}
+
+/// Parse the date stamp at the start of a file stem: `YYYY-MM-DD`, optionally
+/// followed by ` HHMM`, ` HH.MM`, ` HH-MM` or `THHMM`, or the compact
+/// `YYYYMMDDHHMM`. The stamp must end the stem or be followed by a space or
+/// hyphen and words, so `2026-11-06 1432 Autumn hotpot` has all three parts.
+pub fn parse_filename_stamp(stem: &str) -> Option<FilenameStamp> {
+    let digits = |from: usize, n: usize| stem.get(from..from + n).filter(|d| d.bytes().all(|c| c.is_ascii_digit()));
+    if digits(0, 12).is_some() && digits(0, 13).is_none() {
+        let date = format!("{}-{}-{}", digits(0, 4)?, digits(4, 2)?, digits(6, 2)?);
+        return stamp_ending_at(stem, date, Some((digits(8, 2)?, digits(10, 2)?)), 12);
+    }
+    let date = stem.get(..10)?.to_string();
+    if matches!(stem.as_bytes().get(10), Some(b' ' | b'T')) {
+        if let Some((clock, end)) = clock_at(stem, 11) {
+            if let Some(stamp) = stamp_ending_at(stem, date.clone(), Some(clock), end) {
+                return Some(stamp);
+            }
+        }
+    }
+    stamp_ending_at(stem, date, None, 10)
+}
+
+/// Validate a stamp read up to byte `end` and read the words after it.
+fn stamp_ending_at(stem: &str, date: String, clock: Option<(&str, &str)>, end: usize) -> Option<FilenameStamp> {
+    parse_ymd(&date)?;
+    let time = match clock {
+        Some((h, m)) => {
+            let (h, m) = (fixed_digits(h, 2)?, fixed_digits(m, 2)?);
+            if h > 23 || m > 59 {
+                return None;
+            }
+            Some(format!("{h:02}:{m:02}"))
+        }
+        None => None,
+    };
+    let rest = stem.get(end..)?;
+    if !rest.is_empty() && !rest.starts_with([' ', '-']) {
+        return None;
+    }
+    let words = rest.trim_matches([' ', '-']);
+    Some(FilenameStamp { date, time, words: (!words.is_empty()).then(|| words.to_string()) })
+}
+
+/// A clock time `HHMM`, `HH.MM` or `HH-MM` starting at byte `from`: its two
+/// digit pairs and where it ends.
+fn clock_at(stem: &str, from: usize) -> Option<((&str, &str), usize)> {
+    let pair = |at: usize| stem.get(at..at + 2).filter(|p| p.bytes().all(|c| c.is_ascii_digit()));
+    let second = if matches!(stem.as_bytes().get(from + 2), Some(b'.' | b'-')) { from + 3 } else { from + 2 };
+    Some(((pair(from)?, pair(second)?), second + 2))
 }
 
 /// A number written as exactly `n` ASCII digits.
@@ -475,6 +526,40 @@ mod tests {
     fn filename_extensionless() {
         let r = resolve_publish_date(&fm(&[]), &["2025-11-15-foo"], None);
         assert_eq!(r.0, Some("2025-11-15".to_string()));
+    }
+
+    // ── filename stamps ─────────────────────────────────────────────────
+
+    fn stamp(stem: &str) -> Option<(String, Option<String>, Option<String>)> {
+        parse_filename_stamp(stem).map(|s| (s.date, s.time, s.words))
+    }
+
+    #[test]
+    fn stamp_forms() {
+        let d = |t: Option<&str>, w: Option<&str>| Some(("2026-11-06".to_string(), t.map(String::from), w.map(String::from)));
+        assert_eq!(stamp("2026-11-06"), d(None, None));
+        assert_eq!(stamp("2026-11-06 1432"), d(Some("14:32"), None));
+        assert_eq!(stamp("2026-11-06 14.32"), d(Some("14:32"), None));
+        assert_eq!(stamp("2026-11-06 14-32"), d(Some("14:32"), None));
+        assert_eq!(stamp("2026-11-06T1432"), d(Some("14:32"), None));
+        assert_eq!(stamp("202611061432"), d(Some("14:32"), None));
+        assert_eq!(stamp("2026-11-06 Autumn hotpot"), d(None, Some("Autumn hotpot")));
+        assert_eq!(stamp("2026-11-06-autumn-hotpot"), d(None, Some("autumn-hotpot")));
+        assert_eq!(stamp("2026-11-06 1432 Autumn hotpot"), d(Some("14:32"), Some("Autumn hotpot")));
+        assert_eq!(stamp("2026-11-06 1000km"), d(None, Some("1000km")));
+    }
+
+    #[test]
+    fn not_a_stamp() {
+        for stem in ["notes", "2026-11-06x", "2026-13-06", "2026-02-30", "20261106143", "2026110614321", "1432", "202611062561", "x2026-11-06", "2026-11-06春节"] {
+            assert_eq!(stamp(stem), None, "{stem}");
+        }
+    }
+
+    #[test]
+    fn page_date_carries_the_time_when_written() {
+        assert_eq!(parse_filename_stamp("2026-11-06").unwrap().page_date(), "2026-11-06");
+        assert_eq!(parse_filename_stamp("202611061432").unwrap().page_date(), "2026-11-06T14:32");
     }
 
     // ── non-ASCII filenames must not panic (regression: #date-utf8-panic) ──

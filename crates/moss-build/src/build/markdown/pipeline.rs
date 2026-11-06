@@ -637,6 +637,15 @@ pub fn process_markdown_file(
         frontmatter.date = Some(date);
     }
 
+    // A file named by its date stamp is dated by it, unless the page says when
+    // itself: `date:`, or an event's `start:`. Read before the stamp fills
+    // `date`: a page that dates itself is never an untitled post.
+    let dated = frontmatter.date.is_some() || frontmatter.start.is_some();
+    if !dated {
+        let stem = Path::new(file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        frontmatter.date = moss_core::date::parse_filename_stamp(stem).map(|s| s.page_date());
+    }
+
     // Translate the deprecated `sidebar:` field for both simplified and YAML
     // paths. Runs after frontmatter is fully parsed so it sees the final state
     // of children_source. See `apply_sidebar_alias` for the conflict rules.
@@ -1322,10 +1331,8 @@ pub fn process_markdown_file(
     // pipeline so their HTML is available for `collect_footer_slots_by_language`, but
     // they must never receive the auto-injected `<h1 class="moss-article-title">`
     // — the fragment lands inside a `<footer>` slot, and an article-level
-    // heading there is structurally wrong. PR7b routes that
-    // suppression through `HeadingInputs::slot_only` rather than the
-    // pre-2026-05-28 frontmatter-synthesis hack (`title: ""` injected by the
-    // now-deleted `render_footer_pages_from_disk`).
+    // heading there is structurally wrong; `HeadingInputs::slot_only`
+    // suppresses it.
     let heading_inputs = moss_core::heading::HeadingInputs {
         file_path,
         frontmatter_title: frontmatter.title.as_deref(),
@@ -1333,15 +1340,17 @@ pub fn process_markdown_file(
         root_folder_name: Some(root_folder_name),
         is_home_override: is_index_by_home_override,
         slot_only: is_slot_only,
+        dated,
     };
     let heading = moss_core::heading::compute(heading_inputs);
 
-    // Chrome label cascade — `state.text` (from compute(): `title:` else
-    // filename/folder name) when non-empty, filename otherwise (state.text is
-    // empty only in the title:"" case, which we ALWAYS chrome to filename to
-    // avoid <title></title>). Never sourced from body content for any page type
-    // (Obsidian-match, 2026-05-30).
-    let label = if heading.text.is_empty() {
+    // The chrome label: an untitled post's opening words, else `state.text`
+    // (`title:`, else the file or folder name), else the filename, so
+    // `title: ""` never gives an empty <title>.
+    let label = if moss_core::heading::is_untitled_stamp(file_path, frontmatter.title.as_deref(), dated) {
+        let excerpt = crate::build::page::meta::extract_description(&markdown_content_raw, site.math);
+        moss_core::heading::opening_words(&excerpt).unwrap_or_else(|| filename_title.clone())
+    } else if heading.text.is_empty() {
         filename_title.clone()
     } else {
         heading.text.clone()

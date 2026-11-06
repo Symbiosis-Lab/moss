@@ -132,6 +132,8 @@ declarations that fight each other.
   `:::grid` or any other block opening the page still leaves the
   auto-injected title in place, so a heading after it shows the title twice
   the same as if the grid weren't there.
+  A name that starts with a date stamp (`2026-11-06 Autumn hotpot.md`) dates the page and the words after it
+  are the title; a name that is only the stamp is an untitled, dated post (`moss guide authoring`, "Content structure").
 - **Name files in their own language; pin a non-ASCII URL.** The
   filename-as-title rule lets a localized name title the page for you —
   `隐私.md` → "隐私". When the name isn't ASCII, add `url:` to keep the public
