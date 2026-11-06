@@ -96,6 +96,7 @@ GATES_BUILD=(
   place-map-cut
   cluster-layer-zoom
   place-map-route
+  place-dot-links
   preview-parity-gate
   touch-targets
   places-explorer-boot

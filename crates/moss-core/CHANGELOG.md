@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The `moss-place-map` contract entry describes linked dots, and `--moss-place-focus` is a documented custom property.
+
 ### Removed
 
 - **BREAKING:** `resolve::embeds::resolve_embeds_with_visited`, which nothing called. Use `resolve_embeds`, which keeps its own cycle-detection set.

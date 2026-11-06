@@ -510,6 +510,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Aspect ratio of a static place map. moss sets it on a figure drawn over a historical layer (`data-map-cut`), so the figure is cut to the part of the frame the layer covers; read-only for a theme, which sizes the map through its container instead.",
     },
     CustomProp {
+        name: "--moss-place-focus",
+        owner: "moss-place-map",
+        default: "#1b4fd8",
+        description: "The ring that shows around a linked dot of a static place map while it has keyboard focus; `.moss/` themes set it to keep 3:1 against their land tones.",
+    },
+    CustomProp {
         name: "--moss-place-marker-casing",
         owner: "moss-places-marker",
         default: "#ffffff",

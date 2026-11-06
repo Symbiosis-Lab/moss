@@ -97,11 +97,11 @@ pub(super) const ENTRIES: &[ComponentEntry] = &[
                 description: "Runtime-set, inside the hydrated iframe only: whether the embed is showing its small collapsed presentation or has been expanded through the immersive/fullscreen control. Absent on the full places root page and on the static (unhydrated) figure.",
             },
         ],
-        example_html: r#"<figure class="moss-place-map" role="img" aria-label="Map of Kyoto, city precision"><svg aria-hidden="true"></svg></figure>"#,
+        example_html: r#"<figure class="moss-place-map" aria-label="Map of Kyoto, city precision"><svg focusable="false"><a href="/places/kyoto/" aria-label="Kyoto"></a></svg></figure>"#,
         example_markdown: r#"![[/places/kyoto/|style:map]]"#,
         status: Status::Confirmed,
         since: "0",
-        description: "Offline SVG map on a place term page or explicit `style:map` embed. Geography and privacy precision come from `.moss/places.toml`; no browser network request is made.",
+        description: "Offline SVG map on a place term page or explicit `style:map` embed. Geography and privacy precision come from `.moss/places.toml`; no browser network request is made. A dot whose place has its own page is an SVG `<a href>` named for the place (a dot standing for several places is named for all of them), with a 24 by 24 CSS px hit target and a focus ring that shows on keyboard focus; the place's own page does not link its own dot. A figure holding such links is a labelled `figure` without `role=\"img\"`, and its svg is not `aria-hidden`; a figure with no linked dot keeps `role=\"img\"` and a hidden svg.",
     },
     ComponentEntry {
         class: "moss-place-map-credit",

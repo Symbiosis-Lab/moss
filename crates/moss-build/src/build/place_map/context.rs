@@ -69,6 +69,9 @@ pub struct PlaceMapRenderContext {
     /// plain static figure instead of baking in a hash the build might not
     /// actually write.
     explorer_places_hash: Option<String>,
+    /// Term key -> served URL of each place's page, set once the terms are
+    /// derived. A dot links to its place only if the place is listed here.
+    place_pages: Arc<BTreeMap<String, String>>,
     /// The site's declared `[map.layers]`, each with its bbox settled.
     layers: Arc<Vec<crate::config::map_layers::MapLayer>>,
     /// One plan per layer: plates read and fitted, extent, credit, tile key.
@@ -94,6 +97,7 @@ impl PlaceMapRenderContext {
             explorer: true,
             map_assets_hash: String::new(),
             explorer_places_hash: None,
+            place_pages: Arc::default(),
             layers: Arc::default(),
             layer_plans: Arc::default(),
             crops: Arc::default(),
@@ -158,6 +162,18 @@ impl PlaceMapRenderContext {
         self
     }
 
+    /// The pages the static maps' dots link to; see [`Self::place_pages`].
+    pub fn with_term_pages(mut self, terms: &crate::build::terms::TermIndex) -> Self {
+        self.place_pages = Arc::new(terms.place_pages(&self.namespace));
+        self
+    }
+
+    #[cfg(test)]
+    fn with_place_pages(mut self, pages: BTreeMap<String, String>) -> Self {
+        self.place_pages = Arc::new(pages);
+        self
+    }
+
     pub(crate) fn explorer_places_hash(&self) -> Option<&str> {
         self.explorer_places_hash.as_deref()
     }
@@ -217,7 +233,7 @@ impl PlaceMapRenderContext {
             .map(|place| place.precision)
             .max_by_key(precision_rank)
             .unwrap_or(Precision::Country);
-        let options = super::SvgMapOptions { ground: ground.as_ref(), ..super::SvgMapOptions::new(host_path, ordinal, &first.display, precision) };
+        let options = super::SvgMapOptions { ground: ground.as_ref(), links: Some(&self.place_pages), ..super::SvgMapOptions::new(host_path, ordinal, &first.display, precision) };
         match super::emit_locator(&self.maps, &target, options) {
             Ok(locator) => {
                 // The article id `places.<hash>.json` keys THIS page's own
@@ -398,7 +414,7 @@ impl PlaceMapRenderContext {
             .or_else(|| target.places.first().map(|place| place.display.clone()))
             .unwrap_or_else(|| key.to_string());
         let ground = self.street_ground(&mut target, EMBED_CSS_WIDTH);
-        let svg = target.has_coordinates().then(|| super::emit_svg_over(&self.maps, &target, page_path, ordinal, ground.as_ref()))?;
+        let svg = target.has_coordinates().then(|| super::emit_svg_over(&self.maps, &target, page_path, ordinal, ground.as_ref(), Some(&self.place_pages)))?;
         let svg = if in_place_explorer { self.with_explorer_handshake(key, svg) } else { svg };
         let scope = if key == self.namespace { String::new() } else { format!("place={key}") };
         let svg = if is_embed { self.with_embed_hydration(svg, &scope, &embed_name) } else { svg };
@@ -885,6 +901,19 @@ mod tests {
         let html = on.render_locator(&["Harbor".into()], false, "story/index.html", 0).unwrap();
         assert!(html.contains("moss-place-locator moss-align-right"));
         assert!(html.contains("data-map-locator-profile=\"exact-city\""));
+    }
+
+    #[test]
+    fn only_a_place_with_a_page_has_a_linked_dot() {
+        let maps = PlaceMapContext::new(super::super::embedded().unwrap());
+        let pages = BTreeMap::from([("places/harbor".to_string(), "/places/harbor/".to_string())]);
+        let context = PlaceMapRenderContext::new(maps, gazetteer(), "places".into(), LocatorPlacement::AlignRight, BTreeMap::new());
+        let names = ["Harbor".to_string(), "Harbor East".to_string()];
+        let plain = context.render_locator(&names, false, "story/index.html", 0).unwrap();
+        assert!(!plain.contains("<a ") && plain.contains("role=\"img\""), "no pages known: {plain}");
+        let html = context.with_place_pages(pages).render_locator(&names, false, "story/index.html", 0).unwrap();
+        assert!(html.contains("<a href=\"/places/harbor/\" aria-label=\"Harbor\">"), "{html}");
+        assert_eq!(html.matches("<a ").count(), 1, "Harbor East has no page: {html}");
     }
 
     /// The reproduction from the field: a location list that mixes

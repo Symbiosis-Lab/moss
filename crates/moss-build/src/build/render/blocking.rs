@@ -1295,7 +1295,7 @@ pub fn generate_blocking_content_for_build(
         if let Some(ctx) = site_config.place_maps.take() {
             let json = crate::build::place_map::places_data::emit_places_data(&documents, &ctx, site_config.math, &dir_overrides);
             let hash = compute_content_hash(&json);
-            site_config.place_maps = Some(ctx.with_explorer_places_hash(hash));
+            site_config.place_maps = Some(ctx.with_explorer_places_hash(hash).with_term_pages(&term_index));
         }
 
         // The canonical site URL and the calendar plan are decided before the

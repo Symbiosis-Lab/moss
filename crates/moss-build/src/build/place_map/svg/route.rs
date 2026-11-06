@@ -258,6 +258,8 @@ mod tests {
             full_extent: false,
             tile: false,
             ground: None,
+            dot_links: None,
+            linked: false,
         }
     }
 

@@ -3230,6 +3230,7 @@ body > header .site-name {
      --moss-color-accent. */
   --moss-place-marker: var(--moss-color-accent, #2d5a2d);
   --moss-place-marker-casing: #ffffff;
+  --moss-place-focus: #1b4fd8;
   /* A route's dashed line and its hollow (region-precision)
      badge — the same muted slate-blue --moss-place-shadow already uses for
      the filled badge's own chip, so a route's line and both badge
@@ -3282,6 +3283,14 @@ body > header .site-name {
   aspect-ratio: var(--moss-place-map-ar, 3 / 2);
   writing-mode: horizontal-tb;
 }
+/* A dot that links to its place page: the ring shows only while the link has
+   keyboard focus, and the UA outline would draw a second box around it. */
+.moss-place-map a:focus-visible { outline: none; }
+.moss-place-map [data-map-focus] { display: none; }
+.moss-place-map a:focus-visible [data-map-focus] { display: inline; }
+@media (forced-colors: active) {
+  .moss-place-map a:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+}
 [data-theme="dark"] .moss-place-map {
   --moss-place-water: #1b242c;
   --moss-place-globe-water: #1b242c;
@@ -3296,6 +3305,7 @@ body > header .site-name {
   --moss-place-globe-edge: #23272a;
   --moss-place-shadow: #4d5f8f;
   --moss-place-marker-casing: #0e1210;
+  --moss-place-focus: #ffd54a;
   /* Not --moss-place-shadow's own dark value (#4d5f8f): that is a
      background fill in the filled badge, not a stroke/text colour, and is
      too dark to read as either against this theme's near-black casing. A

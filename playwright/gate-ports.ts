@@ -97,6 +97,7 @@ const GATE_PORT_KEYS = [
   'touch-targets:footer-md',
   'touch-targets:footer-fallback',
   'place-map-route',
+  'place-dot-links',
   'places-explorer-boot',
   'places-explorer-camera',
   'places-explorer-ring',

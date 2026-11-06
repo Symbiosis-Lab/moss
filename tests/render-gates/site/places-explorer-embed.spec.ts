@@ -1228,7 +1228,13 @@ test.describe("hydration degrades to the static poster", () => {
     const noJsPage = await browser.newPage({ javaScriptEnabled: false });
     try {
       await noJsPage.goto(url, { waitUntil: "domcontentloaded" });
-      await expect(noJsPage.locator(POSTER)).toHaveAttribute("role", "img");
+      // A static map whose dots link to place pages is a labelled figure of links;
+      // one with no links is a single image. Either way it keeps its name.
+      const poster = noJsPage.locator(POSTER);
+      await expect(poster).toHaveAttribute("aria-label", /\S/);
+      const links = await poster.locator("a[href]").count();
+      if (links > 0) await expect(poster).not.toHaveAttribute("role", "img");
+      else await expect(poster).toHaveAttribute("role", "img");
       await expect(noJsPage.locator(`${POSTER} > svg`)).toHaveCSS("display", "block");
       await expect(noJsPage.locator(IFRAME)).toHaveCount(0);
     } finally {

@@ -2168,6 +2168,43 @@ precision = "city"
   },
 };
 
+// Two located pages and their place pages, for the dots of a static place map
+// being links: Tab reaches one, it is named for its place, shows a focus ring,
+// and Enter opens the place page, whose own dot is not a link. Served by
+// playwright/place-dot-links.config.ts.
+export const PLACE_DOT_LINKS_GATE: ScratchSiteSpec = {
+  name: "place-dot-links-gate",
+  files: {
+    "index.md": `---
+title: Place Dot Links Gate
+uid: "pdl001a"
+location: Harbor
+---
+
+# Place Dot Links
+
+A page with one located place and a locator map beside it.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+locator = "align-right"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+line = false
+explorer = false
+`,
+    ".moss/places.toml": `["Harbor"]
+lat = 35.0
+lng = 135.0
+precision = "city"
+`,
+  },
+};
+
 /**
  * The locator's position relative to the article body's first TEXT block (a
  * paragraph, list or blockquote) — never a heading or media. `heading-first.md`

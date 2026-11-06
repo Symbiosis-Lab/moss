@@ -48,6 +48,16 @@ impl TermIndex {
         self.sites.get(&key).map(|site| self.site_target(&key, site))
     }
 
+    /// Every page of the place-typed kind `namespace`, keyed by term key, for a map dot to link to.
+    pub fn place_pages(&self, namespace: &str) -> std::collections::BTreeMap<String, String> {
+        let prefix = format!("{namespace}/");
+        self.sites
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(key, site)| (key.clone(), self.site_target(key, site)))
+            .collect()
+    }
+
     /// Where a link to this term goes: the claiming page, else its page.
     pub(super) fn site_target(&self, key: &str, site: &TermSite) -> String {
         match &site.claimed_by {
