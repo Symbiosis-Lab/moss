@@ -667,21 +667,19 @@ fn test_css_nav_right_edge_aligns_toggles_when_it_wraps() {
 }
 
 #[test]
-fn test_css_nav_split_name_alone_on_row_one_then_links_and_toggles() {
+fn test_css_nav_split_name_and_toggles_on_row_one_then_links() {
     // `data-nav-split` (set by nav-split.ts on a plain-site-name masthead that
-    // has to wrap) re-stacks the nav: the site name takes row 1 by itself, and
-    // row 2 holds the links followed by the toggles at the end edge.
-    // `display: contents` is what lifts the two groups out of .nav-right so
-    // they can be ordered independently — flex wrapping alone can never float
-    // the later sibling back up.
+    // has to wrap) re-stacks the nav: the site name and the toggles share row
+    // 1, and the links take row 2 alone. `display: contents` lifts the two
+    // groups out of .nav-right so they can be ordered independently; flex
+    // wrapping alone can never float a later sibling back up. Where the
+    // groups actually land is the nav-split-order render gate's concern.
     let right = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-right")
         .expect("split .nav-right rule should exist");
     let left = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-left")
         .expect("split .nav-left rule should exist");
     let links = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-links")
         .expect("split .nav-links rule should exist");
-    let icons = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-icons")
-        .expect("split .nav-icons rule should exist");
 
     assert!(
         right.contains("display: contents"),
@@ -689,21 +687,14 @@ fn test_css_nav_split_name_alone_on_row_one_then_links_and_toggles() {
         right
     );
     assert!(
-        left.contains("flex: 1 1 100%"),
-        "split .nav-left takes all of row 1 so the site name sits alone there, got: {}",
+        left.contains("flex: 1 1 0"),
+        "split .nav-left fills row 1 beside the toggles, got: {}",
         left
     );
     assert!(
-        links.contains("order: 1")
-            && links.contains("flex: 1 1 0")
-            && links.contains("justify-content: flex-start"),
-        "split links open row 2 packed at the start edge, got: {}",
+        links.contains("order: 1") && links.contains("flex: 1 1 100%"),
+        "split links come after the toggles, on a row of their own, got: {}",
         links
-    );
-    assert!(
-        icons.contains("order: 2") && icons.contains("margin-inline-start: auto"),
-        "icons must follow links and push to row 2's end edge, got: {}",
-        icons
     );
 }
 

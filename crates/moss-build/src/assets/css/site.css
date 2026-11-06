@@ -2186,9 +2186,9 @@ footer.container hr::before {
   border-block-end-color: var(--moss-color-accent-hover);
 }
 
-/* Nav Content - Flexible layout that wraps only when needed
-   Default: all items on one row (site-name | nav-links | toggle)
-   When overflow: site-name + toggle on row 1, nav-links on row 2 */
+/* Nav Content - one row (site-name | nav-links | toggles) while it fits.
+   When it doesn't, .nav-right wraps to row 2 as a unit; on a plain site name
+   the measured split (`data-nav-split`, below) keeps the toggles on row 1. */
 .nav-content {
   /* The header rule, on the block-end edge: below the strip across the page,
      to its LEFT under vertical-rl. One spelling lays out both. The token sets
@@ -2270,7 +2270,8 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
    produce a 3-row nav: site-name+partial-breadcrumb / rest-of-breadcrumb /
    nav-links). The clip removes residue after `flex-shrink` has done its job —
    e.g., when the parent-page segment (the last ancestor anchor, min-width:
-   5em) still can't fit. Below ~320px the site name itself may be clipped.
+   5em) still can't fit. On a breadcrumb page below ~320px the site name
+   itself may be clipped.
 
    `clip` rather than `hidden` for the same reason as
    `.moss-nav-island-trail`: `hidden` makes a scroll container, and a hover
@@ -2361,15 +2362,15 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
 }
 
 /* Site Name — the site root; always fully visible (flex-shrink: 0).
-   Font scales with viewport via clamp(); word-break handles extreme
-   narrow widths where even clamped font can't fit. */
+   Font scales with viewport via clamp(). Where a rule lets it wrap, an
+   overlong word still breaks, and its min-content stays the longest word. */
 .site-name {
   flex-shrink: 0;
   color: var(--moss-color-text);
   font-size: clamp(0.875rem, 1.5vw + 0.625rem, var(--moss-size-lg));
   font-weight: 500;
   text-decoration: none;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .site-logo {
@@ -2790,7 +2791,8 @@ body > header .site-name {
    margin is a no-op — the gap above governs. On row 2 it does the same job as
    space-between, and keeps working when .nav-links is absent entirely (a
    site with no nav items has nav-icons as nav-right's only child, where
-   space-between alone would leave it at the start edge). */
+   space-between alone would leave it at the start edge). In the split
+   (`data-nav-split`) it holds the toggles at the end of row 1. */
 .nav-icons {
   display: flex;
   align-items: center;
@@ -2798,33 +2800,28 @@ body > header .site-name {
   margin-inline-start: auto;
 }
 
-/* Two-line split (`data-nav-split`, set by nav-split.ts): row 1 is the site name alone and row 2 holds the links, then the toggles at its end edge. */
+/* Two-line split (`data-nav-split`, set by nav-split.ts): row 1 is the site name or breadcrumb trail with the toggles at its end edge, row 2 the links alone. The toggles are tools for the whole page, not navigation, so they stay at the corner the one-row masthead gave them. A trail folds into the room row 1 leaves it. */
 .nav-content[data-nav-split] .nav-right {
   display: contents;
 }
 
 .nav-content[data-nav-split] .nav-left {
-  flex: 1 1 100%;
+  flex: 1 1 0;
 }
 
-/* The name has row 1 to itself here, so it wraps inside it. The base rule's
-   flex-shrink: 0 keeps it at its one-line width, `.main-nav a` sets nowrap on
-   it, and .nav-left's overflow: clip then cuts the rest off. */
-.nav-content[data-nav-split] .site-name {
+/* A plain name wraps in the room row 1 leaves beside the toggles. The base
+   rule's flex-shrink: 0 keeps it at its one-line width, `.main-nav a` sets
+   nowrap on it, and .nav-left's overflow: clip would cut the rest off. */
+.nav-content[data-nav-split]:not(:has(.breadcrumb-segment)) .site-name {
   flex-shrink: 1;
   min-inline-size: 0;
   white-space: normal;
 }
 
+/* A full-row basis is what sends the links to a line of their own. */
 .nav-content[data-nav-split] .nav-links {
   order: 1;
-  flex: 1 1 0;
-  justify-content: flex-start;
-}
-
-.nav-content[data-nav-split] .nav-icons {
-  order: 2;
-  margin-inline-start: auto;
+  flex: 1 1 100%;
 }
 
 /* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. */
@@ -6305,6 +6302,28 @@ article a:where(:not(.moss-btn)):focus {
 @media (max-width: 20rem) {
   .mobile-menu-button {
     display: block;
+  }
+
+  /* The links are out of the row here, so a site name stays beside the menu
+     button and toggles, wrapping, whenever its longest word fits there; a logo
+     too wide for that sends the controls below it instead of being clipped.
+     A breadcrumb trail is placed by nav-split.ts (beside them through the
+     split, or the shipped wrap). */
+  .nav-content:not(:has(.breadcrumb-segment)) .nav-left {
+    inline-size: min-content;
+  }
+
+  .nav-content:not(:has(.breadcrumb-segment)) .site-name {
+    flex-shrink: 1;
+    min-inline-size: 0;
+    white-space: normal;
+  }
+
+  /* More than two lines there (`data-nav-stack`, set by nav-split.ts): the
+     name keeps its one-line width and the controls that no longer fit wrap
+     below it. */
+  .nav-content[data-nav-stack] .nav-left {
+    inline-size: auto;
   }
 
   /* The open menu is a sheet from the header's bottom edge (theme.ts measures

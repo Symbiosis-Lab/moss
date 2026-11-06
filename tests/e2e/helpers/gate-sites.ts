@@ -3377,9 +3377,12 @@ precision = "exact"
 export const NAV_SPLIT_ORDER_GATE: ScratchSiteSpec = {
   name: "nav-split-order-gate",
   files: {
+    // `breadcrumb: true` is the site-wide enable; the archive pages below give
+    // a three-crumb trail, long enough for the fold to engage at phone widths.
     "index.md": `---
 title: Nav Split Order Gate Site With A Long Name
 uid: "nso00101"
+breadcrumb: true
 ---
 
 # Nav Split Order Gate Site
@@ -3441,6 +3444,27 @@ nav: true
 ---
 
 # Colophon
+`,
+    "archive/index.md": `---
+title: An Archive Of Field Recordings
+uid: "nso00301"
+---
+
+# An Archive Of Field Recordings
+`,
+    "archive/autumn/index.md": `---
+title: Autumn Recordings From The Coast
+uid: "nso00302"
+---
+
+# Autumn Recordings From The Coast
+`,
+    "archive/autumn/rain.md": `---
+title: Rain On The Harbour Wall
+uid: "nso00303"
+---
+
+# Rain On The Harbour Wall
 `,
     "places/index.md": `---
 title: Places
