@@ -511,9 +511,6 @@ pub fn process_markdown_file(
     // suffix split is additive. Used below to make the source-line-offset search
     // skip the frontmatter region (so a body line that happens to equal a
     // frontmatter value line is not matched too early). 0 when no frontmatter.
-    let mut declared = std::collections::BTreeMap::new();
-    let mut field_errors = std::collections::BTreeMap::new();
-    let mut declared_written = std::collections::BTreeSet::new();
     let (mut frontmatter, markdown_content_raw, raw_frontmatter, frontmatter_line_count) =
         if is_simplified_frontmatter(content) {
             let (fm, body) = parse_simplified_frontmatter(content);
@@ -738,15 +735,16 @@ pub fn process_markdown_file(
         lang: doc_lang.as_bcp47_attr(),
         decimal: crate::build::components::field_text::decimal_mark(doc_lang),
     };
-    if let Some(source) = &field_source {
-        let fields = declared_fields(file_path, source, site.fields, format);
-        for warning in fields.warnings {
-            crate::build::cli_output::cli_warn!("{}", warning);
+    let (declared, field_errors, declared_written) = match &field_source {
+        Some(source) => {
+            let fields = declared_fields(file_path, source, site.fields, format);
+            for warning in fields.warnings {
+                crate::build::cli_output::cli_warn!("{}", warning);
+            }
+            (fields.values, fields.errors, fields.written)
         }
-        declared = fields.values;
-        field_errors = fields.errors;
-        declared_written = fields.written;
-    }
+        None => Default::default(),
+    };
 
     // Detect if this is an index file (needed for url_path computation).
     let filename_lower = Path::new(file_path)
@@ -1113,8 +1111,7 @@ pub fn process_markdown_file(
             diag.source_path
         );
     }
-    let mut outgoing_links: Vec<moss_core::resolve::OutgoingLink> = wikilink_outgoing;
-    outgoing_links.extend(graph_resolution.outgoing);
+    let outgoing_links: Vec<moss_core::resolve::OutgoingLink> = wikilink_outgoing.into_iter().chain(graph_resolution.outgoing).collect();
 
     // 2b. Host-context URL classification. `resolve_urls` only handles the
     //     content-graph subset (bare image refs + standard markdown links).
@@ -1148,7 +1145,6 @@ pub fn process_markdown_file(
     } else {
         moss_core::ast::extract_hero(&mut doc, &pipeline_hooks)
     };
-    let mut hero_html = hero_extraction.as_ref().map(|h| h.html.clone());
     let hero_image_url = hero_extraction.as_ref().and_then(|h| h.image_url.clone());
     let hero_overlay_text = hero_extraction
         .as_ref()
@@ -1157,9 +1153,7 @@ pub fn process_markdown_file(
     // fence holds is only the fallback. With nothing in the fence there is no
     // fallback, so no empty hero box is left behind.
     let hero_drawn_from = hero_extraction.as_ref().and_then(|h| h.drawn_from.clone());
-    if hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()) {
-        hero_html = None;
-    }
+    let hero_html = hero_extraction.as_ref().map(|h| h.html.clone()).filter(|_| !hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()));
 
     // 4. Capture the first body image for the cover chain.
     //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
@@ -1260,9 +1254,6 @@ pub fn process_markdown_file(
             }
         });
     }
-    let mut body_plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
-    // A diagram's note links are dependency edges like a prose link's.
-    outgoing_links.extend(diagram_links.take());
 
     // Subscribe-form presence: read from the typed AST (descends into
     // shortcode bodies). Replaces the `has_inline_subscribe` flag the
@@ -1278,13 +1269,6 @@ pub fn process_markdown_file(
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
     let has_forms = moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Form);
     let has_viewer = moss_core::ast::has_viewable_picture_recursive(&doc);
-
-    // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
-    // from an upstream pass) may still contain `href="moss-resolved:..."` /
-    // `wikilink:` / `moss-newtab:` prefixes that the AST renderer didn't
-    // see (they're opaque pass-through). Route any leakage through
-    // `resolve_link`. Idempotent on already-decoded hrefs.
-    body_plan.map_html(&|html| sweep_unresolved_hrefs(html, &resolve_link));
 
     // `:::toc` was removed in the unified grammar migration; the post-pass
     // that replaced its placeholder is gone. Tables of contents are now a
@@ -1393,12 +1377,12 @@ pub fn process_markdown_file(
     if let Some(body_heading) = moss_core::heading::body_heading_replacing_title(heading_inputs, is_nav_page) {
         crate::build::cli_output::log_note!("Heading: in '{file_path}' the body's `# {body_heading}` replaces the page title '{}'; to keep the title as the page heading, open the body with `# {}` and make the other heading `##`", heading.text, heading.text);
     }
-    match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
-        TitleOutcome::None => {}
-        outcome => body_plan.prepend_html(inject_article_title_h1(
+    let title_h1 = match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
+        TitleOutcome::None => None,
+        outcome => Some(inject_article_title_h1(
             "", &heading.text, emit_source_lines, outcome == TitleOutcome::Hidden,
         )),
-    }
+    };
 
     // The declarations with a `place` that this page has a value for, in
     // declaration order. The render stage draws them: a page link needs the
@@ -1585,11 +1569,25 @@ pub fn process_markdown_file(
     let permalink = format!("/{}", url_path); // allow:served-path-url-construct (page permalink derived from doc url_path, stored in ParsedDocument)
     let media_items = crate::build::media_collection::extract_media_items(&doc.blocks, &url_path, doc_lang);
 
-    // Adjust relative paths for pretty URLs: non-index files get wrapped in a subdirectory
-    // (e.g., article.md → article/index.html), so relative paths need one extra "../"
-    if !is_index_file {
-        body_plan.map_html(&adjust_relative_paths_for_pretty_urls);
-    }
+    // The plan is edited in order: sweep, title, then the pretty-URL depth, which
+    // must see the title too. Non-index files are wrapped in a subdirectory
+    // (article.md → article/index.html), so their relative paths need one extra "../".
+    let body_plan = {
+        let mut plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
+        // `Block::Other` raw HTML (e.g. `<div class="callout">`) is opaque to the
+        // AST renderer and may still carry `moss-resolved:` / `wikilink:` /
+        // `moss-newtab:` hrefs. Idempotent on already-decoded hrefs.
+        plan.map_html(&|html| sweep_unresolved_hrefs(html, &resolve_link));
+        if let Some(h1) = title_h1 {
+            plan.prepend_html(h1);
+        }
+        if !is_index_file {
+            plan.map_html(&adjust_relative_paths_for_pretty_urls);
+        }
+        plan
+    };
+    // A diagram's note links are dependency edges like a prose link's.
+    let outgoing_links: Vec<_> = outgoing_links.into_iter().chain(diagram_links.take()).collect();
 
     // The plan, flattened. Consumers that only want bytes read this; the render
     // phase reads `body_plan` when it needs to know what the bytes are made of.
