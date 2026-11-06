@@ -599,6 +599,15 @@ article h6 {
   font-family: var(--moss-font-section, var(--moss-font-body));
 }
 
+/* In languages that build long compound words, a heading may break inside a
+   long word, so a phone does not leave one word or a closing mark alone on a
+   line. Headings in other languages keep whole words. Zero specificity, so a
+   theme's own heading rule decides. */
+:where(h1, h2, h3, h4, h5, h6):where(:lang(de), :lang(nl), :lang(da), :lang(nb), :lang(nn), :lang(sv), :lang(fi)) {
+  hyphens: auto;
+  hyphenate-limit-chars: 10 4 4;
+}
+
 /* A number range in a heading ("1626–1705") never breaks across lines; the
    build wraps each such run in this span. */
 .moss-nobreak {

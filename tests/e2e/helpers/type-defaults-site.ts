@@ -374,6 +374,22 @@ ${card(1, "A prose card with a title that runs to several lines", "Some text.", 
 ${card(2, "Short", "Short.")}
 :::
 `,
+    // The same long heading on a German page and on the site's English one.
+    "hyphens-de.md": `---
+title: Seite
+lang: de
+uid: "tdg00041"
+---
+
+## Bürgerbeteiligungsveranstaltungen der Stadtentwicklungsgesellschaft: wer darf mitreden?
+`,
+    "hyphens-en.md": `---
+title: Page
+uid: "tdg00042"
+---
+
+## Bürgerbeteiligungsveranstaltungen der Stadtentwicklungsgesellschaft: wer darf mitreden?
+`,
     "quotes.md": `---
 title: Quotes
 uid: "tdg00008"

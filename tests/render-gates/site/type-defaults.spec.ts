@@ -1,5 +1,5 @@
 /**
- * Six defaults a hand-built design pinned down, each measured in a real engine
+ * Defaults a hand-built design pinned down, each measured in a real engine
  * on a site the CLI built. Fixture: tests/e2e/helpers/type-defaults-site.ts.
  * Run via: bash scripts/render-gates.sh type-defaults
  */
@@ -499,5 +499,16 @@ test.describe("the page title's size", () => {
         expect(await title(page), `${url} at ${width}`).toBe(26);
       }
     }
+  });
+});
+
+test.describe("headings in languages of compound words", () => {
+  const hyphens = (page: Page) => page.locator("article h2").first().evaluate((h) => getComputedStyle(h).hyphens);
+
+  test("hyphenate in German and keep whole words on an English page", async ({ page }) => {
+    await open(page, "/hyphens-de/", 390);
+    expect(await hyphens(page)).toBe("auto");
+    await open(page, "/hyphens-en/", 390);
+    expect(await hyphens(page)).toBe("manual");
   });
 });
