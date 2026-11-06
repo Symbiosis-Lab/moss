@@ -580,6 +580,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_overlay_text: Option<String>,
+    /// The sources of the page's cited quotations, one per distinct address,
+    /// in page order. Feeds the JSON-LD `citation` list.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub citations: Vec<moss_core::ast::quote_source::QuoteSource>,
     /// Per-page feature-presence flags. See `PageFeatures`.
     #[serde(skip)]
     #[specta(skip)]

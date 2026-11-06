@@ -302,7 +302,7 @@ pub(crate) fn page_json_ld(
         // Schema.org headline is chrome; use the plain-text label.
         return Ok(Some(build_schema_json_ld(
             &d.label, description, &page_meta_url(d, site_url)?, site_name,
-            d.date.as_deref(), cover, d.tags.as_deref().unwrap_or(&[]), site_url,
+            d.date.as_deref(), cover, d.tags.as_deref().unwrap_or(&[]), site_url, &d.citations,
         )));
     }
     Ok(is_homepage.then(|| build_schema_website(site_name, description, homepage_url, lang_tag)))
@@ -321,6 +321,7 @@ pub fn build_schema_json_ld(
     cover: Option<&CoverRef>,
     tags: &[String],
     site_url: &SiteUrl,
+    citations: &[moss_core::ast::quote_source::QuoteSource],
 ) -> String {
     let mut o = serde_json::json!({
         "@context": "https://schema.org",
@@ -339,6 +340,12 @@ pub fn build_schema_json_ld(
     }
     if !tags.is_empty() {
         o["keywords"] = tags.into();
+    }
+    if !citations.is_empty() {
+        o["citation"] = citations
+            .iter()
+            .map(|c| serde_json::json!({"@type": "CreativeWork", "name": c.text, "url": c.href}))
+            .collect();
     }
     ld_script(&o)
 }

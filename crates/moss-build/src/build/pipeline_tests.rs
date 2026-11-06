@@ -8002,3 +8002,28 @@ fn previews_json_recomputes_only_changed_pages_and_drops_removed_ones() {
 
 #[path = "assets_folder_tests.rs"]
 mod assets_folder;
+
+#[test]
+fn a_quotation_source_link_becomes_the_cite_and_the_pages_citation() {
+    let (dir, _c) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(dir.join("Notes")).unwrap();
+    fs::write(dir.join("Notes/index.md"), "---\ntitle: Notes\n---\n\nNotes.\n").unwrap();
+    let quote = "> The annual fiesta has become the day of days.\n>\n> — Jane Doe, [\"Care of Migrants\"](https://archive.example.org/record/123), 1958\n";
+    fs::write(dir.join("Notes/Cited.md"), format!("---\ntitle: Cited\ndate: 2026-01-02\n---\n\n{quote}\n{quote}")).unwrap();
+    fs::write(dir.join("Notes/Plain.md"), "---\ntitle: Plain\ndate: 2026-01-03\n---\n\n> Words.\n>\n> — [Local](/notes/)\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let ld = |page: &str| {
+        let html = staged(&dir, page);
+        let json = html.split("<script type=\"application/ld+json\">").nth(1).expect("structured data");
+        serde_json::from_str::<serde_json::Value>(json.split("</script>").next().unwrap()).unwrap()
+    };
+    let cited = staged(&dir, "notes/cited/index.html");
+    assert_eq!(cited.matches(r#"<blockquote cite="https://archive.example.org/record/123""#).count(), 2, "{cited}");
+    assert_eq!(
+        ld("notes/cited/index.html")["citation"],
+        serde_json::json!([{"@type": "CreativeWork", "name": "\"Care of Migrants\"", "url": "https://archive.example.org/record/123"}])
+    );
+    assert!(!staged(&dir, "notes/plain/index.html").contains("cite="));
+    assert!(ld("notes/plain/index.html").get("citation").is_none());
+}

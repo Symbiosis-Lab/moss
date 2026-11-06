@@ -732,6 +732,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         description: "The url path segment of the folder whose home page sets `color:` for this page: `work` for every page under `/work/`, the nearest coloured folder when they nest. An ordinary page's own `color:` does not change it; only on a page outside any coloured folder is it the page's own name. Absent on pages with no colour at all, and on a site-wide colour set by the front page. Scope a section with `body[data-section=\"work\"]` and tint it with `var(--moss-section-color)`, instead of `body[data-path^=\"/work/\"]`, which breaks when the folder is renamed.",
     },
     ScopeAttr {
+        selector: "blockquote",
+        name: "cite",
+        values: &[],
+        description: "The address of the record a quotation comes from, set when the blockquote's last paragraph begins with an em dash and links to an `http` or `https` address (a grid quote cell takes it from its italic source line). Only the attribute is added: the markup and the source line are as before. Style the cited ones with `blockquote[cite]`.",
+    },
+    ScopeAttr {
         selector: "html",
         name: "data-theme",
         values: &["light", "dark"],

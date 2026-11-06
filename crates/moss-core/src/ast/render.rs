@@ -538,6 +538,11 @@ fn render_block<H: RenderHooks + ?Sized>(
             let body = render_children_to_string(hooks, children, fnotes);
             if !hoist_emptied(children, &body) {
                 out.push_str("<blockquote");
+                if let Some(source) = super::quote_source::prose_quote_source(children) {
+                    out.push_str(" cite=\"");
+                    out.push_str(&escape_attr(&source.href));
+                    out.push('"');
+                }
                 push_source_line_attr(out, meta.source_line);
                 out.push_str(">\n");
                 out.push_str(&body);

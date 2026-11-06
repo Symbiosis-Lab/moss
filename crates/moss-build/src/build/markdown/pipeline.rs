@@ -1710,6 +1710,7 @@ pub fn process_markdown_file(
         body_cover_path,
         body_cover_candidates,
         hero_overlay_text,
+        citations: moss_core::ast::quote_source::citations(&doc.blocks),
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
             forms: has_forms,

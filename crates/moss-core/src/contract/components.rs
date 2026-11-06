@@ -1615,7 +1615,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: ":::grid {collage}\n![A picture](a.jpg)\n+++\n> Communication is health.\n\n*[Source](https://example.org/)*\n+++\n![Another](b.jpg)\n:::\n",
         status: Status::Confirmed,
         since: "0.20",
-        description: "A grid cell whose whole content is a blockquote followed by one italic line: the quote, with the line as its source in the `<figcaption>`. Only the source line links. Its words use `--moss-font-quote`. Matched only in a grid cell (a collage or a plain grid); in running prose the same shape stays a blockquote and a paragraph.",
+        description: "A grid cell whose whole content is a blockquote followed by one italic line: the quote, with the line as its source in the `<figcaption>`. Only the source line links. Its words use `--moss-font-quote`. Matched only in a grid cell (a collage or a plain grid); in running prose the same shape stays a blockquote and a paragraph. When the source line links to an `http` or `https` address, the `<blockquote>` carries it as `cite`, and the page's structured data lists it under `citation`; a prose quotation whose last paragraph starts with an em dash and links the same way gets the same two.",
     },
     ComponentEntry {
         class: "no-viewer",

@@ -50,6 +50,7 @@ pub mod parser;
 mod picture_row;
 pub mod plain_text;
 pub mod query;
+pub mod quote_source;
 pub mod render;
 pub mod resolve_urls;
 pub mod shortcode;

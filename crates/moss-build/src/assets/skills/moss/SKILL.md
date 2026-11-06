@@ -223,6 +223,8 @@ for you. Never write `!important`.
 For shortcodes and partials (content reuse, not styling tiers), see
 `moss guide authoring`.
 
+For a quotation and its source, and for footnotes that move into the margin on a wide window, see `moss guide authoring`, "Quotations and their sources" and "Footnotes and margin notes".
+
 ## Keep the theme stylesheet readable
 
 `.moss/theme/style.css` is read and edited by the person who owns the site long after you finish, so write it for them. Before handing it over, simplify and consolidate:

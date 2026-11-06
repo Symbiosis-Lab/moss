@@ -340,6 +340,30 @@ A page's listing picture is what its card shows in a folder listing, a grid card
 
 A single newline inside a paragraph is a line break (`<br>`), not a space as in plain CommonMark, so lines of an address or a verse stay on their own lines; a blank line starts a new paragraph.
 
+### Quotations and their sources
+
+Write a quotation as a blockquote and put its source in the last paragraph, opening with an em dash (`—`) or a horizontal bar (`―`), with the link to the record where the quoted words sit:
+
+```markdown
+> The annual fiesta has become the day of days.
+>
+> — Jane Doe, ["The Pastoral Care of Migrants"](https://archive.example.org/record/123), 1958
+```
+
+Nothing visible changes: the page shows the `<blockquote>` with its source paragraph as before. moss adds the address of the first `http` or `https` link in that paragraph as the blockquote's `cite`, and lists each such address once under `citation` in the page's structured data (name from the link's words), so a machine can tell which record the words come from. A relative link, a last paragraph without the dash, or a dash line that is not last adds nothing. Link to the record itself, not to the site's home or a search page, because the address is what readers and machines will follow to check the words. In a grid cell, the italic source line under a quote (`*[Source](https://example.org/)*`) does the same. Style the cited ones with `blockquote[cite]`.
+
+### Footnotes and margin notes
+
+Write `Text[^1].` where the note belongs and `[^1]: The note.` on a line of its own:
+
+```markdown
+The parish agrees[^1].
+
+[^1]: The note, with a [link](https://example.org/).
+```
+
+The notes are numbered in the order they are cited and listed at the end of the page. With scripting, on a window at least 76rem wide, moss copies each note into the right margin beside the line that cites it, stacks notes cited close together, and hides the list at the end. If any note cannot be copied, none are hidden. Under 76rem the list at the end is the only place: tapping a marker lifts it as a sheet at the bottom of the window, showing that note (drag up to read all, press Esc, tap the article or drag down to close), and scrolling to the end puts it back in the page. Print and pages without scripting show the list. The home page, a page with `content_width: full` and a page with a sidebar have no margin and use the sheet at any width. To widen or narrow the margin column, set `--moss-sidenote-reserve` on `body` in `.moss/theme/style.css` (`body { --moss-sidenote-reserve: 24rem; }`; the default is at most `17.5rem`, and a declaration on `:root` has no effect because the sidenotes stylesheet sets the property on `body`).
+
 ### Folder cascade
 
 A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `author`, `description`, `content_width`, `title_block`, `reader_controls`, `sort`, `timezone` and `syndicate`. It also carries declared fields (see Declared fields), such as `credit_holder: "Example Museum"`. A cascaded field is checked as the page's own value would be: its type, and its `in` scope, so a page outside that scope gets nothing. The page that declares it is not included. A page that sets one of these keys or fields itself keeps its own value, and a blank one counts: to switch a cascaded key or field off for one page, set it to an empty value there, such as `description: ""`, and the page then has no value for it rather than the folder's. A blank value in a cascade is ignored, as a blank value on a page is. A nested folder's value does not replace an outer folder's, even one that does not fit: the outer folder's value wins, as for the other cascaded keys. A key that is neither a cascade key nor a declared field has no effect; the build warns once per source page and names what cascade does carry.
