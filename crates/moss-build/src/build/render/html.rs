@@ -10,6 +10,8 @@ use moss_core::PageKind;
 
 // Generator submodule imports
 use crate::build::components;
+use crate::build::components::field_places::Placements;
+use crate::i18n::Language;
 use crate::build::render::grid_cells;
 use crate::build::markdown::html_post::splice_after_title_block;
 use crate::build::page::layout::LayoutConfig;
@@ -393,6 +395,335 @@ pub(super) struct RenderCtx<'a, 'd> {
     pub shared: &'a BuildShared<'d>,
 }
 
+/// What a page is, decided once before any of its body is composed: the
+/// branches that follow read these and never re-derive or change them.
+struct PageFacts<'a> {
+    ui_lang: Language,
+    page_lang_tag: String,
+    site_title: String,
+    typesetting: Option<&'a str>,
+    vertical_typesetting: bool,
+    shell_type: ShellType,
+    is_article_page: bool,
+    is_explorer_root: bool,
+    /// Where the place-map locator goes, for every kind of page. Vertical
+    /// pages put it after the opening text; a page with a facts column has it
+    /// head that column; horizontal articles float it before the text; the
+    /// rest keep it in the masthead.
+    locator_placement: LocatorPlacement,
+    /// The declared fields the page draws, less the eyebrow, which goes into
+    /// the body above the title.
+    fields: Placements,
+    eyebrow: String,
+    /// A real public page (not draft/slot_only), so it advertises a share card
+    /// and is indexed; `listed: false` pages keep their card. One flag for the
+    /// og/twitter/cover/auto-card/JSON-LD gates so they cannot drift apart.
+    is_card_eligible: bool,
+    /// The page's children are listed in the right rail, not below its body.
+    /// Read from the alias provenance flag (not `sidebar.is_some()`) so that a
+    /// `sidebar:` the alias yielded to a `children:` conflict still lists
+    /// its body children.
+    children_in_sidebar: bool,
+    /// The folder the right-rail list is drawn from: the deprecated `sidebar:`
+    /// field when the alias is active, else `children_source` under
+    /// `children_in: sidebar`.
+    sidebar_source: Option<&'a str>,
+    /// The share-card description: page description, hero overlay, body, then
+    /// the same three rungs of the page-language homepage. The homepage reads
+    /// only its own rungs.
+    share_card_description: Option<String>,
+    /// Absolute root when deployed, "/" otherwise; shared by the website
+    /// og tags and the WebSite JSON-LD node.
+    homepage_meta_url: String,
+}
+
+impl<'a> PageFacts<'a> {
+    fn new(context: &'a RenderCtx<'_, '_>, doc: Option<&'a ParsedDocument>, is_homepage: bool) -> Self {
+        let all_docs = context.chrome.documents;
+        let layout_config = context.chrome.layout;
+        let site_lang = context.chrome.site_lang;
+        let typesetting = super::config::effective_typesetting(
+            doc.and_then(|d| d.typesetting.as_deref()), layout_config.typesetting.as_deref(),
+        );
+        let vertical_typesetting = typesetting == Some("vertical");
+        let shell_type = ShellRegistry::select_shell_type(doc, is_homepage, context.chrome.project.has_content_folders);
+        let is_article_page = shell_type == ShellType::Article;
+        let ui_lang = doc.map(|d| d.lang).unwrap_or(site_lang);
+
+        let mut fields = doc.map_or_else(Default::default, |d| {
+            crate::build::components::field_places::draw_for_page(d, all_docs, context.content_graph, typesetting)
+        });
+        let eyebrow = std::mem::take(&mut fields.eyebrow);
+        let locator_placement = if vertical_typesetting {
+            LocatorPlacement::AfterText
+        } else if !fields.facts.is_empty() {
+            LocatorPlacement::Facts
+        } else if is_article_page {
+            LocatorPlacement::BeforeText
+        } else {
+            LocatorPlacement::Masthead
+        };
+        if locator_placement == LocatorPlacement::Facts {
+            if let Some(locator) = doc.and_then(|d| credits::render_place_locator(d, layout_config)) {
+                fields.head_facts_with(&locator);
+            }
+        }
+
+        let children_in_sidebar = doc.is_some_and(|d| {
+            d.from_sidebar_alias.unwrap_or(false) || d.children_in.as_deref() == Some("sidebar")
+        });
+        let sidebar_source = doc.and_then(|d| {
+            if d.from_sidebar_alias.unwrap_or(false) {
+                d.sidebar.as_deref()
+            } else if d.children_in.as_deref() == Some("sidebar") {
+                d.children_source.as_deref()
+            } else {
+                None
+            }
+        });
+
+        // Per-language: the page's-language homepage when there is one, else the
+        // site-default homepage, so zh-hans/ pages do not surface the English
+        // homepage's description.
+        let cascade_homepage = if doc.is_some() && !is_homepage {
+            find_homepage_doc(all_docs, ui_lang, site_lang)
+        } else {
+            None
+        };
+        let share_card_description = doc.and_then(|d| {
+            let inputs = crate::build::page::meta::DescriptionChainInputs {
+                page_description: d.description.as_deref(),
+                page_hero_overlay_text: d.hero_overlay_text.as_deref(),
+                page_content: &d.content,
+                homepage_description: cascade_homepage.and_then(|h| h.description.as_deref()),
+                homepage_hero_overlay_text: cascade_homepage.and_then(|h| h.hero_overlay_text.as_deref()),
+                homepage_content: cascade_homepage.map(|h| h.content.as_str()),
+                math: layout_config.assets.math,
+            };
+            crate::build::page::meta::resolve_page_description_with_fallbacks(&inputs)
+        });
+        let homepage_meta_url = if context.site_url.is_deployed() {
+            context.site_url.as_str().to_string()
+        } else {
+            "/".to_string()
+        };
+
+        PageFacts {
+            ui_lang,
+            page_lang_tag: doc.and_then(|d| d.lang_tag.clone()).unwrap_or_else(|| layout_config.lang_tag.clone()),
+            site_title: context.chrome.site_title(doc),
+            typesetting,
+            vertical_typesetting,
+            shell_type,
+            is_article_page,
+            is_explorer_root: is_explorer_root_doc(doc, layout_config),
+            locator_placement,
+            fields,
+            eyebrow,
+            is_card_eligible: doc.map_or(false, |d| d.is_public_page()),
+            children_in_sidebar,
+            sidebar_source,
+            share_card_description,
+            homepage_meta_url,
+        }
+    }
+
+    /// The page's body plan with the locator spliced in, and `eyebrow` (when
+    /// not empty) above everything.
+    fn body_plan(&self, context: &RenderCtx<'_, '_>, doc: &ParsedDocument, eyebrow: &str) -> crate::build::markdown::body_plan::BodyPlan {
+        let mut plan = grid_cells::resolve_page_body(
+            doc,
+            context.chrome.documents,
+            context.content_graph,
+            context.dir_overrides,
+            &context.chrome.project.root_path,
+            &context.shared.media_lookup,
+            self.typesetting,
+            context.shared.now,
+        );
+        splice_body_locator(&mut plan, doc, context.chrome.layout, self.locator_placement);
+        if !eyebrow.is_empty() {
+            plan.prepend_html(eyebrow.to_string());
+        }
+        plan
+    }
+
+    /// The listing of `folder_path`'s children, as the listing a folder index
+    /// shows, in the page's own language.
+    fn children_listing(
+        &self,
+        context: &RenderCtx<'_, '_>,
+        doc: &ParsedDocument,
+        folder_path: &str,
+        from_md_path: &str,
+        names_scoped_home: bool,
+    ) -> String {
+        let marker = crate::build::folder_embed::synthesize_children_marker_for(
+            doc,
+            folder_path,
+            from_md_path,
+            names_scoped_home,
+        );
+        let listed = crate::build::folder_embed::ListedUrls::default();
+        let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
+            &marker,
+            from_md_path,
+            context.chrome.documents,
+            context.chrome.project,
+            context.dir_overrides,
+            doc.lang,
+            self.typesetting,
+            Some(&context.shared.media_lookup),
+            context.chrome.layout.assets.math,
+            None,
+            Some(&listed),
+            context.shared.now,
+        );
+        crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
+        crate::build::emit::listing_style::wrap(
+            doc,
+            annotate_children_listing(resolved_html, context.chrome.emit_source_lines),
+        )
+    }
+
+    /// A folder index, a page that won a term claim (`author_page:` /
+    /// `tag_page:`, at any path) or a page hosting another folder's
+    /// `children_source` ends in that listing; a term page and a place
+    /// namespace root also get their map.
+    fn host_listing(&self, context: &RenderCtx<'_, '_>, doc: &ParsedDocument, content: String, is_folder_index: bool) -> String {
+        let term_listing = doc.term_listing.as_deref();
+        let children_source_target = doc.children_source.as_deref()
+            .map(|r| resolve_children_source_folder_path(r, context.chrome.documents));
+        if !(is_folder_index || term_listing.is_some() || children_source_target.is_some()) {
+            return content;
+        }
+        let names_scoped_home = children_source_target.as_ref().is_some_and(|t| t.1);
+        let folder_path = term_listing.map(str::to_string).unwrap_or_else(|| {
+            if is_folder_index {
+                doc.url_path.trim_end_matches("/index.html").trim_end_matches("index.html").trim_end_matches('/').to_string()
+            } else {
+                children_source_target.map(|t| t.0).unwrap_or_default()
+            }
+        });
+        // A `children_source` host needs its real source path, so the
+        // listing's self-exclusion can match it.
+        let from_md_path = if term_listing.is_some() || is_folder_index {
+            if folder_path.is_empty() { "index.md".to_string() } else { format!("{}/index.md", folder_path) }
+        } else {
+            doc.source_path.clone().unwrap_or_else(|| format!("{}/index.md", folder_path))
+        };
+
+        // An explorer root hosts no listing: the map is the page.
+        let show_folder_children = !self.children_in_sidebar && doc.children.unwrap_or(true) && !self.is_explorer_root;
+        // Where the page's own body ends: a claimed term page's map and
+        // listing are placed relative to it (see `insert_before_sources`).
+        let body_end = content.len();
+        let mut content = content;
+        // A claimed sub-term and a real place-namespace-root folder index get
+        // the same map, under the page-level `map: false` opt-out.
+        let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
+        let map_key = term_listing.or(root_map_key).filter(|_| doc.shows_own_map(true));
+        if let Some(map) = map_key.and_then(|key| {
+            context.chrome.layout.place_maps.as_ref().and_then(|maps| {
+                maps.render_term_map(key, context.chrome.documents.iter(), &doc.url_path, 1, doc.route, false)
+            })
+        }) {
+            if doc.is_place_namespace_root && term_listing.is_none() {
+                // `log::info!`, not a CLI-visible macro: this names a
+                // composition, not a problem, so it never counts toward `--strict`.
+                log::info!(
+                    "{}",
+                    namespace_root_map_notice(doc.source_path.as_deref().unwrap_or(doc.url_path.as_str()))
+                );
+            }
+            if self.is_explorer_root {
+                content = format!("{map}{content}");
+            } else {
+                content.push_str(&map);
+            }
+        }
+        if show_folder_children {
+            content.push_str(&self.children_listing(context, doc, &folder_path, &from_md_path, names_scoped_home));
+        }
+        if term_listing.is_some() && !self.is_explorer_root {
+            let hosted = content.split_off(body_end);
+            content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang);
+        }
+        content
+    }
+}
+
+/// The shell variables every page shares; a page's calendar alternates sit in
+/// the head beside the feed's.
+fn authored_chrome(context: &RenderCtx<'_, '_>, doc: Option<&ParsedDocument>, is_homepage: bool, is_explorer_root: bool) -> ShellVars {
+    let mut shell = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root, context.site_url);
+    if let Some(d) = doc {
+        let head = context.shared.calendar.head_link(d, d.lang);
+        if !head.is_empty() {
+            shell.head_alternates.get_or_insert_with(String::new).push_str(&head);
+        }
+    }
+    shell
+}
+
+/// `html` with the page's colophon rows at its foot.
+fn with_colophon(mut html: String, doc: &ParsedDocument, emit_source_lines: bool) -> String {
+    credits::push_colophon(&mut html, &doc.colophon, emit_source_lines);
+    html
+}
+
+/// The series navigation of a page whose folder is an ordered series, emitted
+/// into the `{post_article}` token: a sibling of `<article>` after the
+/// `after-article` slot, so the comment toggle that injects there sits directly
+/// before it.
+///
+/// The chrome is on when the parent says `series: true`, or says nothing and
+/// its sort looks ordered (a weight axis or an explicit order); the page can
+/// opt out with `series: false`. The opt-out is whole-chain: the page renders
+/// no nav and drops out of every sibling's chain (`is_sequence_step`), so its
+/// neighbours become adjacent. Silencing only its own nav would leave the page
+/// before it pointing "next" at a page that leads nowhere back.
+fn series_nav_html<'d>(context: &RenderCtx<'_, 'd>, d: &ParsedDocument, typesetting: Option<&str>) -> Option<String> {
+    let all_docs = context.chrome.documents;
+    let path_resolver = &context.chrome.assets.paths;
+    let parts: Vec<&str> = d.url_path.split('/').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    // "series/part-1/index.html" -> parent folder "series"
+    let parent_folder = parts[..parts.len() - 2].join("/");
+    let parent_index = format!("{}/index.html", parent_folder);
+    let parent_doc = all_docs.iter().find(|pd| pd.url_path == parent_index)?;
+    // The nav walks direct siblings only, so a flatten scope would be wrong.
+    let resolved = parent_doc.resolve_for_direct_children();
+    let page_opted_out = matches!(&d.series, Some(crate::build::types::SeriesField::Flag(false)));
+    if !series_chrome_on(parent_doc) || page_opted_out {
+        return None;
+    }
+    let parent_prefix = format!("{}/", parent_folder);
+    let siblings = context.shared.sequences.chain(&parent_index, || sequence_siblings(
+        all_docs, &parent_index, &parent_prefix, &resolved,
+    ));
+    // By url_path: every folder index's clean_stem is "index".
+    let pos = siblings.iter().position(|pd| pd.url_path == d.url_path)?;
+    // Labels are chrome: plain text.
+    let neighbour = |i: usize| (siblings[i].label.clone(), path_resolver.resolve_url(&siblings[i].url_path));
+    let prev = (pos > 0).then(|| neighbour(pos - 1));
+    let next = (pos + 1 < siblings.len()).then(|| neighbour(pos + 1));
+    let resolved_parent = path_resolver.resolve_url(&parent_index);
+    let html = components::series_nav::render(
+        &parent_doc.label,
+        &resolved_parent,
+        prev.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
+        next.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
+        // Where you are, over the same set the arrows walk. A lone page gets
+        // no ordinal: "1 of 1" is noise, not orientation.
+        if siblings.len() > 1 { Some((pos + 1, siblings.len())) } else { None },
+        d.lang, typesetting,
+    );
+    (!html.is_empty()).then_some(html)
+}
+
 pub(super) fn render_page<'d>(
     context: &RenderCtx<'_, 'd>,
     doc: Option<&ParsedDocument>,
@@ -404,132 +735,53 @@ pub(super) fn render_page<'d>(
     let layout_config = context.chrome.layout;
     let site_lang = context.chrome.site_lang;
     let emit_source_lines = context.chrome.emit_source_lines;
-    let content_graph = context.content_graph;
     let dir_overrides = context.dir_overrides;
     let site_url = context.site_url;
     let output_dir = context.output_dir;
     let source_root = context.source_root;
-    let BuildShared { media_lookup, sequences, now, .. } = context.shared;
-    let now = *now;
+    let media_lookup = &context.shared.media_lookup;
+    let now = context.shared.now;
     let path_resolver = &context.chrome.assets.paths;
-    let ui_lang = doc.map(|d| d.lang).unwrap_or(site_lang);
-    let page_lang_tag = doc.and_then(|d| d.lang_tag.clone()).unwrap_or_else(|| layout_config.lang_tag.clone());
-    let site_title = context.chrome.site_title(doc);
-    let resolved_typesetting = super::config::effective_typesetting(
-        doc.and_then(|d| d.typesetting.as_deref()), layout_config.typesetting.as_deref(),
-    );
-    let vertical_typesetting = resolved_typesetting == Some("vertical");
-    let mut chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config), site_url);
-    // The calendar alternates sit in the head beside the feed's.
-    if let Some(d) = doc {
-        let head = context.shared.calendar.head_link(d, d.lang);
-        if !head.is_empty() {
-            chrome.head_alternates.get_or_insert_with(String::new).push_str(&head);
-        }
-    }
+    let facts = PageFacts::new(context, doc, is_homepage);
+    let ui_lang = facts.ui_lang;
+    let vertical_typesetting = facts.vertical_typesetting;
+    let page_lang_tag = &facts.page_lang_tag;
+    let site_title = &facts.site_title;
+    let resolved_typesetting = facts.typesetting;
+    let shell_type = facts.shell_type;
+    let is_article_page = facts.is_article_page;
+    let locator_placement = facts.locator_placement;
+    let is_card_eligible = facts.is_card_eligible;
+    let chrome = authored_chrome(context, doc, is_homepage, facts.is_explorer_root);
     let processor = ShellProcessor::new();
 
-    // Determine template type based on layout and content folders
-    let shell_type = ShellRegistry::select_shell_type(doc, is_homepage, project.has_content_folders);
-    let is_article_page = shell_type == ShellType::Article;
-
-    // The declared fields the page draws: the eyebrow goes into the body above
-    // the title, the rest into the masthead that follows it.
-    let mut fields = doc.map_or_else(Default::default, |d| {
-        crate::build::components::field_places::draw_for_page(d, all_docs, content_graph, resolved_typesetting)
-    });
-    let eyebrow = std::mem::take(&mut fields.eyebrow);
-
-    // Where the place-map locator goes, decided once for every page. Vertical
-    // pages put it after the opening text, every kind of page alike; a page
-    // with a facts column has it head that column; horizontal articles float
-    // it before the text; the rest keep it in the masthead.
-    let locator_placement = if vertical_typesetting {
-        LocatorPlacement::AfterText
-    } else if !fields.facts.is_empty() {
-        LocatorPlacement::Facts
-    } else if is_article_page {
-        LocatorPlacement::BeforeText
-    } else {
-        LocatorPlacement::Masthead
-    };
-    if locator_placement == LocatorPlacement::Facts {
-        if let Some(locator) = doc.and_then(|d| credits::render_place_locator(d, layout_config)) {
-            fields.head_facts_with(&locator);
-        }
-    }
-
-    // True when the page should advertise a social share card + be indexed: a
-    // real public page (not draft/slot_only). `listed: false` pages are still
-    // public, so they keep their card. Shared by the og/twitter/cover/
-    // auto-card/JSON-LD gates so they cannot drift apart.
-    let is_card_eligible = doc.map_or(false, |d| d.is_public_page());
-
-
-    // Prepare content based on page type
     let (page_title, homepage_content) = match (doc, is_homepage) {
         (Some(doc), true) => {
-            // Homepage with document (generate_homepage_with_blog_feed equivalent)
-            //
-            // (An `<article>`-unwrapping slice used to sit here. `html_content`
-            // is a body fragment — `<article>` only ever comes from the
-            // article-content template, which wraps this value rather than
-            // being wrapped by it — so the slice never fired.)
-
-            // Obsidian-match: the homepage injects NO title h1 of its own, so
-            // an authored leading `# Foo` is the author's content and is kept
-            // verbatim. (Removed the pre-2026-05-30 dedup that stripped a
-            // leading <h1> matching doc.title — it only ever deleted the
-            // author's heading.)
-
-            let mut body_plan = grid_cells::resolve_page_body(
-                doc,
-                all_docs,
-                content_graph,
-                &dir_overrides,
-                &project.root_path,
-                media_lookup,
-                resolved_typesetting,
-                now,
-            );
-            splice_body_locator(&mut body_plan, doc, layout_config, locator_placement);
-            let mut content = body_plan.to_html();
+            // The homepage injects no title h1 of its own: an authored leading
+            // `# Foo` is the author's content and is kept verbatim.
+            let content = facts.body_plan(context, doc, "").to_html();
 
             // The homepage has no title of moss's own for the byline to sit
             // under; render/credits.rs says where it goes instead, and why a
             // `layout: article` homepage is the article path's page, not this one.
-            if !is_article_page {
-                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
+            let content = if is_article_page {
+                content
+            } else {
+                let content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &facts.fields);
 
                 // One top-level heading is required: the header names the
                 // site, so the heading is visually hidden; with no header it
                 // is shown, unless an opening hero stands in for it.
                 use moss_core::heading::{title_outcome, TitleOutcome};
                 let outcome = title_outcome(&doc.content, true);
-                if outcome != TitleOutcome::None {
+                if outcome == TitleOutcome::None {
+                    content
+                } else {
                     let headerless = layout_config.header == crate::build::components::nav::HeaderMode::None;
                     let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, !(headerless && outcome == TitleOutcome::Visible));
-                    content = format!("{h1}\n{content}");
+                    format!("{h1}\n{content}")
                 }
-            }
-
-            // Folder card <img> tags inherit width/height/loading/LQIP/color
-            // attributes from the moss-core image synthesizer at grid generation
-            // time (`grid_card::render` and `folder_cover::render` thread the
-            // `MediaDimensionLookup` through the synth).
-
-            // Append children list for home page
-            // Uses the same generate_children pipeline as folder index pages,
-            // supporting children_style auto-detection and children_depth control.
-            // `children_in: sidebar` is the new (post-consolidation) way to
-            // route children to the right rail; the deprecated `sidebar:` field
-            // also routes via the alias. Both suppress body-children rendering
-            // identically. We read `from_sidebar_alias` (not `sidebar.is_some()`)
-            // so a conflict like `sidebar: "[[A]]" + children: "[[B]]"` — where
-            // the alias yields and warns "sidebar ignored" — actually renders
-            // body children rather than silently suppressing them.
-            let has_sidebar = doc.from_sidebar_alias.unwrap_or(false)
-                || doc.children_in.as_deref() == Some("sidebar");
+            };
 
             // A home lists its own tree: "" for the root home, `en` for
             // `en/index.html`. `children_source` redirects it elsewhere.
@@ -539,97 +791,43 @@ pub(super) fn render_page<'d>(
                 .unwrap_or_else(|| (own_tree.to_string(), false));
             let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
-            let show_children = !has_sidebar && doc.children.unwrap_or(true);
-            if show_children {
-                let marker = crate::build::folder_embed::synthesize_children_marker_for(
-                    doc,
-                    &target_folder_path,
-                    &from_md_path,
-                    names_scoped_home,
-                );
-                let listed = crate::build::folder_embed::ListedUrls::default();
-                let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
-                    &marker,
-                    &from_md_path,
-                    all_docs,
-                    project,
-                    &dir_overrides,
-                    doc.lang, // per-page language, not site default
-                    resolved_typesetting,
-                    Some(media_lookup),
-                    layout_config.assets.math,
-                    None,
-                    Some(&listed),
-                    now,
-                );
-                crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
-                content.push_str(&crate::build::emit::listing_style::wrap(
-                    doc,
-                    annotate_children_listing(resolved_html, emit_source_lines),
-                ));
-            }
-
+            let content = if !facts.children_in_sidebar && doc.children.unwrap_or(true) {
+                content + &facts.children_listing(context, doc, &target_folder_path, &from_md_path, names_scoped_home)
+            } else {
+                content
+            };
             // Colophon at the very foot, after the children listing.
-            if !is_article_page {
-                credits::push_colophon(&mut content, &doc.colophon, emit_source_lines);
-            }
+            let content = if is_article_page { content } else { with_colophon(content, doc, emit_source_lines) };
 
             // Homepage <title> tag is chrome; use the plain-text label.
             (doc.label.clone(), content)
         }
         (Some(doc), false) => {
-            // Regular page content. Body H1 (if any) is preserved verbatim and
-            // is the sole source of the visible heading — moss never injects one.
-            let mut body = grid_cells::resolve_page_body(
-                doc,
-                all_docs,
-                content_graph,
-                &dir_overrides,
-                &project.root_path,
-                media_lookup,
-                resolved_typesetting,
-                now,
-            );
-            // Done before any cover-wrap below reads `body`, so a claimed
-            // leaf's `split_at_lede` sees the locator as part of the body
-            // it is splitting, same as any other segment, rather than
-            // needing its own case.
-            splice_body_locator(&mut body, doc, layout_config, locator_placement);
-            if !eyebrow.is_empty() {
-                body.prepend_html(eyebrow);
-            }
-            let mut content = body.to_html();
-            if crate::build::components::field_places::title_block_follows_picture(doc) {
-                crate::build::components::field_places::mark_body_start(&mut content);
-            }
+            // The body's own H1 (if any) is the sole source of the visible
+            // heading — moss never injects one. The locator is spliced in
+            // before any cover-wrap below reads the body, so a claimed leaf's
+            // `split_at_lede` sees it as part of the body it is splitting.
+            let body = facts.body_plan(context, doc, &facts.eyebrow);
+            let content = {
+                let mut html = body.to_html();
+                if crate::build::components::field_places::title_block_follows_picture(doc) {
+                    crate::build::components::field_places::mark_body_start(&mut html);
+                }
+                html
+            };
 
-            // Check if this is a folder index page (any non-root index page).
-            // Must use doc.kind == PageKind::Folder (source was index.md/readme.md/_index.md/main.md)
-            // because all pages have pretty URLs ending in /index.html.
+            // A folder index is any non-root page whose source was
+            // index.md/readme.md/_index.md/main.md (every page's URL ends in
+            // /index.html, so the URL alone cannot say).
             let is_folder_index =
                 doc.kind == PageKind::Folder && doc.url_path.ends_with("/index.html") && doc.url_path != "index.html";
 
-            // A home-override page (`home: true` on a non-root file like
-            // `en/Mountain Home.md` → `en/index.html`) is the language-specific
-            // homepage, not a folder listing. The root home (`/index.html`)
-            // skips the folder-title H1 because its `is_homepage: true` branch
-            // never enters this block; home-override pages must do the same to
-            // stay symmetric with the user's mental model — "click language
-            // toggle, see the other language's home page, identically styled."
-            //
-            // Reads the ONE centralized signal `doc.is_home_override` (set in
-            // the markdown pipeline) instead of re-deriving from
-            // `translation_key == "home"`.
-            //
-            // Additionally, a filename-based language root home
-            // (`zh-hans/index.md` → `zh-hans/index.html`) must also suppress
-            // the folder-title H1. These pages use the standard `index.md`
-            // convention inside a language-tree subfolder, so `is_home_override`
-            // is `false` (only `home: true` frontmatter sets it), but they ARE
-            // the language-specific homepage. The depth-1 slash-count guard
-            // is LOAD-BEARING: `zh-hans/index.html` (one '/') qualifies, but
-            // `zh-hans/news/index.html` (two '/') is a genuine content section
-            // and must KEEP its folder-title H1.
+            // A home-override page (`home: true` on a non-root file) and a
+            // language-root folder page (`zh-hans/index.md`) are language-specific
+            // homepages, not folder listings: like the root home they take no
+            // folder-title H1. `is_home_override` only covers the first; the
+            // depth-1 slash count is LOAD-BEARING for the second, since
+            // `zh-hans/news/index.html` is a genuine section and keeps its H1.
             let is_lang_tree_root_home = is_folder_index
                 && doc
                     .source_path
@@ -639,90 +837,48 @@ pub(super) fn render_page<'d>(
                 && doc.url_path.chars().filter(|&c| c == '/').count() == 1;
             let is_home_override = is_folder_index && (doc.is_home_override || is_lang_tree_root_home);
 
-            // A page that won a term claim (`author_page:`/`tag_page:`) hosts
-            // that term's member listing below its own body — at ANY path,
-            // whether the claiming file is a folder index or a plain leaf
-            // note (`build::terms::derive_terms`). Read here (rather than
-            // where the listing itself is appended, further below) because
-            // the cover branch immediately below needs it too: a claim must
-            // add the listing without changing how the page's own
-            // cover/title/byline render, and a plain leaf claimant was
-            // falling through to the folder branch's `else` with no cover
-            // rendering at all (folder pages draw their cover only in the
-            // branch above, gated on `is_folder_index`).
+            // A page that won a term claim hosts that term's listing below its
+            // own body, but must draw its cover and title like any other page,
+            // so the cover branch below reads it too.
             let term_listing = doc.term_listing.as_deref();
+            let is_explorer_root = facts.is_explorer_root;
 
-            // Design decision 7, "the map is the page": a `.visually-hidden`
-            // heading instead of a visible one, and the map leads any
-            // authored body (prepended below rather than appended). See
-            // `PlaceMapRenderContext::is_explorer_root`'s own doc for the
-            // condition; a claimed sub-term listing keeps its ordinary
-            // visible heading either way. `is_explorer_root_doc` is the same
-            // decision the breadcrumb above already forced itself on with.
-            let is_explorer_root = is_explorer_root_doc(Some(doc), layout_config);
-
-            // Wrap content in book-open layout with cover on the left (before
-            // placeholder pass so LQIP attributes are added to the cover <img>).
-            // Title and byline are prepended into the cover body so they
-            // appear beside the cover, not above it.
-            if is_folder_index && !is_home_override {
+            // A folder index wraps its content in the book-open layout with the
+            // cover on the left; title and byline go into the cover body so
+            // they appear beside the cover, not above it.
+            let content = if is_folder_index && !is_home_override {
                 // Split pipe-encoded cover to separate path from display attrs.
                 let (resolved_cover, cover_attrs) = match doc.cover.as_deref() {
                     Some(c) => {
-                        let (url, attrs) = resolve_page_cover(c, &path_resolver);
+                        let (url, attrs) = resolve_page_cover(c, path_resolver);
                         (Some(url), attrs)
                     }
                     None => (None, moss_core::media::MediaAttrs::default()),
                 };
-                // Source for the visible folder-title h1 is `doc.title` — the
-                // index cascade `title:` if set, else the filename/folder name
-                // (`filename_text`), NEVER body content (Obsidian-match,
-                // 2026-05-30). An author's body `# Custom` is kept verbatim as
-                // content and renders below this injected folder-title h1; moss
-                // no longer dedups it.
+                // The visible folder-title h1 is the index cascade `title:`, else
+                // the folder name, never body content: an author's body `# Custom`
+                // is kept verbatim and renders below it.
                 let h1_text = &doc.title;
-                // `layout: article` on a folder-index page reads as a plain
-                // article: no auto-inserted cover component (row or hero) at
-                // all, even when `cover:` is set. The article body owns its
-                // own hero/imagery inline; moss never overrides that
-                // rendering treatment for this layout.
+                // `layout: article` reads as a plain article: no auto-inserted
+                // cover component, even when `cover:` is set.
                 let is_article_layout = doc.layout.as_deref() == Some("article");
-                // Credits are page-level, not article-level: `byline:` under
-                // the title, `colophon:` at the foot, here as on an article.
-                // (`description:` held the byline's slot as a standfirst until
-                // 2026-08-08; it is metadata — see components/folder_cover.rs.)
-                // Skipped when `is_article_page`, because a `layout: article`
-                // folder runs through BOTH assemblies and the article path
-                // below emits both. Same boolean as that gate, so "exactly one
-                // fires" reads off one variable. See render/credits.rs.
+                // `byline:` under the title; skipped when `is_article_page`,
+                // because a `layout: article` folder runs through both
+                // assemblies and the article path below emits both.
                 let folder_byline = (!is_article_page)
                     .then(|| {
                         let masthead = credits::render_page_masthead(doc, layout_config, emit_source_lines, locator_placement);
-                        format!("{}{masthead}", fields.subtitle)
+                        format!("{}{masthead}", facts.fields.subtitle)
                     })
                     .unwrap_or_default();
                 if resolved_cover.is_some() && !is_article_layout && !is_explorer_root {
-                    // Cover branch: folder_cover renders the cover-row with the
-                    // <h1 class="moss-folder-title"> inside
-                    // .moss-collection-cover-body.
-                    //
                     // The cover thumbnail takes about a third of the content
-                    // width, so the cover-body column beside it is narrow.
-                    // Only the lede belongs there: a `:::grid` typeset in that
-                    // column is squeezed to a fraction of its intended width
-                    // (`Illuminated Books.md` — `cover:` + `:::grid 2`), and a
-                    // long-form article body is read in a ~20-character measure
-                    // with half the viewport empty beside it.
-                    //
-                    // `BodyPlan::lede_segments` is where the plan says the lede
-                    // ends. Everything past it re-appends as a plain sibling
-                    // AFTER the cover row closes, the same placement the
-                    // auto-generated children listing already uses. The split
-                    // lands on a block boundary between independently
-                    // serialized segments, so neither side can end mid-element
-                    // — the question the old byte-walking `split_lead_before_grid`
-                    // tried to answer by counting tags, and got wrong on the
-                    // first multi-byte character.
+                    // width, so only the lede belongs in the narrow column
+                    // beside it: a `:::grid` typeset there is squeezed, and a
+                    // long-form body would be read in a ~20-character measure.
+                    // `BodyPlan::lede_segments` says where the lede ends;
+                    // everything past it re-appends as a plain sibling after the
+                    // cover row closes, where the generated children listing sits.
                     let (lead, trailer) = body.split_at_lede();
                     let cover_type = crate::build::media::cover::detect_cover_type(
                         resolved_cover.as_deref().unwrap_or(""),
@@ -739,14 +895,12 @@ pub(super) fn render_page<'d>(
                         Some(media_lookup),
                         emit_source_lines,
                     );
-                    content = format!("{}{}", cover_row_html, trailer);
+                    format!("{}{}", cover_row_html, trailer)
                 } else {
-                    // No-cover branch: prepend the <h1 class="moss-folder-title">
-                    // unless the body or an opening hero already supplies the
-                    // heading. An explorer root gets a hidden one instead (no
-                    // byline), bypassing `no_cover_folder_heading`'s own
-                    // body/hero dedup below — that guards a second VISIBLE
-                    // title, moot for a hidden one.
+                    // No cover: prepend the folder-title h1 unless the body or an
+                    // opening hero already supplies the heading. An explorer root
+                    // gets a hidden one instead (no byline), skipping that dedup,
+                    // which guards a second visible title.
                     let heading = if is_explorer_root {
                         crate::build::components::folder_title::render(h1_text, emit_source_lines, true)
                     } else {
@@ -760,29 +914,22 @@ pub(super) fn render_page<'d>(
                             folder_byline,
                         )
                     };
-                    content = if heading.is_empty() {
+                    if heading.is_empty() {
                         content
                     } else {
                         format!("{}\n{}", heading, content)
-                    };
+                    }
                 }
             } else {
-                // A claimed page that ISN'T itself a folder index (an
-                // ordinary leaf note that won `author_page:`/`tag_page:`,
-                // Article shell or Page shell alike) draws its cover through
-                // the SAME book-open layout a folder index uses: cover on the
-                // left, lede beside it, rest of the body released back to
-                // full width — gone are the days of a bare cover-row with
-                // nothing but empty space beside the image (that same
-                // fix now applies here too). `folder_cover::render` takes an
-                // empty label rather than `h1_text`: this shell's own visible
-                // `<h1>` is already the head of `lead` (the pipeline-injected
-                // article title, or the author's own body `# H1`), and an
-                // empty label emits no heading of its own, so the page keeps
-                // exactly one `<h1>`.
-                if term_listing.is_some() {
-                    if let Some(c) = doc.cover.as_deref() {
-                        let (resolved, cover_attrs) = resolve_page_cover(c, &path_resolver);
+                // A claimed page that is not itself a folder index (a leaf note
+                // that won `author_page:`/`tag_page:`) draws its cover through
+                // the same book-open layout: cover on the left, lede beside it,
+                // the rest released to full width. `folder_cover::render` takes
+                // an empty label because this shell's own visible `<h1>` is
+                // already the head of `lead`, so the page keeps exactly one.
+                let content = match (term_listing, doc.cover.as_deref()) {
+                    (Some(_), Some(c)) => {
+                        let (resolved, cover_attrs) = resolve_page_cover(c, path_resolver);
                         let cover_type = crate::build::media::cover::detect_cover_type(&resolved, doc.cover_type.as_deref());
                         let (lead, trailer) = body.split_at_lede();
                         // A body with no heading of its own (a hero with no
@@ -798,7 +945,7 @@ pub(super) fn render_page<'d>(
                                 lead,
                             )
                         };
-                        content = format!(
+                        format!(
                             "{}{}",
                             components::folder_cover::render(
                                 Some(&resolved),
@@ -811,141 +958,25 @@ pub(super) fn render_page<'d>(
                                 emit_source_lines,
                             ),
                             trailer,
-                        );
+                        )
                     }
-                }
-                if !is_article_page {
-                    // No title block of moss's own — a home-override or
-                    // language-root folder page, or a plain page — so the
-                    // homepage rule applies. Runs AFTER any cover-wrap above:
-                    // `splice_page_masthead` (via `splice_after_title_block`)
-                    // recognizes that wrapper's own empty title placeholder
-                    // and lands the byline beside the real title inside it,
-                    // the same as it would for an unwrapped page — one splice
-                    // site for both shapes.
-                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
-                }
-            }
-
-            // Folder card <img> tags: same LQIP/dimensions inheritance as the
-            // homepage branch above.
-
-            // Append article listing for folder index pages. D1: children is
-            // bool — true/None = show, false = hide; `has_sidebar` routing is
-            // the same alias-aware check as the homepage branch above.
-            let has_sidebar = doc.from_sidebar_alias.unwrap_or(false)
-                || doc.children_in.as_deref() == Some("sidebar");
-            // An ordinary page can host ANOTHER folder's listing too (archive
-            // §4, 2026-09-11) — a folder index or term listing keeps its own.
-            let children_source_target = doc.children_source.as_deref()
-                .map(|r| resolve_children_source_folder_path(r, all_docs));
-            let names_scoped_home = children_source_target.as_ref().is_some_and(|t| t.1);
-            if is_folder_index || term_listing.is_some() || children_source_target.is_some() {
-                let folder_path = term_listing.map(str::to_string).unwrap_or_else(|| {
-                    if is_folder_index {
-                        doc.url_path.trim_end_matches("/index.html").trim_end_matches("index.html").trim_end_matches('/').to_string()
-                    } else {
-                        children_source_target.map(|t| t.0).unwrap_or_default()
-                    }
-                });
-                // children_source's host needs its REAL source path here
-                // (not a folder_path guess), so render_one's self-exclusion
-                // — matching `from` against `source_path` — can find it.
-                let from_md_path = if term_listing.is_some() || is_folder_index {
-                    if folder_path.is_empty() { "index.md".to_string() } else { format!("{}/index.md", folder_path) }
-                } else {
-                    doc.source_path.clone().unwrap_or_else(|| format!("{}/index.md", folder_path))
+                    _ => content,
                 };
+                if is_article_page {
+                    content
+                } else {
+                    // No title block of moss's own, so the homepage rule
+                    // applies. After any cover-wrap above: `splice_page_masthead`
+                    // recognizes that wrapper's empty title placeholder and
+                    // lands the byline beside the real title inside it.
+                    credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &facts.fields)
+                }
+            };
 
-                // An explorer root hosts no children/term listing at all
-                // (design decision 7, "the map is the page" — the reader
-                // finds places through the map and its own breadcrumb menu,
-                // never a list of place links below it); a nested place
-                // page is unaffected and keeps its article list.
-                let show_folder_children = !has_sidebar && doc.children.unwrap_or(true) && !is_explorer_root;
-                // A claimed sub-term's map (`term_listing`) and a real folder
-                // index's own place-namespace-root map are the same splice,
-                // under the same page-level `map: false` opt-out. The
-                // namespace-root case is new: a real `places/index.md` used
-                // to win outright over the map the unclaimed synthetic root
-                // would have shown, with no warning (`is_place_namespace_root`
-                // is set once in `terms::derive_terms`, which can see
-                // `TermIndex`; this layer cannot, so it reads the resolved
-                // flag). The two cases can never both apply to one page — a
-                // term claim always resolves to a sub-key, never the bare
-                // namespace root `is_place_namespace_root` marks.
-                // Where the page's own body ends: a claimed term page's map and
-                // listing are placed relative to it (see `insert_before_sources`).
-                let body_end = content.len();
-                let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
-                let map_key = term_listing.or(root_map_key).filter(|_| doc.shows_own_map(true));
-                if let Some(map) = map_key.and_then(|key| {
-                    layout_config.place_maps.as_ref().and_then(|maps| {
-                        maps.render_term_map(key, all_docs.iter(), &doc.url_path, 1, doc.route, false)
-                    })
-                }) {
-                    if doc.is_place_namespace_root && term_listing.is_none() {
-                        // `log::info!`, not a CLI-visible macro: this names a
-                        // composition, not a problem, so it must never count
-                        // toward `--strict` the way `log_warn_problem!` would.
-                        // A plain `moss build` doesn't print it (the CLI's
-                        // headless logger defaults to `Warn`; `MOSS_LOG_LEVEL=info`
-                        // shows it there) — the desktop app's own logger
-                        // defaults to `Info` in both debug and release builds,
-                        // so its build log shows this line with no override.
-                        log::info!(
-                            "{}",
-                            namespace_root_map_notice(
-                                doc.source_path.as_deref().unwrap_or(doc.url_path.as_str())
-                            )
-                        );
-                    }
-                    if is_explorer_root {
-                        content = format!("{map}{content}");
-                    } else {
-                        content.push_str(&map);
-                    }
-                }
-                if show_folder_children {
-                    let marker = crate::build::folder_embed::synthesize_children_marker_for(
-                        doc,
-                        &folder_path,
-                        &from_md_path,
-                        names_scoped_home,
-                    );
-                    let listed = crate::build::folder_embed::ListedUrls::default();
-                    let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
-                        &marker,
-                        &from_md_path,
-                        all_docs,
-                        project,
-                        &dir_overrides,
-                        doc.lang, // per-page language, not site default
-                        resolved_typesetting,
-                        Some(media_lookup),
-                        layout_config.assets.math,
-                        None,
-                        Some(&listed),
-                        now,
-                    );
-                    crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
-                    content.push_str(&crate::build::emit::listing_style::wrap(
-                        doc,
-                        annotate_children_listing(resolved_html, emit_source_lines),
-                    ));
-                }
-                if term_listing.is_some() && !is_explorer_root {
-                    let hosted = content.split_off(body_end);
-                    content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang);
-                }
-            }
-
-            // Colophon at the very foot — after the children listing, which is
-            // part of the page. Same `is_article_page` gate as the byline above,
-            // and the same position the article path would use.
-            if !is_article_page {
-                credits::push_colophon(&mut content, &doc.colophon, emit_source_lines);
-            }
+            let content = facts.host_listing(context, doc, content, is_folder_index);
+            // Colophon at the very foot, after the listing, which is part of
+            // the page; the same gate as the byline above.
+            let content = if is_article_page { content } else { with_colophon(content, doc, emit_source_lines) };
 
             // The <title> tag is chrome; use the plain-text label.
             (doc.label.clone(), content)
@@ -977,112 +1008,10 @@ pub(super) fn render_page<'d>(
     // Templates all use a bare `{title}` — there is no `{site_name}` template var.
     let title_for_tab = tab_title(&page_title, &site_title, is_homepage);
 
-    // Generate series navigation for article pages in ordered folders.
-    //
-    // Output routing: article pages emit series-nav into the `{post_article}`
-    // template token (sibling of `<article>` inside `<main>`, AFTER the
-    // `<!-- slot:after-article -->` plugin slot). This makes the comment toggle
-    // — which injects into `slot:after-article` — sit DIRECTLY before
-    // series-nav, so the toggle hugs series-nav's `border-top` divider with
-    // mirrored gaps (see `.moss-comments + .moss-series-nav` in site.css).
-    let mut homepage_content = homepage_content;
-    let mut post_article = String::new();
-    if is_article_page && doc.is_some() {
-        let d = doc.unwrap();
-        // Find parent folder's index doc to check for `series`
-        let parts: Vec<&str> = d.url_path.split('/').collect();
-        if parts.len() >= 3 {
-            // e.g. "series/part-1/index.html" -> parent folder = "series"
-            let parent_folder = parts[..parts.len() - 2].join("/");
-            let parent_index = format!("{}/index.html", parent_folder);
-            if let Some(parent_doc) = all_docs.iter().find(|pd| pd.url_path == parent_index) {
-                // Decide whether to render series-nav and, if so, sort siblings via
-                // the resolved-sort dispatch on the parent folder.
-                //
-                // Chrome trigger (Task 13):
-                //   1. parent.series == Flag(true)  -> chrome on
-                //   2. parent.series == Flag(false) -> chrome off
-                //   3. parent.series == None        -> direct_children_sort.series_default
-                //      (true when axis == Weight OR explicit_order is Some — the
-                //      inference says "this folder looks ordered")
-                //   4. The leaf page can opt out with `series: false`,
-                //      regardless of parent (Task 13 step 2). Opting out is
-                //      whole-chain, not just self: the page renders no nav of
-                //      its own (`nav_enabled` below) AND drops out of every
-                //      sibling's chain (`is_sequence_step`), so its neighbours
-                //      become adjacent to each other. Half of that — silencing
-                //      only its own nav — would leave the page before it
-                //      pointing "next →" at a page that leads nowhere back.
-                //
-                // After `FrontMatter::normalize()` runs (Task 5), the legacy
-                // `series: [list]` form (SeriesField::Ordered) is consumed into
-                // `sort: List + series: Flag(true)`, so only Flag/None reach here
-                // for both parent and leaf.
-                //
-                // Route through the direct-children helper to match the
-                // new contract — series-nav iterates direct siblings only,
-                // so re-resolution on a flatten scope would be wrong.
-                let resolved = parent_doc.resolve_for_direct_children();
-                let parent_chrome_on = series_chrome_on(parent_doc);
-                let page_opted_out = matches!(
-                    &d.series,
-                    Some(crate::build::types::SeriesField::Flag(false))
-                );
-                let nav_enabled = parent_chrome_on && !page_opted_out;
-                let sorted_siblings = if nav_enabled {
-                    let parent_prefix = format!("{}/", parent_folder);
-                    let sorted = sequences.chain(&parent_index, || sequence_siblings(
-                        all_docs, &parent_index, &parent_prefix, &resolved,
-                    ));
-                    if sorted.is_empty() { None } else { Some(sorted) }
-                } else {
-                    None
-                };
-
-                if let Some(ref siblings) = sorted_siblings {
-                    // By url_path: every folder index's clean_stem is "index".
-                    if let Some(pos) = siblings.iter().position(|pd| pd.url_path == d.url_path) {
-                        let prev = if pos > 0 {
-                            // chrome; plain-text label
-                            Some((siblings[pos - 1].label.clone(),
-                                  path_resolver.resolve_url(&siblings[pos - 1].url_path)))
-                        } else {
-                            None
-                        };
-                        let next = if pos + 1 < siblings.len() {
-                            // chrome; plain-text label
-                            Some((siblings[pos + 1].label.clone(),
-                                  path_resolver.resolve_url(&siblings[pos + 1].url_path)))
-                        } else {
-                            None
-                        };
-                        let resolved_parent = path_resolver.resolve_url(&parent_index);
-                        // Series nav parent title is chrome; use the plain-text label.
-                        let series_html = components::series_nav::render(
-                            &parent_doc.label,
-                            &resolved_parent,
-                            prev.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
-                            next.as_ref().map(|(t, u)| (t.as_str(), u.as_str())),
-                            // Where you are, over the same set the arrows walk.
-                            // A lone page in a folder gets no ordinal — "1 of 1"
-                            // is noise, not orientation.
-                            if siblings.len() > 1 {
-                                Some((pos + 1, siblings.len()))
-                            } else {
-                                None
-                            },
-                            d.lang, resolved_typesetting,
-                        );
-                        if !series_html.is_empty() {
-                            // Article pages: emit as sibling of <article>
-                            // via the {post_article} template token.
-                            post_article.push_str(&series_html);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let post_article = doc
+        .filter(|_| is_article_page)
+        .and_then(|d| series_nav_html(context, d, resolved_typesetting))
+        .unwrap_or_default();
 
     // Sidebar rendering: source comes from one of two paths:
     //   - Deprecated alias: `doc.from_sidebar_alias = Some(true)` means
@@ -1101,15 +1030,7 @@ pub(super) fn render_page<'d>(
     //     only when truncated.
     //   - Self-referencing (target folder == current page's folder): all items,
     //     no "More" link.
-    let sidebar_source: Option<&str> = doc.and_then(|d| {
-        if d.from_sidebar_alias.unwrap_or(false) {
-            d.sidebar.as_deref()
-        } else if d.children_in.as_deref() == Some("sidebar") {
-            d.children_source.as_deref()
-        } else {
-            None
-        }
-    });
+    let sidebar_source = facts.sidebar_source;
     let use_sidebar_layout = sidebar_source.is_some();
 
     let (sidebar_html, page_wrapper_class) = if use_sidebar_layout {
@@ -1243,20 +1164,6 @@ pub(super) fn render_page<'d>(
     } else {
         String::new()
     };
-
-    // Resolve the homepage doc the current page's DESCRIPTION cascades from.
-    // Per-language: pulls from the page's-language homepage when available,
-    // with site-default homepage as backup (otherwise zh-hans/ pages would
-    // surface the English homepage's description on share cards). Active for
-    // any non-homepage doc (articles AND folder-index pages); the homepage
-    // itself uses its own data via `doc` and skips the cascade so we don't
-    // double-walk the page rungs against the site-wide ones. The cover chain
-    // has no site-wide tail (cover.rs module doc).
-    let cascade_homepage: Option<&crate::build::types::ParsedDocument> = if doc.is_some() && !is_homepage {
-        find_homepage_doc(all_docs, ui_lang, site_lang)
-    } else {
-        None
-    };
     // The page's own picture, or the card moss draws when it has none — and
     // when the picture is a shape no platform crop can hold, the card it
     // draws AROUND that picture. `og_choice` holds the whole decision.
@@ -1321,33 +1228,22 @@ pub(super) fn render_page<'d>(
         None
     };
 
-    // Splice the date-line AND the `after-title` slot marker into
-    // homepage_content so both land after the title block (H1 + optional
-    // blockquote deck) rather than above it. The review colophon / book block
-    // is injected into the `after-title` marker by the enhance hook; emitting
-    // the marker HERE — directly below the date / reading-prefs row — makes that
-    // block render as the first thing after the title and date, before the body.
-    // (The marker previously lived in the article template ABOVE `{content}`,
-    // which rendered the book block above the title.) The marker is emitted for
-    // every article page, with or without a date, so dateless reviews keep their
-    // colophon; an unfilled marker is stripped by inject_slots. See
-    // splice_after_title_block in html_post.rs for the title-block detection
-    // (matches the # H1 + > blockquote deck pattern).
-    if is_article_page {
-        let mut after_title_block = fields.subtitle.clone();
+    // Splice the date-line AND the `after-title` slot marker into the content
+    // so both land after the title block (H1 + optional blockquote deck). The
+    // enhance hook injects the review colophon / book block into the marker,
+    // so emitting it directly below the date row makes that block the first
+    // thing after the title and date. The marker is emitted for every article
+    // page, dated or not, so dateless reviews keep their colophon; an unfilled
+    // marker is stripped by inject_slots.
+    let homepage_content = if is_article_page {
+        let mut after_title_block = facts.fields.subtitle.clone();
         after_title_block.push_str(&article_date_line_html.unwrap_or_default());
         // Byline rows (frontmatter `byline:`) sit between the date row and the
-        // after-title slot: they belong to the masthead, but they are not part
-        // of `.date-line`, which is a single flex row owning the reading-size
-        // control — and which is emitted only when the page has a date, while
-        // a byline must render with or without one.
-        //
-        // Byline + place line only — NOT `render_page_masthead`, which also
-        // folds in the locator for the folder/page-head paths. On an
-        // article the locator already went into the body itself, before its
-        // first text block, when `body_plan`/`body` was built above; adding
-        // it again here would duplicate it right after the place line, the
-        // position this change moved away from.
+        // after-title slot: they belong to the masthead but not to
+        // `.date-line`, a single flex row owning the reading-size control that
+        // is emitted only when the page has a date. Byline and place line only,
+        // not `render_page_masthead`: on an article the locator is already in
+        // the body, before its first text block.
         if let Some(d) = doc {
             if let Some(masthead) =
                 credits::render_byline_html(&d.byline, emit_source_lines, d.place_line.as_deref())
@@ -1356,81 +1252,61 @@ pub(super) fn render_page<'d>(
             }
         }
         after_title_block.push_str("<!-- slot:after-title -->");
-        after_title_block.push_str(&fields.after_masthead());
-        homepage_content = splice_after_title_block(&homepage_content, &after_title_block);
-        // Colophon rows go at the very end of the article body — after the
-        // prose and any footnote section, inside `<article>`. Where the piece
-        // first ran, contributor bios, production credits: everything a reader
-        // does not need before the piece.
-        if let Some(d) = doc {
-            credits::push_colophon(&mut homepage_content, &d.colophon, emit_source_lines);
-            if d.kind != moss_core::PageKind::Folder {
-                if let Some(line) = crate::build::features::syndication::render_syndication_line(&d.syndicated_urls(), d.lang) {
-                    homepage_content.push_str(&line);
+        after_title_block.push_str(&facts.fields.after_masthead());
+        let spliced = splice_after_title_block(&homepage_content, &after_title_block);
+        // Colophon rows close the article body, after the prose and any
+        // footnote section, inside `<article>`; a page's syndication line
+        // follows them.
+        match doc {
+            Some(d) => {
+                let mut html = with_colophon(spliced, d, emit_source_lines);
+                if d.kind != moss_core::PageKind::Folder {
+                    if let Some(line) = crate::build::features::syndication::render_syndication_line(&d.syndicated_urls(), d.lang) {
+                        html.push_str(&line);
+                    }
                 }
+                html
+            }
+            None => spliced,
+        }
+    } else {
+        homepage_content
+    };
+    let homepage_content = {
+        let mut finished = homepage_content;
+        // The `breadcrumb: label` link is chrome around the finished title
+        // block, so it goes on last: the splices above see the title at the
+        // head of the content and need not step past anything.
+        if let Some(d) = doc {
+            if let Some(parent) = crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb) {
+                crate::build::markdown::html_post::prepend_parent_label(&mut finished, &parent);
+            }
+            crate::build::components::field_places::warn_title_block_unplaced(d, &finished);
+        }
+        if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
+            finished = crate::build::components::field_places::after_leading_picture(&finished);
+        } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
+            finished = crate::build::components::field_places::beside_leading_picture(&finished);
+        }
+        finished = crate::build::page::default_width::apply(finished, doc.and_then(|d| d.content_width.as_deref()).or(layout_config.content_width.as_deref()));
+        // Calendar links that close the body: a folder's download and subscribe
+        // links, and an event's "Add to calendar" when no meta line carries it.
+        // A page with its listing off shows no events here; its embedded
+        // listings carry their own folders' links (`folder_embed`).
+        if let Some(d) = doc {
+            if let Some(href) = calendar_at_body_end.as_deref() {
+                finished.push_str(&context.shared.calendar.event_link_html(href, d.lang));
+            }
+            if d.prints_folder_calendar_links() {
+                finished.push_str(&context.shared.calendar.folder_links_html(d, site_url, d.lang));
             }
         }
-    }
-    // The `breadcrumb: label` link is chrome around the finished title block,
-    // so it goes on last: the date row and byline splices above see the title
-    // at the head of the content and need not step past anything.
-    if let Some(d) = doc {
-        if let Some(parent) = crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb) {
-            crate::build::markdown::html_post::prepend_parent_label(&mut homepage_content, &parent);
-        }
-    }
-    if let Some(d) = doc {
-        crate::build::components::field_places::warn_title_block_unplaced(d, &homepage_content);
-    }
-    if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
-        homepage_content = crate::build::components::field_places::after_leading_picture(&homepage_content);
-    } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
-        homepage_content = crate::build::components::field_places::beside_leading_picture(&homepage_content);
-    }
-    homepage_content = crate::build::page::default_width::apply(homepage_content, doc.and_then(|d| d.content_width.as_deref()).or(layout_config.content_width.as_deref()));
-    // Calendar links that close the body: a folder's download and subscribe
-    // links, and an event's "Add to calendar" when no meta line carries it.
-    // A page with its listing off shows no events here; its embedded listings
-    // carry their own folders' links (`folder_embed`).
-    if let Some(d) = doc {
-        if let Some(href) = calendar_at_body_end.as_deref() {
-            homepage_content.push_str(&context.shared.calendar.event_link_html(href, d.lang));
-        }
-        if d.prints_folder_calendar_links() {
-            homepage_content.push_str(&context.shared.calendar.folder_links_html(d, site_url, d.lang));
-        }
-    }
-
-    // Resolve the share-card description once for the page, using the
-    // 6-rung fallback chain: page description → page hero overlay →
-    // page body → homepage description → homepage hero overlay → homepage
-    // body. Article pages (sub-pages of the homepage) read all rungs; the
-    // homepage itself uses only its own rungs 1-3 to avoid double-walking.
-    // Other page types (folder index) get the per-page rungs and skip the
-    // homepage cascade for consistency with the existing cover behavior.
-    let share_card_description: Option<String> = doc.and_then(|d| {
-        let inputs = crate::build::page::meta::DescriptionChainInputs {
-            page_description: d.description.as_deref(),
-            page_hero_overlay_text: d.hero_overlay_text.as_deref(),
-            page_content: &d.content,
-            homepage_description: cascade_homepage.and_then(|h| h.description.as_deref()),
-            homepage_hero_overlay_text: cascade_homepage
-                .and_then(|h| h.hero_overlay_text.as_deref()),
-            homepage_content: cascade_homepage.map(|h| h.content.as_str()),
-            math: layout_config.assets.math,
-        };
-        crate::build::page::meta::resolve_page_description_with_fallbacks(&inputs)
-    });
-    let share_card_description_str: &str = share_card_description.as_deref().unwrap_or("");
-
-    // Homepage meta URL: absolute root when deployed, "/" otherwise. Computed
-    // once here so the og:type=website tags and the WebSite JSON-LD node share
-    // the exact same value (no re-derivation drift between the two meta blocks).
-    let homepage_meta_url: String = if site_url.is_deployed() {
-        site_url.as_str().to_string()
-    } else {
-        "/".to_string()
+        finished
     };
+    let share_card_description = facts.share_card_description.clone();
+    let share_card_description_str: &str = share_card_description.as_deref().unwrap_or("");
+    let homepage_meta_url = &facts.homepage_meta_url;
+
 
     // Build template variables
     let vars = ShellVars {

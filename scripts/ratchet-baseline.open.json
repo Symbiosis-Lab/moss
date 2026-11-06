@@ -110,7 +110,7 @@
         "crates/moss-build/src/build/pipeline.rs::run_notebook_processing": 350,
         "crates/moss-build/src/build/pipeline.rs::build_inner": 650,
         "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": 1850,
-        "crates/moss-build/src/build/render/html.rs::render_page": 800,
+        "crates/moss-build/src/build/render/html.rs::render_page": 550,
         "crates/moss-build/src/build/render/incremental/verdict.rs::compute": 250,
         "crates/moss-build/src/build/scan/scan.rs::scan_folder_with_dedup_emit_with_error": 400,
         "crates/moss-build/src/cli/import.rs::run": 250,

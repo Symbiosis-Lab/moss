@@ -5055,6 +5055,58 @@ mod children_field_tests {
         );
     }
 
+    /// Children routed to the sidebar, by `children_in: sidebar` or by the
+    /// deprecated `sidebar:` field's alias, are not also listed in the body.
+    #[test]
+    fn children_routed_to_the_sidebar_leave_the_body() {
+        let render = |children_in: Option<&str>, from_alias: Option<bool>| -> String {
+            let mut homepage = make_doc("My Site", "index.html");
+            homepage.is_root_level = true;
+            homepage.kind = PageKind::Folder;
+            homepage.children = Some(true);
+            homepage.children_source = Some("[[News]]".to_string());
+            homepage.children_in = children_in.map(str::to_string);
+            homepage.from_sidebar_alias = from_alias;
+            let mut news_index = make_doc("News", "news/index.html");
+            news_index.kind = PageKind::Folder;
+            let mut news_article = make_doc("New Hub", "news/new-hub/index.html");
+            news_article.date = Some("2025-09-18".to_string());
+            let all_docs = vec![homepage.clone(), news_index, news_article];
+            let html = generate_html(
+                Some(&homepage),
+                &all_docs,
+                &make_project(),
+                &make_layout(),
+                true,
+                None,
+                None,
+                Language::En,
+                None,
+                false,
+                false,
+                None,
+                false,
+                None,
+                None,
+                &std::collections::HashMap::new(),
+                &localhost_url(),
+                true,
+                false,
+                "favicon.svg",
+                None,
+                std::path::Path::new(""),
+            )
+            .expect("generate_html should succeed");
+            // The body is the page's article; the sidebar is a sibling before it.
+            let start = html.find("<article class=\"container\"").expect("the page's article");
+            let end = html[start..].find("</main>").map_or(html.len(), |i| start + i);
+            html[start..end].to_string()
+        };
+        assert!(render(None, None).contains("New Hub"), "unrouted children are listed in the body");
+        assert!(!render(Some("sidebar"), None).contains("New Hub"), "children_in: sidebar keeps them out of the body");
+        assert!(!render(None, Some(true)).contains("New Hub"), "the sidebar: alias keeps them out of the body");
+    }
+
     /// An ORDINARY page (not the homepage, not a folder index) carrying
     /// `children: '[[/]]'` + `children_depth: all` should host a whole-site
     /// listing the same way the homepage branch's `children_source` does.
