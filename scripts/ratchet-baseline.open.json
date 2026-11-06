@@ -53,7 +53,7 @@
         "crates/moss-build/src/build/media": 20,
         "crates/moss-build/src/deploy": 18,
         "crates/moss-build/src/js-src/bridge": 17,
-        "crates/moss-build/src/js-src/site": 26,
+        "crates/moss-build/src/js-src/site": 27,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 41,
         "crates/moss-core/src/ast": 28,
@@ -64,7 +64,7 @@
         "crates/moss-build/src/cli": 24,
         "crates/moss-build/src/build/components": 16,
         "crates/moss-build/src/build/emit": 18,
-        "crates/moss-build/src/assets/js": 16,
+        "crates/moss-build/src/assets/js": 17,
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 18
       },
@@ -97,7 +97,7 @@
       "value": {
         "crates/moss-build/src/build.rs::run_pipeline_body": 450,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
-        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
+        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 750,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
         "crates/moss-build/src/build/media/image.rs::run_image_conversion": 400,

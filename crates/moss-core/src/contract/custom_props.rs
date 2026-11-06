@@ -354,6 +354,36 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Aspect ratio every picture in a summary row's strip (`pictures:N`) is cropped to. `--moss-card-cover-fit` applies to the strip too.",
     },
     CustomProp {
+        name: "--moss-marquee-speed",
+        owner: "moss-marquee-track",
+        default: "60",
+        description: "How fast a marquee strip (`motion:marquee`, `:::gallery marquee`) slides, in pixels per second, as a bare number. marquee.js divides one set's width by it to set `--moss-marquee-duration`, so a long strip and a short one move at the same pace.",
+    },
+    CustomProp {
+        name: "--moss-marquee-duration",
+        owner: "moss-marquee-track",
+        default: "40s",
+        description: "Time one loop of a marquee takes. Set by marquee.js on each strip from its width and `--moss-marquee-speed`; set `--moss-marquee-speed` instead of this.",
+    },
+    CustomProp {
+        name: "--moss-marquee-hover",
+        owner: "moss-marquee-track",
+        default: "paused",
+        description: "`animation-play-state` of a marquee under the pointer: `paused` (the default, so a reader can stop it) or `running` to keep it moving. Focus inside the strip always pauses it.",
+    },
+    CustomProp {
+        name: "--moss-marquee-item-width",
+        owner: "moss-card-pictures",
+        default: "clamp(12rem, 28vw, 22rem)",
+        description: "Width of each picture in a sliding summary-row strip; `--moss-card-pictures-ratio` sets its height.",
+    },
+    CustomProp {
+        name: "--moss-marquee-height",
+        owner: "moss-gallery",
+        default: "14rem",
+        description: "Height of the pictures in a `:::gallery marquee`; each keeps its own proportions, so its width follows.",
+    },
+    CustomProp {
         name: "--moss-card-pictures-gap",
         owner: "moss-card-pictures",
         default: "var(--moss-space-xs)",

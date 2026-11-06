@@ -179,7 +179,15 @@ pub fn render_with_sort(
     let cover_inner = if let Some(first) = props.pictures.first() {
         let rest = props.pictures.iter().skip(1).map(|url| draw(url, CoverType::Image, ""));
         let cells: String = std::iter::once(draw(first, props.cover_type.unwrap_or(CoverType::Image), &props.title)).chain(rest).collect();
-        format!(r#"<div class="moss-card-pictures">{cells}</div>"#)
+        if props.marquee {
+            // The second set closes the loop; it has no names and is out of reach.
+            let copy: String = props.pictures.iter().map(|url| draw(url, CoverType::Image, "")).collect();
+            format!(
+                r#"<div class="moss-card-pictures" data-motion="marquee"><div class="moss-marquee-track"><div class="moss-marquee-set">{cells}</div><div class="moss-marquee-set" aria-hidden="true" inert>{copy}</div></div></div>"#
+            )
+        } else {
+            format!(r#"<div class="moss-card-pictures">{cells}</div>"#)
+        }
     } else {
         match (&props.cover, CoverType::resolve(props.cover.as_deref(), props.cover_type)) {
             (Some(url), Some(ct)) => draw(url, ct, &props.title),

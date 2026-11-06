@@ -7332,7 +7332,7 @@ article a:where(:not(.moss-btn)):focus {
   min-inline-size: 0;
 }
 
-.moss-cards[data-layout="list"] .moss-card-pictures > .moss-card-cover {
+.moss-cards[data-layout="list"] .moss-card-pictures .moss-card-cover {
   inline-size: auto;
   aspect-ratio: var(--moss-card-pictures-ratio, 5 / 3);
 }
@@ -7344,8 +7344,87 @@ article a:where(:not(.moss-btn)):focus {
     scroll-snap-type: inline proximity;
     overscroll-behavior-inline: contain;
   }
-  .moss-card-pictures > .moss-card-cover {
+  .moss-card-pictures .moss-card-cover {
     scroll-snap-align: start;
+  }
+}
+
+/* A strip that slides sideways in a loop (`motion:marquee`, `:::gallery
+   marquee`). The build draws its pictures twice in one track, the second set
+   hidden from assistive technology. Until marquee.js has marked the strip
+   `data-marquee-ready`, and for a reader who asks for less motion, the track
+   and the first set vanish into the strip's own layout and the copy is not
+   drawn, so the strip is the still one above. Otherwise the track slides by
+   one set's width, which is where the copy starts, so the loop has no seam.
+   Hooks: `--moss-marquee-speed` (pixels per second, read by the script),
+   `--moss-marquee-hover` (`running` keeps it moving under the pointer),
+   `--moss-marquee-item-width` for a listing strip, `--moss-marquee-height`
+   for a gallery. */
+.moss-marquee-track,
+.moss-marquee-set {
+  display: contents;
+}
+
+.moss-marquee-set[inert] {
+  display: none;
+}
+
+@keyframes moss-marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="marquee"][data-marquee-ready] {
+    display: block;
+    overflow: hidden;
+    scroll-snap-type: none;
+  }
+
+  [data-marquee-ready] > .moss-marquee-track {
+    display: flex;
+    inline-size: max-content;
+    animation: moss-marquee var(--moss-marquee-duration, 40s) linear infinite;
+  }
+
+  [data-marquee-ready][data-marquee-reverse] > .moss-marquee-track {
+    animation-direction: reverse;
+  }
+
+  [data-marquee-ready]:hover > .moss-marquee-track {
+    animation-play-state: var(--moss-marquee-hover, paused);
+  }
+
+  [data-marquee-ready]:focus-within > .moss-marquee-track {
+    animation-play-state: paused;
+  }
+
+  /* The set ends with one gap, so two sets are exactly twice one set. */
+  [data-marquee-ready] .moss-marquee-set {
+    display: flex;
+    flex: none;
+    gap: var(--moss-card-pictures-gap, var(--moss-space-xs));
+    padding-inline-end: var(--moss-card-pictures-gap, var(--moss-space-xs));
+  }
+
+  .moss-cards[data-layout="list"] .moss-card-pictures[data-marquee-ready] .moss-card-cover {
+    flex: none;
+    inline-size: var(--moss-marquee-item-width, clamp(12rem, 28vw, 22rem));
+  }
+
+  .moss-gallery[data-marquee-ready] .moss-marquee-set {
+    gap: var(--moss-gallery-gap, 6px);
+    padding-inline-end: var(--moss-gallery-gap, 6px);
+  }
+
+  .moss-gallery[data-marquee-ready] .moss-gallery-item {
+    flex: none;
+    inline-size: calc(var(--moss-marquee-height, 14rem) * var(--ar, 1.5));
+  }
+
+  .moss-gallery[data-marquee-ready] .moss-gallery-item img {
+    height: var(--moss-marquee-height, 14rem);
   }
 }
 

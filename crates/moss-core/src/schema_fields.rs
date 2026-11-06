@@ -1223,6 +1223,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "children_motion",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["marquee"]),
+        score: 85,
+        description: "With children_pictures on a summary listing, slide each row's strip of pictures sideways in a loop (\"marquee\"), rows alternating direction. Pauses on hover and focus, and stays still for readers who ask for less motion. Absent = a still strip.",
+        label: Some("Motion"),
+        label_key: "chip.children_motion.label",
+        group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "children_pictures",
         field_type: FieldType::Integer,
         widget: Widget::NumberInput,

@@ -1189,25 +1189,27 @@ fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig)
 fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryShortcode, Vec<String>) {
     let attrs = split_positional_classes_width_and_per_line(args);
     let mut warnings = Vec::new();
-    // `rows` is a layout word, not a count: `:::gallery rows` is justified rows.
-    let (rows, count_text) = match attrs.positional.strip_prefix("rows") {
-        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
-            (true, rest.trim())
-        }
-        _ => (false, attrs.positional.as_str()),
+    // `rows` and `marquee` are layout words, not counts: `:::gallery rows` is
+    // justified rows, `:::gallery marquee` one row that slides sideways.
+    let layout_word = |word: &str| match attrs.positional.strip_prefix(word) {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => Some(rest.trim()),
+        _ => None,
     };
-    if rows && (attrs.per_line.is_some() || !count_text.is_empty()) {
-        warnings.push(
-            "`:::gallery rows` lays out justified rows, so the column count is ignored"
-                .to_string(),
-        );
+    let (rows, marquee, count_text) = match (layout_word("rows"), layout_word("marquee")) {
+        (Some(rest), _) => (true, false, rest),
+        (_, Some(rest)) => (false, true, rest),
+        _ => (false, false, attrs.positional.as_str()),
+    };
+    if (rows || marquee) && (attrs.per_line.is_some() || !count_text.is_empty()) {
+        let word = if rows { "rows" } else { "marquee" };
+        warnings.push(format!("`:::gallery {word}` sets its own layout, so the column count is ignored"));
     }
     let count = attrs
         .per_line
         .as_deref()
         .or(if count_text.is_empty() { None } else { Some(count_text) })
         .and_then(|v| v.parse::<u32>().ok());
-    let columns = if rows { None } else { count };
+    let columns = if rows || marquee { None } else { count };
     let mut items: Vec<GalleryItem> = Vec::new();
     for line in gallery_lines(body.lines(), config).into_iter().flatten() {
         match line {
@@ -1242,6 +1244,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
             items,
             width: attrs.width,
             rows,
+            marquee,
             caption: Vec::new(),
         },
         warnings,

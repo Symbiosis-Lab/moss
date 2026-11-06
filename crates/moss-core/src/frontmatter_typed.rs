@@ -418,6 +418,8 @@ pub struct FrontMatter {
     /// listing's rows, in place of the one cover. Read raw here; the build checks the
     /// range with `folder_list::picture_count`. Absent = one cover.
     pub children_pictures: Option<u32>,
+    /// `marquee`: the strip of `children_pictures` slides sideways in a loop.
+    pub children_motion: Option<String>,
     /// What this listing's folder cards say they count: `false` hides it, a
     /// string replaces the text (see [`crate::frontmatter_union::ChildrenCount`]).
     pub children_count: Option<crate::frontmatter_union::ChildrenCount>,
@@ -1102,6 +1104,10 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                     ),
                 },
                 "children_pictures" => frontmatter.children_pictures = value.parse().ok(),
+                "children_motion" => match value {
+                    "marquee" => frontmatter.children_motion = Some(value.to_string()),
+                    _ => eprintln!("Warning: children_motion: \"{value}\" is not valid. Use \"marquee\"."),
+                },
                 "description" => frontmatter.description = Some(value.to_string()),
                 "nav_label" => frontmatter.nav_label = Some(value.to_string()),
                 "lang" => frontmatter.lang = Some(value.to_string()),

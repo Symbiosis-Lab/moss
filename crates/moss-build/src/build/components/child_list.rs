@@ -266,6 +266,9 @@ pub struct ChildItemProps {
     /// listing asked for a strip (`pictures:N`) and the page has more than
     /// one. Empty otherwise: a summary row then draws `cover` alone.
     pub pictures: Vec<String>,
+    /// The listing asked for `motion:marquee`: the strip is drawn twice in a
+    /// track that slides sideways. Meaningful only with `pictures`.
+    pub marquee: bool,
     /// Type of cover media (image, video, iframe). Defaults to Image when cover is Some.
     pub cover_type: Option<CoverType>,
     /// Optional overline shown above the title (horizontal) or between title
@@ -581,6 +584,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         count_only,
         description: explicit_card_text(doc),
         pictures: pictures.zip(cover.as_deref()).map_or_else(Vec::new, |(n, cover)| strip_pictures(doc, cover, n, &path_resolver)),
+        marquee: false,
         cover,
         cover_type: cover_path_for_type
             .as_deref()

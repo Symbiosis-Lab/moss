@@ -359,6 +359,12 @@ pub fn has_scroll_row_recursive(doc: &Document) -> bool {
     )
 }
 
+/// True if any `:::gallery marquee` is in the document, nested ones included.
+/// Gates the marquee script.
+pub fn has_marquee_recursive(doc: &Document) -> bool {
+    any_block(doc, |block| matches!(block, Block::Shortcode(Shortcode::Gallery(gallery)) if gallery.marquee))
+}
+
 /// Whether a fenced block's info string asks for a diagram: its first word is
 /// `mermaid`, as Obsidian, GitHub and GitLab read it.
 pub fn is_diagram_lang(info: &str) -> bool {
