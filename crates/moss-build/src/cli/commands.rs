@@ -118,7 +118,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "fetch",
             args: "<folder>",
-            description: "Download every file in a folder that is still only in the cloud (Google Drive, iCloud Drive, Dropbox, OneDrive), so the folder can be copied or backed up without each read blocking on the provider. Reads and lists only: it writes nothing in the folder. Progress goes to stderr. Exits 0 when every file is on this device, and 1 when the provider stops delivering (nothing arrives for 90 seconds), naming the provider, how many files are still in the cloud with a short sample, and what to do. `moss build` makes the same check first and exits 1 the same way.",
+            description: "Download every file in a folder that is still only in the cloud (Google Drive, iCloud Drive, Dropbox, OneDrive), so the folder can be copied or backed up without each read blocking on the provider. moss's own cache (`.moss/cache/`) is left in the cloud, since a build downloads what it needs again: exclude it from a copy (`rsync --exclude .moss/cache`). Reads and lists only: it writes nothing in the folder. Progress goes to stderr. Exits 0 when every file but the cache is on this device, and 1 when the provider stops delivering (nothing arrives for 90 seconds), naming the provider, how many files are still in the cloud with a short sample, and what to do. `moss build` makes the same check first and exits 1 the same way.",
         },
         CliCommandInfo {
             name: "doctor",
