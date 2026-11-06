@@ -455,6 +455,7 @@ pub(crate) enum FetchMethod {
     Head,
     Post { body: String },
     Put { body: String },
+    Delete,
 }
 
 /// Full HTTP result with ALL response headers (lowercased keys) for the fetch
@@ -487,6 +488,7 @@ pub(crate) async fn do_http_request_full(
             FetchMethod::Head => agent.head(&url_c),
             FetchMethod::Post { .. } => agent.post(&url_c).set("Content-Type", "application/json"),
             FetchMethod::Put { .. } => agent.put(&url_c).set("Content-Type", "application/json"),
+            FetchMethod::Delete => agent.delete(&url_c),
         };
         req = req.set("User-Agent", &crate::system::user_agent());
         if let Some(h) = req_headers {
@@ -502,7 +504,7 @@ pub(crate) async fn do_http_request_full(
         // this BEFORE the match below consumes `method` (Post/Put move `body` out).
         let is_head = matches!(method, FetchMethod::Head);
         let resp = match method {
-            FetchMethod::Get | FetchMethod::Head => req.call(),
+            FetchMethod::Get | FetchMethod::Head | FetchMethod::Delete => req.call(),
             FetchMethod::Post { body } | FetchMethod::Put { body } => req.send_string(&body),
         };
         match resp {
