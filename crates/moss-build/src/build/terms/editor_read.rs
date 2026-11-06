@@ -65,6 +65,7 @@ mod tests {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
         }
     }
 

@@ -214,6 +214,29 @@ const CHILDREN_MEMBERS: &[BuiltinField] = &[
     },
 ];
 
+/// Union members for `syndicate`: `false`, one channel id, or a list of them.
+const SYNDICATE_MEMBERS: &[BuiltinField] = &[
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Array,
+        widget: Widget::TagInput,
+        items_type: Some(FieldType::String),
+        ..FIELD_DEFAULTS
+    },
+];
+
 /// Union members for `children_count`: `false` to hide the count, or the
 /// text to show instead.
 const CHILDREN_COUNT_MEMBERS: &[BuiltinField] = &[
@@ -810,6 +833,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         score: 97,
         description: "Per-page comment opt-in/out",
         label_key: "chip.comments.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "syndicate",
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(SYNDICATE_MEMBERS),
+        score: 96,
+        description: "The channels a copy of this page is posted to after it is published, by their ids under [channels.<id>] (bluesky, mastodon). Usually set once for a folder with cascade:. false posts no copy of this page. Each copy's address is then added to syndicated:.",
         group: "This Page",
         ..FIELD_DEFAULTS
     },

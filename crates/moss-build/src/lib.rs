@@ -59,6 +59,7 @@ pub mod infra;
 pub mod platform;
 pub mod seta;
 pub mod plugins;
+pub mod syndication;
 pub mod system;
 
 pub mod vault;

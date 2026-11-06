@@ -9,6 +9,7 @@ use engine_adapter::PluginEngine;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+pub mod copies;
 pub mod engine_adapter;
 pub mod listing;
 mod hook_context;
@@ -560,6 +561,7 @@ impl PluginManager {
             .filter(|p| {
                 channels_config.is_installed(&p.manifest.name)
                     && !builtin_ids.contains(&p.manifest.name.as_str())
+                    && copies::copy_spec(&p.manifest).is_none()
             })
             .collect();
 
@@ -888,6 +890,8 @@ impl PluginManager {
                         Ok(completion_result) => {
                             if completion_result.success {
                                 Ok((completion_result.result, completion_result.returned))
+                            } else if completion_result.result.is_some() && copies::refusal_is_an_answer(hook_name) {
+                                Ok((completion_result.result, completion_result.returned))
                             } else {
                                 // Prefer .error (set for throw-path failures), then fall
                                 // back to .result.message (set when success:false is
@@ -1048,6 +1052,7 @@ mod tests {
             context: None,
             deployment: None,
             setup: None,
+            copy: None,
         };
         let with_message = CompletionResult {
             success: false,

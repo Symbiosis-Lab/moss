@@ -499,6 +499,7 @@ mod tests {
             date: None,
             tags: vec![],
             uid: uid.map(|s| s.to_string()),
+            syndicate: None,
         }
     }
 

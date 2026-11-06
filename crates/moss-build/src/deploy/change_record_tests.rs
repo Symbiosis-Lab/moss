@@ -15,6 +15,7 @@ fn article_info(source_path: &str, url: &str, title: &str) -> ArticleInfo {
         date: None,
         tags: Vec::new(),
         uid: None,
+        syndicate: None,
     }
 }
 

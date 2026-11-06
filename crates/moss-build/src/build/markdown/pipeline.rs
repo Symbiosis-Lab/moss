@@ -1563,6 +1563,13 @@ pub fn process_markdown_file(
     // comment on ParsedDocument::cascade); moss_core's typed FrontMatter
     // keeps HashMap since it's a broader public/frontend-facing type.
     let cascade = frontmatter.cascade.map(|m| m.into_iter().collect());
+    let syndicate = frontmatter.syndicate.and_then(|v| {
+        serde_json::to_value(v)
+            .map_err(|e| e.to_string())
+            .and_then(|v| crate::syndication::parse_choice(&v))
+            .map_err(|e| crate::build::cli_output::log_warn_problem!("[{file_path}] {e}; this page posts no copies"))
+            .ok()
+    });
     let also_in = frontmatter.also_in;
     let comments = frontmatter.comments;
     let map = frontmatter.map;
@@ -1733,6 +1740,7 @@ pub fn process_markdown_file(
         layout: frontmatter.layout,
         source_path: Some(file_path.to_string()),
         url_override: frontmatter.url,
+        syndicate,
         raw_frontmatter,
         sort: frontmatter.sort.clone(),
         direct_children_sort: None,

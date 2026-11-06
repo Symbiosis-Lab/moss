@@ -17,6 +17,7 @@ fn test_article_map_is_article() {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
         },
     );
 
@@ -50,6 +51,7 @@ fn test_article_map_save_and_load() {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
         },
     );
 
@@ -175,6 +177,7 @@ fn test_is_article_matches_pretty_url_directory_style() {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
         },
     );
 
@@ -198,6 +201,7 @@ fn test_is_article_matches_pretty_url_file_style() {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
         },
     );
 
@@ -351,6 +355,7 @@ fn test_article_map_html_content_roundtrips_through_json() {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
         },
     );
 
@@ -417,6 +422,7 @@ fn test_article_map_uid_serialization() {
             date: None,
             tags: vec![],
             uid: Some("a7b3c9d2".to_string()),
+            syndicate: None,
         },
     );
 
@@ -447,6 +453,7 @@ fn test_article_map_uid_none_omitted_from_json() {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
         },
     );
 

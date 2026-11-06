@@ -22,6 +22,7 @@ pub(crate) fn deploy_failed(message: String, title: String) -> DeployResult {
             context: None,
             deployment: None,
             setup: None,
+            copy: None,
         },
     }
 }

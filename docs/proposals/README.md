@@ -15,6 +15,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [Moving an unlisted folder without publishing its address](unlisted-folder-redirects/README.md) | In progress |
 | [Diagrams from Mermaid text](mermaid-diagrams/README.md) | In progress |
 | [Request forms: a form written in markdown, sent to a form service](request-forms/README.md) | In progress |
+| [Syndication: one contract for posting copies to other networks](syndication/README.md) | In progress |
 | [Country maps: colour whole countries from a table](country-maps/README.md) | In progress |
 | [A position ruler for a row along an ordered axis](position-ruler/README.md) | Proposed |
 

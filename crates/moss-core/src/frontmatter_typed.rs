@@ -374,6 +374,10 @@ pub struct FrontMatter {
     pub description: Option<String>,
     /// Content tags for organization
     pub tags: Option<Vec<String>>,
+    /// The channels this page's copies are posted to: a list of channel ids,
+    /// one id, or `false`. Read leniently, as a value, so a wrong shape is
+    /// reported by the build rather than failing the whole page's frontmatter.
+    pub syndicate: Option<Value>,
     /// Whether to render child pages below content.
     /// Accepts bool (true/false) or a wikilink/path string like "[[News]]".
     /// The lenient deserializer resolves ANY non-bool string to `Some(true)`

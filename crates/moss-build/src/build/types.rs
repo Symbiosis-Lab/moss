@@ -252,6 +252,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub author: Vec<String>,
+    /// The channels this page's copies go to: its own `syndicate:`, else the
+    /// nearest folder cascade's. `Some(empty)` is `syndicate: false`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub syndicate: Option<Vec<String>>,
     /// Editor names from frontmatter `editor:` — field-agnostic sibling of
     /// `author`, feeding whichever term kind's `fields` names "editor".
     /// Unread until `build::terms::derive_terms` is rewritten over kinds.

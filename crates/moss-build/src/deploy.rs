@@ -141,6 +141,14 @@ impl DeployReport {
             DeployReport::DryRun(_) => false,
         }
     }
+
+    /// The address the publish is live at, which every copy links back to.
+    pub fn site_url(&self) -> Option<&str> {
+        match self {
+            DeployReport::Push(PushResult::Success { url, .. }) | DeployReport::Plugin { url, .. } => Some(url),
+            _ => None,
+        }
+    }
 }
 
 impl From<PushResult> for DeployReport {

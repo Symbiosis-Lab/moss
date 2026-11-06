@@ -8,6 +8,7 @@
 pub mod hash_cli;
 pub mod install_cli;
 pub mod registry_client;
+pub mod secret_cli;
 pub mod zip_extract;
 
 use semver::Version;

@@ -644,11 +644,7 @@ impl ProjectInfo {
     }
 }
 
-// DnsRecord/DnsTarget moved to `crate::config::deployment` (2026-08-27,
-// M6a B3): they are deployment-state vocabulary stored in state.toml; plugins
-// produce them, the deployment record owns them. Re-exported so
-// `plugins::types::DnsTarget` paths stay valid; DeployAddress joined them for
-// the same reason.
+// Deployment-state vocabulary: plugins produce it, the deployment record owns it.
 pub use crate::config::deployment::{AddressKind, DeployAddress, DnsRecord, DnsTarget};
 
 /// Deployment information passed to syndication plugins
@@ -816,6 +812,10 @@ pub struct HookResult {
     /// Setup verdict (for the optional `check_setup` hook)
     #[serde(default)]
     pub setup: Option<SetupVerdict>,
+
+    /// What a copy hook posted (`publish_copy`, `update_copy`)
+    #[serde(default)]
+    pub copy: Option<crate::syndication::record::CopyOutcome>,
 }
 
 /// Plugin hook progress payload — carried by `MossEvent::PluginProgress`.

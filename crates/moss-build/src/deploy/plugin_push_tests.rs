@@ -17,6 +17,7 @@ fn completed(success: bool, deployment: Option<DeploymentInfo>) -> DeployResult 
             context: None,
             deployment,
             setup: None,
+            copy: None,
         },
     }
 }
