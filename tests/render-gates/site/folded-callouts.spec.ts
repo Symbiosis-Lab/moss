@@ -11,10 +11,23 @@ import { test, expect, type Page } from '@playwright/test';
 const grouped = (page: Page) => page.locator('.moss-accordion details.callout');
 const supportsMotion = (page: Page) =>
   page.evaluate(() => CSS.supports('interpolate-size: allow-keywords') && CSS.supports('selector(::details-content)'));
-const answerHeight = (page: Page, i: number) =>
-  grouped(page).nth(i).evaluate((el) => {
-    const content = el.querySelector('.callout-content') as HTMLElement;
-    return content.getBoundingClientRect().height;
+/**
+ * Toggle a grouped callout and record the outer `<details>` height on every
+ * frame for 800ms. The motion runs on `::details-content`, so it is the
+ * details box that grows and shrinks; `before` is its height at the click.
+ */
+const toggle = (page: Page, i: number) =>
+  grouped(page).nth(i).evaluate(async (el) => {
+    const height = () => el.getBoundingClientRect().height;
+    const before = height();
+    (el.querySelector('summary') as HTMLElement).click();
+    const samples: number[] = [];
+    const start = performance.now();
+    while (performance.now() - start < 800) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      samples.push(height());
+    }
+    return { before, samples };
   });
 
 test('opening one callout in a group closes the other', async ({ page }) => {
@@ -39,34 +52,29 @@ test('a folded callout outside the group is independent of it', async ({ page })
   await expect(outside).toHaveAttribute('open', '');
 });
 
-test('the answer grows over the token duration where animated details are supported', async ({ page }) => {
+test('the callout grows and shrinks over frames where animated details are supported', async ({ page }) => {
   await page.goto('/');
   test.skip(!(await supportsMotion(page)), 'this engine opens a details at once');
-  const details = grouped(page).nth(0);
-  const full = await (async () => {
-    await details.locator('summary').click();
-    await page.waitForTimeout(700);
-    return answerHeight(page, 0);
-  })();
-  await details.locator('summary').click();
-  await page.waitForTimeout(700);
-  await details.locator('summary').click();
-  await page.waitForTimeout(120);
-  const mid = await answerHeight(page, 0);
-  expect(mid).toBeGreaterThan(0);
-  expect(mid).toBeLessThan(full);
-  await page.waitForTimeout(600);
-  expect(await answerHeight(page, 0)).toBeCloseTo(full, 0);
+  const opening = await toggle(page, 0);
+  const full = opening.samples[opening.samples.length - 1];
+  expect(full).toBeGreaterThan(opening.before + 20);
+  expect(opening.samples[0]).toBeLessThan(full - 1);
+  expect(opening.samples.some((h) => h > opening.before + 1 && h < full - 1)).toBe(true);
+
+  const closing = await toggle(page, 0);
+  const shut = closing.samples[closing.samples.length - 1];
+  expect(shut).toBeCloseTo(opening.before, 0);
+  expect(closing.samples[0]).toBeGreaterThan(shut + 1);
+  expect(closing.samples.some((h) => h > shut + 1 && h < full - 1)).toBe(true);
 });
 
-test('under reduced motion the answer opens at once', async ({ page }) => {
+test('under reduced motion the full height is there on the first frame, opening and closing', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
-  const details = grouped(page).nth(0);
-  await details.locator('summary').click();
-  await page.waitForTimeout(50);
-  const h = await answerHeight(page, 0);
-  await page.waitForTimeout(600);
-  expect(h).toBeCloseTo(await answerHeight(page, 0), 0);
-  expect(await details.evaluate((el) => getComputedStyle(el, '::details-content').transitionDuration)).not.toContain('0.4s');
+  const opening = await toggle(page, 0);
+  const full = opening.samples[opening.samples.length - 1];
+  expect(full).toBeGreaterThan(opening.before + 20);
+  expect(opening.samples[0]).toBeCloseTo(full, 0);
+  const closing = await toggle(page, 0);
+  expect(closing.samples[0]).toBeCloseTo(opening.before, 0);
 });
