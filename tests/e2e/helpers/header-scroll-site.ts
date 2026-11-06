@@ -55,6 +55,7 @@ ${paragraphs(14)}
     "Ledger.md": `---
 title: Ledger
 uid: "hsg00002"
+nav: true
 ---
 
 ${paragraphs(3)}
