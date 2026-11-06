@@ -73,6 +73,7 @@ fn flags_that_go_together_are_checked() {
     assert!(parse(&["--bogus"]).is_err());
     assert!(parse(&["--lift", "x", "--as", "y"]).unwrap_err().contains("--place"));
     assert_eq!(parse(&["site", "--lift", ".x", "--as", "y", "--place", "none"]).unwrap().lift.as_deref(), Some("x"));
+    assert!(parse(&["--import-sources", "l.json", "--lift", "x", "--as", "y", "--place", "none"]).unwrap_err().contains("a run of its own"));
 }
 
 #[test]

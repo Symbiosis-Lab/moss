@@ -58,3 +58,33 @@ fn a_folder_page_draws_no_line_even_as_an_article() {
     ]);
     assert!(!site.html("log/index.html").contains("moss-syndication"));
 }
+
+/// Imports before `origin:` existed wrote the source into `syndicated:`.
+#[test]
+fn an_import_source_moved_to_origin_is_no_longer_shown_as_a_copy() {
+    let old = "https://builder.example/u1/site/log/";
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+        ("log.md", &page(&format!("syndicated:\n- {old}\n- https://bsky.app/profile/ana.example/post/3k\n"))),
+        ("other.md", &page("syndicated:\n  - https://notes.example/a\n")),
+    ]);
+    assert!(site.html("log/index.html").contains(">builder.example</a>"));
+    site.write("sources.json", &format!("[\"{old}\"]"));
+    let migrate = || {
+        let args: Vec<String> = [site.root.to_str().unwrap(), "--import-sources", site.root.join("sources.json").to_str().unwrap(), "--apply"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(moss_build::cli::doctor::migrate::run(&args), 0);
+        std::fs::read_to_string(site.root.join("log.md")).unwrap()
+    };
+    let migrated = migrate();
+    assert!(migrated.contains(&format!("origin: {old}\n")) && !migrated.contains(&format!("- {old}")), "{migrated}");
+    assert_eq!(migrate(), migrated, "a second run changes nothing");
+
+    site.rebuild();
+    let html = site.html("log/index.html");
+    let line = &html[html.find("class=\"moss-syndication\"").expect("the real copy is still listed")..];
+    assert!(line.contains(">Bluesky</a>") && !html.contains("builder.example"), "{line}");
+    assert!(site.html("other/index.html").contains(">notes.example</a>"), "an unlisted address stays a copy");
+}
