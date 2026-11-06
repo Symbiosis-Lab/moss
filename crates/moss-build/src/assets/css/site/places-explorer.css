@@ -1346,7 +1346,7 @@ button.moss-places-chip-crumb {
    --------------------------------------------------------------------------- */
 .moss-place-map[data-moss-place-embed] {
   position: relative;
-  aspect-ratio: 3 / 2;
+  aspect-ratio: var(--moss-place-map-ar, 3 / 2);
   overflow: hidden;
   border-radius: 8px;
 }

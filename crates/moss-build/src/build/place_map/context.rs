@@ -217,8 +217,7 @@ impl PlaceMapRenderContext {
             .map(|place| place.precision)
             .max_by_key(precision_rank)
             .unwrap_or(Precision::Country);
-        let layers = ground.as_ref().map_or(&[][..], |ground| &ground.images[..]);
-        let options = super::SvgMapOptions { layers, ..super::SvgMapOptions::new(host_path, ordinal, &first.display, precision) };
+        let options = super::SvgMapOptions { ground: ground.as_ref(), ..super::SvgMapOptions::new(host_path, ordinal, &first.display, precision) };
         match super::emit_locator(&self.maps, &target, options) {
             Ok(locator) => {
                 // The article id `places.<hash>.json` keys THIS page's own
@@ -406,7 +405,7 @@ impl PlaceMapRenderContext {
             .or_else(|| target.places.first().map(|place| place.display.clone()))
             .unwrap_or_else(|| key.to_string());
         let ground = self.street_ground(&mut target, EMBED_CSS_WIDTH);
-        let svg = target.has_coordinates().then(|| super::emit_svg_over(&self.maps, &target, page_path, ordinal, ground.as_ref().map_or(&[][..], |ground| &ground.images[..])))?;
+        let svg = target.has_coordinates().then(|| super::emit_svg_over(&self.maps, &target, page_path, ordinal, ground.as_ref()))?;
         let svg = if in_place_explorer { self.with_explorer_handshake(key, svg) } else { svg };
         let scope = if key == self.namespace { String::new() } else { format!("place={key}") };
         let svg = if is_embed { self.with_embed_hydration(svg, &scope, &embed_name) } else { svg };

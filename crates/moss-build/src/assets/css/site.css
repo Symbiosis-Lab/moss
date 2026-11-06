@@ -3229,7 +3229,7 @@ body > header .site-name {
   display: block;
   inline-size: 100%;
   block-size: auto;
-  aspect-ratio: 3 / 2;
+  aspect-ratio: var(--moss-place-map-ar, 3 / 2);
   writing-mode: horizontal-tb;
 }
 [data-theme="dark"] .moss-place-map {

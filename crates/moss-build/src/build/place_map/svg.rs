@@ -36,7 +36,7 @@ pub(crate) use route::{route_blocked_diagnostic, route_precision_gate};
 
 use super::geometry::{marker_radius, FrameTier, TILE_K, TILE_STROKE_BASE_K, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES, REGION_FADE_MIN_RADIUS};
 use super::globe::{globe_line, globe_marker, globe_rings};
-use super::layer_crop::LayerImage;
+use super::layer_crop::{StreetGround, View};
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
 
@@ -59,7 +59,7 @@ pub struct SvgMapOptions<'a> {
     pub location: &'a str,
     pub precision: Precision,
     pub href: Option<&'a str>,
-    pub(crate) layers: &'a [LayerImage],
+    pub(crate) ground: Option<&'a StreetGround>,
 }
 
 impl<'a> SvgMapOptions<'a> {
@@ -75,7 +75,7 @@ impl<'a> SvgMapOptions<'a> {
             location,
             precision,
             href: None,
-            layers: &[],
+            ground: None,
         }
     }
 }
@@ -90,16 +90,16 @@ pub fn emit_svg(
     page_path: &str,
     ordinal: usize,
 ) -> String {
-    emit_svg_over(context, target, page_path, ordinal, &[])
+    emit_svg_over(context, target, page_path, ordinal, None)
 }
 
-/// [`emit_svg`] with detail layers drawn over a flat ground.
+/// [`emit_svg`] with detail layers drawn over a flat ground, cut to the part of the canvas they cover.
 pub(crate) fn emit_svg_over(
     context: &PlaceMapContext,
     target: &PlaceMapTarget,
     page_path: &str,
     ordinal: usize,
-    layers: &[LayerImage],
+    ground: Option<&StreetGround>,
 ) -> String {
     let location = target
         .aggregate_name
@@ -115,7 +115,7 @@ pub(crate) fn emit_svg_over(
     emit_svg_with_options(
         context,
         target,
-        SvgMapOptions { layers, ..SvgMapOptions::new(page_path, ordinal, location, precision) },
+        SvgMapOptions { ground, ..SvgMapOptions::new(page_path, ordinal, location, precision) },
     )
 }
 
@@ -168,7 +168,7 @@ fn emit_svg_with_mode(
         canvas_height: f64::from(SVG_HEIGHT),
         full_extent: false,
         tile: false,
-        layers: options.layers,
+        ground: options.ground,
     };
     writer.open_figure(
         target,
@@ -230,7 +230,7 @@ pub(super) fn render_svg(
     // gets the world map's rank/layer thinning either.
     let wide = !writer.tile && projection.as_ref().is_some_and(Projection::is_wide);
     let wide_locator = writer.locator_profile.is_some() && wide;
-    let grouped = target.frame.as_ref().filter(|_| writer.layers.is_empty()).map(|frame| {
+    let grouped = target.frame.as_ref().filter(|_| writer.layers().is_empty()).map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
         let mut grouped = grouped_features(context.pack(), &selected);
         if wide {
@@ -342,7 +342,7 @@ pub(super) struct Writer<'a> {
     /// those effects into a fixed-pixel canvas before camera transforms.
     pub(super) tile: bool,
     /// Detail layers drawn over a flat ground in place of the world's data.
-    pub(super) layers: &'a [LayerImage],
+    pub(super) ground: Option<&'a StreetGround>,
 }
 
 impl<'a> Writer<'a> {
@@ -372,7 +372,7 @@ impl<'a> Writer<'a> {
             canvas_height,
             full_extent,
             tile: false,
-            layers: &[],
+            ground: None,
         }
     }
 }
@@ -496,7 +496,8 @@ impl Writer<'_> {
         };
         write!(
             self.output,
-            "<figure class=\"moss-place-map\" role=\"img\" aria-label=\"{}\" data-map-tier=\"{tier}\" data-map-precision=\"{}\" data-map-location=\"{}\">",
+            "<figure class=\"moss-place-map\"{} role=\"img\" aria-label=\"{}\" data-map-tier=\"{tier}\" data-map-precision=\"{}\" data-map-location=\"{}\">",
+            self.cut_figure_attrs(),
             xml_escape(label),
             precision_name(precision),
             xml_escape(location),
@@ -515,11 +516,11 @@ impl Writer<'_> {
     }
 
     fn open_svg(&mut self) {
-        let width = length(self.canvas_width);
-        let height = length(self.canvas_height);
+        let View { x, y, width, height } = self.window();
+        let (x, y, width, height) = (length(x), length(y), length(width), length(height));
         write!(
             self.output,
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" aria-hidden=\"true\" focusable=\"false\">",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"{x} {y} {width} {height}\" aria-hidden=\"true\" focusable=\"false\">",
         )
         .expect("writing to String cannot fail");
         // A tile is composited at a fractional size. WebKit clips the
@@ -941,7 +942,7 @@ impl Writer<'_> {
                 longitude: 0.0,
                 latitude: 0.0,
             });
-        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #dbe7ea)\"/>").expect("writing to String cannot fail");
+        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"{}><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #dbe7ea)\"/>", self.globe_shift()).expect("writing to String cannot fail");
         // The world tier holds land alone: its rings are the globe's land
         // and, stroked first, its coast.
         let quantisation = context.pack().header.quantisation;
@@ -1174,7 +1175,7 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
             tile: false,
-            layers: &[],
+            ground: None,
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1220,7 +1221,7 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
             tile: false,
-            layers: &[],
+            ground: None,
         };
         writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1427,7 +1428,7 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: true,
             tile: false,
-            layers: &[],
+            ground: None,
         };
         let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None, route: false };
         let projection = choose_projection(&writer, &target).unwrap();

@@ -492,6 +492,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Fill colour of an explorer marker's own dot, its cluster-count badge, and a bloomed ring's legs/dots. `.moss-place-map` already sets this to `var(--moss-color-accent, #2d5a2d)` for the static map's own pins (precision_rank's marker colour); the explorer's own JS-positioned markers read the same property, so recolouring one recolours both.",
     },
     CustomProp {
+        name: "--moss-place-map-ar",
+        owner: "moss-place-map",
+        default: "3 / 2",
+        description: "Aspect ratio of a static place map. moss sets it on a figure drawn over a historical layer (`data-map-cut`), so the figure is cut to the part of the frame the layer covers; read-only for a theme, which sizes the map through its container instead.",
+    },
+    CustomProp {
         name: "--moss-place-marker-casing",
         owner: "moss-places-marker",
         default: "#ffffff",
