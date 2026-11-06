@@ -263,6 +263,79 @@ test.describe("without script", () => {
   });
 });
 
+const EMBEDDED_LIST = ".moss-country-map > .moss-country-list";
+const OWN_TABLE = ".moss-country-own ~ .moss-table-scroll";
+const sized = async (locator: Locator) => (await box(locator)).width > 100 && (await box(locator)).height > 20;
+
+test.describe("a map shows its rows as colour; their words stay for assistive technology", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize(WIDE);
+  });
+
+  test("an embedded map's list is clipped out of sight yet present, and shows when focus enters it", async ({ page }) => {
+    await page.goto("/");
+    const list = page.locator(EMBEDDED_LIST);
+    const row = list.getByRole("link", { name: "Japan" });
+    await expect(row, "still in the accessibility tree").toHaveCount(1);
+    expect((await box(list)).width, "clipped to a point").toBeLessThanOrEqual(1);
+    await page.locator(".moss-country-search input").focus();
+    await page.keyboard.press(TAB);
+    await expect(list.locator("a").first()).toBeFocused();
+    expect(await sized(list), "visible while focus is inside").toBe(true);
+    await page.locator(".moss-country-search input").focus();
+    expect((await box(list)).width, "hidden again when focus leaves").toBeLessThanOrEqual(1);
+  });
+
+  test("a row opened from the keyboard chooses the country", async ({ page }) => {
+    await page.goto("/");
+    const row = page.locator(EMBEDDED_LIST).getByRole("link", { name: "Japan" });
+    await row.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".moss-country-panel")).toContainText("Japan");
+    await page.keyboard.press("Escape");
+    await expect(row).toBeFocused();
+  });
+
+  test("the search's see-the-list link brings the list into view", async ({ page }) => {
+    await page.goto("/");
+    const field = page.locator(".moss-country-search input");
+    await field.fill("zzzz");
+    await page.locator(".moss-country-search-none a").click();
+    expect(await sized(page.locator(EMBEDDED_LIST))).toBe(true);
+  });
+
+  test("on the map's own page the table is clipped yet present, and shows when focus enters it", async ({ page }) => {
+    await page.goto("/risk-levels/");
+    const table = page.locator(OWN_TABLE).first();
+    await expect(page.getByRole("cell", { name: "Japan" })).toHaveCount(1);
+    expect((await box(table)).width).toBeLessThanOrEqual(1);
+    await table.focus();
+    expect(await sized(table)).toBe(true);
+  });
+
+  test("on the map's own page the search's see-the-list link brings the table into view", async ({ page }) => {
+    await page.goto("/risk-levels/");
+    await page.locator(".moss-country-search input").fill("zzzz");
+    await page.locator(".moss-country-search-none a").click();
+    expect(await sized(page.locator(OWN_TABLE).first())).toBe(true);
+  });
+
+  test("a list placed apart with style:levels stays visible", async ({ page }) => {
+    await page.goto("/apart/");
+    expect(await sized(page.locator(".moss-country-list"))).toBe(true);
+  });
+});
+
+test.describe("a map's words without script", () => {
+  test.use({ javaScriptEnabled: false });
+  test("the embedded list and the own page's table are visible", async ({ page }) => {
+    await page.goto("/");
+    expect(await sized(page.locator(EMBEDDED_LIST))).toBe(true);
+    await page.goto("/risk-levels/");
+    expect(await sized(page.locator(OWN_TABLE).first())).toBe(true);
+  });
+});
+
 test.describe("a list placed apart with style:levels", () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize(WIDE);

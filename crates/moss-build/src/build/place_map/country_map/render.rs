@@ -18,9 +18,9 @@ const WIDTH: f64 = 1000.0;
 /// Where the map is drawn.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Place<'a> {
-    /// On its own page, which goes on to show its table.
+    /// On its own page, which goes on to hold its table, kept out of sight.
     OwnPage,
-    /// On another page, which gets the rows as a list as well.
+    /// On another page, which gets the rows as a list kept out of sight.
     Embedded,
     /// On another page that places the list itself with `style:levels`; the
     /// key ties that list to this map.
@@ -108,7 +108,8 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
         Place::EmbeddedListApart(key) => html_escape(key),
         _ => String::new(),
     };
-    let mut out = format!(r#"<figure class="moss-country-map" data-moss-country-map="{key}" data-not-rated="{}""#, html_escape(t(lang, "country_map_not_rated")));
+    let own = if place == Place::OwnPage { " moss-country-own" } else { "" };
+    let mut out = format!(r#"<figure class="moss-country-map{own}" data-moss-country-map="{key}" data-not-rated="{}""#, html_escape(t(lang, "country_map_not_rated")));
     if model.spec.search {
         let _ = write!(out, r#" data-search="{}""#, html_escape(&search_index));
     }

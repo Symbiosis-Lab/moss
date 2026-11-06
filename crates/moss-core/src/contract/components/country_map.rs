@@ -20,6 +20,17 @@ pub(super) const ENTRIES: &[ComponentEntry] = &[
         description: "A country map: inline SVG with one path per country, a legend, the as-of stamp and the panel a reader's choice fills; embedded on another page it also carries the rows as a list, unless that page places the list itself with `style:levels`, when `data-moss-country-map` holds the key that list carries. Drawn from a page's `country_map:` frontmatter and its table.",
     },
     ComponentEntry {
+        class: "moss-country-own",
+        kind: "instance",
+        parent: "moss-country-map",
+        data_attrs: &[],
+        example_html: r#"<figure class="moss-country-map moss-country-own" data-moss-country-map=""></figure>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The map on its own page, the page whose table it is drawn from. While script runs, the page's first table after it is clipped out of sight (kept for screen readers, shown on focus or when the search's see-the-list link targets it), so the map is the display and the rows are not repeated.",
+    },
+    ComponentEntry {
         class: "moss-country",
         kind: "instance",
         parent: "moss-country-map",

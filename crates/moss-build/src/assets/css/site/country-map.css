@@ -70,6 +70,19 @@
 .moss-country-panel dd { margin: 0; }
 
 .moss-country-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--moss-space-md, 1rem); margin-block-start: var(--moss-space-md, 1rem); }
+/* Clipped, not hidden: the rows stay for screen readers and readers without script, and show on focus or when the search's "see the list" link targets them. */
+@media (scripting: enabled) {
+  .moss-country-map > .moss-country-list:not(:focus-within, :target),
+  .moss-country-own:not(:has(:target)) ~ .moss-table-scroll:not(.moss-table-scroll ~ .moss-table-scroll, :focus-within) {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
 .moss-country-group-title { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.25rem; font-weight: 600; }
 .moss-country-group ul { margin: 0; padding: 0; list-style: none; }
 .moss-country-group li { padding-block: 0.15rem; }
