@@ -119,16 +119,45 @@ pub fn install_text_codec(ctx: &Ctx<'_>) -> Result<()> {
 /// with: `importKey("raw", …)` of an HMAC key and `sign("HMAC", …)`, shaped as
 /// the Web Crypto API is in browsers, Node and Deno, so the same plugin code
 /// runs in moss and under a test runner.
-pub fn install_crypto(ctx: &Ctx<'_>) -> Result<()> {
+///
+/// An imported key lives here, in this context's own table, never in
+/// JavaScript: the script holds only the key's index, so nothing a plugin's
+/// code does to its realm (replacing `WeakMap.prototype.get`, say) can read
+/// the key's bytes or let a key sign that was imported only to verify.
+pub fn install_crypto<'js>(ctx: &Ctx<'js>) -> Result<()> {
     let crypto = rquickjs::Object::new(ctx.clone())?;
     crypto.set("randomUUID", Func::from(|| uuid::Uuid::new_v4().to_string()))?;
     ctx.globals().set("crypto", crypto)?;
+    let held: std::rc::Rc<std::cell::RefCell<Vec<(ring::hmac::Key, bool)>>> = Default::default();
+    let table = held.clone();
+    // Answers one number, the key's index times four plus 2 if it may sign and
+    // 1 if it may verify, or null for usages an HMAC key cannot have. A number
+    // and not an object, so no setter a plugin put on a prototype sees or
+    // changes it. The usages are read once, and that one reading decides both
+    // what the key may do and what it shows.
+    let import = rquickjs::Function::new(ctx.clone(), move |ctx: Ctx<'js>, hash: String, raw: rquickjs::TypedArray<'js, u8>, usages: Vec<String>| -> Result<Option<u32>> {
+        let Some((_, algorithm)) = HMAC_HASHES.iter().find(|(name, _)| *name == hash) else {
+            return Err(rquickjs::Exception::throw_type(&ctx, &format!("unsupported hash {hash}")));
+        };
+        if usages.is_empty() || usages.iter().any(|u| u != "sign" && u != "verify") {
+            return Ok(None);
+        }
+        let signs = usages.iter().any(|u| u == "sign");
+        let verifies = usages.iter().any(|u| u == "verify");
+        let mut table = table.borrow_mut();
+        let Ok(id) = u32::try_from(table.len()).map(|n| n.saturating_mul(4)) else { return Ok(None) };
+        table.push((ring::hmac::Key::new(*algorithm, raw.as_ref()), signs));
+        Ok(Some(id | (u32::from(signs) << 1) | u32::from(verifies)))
+    })?;
+    let sign = rquickjs::Function::new(ctx.clone(), move |ctx: Ctx<'js>, id: u32, data: rquickjs::TypedArray<'js, u8>| -> Result<rquickjs::Value<'js>> {
+        let table = held.borrow();
+        let Some((key, true)) = table.get(id as usize) else { return Ok(rquickjs::Value::new_null(ctx)) };
+        let tag = ring::hmac::sign(key, data.as_ref());
+        Ok(rquickjs::TypedArray::<u8>::new(ctx, tag.as_ref().to_vec())?.into_value())
+    })?;
     let install: rquickjs::Function = ctx.eval(SUBTLE_JS)?;
     let hashes: Vec<&str> = HMAC_HASHES.iter().map(|(name, _)| *name).collect();
-    install.call::<_, ()>((
-        rquickjs::Function::new(ctx.clone(), hmac_sign as for<'js> fn(Ctx<'js>, String, rquickjs::TypedArray<'js, u8>, rquickjs::TypedArray<'js, u8>) -> Result<rquickjs::Value<'js>>)?,
-        hashes,
-    ))?;
+    install.call::<_, ()>((import, sign, hashes))?;
     Ok(())
 }
 
@@ -139,21 +168,16 @@ const HMAC_HASHES: [(&str, ring::hmac::Algorithm); 4] = [
     ("SHA-512", ring::hmac::HMAC_SHA512),
 ];
 
-fn hmac_sign<'js>(ctx: Ctx<'js>, hash: String, key: rquickjs::TypedArray<'js, u8>, data: rquickjs::TypedArray<'js, u8>) -> Result<rquickjs::Value<'js>> {
-    let Some((_, algorithm)) = HMAC_HASHES.iter().find(|(name, _)| *name == hash) else {
-        return Err(rquickjs::Exception::throw_type(&ctx, &format!("unsupported hash {hash}")));
-    };
-    let tag = ring::hmac::sign(&ring::hmac::Key::new(*algorithm, key.as_ref()), data.as_ref());
-    Ok(rquickjs::TypedArray::<u8>::new(ctx, tag.as_ref().to_vec())?.into_value())
-}
-
-/// Wraps the host's HMAC in the Web Crypto shapes. What a key may do and its
-/// bytes are kept in a closure, so a key object shows only its type,
-/// algorithm and usages, and changing those cannot change what it signs.
-/// Errors carry the Web Crypto names on a plain Error, as the runtime has no
-/// DOMException.
-const SUBTLE_JS: &str = r#"(hmac, HASHES) => {
+/// Wraps the host's HMAC in the Web Crypto shapes. A key object shows its
+/// type, algorithm and usages; what it signs and whether it may sign are the
+/// host's, so changing those fields changes nothing. Errors carry the Web
+/// Crypto names on a plain Error, as the runtime has no DOMException.
+const SUBTLE_JS: &str = r#"(importHmac, signHmac, HASHES) => {
+  // Taken now, before any plugin code runs, so replacing them later cannot
+  // redirect which index a key object stands for.
   const keys = new WeakMap();
+  const { apply } = Reflect;
+  const { get: mapGet, set: mapSet } = WeakMap.prototype;
   const nameOf = (a) => String(typeof a === "string" ? a : a?.name ?? "").toUpperCase();
   const error = (name, message) => Object.assign(new Error(message), { name });
   const bytes = (data) => {
@@ -165,13 +189,14 @@ const SUBTLE_JS: &str = r#"(hmac, HASHES) => {
     constructor() { throw new TypeError("Illegal constructor"); }
   }
   const subtle = {
-    async importKey(format, keyData, algorithm, extractable, usages) {
+  async importKey(format, keyData, algorithm, extractable, usages) {
       if (format !== "raw" || nameOf(algorithm) !== "HMAC") throw error("NotSupportedError", "moss's crypto.subtle imports raw HMAC keys only");
       if (algorithm.hash === undefined) throw new TypeError("an HMAC key needs a hash");
       const hash = HASHES.find((h) => h === nameOf(algorithm.hash));
       if (!hash) throw error("NotSupportedError", `unsupported hash ${nameOf(algorithm.hash)}`);
-      if (!Array.isArray(usages) || !usages.length || usages.some((u) => u !== "sign" && u !== "verify")) throw error("SyntaxError", "an HMAC key's usages are sign and verify");
-      const raw = bytes(keyData).slice();
+      const usageError = () => error("SyntaxError", "an HMAC key's usages are sign and verify");
+      if (!Array.isArray(usages)) throw usageError();
+      const raw = bytes(keyData);
       if (!raw.length) throw error("DataError", "an HMAC key cannot be empty");
       let length = raw.length * 8;
       if (algorithm.length !== undefined) {
@@ -179,20 +204,25 @@ const SUBTLE_JS: &str = r#"(hmac, HASHES) => {
         if (!(algorithm.length > length - 8 && algorithm.length <= length)) throw error("DataError", `length ${algorithm.length} does not fit a ${length}-bit key`);
         length = algorithm.length;
       }
+      const held = importHmac(hash, raw, usages);
+      if (typeof held !== "number") throw usageError();
+      const signs = (held & 2) !== 0;
+      const verifies = (held & 1) !== 0;
       const value = (v) => ({ value: v, enumerable: true });
       const key = Object.create(CryptoKey.prototype, {
         type: value("secret"),
         extractable: value(Boolean(extractable)),
         algorithm: value({ name: "HMAC", hash: { name: hash }, length }),
-        usages: value([...usages]),
+        usages: value(signs && verifies ? ["sign", "verify"] : signs ? ["sign"] : ["verify"]),
       });
-      keys.set(key, { raw, hash, usages: [...usages] });
+      apply(mapSet, keys, [key, held >>> 2]);
       return key;
     },
     async sign(algorithm, key, data) {
-      const held = keys.get(key);
-      if (nameOf(algorithm) !== "HMAC" || !held || !held.usages.includes("sign")) throw error("InvalidAccessError", "the key is not an HMAC key that may sign");
-      return hmac(held.hash, held.raw, bytes(data)).buffer;
+      const id = apply(mapGet, keys, [key]);
+      const tag = nameOf(algorithm) === "HMAC" && typeof id === "number" ? signHmac(id, bytes(data)) : null;
+      if (tag === null) throw error("InvalidAccessError", "the key is not an HMAC key that may sign");
+      return tag.buffer;
     },
   };
   Object.defineProperty(globalThis.crypto, "subtle", { value: subtle, enumerable: true });
@@ -429,6 +459,35 @@ mod tests {
             [await tag("SHA-1"), await tag({ name: "SHA-256" })].join(" ")
         "#).await;
         assert_eq!(tags, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
+
+    /// Code in the plugin's own realm that replaces the intrinsics the shim
+    /// uses sees no key bytes and cannot make a verify-only key sign.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subtle_keys_survive_a_realm_that_replaces_its_intrinsics() {
+        let out = with_crypto(r#"
+            const seen = [];
+            const { get, set } = WeakMap.prototype;
+            WeakMap.prototype.set = function (k, v) { seen.push(v); return set.call(this, k, v); };
+            WeakMap.prototype.get = function (k) { const v = get.call(this, k); seen.push(v); return typeof v === "object" && v ? { ...v, usages: ["sign"] } : v; };
+            Array.prototype.includes = () => true;
+            const key = await crypto.subtle.importKey("raw", new Uint8Array([7, 7, 7]), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+            const signed = await crypto.subtle.sign("HMAC", key, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            const signer = await crypto.subtle.importKey("raw", new Uint8Array([9]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+            WeakMap.prototype.get = () => 1;
+            const forged = await crypto.subtle.sign("HMAC", {}, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            const tricky = ["verify"];
+            let reads = 0;
+            tricky.some = () => ++reads === 2;
+            const shown = await crypto.subtle.importKey("raw", new Uint8Array([5]), { name: "HMAC", hash: "SHA-256" }, false, tricky);
+            const widened = await crypto.subtle.sign("HMAC", shown, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            Object.defineProperty(Array.prototype, "0", { set() { Object.defineProperty(this, "0", { value: 1, writable: true, enumerable: true, configurable: true }); }, configurable: true });
+            const swapped = await crypto.subtle.importKey("raw", new Uint8Array([3]), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+            delete Array.prototype["0"];
+            const substituted = await crypto.subtle.sign("HMAC", swapped, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            [signed, seen.length === 0, forged, widened, substituted, shown.usages.join(","), signer.usages.join(",")].join(" ")
+        "#).await;
+        assert_eq!(out, "InvalidAccessError true InvalidAccessError InvalidAccessError InvalidAccessError verify sign");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
