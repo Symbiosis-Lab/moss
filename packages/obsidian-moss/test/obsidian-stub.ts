@@ -33,3 +33,6 @@ export class Notice {
   constructor(_message: string, _timeout?: number) {}
 }
 export class FileSystemAdapter {}
+export class Modal {
+  constructor(_app: unknown) {}
+}

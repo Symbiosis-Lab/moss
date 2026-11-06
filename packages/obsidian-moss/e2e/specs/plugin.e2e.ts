@@ -5,6 +5,13 @@
 import { browser, expect } from "@wdio/globals";
 import { obsidianPage } from "wdio-obsidian-service";
 
+/** Starts the preview and answers the first-build question (the shim never creates .moss/). */
+async function startPreview(): Promise<void> {
+  await browser.executeObsidianCommand("moss:preview");
+  const proceed = browser.$(".modal button.mod-cta");
+  if (await proceed.waitForExist({ timeout: 3000 }).catch(() => false)) await proceed.click();
+}
+
 describe("moss plugin", () => {
   it("loads in the vault", async () => {
     const loaded = await browser.executeObsidian(({ app }) => {
@@ -45,8 +52,22 @@ describe("moss plugin", () => {
     );
   });
 
-  it("runs Preview site: spawns the CLI, parses the URL, shows the page", async () => {
+  it("asks before a first build, and Cancel builds nothing", async () => {
     await browser.executeObsidianCommand("moss:preview");
+    const modal = browser.$(".modal");
+    await modal.waitForExist({ timeout: 10000 });
+    const text = await modal.getText();
+    expect(text).toContain("moss has not built this vault before");
+    expect(text).toContain("uid: line");
+    expect(text).toContain("create a .moss folder");
+    await browser.$(".modal button:not(.mod-cta)").click();
+    await browser.pause(1000);
+    expect(await browser.$("iframe.moss-preview-iframe").isExisting()).toBe(false);
+    expect(await browser.$(".status-bar-item.plugin-moss").getText()).toContain("moss: idle");
+  });
+
+  it("runs Preview site: spawns the CLI, parses the URL, shows the page", async () => {
+    await startPreview();
 
     const iframe = browser.$("iframe.moss-preview-iframe");
     await iframe.waitForExist({ timeout: 30000 });
@@ -86,7 +107,7 @@ describe("moss plugin", () => {
   });
 
   it("stops the server when the preview pane is closed", async () => {
-    await browser.executeObsidianCommand("moss:preview");
+    await startPreview();
     const status = browser.$(".status-bar-item.plugin-moss");
     await browser.waitUntil(async () => (await status.getText()).includes("serving"), {
       timeout: 30000,

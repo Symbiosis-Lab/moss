@@ -22,6 +22,8 @@ import {
   type DetectEnv,
 } from "./cli";
 import { frontmatterExtension } from "./cm-frontmatter";
+import { agentFoldersFor, firstBuildMessage, isInICloud } from "./first-build";
+import { FirstBuildModal } from "./first-build-modal";
 import { MossFieldSuggest } from "./field-suggest";
 import { MossPreviewView, MOSS_PREVIEW_VIEW_TYPE, PREVIEW_STOPPED } from "./preview-view";
 import { MossProcess, type SpawnFn } from "./process";
@@ -57,7 +59,7 @@ export default class MossPlugin extends Plugin {
     this.addCommand({
       id: "build",
       name: "Build site",
-      callback: () => this.runBuild(),
+      callback: () => void this.runBuild(),
     });
     this.addCommand({
       id: "preview",
@@ -160,7 +162,26 @@ export default class MossPlugin extends Plugin {
   // ------------------------------------------------------------------
   // Build / preview
 
-  private runBuild(): void {
+  /**
+   * True once the owner agrees to a first build, or at once when the vault is
+   * already a moss site. A first build edits notes (it adds `uid:` lines) and
+   * creates folders, so it is never started without saying so.
+   */
+  private async confirmFirstBuild(vault: string): Promise<boolean> {
+    if (await this.app.vault.adapter.exists(".moss")) return true;
+    const notesGainingUid = this.app.vault.getMarkdownFiles().filter((file) => {
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      return fm !== undefined && !("uid" in fm);
+    }).length;
+    const lines = firstBuildMessage({
+      notesGainingUid,
+      agentFolders: agentFoldersFor((p) => fs.existsSync(p), vault, os.homedir(), path.sep),
+      inICloud: isInICloud(vault),
+    });
+    return new Promise((resolve) => new FirstBuildModal(this.app, lines, resolve).open());
+  }
+
+  private async runBuild(): Promise<void> {
     const binary = this.requireBinary();
     const vault = this.vaultPath();
     if (!binary || !vault) return;
@@ -168,6 +189,7 @@ export default class MossPlugin extends Plugin {
       new Notice("moss is already running. Stop the preview server first.");
       return;
     }
+    if (!(await this.confirmFirstBuild(vault))) return;
     this.setStatus("building…");
     new Notice("moss: building site…");
     this.mossProcess.start(binary, buildArgs(vault, { extraFlags: splitFlags(this.settings.extraFlags) }), vault, {
@@ -199,6 +221,7 @@ export default class MossPlugin extends Plugin {
       if (this.previewUrl) view?.setUrl(this.previewUrl);
       return;
     }
+    if (!(await this.confirmFirstBuild(vault))) return;
 
     const view = await this.openPreviewLeaf();
     view?.showMessage("Building site…");
