@@ -61,6 +61,16 @@ test.describe('header_scroll = "hide"', () => {
     expect(await bottom(page)).toBeGreaterThan(0);
   });
 
+  test('slides rather than jumps', async ({ page }) => {
+    await open(page);
+    await page.mouse.wheel(0, 900);
+    await expect.poll(() => hidden(page)).toBe(true);
+    const sliding = await header(page).evaluate((el) =>
+      el.getAnimations().some((a) => (a as CSSTransition).transitionProperty === 'transform'),
+    );
+    expect(sliding).toBe(true);
+  });
+
   test('ignores a movement of five pixels or fewer', async ({ page }) => {
     await open(page);
     await scrollTo(page, 900);

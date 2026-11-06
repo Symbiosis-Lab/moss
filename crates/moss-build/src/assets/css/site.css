@@ -900,8 +900,13 @@ html:has(body[data-header-scroll]) {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  body[data-header-scroll="hide"] > header {
-    transition: transform var(--moss-header-scroll-duration, 0.2s) var(--moss-header-scroll-ease, ease-out);
+  /* Outranks the immersive-mode fade on `body:not(.immersive-fs-active) > header`,
+     which would otherwise replace the slide with its own transition; the fade is
+     kept alongside. */
+  body[data-header-scroll="hide"]:not(.immersive-fs-active) > header {
+    transition:
+      transform var(--moss-header-scroll-duration, 0.2s) var(--moss-header-scroll-ease, ease-out),
+      opacity 200ms ease 100ms;
   }
 
   body[data-header-scroll="hide"] > header[data-hidden] {
