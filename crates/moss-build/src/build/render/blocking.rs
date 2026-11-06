@@ -46,7 +46,7 @@ use crate::build::scan::sort_inference::populate_direct_children_sorts;
 // Sibling module imports (within build/render/)
 pub use super::config::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
-use super::config::resolve_logo_url;
+use super::config::logo_src;
 use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedAssets};
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
@@ -933,6 +933,8 @@ pub fn generate_blocking_content_for_build(
                         }
                     }
 
+                    doc.logo = doc.logo.take().map(|logo| logo_src(&content_graph, &logo, &file_info.path));
+
                     // Slugify inline asset-dir segments in every doc's HTML
                     // (src, srcset, poster, data-placeholder-src). The resolve
                     // phase in moss-core uses source filesystem names; this maps
@@ -1406,12 +1408,11 @@ pub fn generate_blocking_content_for_build(
         let layout_config = LayoutConfig::new(folder_name, Some(resolved_site_name.as_str()))
             .with_lang_tag(crate::i18n::lang_tag(&site_config.lang));
 
-        // Extract logo from homepage frontmatter (e.g., `logo: assets/logo.svg`)
+        // The home page's logo, already the URL its file is published at
         let homepage_logo = documents
             .iter()
             .find(|d| d.url_path == "index.html")
-            .and_then(|d| d.logo.as_ref())
-            .map(|logo| resolve_logo_url(logo));
+            .and_then(|d| d.logo.clone());
         let layout_config = match homepage_logo {
             Some(logo) => layout_config.with_logo(logo),
             None => layout_config,

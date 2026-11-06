@@ -129,7 +129,7 @@ pub struct ParsedDocument {
     pub weight: Option<i32>,
     /// Analytics configuration for privacy-focused analytics
     pub analytics: Option<crate::build::markdown::AnalyticsConfig>,
-    /// Site logo image path (from homepage frontmatter, rendered in nav)
+    /// The `logo:` as the URL the header asks for (`render::config::logo_src`)
     #[serde(skip)]
     #[specta(skip)]
     pub logo: Option<String>,

@@ -2,21 +2,23 @@
 
 use crate::build::incremental_gates::IncrementalGates;
 
-/// Resolve a logo path from frontmatter to a root-relative URL.
-/// HTTP URLs pass through unchanged. A local path has its `.` and `..`
-/// segments resolved (`./assets/x.png` → `/assets/x.png`) so the URL and the
-/// media lookup key both name the file in its plain form.
-pub(super) fn resolve_logo_url(path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        return path.to_string();
+/// The address the header asks for a `logo:` at. An external URL stays as
+/// written. A local path becomes the URL the build publishes the file at, whose
+/// folders are slugs, so not the path as written. A path no file matches is made
+/// root-absolute with its `.` and `..` segments resolved.
+pub(super) fn logo_src(graph: &moss_core::content_graph::ContentGraph, logo: &str, from_path: &str) -> String {
+    if logo.starts_with("http://") || logo.starts_with("https://") {
+        return logo.to_string();
     }
-    match moss_core::content_graph::join_written("", path) {
-        Some(clean) => format!("/{clean}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
-        None if path.starts_with('/') => path.to_string(),
-        None => format!("/{path}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
+    if let Some(source) = graph.resolve_path(logo, from_path) {
+        return graph.pinned_url(&source);
+    }
+    match moss_core::content_graph::join_written("", logo) {
+        Some(clean) => format!("/{clean}"), // allow:served-path-url-construct (a logo path no site file matches)
+        None if logo.starts_with('/') => logo.to_string(),
+        None => format!("/{logo}"), // allow:served-path-url-construct (a logo path no site file matches)
     }
 }
-
 
 /// Bundled into a single struct to keep `generate_blocking_content`'s signature clean.
 pub struct SiteConfig {

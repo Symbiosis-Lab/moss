@@ -15,7 +15,7 @@ use crate::types::content::ProjectStructure;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::config::{resolve_logo_url, resolve_data_attr, resolve_comments_attr};
+use super::config::{resolve_data_attr, resolve_comments_attr};
 
 pub(super) enum PageFamily {
     Authored,
@@ -97,7 +97,7 @@ impl PageChromeContext<'_, '_> {
         let logo = if !generated && ui_lang != self.site_lang {
             let root = format!("{}/index.html", ui_lang.code());
             self.documents.iter().find(|d| d.url_path == root)
-                .and_then(|d| d.logo.as_ref()).map(|l| resolve_logo_url(l))
+                .and_then(|d| d.logo.clone())
                 .or_else(|| self.layout.logo_path.clone())
         } else {
             self.layout.logo_path.clone()

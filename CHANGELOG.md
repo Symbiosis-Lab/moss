@@ -292,6 +292,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A site logo in a folder whose name has capitals or spaces (`logo: Pictures/Mark.png`, `logo: My Logos/mark.png`) shows on the published site. The header asked for the folder as written while the file is published under the folder's URL name (`pictures/`, `my-logos/`), so the logo was a broken image; with capitals alone, every preview on a Mac still showed it. A language edition's `logo:` is now found the way `cover:` is, starting from its own page's folder.
 - The visit counter on a site published to the moss host no longer sends the part of a page's address after `#`. The host never read it, and some sign-in links carry a token there. A site gets this when it is next published.
 - A page titled with its own place (`title: Harbor`, `location: Harbor`) no longer shows a place line that only repeats its title. Its cards, maps and place page still name it, and a page with several places keeps the line for the others.
 - Headings in German, Dutch, Danish, Norwegian, Swedish and Finnish may now hyphenate words of ten letters or more, so a long compound word no longer pushes a lone word or a closing question mark onto the heading's last line on a phone. Headings in other languages still keep whole words.
