@@ -117,7 +117,7 @@ fn render_list(rows: &[Vec<String>], title: usize, link: Option<usize>, descript
         let link = cell(row, link);
         let description = cell(row, description);
         let head = match (title.is_empty(), link.is_empty()) {
-            (false, false) => format!("[{title}](<{}>)", link.replace('\\', "%5C").replace('<', "%3C").replace('>', "%3E")),
+            (false, false) => format!("[{}](<{}>)", link_label(&title), link.replace('\\', "%5C").replace('<', "%3C").replace('>', "%3E")),
             (false, true) => title,
             (true, _) => String::new(),
         };
@@ -133,6 +133,25 @@ fn render_list(rows: &[Vec<String>], title: usize, link: Option<usize>, descript
         return String::new();
     }
     format!("\n\n{}\n\n", items.join("\n"))
+}
+
+/// `title` as link text: an unescaped bracket would close or reopen the text,
+/// and a trailing backslash would escape the closing `]`. Markdown the title
+/// carries otherwise (emphasis, an escaped bracket) is kept.
+fn link_label(title: &str) -> String {
+    let mut out = String::with_capacity(title.len() + 2);
+    let mut escaped = false;
+    for c in title.chars() {
+        if !escaped && (c == '[' || c == ']') {
+            out.push('\\');
+        }
+        escaped = !escaped && c == '\\';
+        out.push(c);
+    }
+    if escaped {
+        out.push('\\');
+    }
+    out
 }
 
 /// Keep a cell's opening characters from being read as a heading, quote,
@@ -292,6 +311,32 @@ mod tests {
     fn a_byte_order_mark_is_not_part_of_the_first_column_name() {
         let out = with("\u{feff}title,link\nA,https://a.example/\n", "style:list");
         assert_eq!(out.text, "\n\n- [A](<https://a.example/>)\n\n");
+    }
+
+    #[test]
+    fn a_bracket_or_trailing_backslash_in_a_title_stays_inside_its_link() {
+        let item = |title: &str, link: &str| with(&format!("title,link\n\"{title}\",{link}\n"), "style:list").text;
+        assert_eq!(item("A] B", "https://a.example/"), "\n\n- [A\\] B](<https://a.example/>)\n\n");
+        assert_eq!(item("[Draft] notes", "https://a.example/"), "\n\n- [\\[Draft\\] notes](<https://a.example/>)\n\n");
+        assert_eq!(item("C:\\", "https://a.example/"), "\n\n- [C:\\\\](<https://a.example/>)\n\n");
+        assert_eq!(item("A\\] B", "https://a.example/"), "\n\n- [A\\] B](<https://a.example/>)\n\n");
+        assert_eq!(item("Wiki", "https://w.example/a_(b)"), "\n\n- [Wiki](<https://w.example/a_(b)>)\n\n");
+        // And a markdown parser reads each as one link whose text is the title.
+        for (title, text) in [("A] B", "A] B"), ("[Draft] notes", "[Draft] notes"), ("C:\\", "C:\\")] {
+            use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+            let md = item(title, "https://a.example/");
+            let events: Vec<Event> = Parser::new(&md).collect();
+            let links = events.iter().filter(|e| matches!(e, Event::Start(Tag::Link { .. }))).count();
+            let open = events.iter().position(|e| matches!(e, Event::Start(Tag::Link { .. }))).unwrap_or(0);
+            let close = events.iter().position(|e| matches!(e, Event::End(TagEnd::Link))).unwrap_or(0);
+            let mut seen = String::new();
+            for event in &events[open..close] {
+                if let Event::Text(t) = event {
+                    seen.push_str(t);
+                }
+            }
+            assert_eq!((links, seen.as_str()), (1, text), "{md}");
+        }
     }
 
     const BOOKS: &str = "title,link,description,shelf\n\

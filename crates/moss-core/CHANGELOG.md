@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `style: list` data file whose title cell holds a `[`, a `]` or a trailing `\` keeps the whole title inside its link instead of breaking it.
 - `route` is a known frontmatter field: it no longer draws an unknown-field hint, and the schema, the frontmatter contract and the editor list it.
 
 ## [0.22.0] - 2026-11-03
