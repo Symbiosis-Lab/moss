@@ -7434,6 +7434,11 @@ article a:where(:not(.moss-btn)):focus {
     display: none;
   }
 
+  /* The page's pause button wins over the hover token. */
+  :root[data-marquee-paused] [data-marquee-ready] > .moss-marquee-track {
+    animation-play-state: paused;
+  }
+
   [data-marquee-ready]:hover > .moss-marquee-track {
     animation-play-state: var(--moss-marquee-hover, paused);
   }
@@ -7469,6 +7474,39 @@ article a:where(:not(.moss-btn)):focus {
 
   .moss-gallery[data-marquee-ready] .moss-gallery-item img {
     height: var(--moss-marquee-height, 14rem);
+  }
+}
+
+/* The page's one button that pauses every sliding strip (WCAG 2.2.2), drawn by
+   marquee.ts before the first strip that moves. Small and quiet; a theme may
+   restyle it but should keep it visible. Nothing moves for a reader who asks
+   for less motion, so it is not shown. */
+.moss-marquee-control {
+  display: block;
+  min-block-size: 24px;
+  margin-block: 0 var(--moss-space-xs);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--moss-color-text-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+.moss-marquee-control:hover {
+  color: var(--moss-color-text);
+}
+
+.moss-marquee-control[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce), print {
+  .moss-marquee-control {
+    display: none;
   }
 }
 

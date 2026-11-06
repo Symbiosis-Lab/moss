@@ -120,6 +120,35 @@ test("the keyboard never reaches the copy, and a screen reader meets it never", 
   expect(reached.some(Boolean)).toBe(false);
 });
 
+test("the pause button stops every strip for good and the choice outlives a reload", async ({ page }) => {
+  await page.setViewportSize(SIZES[0]);
+  await ready(page);
+  const button = page.locator("button.moss-marquee-control");
+  await expect(button).toHaveCount(1);
+  await expect(button).toBeVisible();
+  // It comes before the motion in reading order.
+  expect(await button.evaluate((el) => !!(el.compareDocumentPosition(document.querySelector("[data-motion='marquee']")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  const tracks = [0, 1, 2, 3].map((i) => trackOf(strips(page).nth(i)));
+  const moved = async () => {
+    const before = await Promise.all(tracks.map(shift));
+    await page.waitForTimeout(400);
+    return (await Promise.all(tracks.map(shift))).map((x, i) => x !== before[i]);
+  };
+  expect(await moved()).toEqual([true, true, true, true]);
+  await button.click();
+  await expect(button).toHaveText("Play motion");
+  // Pointer and focus away from every strip: the pause must hold.
+  await page.mouse.move(2, 2);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await moved()).toEqual([false, false, false, false]);
+  await page.reload();
+  await expect(strips(page)).toHaveCount(4);
+  await expect(page.locator("button.moss-marquee-control")).toHaveText("Play motion");
+  expect(await moved()).toEqual([false, false, false, false]);
+  await page.locator("button.moss-marquee-control").click();
+  expect(await moved()).toEqual([true, true, true, true]);
+});
+
 test("a strip narrower than its box does not animate, and its copy is not drawn", async ({ page }) => {
   for (const size of [SIZES[0], SIZES[2]]) {
     await page.setViewportSize(size);
@@ -186,6 +215,8 @@ test.describe("for a reader who asks for less motion", () => {
     await page.goto("/");
     const strip = page.locator(".moss-card-pictures").first();
     await expect(strip.locator(".moss-card-cover").first()).toBeVisible();
+    // Nothing moves, so there is nothing to pause.
+    await expect(page.locator("button.moss-marquee-control")).toBeHidden();
     expect(await strip.locator(".moss-marquee-track").evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
     expect(await strip.locator(".moss-marquee-set[inert]").evaluate((el) => getComputedStyle(el).display)).toBe("none");
     // Five equal columns in one row, as the still strip is.

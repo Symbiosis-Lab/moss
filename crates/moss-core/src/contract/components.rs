@@ -447,6 +447,17 @@ const CORE: &[ComponentEntry] = &[
         description: "The strip that slides sideways: inside a `.moss-card-pictures[data-motion=\"marquee\"]` (`motion:marquee`) or a `.moss-gallery[data-motion=\"marquee\"]` (`:::gallery marquee`). It holds two `.moss-marquee-set`s and is translated by one set's width, so the loop has no seam. Written once as markup; the stylesheet and marquee.js decide whether it moves, and a strip whose set is narrower than its box does not.",
     },
     ComponentEntry {
+        class: "moss-marquee-control",
+        kind: "container",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<button type="button" class="moss-marquee-control">Pause motion</button>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0.22",
+        description: "The one button on a page that pauses and resumes every sliding strip, so a reader can stop the motion for good (WCAG 2.2.2). Added by marquee.js before the first strip that moves, never by the build; its label switches between \"Pause motion\" and \"Play motion\" and the choice is remembered across pages. Hidden when no strip moves, under prefers-reduced-motion and in print. A theme may restyle it but should keep it visible.",
+    },
+    ComponentEntry {
         class: "moss-marquee-set",
         kind: "instance",
         parent: "moss-marquee-track",

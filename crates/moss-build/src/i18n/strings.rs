@@ -236,6 +236,9 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "image_viewer" => ["Image viewer", "Bildansicht", "图片查看器", "圖片檢視器"],
         "previous" => ["Previous", "Zurück", "上一个", "上一個"],
         "next" => ["Next", "Weiter", "下一个", "下一個"],
+        // The one button that stops and restarts every sliding picture strip.
+        "pause_motion" => ["Pause motion", "Bewegung anhalten", "暂停动态", "暫停動態"],
+        "play_motion" => ["Play motion", "Bewegung abspielen", "播放动态", "播放動態"],
         // Gallery image link name; {n} is the 1-based position, {m} the total.
         "gallery_open_image" => ["Open image {n} of {m}", "Bild {n} von {m} öffnen", "打开第 {n} 张图片，共 {m} 张", "開啟第 {n} 張圖片，共 {m} 張"],
         "view_in_article" => ["View in article", "Im Artikel ansehen", "在文章中查看", "在文章中查看"],
@@ -388,6 +391,24 @@ mod tests {
             for word in ["previous", "next"] {
                 let expected = format!("{word}: \"{}\"", t(lang, word));
                 assert!(line.contains(&expected), "scroll-row.ts {key} labels must contain {expected}: {line}");
+            }
+        }
+    }
+
+    /// The sliding strips' pause button is built by a site script with its
+    /// own copy of the two labels; this holds that copy to the strings above.
+    #[test]
+    fn marquee_labels_match_the_site_strings() {
+        let script = include_str!("../js-src/site/marquee.ts");
+        for lang in Language::ALL {
+            let key = lang.as_bcp47_attr().to_lowercase();
+            let line = script
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("{key}:")) || l.trim_start().starts_with(&format!("\"{key}\":")))
+                .unwrap_or_else(|| panic!("marquee.ts has no labels for {key}"));
+            for (field, word) in [("pause", "pause_motion"), ("play", "play_motion")] {
+                let expected = format!("{field}: \"{}\"", t(lang, word));
+                assert!(line.contains(&expected), "marquee.ts {key} labels must contain {expected}: {line}");
             }
         }
     }
