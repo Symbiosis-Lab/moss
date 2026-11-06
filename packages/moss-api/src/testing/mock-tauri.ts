@@ -459,6 +459,8 @@ export interface MockBrowserTracker {
   closeCount: number;
   /** Whether browser is currently open */
   isOpen: boolean;
+  /** Number of times returnToEditor was called */
+  returnToEditorCount: number;
   /** Reset tracking state */
   reset(): void;
 }
@@ -471,6 +473,7 @@ export function createMockBrowserTracker(): MockBrowserTracker {
   let isOpen = false;
 
   return {
+    returnToEditorCount: 0,
     get openedUrls() {
       return openedUrls;
     },
@@ -498,6 +501,7 @@ export function createMockBrowserTracker(): MockBrowserTracker {
       htmlContent.length = 0;
       closeCount = 0;
       isOpen = false;
+      this.returnToEditorCount = 0;
     },
   };
 }
@@ -580,6 +584,10 @@ function decodeBase64(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
 
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
 function extractFilenameFromUrl(url: string): string {
   try {
     const urlObj = new URL(url);
@@ -617,6 +625,8 @@ export interface SetupMockTauriOptions {
   pluginName?: string;
   /** Project path for internal context (default: "/test/project") */
   projectPath?: string;
+  /** Host environment variables visible to `getPluginEnvVar` (only allow-listed names are served) */
+  envVars?: Record<string, string>;
 }
 
 /**
@@ -691,6 +701,9 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
   const secretStorage = createMockSecretStorage();
   const browserTracker = createMockBrowserTracker();
   const dialogTracker = createMockDialogTracker();
+  /** `<plugin>/<key name>` -> key, so a plugin only ever sees its own keys */
+  const keys = new Map<string, { name: string; algorithm: string; publicKeyBase64: string }>();
+  const siteRoot = `${projectPath}/.moss/build.nosync/current`;
 
   // ── Mock event system (listen / emit) ──────────────────────────────────
   type EventHandler = (event: { payload: unknown }) => void;
@@ -710,8 +723,8 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
     };
   };
 
-  /** Emit an event to all registered listeners */
-  const emit = async (event: string, payload?: unknown): Promise<void> => {
+  /** Call every listener for an event synchronously */
+  const emitToListeners = (event: string, payload: unknown): void => {
     const handlers = eventListeners.get(event);
     if (handlers) {
       for (const handler of handlers) {
@@ -720,14 +733,9 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
     }
   };
 
-  /** Internal helper: emit to listeners synchronously (used by invoke handlers) */
-  const emitToListeners = (event: string, payload: unknown): void => {
-    const handlers = eventListeners.get(event);
-    if (handlers) {
-      for (const handler of handlers) {
-        handler({ payload });
-      }
-    }
+  /** Emit an event to all registered listeners */
+  const emit = async (event: string, payload?: unknown): Promise<void> => {
+    emitToListeners(event, payload);
   };
 
   // Create invoke handler
@@ -1078,6 +1086,76 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
       }
 
       // ======================================================================
+      // Compiled site, host environment, keystore, shell
+      // ======================================================================
+      case "read_site_file": {
+        const relativePath = payload?.relativePath as string;
+        enforceInsideProject(relativePath);
+        const file = filesystem.getFile(`${siteRoot}/${relativePath}`);
+        if (!file) {
+          throw new Error(`Failed to read site file '${relativePath}': not found`);
+        }
+        return encodeBase64(file.bytes ?? new TextEncoder().encode(file.content));
+      }
+
+      case "list_site_files_with_sizes": {
+        const prefix = `${siteRoot}/`;
+        return filesystem
+          .listFiles()
+          .filter((p) => p.startsWith(prefix))
+          .map((p) => {
+            const file = filesystem.getFile(p)!;
+            return {
+              path: p.slice(prefix.length),
+              size: (file.bytes ?? new TextEncoder().encode(file.content)).length,
+            };
+          });
+      }
+
+      case "get_plugin_env_var": {
+        // The host's allow-list: any other name is null even when set.
+        const name = payload?.name as string;
+        const allowed = ["MOSS_MATTERS_TEST_PROFILE", "MOSS_MATTERS_DOMAIN"];
+        return allowed.includes(name) ? (options?.envVars?.[name] ?? null) : null;
+      }
+
+      case "key_get_or_create": {
+        const name = payload?.name as string;
+        const algorithm = payload?.algorithm as string;
+        if (algorithm !== "ed25519" && algorithm !== "secp256k1-schnorr") {
+          throw new Error(`unknown key algorithm '${algorithm}'`);
+        }
+        if (!name || /[/\\\0]|\.\./.test(name) || name.length > 128) {
+          throw new Error("keystore: InvalidName");
+        }
+        const id = `${pluginName}/${name}`;
+        const existing = keys.get(id);
+        if (existing) {
+          if (existing.algorithm !== algorithm) throw new Error("keystore: AlgorithmMismatch");
+          return existing;
+        }
+        // Both algorithms have a 32-byte public key.
+        const created = {
+          name,
+          algorithm,
+          publicKeyBase64: encodeBase64(crypto.getRandomValues(new Uint8Array(32))),
+        };
+        keys.set(id, created);
+        return created;
+      }
+
+      case "key_list": {
+        return [...keys.entries()]
+          .filter(([id]) => id.startsWith(`${pluginName}/`))
+          .map(([, key]) => key);
+      }
+
+      case "return_to_editor": {
+        browserTracker.returnToEditorCount++;
+        return null;
+      }
+
+      // ======================================================================
       // Messaging (silent no-op)
       // ======================================================================
       case "plugin_message": {
@@ -1148,6 +1226,7 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
       secretStorage.clear();
       browserTracker.reset();
       dialogTracker.reset();
+      keys.clear();
       eventListeners.clear();
     },
   };

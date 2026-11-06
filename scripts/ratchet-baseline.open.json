@@ -41,7 +41,7 @@
         "crates/moss-core/src/render/image.rs": 1100,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
         "crates/moss-core/src/schema_fields.rs": 1400,
-        "packages/moss-api/src/testing/mock-tauri.ts": 1200,
+        "packages/moss-api/src/testing/mock-tauri.ts": 1300,
         "crates/moss-build/src/build/manifest.rs": 1200,
         "crates/moss-build/src/build/terms.rs": 1000,
         "crates/moss-core/src/asset_paths.rs": 1000,
@@ -90,7 +90,7 @@
         "crates/moss-core/src/render/image.rs": "The single entry point every <img>/<picture> call site converges on, by explicit architectural choice recorded in the module doc; splitting it back into per-call-site emitters is the exact regression the migration that produced this file was written to retire.",
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": "This dispatcher is the single entry point for wikilink embeds; the remaining growth path is more embed types registering through the shared renderer lookup, which is the intended way to add one, not a sign this file needs splitting.",
         "crates/moss-core/src/schema_fields.rs": "BUILTIN_FIELDS is deliberately one flat table, co-located by convention with frontmatter_typed.rs per the module doc, so a new field is a two-file one-commit change; it grows exactly one entry per frontmatter field moss adds, which is the design working as intended.",
-        "packages/moss-api/src/testing/mock-tauri.ts": "In-memory Tauri IPC mocks for plugin integration tests, one mock per real IPC command moss-api exposes; it grows in lockstep with the command surface and retires only if the mocks are generated from the bindings instead of hand-written.",
+        "packages/moss-api/src/testing/mock-tauri.ts": "In-memory Tauri IPC mocks for plugin integration tests, one mock per real IPC command moss-api exposes; it grows in lockstep with the command surface. The length is one hand-written fake per IPC command plus fixture factories; the IPC surface is a hand-written match in the host, so there is nothing to generate the mocks from, and the file is healthy test infrastructure.",
         "packages/moss-ui/src/ui/i18n/ui-strings.ts": "The UI's string table, every key in every locale: data, not logic. It retires when each locale's strings move to a file of their own that the i18n module loads."
       }
     },

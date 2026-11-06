@@ -211,6 +211,8 @@ interface MockBrowserTracker {
   closeCount: number;
   /** Whether browser is currently open */
   isOpen: boolean;
+  /** Number of times returnToEditor was called */
+  returnToEditorCount: number;
   /** Reset tracking state */
   reset(): void;
 }
@@ -255,6 +257,8 @@ interface SetupMockTauriOptions {
   pluginName?: string;
   /** Project path for internal context (default: "/test/project") */
   projectPath?: string;
+  /** Host environment variables visible to `getPluginEnvVar` (only allow-listed names are served) */
+  envVars?: Record<string, string>;
 }
 /**
  * Context returned by setupMockTauri with all mock utilities
