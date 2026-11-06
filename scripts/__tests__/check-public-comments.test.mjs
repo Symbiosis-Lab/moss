@@ -56,6 +56,14 @@ describe('flags private process vocabulary in comments', () => {
     assert.match(r.stderr, /a\.rs:5:/);
   });
 
+  it('a line of ARCHITECTURE.md or the ratchet baseline', () => {
+    for (const rel of ['ARCHITECTURE.md', 'scripts/ratchet-baseline.open.json']) {
+      const r = run(rel, `ok\n| \`a.rs\` | 1 | shed in PR7a-fragment |\n`);
+      assert.equal(r.status, 1, `${rel}: ${r.stderr}`);
+      assert.match(r.stderr, new RegExp(`${rel.replace('.', '\\.')}:2:`));
+    }
+  });
+
   it('a describe-facing description string', () => {
     const r = run('crates/moss-core/src/contract/components.rs', `const X: E = E {\n    description: "Retired in Phase 1c, collapsed",\n};\n`);
     assert.equal(r.status, 1, r.stderr);

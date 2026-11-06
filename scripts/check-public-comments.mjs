@@ -124,8 +124,27 @@ export function* describeStrings(src) {
   }
 }
 
+// Documents whose whole text is public and generated from or about the code:
+// every line is checked, not only comments.
+const WHOLE_TEXT_FILES = ["ARCHITECTURE.md", "scripts/ratchet-baseline.open.json"];
+
+function* lines(src) {
+  const all = src.split("\n");
+  for (let i = 0; i < all.length; i++) yield { line: i + 1, text: all[i] };
+}
+
 export function check(root) {
   const hits = [];
+  for (const rel of WHOLE_TEXT_FILES) {
+    let src;
+    try { src = readFileSync(join(root, rel), "utf8"); } catch { continue; }
+    for (const { line, text } of lines(src)) {
+      for (const [label, re] of PATTERNS) {
+        const m = re.exec(text);
+        if (m && !ALLOW.some(([p, phrase]) => rel.endsWith(p) && text.includes(phrase))) hits.push(`${rel}:${line}: ${label}: "${m[0]}"`);
+      }
+    }
+  }
   for (const file of sourceFiles(root)) {
     const rel = relative(root, file).split(sep).join("/");
     const rust = file.endsWith(".rs");
@@ -149,7 +168,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const hits = check(root);
   if (hits.length) {
     console.error(hits.join("\n"));
-    console.error(`\n${hits.length} private process label(s) in comments or describe strings. Say the technical reason instead (see .claude/CLAUDE.md, "This repository is public").`);
+    console.error(`\n${hits.length} private process label(s) in comments, describe strings or the architecture documents. Say the technical reason instead (see .claude/CLAUDE.md, "This repository is public").`);
     process.exit(1);
   }
 }
