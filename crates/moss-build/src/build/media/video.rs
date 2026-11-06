@@ -988,8 +988,8 @@ fn finish_run(
         }
     }
 
-    // Dual-emit (Step 3 Phase 4): legacy BackgroundProgress + a media child Job
-    // under the Build parent. Gated on REAL work (FIX 1b): a content-only rebuild
+    // Dual-emit: legacy BackgroundProgress + a media child Job
+    // under the Build parent. Gated on REAL work: a content-only rebuild
     // cache-skips every video → `converted_count == 0` + no advisories → no Job.
     spawn_media_child_job(services, "videos", converted_count, advisories.clone());
     // Final completion (discarded on a headless build)
@@ -4937,7 +4937,7 @@ pub(crate) mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Phase 1b: thread the just-staged CAS oid through to the manifest
+    // Thread the just-staged CAS oid through to the manifest
     // ------------------------------------------------------------------
 
     /// Mirrors `ship_phase_ships_correct_bytes_from_cas_despite_stage_dir_

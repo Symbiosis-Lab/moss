@@ -1,6 +1,6 @@
-//! Phase-2 acceptance: a synthetic IIFE plugin exercises invoke + event.listen
+//! Acceptance: a synthetic IIFE plugin exercises invoke + event.listen
 //! + fetch + setTimeout through QuickJsEngine end-to-end. Proves the host-binding
-//! shim WITHOUT github/matters auth (Phase 3).
+//! shim WITHOUT github/matters auth.
 
 #[cfg(test)]
 mod tests {
@@ -279,13 +279,12 @@ mod tests {
         );
     }
 
-    /// C.13 class-eliminator regression: the original Phase-0 deterministic repro is
+    /// C.13 class-eliminator regression: the deterministic repro is
     /// "Rust blocks on a signal from a suspended WEBVIEW". On quickjs the class is
     /// structurally absent because there is NO webview. A full-featured hook (timers +
     /// fetch-shim against a local stub + invoke + event listen/deliver) completes with
     /// ZERO webviews in the process — which is literally `new(None)`'s
-    /// environment (design-spec §7: "the Phase-0 deterministic repro becomes a
-    /// regression test that passes on quickjs"). Headless == the strongest form of
+    /// environment. Headless == the strongest form of
     /// the repro: no webview exists to suspend.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn hook_completes_with_zero_webviews_in_process() {

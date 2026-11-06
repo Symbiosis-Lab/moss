@@ -19,7 +19,7 @@
 //!
 //! - **A — input envelope** ([`guard`]): length ≤ [`MAX_TEX_BYTES`], nesting ≤
 //!   [`MAX_NESTING`], and a codepoint allowlist that rejects the crash- and
-//!   blank-inducing inputs *before RaTeX sees a byte*. Alone this closes T1/T2.
+//!   blank-inducing inputs *before RaTeX sees a byte*. Alone this closes both the crash and the blank-output cases.
 //! - **B — output validation** ([`validate_svg`]): the emitted SVG must parse
 //!   to a rooted `<svg>` with a sane `viewBox`, stay under a byte cap, carry at
 //!   least one glyph, and contain **zero** `<text>`/`<use>`/`<image>`/`id=`.

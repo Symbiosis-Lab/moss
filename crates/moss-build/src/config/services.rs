@@ -1,8 +1,7 @@
 //! `[services]` schema v2 — the typed shape of `.moss/config.toml`'s services.
 //!
-//! Moved from the app crate's `domain/config.rs` (2026-08-27, M6a B3): the
-//! build tree decides footer chrome and slot resolution from these types, so
-//! they must be reachable from `moss-build` when the pipeline crosses. The
+//! The build tree decides footer chrome and slot resolution from these types,
+//! so they must be reachable from `moss-build`. The
 //! path-taking readers live in `build::site_config` and the write primitive in
 //! `vault::config` — this module is the vocabulary,
 //! not the file access.

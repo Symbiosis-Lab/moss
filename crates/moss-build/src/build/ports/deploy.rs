@@ -21,11 +21,11 @@
 //! resolves at the entry point, the body consumes and never asks.
 //!
 //! Beside [`super::host`] rather than next to the publish body it serves, for
-//! one measured reason: ratchet row (o) `seam_surface` counts only `ports*`
+//! one measured reason: the seam-width ratchet counts only `ports*`
 //! paths, and the first draft of this file sat in `deploy/` where the counter
-//! could not see it — a seam growing unobserved is the failure row (v)
-//! `app_host_surface` was added after. The whole directory moves to the crate
-//! root at M6a; it moves as one.
+//! could not see it — a seam growing unobserved is the failure the
+//! host-surface ratchet was added after. The whole directory moves to the crate
+//! root in the pipeline move; it moves as one.
 //!
 //! Crossed here 2026-09-09 ahead of track C4d, which gives `moss deploy` a
 //! headless route. Two implementors since: the app (`deploy::app_seam::AppPorts`)

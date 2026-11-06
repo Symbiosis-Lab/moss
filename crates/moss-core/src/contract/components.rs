@@ -304,7 +304,7 @@ const CORE: &[ComponentEntry] = &[
         description: "Retired: the additional co-class on `.moss-cards[data-layout=\"list\"]` had no matching rules in the default CSS once `children_style: summary` collapsed into the list-layout block, and its lingering emission broke themes that hid the class (e.g. a site theme's `.moss/theme/style.css` keyed `display: none` on it, erasing folder-embed listings). Theme authors targeting summary listings should use `.moss-cards[data-layout=\"list\"]` directly.",
     },
     // -------------------------------------------------------------------
-    // Cards family — current emitted vocabulary (pre-Phase 1c collapsing).
+    // Cards family — current emitted vocabulary.
     // Three parallel layouts: grid, list, minimal. Each has its own
     // container + instance + sub-classes.
     // -------------------------------------------------------------------
@@ -976,8 +976,7 @@ const CORE: &[ComponentEntry] = &[
     },
     // -------------------------------------------------------------------
     // Callouts — Obsidian-style admonitions. Type variant goes on the
-    // container as `.callout-<type>`. Phase 1c may collapse into
-    // `.moss-callout[data-type]`.
+    // container as `.callout-<type>`.
     // -------------------------------------------------------------------
     ComponentEntry {
         class: "moss-callout",

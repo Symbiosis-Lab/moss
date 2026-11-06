@@ -2351,14 +2351,11 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
     // Register .webp output paths in the manifest coordinator. Without
     // registration, generated WebP files get deleted on the next rebuild
-    // because they have no entry in `image_outputs`. This used to have a
-    // `tx.is_none()` fallback to `update_image_hashes` (on-disk
-    // hashes.json read+write); that fallback is gone — every caller goes
-    // through the coordinator now.
+    // because they have no entry in `image_outputs`.
     emit_image_outputs_via_channel(project_root, &ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
 
-    // Dual-emit (Step 3 Phase 4): legacy BackgroundProgress + a media child Job
-    // under the Build parent. Gated on REAL work (FIX 1b).
+    // Dual-emit: legacy BackgroundProgress + a media child Job
+    // under the Build parent. Gated on REAL work.
     crate::build::progress::spawn_media_child_job(
         services,
         "images",

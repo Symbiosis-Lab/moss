@@ -275,10 +275,8 @@ fn body_cover_path_skips_raw_html_img_in_markdown() {
     );
 }
 
-// Phase 4 PR7a-fragment (2026-05-28): the unit test
-// `strip_resolver_sentinel_drops_all_three_known_prefixes` deleted
-// alongside its subject helper. The sentinel-stripping behavior at
-// body-cover-path capture time now lives inside
+// The sentinel-stripping behavior at
+// body-cover-path capture time lives inside
 // `find_first_block_image` / `process_markdown_file`'s
 // `body_cover_path` derivation, which reads `Url::Resolved` from the
 // typed AST — the sentinel is decoded by `classify_url_prod` before
@@ -1860,11 +1858,10 @@ fn test_pipeline_no_site_id_yields_pending_form() {
     );
 }
 
-/// 2026-05-28 (Phase 4 source-line wiring): when `emit_source_lines=true`,
+/// When `emit_source_lines=true`,
 /// the production `process_markdown_file` path must emit
-/// `data-source-line="N"` attributes on top-level blocks. Restores the
-/// preview-scroll paragraph-precision feature that PR7a's
-/// `transform_events` deletion temporarily disabled.
+/// `data-source-line="N"` attributes on top-level blocks, which gives the
+/// preview scroll paragraph precision.
 ///
 /// The downstream consumer is the preview bridge's
 /// `scrollToSourceLine` RPC, which queries
@@ -3106,12 +3103,10 @@ fn empty_alt_with_emphasis_caption_does_not_wrap_split_paragraph() {
     );
 }
 
-// Phase 4 PR7a-fragment (2026-05-28): the two unit tests that
-// exercised `emit_standalone_figure_image` directly — Step-8 finding-2
-// raw-HTML media wrap, and HTML-escape boundary — deleted alongside
-// their subject helper. The figure synthesizer (`synthesize_image_html`
-// with `ImageContext::MarkdownStandalone`) and its caption-escaping
-// path are still exercised end-to-end via the `implicit_figure_*`
+// The raw-HTML media wrap and the HTML-escape boundary of the figure
+// synthesizer (`synthesize_image_html` with
+// `ImageContext::MarkdownStandalone`) and its caption-escaping
+// path are exercised end-to-end via the `implicit_figure_*`
 // tests above (which run through `process_markdown_file` → typed-AST
 // `Block::Figure` promotion → `DefaultHooks::render_image`) and via
 // moss-core's `synthesize_image_html` unit tests in
@@ -3220,24 +3215,20 @@ fn picture_paragraph_renders_as_a_gallery_row() {
     assert!(named.contains(r#"alt="Dusk""#), "{named}");
 }
 
-// ===== Phase 3 PR4 (2026-05-27) — `moss:` title channel retired =====
+// ===== `moss:` title channel retired =====
 //
-// The Phase 1 C1 Stage 2 dispatcher used to read `moss:K=V` titles
-// from `Tag::Image` and `Tag::Link` events and route them to per-kind
-// synthesizers (pdf/video/audio/iframe/3d). PR4 retires that channel:
-// wikilink-typed events dispatch via
-// `crates/moss-core/src/resolve/wikilink_dispatch.rs`, and plain
-// CommonMark images/links emit with default typed slots. The Phase 1
-// C1 integration tests below are deleted with the channel they pinned;
-// their structural-identity coverage moves to:
+// `moss:K=V` titles on `Tag::Image` and `Tag::Link` events no longer route
+// to per-kind synthesizers (pdf/video/audio/iframe/3d): wikilink-typed events
+// dispatch via `crates/moss-core/src/resolve/wikilink_dispatch.rs`, and plain
+// CommonMark images/links emit with default typed slots. Structural coverage
+// of that dispatch lives in:
 //
 //   - moss-core `wikilink_dispatch::tests` (per-extension routing)
 //   - moss-core `embed_renderer::tests` (bare-markdown emission)
 //   - snapshot tests (end-to-end HTML shape for wikilink fixtures)
 //
-// The desktop app's own contract test is the
-// regression guard against a `moss:` title reviving on any `<img>` in
-// rendered output (planned extension in PR6).
+// The desktop app's own contract test guards against a `moss:` title
+// reviving on any `<img>` in rendered output.
 
 #[test]
 fn pipeline_moss_title_no_longer_routes_to_typed_context() {
@@ -3259,8 +3250,7 @@ fn pipeline_moss_title_no_longer_routes_to_typed_context() {
 
 #[test]
 fn pipeline_moss_kind_link_no_longer_dispatches_to_synthesizer() {
-    // Regression guard: `[name](url "moss:kind=video")` (the old
-    // Stage 1 → Stage 2 markdown link contract) no longer dispatches.
+    // Regression guard: `[name](url "moss:kind=video")` no longer dispatches.
     // It emits the default `<a href>` like any other CommonMark link.
     let html = render_markdown_to_html(r#"[clip.mp4](clip.mp4 "moss:kind=video")"#);
     assert!(
@@ -3323,7 +3313,7 @@ fn pipeline_author_raw_img_html_unchanged() {
 
 #[test]
 fn pipeline_unknown_kind_does_not_dispatch_under_pr4() {
-    // Phase 3 PR4: `moss:kind=…` titles no longer dispatch — even
+    // `moss:kind=…` titles no longer dispatch — even
     // unknown values emit the default anchor (because the channel
     // itself is gone, not because of the kind switch's fallthrough).
     let html = render_markdown_to_html(r#"[thing](x.unknown "moss:kind=xenomorph")"#);

@@ -170,7 +170,7 @@ pub struct QuickJsEngine {
     /// the host task hasn't been spawned yet — prevents a premature channel close.
     #[allow(dead_code)]
     dispatch_tx: mpsc::UnboundedSender<DispatchRequest>,
-    /// Out-of-band kill switch (Phase-4 condition 1, D1): set by `shutdown()`
+    /// Out-of-band kill switch: set by `shutdown()`
     /// BEFORE sending Job::Shutdown; read by the rquickjs interrupt handler.
     /// Out-of-band because a hook wedged in synchronous JS never lets the loop
     /// service the job channel — this flag is the only signal that reaches it.
@@ -361,8 +361,7 @@ struct PluginRuntime {
     fingerprint: u64,
     /// Live hook tasks on this Context (engine thread only). Eviction with
     /// in_flight > 0 RETIRES the runtime instead of killing its timers — a
-    /// cancel_all here orphans the in-flight hook's awaited setTimeout forever
-    /// (Phase-4 condition 4, D2).
+    /// cancel_all here orphans the in-flight hook's awaited setTimeout forever.
     in_flight: Rc<Cell<usize>>,
     /// D3 hygiene: set by a cancelled/interrupted hook task to signal that this
     /// Context has half-mutated JS state. The loop-top poison sweep retires it
@@ -434,7 +433,7 @@ fn engine_thread_main(
     if result.is_err() {
         // All subsequent API calls fail fast with "plugin engine thread has exited".
         // Per-manager cardinality (D1) means folder close/reopen replaces the engine;
-        // automatic respawn is the Phase-4 hard-gate.
+        // there is no automatic respawn.
         log::error!(target: "plugin", "moss-plugin-engine thread PANICKED — engine dead until manager teardown/recreate");
     }
 }
@@ -455,7 +454,7 @@ async fn engine_loop(
         }
     };
 
-    // Phase-4 watchdog (D1 + D3, invariant 6): per-Runtime interrupt handler. Runs on
+    // Watchdog: per-Runtime interrupt handler. Runs on
     // THIS thread inside an executing JS frame every ~10k poll points, forever —
     // relaxed atomic loads + thread-local reads ONLY; never call back into the runtime.
     // Returns true → quickjs-ng raises UNCATCHABLE InternalError: interrupted.
@@ -766,7 +765,7 @@ async fn engine_loop(
                     teardown_one(&pr).await;
                 }
                 teardown_plugins(&mut plugins).await;
-                // Close the job channel BEFORE acking (Phase-4 condition 1): once
+                // Close the job channel BEFORE acking: once
                 // `shutdown()` returns, a late dispatch must fail fast at send time
                 // with the never-accepted sentinel ("plugin engine thread has
                 // exited") instead of racing the thread's exit — a send landing in

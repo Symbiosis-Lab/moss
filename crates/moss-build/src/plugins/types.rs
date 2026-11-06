@@ -214,7 +214,7 @@ pub enum Capability {
     ///   2. Emit `MattersNeedsConnection` (or a generic equivalent) when the
     ///      folder is opened with no bound session, triggering auto-open-once.
     ///
-    /// Added 2026-06-23 (Phase 4b) — currently used only by the Matters plugin.
+    /// Currently used only by the Matters plugin.
     /// Does NOT map to a `hook_name()` (it's not a build hook).
     Login,
 }
@@ -239,13 +239,13 @@ impl Capability {
 
 /// Plugin hook — the set of operations a plugin can perform.
 ///
-/// Strict subset of `TaskKind` (introduced in T1): exactly the
+/// Strict subset of `TaskKind`: exactly the
 /// kinds plugins can produce. Internal-only kinds (Save, Validate, Lint,
 /// Format, Resolve, Build, Rebuild, AssetTransform) live in `TaskKind` and
 /// are NOT in `PluginHook` because plugins cannot perform those operations.
 ///
 /// Each variant corresponds 1:1 with a `Capability` variant and a hook
-/// function name. The router in `plugins::runtime` (T1) takes a
+/// function name. The router in `plugins::runtime` takes a
 /// `(PluginHook, TriggerContext)` and emits a `(TaskScope, TaskKind,
 /// TaskTone)` tuple, with `impl From<PluginHook> for TaskKind` providing
 /// the kind mapping.
@@ -280,7 +280,7 @@ impl PluginHook {
 
 /// Trigger context — *why* the plugin task was invoked.
 ///
-/// Pairs with `PluginHook` as the two halves of `PluginTaskSignal` (T1).
+/// Pairs with `PluginHook` as the two halves of `PluginTaskSignal`.
 /// Same (hook, trigger) cross product feeds the exhaustive router that
 /// decides UI surface (`TaskScope`) and `TaskTone`.
 ///
@@ -840,7 +840,7 @@ pub struct PluginProgressEvent {
     pub completed: bool,
 }
 
-/// A plugin's PROPOSED advisory (Step 3 Phase 5, §8 + R13) — pre-clamp.
+/// A plugin's PROPOSED advisory — pre-clamp.
 ///
 /// Structurally identical to [`crate::advisory::Advisory`] but a DISTINCT type
 /// so a plugin can never hand moss a *final* advisory across the IPC. A plugin
@@ -866,7 +866,7 @@ pub struct PluginAdvisory {
     pub action: crate::advisory::Action,
 }
 
-/// The severity gavel (Step 3 Phase 5, §8 + R13) — the SOLE constructor of a
+/// The severity gavel — the SOLE constructor of a
 /// plugin-origin [`crate::advisory::Advisory`].
 ///
 /// moss reserves the panel-popping power for core + actionable-blocking,

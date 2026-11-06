@@ -1,4 +1,4 @@
-//! Phase 2E v5 PR6 — `<img>` contract test, wikilinks half.
+//! `<img>` contract test, wikilinks half.
 //!
 //! Open-half twin of `all_parser_new_ext_sites_enable_wikilinks` in the
 //! desktop app's `img_contract_test.rs` — that test is a uniform
@@ -9,8 +9,7 @@
 //! sub-check) for its own `src`. The desktop half keeps scanning its own
 //! source.
 //!
-//! Phase 3 PR2 (`ee102b7d1`) flipped `ENABLE_WIKILINKS` at every parser
-//! site, retiring the Stage-1 wikilink rewriter in favor of native
+//! Every parser site sets `ENABLE_WIKILINKS`, so wikilinks parse as native
 //! pulldown-cmark `LinkType::WikiLink` events. A future site that forgets
 //! the flag would silently drop wikilink processing in its path.
 

@@ -23,8 +23,7 @@ pub(crate) fn deliver_event_until_aborted(
     })
 }
 
-/// Compile-time `!Send`→`Send` boundary proof on the REAL dispatch path
-/// (replaces the Phase-1 eval_future_is_send).
+/// Compile-time `!Send`→`Send` boundary proof on the REAL dispatch path.
 #[test]
 fn dispatch_hook_raw_future_is_send() {
     fn assert_send<T: Send>(_: &T) {}
@@ -122,9 +121,8 @@ async fn init_failure_cleans_up_and_allows_retry() {
     engine.shutdown().await;
 }
 
-/// EvalI64-removal replacement: per-plugin Context state persists across
-/// dispatches (the Phase-1 `reuses_context_across_calls` contract, now on the
-/// REAL dispatch path).
+/// Per-plugin Context state persists across dispatches on the REAL dispatch
+/// path.
 ///
 /// REGRESSION PIN: EvalI64 uses a separate `scratch` Context and never touches
 /// plugin Contexts; this test exists so the contract survives the EvalI64

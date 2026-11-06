@@ -526,10 +526,8 @@ pub fn get_build_passthrough(project_path: &str) -> Result<Vec<String>, String> 
 /// applies `store_gc::KEEP_GENERATIONS_DEFAULT` and the floor.
 ///
 /// Lives here, beside [`get_build_passthrough`], because `config.toml` has one
-/// reader by charter (NORTH-STAR ownership map: `vault/config.rs` is THE
-/// config.toml reader, of which this module is the current home). `store_gc`
-/// itself stays free of config access so it can move into `crates/moss-build`
-/// unchanged.
+/// reader by charter (`vault/config.rs`, of which this module is the current
+/// home). `store_gc` itself stays free of config access.
 ///
 /// A malformed value must never fail a build, so every error path folds to
 /// `None` rather than propagating — an unreadable knob means "use the default",

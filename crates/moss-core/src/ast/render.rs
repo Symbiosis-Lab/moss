@@ -295,21 +295,15 @@ fn render_block<H: RenderHooks + ?Sized>(
             title,
             children,
         } => {
-            // Phase 4 PR4: byte-shape mirrors the (now-deleted) Stage 1
-            // `resolve/callouts.rs` output that production HTML still
-            // assumes — `<div class="callout" data-type="{slug}"> /
+            // Byte shape that production HTML assumes —
+            // `<div class="callout" data-type="{slug}"> /
             //   <div class="callout-title">{title}</div> /
             //   <div class="callout-content">…</div>
-            // </div>`. The `data-fold` attribute is new in PR4 (Obsidian
-            // foldable callouts); absent on non-foldable callouts so
-            // existing fixtures remain byte-identical.
+            // </div>`. `data-fold` marks Obsidian foldable callouts; it is
+            // absent on non-foldable ones.
             //
-            // `data-source-line` injected when meta carries it; matches the
-            // legacy `transform_events` shape on the blockquote-promoted
-            // callout (the legacy emit was for `<blockquote>` since
-            // callouts hadn't moved to a typed `<div>` shape yet at the
-            // time; downstream consumer (iframe-bridge) accepts the attr
-            // on any wrapper element).
+            // `data-source-line` is injected when meta carries it; the
+            // iframe bridge accepts the attr on any wrapper element.
             // A folded callout is a native <details> (keyboard and
             // screen-reader behaviour for free); the title is its <summary>.
             let (wrapper, title_tag) = if fold.is_some() {
@@ -337,7 +331,7 @@ fn render_block<H: RenderHooks + ?Sized>(
             }
             out.push_str(">\n");
             // Title slot: prefer the parser-extracted title; fall back
-            // to the kind's capitalized default (matches Stage 1).
+            // to the kind's capitalized default.
             let display_title = title
                 .as_deref()
                 .map(|t| t.trim())
@@ -436,7 +430,7 @@ fn render_block<H: RenderHooks + ?Sized>(
                     // `None` for the default `1. foo` case keeps the
                     // shorter `<ol>` shape. Attribute order mirrors other
                     // typed-AST blocks: existing tag attrs first, then
-                    // `data-source-line`. Phase 4 followup B (2026-05-28).
+                    // `data-source-line`.
                     if let Some(n) = start {
                         out.push_str(" start=\"");
                         out.push_str(&n.to_string());
@@ -714,13 +708,9 @@ fn render_block<H: RenderHooks + ?Sized>(
             out.push_str("</figure>\n");
         }
         Block::LinkCard { url, children } => {
-            // Phase 4 PR4.5 (2026-05-28): the compound-link grid-cell shape.
+            // The compound-link grid-cell shape.
             // External URLs render as a link-preview wrapper; internal URLs
-            // render as `data-kind="link"` grid-card.
-            //
-            // Production byte shape matches today's desktop app
-            // `render_compound_link_cell` output (ported here so that
-            // shape was deleted from the desktop app in PR4.5). The wrapping
+            // render as `data-kind="link"` grid-card. The wrapping
             // `<div class="moss-grid">` chrome lives in the Grid render
             // arm in hooks.rs; LinkCard is the per-cell shape.
             let body = render_children_to_string(hooks, children, fnotes);
@@ -889,13 +879,10 @@ fn render_inline<H: RenderHooks + ?Sized>(
             };
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);
-            // Phase 4 PR7a-flip-core-A (2026-05-28): pass the
-            // `is_wikilink` flag directly to the hook. Pre-flip-core-A,
-            // this arm synthesized a wikilink-kinded `ResolvedUrl` to
-            // coax the hook's wikilink branch — a lossy workaround that
-            // dropped the original `UrlKind` (`AssetNewtab` wikilinks
-            // lost their `target="_blank" rel="noopener"`). The hook's
-            // new signature carries both concerns orthogonally.
+            // Pass the `is_wikilink` flag directly to the hook; the resolved
+            // `UrlKind` must stay intact (`AssetNewtab` wikilinks keep their
+            // `target="_blank" rel="noopener"`), so the hook receives both
+            // concerns orthogonally.
             hooks.render_link(out, resolved, *is_wikilink, &content);
         }
         Inline::Image {

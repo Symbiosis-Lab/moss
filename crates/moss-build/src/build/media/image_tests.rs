@@ -5631,7 +5631,7 @@ fn emit_image_outputs_does_not_fabricate_a_file_without_a_recoverable_oid() {
     );
 }
 
-// ----- Phase 1b: thread the just-encoded CAS oid through to the manifest -----
+// ----- Thread the just-encoded CAS oid through to the manifest -----
 
 /// Inline no-op `Spawner`, shared shape with the other full-`dispatch_image_
 /// conversions` tests in this file: it puts `dispatch_image_conversions` on

@@ -1,7 +1,7 @@
 use super::*;
 use std::fs;
 
-// ── The severity gavel (Step 3 Phase 5, §8 + R13) ─────────────────────
+// ── The severity gavel ─────────────────────
 //
 // A plugin PROPOSES an advisory severity; moss holds the gavel. A plugin's
 // `Blocking` clears the same R12 bar as Deploy (Action ≠ None) — otherwise
@@ -728,7 +728,7 @@ fn contributes_jobs_round_trips_as_a_bare_map() {
 //
 // Foundational types for PanelTask. These tests pin the
 // serde wire format (JSON-side spelling) so the closed enums stay
-// stable across the router (T1), the matters manifest, and bindings.ts.
+// stable across the router, the matters manifest, and bindings.ts.
 
 #[test]
 fn plugin_hook_serializes_all_variants_lowercase() {

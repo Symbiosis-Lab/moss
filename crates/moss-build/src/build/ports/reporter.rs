@@ -72,9 +72,8 @@ pub struct CloudSync<'a> {
 /// shell signal could arrive as one more default method and the detector would
 /// never fire. Four channel-shaped concerns cross this seam (progress,
 /// `stage_ready`, `cloud_sync`, `download_progress`) and all four are methods on
-/// this one trait, so the fold was not hypothetical. The abort-threshold rule (adopted
-/// 2026-08-18) replaces the trait count with a width count — ratchet row (o)
-/// `seam_surface` — which a fold moves exactly as much as a new port does. Add a
+/// this one trait, so the fold was not hypothetical. A width count — the
+/// seam-width ratchet — replaces the trait count, which a fold moves exactly as much as a new port does. Add a
 /// method here and the tripwire goes red.
 pub trait BuildReporter: Send + Sync {
     /// Report one pipeline event.

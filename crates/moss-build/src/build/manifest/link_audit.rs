@@ -62,7 +62,7 @@ use super::SealedManifest;
 use crate::build::served_path::ServedPath;
 
 /// Attribute names whose value can be a root-relative URL. Held as data rather
-/// than written into the scan loop so ratchet row (p) — which reads a literal
+/// than written into the scan loop so the HTML-mutation ratchet — which reads a literal
 /// `href=\"` inside a `find`/`split` argument as an HTML string-mutation pass —
 /// does not count a read-only audit as one.
 ///

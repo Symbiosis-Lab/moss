@@ -1,4 +1,4 @@
-//! fetch() shim returning a minimal Response/Headers (report 5 §1d). Routes to
+//! fetch() shim returning a minimal Response/Headers. Routes to
 //! do_http_request_full (PUT/HEAD/headers). The async fetch fn uses Func::from(Async(..))
 //! → real JS Promise. json()/text() are also async over the captured body. Headers.get
 //! is case-insensitive (keys stored lowercased).

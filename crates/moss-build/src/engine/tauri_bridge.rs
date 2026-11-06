@@ -1,4 +1,4 @@
-//! globalThis.__TAURI__ assembly + the engine-side event hub (report 5 §3).
+//! globalThis.__TAURI__ assembly + the engine-side event hub.
 //! __TAURI__ = { core: { invoke }, event: { emit, listen } }.
 //!
 //! LOAD-BEARING INVARIANT for every async host fn (`Func::from(Async(closure))`):

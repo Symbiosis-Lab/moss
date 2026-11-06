@@ -168,7 +168,7 @@ fn split_dest_url_query_then_anchor() {
 //
 // Use a minimal ContentGraph that registers a few paths. We rely on
 // ContentGraph::resolve_path() to map bare names back to filesystem-
-// looking paths (the same surface Stage 1 uses).
+// looking paths.
 
 fn build_graph(paths: &[&str]) -> ContentGraph {
     let mut b = ContentGraphBuilder::new();
@@ -185,9 +185,8 @@ fn build_graph(paths: &[&str]) -> ContentGraph {
     b.build()
 }
 
-/// Helper: empty AssetSnapshot. Phase 3 PR4.5 (2026-05-27) added the
-/// `assets` parameter to dispatch_wikilink_embed so non-image embed
-/// kinds can route directly to their HTML synthesizers.
+/// Helper: empty AssetSnapshot, for the `assets` parameter of
+/// dispatch_wikilink_embed.
 fn empty_snapshot() -> AssetSnapshot {
     AssetSnapshot::new()
 }
@@ -391,11 +390,9 @@ fn build_anchor_block_ref_is_not_slugged() {
 
 #[test]
 fn dispatch_video_extension_routes_to_synth() {
-    // Phase 3 PR4.5 (2026-05-27): non-image wikilinks now route
-    // DIRECTLY to the per-kind synthesizer — the markdown round-trip
-    // is gone (it was dropping the `moss:kind=…` title since PR2 and
-    // entirely silent after PR4 deleted `parse_title`). The dispatcher
-    // returns `EmitKind::Html` carrying the `<video>` byte shape; we
+    // Non-image wikilinks route DIRECTLY to the per-kind synthesizer, with
+    // no markdown round-trip (which would drop the `moss:kind=…` title).
+    // The dispatcher returns `EmitKind::Html` carrying the `<video>` byte shape; we
     // pin only the structural identity (element + src) so byte-shape
     // changes are owned by the synth tests in `render/video.rs`.
     let graph = build_graph(&["clip.mp4"]);
@@ -419,8 +416,8 @@ fn dispatch_video_extension_routes_to_synth() {
 
 #[test]
 fn dispatch_pdf_extension_routes_to_synth() {
-    // See `dispatch_video_extension_routes_to_synth` for the PR4.5
-    // routing rationale. The pdf synthesizer emits an `<object type="application/pdf">`.
+    // See `dispatch_video_extension_routes_to_synth` for the routing
+    // rationale. The pdf synthesizer emits an `<object type="application/pdf">`.
     let graph = build_graph(&["report.pdf"]);
     let emit = dispatch_wikilink_embed(
         "report.pdf",

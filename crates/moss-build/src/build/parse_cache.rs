@@ -1,8 +1,8 @@
 //! Loop A parse cache.
 //!
-//! Stage 0 measured Loop A — read + Obsidian-resolve + parse, `render/blocking.rs` —
-//! at ~70-74% of render wall time (~16-18s of ~22s on the 216-page riverbend/河灣
-//! vault). Stages 4-6 only ever skip Loop B, so a one-file save still paid for
+//! Measurement showed Loop A — read + Obsidian-resolve + parse, `render/blocking.rs` —
+//! at ~70-74% of render wall time (~16-18s of ~22s on a 216-page site
+//! vault). The render skip only ever skips Loop B, so a one-file save still paid for
 //! parsing all 216 pages. This module lets an unchanged page replay the
 //! `ParsedDocument` the previous build produced instead.
 //!
@@ -29,8 +29,8 @@
 //!    are `#[serde(skip)]`, and `BodyPlan`/`OutgoingLink` do not implement
 //!    `Serialize` at all. A JSON cache would silently replay documents with no
 //!    body plan, i.e. HTML missing every grid/cover enhancement — the exact
-//!    "silently stale" failure this stage must not have. Making the whole
-//!    moss-core `Block` tree serializable is a far larger change than Stage 7.
+//!    "silently stale" failure this cache must not have. Making the whole
+//!    moss-core `Block` tree serializable is a far larger change than this cache.
 //! 2. A file would never be read anyway. The cache is only ever consulted under
 //!    `BuildTrigger::ContentOnly`, which only the watch loop produces, inside a
 //!    long-lived process. Every cross-process entry point (`moss build`,
@@ -96,7 +96,7 @@
 //!
 //! # Kill switch
 //!
-//! `MOSS_NO_INCREMENTAL` — the same one Stage 5b ships. It is read in BOTH
+//! `MOSS_NO_INCREMENTAL` — the same one the render skip uses. It is read in BOTH
 //! `PipelineConfig::allows_incremental_skip` and
 //! `PipelineConfig::allows_parse_cache_reuse` and delivered here as
 //! `SiteConfig::incremental.parse_cache`. There is deliberately no second flag:
@@ -651,8 +651,7 @@ pub fn site_scalars<'a>(
 /// whole subtree. A mismatch bypasses the cache for the entire build.
 ///
 /// Maps arrive as `HashMap`s whose `Debug` order is per-instance random, so
-/// they are sorted into `BTreeMap`/`Vec` before hashing (the Stage 5a
-/// determinism bug, one phase earlier).
+/// they are sorted into `BTreeMap`/`Vec` before hashing, as in the facade hash.
 ///
 /// NOT included, deliberately: `content_graph` (a pure function of the file
 /// path list, which IS included), and the asset/media inputs
@@ -902,8 +901,7 @@ mod tests {
     #[test]
     fn inputs_fingerprint_is_stable_across_map_instances() {
         // Two HashMaps with the same contents hash the same even though their
-        // iteration orders differ — the Stage 5a determinism bug, one phase
-        // earlier. Build the second map in the opposite insertion order.
+        // iteration orders differ. Build the second map in the opposite insertion order.
         let mut reversed = HashMap::new();
         for (k, v) in [("z.md", "z/index.html"), ("y.md", "y/index.html"), ("x.md", "x/index.html")] {
             reversed.insert(k.to_string(), v.to_string());

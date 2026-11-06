@@ -100,7 +100,7 @@ pub fn render_cover_html(
                     fit: attrs.fit,
                     ..Default::default()
                 };
-                // Phase 1 B1 (2026-05-25): synthesizer takes `&AssetSnapshot`.
+                // The synthesizer takes `&AssetSnapshot`.
                 // Memoized on the lookup — this built one snapshot per CARD
                 // until 2026-08-24, which cost cards x images. No
                 // `AssetRegistry` available at this boundary, so variant kinds

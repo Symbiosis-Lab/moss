@@ -2,8 +2,7 @@
 //! actually needs.
 //!
 //! One emit family, one owner — `blocking.rs` gates, this module assembles,
-//! per NORTH-STAR's interception rule ("new emit family → `emit/`-shaped
-//! module, never more code in `blocking.rs`").
+//! so `blocking.rs` gains no code per family.
 //!
 //! ## The gate is declared, never inferred
 //!
@@ -60,7 +59,7 @@ pub struct CssPartial {
 
 /// Every optional partial, in the order they are concatenated after core.
 ///
-/// A registration table in the NORTH-STAR pattern-glossary #2 sense: one
+/// A registration table: one
 /// table per family, with a totality test beside it
 /// (`stylesheet_tests::every_partial_file_has_a_row`), explicitly not a
 /// macro engine.

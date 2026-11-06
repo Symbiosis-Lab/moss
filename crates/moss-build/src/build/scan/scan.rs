@@ -1297,7 +1297,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
 
     let walk_elapsed = scan_walk_start.elapsed();
 
-    // Phase 2: extract raster-image metadata in PARALLEL. Each task uses a fresh
+    // Extract raster-image metadata in PARALLEL. Each task uses a fresh
     // local HashIndex (extract_media_metadata_cached needs `&mut`; on a warm
     // build it records the file's carried-forward content hash) — merged into
     // new_index in walk order afterward. `old_index` is read-only shared;

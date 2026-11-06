@@ -463,9 +463,9 @@ fn is_media_attrs_pipe(pipe: &str) -> bool {
 
 /// Parse a hero overlay's raw markdown source into `Vec<Block>`.
 ///
-/// Phase 4 PR4.5 (2026-05-28): mirrors `parse_cell_to_blocks` for the
-/// grid-cell path but without compound-link detection (an overlay is not
-/// a compound-link surface; that pattern is grid-cell-specific).
+/// Mirrors `parse_cell_to_blocks` for the grid-cell path but without
+/// compound-link detection (an overlay is not a compound-link surface; that
+/// pattern is grid-cell-specific).
 /// Returns an empty vec (and no warnings) when the overlay is empty.
 /// Otherwise returns `(blocks, warnings)` — the fragment `Document`'s
 /// warnings (e.g. a misspelled `:::name` shortcode nested inside the

@@ -1,4 +1,4 @@
-//! Pure build-output data — the M6a boundary's "data" side.
+//! Pure build-output data — the crate boundary's "data" side.
 //!
 //! Everything here is plain data a future headless moss-build crate would
 //! consume: the hash-manifest entry helpers, scan results, media metadata,

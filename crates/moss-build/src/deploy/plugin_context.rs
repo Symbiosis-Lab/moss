@@ -103,7 +103,7 @@ const GITHUB_DEPLOY_PLUGIN: &str = "github";
 ///
 /// All three conditions are required, and the plugin is the one that was
 /// missing. The `origin` remote is the deploy target for the **github plugin
-/// only** — its `deploy()` resolves owner/repo from `origin` (Phase 0,
+/// only** — its `deploy()` resolves owner/repo from `origin` (see
 /// `plugins/github/src/main.ts`). For every other plugin that same remote is
 /// ordinary version control and says nothing about where the site ships: an
 /// OnionPress site publishes to an `.onion` address that has no subpath, and

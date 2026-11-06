@@ -46,10 +46,10 @@ pub fn synthesize_iframe_html(
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
-    // Reconstruct the iframe `src` from the URL slot + Stage-1-folded
-    // `?query#fragment` params. pulldown-cmark would percent-encode `?`
-    // and `#` if they stayed in the URL slot, so Stage 1 lifts them out;
-    // Stage 2 puts them back here.
+    // Reconstruct the iframe `src` from the URL slot + the `query` /
+    // `fragment` params. pulldown-cmark would percent-encode `?` and `#`
+    // if they stayed in the URL slot, so they travel as params and are put
+    // back here.
     let mut full_src = String::from(src);
     if let Some(q) = params.get("query") {
         full_src.push('?');

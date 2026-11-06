@@ -1,4 +1,4 @@
-//! The asset promise registry — app-runtime side of the M6a boundary.
+//! The asset promise registry — app-runtime side of the crate boundary.
 //!
 //! The explicit promise model: the pipeline registers every
 //! image/video variant URL as Pending, the encoder transitions it to
@@ -265,7 +265,7 @@ impl AssetRegistry {
     /// a failed variant — `<picture>` does not recover from a chosen-source
     /// 404, HTML spec § update-the-source-set).
     ///
-    /// Phase 0 Task F1 — feeds `AssetSnapshot.variants`. The accessor is
+    /// Feeds `AssetSnapshot.variants`. The accessor is
     /// keyed by **stem path** (extension stripped) per the
     /// [`moss_core::asset_snapshot`] module docs.
     pub fn iter_registered_variants(

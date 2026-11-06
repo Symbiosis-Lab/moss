@@ -56,8 +56,7 @@ pub trait RenderHooks {
         is_wikilink: bool,
         content: &str,
     ) {
-        // PR7a-flip-core-A: is_wikilink and UrlKind::AssetNewtab are
-        // orthogonal. A wikilink that resolves to an asset-newtab kind
+        // is_wikilink and UrlKind::AssetNewtab are orthogonal. A wikilink that resolves to an asset-newtab kind
         // emits BOTH `class="wikilink"` AND `target="_blank" rel="noopener"`
         // — neither concern shadows the other.
         //
@@ -162,15 +161,14 @@ pub trait RenderHooks {
 
     /// Optional [`AssetSnapshot`] for the gallery synth path.
     ///
-    /// Phase 2E v5 PR3 (2026-05-26): when the impl returns
-    /// `Some(snapshot)`, [`render_shortcode`]'s `Gallery` arm routes each
-    /// item through [`crate::render::image::synthesize_image_html`] with
+    /// When the impl returns `Some(snapshot)`, [`render_shortcode`]'s
+    /// `Gallery` arm routes each item through
+    /// [`crate::render::image::synthesize_image_html`] with
     /// [`ImageContext::GalleryThumb`], producing the canonical synth byte
     /// shape (`<picture><source srcset=*.webp>`, dims, LQIP, lazy
     /// loading). When the impl returns `None` (tests, fragment-render
-    /// paths, downstream consumers without a snapshot), the legacy
-    /// bare-`<img>` emission survives so the regex post-pass picks up
-    /// the attributes.
+    /// paths, downstream consumers without a snapshot), an empty snapshot
+    /// is used: same shape with fallback dims and no LQIP.
     ///
     /// Default impl: `None`. [`DefaultHooks::with_snapshot`] overrides
     /// to expose the constructor-provided snapshot.
@@ -695,9 +693,7 @@ pub trait RenderHooks {
     /// RPC). When `None` (default config / fragment-render paths), no
     /// attr is emitted — byte-identical to the pre-source-line shape.
     ///
-    /// Source-line wiring added 2026-05-28 (Phase 4 cleanup): restores
-    /// the preview-scroll paragraph-precision feature that PR7a's
-    /// `transform_events` deletion removed.
+    /// The attr gives the preview paragraph-precision scrolling.
     fn render_heading(
         &self,
         out: &mut String,
@@ -783,12 +779,10 @@ pub struct HeadingMarks<'a> {
 /// Default render hooks. moss-core ships this as the base implementation
 /// of [`RenderHooks`]; the methods are the trait's default impls.
 ///
-/// Phase 2E v5 PR3 (2026-05-26): refactored from a unit struct to a
-/// lifetime-parameterized struct so callers can attach an
+/// Lifetime-parameterized so callers can attach an
 /// [`AssetSnapshot`] for the gallery synth path. Use
 /// [`DefaultHooks::new`] / `Default::default()` for the no-snapshot
-/// behavior (legacy bare-`<img>` emission; surviving regex post-pass
-/// fills in attributes); use [`DefaultHooks::with_snapshot`] for the
+/// behavior (empty snapshot: fallback dims, no LQIP); use [`DefaultHooks::with_snapshot`] for the
 /// production path (full synth byte shape — `<picture><source srcset>`,
 /// dims, LQIP, lazy loading).
 ///
@@ -1024,9 +1018,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
                 return;
             }
         };
-        // PR1 v2 (post-Wave-0.5 parity probe): MarkdownInline (no figure
-        // wrap) for inline images. PR3's Block::Figure handles the figure
-        // wrap for image-only paragraphs.
+        // MarkdownInline (no figure wrap) for inline images; `Block::Figure`
+        // handles the figure wrap for image-only paragraphs.
         let ctx = crate::render::image::ImageContext::MarkdownInline;
         // The CommonMark title is the image's `title` attribute, before the
         // `style` fragment; neither is emitted when absent.
@@ -1129,7 +1122,7 @@ fn render_hero_overlay_blocks(
 /// `</p><div>`), but `</li>`, `</ul>`, `</ol>`, etc. keep their trailing
 /// `\n` (`<ul>\n<li>`, `</li>\n<li>`, `</li>\n</ul>`).
 ///
-/// Phase 4 PR4.5 (2026-05-28): introduced for the Grid arm's per-cell
+/// Used by the Grid arm's per-cell
 /// rendering. The AST `render_block` emits trailing `\n` after every
 /// block-level child to keep top-level document HTML readable; inside a
 /// grid cell, that whitespace needs surgical removal to byte-match
@@ -1310,8 +1303,7 @@ mod tests {
 
     #[test]
     fn default_hooks_render_link_is_wikilink_flag_injects_class() {
-        // PR7a-flip-core-A: `is_wikilink: true` injects `class="wikilink"`
-        // regardless of `url.kind` — the flag carries the parse-time
+        // `is_wikilink: true` injects `class="wikilink"` regardless of `url.kind` — the flag carries the parse-time
         // discriminator (pulldown-cmark `LinkType::WikiLink`) and is
         // honored independently from the resolved URL classification.
         let hooks = DefaultHooks::new();
@@ -1343,8 +1335,7 @@ mod tests {
 
     #[test]
     fn default_hooks_render_link_wikilink_and_newtab_compose() {
-        // PR7a-flip-core-A: `is_wikilink` and `UrlKind::AssetNewtab` are
-        // orthogonal flags — a wikilink that resolves to an asset-newtab
+        // `is_wikilink` and `UrlKind::AssetNewtab` are orthogonal flags — a wikilink that resolves to an asset-newtab
         // target emits BOTH `class="wikilink"` AND `target="_blank"
         // rel="noopener"`. Pins the composition so a future refactor that
         // re-fuses the two concerns (e.g. via a single match arm) gets
@@ -1754,7 +1745,7 @@ mod tests {
 
     #[test]
     fn grid_with_width_wide_emits_data_width() {
-        // PR4.5: cells are Vec<Vec<Block>>; build trivial Paragraph cells.
+        // Build trivial Paragraph cells.
         let sc = Shortcode::Grid(GridShortcode {
             columns: 2,
             width: Some("wide".to_string()),
@@ -1787,24 +1778,16 @@ mod tests {
         );
     }
 
-    // ── DefaultHooks Gallery synth path (Phase 4 PR1) ────────────────
+    // ── DefaultHooks Gallery synth path ────────────────
     //
-    // Pre-Phase-4-PR1, `DefaultHooks::new()` (no snapshot) emitted a
-    // legacy bare-`<img>` gallery-item shape and relied on a surviving
-    // regex post-pass to inject dims / LQIP / `<picture>` downstream.
-    // Phase 4 PR1 (2026-05-27) deleted that bare-`<img>` fallback: every
-    // gallery item now routes through
+    // Every gallery item routes through
     // `synthesize_image_html(..., GalleryThumb, ...)`, threading an empty
     // `AssetSnapshot` through when no snapshot is in scope. Synth emits
     // `<picture>` for raster originals in both cases (snapshot-present
     // uses real dims/LQIP; snapshot-absent uses fallback dims, no LQIP).
     //
     // Rationale: the `img_contract_test` invariant requires every `<img>`
-    // in moss output to be synth-emitted or a documented carve-out. The
-    // legacy bare-img fallback was unreachable from production code paths
-    // (PipelineHooks always provides a snapshot) but became reachable the
-    // moment `render_document` is wired into production — closing the
-    // gap preemptively in PR1.
+    // in moss output to be synth-emitted or a documented carve-out.
 
     use crate::asset_snapshot::{AssetSnapshot, VariantKindSet};
     use std::path::PathBuf;
@@ -1825,9 +1808,8 @@ mod tests {
 
     #[test]
     fn default_hooks_new_gallery_routes_through_synth_with_empty_snapshot() {
-        // Phase 4 PR1 (2026-05-27): the legacy bare-`<img>` fallback for
-        // the no-snapshot Gallery path is deleted; an empty
-        // `AssetSnapshot` is threaded through synth instead. For raster
+        // The no-snapshot Gallery path threads an empty
+        // `AssetSnapshot` through synth. For raster
         // originals (.jpg/.jpeg/.png), synth still emits `<picture>` —
         // with fallback dims (800×600) and no LQIP/color style — so the
         // byte shape is identical between snapshot-present and snapshot-
@@ -1885,10 +1867,9 @@ mod tests {
         assert!(out.contains(r#"height="600""#), "expected height=600, got: {out}");
     }
 
-    // ── DefaultHooks Hero synth path (Phase 4 PR1) ───────────────────
+    // ── DefaultHooks Hero synth path ───────────────────
     //
-    // Phase 4 PR1 (2026-05-27): the Hero arm of `render_shortcode` no
-    // longer emits a raw `<img src="…" alt="" />` — it routes through
+    // The Hero arm of `render_shortcode` routes through
     // `synthesize_image_html` with `ImageContext::Hero` (snapshot
     // present) or `ImageContext::HeroBare` (no snapshot — the legitimate
     // carve-out). Both shapes satisfy `img_contract_test`'s
@@ -1993,7 +1974,7 @@ mod tests {
         assert!(!out.contains(r#"sizes="100vw""#), "got: {out}");
     }
 
-    // ── DefaultHooks::render_image synth path (Phase 4 PR1) ──────────
+    // ── DefaultHooks::render_image synth path ──────────
     //
     // The `RenderHooks::render_image` default emits a bare `<img>`. The
     // `DefaultHooks` impl overrides this to route through synth when a
@@ -2002,18 +1983,12 @@ mod tests {
 
     #[test]
     fn default_hooks_with_snapshot_render_image_emits_picture_no_figure_wrap() {
-        // PR1 v2 (post-Wave-0.5 parity probe): inline `Inline::Image`
-        // rendering uses `MarkdownInline` — emits `<picture><img></picture>`
-        // for raster originals, NO `<figure>` wrap. The figure wrap is
-        // PR3's territory: `Block::Figure` is the typed variant for
-        // image-only paragraphs and its renderer uses
-        // `MarkdownStandalone`.
-        //
-        // Before v2 (early PR1) used `MarkdownStandalone` here and applied
-        // figure wrap to every inline image — incorrect for paragraphs
-        // with sibling content (image + italic caption + prose). Parity
-        // probe surfaced this as 9 false-positive divergences on a real
-        // site's CJK fixtures.
+        // Inline `Inline::Image` rendering uses `MarkdownInline` — emits
+        // `<picture><img></picture>` for raster originals, NO `<figure>`
+        // wrap. The figure wrap belongs to `Block::Figure` (image-only
+        // paragraphs), whose renderer uses `MarkdownStandalone`; wrapping
+        // every inline image would be wrong for paragraphs with sibling
+        // content (image + italic caption + prose).
         let src = "photos/cat.jpg";
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
@@ -2043,14 +2018,12 @@ mod tests {
 
     #[test]
     fn default_hooks_with_snapshot_render_image_emits_title_attribute_when_present() {
-        // PR1 v2 (post-parity-probe correction): with `MarkdownInline`,
-        // `title` becomes a `title=""` HTML attribute on the inner `<img>`,
-        // NOT a `<figcaption>` (the figure-wrap is PR3 territory).
+        // With `MarkdownInline`, `title` becomes a `title=""` HTML attribute
+        // on the inner `<img>`, NOT a `<figcaption>` (the figure wrap is
+        // `Block::Figure`'s).
         //
         // Verifying title round-trips through synth ensures we don't drop
-        // CommonMark `[text](href "title")` data through the AST path —
-        // the documented gap on `render_link` is fixed in PR8; for images
-        // it lands here in PR1.
+        // CommonMark `[text](href "title")` data through the AST path.
         let src = "photos/cat.jpg";
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
@@ -2073,9 +2046,8 @@ mod tests {
         // The MarkdownInline path's title handling depends on synth's
         // implementation; assert it doesn't disappear silently.
         // Note: if synth currently drops title in MarkdownInline mode,
-        // that's a separate finding to file — flagged as a Phase 4
-        // followup since the production wikilink dispatcher carries title
-        // via TitleParams.
+        // that's a separate finding; the production wikilink dispatcher
+        // carries title via TitleParams.
         assert!(out.contains("<picture") || out.contains("<img"), "got: {out}");
     }
 

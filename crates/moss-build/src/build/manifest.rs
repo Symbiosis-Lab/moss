@@ -584,7 +584,7 @@ impl PendingManifest {
     }
 
     /// Carry a page's source hash forward from the previous manifest, for pages
-    /// this build did not re-read: the Stage-5b skip set, a parse-cache hit, or
+    /// this build did not re-read: the render skip set, a parse-cache hit, or
     /// an iCloud deferral. The bytes are unchanged by definition on all three
     /// paths — that is *why* they were skipped — so the previous hash is the
     /// current hash.

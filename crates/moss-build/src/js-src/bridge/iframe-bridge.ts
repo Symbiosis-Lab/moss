@@ -830,10 +830,9 @@ import { installCaptureResponder } from "./capture/responder";
     // moves `src`/`srcset` into `data-moss-ph-*` so the browser stops
     // re-selecting a URL it already failed on. Only the placeholder module knows
     // those attribute names, so we call through the handle it publishes rather
-    // than duplicating them here. This is the whole fix for LOG-8D03-T0528-08-08:
-    // without it a pending image that errored once matched nothing forever, the
-    // swap buffer evicted it after 20 futile drains, and the blueprint grid
-    // survived until the user pressed Cmd+R.
+    // than duplicating them here. Without this call a pending image that errored
+    // once matched nothing forever, the swap buffer evicted it after 20 futile
+    // drains, and the blueprint grid survived until the user pressed Cmd+R.
     //
     // Runs for EVERY asset type: a missing video poster is an <img> too (the old
     // thumb-swap.js existed only to handle that one case).
@@ -1006,8 +1005,8 @@ import { installCaptureResponder } from "./capture/responder";
   //
   // Model: Eleventy Dev Server `reload-client.js` morph branch — it too
   // `fetch`es its own `location.href` and idiomorphs the live document
-  // (full <head>+<body>, restore focus). Phase-1 scope is REFRESH (same
-  // URL); morph-driven navigation is future work.
+  // (full <head>+<body>, restore focus). Scope is REFRESH only (same
+  // URL), not morph-driven navigation.
   window.addEventListener("message", (e: MessageEvent) => {
     if (e.data?.type !== "moss-morph") return;
     const { gen } = e.data as { gen?: number };

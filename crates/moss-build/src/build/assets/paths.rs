@@ -55,10 +55,9 @@ pub fn compute_binary_hash_file(path: &std::path::Path) -> Result<String, String
 /// the edge this removed. Those hashes still run inside work a publish waits
 /// on (`deploy::drain_in_flight_work`, `STALL_TIMEOUT` 300s), so a single file
 /// whose read SUCCEEDS but takes over 300s with no other build event in the
-/// window would now abort a publish that was progressing fine. Narrow, and not
-/// nothing. Closing it properly is a reporter-shaped concern, which
-/// is the port seam's business (NORTH-STAR:88, ratchet row (o)) — not a
-/// re-added `crate::deploy` call.
+/// window would now abort a publish that was progressing fine. Narrow, but real.
+/// Closing it properly is a reporter-shaped concern, which belongs to the port
+/// seam, not a re-added `crate::deploy` call.
 pub fn compute_binary_hash_file_with_heartbeat(
     path: &std::path::Path,
     on_chunk: &dyn Fn(),
@@ -95,7 +94,7 @@ pub fn hash_reader(reader: &mut impl std::io::Read, on_chunk: &dyn Fn()) -> std:
 /// requirement: `HashMap` iteration order is non-deterministic, so an unsorted
 /// feed would produce a different id for the same content across processes.
 ///
-/// Same `files` content always yields the same id (I2 invariant from Stage 1 design).
+/// Same `files` content always yields the same id.
 /// Co-located with `compute_binary_hash` to share the `xxh3_64` import.
 pub fn compute_manifest_generation_id(files: &std::collections::HashMap<String, String>) -> String {
     use std::collections::BTreeMap;
@@ -226,7 +225,7 @@ impl PathResolver {
     /// has to RECOGNISE a URL then saw a shape it was not written against —
     /// `orphan_prune`'s reference scanner reads its token class straight off the
     /// encoder's output set, so raw non-ASCII covers read as unreferenced and
-    /// were deleted, 404ing the live site (2026-08-06, `LOG-8D03-T1529-08-06`).
+    /// were deleted, 404ing the live site.
     /// A second implementation of a conversion is a second answer; keep one.
     ///
     /// Examples (without overrides):

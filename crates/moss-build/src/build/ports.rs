@@ -25,7 +25,7 @@
 //! - [`announcer::SealAnnouncer`] (2026-08-24 extension) — the seal
 //!   tail's three state handoffs that are not `PipelineEvent`-shaped. Its
 //!   module doc argues why it is a new port rather than a fold onto
-//!   `BuildReporter`; the row-(o) raise it caused is accepted by name.
+//!   `BuildReporter`; the seam-width ratchet raise it caused is accepted by name.
 //!
 //! One more is implemented here and is closure-shaped rather than a trait:
 //!
@@ -65,21 +65,21 @@
 //! `CacheKeyInputs` was never the struct the threshold was written about.
 //! [`host::HostPorts`] is — it is the seam itself, the thing every host must
 //! answer — and it was declared in `build.rs`, one directory above everything
-//! row (o) scans. So the clause about "either named value struct" was reading
+//! the seam-width ratchet scans. So the clause about "either named value struct" was reading
 //! the smaller of the two and reporting 2 while the real one stood at
-//! **sixteen** direct members, four past the ceiling, with no way for the row
-//! to say so. It is declared in [`host`] as of 2026-08-27 and the row now reads
+//! **sixteen** direct members, four past the ceiling, with no way for the ratchet
+//! to say so. It is declared in [`host`] and the ratchet now reads
 //! it; the jump is measurement catching up, not surface being added.
 //!
 //! Six of those sixteen were `Arc<dyn Fn…>` fields that are now the
-//! [`host::HostStore`] trait. That fold moves the row's number by zero on
+//! [`host::HostStore`] trait. That fold moves the ratchet's number by zero on
 //! purpose — the abort-threshold rule counts a trait method exactly as it counts a struct
 //! member, so a fold can never be a way to get under the ceiling. What it is
 //! for is that the seam's shapes now have names.
 //!
-//! Both numbers are now read by ratchet row (o) `seam_surface` rather than by
-//! hand — 14 on the day this rule was adopted, shrink-only from there. The
-//! prose above is the explanation; the row is the test, and it is the one that
+//! Both numbers are read by the seam-width ratchet rather than by
+//! hand — 14 when this rule was adopted, shrink-only from there. The
+//! prose above is the explanation; the ratchet is the test, and it is the one that
 //! notices a fourth concern arriving as a fifth method.
 //!
 //! The target-architecture note ends that clause with "a field only one caller sets … fires
@@ -97,10 +97,10 @@
 //! concerns rather than ports, or the fold needs a rule about when it stops
 //! being legitimate.
 //!
-//! [`LivePortResolver`] found the same edge from the other side: row (o) reads
+//! [`LivePortResolver`] found the same edge from the other side: the seam-width ratchet reads
 //! trait methods and struct members, so a **closure** port — the shape this
 //! module's own prose calls "already the right shape" — adds real seam width
-//! and moves the number by zero. The row is unmoved at 14 with three ports
+//! and moves the number by zero. The ratchet is unmoved at 14 with three ports
 //! implemented rather than two, which is under-counting, not a clean bill.
 //! That is still an open question to fold into the eventual decision.
 
@@ -146,7 +146,7 @@ pub mod spawner;
 /// that case alone; this port is what makes it answerable by every build rather
 /// than only by the one whose caller happened to resolve a port first.
 ///
-/// Not counted by ratchet row (o) `seam_surface`, which counts trait methods
+/// Not counted by the seam-width ratchet, which counts trait methods
 /// and value-struct members; a closure port is a type alias, exactly like
 /// `SlotResolver`. That is a gap in the abort-threshold rule's collector rather than a licence.
 pub type LivePortResolver = std::sync::Arc<dyn Fn() -> Option<u16> + Send + Sync>;

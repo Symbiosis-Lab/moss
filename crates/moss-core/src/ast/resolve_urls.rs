@@ -61,28 +61,23 @@ pub fn resolve_urls(
     graph: &ContentGraph,
     source_path: &str,
 ) -> UrlResolution {
-    // Phase 1: walk asset URLs (image refs) and accumulate their
-    // OutgoingLink entries. This pass replaces the deleted Stage 1
-    // `resolve::markdown_refs::resolve_markdown_refs` — it only touches
-    // asset URLs and produces OutgoingLink for resolved bare-filename
-    // images. The companion AST visitor lives at `resolve_image_urls`
+    // Walk asset URLs (image refs) and accumulate their OutgoingLink
+    // entries. Only asset URLs are touched; resolved bare-filename images
+    // produce an OutgoingLink. The AST visitor lives at `resolve_image_urls`
     // below.
     let mut found = UrlResolution::default();
     resolve_image_urls(doc, graph, source_path, &mut found);
 
-    // Phase 2: walk link URLs and accumulate their OutgoingLink entries.
-    // Replaces the deleted Stage 1
-    // `resolve::markdown_links::resolve_markdown_links` — only touches
-    // link URLs and produces OutgoingLink for resolved cross-page links.
+    // Walk link URLs and accumulate their OutgoingLink entries. Only link
+    // URLs are touched; resolved cross-page links produce an OutgoingLink.
     // The AST visitor lives at `resolve_link_urls` below.
     //
-    // Two-pass ordering matches Stage 1's resolve.rs sequence (refs first,
-    // then links). The image-URL display_text comes from alt; the link-URL
+    // Image URLs resolve before link URLs. The image-URL display_text comes from alt; the link-URL
     // display_text comes from the link text. Each phase appends to the
     // shared `outgoing` Vec in document order.
     resolve_link_urls(doc, graph, source_path, &mut found);
 
-    // Phase 3 (NOT done by default): the renderer's invariant requires
+    // Not done by default: the renderer's invariant requires
     // every URL be `Url::Resolved` at HTML emission time. For non-graph
     // URLs the visitor left as `Url::Unresolved` (resolver-prefixed,
     // anchors that fell through, edge cases), the caller is responsible
@@ -96,19 +91,18 @@ pub fn resolve_urls(
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1: image (Inline::Image::src) URL resolution
+// Image (Inline::Image::src) URL resolution
 // ---------------------------------------------------------------------------
 
 /// Walk every `Inline::Image::src` URL and resolve bare-filename references.
 ///
-/// Replaces the deleted Stage 1 `resolve::markdown_refs::resolve_markdown_refs`
-/// (Phase 4 PR7a, 2026-05-28). Contract:
+/// Contract:
 /// - Only touches Inline::Image::src URLs (not Link URLs).
 /// - Bare filename + has-extension + no-path-separators → graph lookup.
 /// - On `Found`: rewrite to relative asset path; push OutgoingLink.
 /// - On `Unresolved`: leave URL as author-input (mark resolved-as-asset so
 ///   the renderer accepts it).
-/// - Pipe-bearing URLs pass through unchanged (Phase 3 PR3 contract).
+/// - Pipe-bearing URLs pass through unchanged.
 /// - External / data / mailto / anchor / explicit-relative pass through.
 fn resolve_image_urls(
     doc: &mut Document,
@@ -143,7 +137,7 @@ fn resolve_image_urls(
 /// same logic can apply to structural image URLs that live on shortcode
 /// args (Hero, Gallery). Behavior:
 /// - Already `Url::Resolved` → no-op.
-/// - Pipe-bearing → pass through verbatim (Phase 3 PR3 contract).
+/// - Pipe-bearing → pass through verbatim.
 /// - External, anchor, data URLs → pass through (the resolver finds no file for
 ///   these, so they fall through to the verbatim passthrough arm).
 /// - Separator-bearing, bare filename, or `/`-absolute → routed through
@@ -169,8 +163,7 @@ fn resolve_asset_url(
         Url::Resolved(_) => return,
     };
 
-    // Pipe-bearing URLs pass through unchanged (Phase 3 PR3): authors
-    // use `![[file.jpg|attrs]]` for typed params; pipe in standard
+    // Pipe-bearing URLs pass through unchanged: authors use `![[file.jpg|attrs]]` for typed params; pipe in standard
     // markdown URL is literal and intentionally 404s.
     if raw.contains('|') {
         *url = Url::Resolved(ResolvedUrl::new(raw, UrlKind::Asset));
@@ -347,7 +340,7 @@ fn resolve_shortcode_image_urls(
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2: link (Inline::Link::url + Block::LinkCard::url) URL resolution
+// Link (Inline::Link::url + Block::LinkCard::url) URL resolution
 // ---------------------------------------------------------------------------
 
 /// Walk every link URL (Inline::Link::url, Block::LinkCard::url) and
@@ -360,9 +353,8 @@ fn resolve_shortcode_image_urls(
 ///   exactly names a Markdown source file) → graph lookup.
 /// - On `Found`: classify into Internal (markdown) / Asset (binary) and
 ///   push OutgoingLink with target_path = resolved path.
-/// - On `Unresolved`: leave URL author-input; Stage 1 emitted a diagnostic
-///   here, but PR6 mirrors the byte-equivalence contract (no diagnostic in
-///   the OutgoingLink Vec since Diagnostic is a separate stream).
+/// - On `Unresolved`: leave URL author-input and push a Diagnostic (a
+///   separate stream from the OutgoingLink Vec).
 /// - Anchor / mailto / tel / external pass through with the matching
 ///   UrlKind so the renderer attaches the right attributes.
 fn resolve_link_urls(
@@ -407,17 +399,17 @@ fn resolve_link_urls(
             return;
         }
 
-        // Stage 1 carry-over: URLs already prefixed with a resolver
-        // sentinel (`moss-resolved:`, `moss-newtab:`, `wikilink:`) carry
-        // Stage 1 / upstream state the visitor cannot decode in isolation
+        // URLs already prefixed with a resolver sentinel (`moss-resolved:`,
+        // `moss-newtab:`, `wikilink:`) carry upstream state the visitor
+        // cannot decode in isolation
         // — the final pretty URL depends on the host's `page_map`, which
         // lives in moss-build's pipeline context. Leave these as
         // `Url::Unresolved` so the host's per-URL classifier
         // (`classify_url_prod` in moss-build's pipeline) can apply the
         // page_map-aware decoding. This preserves the byte-equivalence
-        // contract (no OutgoingLink emitted for already-resolved targets
-        // — Stage 1 already counted them) while letting the host close
-        // the prefix-decoding loop.
+        // contract (no OutgoingLink emitted for already-resolved targets,
+        // which were counted upstream) while letting the host close the
+        // prefix-decoding loop.
         if raw.starts_with("moss-resolved:")
             || raw.starts_with("moss-newtab:")
             || raw.starts_with("wikilink:")
@@ -439,12 +431,10 @@ fn resolve_link_urls(
 
         // Resolvable: split query/fragment, look up the path against the
         // content graph, push OutgoingLink, emit the `moss-resolved:`
-        // sentinel for the host classifier. Mirrors
-        // markdown_links::rewrite_line byte-for-byte: same sentinel shape
-        // (`moss-resolved:<path>[<suffix>]`), same suffix concatenation.
+        // sentinel for the host classifier. Sentinel shape:
+        // `moss-resolved:<path>[<suffix>]`.
         //
-        // Phase 4 PR7a-stage1b (2026-05-28): moss-core resolves the
-        // filesystem path; moss-build's `classify_url_prod` decodes the
+        // moss-core resolves the filesystem path; moss-build's `classify_url_prod` decodes the
         // sentinel into the final pretty / external / asset URL using
         // `page_map`, `external_url_map`, and the wikilink-class signal.
         // The sentinel IS the moss-core ↔ moss-build layering seam — the
@@ -481,7 +471,7 @@ fn resolve_link_urls(
                 *link_url = Url::Unresolved(sentinel);
             }
             ResolvedRef::Unresolved => {
-                // Mirrors Stage 1: leave the URL as authored — no
+                // Leave the URL as authored — no
                 // `moss-resolved:` prefix, no synthesized target. Internal so
                 // the renderer's `Url::Resolved` invariant holds.
                 found.diagnostics.push(Diagnostic {
@@ -568,10 +558,10 @@ pub fn slug_wikilink_suffix(suffix: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: ensure no Url::Unresolved survives
+// Ensure no Url::Unresolved survives
 // ---------------------------------------------------------------------------
 
-/// Classify any URL left as `Url::Unresolved` after phases 1 + 2 into a
+/// Classify any URL left as `Url::Unresolved` after the image and link passes into a
 /// best-effort `Url::Resolved`. The renderer's invariant requires no
 /// `Url::Unresolved` reaches HTML emission; this is the safety net that
 /// catches URLs the per-kind phases didn't visit (e.g., a future

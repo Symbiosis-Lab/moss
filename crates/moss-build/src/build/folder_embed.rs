@@ -15,7 +15,7 @@
 //!
 //! 2. **Static-index folder** (no content-folder doc, but the folder has a
 //!    source `index.html` or `index.htm` in `project.html_files`). Dispatch
-//!    into the canonical Stage 2 iframe synthesizer (`synthesize_iframe_html`)
+//!    into the iframe synthesizer (`synthesize_iframe_html`)
 //!    with an empty `TitleParams` — emission shape is identical to
 //!    `![[folder/index.html]]`. This is the form for embedding built static
 //!    web apps (Vite/Astro/Observable exports).
@@ -1029,7 +1029,7 @@ fn resolve_markers_impl(
 /// project-relative path (as produced by `resolve_folder_id`). It matches
 /// `FileInfo.path`, which is also forward-slash + project-relative.
 ///
-/// Dispatching into `synthesize_iframe_html` (the canonical Stage 2 iframe
+/// Dispatching into `synthesize_iframe_html` (the iframe
 /// synthesizer) rather than inlining the emission means any future change
 /// to the iframe shape (sandbox attribute, default sizing) flows here
 /// automatically.
@@ -1081,8 +1081,8 @@ fn try_render_folder_index_iframe(
         format!("{}/{}", folder_id, index_name)
     };
     // Folder-as-iframe runs in the desktop app's build pipeline outside the
-    // markdown emission path (no pulldown-cmark, no Stage-2 dispatcher).
-    // Call the canonical Stage 2 synthesizer directly. Folder embeds carry
+    // markdown emission path (no pulldown-cmark), so call the iframe
+    // synthesizer directly. Folder embeds carry
     // a `|size` token (e.g. `![[/app/|80%]]`) which we translate into the
     // iframe's `width=`/`height=` attributes — mirroring the wikilink
     // dispatcher's `build_synth_params` Iframe arm. Any other per-link
@@ -1199,8 +1199,7 @@ pub(crate) fn select_children_by_slug<'a>(
                 return false;
             }
             // Folder embeds publish a list of articles — `is_listable`
-            // covers draft/slot_only in one shot
-            // (PR7b routed slot files through this path).
+            // covers draft/slot_only in one shot.
             if !d.is_listable() {
                 return false;
             }

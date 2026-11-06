@@ -847,10 +847,9 @@ fn email_channel_without_site_id_injects_pending_form() {
 /// SYNTHESIZED pages — the auto-generated homepage of a site without
 /// an index.md/self-named home note, folder listing pages — get the
 /// form too. A PerPage map keyed on parsed url_paths misses them
-/// (caught during Phase 1 visual verification: the built homepage of
-/// a home-note-less site had no form while every parsed page did,
-/// which also made the deploy guard force a rebuild on every publish
-/// for such sites). Scoped sites still use PerPage — their
+/// (the built homepage of a home-note-less site would have no form while
+/// every parsed page had one, which also made the deploy guard force a
+/// rebuild on every publish). Scoped sites still use PerPage — their
 /// synthesized-page gap is a documented Follow-up.
 #[test]
 fn single_scope_form_covers_synthesized_pages() {
@@ -1747,13 +1746,10 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
         "class identifier survives the no-manifest fallback, got: {}",
         after_title
     );
-    // Phase 1 B1 (2026-05-25): the synthesizer always wraps raster
-    // originals in `<picture>` regardless of manifest presence per
-    // the "honest mirror" invariant — the preview server fills
-    // in placeholder bytes when the variant hasn't landed yet. The
-    // prior "no manifest → no `<picture>`" expectation was a quirk of
-    // the old MediaDimensionLookup-gated emission. Falls back to
-    // 800×600 dims when the snapshot has no entry for the path.
+    // The synthesizer always wraps raster originals in `<picture>`
+    // regardless of manifest presence ("honest mirror" invariant): the
+    // preview server fills in placeholder bytes until the variant lands.
+    // Falls back to 800×600 dims when the snapshot has no entry for the path.
     assert!(
         after_title.contains("<picture>"),
         "raster cover always wraps in <picture> post-B1; got: {}",
@@ -1814,11 +1810,9 @@ fn test_should_inject_both_triggers() {
     assert!(should_inject_subscribe_assets(&pages, true));
 }
 
-// The `project_has_inline_subscribe` filesystem-scan tests were deleted
-// along with the function in PR7b. Detection now reads
-// `ParsedDocument.features.inline_subscribe` directly from the parsed
-// page slice produced by `pipeline::run`; `should_inject_subscribe_assets`
-// (above) tests cover the new path.
+// Detection reads `ParsedDocument.features.inline_subscribe` directly from
+// the parsed page slice produced by `pipeline::run`; the
+// `should_inject_subscribe_assets` tests above cover it.
 
 // ── mode-independence regression tests ─────────────────────────────────
 //

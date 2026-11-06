@@ -1387,8 +1387,8 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * future Inline/Narrated/Awaiting renderers) filter on `payload.tone`
  * and `payload.scope` to decide whether to react.
  * 
- * Added in T2 (2026-05-28) — T1 deferred the wire bridge because
- * `PanelTask` contains `Instant`; `PanelTaskWire` strips it. See the
+ * `PanelTask` contains `Instant`, so the wire carries
+ * `PanelTaskWire`, which strips it. See the
  * module docstring in `tasks.rs` for the full rationale.
  */
 { kind: "PanelTaskUpdate"; payload: PanelTaskWire } | 
@@ -1427,15 +1427,15 @@ path: string } } |
  */
 { kind: "OutsideEditKept"; payload: { path: string; version_id: string } } | 
 /**
- * Onboarding T9: ask the app shell (main webview) to open the plugin
+ * Ask the app shell (main webview) to open the plugin
  * catalog filtered to importers. Produced by the editor webview's
  * "Plugin" card; consumed by `app.ts`'s `onMossEvent("OpenPluginsView", …)`
  * listener which opens the settings modal at the `channels` section.
  * 
  * **Routed via `emit_to("main", …)` — NOT broadcast.** Tauri webviews
  * are isolated `Window` instances; a `window.dispatchEvent` from the
- * editor webview never reaches the main webview's listener, so the
- * previous T9 implementation (a `CustomEvent`) silently no-op'd.
+ * editor webview never reaches the main webview's listener, so a
+ * `CustomEvent` would silently no-op.
  * `app.emit_to("main", …)` is the supported cross-webview path.
  * See project memory: "NEVER use `app.emit()` broadcast".
  */
@@ -1488,8 +1488,6 @@ folder_path: string } } |
  * 
  * `project_path` lets the frontend tie the signal to the correct folder
  * and verify it hasn't been superseded by a folder switch.
- * 
- * Design: Phase 4b B3.
  */
 { kind: "MattersNeedsConnection"; payload: { project_path: string } } | 
 /**
@@ -1813,7 +1811,7 @@ amount: Amount | null;
  */
 elapsed_ms: number | null; 
 /**
- * Parent Job id for sub-jobs (media under Build, Phase 4).
+ * Parent Job id for sub-jobs (media under Build).
  */
 parent: string | null; state: TaskState }
 
@@ -2747,7 +2745,6 @@ export type TaskState = { state: "running"; fraction: number | null; message: st
  * `action` (Step 3 R3, typed) is the recovery affordance the Awaiting
  * renderer paints next to the directive. `Action::None` is a bare
  * cancel; `InApp`/`Command`/`Link` carry a labelled recovery control.
- * Replaces the legacy stringly `EscapeAction` grammar (deleted Phase 6).
  */
 { state: "awaiting"; directive: string; action: Action } | 
 /**

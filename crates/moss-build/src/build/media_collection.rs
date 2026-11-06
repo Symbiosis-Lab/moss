@@ -245,12 +245,11 @@ fn generate_grid_item(
     // overlay `<div>` are emitted as raw HTML — they're container chrome,
     // not content images.
     //
-    // Phase 1 B1 (2026-05-25): the synthesizer now consumes `&AssetSnapshot`
-    // instead of `Option<&MediaDimensionLookup>`. We build a snapshot inline
+    // The synthesizer consumes `&AssetSnapshot`. We build a snapshot inline
     // from whatever lookup is in scope (or an empty snapshot when callers
-    // don't have one — preserving the prior `None` path's no-data semantics).
-    // The variant data is unused at this stage (the synthesizer still picks
-    // `<picture>` by file extension); Phase 1 B2 wires the variant probe.
+    // don't have one, meaning no dimension data).
+    // The variant data is unused (the synthesizer picks `<picture>` by
+    // file extension).
     // BUG 6: the snapshot indexes under the lookup's real `dir_overrides`, so a
     // thumbnail under an overridden dir resolves to its output-URL key (not
     // just source-key + base-slug) and gets real dims instead of the fallback.

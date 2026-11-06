@@ -76,9 +76,9 @@ pub mod icloud;
 pub mod markdown;
 pub mod media;
 pub mod render;
-// Back-compat shim: video has moved to build::media::video. Remove after Phase 3 generator/ cleanup (Task 11).
+// Back-compat alias for `build::media::video`.
 pub(crate) use media::video;
-// Back-compat shim: image has moved to build::media::image. Remove after Phase 3 generator/ cleanup (Task 11).
+// Back-compat alias for `build::media::image`.
 pub(crate) use media::image;
 pub mod watch;
 pub mod features;
@@ -96,7 +96,6 @@ pub mod ship;
 pub mod terms;
 pub mod place_map;
 pub mod types;
-// New top-level buckets (Task 11 — Phase 3 generator/ redistribution)
 pub mod assets;
 pub mod cache;
 // A file's stat record and the one rule the stat-keyed caches trust it by.
@@ -261,9 +260,8 @@ impl BuildTrigger {
 /// and the closure aliases that travel with them — re-exported at the
 /// historic `crate::build::` spelling its consumers already use.
 ///
-/// The declarations moved into `build/ports/` on 2026-08-27 so ratchet row (o)
-/// can see them; see that module for why the old placement made NORTH-STAR's
-/// abort threshold unfalsifiable.
+/// The declarations live in `build/ports/` so the seam-width ratchet can see
+/// them; see that module for why.
 pub use ports::host::{HostPorts, HostStore, ServerDiff, ServerDiffFuture, ServerFuture};
 
 /// Single configuration struct for all pipeline behavior.
@@ -291,8 +289,7 @@ pub struct PipelineConfig {
     /// flip-flops on disk between those two triggers (the 2026-06-10 email
     /// footer bug).
     pub start_server: bool,
-    /// What the host provides to this build — see [`HostPorts`]. This
-    /// replaced `app: Option<tauri::AppHandle>` (2026-08-27, M6a plan C1).
+    /// What the host provides to this build — see [`HostPorts`].
     pub host: HostPorts,
     /// What triggered this build (watch mode) — see `BuildTrigger`.
     /// Read by `allows_incremental_skip`.
@@ -1143,9 +1140,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // `generate_blocking_content` so pre-finalization native slot collection
     // (`generate_native_slots`) can consult typed feature flags
     // (`features.inline_subscribe`) and reach slot-only files (`footer.md`)
-    // through the same data path the rest of the build uses. Replaces the
-    // pre-PR7b filesystem-scan stand-ins `project_has_inline_subscribe`
-    // and `render_footer_pages_from_disk`.
+    // through the same data path the rest of the build uses.
     //
     // Slots come from moss's own features only — the comment section, the
     // subscribe form, the analytics beacon. A plugin could contribute one
@@ -1309,9 +1304,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // wait_for_in_flight_work gates on it), awaits await_completion(), writes
     // the SealedManifest to hashes.json, stores it in AppState.current_sealed_manifest,
     // then decrements the counter.
-    // Deploy hard-errors on None (no disk fallback since Stage 0); the
-    // The seal+persist task must populate the slot before Publish is
-    // attempted.
+    // Deploy hard-errors on None (no disk fallback), so the seal+persist task
+    // must populate the slot before Publish is attempted.
 
     let mut media_rerender_owed = false;
     if let Some(handle) = _bg_handle {
@@ -2225,9 +2219,8 @@ pub(crate) fn collect_build_store(
 
     let project_path = mp.project_root().to_string_lossy().to_string();
     // The app resolves the two app-side inputs — the config knob and the
-    // last-deployed pointer — and hands `store_gc` plain data. That is what
-    // keeps the collector tauri-free and mechanically movable into
-    // `crates/moss-build` at M6a.
+    // last-deployed pointer — and hands `store_gc` plain data, which
+    // keeps the collector tauri-free.
     let last_deployed = crate::build::site_config::get_domain_config(&project_path)
         .ok()
         .and_then(|c| c.last_deployed_generation_id);

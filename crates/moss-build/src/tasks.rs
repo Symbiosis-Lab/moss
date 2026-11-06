@@ -258,7 +258,6 @@ pub enum TaskState {
     /// `action` (Step 3 R3, typed) is the recovery affordance the Awaiting
     /// renderer paints next to the directive. `Action::None` is a bare
     /// cancel; `InApp`/`Command`/`Link` carry a labelled recovery control.
-    /// Replaces the legacy stringly `EscapeAction` grammar (deleted Phase 6).
     Awaiting {
         directive: String,
         action: Action,
@@ -451,8 +450,7 @@ impl From<PluginHook> for TaskKind {
 
 /// A single tracked task. In-memory only — `started_at: Instant` is not
 /// `Serialize`, so PanelTask is not a wire type. The Layer-2 event payload
-/// (emitted via Tauri to renderers) is a separate snapshot struct added
-/// in T6 / T8a; this struct stays internal to the registry.
+/// (emitted via Tauri to renderers) is a separate snapshot struct (`PanelTaskWire`); this struct stays internal to the registry.
 #[derive(Debug, Clone)]
 pub struct PanelTask {
     pub id: TaskId,
@@ -484,7 +482,7 @@ pub struct PanelTask {
     /// on the wire (which keeps measuring for fade logic); captured once at the
     /// terminal transition and is what the receipt header renders.
     elapsed: Option<Duration>,
-    /// Parent Job for sub-jobs (media under Build, Step 3 Phase 4).
+    /// Parent Job for sub-jobs (media under Build).
     pub parent: Option<TaskId>,
     pub started_at: Instant,
     pub state: TaskState,
@@ -687,7 +685,7 @@ pub fn route_plugin_task(signal: PluginTaskSignal) -> (TaskScope, TaskKind, Task
         // plugins::runtime). SURFACED via the frontend `task-toast-subscriber`
         // (`shippedDegradedAdvisory`): a Workspace Succeeded Job carrying a
         // ShippedDegraded advisory becomes an info-severity ephemeral toast
-        // (Phase 6 PIECE B). Do NOT build a new Workspace render surface here.
+        // Do NOT build a new Workspace render surface here.
         (Syndicate, Background) => (TaskScope::Workspace, TaskTone::Ambient),
         (Syndicate, ManualOne) => (TaskScope::ActionPanel, TaskTone::Inline),
 
@@ -745,7 +743,7 @@ pub struct PanelTaskWire {
     /// The frozen terminal span in millis (R-a) — the receipt's elapsed,
     /// NOT the live-ticking `started_at_ms`. `None` until terminal.
     pub elapsed_ms: Option<u64>,
-    /// Parent Job id for sub-jobs (media under Build, Phase 4).
+    /// Parent Job id for sub-jobs (media under Build).
     pub parent: Option<TaskId>,
     pub state: TaskState,
 }
@@ -850,7 +848,7 @@ impl TaskRegistry {
     /// tone explicitly; plugin callers route through `route_plugin_task`
     /// first.
     ///
-    /// `_tone` is **no longer stored** (Step 3 Phase 6 R5): a Job's tone is
+    /// `_tone` is not stored: a Job's tone is
     /// computed by [`PanelTask::tone`] from its nature, not carried as data.
     /// The argument is retained so producers/the router can keep expressing
     /// (and logging) their intended surface without churning every call site;
@@ -881,7 +879,7 @@ impl TaskRegistry {
         }
     }
 
-    /// Spawn a task that nests under `parent` (Step 3 Phase 4). Identical to
+    /// Spawn a task that nests under `parent`. Identical to
     /// [`spawn`](Self::spawn) except the new task carries `parent: Some(parent)`,
     /// so the frontend renders it as a child row (and `handleJobUpdate` treats it
     /// as ambient — child Jobs do not auto-surface the panel). Used for the media
@@ -1008,7 +1006,7 @@ impl TaskRegistry {
     /// until a subsequent `prune_terminal(window_id, scope)` call removes
     /// them. A subscriber that re-fires the toast on every poll without
     /// tracking already-toasted `TaskId`s will surface the same failure
-    /// repeatedly — see T6's toast subscriber design notes.
+    /// repeatedly.
     pub fn failed_unrecoverable(&self) -> Vec<PanelTask> {
         let map = self.inner.lock().expect("TaskRegistry mutex poisoned");
         map.values()
@@ -1068,7 +1066,7 @@ impl TaskRegistry {
     }
 
     /// Drive a task's terminal-success receipt **by id**, with a producer-supplied
-    /// elapsed span (Step 3 Phase 4). The Build parent Job's receipt is applied from
+    /// elapsed span. The Build parent Job's receipt is applied from
     /// the post-join barrier, which holds only the `Arc<TaskRegistry>` + the parent
     /// `TaskId` — never a `&mut TaskHandle` (that was moved into the spawner). It sets
     /// `verb`/`amount`/`elapsed` on the terminal transition only, enforces invariant #4
@@ -1101,7 +1099,7 @@ impl TaskRegistry {
         });
     }
 
-    /// Drive a task to `Cancelled` **by id** (Step 3 Phase 4, review fix). Used by
+    /// Drive a task to `Cancelled` **by id**. Used by
     /// the post-join barrier's Drop guard: when a build is superseded / early-returns
     /// without producing a "Built" receipt, the parent Job must still reach a terminal
     /// state (a leaked `Running` parent never prunes — `prune_terminal` only removes
@@ -1116,8 +1114,7 @@ impl TaskRegistry {
         });
     }
 
-    /// Whether the task identified by `task_id` is in a terminal state (Step 3
-    /// Phase 4, review fix). Returns `false` if the task is not found (already
+    /// Whether the task identified by `task_id` is in a terminal state. Returns `false` if the task is not found (already
     /// pruned ⇒ treat as terminal-handled). The post-join barrier's Drop guard
     /// reads this to avoid clobbering a Succeeded receipt with a Cancelled state.
     pub fn is_terminal_by_id(&self, task_id: TaskId) -> bool {
@@ -1178,8 +1175,7 @@ impl TaskRegistry {
 // ──────────────────────────── TaskHandle ──────────────────────────────────
 
 /// Owned handle to a single task in a `TaskRegistry`. Each transition
-/// method mutates the registry entry and (in future phases) emits a
-/// matching event to renderers — that event wiring lands in T6/T8a.
+/// method mutates the registry entry; it does not emit events to renderers.
 ///
 /// Dropping a handle does NOT auto-cancel the task. Plugins / native
 /// callers must call one of the terminal methods explicitly. The
@@ -1297,7 +1293,7 @@ impl TaskHandle {
     /// Upholds invariant #3 (the `Failed` state always carries its cause). The
     /// advisory IS the failure — its `what` is the human message, its
     /// `severity` the recoverability — so there is no separate free-text error
-    /// to thread through (collapsed in Step 3 Phase 6).
+    /// to thread through.
     pub fn failed_with(&self, advisory: Advisory) {
         self.registry.with_task(&self.key, self.id, |task| {
             task.state = TaskState::Failed { advisory };
@@ -1330,14 +1326,13 @@ impl TaskHandle {
         self
     }
 
-    // `TaskHandle::done_with_elapsed` was removed in the Phase-4 review fix
-    // (FIX 4 — "every module has a consumer"). It had ZERO production consumers:
-    // the Build parent's terminal receipt is driven registry-level via
+    // There is no `TaskHandle::done_with_elapsed`: it had ZERO production
+    // consumers. The Build parent's terminal receipt is driven registry-level via
     // `TaskRegistry::done_with_elapsed_by_id` (the post-join barrier holds only an
     // `Arc<TaskRegistry>` + the parent `TaskId`, never a `&mut TaskHandle`).
 
     /// Terminal-success builder stamping the typed `verb` + `amount` on the
-    /// Job, through a shared (`&self`) handle (Step 3 Phase 5, §8 + R13).
+    /// Job, through a shared (`&self`) handle.
     ///
     /// This is the `&self` analog of [`TaskHandle::done_with`]: the plugin
     /// lifecycle store yields `&TaskHandle` (its `HashMap<TaskId, TaskHandle>`

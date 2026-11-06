@@ -192,9 +192,8 @@ fn is_kv_token(token: &str) -> bool {
 
 /// Split a pulldown-cmark wikilink `dest_url` into `file`, `section`, `query`.
 ///
-/// Ported from the pre-Phase-3 `wikilinks::parse_wikilink_inner` (the
-/// `before-pipe` half — the `|alias` part is handled by pulldown-cmark
-/// via pothole events, so it doesn't appear in `dest_url`).
+/// Only the `before-pipe` half of a wikilink: the `|alias` part is handled
+/// by pulldown-cmark via pothole events, so it doesn't appear in `dest_url`.
 ///
 /// Whichever of `#` or `?` appears first in `dest_url` owns its tail; the
 /// other is split out of that tail. Matches Obsidian's heading-ref priority
@@ -264,7 +263,7 @@ fn build_anchor(section: Option<&str>) -> String {
     }
 }
 
-/// Phase 3: Stage 2 entry point for wikilink dispatch.
+/// Entry point for wikilink dispatch.
 ///
 /// Reads a parsed wikilink (the `dest_url` and pothole-text fields from
 /// pulldown-cmark's `Tag::Link { link_type: LinkType::WikiLink { has_pothole } }`
@@ -375,11 +374,9 @@ fn dispatch_embed_form(
 
     // Derive `alias` and `placement` for ParsedEmbed from the pothole.
     // For PotholeContent::Params we surface no alias; the params are
-    // carried via TitleParams (consumers in PR4 onward can read them
-    // directly without round-tripping through the `moss:` title channel).
-    // For PR1 the params get folded into the renderer via the same path
-    // Stage 1 uses today: there's no Stage-2 consumer yet, so we forward
-    // alias as None when we have pure params.
+    // carried via TitleParams (consumers can read them directly without
+    // round-tripping through the `moss:` title channel), so alias is None
+    // for pure params.
     //
     // The placement is read off EVERY pipe segment, not just the first, so
     // `align-right|33%|A caption` keeps its float, its size and its caption.
@@ -685,7 +682,7 @@ fn dispatch_wikilink_form(
 
     // For plain wikilinks, only Alias-shaped potholes contribute to
     // display text. Width tokens and params are meaningless on a
-    // non-embed wikilink — preserve Stage 1 behavior by ignoring them.
+    // non-embed wikilink, so they are ignored.
     let alias_display = match &pothole {
         PotholeContent::Alias(s) => Some(s.clone()),
         PotholeContent::WidthToken { rest_alias, .. } if !rest_alias.is_empty() => {
@@ -898,7 +895,7 @@ fn placement_from_params(params: &TitleParams) -> Placement {
 }
 
 /// Discriminant for the per-kind HTML synthesizer the dispatcher routes to
-/// directly (Phase 3 PR4.5). Non-image / non-deferred extensions skip the
+/// directly. Non-image / non-deferred extensions skip the
 /// markdown round-trip and emit `EmitKind::Html` straight from the synth
 /// function — see the dispatcher branch in `dispatch_embed_form`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

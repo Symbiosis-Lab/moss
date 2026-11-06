@@ -226,9 +226,9 @@ async fn push_site_inner_impl(
     // Own the generation_id string once; every upload task clones it in.
     // This is the value threaded into X-Moss-Generation on sync, upload, and
     // chunked-create requests so the server routes all writes to the correct
-    // generation directory — fixes the Stage 2 showstopper where the client
-    // was syncing/uploading into generations/_default/ but committing to
-    // generations/<16-hex>/ (an empty dir), causing a 422 completeness gate.
+    // generation directory; without it, sync and upload land in
+    // generations/_default/ while the commit targets generations/<16-hex>/
+    // (an empty dir), which fails the 422 completeness gate.
     let generation_id_str = sealed.generation_id().to_string();
 
 

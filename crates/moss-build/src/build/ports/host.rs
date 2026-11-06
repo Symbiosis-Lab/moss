@@ -1,26 +1,18 @@
 //! Everything the pipeline needs from whichever host is running it.
 //!
-//! Until 2026-08-27 these capabilities were fetched from
-//! `PipelineConfig.app: Option<tauri::AppHandle>` via managed-state lookups
-//! scattered through `run_pipeline` — which is why the conductor could not
-//! leave the app crate (M6a). Now the host resolves them ONCE at the entry
-//! point: the app side constructs [`HostPorts`] via `crate::events::host_ports`
-//! (capturing its `AppHandle`), headless callers get the same shape with the
-//! headless arms. The conductor consumes; it never asks "do I have an app".
+//! The host resolves these capabilities ONCE at the entry point, not through
+//! `AppHandle` managed-state lookups scattered through `run_pipeline` (which
+//! would tie the conductor to the app crate): the app side constructs
+//! [`HostPorts`] via `crate::events::host_ports` (capturing its `AppHandle`),
+//! headless callers get the same shape with the headless arms. The conductor consumes; it never asks "do I have an app".
 //!
 //! ## Why this lives here and not beside `run_pipeline`
 //!
-//! It was declared in `build.rs` until 2026-08-27, "deliberately outside ratchet
-//! row (o) like `PipelineConfig` itself". That reasoning does not hold:
 //! `PipelineConfig` is what a *caller* asks the build to do, while `HostPorts`
-//! **is the seam** — the exact thing NORTH-STAR's abort threshold is defined
-//! over. Row (o) scans `ports.rs` + `ports/**`, so declaring the widest seam
-//! struct one directory up meant the threshold could not fire no matter how
-//! wide it got, and it had reached sixteen direct members before anyone counted.
-//! Moving the declaration here is what makes the falsifier able to fail.
-//!
-//! The row-(o) jump this caused is newly *measured* surface, not newly *added*
-//! surface, and is accepted under that name.
+//! **is the seam** — the exact thing the crate-split abort threshold is defined
+//! over. The ratchet scans `ports.rs` + `ports/**`, so declaring the widest seam
+//! struct one directory up would keep the threshold from firing no matter how
+//! wide it got. Declaring it here is what makes the falsifier able to fail.
 
 use std::sync::Arc;
 
@@ -57,7 +49,7 @@ pub type ServerDiff = Arc<
 /// host about its bookkeeping, or hand it back a fact the build just learned* —
 /// so they are one trait, matching the three ports that were already traits.
 ///
-/// The fold is not a way to shrink the seam: ratchet row (o) counts a trait
+/// The fold is not a way to shrink the seam: the seam-width ratchet counts a trait
 /// method exactly as it counts a struct member, which is the abort-threshold rule's whole point.
 /// What it buys is that the shapes are named and the `None` arms are a real
 /// implementation rather than a silent skip at each call site.

@@ -240,7 +240,7 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
 /// a large site is skipped — that is most of the site.
 ///
 /// A page absent from `hashes` was not read this build, which is only ever
-/// because its bytes provably did not change (parse-cache hit, Stage-5b carry)
+/// because its bytes provably did not change (parse-cache hit, render-skip carry)
 /// or could not be read (iCloud deferral). All three want the previous hash.
 fn register_page_source(
     pending: &mut PendingManifest,
@@ -628,7 +628,7 @@ pub fn generate_blocking_content_for_build(
     }
 
     // Source-path → hash of the bytes this build actually read, for the pages
-    // it actually read. Absent means "skipped" (parse-cache hit, Stage-5b
+    // it actually read. Absent means "skipped" (parse-cache hit, render-skip
     // carry, iCloud deferral), which `register_page_source` turns into a
     // carry-forward rather than a gap. See `PendingManifest::register_page_source_hash`.
     let mut page_source_hashes: HashMap<String, crate::build::types::SourceMetadata> = HashMap::new();
@@ -753,7 +753,7 @@ pub fn generate_blocking_content_for_build(
                     // - Deferred renderers (notebook, table, plugins) emit
                     //   markers resolved by MarkerHandlers in a post-pass.
                     let t_resolve = std::time::Instant::now();
-                    // Phase 0 Task F1: thread the AssetSnapshot through. The
+                    // Thread the AssetSnapshot through. The
                     // snapshot is built once above the loop and reused for every
                     // markdown file in this build.
                     let derived_site = site_config.derivations.as_deref();
@@ -851,7 +851,7 @@ pub fn generate_blocking_content_for_build(
                     // bytes here, before the AST dispatcher that fills
                     // `outgoing_links` ever runs — so they feed both the parse
                     // cache's validity check and `DepGraph::back_embeds`, which
-                    // sat over an empty relation until now (Stage 5b finding #2).
+                    // would otherwise be computed over an empty relation.
                     doc.embed_deps = std::mem::take(&mut resolve_result.embed_deps);
                     // Demote non-winner index files to normal pages.
                     // When multiple files qualify as home files (e.g., index.md and
@@ -951,11 +951,10 @@ pub fn generate_blocking_content_for_build(
 
                     // Placeholder attributes (width, height, loading, LQIP/color
                     // background, .mov→.mp4 src rewrite, poster, data-thumb-src)
-                    // are now emitted at parse time by the moss-core synthesizers
+                    // are emitted at parse time by the moss-core synthesizers
                     // (`render::{image,video,audio,iframe,model,pdf}`), which read
-                    // from the `AssetSnapshot` built once per run. The Stage 3
-                    // regex post-pass (`add_placeholder_attributes`) was retired in
-                    // Phase 2E v5 PR5 (2026-05-26).
+                    // from the `AssetSnapshot` built once per run; no post-pass
+                    // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     Some((doc, Some((source_file_path, content, stat_before_read))))
@@ -1170,8 +1169,8 @@ pub fn generate_blocking_content_for_build(
     // immediately below: each one is a no-op or trivially-correct for a
     // single self-contained synthetic doc with no source_path.
     //
-    // Hoisted here (rather than just-before-the-homepage-render) on the
-    // architecture-review feedback for T3: a *deployed* empty site would
+    // Hoisted here (rather than just before the homepage render) because a
+    // *deployed* empty site would
     // otherwise emit a sitemap with zero entries and an llms.txt titled
     // "site" (i18n fallback) instead of the folder name.
     if documents.is_empty() {
@@ -1495,7 +1494,7 @@ pub fn generate_blocking_content_for_build(
     //
     // Which optional partials this build ships is a site-level fact — the
     // union of every page's parse-time features with the resolved config.
-    // `site_assets` is NOT what invalidates the Stage 5b render skip: it
+    // `site_assets` is NOT what invalidates the incremental render skip: it
     // changes the sheet's *contents*, and `css_version` — a hash of those
     // contents, folded into `asset_versions` below — is what the skip reads.
     // See the note on `SiteAssets` itself.
@@ -1576,7 +1575,7 @@ pub fn generate_blocking_content_for_build(
         crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &input_evidence)
     });
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
-        // Phase 1 PR-1d: warn when theme references pre-v1 (Retired) class
+        // Warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
         for warning in crate::build::theme_lint::lint_theme_css(content) {
             log_warn_problem!("{}", warning);
@@ -1658,7 +1657,7 @@ pub fn generate_blocking_content_for_build(
     }
 
     // Every content-addressed asset whose HASHED FILENAME appears in emitted
-    // HTML, folded into one build-global key. A page that the Stage 5b skip
+    // HTML, folded into one build-global key. A page that the incremental skip
     // carries forward keeps its old `<link href>`/`<script src>`, so if any of
     // these moved, that page now points at a file this build deleted.
     // See `FacadeCache::asset_versions` — this is the value it stores.
@@ -1980,10 +1979,10 @@ pub fn generate_blocking_content_for_build(
             );
         }
 
-        // Phase 1 — render in parallel. Progress is emitted on a monotonic
+        // Render in parallel. Progress is emitted on a monotonic
         // completion counter (tasks finish out of order). `reporter` is
         // Option<&AppHandle> and AppHandle is Sync, so emitting from worker
-        // threads is sound. Errors surface in `documents` order in phase 2, so
+        // threads is sound. Errors surface in `documents` order in the registration pass below, so
         // the first error propagated is identical to the sequential loop's.
         let render_total = to_render.len();
         let rendered_atomic = AtomicUsize::new(0);
@@ -2078,7 +2077,7 @@ pub fn generate_blocking_content_for_build(
         );
         log::debug!(target: "timing", "[render] html_pages: phase1 done: {:?}", total_start.elapsed());
 
-        // Phase 2 — register into `pending` sequentially, in `documents` order.
+        // Register into `pending` sequentially, in `documents` order.
         // Wrap in a closure so `?` short-circuits to the inner Result and the
         // completion event fires on every exit path (Ok or Err) before we
         // propagate — same rationale as the original loop.
@@ -3228,7 +3227,7 @@ pub fn generate_blocking_content_for_build(
     log::debug!(target: "timing", "[render] total: {:?}", total_start.elapsed());
 
     // Build site-level meta defaults for bundled-SPA `<head>` injection
-    // (link-preview-defaults plan, Phase 5). The injector preserves anything
+    // (link-preview defaults). The injector preserves anything
     // the SPA author already set, so we always pass these defaults — the SPA
     // wins on conflict.
     //
@@ -3288,7 +3287,7 @@ pub fn generate_blocking_content_for_build(
 
         // For og:url + canonical, use the site root URL (the SPA folder URL is
         // applied per-injection in `as_borrowed`). og:image is left None for
-        // now — Phase 4.3 wires the auto-generated card.
+        // now — the auto-generated card is wired separately.
         let og_tags = if let Some(ref host) = site_host {
             let site_root_url = format!("https://{}/", host.trim_start_matches("www."));
             Some(build_og_tags_website(

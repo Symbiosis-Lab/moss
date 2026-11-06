@@ -11,7 +11,7 @@
 //! differently, shipped different CSS, or laid pages out at different URLs —
 //! showing it means the user watches a broken version of their own site for
 //! however long the build takes, then watches it change. One real report
-//! (LOG-C2CF-T0935-08-14) had the previous generation missing the very page
+//! had the previous generation missing the very page
 //! being opened, so the first thing the user saw was a 404 shell with no
 //! styling; they reasonably read that as moss having damaged their site.
 //!

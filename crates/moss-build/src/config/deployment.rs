@@ -1,14 +1,12 @@
 //! Deployment state vocabulary — the typed shape of `.moss/state.toml`'s
 //! `[deployment]` table.
 //!
-//! Moved from the app crate (2026-08-27, M6a B3): `DomainDeploymentConfig`
-//! from `domain/types.rs`, `DnsTarget`/`DnsRecord` from `plugins/types.rs`
-//! (they are deployment-state vocabulary that the plugins module happened to
-//! host — plugins *produce* DNS targets, the deployment record *stores* them).
-//! The build tree threads a `DomainDeploymentConfig` value through slot
+//! `DomainDeploymentConfig` and `DnsTarget`/`DnsRecord` are deployment-state
+//! vocabulary (plugins *produce* DNS targets, the deployment record *stores*
+//! them). The build tree threads a `DomainDeploymentConfig` value through slot
 //! resolution and feature sync, so the type must be reachable from
-//! `moss-build` when the pipeline crosses. Reading and writing `state.toml`
-//! stays app-side: vocabulary crosses, file access does not.
+//! `moss-build`. Reading and writing `state.toml` stays app-side: the
+//! vocabulary lives here, file access does not.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

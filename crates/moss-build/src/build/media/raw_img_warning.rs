@@ -2,18 +2,11 @@
 //!
 //! # Why this exists
 //!
-//! Phase 2 of the unified-image-emission migration retires
-//! `build/media/placeholder.rs`, the regex post-pass that injected
-//! `data-placeholder-src`, `width`/`height`, and `loading="lazy"` onto every
-//! `<img>`/`<video>` element in the emitted HTML — including raw HTML tags an
-//! author hand-typed in their markdown source (one of the four documented
-//! placeholder.rs carve-outs).
-//!
-//! After Phase 2E deletes `placeholder.rs`, raw HTML in markdown source becomes
-//! fully opaque to moss: pulldown-cmark passes it through verbatim and the
-//! synthesizer never sees it. The author loses LQIP, intrinsic dimensions, and
-//! lazy-load attribute injection silently. This module is the only mechanism
-//! that surfaces the regression to the author so they can convert to
+//! Raw HTML in markdown source is opaque to moss: pulldown-cmark passes it
+//! through verbatim and the synthesizer never sees it. The author silently
+//! loses LQIP, intrinsic dimensions, and lazy-load attribute injection (no
+//! post-pass adds them to the emitted HTML). This module is the only mechanism
+//! that surfaces that to the author so they can convert to
 //! `![alt](src)` / `![[file]]` syntax and opt back into moss enhancement.
 //!
 //! # Behavior

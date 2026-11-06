@@ -13,6 +13,8 @@ This is the MIT-licensed public half of moss (`moss-core`, `moss-build`, `moss-c
 - No vocabulary from the private work process: plan stage or task labels ("Stage 3", "Task A5"), the names of review passes ("the thermo review"), "the design doc", or the filenames of private documents (even a bare name like `proving-a-change.md`). Say the technical reason itself. In one batch on 2026-09-29, four of seven commits leaked terms like these after the bullets above had been read, because none of those bullets names them.
 - No AI attribution in commits or generated text.
 
+`node scripts/check-public-comments.mjs` enforces the label and ticket-id patterns (plan stage and task labels, `LOG-` ticket ids, ADR ids, `NORTH-STAR`, report references) in Rust and TypeScript comments; the pre-commit hook and the PR workflow run it, so say the technical reason instead of the label.
+
 ## Rust conventions
 
 - Never create `foo/mod.rs`. This tree uses the sibling-file pattern only (`foo.rs` + `foo/bar.rs`). Confirm before assuming otherwise: `find crates -name mod.rs` must be empty.

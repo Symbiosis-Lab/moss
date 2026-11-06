@@ -5,7 +5,7 @@
 //! line 1020 and an `if gate { BuildContext::…emit(…) }` block near line 2820,
 //! 1,800 lines apart, with the `<script>` tag built in a third file. Adding an
 //! eighth (`share-card`) that way is exactly the "more code in `blocking.rs`"
-//! NORTH-STAR's interception rule forbids.
+//! the `emit/` layout exists to prevent.
 //!
 //! ## What this module owns, and what it does not
 //!
@@ -76,7 +76,7 @@ pub struct SiteScript {
 
 /// Every script moss emits into `_moss/js/`.
 ///
-/// A registration table in the NORTH-STAR pattern-glossary #2 sense; sibling
+/// A registration table; sibling
 /// of `emit::stylesheet::CSS_PARTIALS` and `emit::feature_styles::FEATURE_STYLES`.
 /// Totality test: `scripts_tests::every_embedded_script_has_a_row`.
 pub const SITE_SCRIPTS: &[SiteScript] = &[

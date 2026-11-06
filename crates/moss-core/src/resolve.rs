@@ -107,14 +107,12 @@ pub struct ResolveResult {
 /// 5. Transform block references -- `^id` markers to HTML anchors
 /// 6. Rejoin frontmatter + resolved body
 ///
-/// Phase 4 PR7a (2026-05-28) deleted Stage 1 callout transformation,
-/// bare-filename image resolution, AND standard markdown link
-/// resolution (`[text](target.md)`); all three are now part of the
-/// typed AST (`crates/moss-core/src/ast/`). For standard markdown
-/// links, the AST visitor (`ast/resolve_urls::resolve_link_urls`)
-/// emits the same `moss-resolved:` sentinel Stage 1 used to emit, so
-/// moss-build's `classify_url_prod` decoder still drives page_map /
-/// external_url_map / wikilink-class decoding unchanged.
+/// Callout transformation, bare-filename image resolution and standard
+/// markdown link resolution (`[text](target.md)`) are not done here; they
+/// belong to the typed AST (`crates/moss-core/src/ast/`). For standard
+/// markdown links, the AST visitor (`ast/resolve_urls::resolve_link_urls`)
+/// emits a `moss-resolved:` sentinel, so moss-build's `classify_url_prod`
+/// decoder drives page_map / external_url_map / wikilink-class decoding.
 pub fn resolve_content(
     source_path: &str,
     raw_markdown: &str,
@@ -163,27 +161,24 @@ pub fn resolve_content_with_derivations(
     graph: &ContentGraph,
     file_reader: &dyn Fn(&str) -> Option<String>,
     handlers: &embeds::MarkerHandlers<'_>,
-    // Phase 0: threaded but not yet consumed. Phase 1 wires up reads.
+    // Not yet consumed.
     _assets: &AssetSnapshot,
     derivations: Option<&embeds::derived::Derivations<'_>>,
 ) -> ResolveResult {
     // Step 1: Separate frontmatter from body.
     let (frontmatter, body) = split_frontmatter(raw_markdown);
 
-    // Phase 3 PR2: Stage 1's wikilink rewriter + stage1_sweep retire.
-    // pulldown-cmark now parses `[[…]]` / `![[…]]` natively via
-    // `Options::ENABLE_WIKILINKS` (flipped in PR2 at every Parser::new_ext
-    // site), and `process_markdown_file` dispatches each event directly
-    // (see `moss_core::ast::dispatch_wikilink_embeds`) — this crate-side
-    // path no longer dispatches embeds in Stage 1. The `stage1_sweep`
-    // (`![alt](file.pdf)` → `moss:kind=pdf` title rewrite) is retired per
-    // plan Option A: authors who want non-image embeds use the wikilink
-    // form `![[report.pdf]]`. See plan v2 § PR2.
+    // pulldown-cmark parses `[[…]]` / `![[…]]` natively via
+    // `Options::ENABLE_WIKILINKS` (set at every Parser::new_ext site),
+    // and `process_markdown_file` dispatches each event directly (see
+    // `moss_core::ast::dispatch_wikilink_embeds`), so this path does not
+    // dispatch embeds. `![alt](file.pdf)` is not rewritten to a
+    // `moss:kind=pdf` embed: authors who want non-image embeds use the
+    // wikilink form `![[report.pdf]]`.
     let outgoing_links: Vec<OutgoingLink> = Vec::new();
     let diagnostics: Vec<Diagnostic> = Vec::new();
 
-    // Phase 3 PR2: pre-pass that lowers block-level wikilinks into
-    // marker comments BEFORE pulldown-cmark sees them. Two classes of
+    // Pre-pass that lowers block-level wikilinks into marker comments BEFORE pulldown-cmark sees them. Two classes of
     // wikilink need this treatment because their output is block-level
     // HTML, and pulldown-cmark wraps single-image paragraphs in `<p>`
     // unconditionally:
@@ -193,19 +188,17 @@ pub fn resolve_content_with_derivations(
     //   - **folder-list embeds** (`![[/dir/|limit:N]]`) →
     //     `<!-- MOSS_MARKER_FOLDER_LIST:… -->` for moss-build's marker
     //     handlers to expand into card grids.
-    // Both cases used to be emitted by Stage 1's wikilink resolver; with
-    // that resolver retired, pulldown-cmark's Stage 2 dispatcher would
-    // emit the markers inside `<p>` (paragraph context), and
-    // `resolve_embeds` would never see them (it scans markdown lines,
-    // not rendered HTML). Pre-converting both shapes here mirrors the
-    // earlier layering.
+    // Left to the wikilink dispatcher, the markers would be emitted inside
+    // `<p>` (paragraph context), and `resolve_embeds` would never see them
+    // (it scans markdown lines, not rendered HTML), so both shapes are
+    // converted here.
     let mut lowering_diagnostics = Vec::new();
     let body = lower_transclusion_and_folder_wikilinks(body, graph, source_path, derivations, &mut lowering_diagnostics);
 
     // Step 3: Resolve markdown transclusion embeds. The inlined body of
     // each embedded `.md` file is appended verbatim — its wikilinks (if
     // any) survive into the markdown handed back to moss-build, where
-    // pulldown-cmark + Stage 2 dispatcher resolves them along with the
+    // pulldown-cmark + the wikilink dispatcher resolves them along with the
     // host page's own wikilinks.
     let embed_result = embeds::resolve_embeds(&body, source_path, file_reader);
     let mut diagnostics = diagnostics;
@@ -233,11 +226,9 @@ pub fn resolve_content_with_derivations(
         None => (deferred_result.content, Default::default()),
     };
 
-    // Step 4.6 (DELETED, Phase 4 PR7a-stage1b 2026-05-28):
-    // `markdown_links::resolve_markdown_links` is gone. The typed AST
+    // Standard markdown links are not resolved here. The typed AST
     // visitor (`crates/moss-core/src/ast/resolve_urls.rs::resolve_link_urls`)
-    // now produces byte-equivalent results — including the
-    // `moss-resolved:<path>` sentinel that moss-build's `classify_url_prod`
+    // does it, emitting the `moss-resolved:<path>` sentinel that moss-build's `classify_url_prod`
     // decoder consumes for `page_map` / `external_url_map` / wikilink-class
     // decoding. `outgoing_links` remains empty at this layer; the AST
     // visitor's OutgoingLink Vec is consumed downstream in
@@ -245,13 +236,10 @@ pub fn resolve_content_with_derivations(
 
     // Step 5: Transform block references.
     //
-    // Phase 4 PR7a (2026-05-28) deleted the Stage 1 `transform_callouts`
-    // pass that ran here. Obsidian-callout syntax is now handled by the
-    // typed AST parser (`crates/moss-core/src/ast/parser.rs`'s
-    // `Tag::BlockQuote` arm); the AST renderer emits the same canonical
-    // callout HTML (and additively handles foldable +/- suffixes and
-    // Obsidian aliases). See investigation notes referenced in the
-    // PR7a commit message for the byte-shape parity proof.
+    // Obsidian-callout syntax is not transformed here: the typed AST
+    // parser (`crates/moss-core/src/ast/parser.rs`'s `Tag::BlockQuote`
+    // arm) handles it, including foldable +/- suffixes and Obsidian
+    // aliases, and the AST renderer emits the callout HTML.
     let (block_result, block_ids) = block_refs::transform_block_refs(&deferred_content);
 
     // Step 6: Resolve frontmatter wikilinks + rejoin with resolved body.
@@ -274,16 +262,14 @@ pub fn resolve_content_with_derivations(
     }
 }
 
-/// Phase 3 PR2: lower wikilink-form markdown transclusions
+/// Lower wikilink-form markdown transclusions
 /// (`![[note]]` / `![[note.md]]` / `![[note#section]]`) into the
 /// `<!-- moss-embed:TARGET -->` marker shape that
 /// [`embeds::resolve_embeds`] consumes. Pure text rewrite — no I/O.
 ///
-/// Why this pre-pass exists: before the dispatcher existed, the wikilink resolver
-/// did this conversion. Phase 3 retires that resolver and routes most
-/// wikilink handling through this crate's own AST visitor
-/// ([`crate::ast::dispatch_wikilink_embeds`]), called from moss-build's
-/// `process_markdown_file`. But
+/// Why this pre-pass exists: most wikilink handling goes through this
+/// crate's own AST visitor ([`crate::ast::dispatch_wikilink_embeds`]),
+/// called from moss-build's `process_markdown_file`. But
 /// `embeds::resolve_embeds` runs BEFORE pulldown-cmark, so the
 /// dispatcher cannot emit the marker in time. We pre-convert the
 /// transclusion wikilinks here.
@@ -291,7 +277,7 @@ pub fn resolve_content_with_derivations(
 /// Only `.md`-extension wikilinks (and extension-less wikilinks
 /// resolving to `.md` files) are rewritten. Image / pdf / iframe /
 /// video / audio / 3d / notebook / table embeds still flow through the
-/// Stage 2 dispatcher untouched.
+/// wikilink dispatcher untouched.
 ///
 /// Inert regions are honored via [`crate::inert_regions`], the one shared
 /// scanner: a wikilink inside a code fence, an indented code block, an
@@ -1112,8 +1098,8 @@ mod tests {
             .content_markdown
             .starts_with("---\ntitle: Test\n---\n"));
 
-        // Phase 3 PR2: `resolve_content` no longer resolves body wikilinks
-        // — that's this crate's own AST visitor's job, in
+        // `resolve_content` does not resolve body wikilinks — that's this
+        // crate's own AST visitor's job, in
         // `crate::ast::dispatch_wikilink_embeds`, called from moss-build's
         // `process_markdown_file`.
         // The `[[guide#Setup]]` wikilink passes through unchanged here.
@@ -1125,9 +1111,8 @@ mod tests {
             .contains("<span id=\"my-block\"></span>"));
         assert_eq!(result.block_ids, vec!["my-block"]);
 
-        // Phase 4 PR7a (2026-05-28): Stage 1 `transform_callouts` is
-        // deleted. Callout transformation now lives in the typed AST
-        // parser (`ast/parser.rs`'s Tag::BlockQuote arm) and renderer.
+        // Callout transformation lives in the typed AST parser
+        // (`ast/parser.rs`'s Tag::BlockQuote arm) and renderer.
         // `resolve_content` returns raw markdown here — the `> [!warning]`
         // syntax passes through verbatim for downstream parsing.
         assert!(
@@ -1172,9 +1157,9 @@ mod tests {
         let files = test_files();
 
         // disclaimer.md body contains `See [[guide]] for details.`
-        // Phase 3 PR2: the embedded body's wikilink is no longer
-        // resolved by `resolve_content`; the wikilink dispatcher (`ast::dispatch_wikilink_embeds`)
-        // handles it. `resolve_content` lowers
+        // The embedded body's wikilink is not resolved by
+        // `resolve_content`; the wikilink dispatcher
+        // (`ast::dispatch_wikilink_embeds`) handles it. `resolve_content` lowers
         // `![[disclaimer]]` into the `<!-- moss-embed:disclaimer.md -->`
         // marker, then `resolve_embeds` inlines the disclaimer body
         // verbatim — wikilinks inside survive into the markdown
@@ -1183,7 +1168,7 @@ mod tests {
         let result = resolve_content("note.md", input, &graph, &mock_reader(&files));
 
         // The embedded body's wikilink survives as raw `[[guide]]`
-        // (handed off to Stage 2 downstream).
+        // (handed off to the wikilink dispatcher downstream).
         assert!(
             result.content_markdown.contains("[[guide]]"),
             "Expected raw wikilink from embedded content, got: {}",
@@ -1198,14 +1183,14 @@ mod tests {
         let graph = test_graph();
         let files = HashMap::new();
 
-        // Phase 3 PR2: wikilink unresolved diagnostics now surface from
-        // the wikilink dispatcher (`ast::dispatch_wikilink_embeds`). `resolve_content` only
+        // Wikilink unresolved diagnostics surface from the wikilink
+        // dispatcher (`ast::dispatch_wikilink_embeds`). `resolve_content` only
         // surfaces diagnostics from passes it still runs (transclusion
         // / deferred markers / block refs). `![[missing]]` with no
         // extension resolves to Unresolved in the lowering pass — but
-        // the lowering pass leaves the raw `![[missing]]` for Stage 2
+        // the lowering pass leaves the raw `![[missing]]` for the dispatcher
         // to handle and does NOT emit a diagnostic itself. So this
-        // test asserts the new contract: zero diagnostics for body
+        // test asserts zero diagnostics for body
         // wikilinks at this layer.
         let input = "[[nonexistent]] and ![[missing]]";
         let result = resolve_content("note.md", input, &graph, &mock_reader(&files));
@@ -1226,18 +1211,18 @@ mod tests {
         let graph = test_graph();
         let files = test_files();
 
-        // Phase 3 PR2: body wikilink outgoing-links are populated by
+        // Body wikilink outgoing-links are populated by
         // `ast::dispatch_wikilink_embeds` (not by `resolve_content`).
         // What this layer still populates: block_refs results. The
         // wikilink body links `[[guide]]` and `![[disclaimer]]` pass
-        // through to Stage 2; standard markdown links pass through to
+        // through to the wikilink dispatcher; standard markdown links pass through to
         // the AST visitor (`ast/resolve_urls`).
         let input = "[[guide]]\n\n![[disclaimer]]";
         let result = resolve_content("note.md", input, &graph, &mock_reader(&files));
 
         // The disclaimer body got inlined (via `<!-- moss-embed -->`
         // lowering + resolve_embeds), but its `[[guide]]` is now raw
-        // markdown for Stage 2 — none of these appear in
+        // markdown for the dispatcher — none of these appear in
         // outgoing_links from this layer.
         let wikilinks: Vec<_> = result
             .outgoing_links
@@ -1306,8 +1291,7 @@ mod tests {
             &mock_reader(&files),
         );
 
-        // Phase 4 PR7a (2026-05-28): Stage 1 `resolve_markdown_refs` is
-        // deleted. Bare-filename image resolution now happens in the
+        // Bare-filename image resolution happens in the
         // typed AST visitor (`ast/resolve_urls::resolve_image_urls`)
         // downstream of `resolve_content`. The image src passes through
         // verbatim here.
@@ -1339,8 +1323,7 @@ mod tests {
             .content_markdown
             .starts_with("---\ntitle: Test\n---\n"));
 
-        // Phase 4 PR7a (2026-05-28): Stage 1 `resolve_markdown_refs` is
-        // deleted. The bare filename now passes through `resolve_content`
+        // The bare filename passes through `resolve_content`
         // verbatim; the typed AST visitor
         // (`ast/resolve_urls::resolve_image_urls`) resolves it later in
         // `process_markdown_file`. The visitor has its own coverage in
@@ -1604,7 +1587,7 @@ mod tests {
             result.content_markdown
         );
 
-        // Phase 3 PR2: body wikilink `[[news]]` passes through as raw
+        // Body wikilink `[[news]]` passes through as raw
         // markdown — this crate's own `ast::dispatch_wikilink_embeds`
         // visitor resolves it via the `dispatch_wikilink_embed` arm.
         assert!(
@@ -1660,9 +1643,7 @@ mod tests {
 
     #[test]
     fn standard_markdown_link_passes_through_in_pipeline() {
-        // Phase 4 PR7a-stage1b (2026-05-28): Stage 1
-        // `markdown_links::resolve_markdown_links` is deleted. The bare
-        // markdown link now passes through `resolve_content` verbatim;
+        // The markdown link passes through `resolve_content` verbatim;
         // the typed AST visitor
         // (`ast/resolve_urls::resolve_link_urls`) emits the
         // `moss-resolved:文字/文字.md` sentinel later in

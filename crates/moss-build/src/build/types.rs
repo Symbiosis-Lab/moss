@@ -955,7 +955,7 @@ pub struct PageFeatures {
 /// from it which runtime `<script>` tags the shell carries. It reaches the
 /// render paths as `LayoutConfig::assets`.
 ///
-/// **Not** the key of the Stage 5b global invalidator. Changing the partial
+/// **Not** the key of the global invalidator. Changing the partial
 /// set changes the stylesheet's content-hashed filename, which every already-
 /// rendered page references — but so does editing `site.css` or `tokens.json`
 /// or upgrading moss. That whole class is keyed on the emitted

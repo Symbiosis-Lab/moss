@@ -9386,7 +9386,7 @@ mod homepage_translation_tests {
         let zh_html = fs::read_to_string(output_dir.join("zh-hans/index.html"))
             .expect("Should read Chinese translation");
 
-        // After Phase 1 PR-1b, the emitter writes `<html data-moss-html-version="1" lang="...">`.
+        // The emitter writes `<html data-moss-html-version="1" lang="...">`.
         // Match on the lang attribute alone so attribute reordering doesn't break this test.
         assert!(
             en_html.contains(r#"lang="en""#),

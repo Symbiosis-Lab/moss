@@ -1,4 +1,4 @@
-//! __TAURI__.core.invoke dispatch (report 1 §2B, report 3). The async host_invoke
+//! __TAURI__.core.invoke dispatch. The async host_invoke
 //! serializes the args object to JSON (json_stringify), hands it to the host over
 //! a Send channel (DispatchBridge), and resolves/rejects the JS Promise.
 //!
@@ -349,7 +349,7 @@ async fn dispatch_command_core(
             reply_json(&r)
         }
         "html_to_markdown" => {
-            // Fold the Phase-2 inline htmd arm back onto the ONE shared fn (B.8).
+            // Delegates to the shared `html_to_markdown`.
             let html = req_str(&args, "html")?;
             let md = crate::plugins::runtime::portable::html_to_markdown(html).await?;
             reply_json(&md)

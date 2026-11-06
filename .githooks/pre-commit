@@ -16,4 +16,5 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 node scripts/check-dist-freshness.mjs || exit 1
+node scripts/check-public-comments.mjs || exit 1
 exec node scripts/check-site-watercolor-freshness.mjs

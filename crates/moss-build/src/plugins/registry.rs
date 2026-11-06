@@ -1,7 +1,7 @@
 //! Plugin Registry - Bundled plugins shown in the plugin installer
 //!
 //! This module provides a list of all bundled plugins for the plugin installer UI.
-//! For Phase 1, all plugins come from bundled plugins (embedded in the binary).
+//! For now, all plugins come from bundled plugins (embedded in the binary).
 //! Remote plugins may be added later.
 //!
 //! All bundled plugins appear in the installer (a `preview` manifest
@@ -359,11 +359,10 @@ const EMAIL_ICON_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2
 
 /// One registration row per built-in channel.
 ///
-/// NORTH-STAR pattern 2 (registration table with a totality test beside
-/// it — see test_builtin_channel_table_totality): adding a built-in
+/// Registration table with a totality test beside
+/// it (see test_builtin_channel_table_totality): adding a built-in
 /// channel is adding ONE row here; ids, catalog rows, and icons all
-/// derive from this table. The row-home moves to host_api/registry.rs
-/// at M3; until then this is the single source in this file.
+/// derive from this table.
 struct BuiltinChannel {
     id: &'static str,
     description: &'static str,
@@ -1323,7 +1322,7 @@ deploy = "other-deployer"
         assert!(ids.contains(&"email"), "email should be a built-in channel");
     }
 
-    /// NORTH-STAR pattern 2: the registration table carries a totality test
+    /// The registration table carries a totality test
     /// beside it. Every surface (rows, ids, icons) derives from
     /// BUILTIN_CHANNELS, and every row fully resolves.
     #[test]

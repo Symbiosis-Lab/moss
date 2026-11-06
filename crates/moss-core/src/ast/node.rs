@@ -80,7 +80,7 @@ impl CalloutKind {
     /// [`CalloutKind`]. Returns `None` if the name is not a recognized
     /// canonical kind or alias.
     ///
-    /// Alias table (Obsidian-dialect, per shape-spec § 1):
+    /// Alias table (Obsidian dialect):
     /// - `tldr` / `summary` → `Abstract`
     /// - `hint` / `important` → `Tip`
     /// - `check` / `done` → `Success`
@@ -90,14 +90,12 @@ impl CalloutKind {
     /// - `error` → `Danger`
     /// - `cite` → `Quote`
     ///
-    /// `pending` is also accepted as an alias for `Todo` (used by a real
-    /// site's pages; carried over from pre-Phase-4 Stage 1 support in
-    /// `crates/moss-core/src/resolve/callouts.rs`).
+    /// `pending` is also accepted as an alias for `Todo` (existing sites
+    /// use `> [!pending]`).
     ///
     /// Note: the [`CalloutKind`] enum reserves `Important`, `Summary`,
-    /// and `Help` as canonical variants for future Stage 2 use (e.g.
-    /// editor-emitted callouts that should not name-clash with the
-    /// Obsidian aliases above). Author markdown can't currently produce
+    /// and `Help` as canonical variants (e.g. for editor-emitted callouts
+    /// that should not name-clash with the Obsidian aliases above). Author markdown can't currently produce
     /// these three through `from_raw`; they're reachable only via
     /// programmatic construction.
     pub fn from_raw(raw: &str) -> Option<Self> {
@@ -117,7 +115,7 @@ impl CalloutKind {
             "bug" => Self::Bug,
             "example" => Self::Example,
             "quote" => Self::Quote,
-            // Obsidian-dialect aliases (shape-spec § 1)
+            // Obsidian-dialect aliases
             "tldr" | "summary" => Self::Abstract,
             "hint" | "important" => Self::Tip,
             "check" | "done" => Self::Success,
@@ -126,9 +124,7 @@ impl CalloutKind {
             "fail" | "missing" => Self::Failure,
             "error" => Self::Danger,
             "cite" => Self::Quote,
-            // Legacy alias retained from pre-Phase-4 Stage 1
-            // (`crates/moss-core/src/resolve/callouts.rs`). Existing sites
-            // use `> [!pending]`; map to Todo.
+            // Existing sites use `> [!pending]`; map to Todo.
             "pending" => Self::Todo,
             _ => return None,
         };
@@ -227,8 +223,6 @@ pub enum Block {
     /// open by default, `> [!type]-` closed) carry the [`Fold`] state;
     /// non-foldable callouts have `fold: None`.
     ///
-    /// Phase 4 PR4 extended the shape from `kind: String` to
-    /// `kind: CalloutKind` + added `fold: Option<Fold>` and `title: Option<String>`.
     /// Title is the optional inline text following the marker
     /// (`> [!note] My title` → `title: Some("My title")`).
     Callout {
@@ -255,15 +249,13 @@ pub enum Block {
     /// items that have no faithful source position (none today, but kept
     /// for symmetry with [`crate::ast::document::BlockMeta::source_line`]).
     ///
-    /// Phase 4 source-lines followup (2026-05-28): added because the
-    /// preview's scroll-sync (the desktop editor's cm-scroll-sync, through
+    /// The preview's scroll-sync (the desktop editor's cm-scroll-sync, through
     /// moss-build's iframe bridge) interpolates editor positions
     /// proportionally between annotated DOM elements. A 30-item list
     /// spanning 50 source lines without per-`<li>` annotations forces
     /// interpolation between the outer `<ul>` and the next top-level
-    /// block — potentially 100 lines away. Legacy `transform_events`
-    /// (commit f91aca8fa, 2026-04-01) emitted on `<li>` and `<tr>` for
-    /// this reason; the typed-AST renderer now matches.
+    /// block — potentially 100 lines away. The renderer therefore emits
+    /// the attribute on `<li>` and `<tr>` too.
     List {
         ordered: bool,
         /// Explicit ordered-list start number (pulldown-cmark's
@@ -272,10 +264,8 @@ pub enum Block {
         /// `None` for unordered lists and for ordered lists where N is
         /// the implicit default `1`. CommonMark only honors the FIRST
         /// item's number as the list start; subsequent numbers are
-        /// re-derived. Phase 4 followup B (2026-05-28): added because
-        /// `<ol>` was previously emitted for any ordered list,
-        /// silently dropping the explicit start number — `3. foo`
-        /// rendered as `<ol><li>foo</li></ol>` instead of
+        /// re-derived. Without it an explicit start is dropped: `3. foo`
+        /// would render as `<ol><li>foo</li></ol>` instead of
         /// `<ol start="3"><li>foo</li></ol>`.
         #[serde(default)]
         start: Option<u64>,
@@ -294,9 +284,8 @@ pub enum Block {
     /// `data-source-line` attributes. When tracking is on,
     /// `row_source_lines.len() == rows.len()`.
     ///
-    /// Phase 4 source-lines followup (2026-05-28): see the corresponding
-    /// doc comment on `Block::List` for the scroll-sync interpolation
-    /// rationale.
+    /// See the doc comment on `Block::List` for the scroll-sync
+    /// interpolation rationale.
     Table {
         header: Vec<Vec<Inline>>,
         rows: Vec<Vec<Vec<Inline>>>,
@@ -382,7 +371,7 @@ pub enum Block {
     /// (images, headings, paragraphs, emphasis). The poster-card
     /// pattern: `[![[poster]] ### Title *date* description](/url)`.
     ///
-    /// Phase 4 PR4.5 (2026-05-28): added because CommonMark restricts
+    /// CommonMark restricts
     /// `Inline::Link.children` to inline-level content; a markdown link
     /// wrapping `### Heading` + paragraphs cannot round-trip through
     /// pulldown-cmark's inline parser. The cell-string-level shape
@@ -423,8 +412,7 @@ pub enum Inline {
     /// discriminator at parse time so the renderer can emit
     /// `class="wikilink"` on the `<a>` tag and downstream consumers
     /// (graph builder, link-resolver) can distinguish wikilink targets
-    /// from standard markdown links. Added Phase 4 PR7a (2026-05-28) as
-    /// the smallest AST change matching mdast convention (Link node +
+    /// from standard markdown links. Matches mdast convention (Link node +
     /// extension flag, mirroring `LinkType::WikiLink` as a tag).
     Link {
         url: Url,
@@ -432,7 +420,7 @@ pub enum Inline {
         children: Vec<Inline>,
         /// True when pulldown-cmark emitted `Tag::Link { link_type:
         /// LinkType::WikiLink, .. }` (i.e. the markdown source was
-        /// `[[target]]` or `[[target|alias]]`, post-Stage-1 rewrite).
+        /// `[[target]]` or `[[target|alias]]`).
         /// Renderer adds `class="wikilink"` for true.
         #[serde(default)]
         is_wikilink: bool,
@@ -453,14 +441,13 @@ pub enum Inline {
     },
     /// `![alt](src "title")` or `![[wikilink]]`.
     ///
-    /// `is_wikilink` + `wikilink_pothole` (Phase 4 PR7a-flip-core-B,
-    /// 2026-05-28) preserve pulldown-cmark's `LinkType::WikiLink`
+    /// `is_wikilink` + `wikilink_pothole` preserve pulldown-cmark's `LinkType::WikiLink`
     /// discriminator and the original pothole text so the
     /// `dispatch_wikilink_embeds` visitor can route `![[v.mp4|width=400]]`
     /// → per-extension renderer (video / pdf / audio / iframe / 3D /
     /// notebook / etc) with the typed params intact. The parser's
-    /// `Tag::Image` arm captures the raw pothole BEFORE PR3.5's
-    /// wikilink-alt classification consumes it into the `alt` field;
+    /// `Tag::Image` arm captures the raw pothole BEFORE wikilink-alt
+    /// classification consumes it into the `alt` field;
     /// without preservation, the `width=400` token is erased after
     /// alt-classification.
     ///
@@ -584,8 +571,8 @@ mod tests {
 
     #[test]
     fn block_list_carries_explicit_start_number() {
-        // Phase 4 followup B (2026-05-28): ordered lists with an
-        // explicit non-default start number round-trip through the AST.
+        // Ordered lists with an explicit non-default start number round-trip
+        // through the AST.
         let b = Block::List {
             ordered: true,
             start: Some(3),
@@ -646,7 +633,7 @@ mod tests {
 
     #[test]
     fn block_figure_carries_image_and_optional_caption() {
-        // Phase 4 PR3: Block::Figure wraps a single Inline::Image and an
+        // Block::Figure wraps a single Inline::Image and an
         // optional caption (vector of inlines so emphasis/strong can ride
         // through). Caption defaults to the image's alt text at parse time;
         // None is reserved for the empty-alt case.
@@ -788,7 +775,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 4 PR4: CalloutKind canonicalization
+    // CalloutKind canonicalization
     // -----------------------------------------------------------------
 
     #[test]
@@ -816,7 +803,7 @@ mod tests {
 
     #[test]
     fn callout_kind_canonicalizes_all_obsidian_aliases() {
-        // The 8 alias mappings from shape-spec § 1.
+        // The 8 Obsidian alias mappings.
         assert_eq!(CalloutKind::from_raw("tldr"), Some(CalloutKind::Abstract));
         assert_eq!(
             CalloutKind::from_raw("summary"),
@@ -900,9 +887,8 @@ mod tests {
 
     #[test]
     fn inline_link_is_wikilink_serde_defaults_to_false() {
-        // When deserializing AST JSON authored before PR7a, missing
-        // `is_wikilink` field must default to `false` (back-compat for
-        // any serialized snapshots that pre-date the wikilink AST work).
+        // A missing `is_wikilink` field must default to `false`
+        // (back-compat for serialized snapshots).
         let json =
             r#"{"link":{"url":{"unresolved":"docs/"},"title":null,"children":[{"text":"Docs"}]}}"#;
         let back: Inline = serde_json::from_str(json).expect("deserialize");

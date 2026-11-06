@@ -147,7 +147,7 @@ fn strip_non_prose(text: &str) -> String {
 /// Strip `<!-- ... -->` comments from markdown SOURCE text.
 ///
 /// Written as a manual char scan rather than `Regex::new`/`.replace_all`
-/// with a `<!--` needle on purpose: ratchet row (p) (`html_string_mutation`)
+/// with a `<!--` needle on purpose: the HTML-string-mutation ratchet
 /// counts any `Regex::new`/`.replace*`/`.find`-family call whose
 /// string argument contains `<` as evidence of a tag-aware pass over
 /// ALREADY-EMITTED HTML bypassing the structural `Vec<Block>` pipeline. This
@@ -915,8 +915,7 @@ mod tests {
         assert_eq!(detect_project_language(&files, "/nonexistent", &never_evicted), None);
     }
 
-    /// Stage 3: a
-    /// cloud-dataless file must be skipped from the sample exactly like a
+    /// A cloud-dataless file must be skipped from the sample exactly like a
     /// read error, not read/blocked on. The injectable predicate lets this
     /// be tested without real `SF_DATALESS` state.
     #[test]

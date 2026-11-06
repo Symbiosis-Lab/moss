@@ -182,11 +182,9 @@ proptest! {
 proptest! {
     #![proptest_config(cfg())]
 
-    // Phase 4 PR4 (2026-05-27): `transform_callouts_never_panics` test
-    // removed alongside deletion of `crates/moss-core/src/resolve/callouts.rs`.
-    // Obsidian-callout detection is now part of the typed AST parser
-    // (`crates/moss-core/src/ast/parser.rs`'s Tag::BlockQuote arm); the
-    // existing `parse_never_panics` proptest below already covers it.
+    // Obsidian-callout detection is part of the typed AST parser
+    // (`crates/moss-core/src/ast/parser.rs`'s Tag::BlockQuote arm), covered
+    // by the `parse_never_panics` proptest below.
 
     #[test]
     fn transform_block_refs_never_panics(content in any_str()) {

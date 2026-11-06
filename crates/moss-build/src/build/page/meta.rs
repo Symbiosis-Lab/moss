@@ -1134,11 +1134,9 @@ pub fn strip_markdown_inline(text: &str) -> String {
         }
     }
 
-    // Phase 3 PR2: strip wikilinks `[[file]]`, `[[file|alias]]`,
-    // `![[file]]`, etc. Stage 1's wikilink resolver used to rewrite these
-    // into `[text](url)` shape before description extraction; Phase 3
-    // pushes wikilink resolution down into pulldown-cmark's event stream,
-    // which is invisible to this text-level stripper. The replacement
+    // Strip wikilinks `[[file]]`, `[[file|alias]]`,
+    // `![[file]]`, etc. Wikilink resolution happens in pulldown-cmark's
+    // event stream, which is invisible to this text-level stripper. The replacement
     // matches what `dispatch_wikilink_embed` produces for the link case:
     // alias text (when present) or the file part. Image embeds (`![[…]]`)
     // drop entirely — they're media references, not text — including the

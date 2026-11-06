@@ -3,11 +3,10 @@
 //! Serializable structs moss emits to the app's webviews (build progress,
 //! scan stages, file-watch deltas) plus `SystemInfo` for support and
 //! diagnostics. Data-only, but app-shaped: a headless moss-build crate has
-//! no frontend to emit these to, so they sit on the app side of the M6a
+//! no frontend to emit these to, so they sit on the app side of the crate
 //! boundary.
 //!
-//! Split out of `types.rs` 2026-08-10 (M5a); `types.rs` re-exports every
-//! item at its old path, so consumers are unchanged.
+//! `types.rs` re-exports every item from here.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -285,8 +284,8 @@ pub enum MossEvent {
     /// future Inline/Narrated/Awaiting renderers) filter on `payload.tone`
     /// and `payload.scope` to decide whether to react.
     ///
-    /// Added in T2 (2026-05-28) — T1 deferred the wire bridge because
-    /// `PanelTask` contains `Instant`; `PanelTaskWire` strips it. See the
+    /// `PanelTask` contains `Instant`, so the wire carries
+    /// `PanelTaskWire`, which strips it. See the
     /// module docstring in `tasks.rs` for the full rationale.
     PanelTaskUpdate(PanelTaskWire),
     /// A source image file was created, modified (in-place), deleted, or
@@ -316,15 +315,15 @@ pub enum MossEvent {
     /// brings it back). `path` is the page's path inside the site. Sent so an
     /// agent that wrote the page learns its edit is no longer in the file.
     OutsideEditKept { path: String, version_id: String },
-    /// Onboarding T9: ask the app shell (main webview) to open the plugin
+    /// Ask the app shell (main webview) to open the plugin
     /// catalog filtered to importers. Produced by the editor webview's
     /// "Plugin" card; consumed by `app.ts`'s `onMossEvent("OpenPluginsView", …)`
     /// listener which opens the settings modal at the `channels` section.
     ///
     /// **Routed via `emit_to("main", …)` — NOT broadcast.** Tauri webviews
     /// are isolated `Window` instances; a `window.dispatchEvent` from the
-    /// editor webview never reaches the main webview's listener, so the
-    /// previous T9 implementation (a `CustomEvent`) silently no-op'd.
+    /// editor webview never reaches the main webview's listener, so a
+    /// `CustomEvent` would silently no-op.
     /// `app.emit_to("main", …)` is the supported cross-webview path.
     /// See project memory: "NEVER use `app.emit()` broadcast".
     OpenPluginsView {
@@ -369,8 +368,6 @@ pub enum MossEvent {
     ///
     /// `project_path` lets the frontend tie the signal to the correct folder
     /// and verify it hasn't been superseded by a folder switch.
-    ///
-    /// Design: Phase 4b B3.
     MattersNeedsConnection { project_path: String },
 
     /// The app UI language changed at runtime (live switch, no restart).

@@ -10,9 +10,8 @@ use super::Sizing;
 /// (each with a leading space). Empty strings if alias is missing or not a
 /// sizing hint.
 ///
-/// Phase 0 Stage 1 emitters now route sizing through title-attribute params
-/// (`width=…` / `height=…`); this helper is retained for Phase 1's Stage 2
-/// dispatcher to consume those params back into the HTML attribute form.
+/// Sizing travels as title-attribute params (`width=…` / `height=…`), so
+/// this helper currently has no caller.
 #[allow(dead_code)]
 pub(super) fn dim_attrs(alias: Option<&str>) -> (String, String) {
     let Some(a) = alias else {

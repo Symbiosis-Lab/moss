@@ -61,9 +61,8 @@ impl Placement {
 /// Bare `left` / `right` are deliberately absent: in a pipe segment they
 /// mean `object-position`, and have since before alignment existed
 /// (`![[hero.jpg|left]]` positions the crop, it does not float the image).
-/// [`AlignSide::from_keyword`] still accepts them because Stage 1 writes
-/// them as the value of an explicit `align=` key, where nothing else can
-/// claim them.
+/// [`AlignSide::from_keyword`] still accepts them as the value of an
+/// explicit `align=` key, where nothing else can claim them.
 fn placement_align_token(tok: &str) -> Option<AlignSide> {
     match tok.to_lowercase().as_str() {
         "align-left" | "alignleft" => Some(AlignSide::Left),

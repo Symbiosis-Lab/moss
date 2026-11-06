@@ -1075,7 +1075,7 @@ declare function getTauriCore(): TauriCore;
  *
  * Currently allow-listed (see runtime.rs `ALLOWED` constant):
  * - `MOSS_MATTERS_TEST_PROFILE` — bypasses Matters auth and switches to
- *   public-fetch mode for the named profile (T8a e2e harness).
+ *   public-fetch mode for the named profile (e2e harness).
  * - `MOSS_MATTERS_DOMAIN` — overrides the Matters domain (e.g. "matters.icu")
  *   so moss-claude.sh can target the test env without pre-seeding config.json.
  *

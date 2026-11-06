@@ -1,14 +1,13 @@
 //! Hero rendering + the link-preview helpers shared with
 //! `build::render::grid_cells`.
 //!
-//! Phase 4 PR4.5 (2026-05-28) deleted the Grid-rendering surface from
-//! this file. `Shortcode::Grid::cells` is now `Vec<Vec<Block>>` (parsed
+//! Grid rendering is not done here. `Shortcode::Grid::cells` is `Vec<Vec<Block>>` (parsed
 //! at extract time in `moss_core::ast::shortcode_extract::parse_grid`),
 //! URLs are resolved by `resolve_shortcode_urls` in `pipeline.rs`, and
 //! the AST-level `DefaultHooks::render_shortcode` Grid arm (called via
 //! `PipelineHooks::render_shortcode` delegation) emits production HTML.
 //! Compound-link cells flow through the typed `Block::LinkCard { url,
-//! children }` variant introduced in PR4.5.
+//! children }` variant.
 //!
 //! What remains here:
 //! - [`render_hero_html_typed`] — Hero rendering. Called from the
@@ -898,7 +897,6 @@ mod tests {
         assert!(html.contains("landing"), "raw class list still passes through: {html}");
     }
 
-    // Phase 4 PR4.5 (2026-05-28): render_grid_html_typed deleted —
     // Grid renders via `PipelineHooks::render_shortcode` → DefaultHooks
     // Grid arm in `crates/moss-core/src/ast/hooks.rs`. Test coverage
     // for the AST-level Grid shape lives in `moss-core` lib tests.

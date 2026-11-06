@@ -409,7 +409,7 @@ fn test_build_creates_output_directory() {
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
     assert!(!result.unwrap(), "Site should not be empty");
 
-    // Verify output was created (staging/ is sole output post-T2)
+    // Verify output was created (staging/ is sole output )
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
@@ -470,7 +470,7 @@ fn test_build_with_site_dir_state() {
     );
 
     assert!(result.is_ok());
-    // Post-T2: staging/ is sole build output
+    // Staging/ is sole build output
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
@@ -500,7 +500,7 @@ fn test_site_stage_persists_after_successful_build() {
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert!(stage_dir.exists(), "site-stage should persist after build");
 
-    // Post-T2: staging/ is sole output (ship_phase removed)
+    // Staging/ is sole output
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
@@ -547,7 +547,7 @@ fn test_site_stage_persists_after_rebuild() {
 
 #[test]
 fn test_rebuild_site_populated_after_build() {
-    // Post-T2: staging/ is the sole build output. The test verifies that
+    // Staging/ is the sole build output. The test verifies that
     // staging/ is fully populated when build() returns.
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -604,8 +604,8 @@ fn test_site_stage_persists_when_no_changes() {
 
 #[test]
 fn test_slots_injected_before_copy_to_site() {
-    // Post-T2: staging/ is sole output. Slot injection happens on staging/
-    // and the result is verified there. ship_phase to site/ removed.
+    // Staging/ is sole output. Slot injection happens on staging/
+    // and the result is verified there.
     use crate::build::enhance::{EnhanceContent, EnhanceResult};
 
     let (test_dir, _cleanup) = create_test_dir();
@@ -663,7 +663,7 @@ fn test_empty_slots_leave_no_markers() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
 
-    // Post-T2: check staging/ (sole output)
+    // Check staging/ (sole output)
     let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         !stage_html.contains("<!-- slot:"),
@@ -704,7 +704,7 @@ fn test_slots_injected_on_rebuild() {
     let result = build_test(folder_path, None, None, None, None, &slots);
     assert!(result.is_ok(), "Rebuild should succeed: {:?}", result);
 
-    // Post-T2: check staging/ (sole output)
+    // Check staging/ (sole output)
     let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         stage_html.contains("test-style"),
@@ -752,10 +752,10 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
         "staging/index.html must contain the injected slot content"
     );
 
-    // Post-T2: manifest hashes the deploy-ready bytes (staging/ bytes with
+    // Manifest hashes the deploy-ready bytes (staging/ bytes with
     // data-source-line annotations stripped via apply_transform). staging/ holds
     // annotated HTML; the manifest records the stripped derivative that deploy uploads.
-    // site/ is not updated until T4 (seal+persist materialization).
+    // site/ is not updated until seal+persist materialization.
     let staging_html_for_hash = fs::read(test_dir.join(".moss/build.nosync/staging/index.html"))
         .expect("staging/index.html must exist after build");
     let manifest_bytes = crate::build::ship::apply_transform(
@@ -798,7 +798,7 @@ fn test_first_build_uses_staging() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
-    // Post-T2: staging/ is sole output
+    // Staging/ is sole output
     assert!(
         test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be generated in staging/"
@@ -813,7 +813,7 @@ fn test_first_build_uses_staging() {
 
 #[test]
 fn test_rebuild_when_site_emptied() {
-    // Post-T2: site/ is not updated by the build (ship_phase removed).
+    // Site/ is not updated by the build.
     // staging/ is the sole output; emptying staging/ between builds
     // verifies the pipeline recovers correctly.
     let (test_dir, _cleanup) = create_test_dir();
@@ -847,7 +847,7 @@ fn test_rebuild_when_site_emptied() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok(), "Rebuild should succeed: {:?}", result);
 
-    // staging/ should have content (sole output post-T2)
+    // staging/ should have content (sole output)
     assert!(
         test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be in staging/ after build"
@@ -896,7 +896,7 @@ fn test_rebuild_when_staging_deleted() {
 /// with `data-source-*` (the preview rests on `/stage`, so click-to-source needs
 /// annotations on every build).
 ///
-/// Post-T2: ship_phase to site/ removed. Only staging/ is checked.
+/// Only staging/ is checked.
 #[test]
 fn build_annotates_stage_and_strips_site_without_server_port() {
     let (test_dir, _cleanup) = create_test_dir();
@@ -936,7 +936,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
 
-    // Verify first content (in staging/ post-T2)
+    // Verify first content (in staging/)
     let content = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
     assert!(
         content.contains("First"),
@@ -1012,7 +1012,7 @@ fn test_pointer_switches_during_rebuild() {
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
 
-    // Post-T2: staging/ is the sole output. site/ is NOT updated.
+    // Staging/ is the sole output. site/ is NOT updated.
     // Check that staging/ has the new content.
     let content = fs::read_to_string(stage_dir.join("index.html")).unwrap();
     assert!(
@@ -1023,7 +1023,7 @@ fn test_pointer_switches_during_rebuild() {
 
 #[test]
 fn test_content_unchanged_when_hashes_match() {
-    // Post-T2: staging/ is the sole build output. When hashes match (no-changes
+    // Staging/ is the sole build output. When hashes match (no-changes
     // rebuild), staging/ must still have identical content.
     let (test_dir, _cleanup) = create_test_dir();
     let folder_path = test_dir.to_str().unwrap();
@@ -1080,7 +1080,7 @@ fn test_multiple_sequential_rebuilds() {
         // Pointer rests on site-stage/ (preview with annotations)
         assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
 
-        // Post-T2: verify content in staging/ (sole output)
+        // Verify content in staging/ (sole output)
         let content = fs::read_to_string(stage_dir.join("index.html")).unwrap();
         assert!(
             content.contains(&format!("Version {}", i)),
@@ -1137,7 +1137,7 @@ fn test_pointer_sequence_during_rebuild() {
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
     assert_eq!(state.current_dir.read().unwrap().as_path(), stage_dir);
 
-    // staging/ has the new content (sole output post-T2)
+    // staging/ has the new content (sole output)
     let content = fs::read_to_string(stage_dir.join("index.html")).unwrap();
     assert!(
         content.contains("New"),
@@ -1186,7 +1186,7 @@ fn test_build_returns_before_assets_copied() {
         elapsed
     );
 
-    // HTML should be immediately available after build() returns (in staging/ post-T2)
+    // HTML should be immediately available after build() returns (in staging/)
     assert!(
         test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "HTML should be generated in blocking phase"
@@ -1212,7 +1212,7 @@ fn test_html_available_immediately_after_build() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
 
-    // All HTML files must be available immediately (in staging/ post-T2)
+    // All HTML files must be available immediately (in staging/)
     assert!(
         test_dir.join(".moss/build.nosync/staging/index.html").exists(),
         "index.html should be ready immediately"
@@ -1272,7 +1272,7 @@ fn test_blocking_phase_includes_essential_files() {
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
     assert!(result.is_ok());
 
-    // Essential files for page rendering (in staging/ post-T2)
+    // Essential files for page rendering (in staging/)
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
     // CSS and JS are now emitted with content-hash names.
     let moss_dir = test_dir.join(".moss/build.nosync/staging/_moss");
@@ -1312,7 +1312,7 @@ fn test_blocking_phase_includes_essential_files() {
 }
 
 // =========================================================================
-// Background Video Conversion Tests (Phase 2)
+// Background Video Conversion Tests
 // =========================================================================
 
 #[test]
@@ -1320,9 +1320,8 @@ fn test_background_ctx_is_not_ignored() {
     // Smoke test: a markdown file referencing a `.mov` video file builds
     // successfully and produces an output HTML.
     //
-    // Phase 2E v5 PR5 (2026-05-26) retired the Stage 3 regex post-pass
-    // that used to rewrite `.mov → .mp4` on raw `<video>` HTML embedded
-    // in markdown source. Raw HTML is opaque pulldown-cmark pass-through
+    // No regex post-pass rewrites `.mov → .mp4` on raw `<video>` HTML
+    // embedded in markdown source. Raw HTML is opaque pulldown-cmark pass-through
     // and no longer reaches a moss-controlled emitter. The `.mov → .mp4`
     // rewrite now lives exclusively at
     // `moss_core::render::video::synthesize_video_html` (via
@@ -1607,13 +1606,8 @@ fn record_file(test_dir: &std::path::Path, path: &str) {
 // BuildComplete
 // =========================================================================
 //
-// Four tests lived here that named the right scenarios — "emitted when all
-// tasks done", "immediate if no videos", "on ffmpeg missing", "on cancellation"
-// — and asserted nothing about any of them: each built a `BuildComplete` struct
-// by hand and checked its own fields back. They were green for the entire time
-// the event was never emitted at all on an image-only site
-// (LOG-C2CF-T0935-08-14). Emission is now owned by `BuildTerminalBarrier` and
-// tested where it is emitted, in `build/background.rs`:
+// Emission is owned by `BuildTerminalBarrier` and tested where it is
+// emitted, in `build/background.rs`:
 // `a_build_with_no_workers_at_all_still_reaches_its_terminal_receipt`,
 // `the_receipt_reports_the_counters_the_workers_published`, and
 // `a_superseded_build_owes_no_completion_receipt`.
@@ -4843,7 +4837,7 @@ fn test_image_compression_pipeline_end_to_end() {
     // upgrades the HTML to `<picture><source srcset="photo.webp">`.
     //
     // Assertions prove the seams are wired correctly:
-    //   1. JPEGs on disk become .webp in .moss/build.nosync/staging/ (sole output post-T2)
+    //   1. JPEGs on disk become .webp in .moss/build.nosync/staging/ (sole output)
     //   2. .webp is smaller than the source JPEG (real encoding happened)
     //   3. SVG passes through unchanged (skip rules honoured)
     //   4. After build 2 — Built HTML wraps the markdown <img> in
@@ -4896,7 +4890,7 @@ fn test_image_compression_pipeline_end_to_end() {
     );
     assert!(result.is_ok(), "Build 1 should succeed: {:?}", result);
 
-    // ---- 1. WebP outputs exist (in staging/ — the sole build output post-T2) ----
+    // ---- 1. WebP outputs exist (in staging/ — the sole build output) ----
     let staging_dir = test_dir.join(".moss/build.nosync/staging");
     let photo_webp = staging_dir.join("photo.webp");
     let photo2_webp = staging_dir.join("photo2.webp");

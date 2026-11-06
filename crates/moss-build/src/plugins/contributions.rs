@@ -57,7 +57,7 @@ pub struct PluginContributes {
     #[serde(default)]
     pub processor: Option<ProcessorContribution>,
 
-    /// Job descriptors a plugin supplies (Step 3 Phase 5, §8 + R13).
+    /// Job descriptors a plugin supplies.
     ///
     /// Parallels `frontmatter`: the plugin declares the MEANING of each Job it
     /// produces (a past-tense `verb` + an amount `noun`); moss normalizes the

@@ -580,8 +580,7 @@ pub(crate) const LIMIT_MAX: usize = 12;
 /// A separate knob from [`LIMIT_MAX`] because they bound different things:
 /// this bounds memory, that bounds request duration. The old code had neither —
 /// 20 concurrent x up to 20 MB buffered is up to 400 MB resident on a machine
-/// that is also running a webview and a build. NORTH-STAR calls for auditing
-/// the memory budget before parallelizing; this is that audit's answer.
+/// that is also running a webview and a build.
 pub const BYTE_BUDGET: u64 = 8 * 1024 * 1024;
 
 /// Per-request ceiling for a single file upload, overriding the client's

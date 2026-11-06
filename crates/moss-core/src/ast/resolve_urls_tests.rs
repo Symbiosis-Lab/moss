@@ -48,9 +48,9 @@ fn resolves_standard_markdown_link_to_internal() {
     assert_eq!(outgoing[0].display_text, "文字");
     assert_eq!(outgoing[0].link_type, LinkType::Standard);
 
-    // Phase 4 PR7a-stage1b (2026-05-28): the visitor emits a
-    // `moss-resolved:` sentinel for internal links (Url::Unresolved)
-    // so moss-build's host classifier can decode it via page_map.
+    // The visitor emits a `moss-resolved:` sentinel for internal links
+    // (Url::Unresolved) so moss-build's host classifier can decode it via
+    // page_map.
     // The renderer doesn't see this state — the host's
     // `classify_url_prod` pass replaces Unresolved before render.
     match &doc.blocks[0] {
@@ -199,8 +199,7 @@ fn resolves_bare_filename_image_against_graph() {
             _ => panic!("expected Image, got {children:?}"),
         },
         Block::Figure { image, .. } => {
-            // PR3's Block::Figure: image-only paragraph may parse as
-            // Figure directly.
+            // An image-only paragraph may parse as Block::Figure directly.
             if let Inline::Image { src, .. } = image {
                 let Url::Resolved(r) = src else {
                     panic!("expected Resolved, got {src:?}")
@@ -251,8 +250,7 @@ fn unresolved_bare_filename_passes_through() {
 #[test]
 fn does_not_resolve_url_inside_code_block() {
     // visit_urls_mut never descends into Block::CodeBlock, so the
-    // visitor never sees URLs in code fences. This matches Stage 1's
-    // fence-aware behavior structurally.
+    // visitor never sees URLs in code fences.
     let mut doc = parse("```\n[link](inside.md)\n```\n");
     let graph = graph_with(&["index.md", "inside.md"]);
     let outgoing = resolve_urls(&mut doc, &graph, "index.md").outgoing;
@@ -317,15 +315,8 @@ fn query_string_preserved_on_internal_link() {
 // OutgoingLink + sentinel-shape coverage
 // -----------------------------------------------------------------
 //
-// Phase 4 PR7a-stage1b (2026-05-28): the Stage 1 pass
-// `markdown_links::resolve_markdown_links` was deleted in this PR
-// alongside the matching `byte_equivalence_*` baseline helpers. The
-// visitor now emits the same `moss-resolved:<path>` sentinel Stage 1
-// emitted, byte-for-byte — proven by the per-test sentinel
-// assertions below. The companion Stage 1 pass
-// `markdown_refs::resolve_markdown_refs` was already deleted in the
-// prior PR; its parity is covered by
-// `resolves_bare_filename_image_against_graph` above.
+// The visitor emits a `moss-resolved:<path>` sentinel for internal links,
+// pinned by the per-test sentinel assertions below.
 
 #[test]
 fn standard_markdown_link_emits_sentinel() {
@@ -482,23 +473,16 @@ fn query_and_fragment_sentinel_shape() {
 fn link_wrapping_image_target_path() {
     // Shape produced by `[![[image.png]]](target.html?q)` after the
     // wikilinks pass rewrites the embed to `![alt](path)`.
-    // Pre-PR7a-stage1b this test compared to a Stage 1 baseline that
-    // used the raw markdown source between `[` and `]` for
-    // display_text; the visitor uses parsed plain text (alt text).
-    // That divergence was non-breaking (display_text has no
-    // production consumer). With Stage 1 deleted we assert on the
-    // visitor's behavior directly: load-bearing fields (target_path,
-    // link_type) plus the documented display_text.
+    // display_text is the parsed plain text (alt text), which has no
+    // production consumer; the load-bearing fields are target_path and
+    // link_type.
     //
-    // Task 6 (asset-engine routing, 2026-06-03): the engine now also
-    // resolves separator-path image references through the graph and
-    // emits an OutgoingLink for the discovered dependency edge. So
-    // this test now expects TWO OutgoingLink entries:
-    //   [0] — image: assets/scale-compare.png (phase 1, image resolver)
-    //   [1] — link: assets/scale-compare.html (phase 2, link resolver)
-    // Previously [0] was absent because separator-path images were
-    // passed through verbatim (the 404 bug). The href for the image
-    // is unchanged ("assets/scale-compare.png" from index.md root).
+    // The image resolver also resolves separator-path image references
+    // through the graph and emits an OutgoingLink for the dependency edge,
+    // so this test expects TWO OutgoingLink entries:
+    //   [0] — image: assets/scale-compare.png (image resolver)
+    //   [1] — link: assets/scale-compare.html (link resolver)
+    // The href for the image is "assets/scale-compare.png" from index.md root.
     let source = "index.md";
     let content = "[![scale-compare](assets/scale-compare.png)](scale-compare.html?a=major_pent&r=major_pent%3AD)";
     let mut b = ContentGraphBuilder::new();
@@ -510,7 +494,7 @@ fn link_wrapping_image_target_path() {
     let mut doc = parse(content);
     let visitor = resolve_urls(&mut doc, &graph, source).outgoing;
 
-    // Phase 1 emits the image dependency edge; phase 2 emits the link.
+    // The image resolver emits the dependency edge; the link resolver emits the link.
     assert_eq!(
         visitor.len(),
         2,
@@ -544,8 +528,7 @@ fn pipe_bearing_image_url_unchanged() {
     let graph = b.build();
     let outgoing = resolve_urls(&mut doc, &graph, "articles/post.md").outgoing;
 
-    // Phase 3 PR3 contract: pipe-bearing URLs pass through verbatim,
-    // no OutgoingLink emitted.
+    // Pipe-bearing URLs pass through verbatim, no OutgoingLink emitted.
     assert!(outgoing.is_empty());
 }
 

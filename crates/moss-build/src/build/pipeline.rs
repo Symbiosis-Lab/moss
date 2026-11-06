@@ -1552,12 +1552,9 @@ fn build_inner(
         );
     }
     // `documents` is the parsed page slice (production type `ParsedDocument`,
-    // not yet the typed-AST `moss_core::ast::Document`). An earlier change
-    // threads it back to `build.rs` so native slot generation can read typed
-    // feature flags + slot-only files without the previous filesystem rescan
-    // hacks (`project_has_inline_subscribe`, `render_footer_pages_from_disk`).
-    // When the typed-AST migration completes (Phase 4+), this evolves to
-    // `Vec<moss_core::ast::Document>`.
+    // not the typed-AST `moss_core::ast::Document`). It is threaded back to
+    // `build.rs` so native slot generation can read typed feature flags and
+    // slot-only files without rescanning the filesystem.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
     let build_now = crate::build::folder_embed::upcoming::now();
     // Read again by the notebook viewers, after `site_config` is consumed.
@@ -1985,7 +1982,7 @@ fn build_inner(
         // clone it here, before the video dispatch below consumes the original.
         let ctx_for_assets = background_ctx.clone();
 
-        // Step 3 Phase 4 (review fix). The parent Build Job is NO LONGER spawned
+        // The parent Build Job is not spawned
         // eagerly here — `collect_videos_for_conversion` returns every .mov
         // regardless of the transform cache, so a non-empty `video_items` is NOT
         // evidence of real work (a content-only rebuild on a video site cache-skips

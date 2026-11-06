@@ -1,6 +1,6 @@
-//! Web globals the github/matters bundles + moss-api SDK touch (report 3 §2):
+//! Web globals the github/matters bundles + moss-api SDK touch:
 //! console, atob/btoa, TextEncoder/TextDecoder, crypto.randomUUID. Plus tokio
-//! timers (Task 6). All sync fns use Func::from (report 1 §1); install on
+//! timers. All sync fns use Func::from; install on
 //! globalThis inside a `with`/`async_with!` closure.
 
 use rquickjs::{Ctx, Result, prelude::Func};

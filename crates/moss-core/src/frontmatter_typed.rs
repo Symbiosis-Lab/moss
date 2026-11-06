@@ -510,7 +510,7 @@ impl FrontMatter {
 ///
 /// Only `Dropped` outcomes exist today — a field whose value couldn't satisfy
 /// its typed field and was removed so its neighbours survive. Severity tiers
-/// (coerced/lossy) are added in Phase 3c alongside their first real consumer
+/// (coerced/lossy) wait for their first real consumer
 /// (the chip UI), per the "consumer before it ships" rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldWarning {

@@ -82,10 +82,9 @@ pub struct HeadingInputs<'a> {
     /// `true` iff the file is a layout-slot source (e.g. root `footer.md`)
     /// rather than an article. Slot files are embedded as fragments into a
     /// surrounding layout; the auto-injected `<h1 class="moss-article-title">`
-    /// would render as an unwanted heading inside that fragment. PR7b
-    /// replaces the pre-2026-05-28 frontmatter-synthesis hack
-    /// (`title: ""` injected at the call site to drive `empty_title=true`)
-    /// with this structural input. Editor passes `false`.
+    /// would render as an unwanted heading inside that fragment; this input
+    /// suppresses it directly, with no `title: ""` frontmatter needed.
+    /// Editor passes `false`.
     pub slot_only: bool,
     /// The frontmatter names the page's own date (`date:` or `start:`). A
     /// file named by a bare date stamp is an untitled post only without one,
@@ -892,8 +891,7 @@ mod tests {
 
     #[test]
     fn slot_only_hides_heading_regardless_of_title() {
-        // PR7b: `footer.md` flows through the normal pipeline
-        // with `slot_only = true`. The auto-injected H1 must be suppressed
+        // `footer.md` flows through the normal pipeline with `slot_only = true`. The auto-injected H1 must be suppressed
         // even when the author writes `title: "Custom"` in the
         // frontmatter — the rendered HTML lands inside a `<footer>` slot,
         // and an article-level heading there is structurally wrong.

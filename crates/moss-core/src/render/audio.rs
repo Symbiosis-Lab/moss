@@ -1,13 +1,9 @@
 //! Audio embed synthesizer.
 //!
-//! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
-//! source URL, and an [`AssetSnapshot`]. Emits final `<audio>` HTML —
-//! preserving the shape moss-core's pre-Phase-0 audio renderer used to emit
-//! before Phase 0's Stage 1 migration (that renderer's own `render()` was
-//! unreachable dead code by the time it was removed; the byte shape lives
-//! on here, which is the actual live path).
+//! Receives a [`TitleParams`] (already parsed by the dispatcher), the
+//! source URL, and an [`AssetSnapshot`]. Emits final `<audio>` HTML.
 //!
-//! Pre-Phase-0 reference shape:
+//! Shape:
 //!
 //! ```html
 //! <audio class="moss-embed moss-embed-audio" controls preload="metadata">
@@ -16,11 +12,10 @@
 //! </audio>
 //! ```
 //!
-//! The pre-Phase-0 renderer always emitted `controls` and `preload="metadata"`,
-//! with a `<source type="{mime}">` derived from the asset extension. Phase 1
-//! preserves that exact byte shape; `TitleParams` (`controls`, `loop`,
-//! `autoplay`, `muted`, `preload`) currently surface no behavioral overrides
-//! because the markdown emitter does not author them — they are reserved for
+//! `controls` and `preload="metadata"` are always emitted, with a
+//! `<source type="{mime}">` derived from the asset extension. `TitleParams`
+//! (`controls`, `loop`, `autoplay`, `muted`, `preload`) currently surface no
+//! behavioral overrides because the markdown emitter does not author them — they are reserved for
 //! future param plumbing without changing the dispatcher contract.
 
 use crate::asset_snapshot::AssetSnapshot;
@@ -34,15 +29,10 @@ use crate::resolve::title_params::TitleParams;
 ///
 /// Always emits a `<audio>` element with `controls preload="metadata"` and
 /// a `<source>` child carrying the URL and a MIME type derived from the
-/// extension. Matches the pre-Phase-0 audio renderer's byte shape one-for-one
-/// so existing snapshot tests / fixtures remain valid after the Stage 2
-/// dispatcher routes here.
+/// extension.
 ///
 /// Uses the canonical 4-char attribute escaper (`& < > "`); apostrophe is
-/// safe inside `"..."` attributes per HTML5. The pre-Phase-0 path called
-/// `moss_core::media::html_escape` (5 chars, also escapes `'` → `&#39;`),
-/// which over-escaped attribute values relative to pdf / iframe / model.
-/// This byte-shape change aligns audio/video with their siblings.
+/// safe inside `"..."` attributes per HTML5. Matches pdf / iframe / model.
 #[allow(unused_variables)]
 pub fn synthesize_audio_html(
     params: &TitleParams,
@@ -70,8 +60,7 @@ pub fn synthesize_audio_html(
 
 /// Map a lowercased audio extension to the MIME emitted on `<source type="…">`.
 ///
-/// Mirrors the table in moss-core's pre-Phase-0 audio renderer so the byte
-/// shape of `type="…"` stays identical. Unknown extensions fall back to
+/// Unknown extensions fall back to
 /// `application/octet-stream` (browsers ignore the unknown type and probe
 /// the response Content-Type — graceful degradation).
 fn audio_mime_for_ext(ext: &str) -> &'static str {

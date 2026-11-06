@@ -1358,7 +1358,7 @@ pub(crate) fn copy_deferred_assets(
                     }
                 }
 
-                // Bundled-SPA `<head>` injection (link-preview-defaults Phase 5).
+                // Bundled-SPA `<head>` injection (link-preview defaults).
                 // After the source HTML has been linked into the output, post-
                 // process bundled-SPA `index.html` files (e.g. a Vite app at
                 // `cities-heat-map/index.html`) to inject site-level meta

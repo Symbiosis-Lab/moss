@@ -24,12 +24,12 @@ use std::path::Path;
 /// places either is decided.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IncrementalGates {
-    /// Stage 5b — may the page-render loop carry forward pages whose
+    /// May the page-render loop carry forward pages whose
     /// fingerprint did not move? `false` for every non-watch entry point
     /// (`moss build`, `moss preview`, deploy all render every page) and
     /// `false` whenever `MOSS_NO_INCREMENTAL` is set.
     pub render_skip: bool,
-    /// Stage 7 — may Loop A replay the previous build's `ParsedDocument`s?
+    /// May Loop A replay the previous build's `ParsedDocument`s?
     /// Same entry-point and kill-switch rules; the difference is which changed
     /// paths it tolerates (markdown plus a parse-irrelevant allowlist).
     pub parse_cache: bool,

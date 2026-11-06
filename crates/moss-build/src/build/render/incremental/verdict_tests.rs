@@ -132,10 +132,9 @@ fn assert_full(verdict: &RenderVerdict, cause: FullCause) {
 
 // ---- the number this whole design exists to move -------------------------
 
-/// The Stage-0 baseline on `riverbend/河灣`: a no-op save re-renders 114 of
-/// 214 pages, of which every listing host was rendered *by the predicate*, not
-/// by the diff. After Stage 2 the same save must skip every page — hosts
-/// included.
+/// What the gate exists for: a save that changes nothing must skip every
+/// page, listing hosts included. A host rendered *by the predicate* rather
+/// than by the diff would re-render on every save.
 #[test]
 fn a_no_op_rebuild_skips_every_page_including_every_listing_host() {
     let h = Harness::new();

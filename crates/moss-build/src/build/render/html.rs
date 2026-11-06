@@ -516,8 +516,7 @@ pub(super) fn render_page<'d>(
             // Folder card <img> tags inherit width/height/loading/LQIP/color
             // attributes from the moss-core image synthesizer at grid generation
             // time (`grid_card::render` and `folder_cover::render` thread the
-            // `MediaDimensionLookup` through the synth). Phase 2E v5 PR5
-            // (2026-05-26) retired the Stage 3 regex post-pass that ran here.
+            // `MediaDimensionLookup` through the synth).
 
             // Append children list for home page
             // Uses the same generate_children pipeline as folder index pages,

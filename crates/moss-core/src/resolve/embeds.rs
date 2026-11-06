@@ -21,8 +21,7 @@ pub mod expand;
 /// Public because every consumer that walks the embed relation has to stop at
 /// the same depth the resolver itself stopped at — notably
 /// [`crate::dep_graph::DepGraph::embed_closure`], which bounds its traversal by
-/// this constant rather than inventing a second limit that could disagree
-/// (Stage 7).
+/// this constant rather than inventing a second limit that could disagree.
 pub const MAX_EMBED_DEPTH: usize = 10;
 
 /// Prefix for resolved embed markers.
