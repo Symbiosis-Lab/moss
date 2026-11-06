@@ -448,6 +448,7 @@ mod tests {
                 reason: RemovalReason::Unexplained,
                 moved_to: None,
                 source: None,
+                withdrawn_by: None,
             }]),
             transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["legacy-feed.xml".into(), "style.1a2b3c.css".into()] },
             refusal: Some(crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, "Nothing published — REFUSED".into())),
@@ -569,6 +570,7 @@ mod tests {
             reason: RemovalReason::Unexplained,
             moved_to: None,
             source: None,
+            withdrawn_by: None,
         });
         dry.transfer = Transfer::SinceLastPublish {
             upload: 0,

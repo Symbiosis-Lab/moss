@@ -172,8 +172,7 @@ pub fn removed_for_seal(mp: &MossPaths, sealed: &SealedManifest) -> Vec<change_s
     let Some(baseline) = published_record::load_address_baseline(mp, publish_target(mp).as_deref()) else {
         return Vec::new();
     };
-    let withdrawn = crate::build::feeds::robots::AiSettings::for_folder(mp).withdrawn();
-    change_set::removed_addresses(&baseline, sealed, |src| mp.project_root().join(src).symlink_metadata().is_ok(), &withdrawn)
+    change_set::removed_addresses(&baseline, sealed, |src| mp.project_root().join(src).symlink_metadata().is_ok())
 }
 
 /// The server's own `(need, remove)` for a sealed manifest — the arm for a

@@ -30,6 +30,7 @@ export const BUNDLES = [
   { entry: "crates/moss-build/src/js-src/site/theme.ts", out: "crates/moss-build/src/assets/js/theme.js" },
   { entry: "crates/moss-build/src/js-src/site/fullscreen.ts", out: "crates/moss-build/src/assets/js/fullscreen.js" },
   { entry: "crates/moss-build/src/js-src/site/link-preview.ts", out: "crates/moss-build/src/assets/js/preview.js" },
+  { entry: "crates/moss-build/src/js-src/site/selection.ts", out: "crates/moss-build/src/assets/js/selection.js" },
   { entry: "crates/moss-build/src/js-src/site/comments/artalk.ts", out: "crates/moss-build/src/assets/js/comments-artalk.js" },
   { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "crates/moss-build/src/assets/js/subscribe.js" },
   { entry: "crates/moss-build/src/js-src/site/forms/forms.ts", out: "crates/moss-build/src/assets/js/forms.js" },

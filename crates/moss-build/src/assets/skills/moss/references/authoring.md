@@ -1061,6 +1061,17 @@ Turn on the site search with `search = true` under `[site]` in `.moss/config.tom
 search = true
 ```
 
+## Share and copy on selected text
+
+Turn on `selection_tools = true` under `[site]` in `.moss/config.toml` to give readers two buttons when they select text in a page: Share makes a picture of the passage, with the page's title, its listing picture and a QR code for the page, and Copy puts the passage on the clipboard with its title, author and address. On a phone the bar shows Share alone, since the phone's own menu copies. The build writes one QR code per public page under `qr/`, only for a site with a published address. It is off when the key is unset: the site then ships no QR codes, no share-card script and no selection script. A page with comments still offers Comment on selected text either way.
+
+```toml
+[site]
+selection_tools = true
+```
+
+Turning it off stops every `qr/` address the site served. The publish check reads their absence as your choice, not as broken addresses.
+
 ## Search engines and AI
 
 Three switches under `[site]` say what a site asks of the programs that read it, one use of its pages each. All three are requests: a crawler that ignores them can still read the site, and only a login keeps a page private.

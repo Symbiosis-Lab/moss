@@ -206,7 +206,7 @@ fn capped_rows_with_room_to_spare_hide_nothing() {
 }
 
 fn gone(path: &str, reason: RemovalReason, source: Option<&str>) -> RemovedAddress {
-    RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into) }
+    RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into), withdrawn_by: None }
 }
 
 fn summarize(change_set: &ChangeSet, removed: &[RemovedAddress]) -> PageChangeSummary {
@@ -276,6 +276,7 @@ fn a_moved_page_with_no_stub_is_named_once_in_the_list() {
         reason: RemovalReason::Unexplained,
         moved_to: Some("new/index.html".into()),
         source: Some("moved.md".into()),
+        withdrawn_by: None,
     }];
     let change_set = ChangeSet { classified: true, edited: 1, pages: vec![ChangedPage { source_path: "moved.md".into(), verb: PageVerb::Edited }], ..Default::default() };
 

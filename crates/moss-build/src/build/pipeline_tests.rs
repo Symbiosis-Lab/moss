@@ -7924,7 +7924,7 @@ fn marking_a_published_page_as_a_draft_is_not_an_unexplained_removal() {
 
     fs::write(dir.join("wip.md"), "---\ntitle: Plan\ndraft: true\n---\n\nBody.\n").unwrap();
     let (_, _, _, drafted) = build_test_promoted_or_withheld(folder).unwrap();
-    let removed = removed_addresses(&baseline, &drafted, |src| dir.join(src).exists(), &[]);
+    let removed = removed_addresses(&baseline, &drafted, |src| dir.join(src).exists());
 
     let gone = removed.iter().find(|r| r.path == "wip/index.html").expect("the address leaves the site");
     assert_eq!(gone.reason, RemovalReason::Withheld);

@@ -5465,7 +5465,9 @@ mod children_field_tests {
 
         let all_docs = vec![page.clone()];
         let project = make_project();
-        let layout = make_layout();
+        // The cover reaches the share card only on a site that shares.
+        let mut layout = make_layout();
+        layout.assets.selection_tools = true;
 
         let html = generate_html(
             Some(&page),

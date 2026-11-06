@@ -2200,7 +2200,12 @@ moved_to?: string | null;
  * old to name folder files. It is what tells "still in your folder but no
  * longer published" from "no longer produced".
  */
-source?: string | null }
+source?: string | null; 
+/**
+ * The site setting that stopped this generated file, when one did. Such
+ * a removal is `AuthorRemoved`: the owner's act, like deleting a source.
+ */
+withdrawn_by?: WithdrawnBy | null }
 
 export type RenameArgs = { oldPath: VaultPath; newPath: VaultPath }
 
@@ -3189,6 +3194,24 @@ page: string | null; allowedKinds: ExtKind[] | null }
  * accidental swaps with other string identifiers (site_id, label, etc.).
  */
 export type WindowId = string
+
+/**
+ * A site setting that stops a generated file on purpose.
+ */
+export type WithdrawnBy = 
+/**
+ * AI answers are asked not to use the pages, so there is no `llms.txt`.
+ */
+"ai_answers" | 
+/**
+ * No search or AI switch is set any more, so there is no `tdmrep.json`.
+ */
+"ai_switches" | 
+/**
+ * `[site].selection_tools` is off, so there is no Share and no QR code
+ * for its picture.
+ */
+"selection_tools"
 
 export type WriteEditorFileBinaryArgs = { relativePath: VaultPath; dataBase64: string }
 

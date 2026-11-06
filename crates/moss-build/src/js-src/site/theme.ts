@@ -386,9 +386,6 @@ initCardVideos();
 import { initAmbientVideos } from "./video/ambient-video";
 initAmbientVideos();
 
-import { initSelectionActions } from "./selection-actions";
-initSelectionActions();
-
 
 // Breadcrumb hover hints, shown only while a segment's label is actually cut
 // off. It rides this bundle rather than shipping its own `<script>` because

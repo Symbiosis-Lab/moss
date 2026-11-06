@@ -250,6 +250,12 @@ pub fn get_site_floating_nav(project_path: &str) -> Result<Option<bool>, String>
     get_site_bool_field(project_path, "floating_nav")
 }
 
+/// Read `[site].selection_tools` — Share and Copy on selected text.
+/// None = not set (off).
+pub fn get_site_selection_tools(project_path: &str) -> Result<Option<bool>, String> {
+    get_site_bool_field(project_path, "selection_tools")
+}
+
 /// Get the flat deployment view for a project.
 ///
 /// Composed from two files, matching who owns what: `.moss/state.toml

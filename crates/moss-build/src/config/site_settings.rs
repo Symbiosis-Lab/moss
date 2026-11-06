@@ -120,6 +120,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "The licence of the edition, stated on every page of an archival copy and in its source README.",
         },
         SiteSettingInfo {
+            name: "selection_tools",
+            r#type: "bool",
+            default: Some("false"),
+            description: "When a reader selects text, offer Share (a picture of the passage with the page's QR code) and Copy (the passage with its source). false ships neither, and no QR codes.",
+        },
+        SiteSettingInfo {
             name: "link_preview",
             r#type: "bool",
             default: Some("true"),

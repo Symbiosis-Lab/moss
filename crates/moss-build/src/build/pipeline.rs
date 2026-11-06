@@ -1350,13 +1350,14 @@ fn build_inner(
     for note in cfg.as_ref().map(|c| c.unknown_site_keys()).unwrap_or_default() {
         crate::build::cli_output::log_note!("{note}");
     }
-    let forms_endpoint = cfg.as_ref().and_then(|c| match crate::build::site_config::parse_services(c) {
-        Ok(services) => services.forms_endpoint(),
+    let services_config = cfg.as_ref().and_then(|c| match crate::build::site_config::parse_services(c) {
+        Ok(services) => Some(services),
         Err(problem) => {
             crate::build::cli_output::log_warn_problem!("{problem}");
             None
         }
     });
+    let forms_endpoint = services_config.as_ref().and_then(|s| s.forms_endpoint());
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1493,6 +1494,13 @@ fn build_inner(
         // asked for, not inherited, so a site that never said anything gets no
         // floating nav (as amended 2026-08-30).
         floating_nav: site_bool("floating_nav").unwrap_or(false),
+        // Default-OFF, like `floating_nav`.
+        selection_tools: site_bool("selection_tools").unwrap_or(false),
+        // A page's own `comments: true` beats `[site].comments`, so the service
+        // alone decides whether some page may offer Comment.
+        selection_comments: services_config
+            .as_ref()
+            .is_some_and(|s| s.is_enabled(crate::config::services::ServiceKind::Comments, false)),
         // Default-on by key absence, like `link_preview`: `[site].colophon = false`
         // is the only way to leave moss's credit out.
         colophon,

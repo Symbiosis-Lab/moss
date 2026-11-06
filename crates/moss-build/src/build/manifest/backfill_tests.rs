@@ -325,3 +325,53 @@ async fn a_tail_that_did_not_promote_speaks_for_nothing() {
 
     assert!(for_seal(&mp, None).await.is_none(), "and a silent tail yields no change set");
 }
+
+// ---- A generated file a site setting stopped is the owner's act ----
+
+/// The removals a build sealed with `withdrawn` reports against a last publish
+/// that served `llms.txt`, two QR codes, `rss.xml`, and two of the author's own
+/// SVGs: one elsewhere and one in a folder of theirs named `qr/`, still there.
+fn removals_after(withdrawn: crate::build::manifest::change_set::Withdrawn) -> Vec<(String, change_set::RemovalReason, Option<change_set::WithdrawnBy>)> {
+    use crate::build::manifest::change_set::PublishedSnapshot;
+    let vault = tempfile::tempdir().unwrap();
+    let mp = MossPaths::new(vault.path());
+    let mut last = PendingManifest::new(SiteHashes::default());
+    for path in ["llms.txt", ".well-known/tdmrep.json", "qr/index.svg", "qr/notes/spring.svg", "rss.xml", "art/qr.svg"] {
+        last.register(&ServedPath::from_cached(path).unwrap(), b"x", HashBucket::Files);
+    }
+    let own = "qr/poster.svg";
+    std::fs::create_dir_all(vault.path().join("qr")).unwrap();
+    std::fs::write(vault.path().join(own), b"<svg/>").unwrap();
+    last.register(&ServedPath::from_source(own).unwrap(), b"<svg/>", HashBucket::Files);
+    let meta = crate::build::types::SourceMetadata { hash: "h".into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None };
+    last.register_page_source_hash(own.into(), meta);
+    published_record::save(&mp, &PublishedSnapshot::from_sealed(&last.seal(), "moss:site-1", "2026-11-05T00:00:00Z".into())).unwrap();
+    let mut now = PendingManifest::new(SiteHashes::default());
+    now.set_withdrawn(withdrawn);
+    let mut removed: Vec<_> = removed_for_seal(&mp, &now.seal()).into_iter().map(|r| (r.path, r.reason, r.withdrawn_by)).collect();
+    removed.sort_by(|a, b| a.0.cmp(&b.0));
+    removed
+}
+
+#[test]
+fn files_a_setting_stopped_pass_the_publish_gate_and_nothing_else_does() {
+    use change_set::RemovalReason::{AuthorRemoved, Unexplained};
+    use change_set::WithdrawnBy::{AiAnswers, AiSwitches, SelectionTools};
+    let all = change_set::Withdrawn { llms_txt: true, tdmrep_json: true, qr_codes: true };
+    assert_eq!(
+        removals_after(all),
+        [
+            (".well-known/tdmrep.json".to_string(), AuthorRemoved, Some(AiSwitches)),
+            ("art/qr.svg".to_string(), Unexplained, None),
+            ("llms.txt".to_string(), AuthorRemoved, Some(AiAnswers)),
+            ("qr/index.svg".to_string(), AuthorRemoved, Some(SelectionTools)),
+            ("qr/notes/spring.svg".to_string(), AuthorRemoved, Some(SelectionTools)),
+            ("qr/poster.svg".to_string(), Unexplained, None),
+            ("rss.xml".to_string(), Unexplained, None),
+        ]
+    );
+    assert!(
+        removals_after(Default::default()).iter().all(|(_, reason, by)| *reason == Unexplained && by.is_none()),
+        "with every setting on, a missing generated file is still a broken promise"
+    );
+}

@@ -210,41 +210,6 @@ impl PathResolver {
         }
     }
 
-    /// The lazy-chunk pointers carried by the theme `<script>` tag.
-    ///
-    /// Every `Load::Lazy` script is content-hashed, so the source that
-    /// `import()`s it cannot name it — it reads the URL off this tag instead
-    /// (see `selection-actions.ts`'s `loadShareCard` and `hls-boot.ts`). One
-    /// owner for all of them rather than one method per chunk: these values are
-    /// build-global, byte-identical on every page, and adding the third one
-    /// should not mean a third template variable threaded through four render
-    /// paths. Attributes on the existing tag rather than extra inline
-    /// `<script>`s, for the same reason: fewer elements, and a build-global
-    /// value does not trip the preview morph-guard's `scriptsDiffer` reload.
-    ///
-    /// `hls_hash` is `None` on a site with no ladder, and then the attribute
-    /// is absent rather than dangling. It reads as belt-and-braces — the only
-    /// reader, `hls-boot.js`, is gated on the same fact and is not on the page
-    /// either — but the snapshot suite priced the alternative: an
-    /// unconditional attribute is 45 bytes on every page of every moss site,
-    /// naming a file that most of them never emit.
-    pub fn lazy_chunk_attrs(&self, share_card_hash: &str, hls_hash: Option<&str>) -> String {
-        let mut out = format!(
-            " data-share-card=\"{}\"",
-            Self::hashed_js_url("share-card", share_card_hash)
-        );
-        if let Some(hash) = hls_hash {
-            out.push_str(&format!(" data-hls=\"{}\"", Self::hashed_js_url("hls", hash)));
-        }
-        out
-    }
-
-    fn hashed_js_url(name: &str, hash: &str) -> String {
-        ServedPath::for_runtime_js_hashed(name, hash)
-            .expect("SITE_SCRIPTS names are valid")
-            .to_relative_url()
-    }
-
     /// Resolve a URL path to a root-relative href.
     ///
     /// Absolute URLs (`http://`, `https://`) pass through unchanged.

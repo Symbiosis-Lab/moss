@@ -89,6 +89,13 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub floating_nav: bool,
+    /// `[site].selection_tools` — Share and Copy on selected text, and the
+    /// QR codes the shared picture carries. Default OFF: sharing tools are
+    /// asked for, not inherited.
+    pub selection_tools: bool,
+    /// The comments service is switched on, so some page may offer Comment
+    /// on selected text: a page's own `comments: true` beats `[site].comments`.
+    pub selection_comments: bool,
     /// `[site].colophon` — moss's one-line "Published with moss" credit.
     /// Default ON: an absent key resolves to `true` at the construction
     /// site. Authors who don't want it write `[site].colophon = false`, and
@@ -191,6 +198,8 @@ impl Default for SiteConfig {
             link_preview: false,
             heading_anchors: false,
             floating_nav: false,
+            selection_tools: false,
+            selection_comments: false,
             colophon: true,
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,

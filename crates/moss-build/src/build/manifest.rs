@@ -144,6 +144,7 @@ pub struct PendingManifest {
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
+    withdrawn: change_set::Withdrawn,
     /// Paths that the blocking phase generated. Must be a subset of
     /// `(inner.files ∪ inner.image_outputs)` at seal time (the manifest invariant).
     /// Consumed by stale-HTML cleanup (C1–C4).
@@ -346,6 +347,7 @@ impl PendingManifest {
             input_evidence: None,
             preview_embeds: std::collections::BTreeMap::new(),
             preview_uses_places: false,
+            withdrawn: Default::default(),
             preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
@@ -376,6 +378,11 @@ impl PendingManifest {
     ) {
         self.preview_embeds = embeds;
         self.preview_uses_places = uses_places;
+    }
+
+    /// Record the generated files this build leaves out because a site setting says so.
+    pub(crate) fn set_withdrawn(&mut self, withdrawn: change_set::Withdrawn) {
+        self.withdrawn = withdrawn;
     }
 
     /// Record that `rel_path`'s output could not be verified this build.
@@ -916,6 +923,7 @@ impl PendingManifest {
             preview_embeds: self.preview_embeds,
             preview_uses_places: self.preview_uses_places,
             preview_originals: self.preview_originals,
+            withdrawn: self.withdrawn,
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
@@ -941,6 +949,7 @@ pub struct SealedManifest {
     preview_embeds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     preview_uses_places: bool,
     preview_originals: std::collections::BTreeMap<String, Option<String>>,
+    withdrawn: change_set::Withdrawn,
     blocking_keys: HashSet<String>,
     /// Content-derived identity computed at seal time. 16 lowercase hex chars
     /// (xxh3_64 over BTreeMap-sorted `"{path}\x00{entry_value}\n"` pairs).
@@ -967,6 +976,11 @@ pub struct SealedManifest {
 }
 
 impl SealedManifest {
+    /// The generated files this build left out because a site setting says so.
+    pub fn withdrawn(&self) -> change_set::Withdrawn {
+        self.withdrawn
+    }
+
     /// Whether this selected generation has an exact route backed by the
     /// requested source. An unresolved navigation may keep a previously
     /// selected route only when this seal proves its source or generated inputs.

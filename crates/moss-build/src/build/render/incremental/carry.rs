@@ -33,6 +33,7 @@ impl CarryProof {
         previous: &SiteHashes,
         output_dir: &Path,
         site_url: &SiteUrl,
+        selection_tools: bool,
     ) -> Option<Self> {
         // The not-found page is always rendered: its root `/404.html` copy is
         // a second output this proof does not know about, registered from the
@@ -42,7 +43,7 @@ impl CarryProof {
         }
 
         let html = proved_entry(&doc.url_path, previous, output_dir)?;
-        let qr = match qr::share_qr_for_page(&doc.url_path, doc.is_public_page(), site_url) {
+        let qr = match qr::share_qr_for_page(&doc.url_path, doc.is_public_page(), site_url, selection_tools) {
             Some(qr) => Some(proved_entry(&qr.served_path, previous, output_dir)?),
             None => None,
         };

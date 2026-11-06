@@ -1467,15 +1467,14 @@ pub(super) fn render_page<'d>(
             None
         },
         page_wrapper_class,
-        // Hero section from document (placed outside <main> for full-width).
-        // Enabled for all pages (homepage + articles) — needed for image pages
-        // and any article using :::hero shortcode.
+        // Placed outside <main> so a hero spans the full width, on any page.
         hero_section: doc.and_then(|d| d.hero_html.clone()),
         // The cover and the QR the page itself has, published to the reader
         // runtime on `<article class="container">` so share-card.ts finds
         // neither by guessing at markup. Absent attribute = the card draws
         // nothing there, and each rule lives with the code that decides it.
         share_cover_attr: doc
+            .filter(|_| layout_config.assets.selection_tools)
             .map(|d| {
                 crate::build::page::cover::share_cover_attr(
                     d.hero_image_url.as_deref(),
@@ -1490,8 +1489,8 @@ pub(super) fn render_page<'d>(
         // the same gap folder notes had: a card with an empty corner on the one
         // page most likely to be shared.
         share_qr_attr: match doc {
-            Some(d) => qr::share_qr_attr(&d.url_path, d.is_public_page(), site_url),
-            None => qr::share_qr_attr("index.html", true, site_url),
+            Some(d) => qr::share_qr_attr(&d.url_path, d.is_public_page(), site_url, layout_config.assets.selection_tools),
+            None => qr::share_qr_attr("index.html", true, site_url, layout_config.assets.selection_tools),
         },
         // Main element class for sidebar layout
         main_class: if use_sidebar_layout {

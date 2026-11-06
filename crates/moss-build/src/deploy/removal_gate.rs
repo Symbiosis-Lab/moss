@@ -8,7 +8,7 @@
 //! (`manifest::change_set::removed_addresses`); this module owns what the gate
 //! does with it and how it reads.
 
-use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress};
+use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress, WithdrawnBy};
 use crate::build::feeds::redirect_table::moves_a_folder;
 use crate::build::served_path::served_address;
 
@@ -22,11 +22,20 @@ pub(crate) fn cause_line(r: &RemovedAddress) -> String {
         if r.source.is_none() && crate::build::feeds::calendar::is_calendar_file(&r.path) {
             return format!("{at} is gone because no event page says `start:` there any more.");
         }
-        if r.source.is_none() && r.path == crate::build::served_path::ServedPath::for_llms_txt().as_str() {
-            return format!("{at} is gone because the site asks AI assistants not to use its pages.");
-        }
-        if r.source.is_none() && r.path == crate::build::served_path::ServedPath::for_tdmrep_json().as_str() {
-            return format!("{at} is gone because the site no longer sets its AI switches.");
+        match r.withdrawn_by {
+            Some(WithdrawnBy::AiAnswers) => {
+                return format!("{at} is gone because the site asks AI assistants not to use its pages.");
+            }
+            Some(WithdrawnBy::AiSwitches) => {
+                return format!("{at} is gone because the site no longer sets its AI switches.");
+            }
+            Some(WithdrawnBy::SelectionTools) => {
+                return format!(
+                    "{at} is gone because the site no longer offers Share on selected text \
+                     (`selection_tools` under [site]), whose pictures carry the page's code."
+                );
+            }
+            None => {}
         }
         return match &r.source {
             Some(src) => format!("{at} is gone because you deleted its source ({src})."),
@@ -231,7 +240,32 @@ mod tests {
             reason: crate::build::manifest::change_set::RemovalReason::AuthorRemoved,
             moved_to: None,
             source: None,
+            withdrawn_by: None,
         };
         assert_eq!(cause_line(&r), "/events/talk/event.ics is gone because no event page says `start:` there any more.");
+    }
+
+    #[test]
+    fn a_file_a_setting_stopped_names_the_setting() {
+        let gone = |path: &str, by| RemovedAddress {
+            path: path.into(),
+            reason: RemovalReason::AuthorRemoved,
+            moved_to: None,
+            source: None,
+            withdrawn_by: Some(by),
+        };
+        assert_eq!(
+            cause_line(&gone("qr/notes/spring.svg", WithdrawnBy::SelectionTools)),
+            "/qr/notes/spring.svg is gone because the site no longer offers Share on selected text \
+             (`selection_tools` under [site]), whose pictures carry the page's code."
+        );
+        assert_eq!(
+            cause_line(&gone("llms.txt", WithdrawnBy::AiAnswers)),
+            "/llms.txt is gone because the site asks AI assistants not to use its pages."
+        );
+        assert_eq!(
+            cause_line(&gone(".well-known/tdmrep.json", WithdrawnBy::AiSwitches)),
+            "/.well-known/tdmrep.json is gone because the site no longer sets its AI switches."
+        );
     }
 }

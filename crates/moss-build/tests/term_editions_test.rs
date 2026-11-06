@@ -10,6 +10,10 @@ use site::{hrefs_in, Site};
 const PARTNERS: &str = "\n[terms.partners]\nfields = [\"partners\"]\ntitle = \"Partners\"\nnav = true\n";
 
 fn partner_site(extra: &[(&str, &str)]) -> Site {
+    partner_site_with("", extra)
+}
+
+fn partner_site_with(site_keys: &str, extra: &[(&str, &str)]) -> Site {
     let mut files: Vec<(&str, &str)> = vec![
         ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
         ("de/index.md", "---\ntitle: Start\n---\n\nWillkommen.\n"),
@@ -23,7 +27,7 @@ fn partner_site(extra: &[(&str, &str)]) -> Site {
         ),
     ];
     files.extend_from_slice(extra);
-    Site::with_config(&format!("domain = \"example.org\"\n{PARTNERS}"), &files)
+    Site::with_config(&format!("domain = \"example.org\"\n{site_keys}{PARTNERS}"), &files)
 }
 
 #[test]
@@ -268,7 +272,7 @@ fn a_name_only_one_edition_uses_forwards_without_a_domain_too() {
 
 #[test]
 fn a_moved_term_pages_qr_code_keeps_its_old_address() {
-    let site = partner_site(&[]);
+    let site = partner_site_with("selection_tools = true\n", &[]);
     let (old_qr, new_qr) = ("qr/partners/nur-deutsch.svg", "qr/de/partners/nur-deutsch.svg");
     assert!(site.output(new_qr).exists(), "the German page has a code");
 

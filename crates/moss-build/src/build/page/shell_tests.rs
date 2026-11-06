@@ -3640,8 +3640,8 @@ fn a_built_page_ships_no_blueprint_placeholder() {
 /// half the share/copy bar ended up off the left of a phone screen.
 #[test]
 fn the_selection_popover_is_not_centred_by_a_transform() {
-    let rule = get_css_rule(DEFAULT_CSS, ".sel-popover")
-        .expect("site.css must style .sel-popover");
+    let rule = get_css_rule(include_str!("../../assets/css/site/selection.css"), ".sel-popover")
+        .expect("selection.css must style .sel-popover");
     assert!(
         !rule.contains("transform"),
         ".sel-popover must carry no transform — `left` is its real left edge, \

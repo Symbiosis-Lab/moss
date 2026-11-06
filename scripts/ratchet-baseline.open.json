@@ -54,7 +54,7 @@
         "crates/moss-build/src/build/media": 20,
         "crates/moss-build/src/deploy": 18,
         "crates/moss-build/src/js-src/bridge": 17,
-        "crates/moss-build/src/js-src/site": 25,
+        "crates/moss-build/src/js-src/site": 26,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 41,
         "crates/moss-core/src/ast": 27,
@@ -65,7 +65,7 @@
         "crates/moss-build/src/cli": 24,
         "crates/moss-build/src/build/components": 16,
         "crates/moss-build/src/build/emit": 18,
-        "crates/moss-build/src/assets/js": 15,
+        "crates/moss-build/src/assets/js": 16,
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 18
       },

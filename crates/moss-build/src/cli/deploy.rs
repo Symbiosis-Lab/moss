@@ -571,7 +571,7 @@ mod removed_by_author_tests {
     use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 
     fn gone(path: &str, reason: RemovalReason, source: Option<&str>) -> RemovedAddress {
-        RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into) }
+        RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into), withdrawn_by: None }
     }
 
     /// After a publish the author reads which addresses went away because

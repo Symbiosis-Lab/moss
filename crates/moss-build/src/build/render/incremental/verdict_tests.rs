@@ -905,14 +905,14 @@ fn the_not_found_page_is_never_carried_even_when_the_verdict_and_output_allow_it
     let site_url = crate::build::site_url::SiteUrl::parse("https://example.com").unwrap();
     let mut previous = crate::types::content::SiteHashes::default();
     for d in &docs[1..] {
-        let qr = crate::build::media::qr::share_qr_for_page(&d.url_path, d.is_public_page(), &site_url);
+        let qr = crate::build::media::qr::share_qr_for_page(&d.url_path, d.is_public_page(), &site_url, true);
         for out in std::iter::once(d.url_path.clone()).chain(qr.map(|q| q.served_path)) {
             previous.files.insert(out.clone(), "100644:0123456789abcdef".to_string());
             std::fs::create_dir_all(h.output.join(&out).parent().unwrap()).unwrap();
             std::fs::write(h.output.join(&out), "x").unwrap();
         }
     }
-    let proof = |d: &ParsedDocument| CarryProof::for_document(d, &verdict, &previous, &h.output, &site_url);
+    let proof = |d: &ParsedDocument| CarryProof::for_document(d, &verdict, &previous, &h.output, &site_url, true);
 
     assert!(proof(&docs[1]).is_some(), "a plain page with all its outputs is carried");
     assert!(verdict.may_skip_document(&docs[2]), "the verdict alone would carry the not-found page");

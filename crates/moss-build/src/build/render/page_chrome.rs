@@ -156,10 +156,7 @@ impl PageChromeContext<'_, '_> {
         ShellVars {
             title: String::new(),
             css_path: paths.css_path(), js_path: paths.js_path(),
-            lazy_chunk_attrs: paths.lazy_chunk_attrs(
-                self.assets.scripts.hash("share-card"),
-                self.layout.assets.video_ladder.then(|| self.assets.scripts.hash("hls")),
-            ),
+            lazy_chunk_attrs: self.assets.scripts.lazy_chunk_attrs(&self.layout.assets),
             navigation: nav.generate_navigation(),
             has_header: self.layout.header != crate::build::components::nav::HeaderMode::None,
             colophon: self.layout.colophon,

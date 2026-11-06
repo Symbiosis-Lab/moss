@@ -76,3 +76,32 @@ fn a_site_with_no_switch_keeps_the_robots_txt_its_policy_always_wrote() {
     assert!(!site.output("llms.txt").exists(), "a restricted site asked not to be used for answers");
     assert!(!site.output(".well-known/tdmrep.json").exists());
 }
+
+#[test]
+fn the_llms_txt_a_site_stops_serving_is_its_own_choice() {
+    use moss_build::build::manifest::change_set::{PublishedSnapshot, RemovalReason, WithdrawnBy};
+    let site = Site::with_config("domain = \"example.com\"\nai_answers = true\n", PAGES);
+    let mut snapshot = PublishedSnapshot { target: "moss:test".into(), published_at: "2026-11-01T00:00:00Z".into(), ..Default::default() };
+    snapshot.files.insert("llms.txt".into(), "h".into());
+    moss_build::build::manifest::published_record::save(&moss_build::moss_paths::MossPaths::new(&site.root), &snapshot).unwrap();
+    site.write(".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\ndomain = \"example.com\"\nai_answers = false\n");
+    site.rebuild();
+    let removed = moss_build::system::build_records::records().removed_addresses(&site.root.to_string_lossy()).unwrap();
+    let llms = removed.iter().find(|r| r.path == "llms.txt").expect("llms.txt is no longer served");
+    assert_eq!((llms.reason, llms.withdrawn_by), (RemovalReason::AuthorRemoved, Some(WithdrawnBy::AiAnswers)));
+}
+
+#[test]
+fn the_tdmrep_json_a_site_stops_serving_when_it_drops_its_switches_is_its_own_choice() {
+    use moss_build::build::manifest::change_set::{PublishedSnapshot, RemovalReason, WithdrawnBy};
+    let site = Site::with_config("domain = \"example.com\"\nai_training = false\n", PAGES);
+    assert!(site.output(".well-known/tdmrep.json").exists());
+    let mut snapshot = PublishedSnapshot { target: "moss:test".into(), published_at: "2026-11-01T00:00:00Z".into(), ..Default::default() };
+    snapshot.files.insert(".well-known/tdmrep.json".into(), "h".into());
+    moss_build::build::manifest::published_record::save(&moss_build::moss_paths::MossPaths::new(&site.root), &snapshot).unwrap();
+    site.write(".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\ndomain = \"example.com\"\n");
+    site.rebuild();
+    let removed = moss_build::system::build_records::records().removed_addresses(&site.root.to_string_lossy()).unwrap();
+    let tdmrep = removed.iter().find(|r| r.path == ".well-known/tdmrep.json").expect("tdmrep.json is no longer served");
+    assert_eq!((tdmrep.reason, tdmrep.withdrawn_by), (RemovalReason::AuthorRemoved, Some(WithdrawnBy::AiSwitches)));
+}

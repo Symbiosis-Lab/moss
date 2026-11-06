@@ -14,8 +14,6 @@
 //! switch. `llms.txt` follows the AI answers use in both forms, so a
 //! `restricted` site stops publishing it.
 
-use crate::build::served_path::ServedPath;
-
 /// Crawlers that collect pages to train models. Order is part of the
 /// published robots.txt and stays as sites have always had it.
 const TRAINING_CRAWLERS: [&str; 8] = [
@@ -217,15 +215,6 @@ impl AiSettings {
     /// Whether the site's whole text is published as `llms.txt`.
     pub fn publishes_llms_txt(self) -> bool {
         self.uses().answers
-    }
-
-    /// Addresses this choice stops serving on purpose: `llms.txt` while AI
-    /// answers are asked not to, and `tdmrep.json` once no switch is set. The
-    /// publish gate reads the disappearance of one as the owner's act.
-    pub fn withdrawn(self) -> Vec<ServedPath> {
-        let llms = (!self.publishes_llms_txt()).then(ServedPath::for_llms_txt);
-        let tdmrep = self.tdmrep_json().is_none().then(ServedPath::for_tdmrep_json);
-        llms.into_iter().chain(tdmrep).collect()
     }
 
     /// `/.well-known/tdmrep.json`, the W3C TDM Reservation Protocol's form of

@@ -984,6 +984,12 @@ pub struct SiteAssets {
     pub link_preview: bool,
     /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
     pub heading_anchors: bool,
+    /// `[site].selection_tools` — Share and Copy on selected text, the
+    /// share-card chunk and every page's QR code. Defaults OFF.
+    pub selection_tools: bool,
+    /// Comments may be on somewhere, so selected text offers Comment and the
+    /// selection script ships even with `selection_tools` off.
+    pub selection_comments: bool,
     /// `[site].math` — click-to-copy LaTeX on math nodes. Defaults ON.
     pub math: bool,
     /// This build generated at least one media collection page

@@ -56,6 +56,9 @@ function createArticlePage(): void {
   main.appendChild(commentsSection);
 
   document.body.appendChild(main);
+  const script = document.createElement("script");
+  script.dataset.shareCard = "/_moss/js/share-card.abc.js";
+  document.body.appendChild(script);
 }
 
 beforeEach(() => {

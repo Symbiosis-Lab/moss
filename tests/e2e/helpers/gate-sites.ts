@@ -1500,7 +1500,8 @@ typesetting: vertical
 
 印：「字曰年」。
 `,
-    ".moss/config.toml": CONFIG_TOML,
+    ".moss/config.toml": `${CONFIG_TOML}selection_tools = true
+`,
     // No user theme: this gate is about moss's own defaults.
     ".moss/theme/style.css": null,
   },
@@ -4297,7 +4298,9 @@ export const WCAG_OUTPUT: ScratchSiteSpec = {
   files: {
     // Comments with a server address, so the form renders live; the spec
     // stands in for the server.
-    ".moss/config.toml": `${CONFIG_TOML}
+    // Selection tools on, so the popover's Share, Comment and Copy are audited.
+    ".moss/config.toml": `${CONFIG_TOML}selection_tools = true
+
 [services.comments]
 enabled = true
 server_url = "https://comments.example.test"

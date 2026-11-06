@@ -27,6 +27,7 @@ use crate::build::markdown::{process_markdown_file, resolve_duplicate_slugs_with
 use crate::build::folder_embed::{generate_children, resolve_children_config};
 use crate::build::assets::paths::{compute_binary_hash, compute_content_hash, PathResolver};
 use crate::build::context::BuildContext;
+use crate::build::manifest::change_set::Withdrawn;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::media::qr;
 use crate::build::outcome::BuildStopped;
@@ -1524,6 +1525,8 @@ pub fn generate_blocking_content_for_build(
             places_explorer: crate::build::features::should_inject_places_explorer(&term_index, &site_config),
             map_layers: site_config.place_maps.as_ref().is_some_and(|maps| maps.has_layers()),
             colophon_credit: site_config.colophon_credit.is_some(),
+            selection_tools: site_config.selection_tools,
+            selection_comments: site_config.selection_comments,
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four
@@ -1541,11 +1544,6 @@ pub fn generate_blocking_content_for_build(
     // One listing per folder for the filename-cover rung, shared by its pages.
     let filename_covers = crate::build::page::cover::FilenameCovers::default();
     let js_version = scripts.hash("theme").to_string();
-    let share_card_hash = scripts.hash("share-card").to_string();
-    let hls_hash = scripts.hash("hls").to_string();
-    // `None` keeps `data-hls` off every page of a site with no ladder, which is
-    // what keeps those sites byte-identical. See `lazy_chunk_attrs`.
-    let hls_attr_hash: Option<&str> = site_assets.video_ladder.then_some(hls_hash.as_str());
     let fullscreen_hash = scripts.hash("fullscreen").to_string();
 
 
@@ -1826,6 +1824,7 @@ pub fn generate_blocking_content_for_build(
                 &previous_hashes,
                 output_dir,
                 &site_url,
+                layout_config.assets.selection_tools,
             )
         });
     let homepage_carried = homepage_carry_proof.is_some();
@@ -1909,6 +1908,7 @@ pub fn generate_blocking_content_for_build(
                     &previous_hashes,
                     output_dir,
                     &site_url,
+                    layout_config.assets.selection_tools,
                 ) {
                     Some(proof) => carry.push((doc, proof)),
                     None => render.push(doc),
@@ -2293,6 +2293,7 @@ pub fn generate_blocking_content_for_build(
                 &previous_hashes,
                 output_dir,
                 &site_url,
+                layout_config.assets.selection_tools,
             ) {
                 if carry_verification.is_some() {
                     verification_snapshot =
@@ -2402,7 +2403,7 @@ pub fn generate_blocking_content_for_build(
             let vars = ShellVars {
                 title: tab_title(&page_title, &localized_site_name, false),
                 homepage_content: content_html,
-                share_qr_attr: qr::share_qr_attr(&auto_url_path, true, &site_url),
+                share_qr_attr: qr::share_qr_attr(&auto_url_path, true, &site_url, layout_config.assets.selection_tools),
                 ..chrome
             };
             let html_page = ShellProcessor::new().process(ShellType::Page, vars);
@@ -2525,18 +2526,16 @@ pub fn generate_blocking_content_for_build(
                 .map_err(|e| format!("Failed to emit tdmrep.json: {}", e))?;
         }
 
-        // Generate QR codes for article pages
-        let qr_dir = output_dir.join("qr");
-        crate::build::io_utils::create_output_dir_all(&qr_dir)
-            .map_err(|e| format!("Failed to create qr directory: {}", e))?;
-
         // Which pages get a code, and where it lives, is decided in ONE place —
         // `build/media/qr.rs` — because `render/html.rs` has to reach the same
         // verdict to write `data-share-qr`. Anything decided here instead is
         // invisible to the reader, which is how folder notes ended up with
         // cards missing their QR corner.
-        qr::emit_share_qrs(&documents, &site_url, output_dir, pending)?;
+        qr::emit_share_qrs(&documents, &site_url, layout_config.assets.selection_tools, output_dir, pending)?;
     }
+    // What the settings leave out, so the publish gate reads a missing
+    // llms.txt, tdmrep.json or QR code as the owner's choice.
+    pending.set_withdrawn(Withdrawn::from_settings(site_config.ai, layout_config.assets.selection_tools));
 
     // Calendar files for event pages and for folders of them. Written whether or
     // not the site has a deployed address, so a preview serves the links the
@@ -2554,8 +2553,6 @@ pub fn generate_blocking_content_for_build(
     // (set below). See `build/feeds/search.rs`.
 
     // llms.txt: the whole site's text, unless AI answers are asked not to.
-    // Its absence then is declared by `AiSettings::withdrawn`, so the publish
-    // gate reads it as the owner's choice.
     if site_config.ai.publishes_llms_txt() {
         let llms_site_title = documents
             .iter()
@@ -2941,7 +2938,7 @@ pub fn generate_blocking_content_for_build(
                 &layout_config.lang_tag,
                 Some(&event_level_image_lookup),
                 &media_path_resolver.js_path(),
-                &media_path_resolver.lazy_chunk_attrs(&share_card_hash, hls_attr_hash),
+                &shared.scripts.lazy_chunk_attrs(&layout_config.assets),
                 js_fullscreen_path_arg,
                 &shared.scripts.tag("search", &layout_config.assets, &media_path_resolver),
                 layout_config.ai.robots_tag(false).as_deref(),

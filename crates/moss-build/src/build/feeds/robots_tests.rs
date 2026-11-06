@@ -212,14 +212,9 @@ fn tdmrep_reserves_while_training_is_asked_not_to_and_stays_when_allowed() {
 }
 
 #[test]
-fn llms_txt_follows_ai_answers_and_its_absence_is_declared() {
+fn llms_txt_follows_ai_answers() {
     assert!(!switches(true, false, false).publishes_llms_txt());
-    let paths = |s: AiSettings| s.withdrawn().iter().map(|p| p.as_str().to_string()).collect::<Vec<_>>();
-    assert_eq!(paths(switches(true, false, false)), ["llms.txt"]);
     assert!(switches(false, true, false).publishes_llms_txt());
-    assert!(paths(switches(false, true, false)).is_empty());
-    // With no switch set there is no tdmrep.json: removing the keys withdraws it.
-    assert_eq!(paths(preset(None)), [".well-known/tdmrep.json"]);
     // A restricted site asked not to be used for answers, switches or not.
     assert!(!preset(Some("restricted")).publishes_llms_txt());
     assert!(preset(None).publishes_llms_txt() && preset(Some("unrestricted")).publishes_llms_txt());
@@ -230,57 +225,6 @@ fn from_config_reads_the_same_keys_resolve_takes() {
     let cfg = crate::config::ConfigFile::parse("[site]\nai_policy = \"restricted\"\nai_training = true\n").unwrap();
     assert_eq!(AiSettings::from_config(Some(&cfg)), AiSettings::resolve(Some("restricted"), None, None, Some(true)));
     assert_eq!(AiSettings::from_config(None), AiSettings::default());
-}
-
-// ---- The publish gate reads a withdrawn llms.txt as the owner's act ----
-
-fn removal_reasons(config: &str) -> Vec<(String, crate::build::manifest::change_set::RemovalReason)> {
-    use crate::build::manifest::change_set::PublishedSnapshot;
-    use crate::build::manifest::{backfill, published_record, HashBucket, PendingManifest};
-    use crate::build::served_path::ServedPath;
-    use crate::types::content::SiteHashes;
-
-    let vault = tempfile::tempdir().unwrap();
-    let mp = crate::moss_paths::MossPaths::new(vault.path());
-    std::fs::create_dir_all(vault.path().join(".moss")).unwrap();
-    std::fs::write(vault.path().join(".moss/config.toml"), config).unwrap();
-    let mut last = PendingManifest::new(SiteHashes::default());
-    for path in ["llms.txt", ".well-known/tdmrep.json", "rss.xml"] {
-        last.register(&ServedPath::from_cached(path).unwrap(), b"x", HashBucket::Files);
-    }
-    published_record::save(&mp, &PublishedSnapshot::from_sealed(&last.seal(), "moss:site-1", "2026-11-05T00:00:00Z".into())).unwrap();
-    let now = PendingManifest::new(SiteHashes::default()).seal();
-    let mut reasons: Vec<_> = backfill::removed_for_seal(&mp, &now).into_iter().map(|r| (r.path, r.reason)).collect();
-    reasons.sort_by(|a, b| a.0.cmp(&b.0));
-    reasons
-}
-
-#[test]
-fn a_withdrawn_llms_txt_passes_the_publish_gate_and_nothing_else_does() {
-    use crate::build::manifest::change_set::RemovalReason::{AuthorRemoved, Unexplained};
-    let tdmrep = ".well-known/tdmrep.json".to_string();
-    assert_eq!(
-        removal_reasons("[site]\nai_answers = false\n"),
-        [(tdmrep.clone(), Unexplained), ("llms.txt".to_string(), AuthorRemoved), ("rss.xml".to_string(), Unexplained)]
-    );
-    assert_eq!(
-        removal_reasons("[site]\nai_answers = true\n"),
-        [(tdmrep.clone(), Unexplained), ("llms.txt".to_string(), Unexplained), ("rss.xml".to_string(), Unexplained)]
-    );
-    // Removing every switch withdraws tdmrep.json, as the owner's choice.
-    assert_eq!(
-        removal_reasons("[site]\nlang = \"en\"\n"),
-        [(tdmrep, AuthorRemoved), ("llms.txt".to_string(), Unexplained), ("rss.xml".to_string(), Unexplained)]
-    );
-}
-
-/// The gate says which setting withdrew a file, not that its source was deleted.
-#[test]
-fn a_withdrawn_file_is_worded_by_the_setting_that_withdrew_it() {
-    use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
-    let line = |path: &str| crate::deploy::removal_gate::cause_line(&RemovedAddress { path: path.into(), reason: RemovalReason::AuthorRemoved, moved_to: None, source: None });
-    assert_eq!(line("llms.txt"), "/llms.txt is gone because the site asks AI assistants not to use its pages.");
-    assert_eq!(line(".well-known/tdmrep.json"), "/.well-known/tdmrep.json is gone because the site no longer sets its AI switches.");
 }
 
 #[test]
