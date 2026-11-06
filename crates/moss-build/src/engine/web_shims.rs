@@ -135,17 +135,22 @@ pub fn install_crypto<'js>(ctx: &Ctx<'js>) -> Result<()> {
     // and not an object, so no setter a plugin put on a prototype sees or
     // changes it. The usages are read once, and that one reading decides both
     // what the key may do and what it shows.
-    let import = rquickjs::Function::new(ctx.clone(), move |ctx: Ctx<'js>, hash: String, raw: rquickjs::TypedArray<'js, u8>, usages: Vec<String>| -> Result<Option<u32>> {
+    let import = rquickjs::Function::new(ctx.clone(), move |ctx: Ctx<'js>, hash: String, raw: rquickjs::TypedArray<'js, u8>, usages: rquickjs::Value<'js>| -> Result<Option<u32>> {
         let Some((_, algorithm)) = HMAC_HASHES.iter().find(|(name, _)| *name == hash) else {
             return Err(rquickjs::Exception::throw_type(&ctx, &format!("unsupported hash {hash}")));
         };
+        // A Proxy does not convert, so its traps never run here.
+        let Ok(usages) = <Vec<String> as rquickjs::FromJs>::from_js(&ctx, usages) else { return Ok(None) };
         if usages.is_empty() || usages.iter().any(|u| u != "sign" && u != "verify") {
             return Ok(None);
         }
         let signs = usages.iter().any(|u| u == "sign");
         let verifies = usages.iter().any(|u| u == "verify");
         let mut table = table.borrow_mut();
-        let Ok(id) = u32::try_from(table.len()).map(|n| n.saturating_mul(4)) else { return Ok(None) };
+        let id = u32::try_from(table.len()).ok().filter(|_| table.len() < MAX_HMAC_KEYS).and_then(|n| n.checked_mul(4));
+        let Some(id) = id else {
+            return Err(rquickjs::Exception::throw_message(&ctx, &format!("a plugin may hold at most {MAX_HMAC_KEYS} HMAC keys")));
+        };
         table.push((ring::hmac::Key::new(*algorithm, raw.as_ref()), signs));
         Ok(Some(id | (u32::from(signs) << 1) | u32::from(verifies)))
     })?;
@@ -160,6 +165,10 @@ pub fn install_crypto<'js>(ctx: &Ctx<'js>) -> Result<()> {
     install.call::<_, ()>((import, sign, hashes))?;
     Ok(())
 }
+
+/// Imported keys are never freed while the plugin runs, so their number is
+/// capped to bound the memory one plugin can hold.
+const MAX_HMAC_KEYS: usize = 65_536;
 
 const HMAC_HASHES: [(&str, ring::hmac::Algorithm); 4] = [
     ("SHA-1", ring::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY),
@@ -514,6 +523,63 @@ mod tests {
             ].join(" | ")
         "#).await;
         assert_eq!(out, r#"{"type":"secret","extractable":true,"algorithm":{"name":"HMAC","hash":{"name":"SHA-256"},"length":24},"usages":["verify"]} | true | InvalidAccessError | NotSupportedError | NotSupportedError | SyntaxError | DataError | SyntaxError | TypeError | DataError | 20 | InvalidAccessError | InvalidAccessError | InvalidAccessError | TypeError"#);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_plugin_holding_the_most_keys_is_refused_another() {
+        let out = with_crypto(r#"
+            const imp = () => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+            for (let i = 0; i < 65536; i++) await imp();
+            await imp().then(() => "accepted", (e) => `${e.name}: ${e.message}`)
+        "#).await;
+        assert_eq!(out, "Error: a plugin may hold at most 65536 HMAC keys");
+    }
+
+    /// Usages behind a Proxy are refused like any usages that are not a
+    /// plain list, so no trap decides what a key may do.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn usages_behind_a_proxy_are_refused() {
+        let out = with_crypto(r#"
+            const imp = (usages) => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-256" }, false, usages).then((k) => k.usages.join(","), (e) => e.name);
+            let reads = 0;
+            const flipping = new Proxy(["verify"], { get(t, p) { return p === "0" && ++reads > 1 ? "sign" : t[p]; } });
+            const throwing = new Proxy(["sign"], { get(t, p) { if (p === "length") throw new Error("no"); return t[p]; } });
+            [await imp(flipping), await imp(throwing), reads, await imp(["verify"])].join(" ")
+        "#).await;
+        assert_eq!(out, "SyntaxError SyntaxError 0 verify");
+    }
+
+    /// Each context has its own key table: a key one plugin imported does not
+    /// sign in another's context, and the other's own first key signs with its
+    /// own bytes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn keys_do_not_cross_contexts() {
+        let rt = AsyncRuntime::new().unwrap();
+        let (a, b) = (AsyncContext::full(&rt).await.unwrap(), AsyncContext::full(&rt).await.unwrap());
+        let run = |code: &'static str| code.as_bytes();
+        let held = async_with!(a => |ctx| {
+            install_crypto(&ctx).unwrap();
+            let promise: rquickjs::Promise = ctx.eval_promise(run(r#"globalThis.k = await crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);"#)).unwrap();
+            let _: rquickjs::Value = promise.into_future().await.unwrap();
+            rquickjs::Persistent::save(&ctx, ctx.globals().get::<_, rquickjs::Object>("k").unwrap())
+        })
+        .await;
+        let out: String = async_with!(b => |ctx| {
+            install_crypto(&ctx).unwrap();
+            ctx.globals().set("foreign", held.restore(&ctx).unwrap()).unwrap();
+            let promise: rquickjs::Promise = ctx.eval_promise(run(r#"
+                const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+                const own = await crypto.subtle.importKey("raw", new Uint8Array([2]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+                const crossed = await crypto.subtle.sign("HMAC", foreign, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+                globalThis.out = [crossed, hex(await crypto.subtle.sign("HMAC", own, new Uint8Array(1)))].join(" ");
+            "#)).unwrap();
+            let _: rquickjs::Value = promise.into_future().await.unwrap();
+            ctx.globals().get("out").unwrap()
+        })
+        .await;
+        let own = ring::hmac::sign(&ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &[2]), &[0]);
+        let hex: String = own.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(out, format!("InvalidAccessError {hex}"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
