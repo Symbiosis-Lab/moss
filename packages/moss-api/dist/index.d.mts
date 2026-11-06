@@ -157,7 +157,7 @@ declare function reportProgress(phase: string, current: number, total: number, m
 declare function reportError(error: string, context?: string, fatal?: boolean): Promise<void>;
 /**
  * `PluginHook` mirrors the closed Rust enum in
- * the app's plugin types module. The router (T1) cross-products
+ * moss's plugin types. moss cross-products
  * `PluginHook × TriggerContext` to pick a UI surface for the task.
  * Plugin authors pick the hook that matches what they're doing; they
  * do NOT pick the surface (the router owns that).
@@ -191,7 +191,7 @@ type EscapeSpec = "cancel" | `resend:${string}` | `recheck:${string}` | `downloa
  */
 type AdvisoryScope = "File" | "Config" | "Environment" | "Remote" | "Account";
 /**
- * How serious the plugin proposes an advisory is. moss CLAMPS this (R13): a
+ * How serious the plugin proposes an advisory is. moss CLAMPS this: a
  * `Blocking` proposal with no actionable affordance is demoted to a quiet
  * `NeedsAction` hairline dot. Mirrors the Rust `advisory::Severity`.
  * @category Messaging
@@ -232,13 +232,13 @@ type AdvisoryAction = "None" | {
  * `plugins::types::PluginAdvisory` wire shape exactly so it deserializes
  * directly into `PluginTaskLifecycle::Succeeded/Failed { advisories }`. moss
  * is the only constructor of a final `Advisory` — a plugin can never hand moss
- * one (R13).
+ * one.
  * @category Messaging
  */
 interface AdvisoryProposal {
   /** Which axis of the system this advisory is about. */
   scope: AdvisoryScope;
-  /** The severity the plugin REQUESTS. moss clamps it (R13). */
+  /** The severity the plugin REQUESTS. moss clamps it. */
   severity: AdvisorySeverity;
   /**
    * The site-relative path of the file this advisory is about, e.g.
@@ -282,7 +282,7 @@ interface StartTaskOptions {
   cancellable?: boolean;
   /**
    * Plugin-local job id referencing `contributes.jobs[id]` in the plugin's
-   * manifest (Step 3 Phase 5, §8 + R13). When set, moss looks up the declared
+   * manifest. When set, moss looks up the declared
    * descriptor (a past-tense `verb` + an amount `noun`), normalizes the verb
    * (`Verb::normalized` — moss owns capitalization/length/glyphs), and on a
    * `succeeded(receipt, count)` stamps its OWN typed `Verb` + `Amount { count,
@@ -332,7 +332,7 @@ interface TaskHandle {
    */
   awaiting(directive: string, venue: string, escape?: EscapeSpec): Promise<void>;
   /**
-   * PROPOSE an advisory on this task (Step 3 Phase 5, §8 + R13). Accumulates
+   * PROPOSE an advisory on this task. Accumulates
    * the proposal on the handle; it is flushed into the next terminal call
    * (`succeeded`/`failed`) as `advisories: PluginAdvisory[]`. moss holds the
    * severity gavel server-side: a `Blocking` proposal with no actionable
@@ -428,7 +428,7 @@ interface ProcessContext extends BaseContext {
   site_config?: Record<string, unknown>;
 }
 /**
- * Context for on_deploy hook (deployer plugins)
+ * Context for the deploy hook (deployer plugins)
  *
  * @category Hook contexts
  */

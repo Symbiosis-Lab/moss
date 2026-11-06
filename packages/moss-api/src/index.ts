@@ -9,7 +9,7 @@
  * import { reportProgress } from "@symbiosis-lab/moss-api";
  *
  * const MyPlugin = {
- *   async on_deploy(context: DeployContext): Promise<HookResult> {
+ *   async deploy(context: DeployContext): Promise<HookResult> {
  *     await reportProgress("deploying", 0, 100, "Initializing");
  *     // ... deployment logic
  *     return { success: true, message: "Deployed successfully" };

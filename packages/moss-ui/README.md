@@ -1,6 +1,6 @@
 # @symbiosis-lab/moss-ui
 
-The moss UI: its typed contract with the moss engine, and the UI code every host of moss shares.
+The moss UI: its typed contract with the moss engine, and the UI code every host of moss shares. Public source, not published to npm. The editor and preview are not in it yet.
 
 ## The contract
 

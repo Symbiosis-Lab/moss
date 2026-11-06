@@ -4,7 +4,9 @@
 
 **Write anywhere. Publish everywhere. Own everything.**
 
-moss turns a folder of markdown into a website. The folder on your disk is the site: there is no database, no CMS and no project to configure. Write in any editor, and moss builds the pages, the navigation, the styling and dark mode, then publishes them.
+moss turns a folder of markdown into a website. The folder on your disk is the site: there is no database, no CMS and no project to configure. Write in any editor, and moss builds the pages, the navigation, the styling and dark mode, then publishes them. It is for writers, researchers, artists and small organisations who want a site they own, and for the coding agents that build sites for them.
+
+This repository is the open-source engine, CLI, plugins and UI behind moss, wherever you write. To start, [install](#install) the CLI and run `moss build <folder> --serve` on a folder of markdown.
 
 <img src="assets/new-folder.gif" width="720" alt="A folder of markdown files becomes a website in the moss app">
 
@@ -51,6 +53,8 @@ npm install -g @symbiosis-lab/moss
 
 ## Quick start
 
+Make a folder with an `index.md` in it, then:
+
 ```sh
 moss build ~/blog/            # build once
 moss build ~/blog/ --serve    # build and serve a local preview
@@ -65,13 +69,13 @@ For a coding agent, `moss guide` prints the conventions and rules, and `moss des
 
 ## Where moss is going
 
-Designs for things moss does not do yet live in [docs/proposals](docs/proposals/), each with an issue where it is discussed. A proposal is not a promise. The [`proposal` label](https://github.com/Symbiosis-Lab/moss/labels/proposal) lists everything under consideration.
+Designs for things moss does not do yet live in [docs/proposals](docs/proposals/), and those opened for public discussion link to an issue. A proposal is not a promise. The [`proposal` label](https://github.com/Symbiosis-Lab/moss/labels/proposal) lists the ones under discussion.
 
 ## Contributing
 
 Bug reports, comments on proposals and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) says how to build, how to check a change and what we ask of contributors. Issues labelled [`good first issue`](https://github.com/Symbiosis-Lab/moss/labels/good%20first%20issue) are sized for a first contribution.
 
-The desktop app’s releases, bug reports and designs live here.
+The desktop app's releases and bug reports live here too; its source is maintained separately.
 
 ## Repository layout
 
@@ -80,10 +84,11 @@ The desktop app’s releases, bug reports and designs live here.
 | Path | What's there |
 |---|---|
 | `crates/moss-cli` | the `moss` CLI binary |
-| `crates/moss-build` | the build engine the CLI and desktop app both call |
+| `crates/moss-build` | the build engine every way of running moss calls |
 | `crates/moss-core` | pure-Rust parsing and schema code, no I/O |
 | `packages/moss` | the `@symbiosis-lab/moss` npm wrapper that installs the CLI binary |
 | `packages/moss-api` | the plugin API |
+| `packages/moss-ui` | [shared UI components and the typed engine contract](packages/moss-ui/README.md) used by moss hosts |
 | `packages/moss-syntax` | shared markdown/frontmatter syntax tooling |
 | `packages/obsidian-moss` | the Obsidian plugin |
 | `site/` | the source of [mosspub.com](https://mosspub.com), including the docs |

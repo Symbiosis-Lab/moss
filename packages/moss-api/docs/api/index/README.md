@@ -13,7 +13,7 @@ import type { DeployContext, HookResult } from "@symbiosis-lab/moss-api";
 import { reportProgress } from "@symbiosis-lab/moss-api";
 
 const MyPlugin = {
-  async on_deploy(context: DeployContext): Promise<HookResult> {
+  async deploy(context: DeployContext): Promise<HookResult> {
     await reportProgress("deploying", 0, 100, "Initializing");
     // ... deployment logic
     return { success: true, message: "Deployed successfully" };
@@ -84,7 +84,7 @@ Which axis of the system an advisory is about. Mirrors the Rust
 type AdvisorySeverity = "ShippedDegraded" | "NeedsAction" | "Blocking";
 ```
 
-How serious the plugin proposes an advisory is. moss CLAMPS this (R13): a
+How serious the plugin proposes an advisory is. moss CLAMPS this: a
 `Blocking` proposal with no actionable affordance is demoted to a quiet
 `NeedsAction` hairline dot. Mirrors the Rust `advisory::Severity`.
 
@@ -118,7 +118,7 @@ type PluginHook = "publish" | "deploy" | "syndicate" | "process";
 ```
 
 `PluginHook` mirrors the closed Rust enum in
-the app's plugin types module. The router (T1) cross-products
+moss's plugin types. moss cross-products
 `PluginHook × TriggerContext` to pick a UI surface for the task.
 Plugin authors pick the hook that matches what they're doing; they
 do NOT pick the surface (the router owns that).

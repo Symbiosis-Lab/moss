@@ -1,9 +1,6 @@
 # @symbiosis-lab/moss-syntax
 
-moss's markdown syntax layer, extracted so **one implementation** serves every
-host (the moss editor today, the Obsidian plugin next).
-
-Workspace-private until the Obsidian plugin ships publicly.
+moss's markdown syntax layer, shared so **one implementation** serves every host: the moss editor and the Obsidian plugin. Public source; not published to npm.
 
 ## What the `.` export carries (L1 — the core layer)
 
@@ -58,7 +55,6 @@ new variant is a semver break and needs its own design review. A syntax feature 
 seems to want one should first be tried as a transform over the existing
 `Other` passthrough — which is how math itself ships.
 
-**The Obsidian plugin needs a public repo.** Obsidian stopped accepting new closed-source plugins in May 2026. This package stays `"private": true` with no changesets entry until the mirror pipeline publishes it.
 
 ## Fixtures
 

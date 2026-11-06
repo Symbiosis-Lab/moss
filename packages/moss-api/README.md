@@ -7,7 +7,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![bundle size](https://img.shields.io/bundlephobia/minzip/@symbiosis-lab/moss-api)](https://bundlephobia.com/package/@symbiosis-lab/moss-api)
 
-[moss](https://mosspub.com) is a desktop publishing app; this package is its plugin API surface. Use it to write plugins that publish posts, manage site assets, or extend the editor.
+[moss](https://mosspub.com) turns a folder of markdown into a website, wherever you write; this package is its plugin API. Plugins run in moss's embedded QuickJS environment, which has no DOM. Use it to write plugins that publish posts, manage site assets, or extend the build.
 
 - [Quickstart](#quickstart)
 - [Anatomy of a plugin](#anatomy-of-a-plugin)

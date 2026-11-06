@@ -48,7 +48,7 @@ export interface ProcessContext extends BaseContext {
 }
 
 /**
- * Context for on_deploy hook (deployer plugins)
+ * Context for the deploy hook (deployer plugins)
  *
  * @category Hook contexts
  */

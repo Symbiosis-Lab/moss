@@ -8,7 +8,7 @@ children: false
 ---
 ![[Intro to moss.mp4|100%|A one-minute tour of moss: make a folder your website, write a first post, start from a starter folder, and publish.]]
 
-moss packs the markdown files and other media in your folder into a website. You can use any markdown editor, such as [Obsidian](https://obsidian.md/), or moss's built-in editor, to write and add other material. moss is macOS-only for now; Linux and Windows are coming in later releases.
+moss packs the markdown files and other media in your folder into a website. You can use any markdown editor, such as [Obsidian](https://obsidian.md/), or moss's built-in editor, to write and add other material. The desktop app currently supports macOS; the CLI also runs on Linux and Windows (see the install options in the [README](https://github.com/Symbiosis-Lab/moss#install)).
 
 Please submit bugs and feature suggestions [on Github](https://github.com/Symbiosis-Lab/moss/issues).
 

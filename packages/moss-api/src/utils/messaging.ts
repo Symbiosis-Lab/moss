@@ -111,7 +111,7 @@ export async function reportError(
 
 /**
  * `PluginHook` mirrors the closed Rust enum in
- * the app's plugin types module. The router (T1) cross-products
+ * moss's plugin types. moss cross-products
  * `PluginHook × TriggerContext` to pick a UI surface for the task.
  * Plugin authors pick the hook that matches what they're doing; they
  * do NOT pick the surface (the router owns that).
@@ -153,13 +153,13 @@ export type EscapeSpec =
   | `recheck:${string}`
   | `download-tool:${string}`;
 
-// ── Advisory proposal vocabulary (Step 3 Phase 5, §8 + R13) ───────────────
+// ── Advisory proposal vocabulary ───────────────
 //
 // These TS types mirror the Rust serde wire shapes 1:1 (hand-written here,
 // matching the `PluginHook`/`TriggerContext` mirror pattern above — moss-api
 // is a standalone npm package and does not import the app's generated
 // `bindings.ts`). A plugin PROPOSES an advisory; moss holds the severity gavel
-// (`clamp_plugin_advisory`, R13) — the proposal is never the final word.
+// (`clamp_plugin_advisory`) — the proposal is never the final word.
 
 /**
  * Which axis of the system an advisory is about. Mirrors the Rust
@@ -174,7 +174,7 @@ export type AdvisoryScope =
   | "Account";
 
 /**
- * How serious the plugin proposes an advisory is. moss CLAMPS this (R13): a
+ * How serious the plugin proposes an advisory is. moss CLAMPS this: a
  * `Blocking` proposal with no actionable affordance is demoted to a quiet
  * `NeedsAction` hairline dot. Mirrors the Rust `advisory::Severity`.
  * @category Messaging
@@ -206,13 +206,13 @@ export type AdvisoryAction =
  * `plugins::types::PluginAdvisory` wire shape exactly so it deserializes
  * directly into `PluginTaskLifecycle::Succeeded/Failed { advisories }`. moss
  * is the only constructor of a final `Advisory` — a plugin can never hand moss
- * one (R13).
+ * one.
  * @category Messaging
  */
 export interface AdvisoryProposal {
   /** Which axis of the system this advisory is about. */
   scope: AdvisoryScope;
-  /** The severity the plugin REQUESTS. moss clamps it (R13). */
+  /** The severity the plugin REQUESTS. moss clamps it. */
   severity: AdvisorySeverity;
   /**
    * The site-relative path of the file this advisory is about, e.g.
@@ -257,7 +257,7 @@ export interface StartTaskOptions {
   cancellable?: boolean;
   /**
    * Plugin-local job id referencing `contributes.jobs[id]` in the plugin's
-   * manifest (Step 3 Phase 5, §8 + R13). When set, moss looks up the declared
+   * manifest. When set, moss looks up the declared
    * descriptor (a past-tense `verb` + an amount `noun`), normalizes the verb
    * (`Verb::normalized` — moss owns capitalization/length/glyphs), and on a
    * `succeeded(receipt, count)` stamps its OWN typed `Verb` + `Amount { count,
@@ -308,7 +308,7 @@ export interface TaskHandle {
    */
   awaiting(directive: string, venue: string, escape?: EscapeSpec): Promise<void>;
   /**
-   * PROPOSE an advisory on this task (Step 3 Phase 5, §8 + R13). Accumulates
+   * PROPOSE an advisory on this task. Accumulates
    * the proposal on the handle; it is flushed into the next terminal call
    * (`succeeded`/`failed`) as `advisories: PluginAdvisory[]`. moss holds the
    * severity gavel server-side: a `Blocking` proposal with no actionable
@@ -440,7 +440,7 @@ export async function startTask(
     cancellable,
   };
   // Reference the manifest job descriptor so moss can stamp its OWN
-  // normalized verb + amount on the terminal (Step 3 Phase 5, §8 + R13).
+  // normalized verb + amount on the terminal .
   if (options.job !== undefined) {
     started.job = options.job;
   }
@@ -465,7 +465,7 @@ export async function startTask(
 
   // Advisories proposed via `advise()` accumulate here and ride the next
   // terminal IPC (`succeeded`/`failed`) so moss applies them atomically with
-  // the success/failure transition through the smart constructors (R13).
+  // the success/failure transition through the smart constructors.
   const pendingAdvisories: AdvisoryProposal[] = [];
   // Set by any terminal call (`succeeded`/`failed`/`cancelled`). Once spent,
   // `advise()` no-ops — the handle is dead and a late advisory would otherwise
@@ -517,7 +517,7 @@ export async function startTask(
       if (pendingAdvisories.length > 0) {
         lifecycle.advisories = pendingAdvisories.slice();
       }
-      // The COUNT for a descriptor-driven job (Step 3 Phase 5): moss pairs it
+      // The COUNT for a descriptor-driven job: moss pairs it
       // with the declared `noun` to render "Syndicated · N posts" from its own
       // value objects. Omitted ⇒ serde defaults to None (no amount stamped).
       if (amount !== undefined) {
