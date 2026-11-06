@@ -107,4 +107,6 @@ The old spellings — `config_schema` and the other `config_*` maps, `setup.cred
 
 **How a user gets a plugin: `moss plugin install <id> [<folder>]`.** It puts the plugin into the site and allows it, either from moss's plugin registry or, for a plugin moss ships, by copying it out of moss. In the app, the plugin installer and the first-publish flow install plugins too. The registry is moss's own (`Symbiosis-Lab/moss-registry`) and its catalog is fetched on every install, so a plugin you write reaches a user's site by being added to that registry, not by publishing it somewhere for users to fetch.
 
+A plugin whose manifest says `"preview": true` is unfinished: moss's plugin catalog hides it and `moss plugin install` refuses it until the user turns on **Preview features** in moss's Settings (without the app, by adding `"experimental": {"preview_features": true}` to `app-config.json` in moss's app-data folder, which the refusal names). A copy already in a site keeps running either way.
+
 The packages are also published to npm as `@symbiosis-lab/moss-plugin-*`, but moss does not install from npm. There is no scaffolding command: copy an existing plugin and adapt it.
