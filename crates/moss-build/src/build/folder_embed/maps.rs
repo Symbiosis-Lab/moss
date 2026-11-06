@@ -72,9 +72,9 @@ pub(super) fn record_placements(doc: &mut ParsedDocument, from: &str) {
         .collect();
 }
 
-/// `![[/places/|style:map]]` in a page other than the places root: the whole
-/// site's map. `None` when the target is not the place root or the host is the
-/// root page itself, which draws its own explorer in place.
+/// `![[/places/|style:map]]`: the whole site's map. Nothing on a root page
+/// that already draws that map itself, and `None` when the target is not the
+/// place root.
 pub(super) fn render_place_root(
     parsed: &ParsedMarker<'_>,
     ordinal: usize,
@@ -86,12 +86,12 @@ pub(super) fn render_place_root(
     if target.trim_matches('/') != maps.namespace() || !target.ends_with('/') {
         return None;
     }
-    let host_is_root = docs
+    let host_draws_it = docs
         .iter()
         .find(|d| d.source_path.as_deref() == Some(from))
-        .is_some_and(|d| maps.is_explorer_root_for_doc(d));
-    if host_is_root {
-        return None;
+        .is_some_and(|d| maps.draws_own_root_map_for_doc(d));
+    if host_draws_it {
+        return Some(String::new());
     }
     let svg = maps.render_root_map_embed(docs.iter(), from, ordinal)?;
     Some(place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref()))

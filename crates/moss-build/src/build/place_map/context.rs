@@ -239,39 +239,32 @@ impl PlaceMapRenderContext {
         }
     }
 
-    /// Whether `doc` is a place-typed namespace root with a map to draw —
-    /// `render/html.rs`'s one page-assembly fork for design decision 7, "the
-    /// map is the page": such a root's own folder-title heading renders
-    /// `.visually-hidden` instead of the ordinary visible one, and any
-    /// authored body renders below the map rather than above it. A method on
-    /// `&self`, not a free function over the same three bools, so a site
-    /// with no place maps at all (no `PlaceMapRenderContext` to call this
-    /// on) can never answer yes — the `Option::is_some()` check that used to
-    /// sit beside this logic at the call site is now just "do I have a
-    /// context to ask". `is_folder_index`/`is_place_namespace_root`/
-    /// `map_disabled` are `ParsedDocument` fields this module never depends
-    /// on directly (see its own boundary) — the caller reads them off `doc`
-    /// and passes them through.
-    pub fn is_explorer_root(&self, is_folder_index: bool, is_place_namespace_root: bool, map_disabled: bool) -> bool {
+    /// Whether a page is a place-typed namespace root that draws the site's
+    /// map itself: its own index, with its map not turned off. The page fields
+    /// are passed in because this module does not depend on `ParsedDocument`.
+    pub fn draws_own_root_map(&self, is_folder_index: bool, is_place_namespace_root: bool, map_disabled: bool) -> bool {
         is_folder_index && is_place_namespace_root && !map_disabled
     }
 
-    /// [`Self::is_explorer_root`], reading its three signals off `doc`
-    /// itself rather than making every caller re-derive `is_folder_index`
-    /// by hand — `render/html.rs`'s own authored-page path and
-    /// `render/blocking.rs`'s synthetic-folder path both reach this exact
-    /// decision from a `ParsedDocument`, and used to each inline a slightly
-    /// different copy of the same folder-index predicate (one of the two
-    /// read it correctly; the other always passed a hardcoded `false`,
-    /// which is what shipped a visible heading on a places root with no
-    /// authored index page). The predicate is the same one
-    /// `render/html.rs`'s own folder-index detection already uses
-    /// elsewhere in that file.
-    pub fn is_explorer_root_for_doc(&self, doc: &crate::build::types::ParsedDocument) -> bool {
+    /// Whether such a root also hosts the explorer: the explorer is the page,
+    /// so its folder title is `.visually-hidden` and any authored body follows
+    /// the map. With the explorer off, a root is an ordinary folder page and
+    /// its map follows the body.
+    pub fn is_explorer_root(&self, is_folder_index: bool, is_place_namespace_root: bool, map_disabled: bool) -> bool {
+        self.explorer && self.draws_own_root_map(is_folder_index, is_place_namespace_root, map_disabled)
+    }
+
+    /// [`Self::draws_own_root_map`], reading its signals off `doc`.
+    pub fn draws_own_root_map_for_doc(&self, doc: &crate::build::types::ParsedDocument) -> bool {
         let is_folder_index = doc.kind == moss_core::PageKind::Folder
             && doc.url_path.ends_with("/index.html")
             && doc.url_path != "index.html";
-        self.is_explorer_root(is_folder_index, doc.is_place_namespace_root, !doc.shows_own_map(true))
+        self.draws_own_root_map(is_folder_index, doc.is_place_namespace_root, !doc.shows_own_map(true))
+    }
+
+    /// [`Self::is_explorer_root`], reading its signals off `doc`.
+    pub fn is_explorer_root_for_doc(&self, doc: &crate::build::types::ParsedDocument) -> bool {
+        self.explorer && self.draws_own_root_map_for_doc(doc)
     }
 
     /// Compose a SYNTHETIC term-listing folder's lead content whole: the
