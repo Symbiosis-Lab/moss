@@ -70,7 +70,7 @@ fn an_address_the_last_publish_served_under_assets_is_not_a_pending_removal() {
         last.register(&ServedPath::from_source(out).unwrap(), b"listing", crate::build::manifest::HashBucket::Files);
     }
     let baseline = PublishedSnapshot::from_sealed(&last.seal(), "test", "2026-01-01T00:00:00Z".into());
-    let removed = removed_addresses(&baseline, &now, |src| dir.join(src).exists());
+    let removed = removed_addresses(&baseline, &now, |src| dir.join(src).exists(), &[]);
     assert!(pending_removals(&removed, None).is_empty(), "{removed:?}");
 }
 

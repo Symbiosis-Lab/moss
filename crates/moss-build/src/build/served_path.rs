@@ -455,6 +455,11 @@ impl ServedPath {
         ServedPath("robots.txt".to_string())
     }
 
+    /// The TDM Reservation Protocol file. Path is fixed by the protocol.
+    pub fn for_tdmrep_json() -> Self {
+        ServedPath(".well-known/tdmrep.json".to_string())
+    }
+
     /// Default theme CSS, emitted from the binary-embedded default stylesheet
     /// asset.
     pub fn for_default_stylesheet() -> Self {

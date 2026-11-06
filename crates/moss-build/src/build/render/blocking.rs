@@ -1440,7 +1440,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_heading_anchors(site_config.heading_anchors);
         // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
+        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
@@ -2514,12 +2514,16 @@ pub fn generate_blocking_content_for_build(
         // sitemap.xml is emitted further down, once every page is registered.
 
         // Generate robots.txt (user's own will overwrite during background asset copy)
-        let robots_content =
-            crate::build::feeds::sitemap::generate_robots_txt(url, site_config.ai_policy.as_deref());
-        // Site 12 (Pattern A): emit robots.txt.
+        let robots_content = site_config.ai.robots_txt(url);
+        // robots.txt, from the site's search and AI settings.
         BuildContext::for_render(output_dir, pending)
             .emit(&ServedPath::for_robots_txt(), robots_content.as_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit robots.txt: {}", e))?;
+        if let Some(tdmrep) = site_config.ai.tdmrep_json() {
+            BuildContext::for_render(output_dir, pending)
+                .emit(&ServedPath::for_tdmrep_json(), tdmrep.as_bytes(), HashBucket::Files)
+                .map_err(|e| format!("Failed to emit tdmrep.json: {}", e))?;
+        }
 
         // Generate QR codes for article pages
         let qr_dir = output_dir.join("qr");
@@ -2548,8 +2552,10 @@ pub fn generate_blocking_content_for_build(
     // after `generate_blocking_content` returns, using `BackgroundContext::search_enabled`
     // (set below). See `build/feeds/search.rs`.
 
-    // Generate llms.txt — full site content for LLM consumption (unconditional)
-    {
+    // llms.txt: the whole site's text, unless AI answers are asked not to.
+    // Its absence then is declared by `AiSettings::withdrawn`, so the publish
+    // gate reads it as the owner's choice.
+    if site_config.ai.publishes_llms_txt() {
         let llms_site_title = documents
             .iter()
             .find(|d| d.url_path == "index.html")
@@ -2937,6 +2943,7 @@ pub fn generate_blocking_content_for_build(
                 &media_path_resolver.lazy_chunk_attrs(&share_card_hash, hls_attr_hash),
                 js_fullscreen_path_arg,
                 &shared.scripts.tag("search", &layout_config.assets, &media_path_resolver),
+                layout_config.ai.robots_tag(false).as_deref(),
             );
 
             let page_url = format!("{}/index.html", page_slug);

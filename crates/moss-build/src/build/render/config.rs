@@ -108,10 +108,10 @@ pub struct SiteConfig {
     /// `[redirects]` from the config the build parsed once: old address, new
     /// address, as the author wrote them.
     pub declared_redirects: Vec<(String, String)>,
-    /// `[site].ai_policy` — site-level AI crawler policy that drives the
-    /// generated robots.txt. One of `"standard"` (default), `"unrestricted"`,
-    /// or `"restricted"`. `None` falls back to the standard policy.
-    pub ai_policy: Option<String>,
+    /// `[site]` `search_engines` / `ai_answers` / `ai_training` and
+    /// `ai_policy`, resolved: robots.txt, the robots meta tag, `llms.txt` and
+    /// `tdmrep.json` all read this one value.
+    pub ai: crate::build::feeds::robots::AiSettings,
     /// `[site].search` — full-text search, resolved at the construction site
     /// in `build/pipeline.rs`: `true` when the author turned the Services-tab
     /// toggle on. By design, the gate is expressed here in the
@@ -194,7 +194,7 @@ impl Default for SiteConfig {
             header: crate::build::components::nav::HeaderMode::Brand,
             site_url_override: None,
             declared_redirects: Vec::new(),
-            ai_policy: None,
+            ai: Default::default(),
             search: false,
             term_kinds: Vec::new(),
             term_nav: Vec::new(),

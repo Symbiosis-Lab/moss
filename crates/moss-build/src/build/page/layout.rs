@@ -35,6 +35,9 @@ pub struct LayoutConfig {
     /// since 2026-08-30, explicit opt-in). Site-level for the same reason as
     /// `math`: the island is chrome, present on every breadcrumbed page or none.
     pub floating_nav: bool,
+    /// What the site asks of search engines and AI; read here for the robots
+    /// meta tag every page carries.
+    pub ai: crate::build::feeds::robots::AiSettings,
     /// `[site].colophon` — whether moss's credit line is emitted (default ON).
     pub colophon: bool,
     /// `[site].credit` — the site's own line before the colophon's mark.
@@ -81,6 +84,7 @@ impl LayoutConfig {
                 ..SiteAssets::default()
             },
             floating_nav: false,
+            ai: Default::default(),
             colophon: true,
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
@@ -157,6 +161,12 @@ impl LayoutConfig {
     /// Set the site-wide floating-nav preference (`[site].floating_nav`, default false)
     pub fn with_floating_nav(mut self, floating_nav: bool) -> Self {
         self.floating_nav = floating_nav;
+        self
+    }
+
+    /// Set what the site asks of search engines and AI.
+    pub fn with_ai(mut self, ai: crate::build::feeds::robots::AiSettings) -> Self {
+        self.ai = ai;
         self
     }
 

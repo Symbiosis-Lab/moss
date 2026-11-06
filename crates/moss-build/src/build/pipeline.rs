@@ -368,6 +368,7 @@ fn run_notebook_processing(
     staging_dir: &std::path::Path,
     cancel_flag: Option<&std::sync::atomic::AtomicBool>,
     evidence: &super::cloud_ledger::InputEvidence,
+    robots_tag: Option<String>,
 ) -> Vec<NotebookReceipt> {
     use crate::build::assets::asset_resolver::resolve_asset_directory;
     use crate::build::notebook::{collect_notebooks, generate_contents_manifest, generate_viewer_html_with_content, jupyterlite_asset_config, patch_jupyterlite_config, CONTENTS_ALL_JSON_FILE};
@@ -620,6 +621,7 @@ fn run_notebook_processing(
         let item_source_path = item.source_path.clone();
         let staging_owned = staging_dir.to_path_buf();
         let evidence_for_copy = evidence.clone();
+        let robots_tag = robots_tag.clone();
         let notebook_paths = with_io_timeout(&item.source_path, move || {
             let mut produced = Vec::new();
             // Copy .ipynb to its natural served path. Both this path and the
@@ -654,6 +656,7 @@ fn run_notebook_processing(
                 &notebook_filename,
                 "/jupyter",
                 notebook_content.as_deref(),
+                robots_tag.as_deref(),
             );
             let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
@@ -1500,7 +1503,7 @@ fn build_inner(
         header: crate::build::components::nav::HeaderMode::from_config(site_str("header").as_deref()),
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
-        ai_policy: site_str("ai_policy"),
+        ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
         // One switch: the per-site Services-tab toggle, absent key = off
         // (graduated out of `experimental.preview_features` 2026-08-31).
         // Resolved here into the ONE value the nav button
@@ -1548,6 +1551,8 @@ fn build_inner(
     // `Vec<moss_core::ast::Document>`.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
     let build_now = crate::build::folder_embed::upcoming::now();
+    // Read again by the notebook viewers, after `site_config` is consumed.
+    let site_ai = site_config.ai;
     let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_now)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
@@ -1849,6 +1854,7 @@ fn build_inner(
             &background_ctx.staging_dir,
             cancel,
             &input_evidence,
+            site_ai.robots_tag(false),
         );
         // Register the receipts. `pending` is still alive here (constructed in
         // build_inner before generate_blocking_content and passed as &mut); the

@@ -326,7 +326,7 @@ pub(crate) fn viewer_path(
 ///
 /// Complete HTML string for the viewer page.
 pub fn generate_viewer_html(notebook_filename: &str, jupyter_base_path: &str) -> String {
-    generate_viewer_html_with_content(notebook_filename, jupyter_base_path, None)
+    generate_viewer_html_with_content(notebook_filename, jupyter_base_path, None, None)
 }
 
 /// Like `generate_viewer_html` but accepts optional notebook JSON content
@@ -335,7 +335,10 @@ pub fn generate_viewer_html_with_content(
     notebook_filename: &str,
     jupyter_base_path: &str,
     notebook_content: Option<&str>,
+    // The site's `<meta name="robots">` tag, from its search and AI switches.
+    robots_tag: Option<&str>,
 ) -> String {
+    let robots = robots_tag.map(|t| format!("\n{t}")).unwrap_or_default();
     // Extract title: try notebook JSON first, then fall back to filename
     let title_from_content = notebook_content.and_then(extract_notebook_title);
     let raw_title = title_from_content.as_deref().unwrap_or_else(|| {
@@ -355,7 +358,7 @@ pub fn generate_viewer_html_with_content(
 <html data-moss-html-version="1" lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">{robots}
 <title>{title}</title>
 <style>
 body {{ margin: 0; overflow: hidden; background: #faf8f5; }}
@@ -763,7 +766,7 @@ mod tests {
             "nbformat": 4,
             "nbformat_minor": 5
         }"##;
-        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", Some(ipynb));
+        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", Some(ipynb), None);
         assert!(
             html.contains("<title>My Custom Title</title>"),
             "Title should come from notebook content, not filename"
@@ -772,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_viewer_html_falls_back_to_filename_title() {
-        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", None);
+        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", None, None);
         assert!(
             html.contains("<title>analysis</title>"),
             "Title should fall back to filename without .ipynb"
@@ -787,7 +790,7 @@ mod tests {
             "nbformat": 4,
             "nbformat_minor": 5
         }"#;
-        let html = generate_viewer_html_with_content("test.ipynb", "/jupyter", Some(ipynb));
+        let html = generate_viewer_html_with_content("test.ipynb", "/jupyter", Some(ipynb), None);
         assert!(
             !html.contains("<script>alert(1)</script>"),
             "Title must be HTML-escaped to prevent XSS"
@@ -796,5 +799,14 @@ mod tests {
             html.contains("&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
             "HTML entities should be escaped in title"
         );
+    }
+
+    #[test]
+    fn test_viewer_html_carries_the_sites_robots_tag() {
+        let tag = r#"<meta name="robots" content="noindex, noai, noimageai">"#;
+        let html = generate_viewer_html_with_content("a.ipynb", "/jupyter", None, Some(tag));
+        let head = &html[..html.find("</head>").unwrap()];
+        assert!(head.contains(tag), "{html}");
+        assert!(!generate_viewer_html_with_content("a.ipynb", "/jupyter", None, None).contains("name=\"robots\""));
     }
 }

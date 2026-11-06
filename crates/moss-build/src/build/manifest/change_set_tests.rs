@@ -71,7 +71,7 @@ fn in_build(cur: &crate::build::manifest::SealedManifest) -> impl Fn(&str) -> bo
 }
 
 fn removed_of(prev: &PublishedSnapshot, cur: &crate::build::manifest::SealedManifest) -> Vec<(String, RemovalReason)> {
-    removed_addresses(prev, cur, in_build(cur)).into_iter().map(|r| (r.path, r.reason)).collect()
+    removed_addresses(prev, cur, in_build(cur), &[]).into_iter().map(|r| (r.path, r.reason)).collect()
 }
 
 fn snapshot(m: &crate::build::manifest::SealedManifest) -> PublishedSnapshot {
@@ -557,7 +557,7 @@ fn a_vanished_internal_sidecar_never_refuses_the_publish() {
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, &cur, in_build(&cur), &[]);
     assert!(pending_removals(&removed, None).is_empty(), "{removed:?}");
     assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());
     assert_eq!(classify(Some(&prev), &cur).removed_assets, 2, "still counted as removed output");
@@ -571,7 +571,7 @@ fn a_vanished_page_or_authors_dotfile_still_refuses_beside_an_internal_sidecar()
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let pending: Vec<String> = pending_removals(&removed_addresses(&prev, &cur, |_| true), None)
+    let pending: Vec<String> = pending_removals(&removed_addresses(&prev, &cur, |_| true, &[]), None)
         .into_iter()
         .map(|p| p.path)
         .collect();
@@ -589,7 +589,7 @@ fn removed_assets_counts_every_vanished_non_page_output_including_internal_ones(
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur), &[]));
 
     assert_eq!(set.removed_assets, 2, "the removed page is a Deleted verb; the internal card still counts");
     assert_eq!(set.removed.len(), 2, "the list holds public addresses only: the page and the feed");
@@ -600,7 +600,7 @@ fn a_publish_removing_only_internal_files_is_not_empty() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[("_moss/og/c.png", &b"I"[..])]));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+    let set = classify(Some(&prev), &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur), &[]));
 
     assert!(set.removed.is_empty());
     assert!(!set.is_empty(), "a deleted file is still something to publish");
@@ -623,7 +623,7 @@ fn removed_addresses_ride_on_an_unclassified_set_too() {
     let prev = snapshot(&sealed(&[], &[("feed.xml", &b"F"[..])]));
     let cur = sealed(&[], &[]);
 
-    let set = classify(None, &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur)));
+    let set = classify(None, &cur).with_removed(removed_addresses(&prev, &cur, in_build(&cur), &[]));
 
     assert!(!set.classified);
     assert_eq!(set.removed.len(), 1);
@@ -648,7 +648,7 @@ fn a_moved_page_with_no_stub_records_where_it_went() {
     let prev = snapshot(&sealed(&[("a.md", "a/index.html", "h", b"A")], &[]));
     let cur = sealed(&[("a.md", "b/index.html", "h", b"A")], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, &cur, in_build(&cur), &[]);
 
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].moved_to.as_deref(), Some("b/index.html"));
@@ -676,7 +676,7 @@ fn a_removal_carries_the_recorded_source_when_there_is_one() {
     let cur = sealed_with_assets(&[], &[], &[], &["docs/a.pdf"]);
 
     let by_path: std::collections::HashMap<_, _> =
-        removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| (r.path.clone(), r)).collect();
+        removed_addresses(&prev, &cur, in_build(&cur), &[]).into_iter().map(|r| (r.path.clone(), r)).collect();
 
     assert_eq!(by_path["docs/a.pdf"].source.as_deref(), Some("docs/a.pdf"));
     assert_eq!(by_path["feed.xml"].source, None);
@@ -809,7 +809,7 @@ fn a_moved_folder_file_is_a_move_not_a_deletion() {
     let prev = snapshot(&sealed_with_assets(&[], &[], &["review/old/plan.pdf"], &[]));
     let cur = sealed_with_assets(&[], &[], &["review/client/old/plan.pdf"], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, &cur, in_build(&cur), &[]);
     assert_eq!(removed_of(&prev, &cur), [("review/old/plan.pdf".to_string(), RemovalReason::Unexplained)]);
     let pending = pending_removals(&removed, None);
     assert_eq!(pending[0].cause, RemovalCause::Moved { to: "/review/client/old/plan.pdf".to_string() });
@@ -824,7 +824,7 @@ fn a_moved_pictures_derivative_moved_with_it() {
     let prev = snapshot(&sealed_with_assets(&[], &[("old/photo.webp", b"W")], &["old/photo.png"], &[]));
     let cur = sealed_with_assets(&[], &[("new/photo.webp", b"W")], &["new/photo.png"], &[]);
 
-    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| (r.path, r.moved_to)).collect();
+    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur), &[]).into_iter().map(|r| (r.path, r.moved_to)).collect();
     assert_eq!(
         moved,
         [
@@ -849,7 +849,7 @@ fn a_move_prefers_the_arrival_with_the_same_name() {
     let prev = snapshot(&sealed_with_assets(&[], &[], &["old/plan.pdf"], &[]));
     let cur = sealed_with_assets(&[], &[], &["new/copy.pdf", "new/plan.pdf"], &[]);
 
-    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur)).into_iter().map(|r| r.moved_to).collect();
+    let moved: Vec<_> = removed_addresses(&prev, &cur, in_build(&cur), &[]).into_iter().map(|r| r.moved_to).collect();
     assert_eq!(moved, [Some("new/plan.pdf".to_string())]);
 }
 
@@ -882,7 +882,7 @@ fn a_vanished_form_description_never_refuses_the_publish() {
     ));
     let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
 
-    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    let removed = removed_addresses(&prev, &cur, in_build(&cur), &[]);
     assert!(removed.is_empty(), "{removed:?}");
     assert!(pending_removals(&removed, None).is_empty());
     assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());

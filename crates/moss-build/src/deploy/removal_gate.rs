@@ -22,6 +22,12 @@ pub(crate) fn cause_line(r: &RemovedAddress) -> String {
         if r.source.is_none() && crate::build::feeds::calendar::is_calendar_file(&r.path) {
             return format!("{at} is gone because no event page says `start:` there any more.");
         }
+        if r.source.is_none() && r.path == crate::build::served_path::ServedPath::for_llms_txt().as_str() {
+            return format!("{at} is gone because the site asks AI assistants not to use its pages.");
+        }
+        if r.source.is_none() && r.path == crate::build::served_path::ServedPath::for_tdmrep_json().as_str() {
+            return format!("{at} is gone because the site no longer sets its AI switches.");
+        }
         return match &r.source {
             Some(src) => format!("{at} is gone because you deleted its source ({src})."),
             None => format!("{at} is gone because you deleted its file."),

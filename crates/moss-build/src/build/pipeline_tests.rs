@@ -3932,7 +3932,7 @@ fn test_video_served_path_derivation_with_overrides() {
 #[test]
 fn test_notebook_processing_noop_when_empty() {
     let outputs = run_notebook_processing(None, &[], "/test", Path::new("/test/output"), None,
-        &crate::build::cloud_ledger::InputEvidence::new(Path::new("/test")));
+        &crate::build::cloud_ledger::InputEvidence::new(Path::new("/test")), None);
     assert!(outputs.is_empty(), "No notebooks = no outputs");
 }
 
@@ -3956,7 +3956,7 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
     }];
 
     let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source)));
+        &crate::build::cloud_ledger::InputEvidence::new(&source), None));
 
     assert!(
         output.join("test.ipynb").exists(),
@@ -4002,7 +4002,7 @@ fn test_data_files_copied_to_jupyter_files() {
     }];
 
     let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source)));
+        &crate::build::cloud_ledger::InputEvidence::new(&source), None));
 
     // Data file should be in jupyter/files/ (fallback path without JupyterLite)
     // Note: without JupyterLite assets, the function takes the fallback path
@@ -4026,7 +4026,7 @@ fn skipped_notebook_copy_stays_unresolved_after_a_later_manifest_read() {
         size: content.len() as u64, modified: None,
     }];
     let evidence = crate::build::cloud_ledger::InputEvidence::new(&source);
-    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence));
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence, None));
     assert!(!receipt_paths(&outputs).contains(&"analysis.ipynb".to_string()));
     assert_eq!(evidence.unresolved_structural(), ["analysis.ipynb"]);
     assert!(read_notebook_sibling(&notebook, &evidence).is_some());
@@ -4073,7 +4073,7 @@ fn test_notebook_processing_cancel_flag_returns_early() {
     let cancel = AtomicBool::new(true);
     let outputs =
         run_notebook_processing(None, &files, &source.to_string_lossy(), &output, Some(&cancel),
-            &crate::build::cloud_ledger::InputEvidence::new(&source));
+            &crate::build::cloud_ledger::InputEvidence::new(&source), None);
 
     assert!(
         outputs.is_empty(),
@@ -7924,7 +7924,7 @@ fn marking_a_published_page_as_a_draft_is_not_an_unexplained_removal() {
 
     fs::write(dir.join("wip.md"), "---\ntitle: Plan\ndraft: true\n---\n\nBody.\n").unwrap();
     let (_, _, _, drafted) = build_test_promoted_or_withheld(folder).unwrap();
-    let removed = removed_addresses(&baseline, &drafted, |src| dir.join(src).exists());
+    let removed = removed_addresses(&baseline, &drafted, |src| dir.join(src).exists(), &[]);
 
     let gone = removed.iter().find(|r| r.path == "wip/index.html").expect("the address leaves the site");
     assert_eq!(gone.reason, RemovalReason::Withheld);

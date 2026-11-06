@@ -1051,6 +1051,25 @@ Turn on the site search with `search = true` under `[site]` in `.moss/config.tom
 search = true
 ```
 
+## Search engines and AI
+
+Three switches under `[site]` say what a site asks of the programs that read it, one use of its pages each. All three are requests: a crawler that ignores them can still read the site, and only a login keeps a page private.
+
+```toml
+[site]
+search_engines = true   # search engines list the pages and link to them
+ai_answers = true       # an AI assistant reads a page to answer someone's question
+ai_training = false     # AI companies train models on the pages
+```
+
+- `search_engines = false` puts `noindex` on every page, asks the AI search crawlers (OAI-SearchBot, Claude-SearchBot, PerplexityBot) not to read the site, and drops robots.txt's `Sitemap:` line. Googlebot and Bingbot are never blocked, because a search engine has to read a page to see its `noindex`. Google's AI answers in Search come with Search: Google offers no separate switch for them.
+- `ai_answers = false` asks ChatGPT-User, Claude-User and Perplexity-User not to fetch pages (and Google-Extended too when training is allowed, since it also covers Gemini's grounding), and stops publishing `llms.txt`. The publish check reads the file's absence as your choice, not a broken address. OpenAI says robots.txt may not apply when a person asks ChatGPT to open a page.
+- `ai_training = false` asks the known training crawlers not to read the site, adds `noai, noimageai` to every page's robots tag, and reserves text-and-data mining in `/.well-known/tdmrep.json` (`tdm-reservation` 1; it is written with 0 when training is allowed).
+
+Once a switch is set, robots.txt opens with two comment lines naming the three choices; it always carries `Content-Signal: search=…, ai-input=…, ai-train=…`. "Every page" means every page moss draws, generated folder and media pages included, and a draft keeps its own `noindex` in the same tag. Your own `.html` files keep the head you wrote, and the subscription confirmation pages keep their fixed `noindex, nofollow`, since they carry none of the site's text.
+
+`ai_policy` is a name for a state of the three: `"standard"` (the default: search engines and AI answers allowed, training asked not to), `"unrestricted"` (all allowed) or `"restricted"` (all asked not to). A switch you set wins over it, and an unset switch follows it. A site that sets none of the three keeps the robots.txt its `ai_policy` has always written, with no robots tag and no `tdmrep.json`; `llms.txt` follows the AI answers use either way, so a `"restricted"` site does not publish it. Removing all three switches stops `tdmrep.json`, and the publish gate reads that as your choice. A `robots.txt` of your own at the site root replaces the generated one.
+
 ## Archival copy: dated editions and citation
 
 Turn on `archival = true` under `[site]` in `.moss/config.toml` for a site that is meant to be cited and kept. It is off when the key is unset, and a site without it builds exactly as before. The edition here is the build's own date and id, unrelated to a language edition such as `de/`. On a footer that ends on a closing picture, the edition block sits on that picture's foot, beside its credit, in the same panel or ink.

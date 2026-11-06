@@ -465,15 +465,6 @@ pub(super) fn render_page<'d>(
     // auto-card/JSON-LD gates so they cannot drift apart.
     let is_card_eligible = doc.map_or(false, |d| d.is_public_page());
 
-    // Non-public pages (drafts) carry a noindex robots directive so crawlers
-    // never index them even if the URL leaks. Public pages — including
-    // `listed: false` (off-feed but indexable) — get no robots meta.
-    let robots_meta = match doc {
-        Some(d) if !d.is_public_page() => {
-            Some("\n    <meta name=\"robots\" content=\"noindex\">".to_string())
-        }
-        _ => None,
-    };
 
     // Prepare content based on page type
     let (page_title, homepage_content) = match (doc, is_homepage) {
@@ -1645,7 +1636,6 @@ pub(super) fn render_page<'d>(
             String::new()
         },
         post_article,
-        robots_meta,
         ..chrome
     };
 

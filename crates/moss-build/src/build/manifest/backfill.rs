@@ -169,11 +169,11 @@ pub(crate) fn publish_target(mp: &MossPaths) -> Option<String> {
 /// is target-strict, and this must reach every verdict, including the
 /// unclassified one and the ask-the-server path.
 pub fn removed_for_seal(mp: &MossPaths, sealed: &SealedManifest) -> Vec<change_set::RemovedAddress> {
-    published_record::load_address_baseline(mp, publish_target(mp).as_deref())
-        .map(|baseline| change_set::removed_addresses(&baseline, sealed, |src| {
-                mp.project_root().join(src).symlink_metadata().is_ok()
-            }))
-        .unwrap_or_default()
+    let Some(baseline) = published_record::load_address_baseline(mp, publish_target(mp).as_deref()) else {
+        return Vec::new();
+    };
+    let withdrawn = crate::build::feeds::robots::AiSettings::for_folder(mp).withdrawn();
+    change_set::removed_addresses(&baseline, sealed, |src| mp.project_root().join(src).symlink_metadata().is_ok(), &withdrawn)
 }
 
 /// The server's own `(need, remove)` for a sealed manifest — the arm for a

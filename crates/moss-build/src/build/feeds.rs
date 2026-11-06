@@ -7,6 +7,7 @@ pub mod llms_txt;
 pub mod previews;
 pub mod redirect_table;
 pub mod redirects;
+pub mod robots;
 pub mod rss;
 pub mod search;
 pub mod search_lane;

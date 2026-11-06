@@ -326,7 +326,10 @@ pub fn generate_media_page(
     lazy_chunk_attrs: &str,
     js_fullscreen_path: Option<&str>,
     search_js_tag: &str,
+    // The site's `<meta name="robots">` tag, from its search and AI switches.
+    robots_tag: Option<&str>,
 ) -> String {
+    let robots = robots_tag.map(|t| format!("\n  {t}")).unwrap_or_default();
     let (page_title, _page_slug) = match media_type {
         MediaType::Photography => (crate::i18n::t(lang, "photography"), "photography"),
         MediaType::Video => (crate::i18n::t(lang, "videos"), "videos"),
@@ -344,7 +347,7 @@ pub fn generate_media_page(
 <html data-moss-html-version="1" lang="{html_lang}">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">{robots}
   <title>{page_title} - {site_name}</title>
   <link rel="stylesheet" href="{css_path}">
 </head>
@@ -669,6 +672,7 @@ mod tests {
             "",
             None,
             "",
+            None
         );
 
         // Check page structure
@@ -704,7 +708,7 @@ mod tests {
             article_url: "posts/video.html".to_string(),
         }];
 
-        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "");
+        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "", None);
 
         assert!(html.contains("<title>Videos - My Site</title>"));
         assert!(html.contains("<h1>Videos</h1>"));
@@ -726,7 +730,7 @@ mod tests {
             article_url: "posts/video.html".to_string(),
         }];
 
-        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, "fr", None, "/_moss/js/theme.testabcd.js", "", None, "");
+        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, "fr", None, "/_moss/js/theme.testabcd.js", "", None, "", None);
 
         assert!(html.contains(r#"lang="fr""#), "{html}");
         assert!(!html.contains(r#"lang="en""#), "{html}");
@@ -742,7 +746,7 @@ mod tests {
             article_url: "posts/code.html".to_string(),
         }];
 
-        let html = generate_media_page(&MediaType::Interactive, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "");
+        let html = generate_media_page(&MediaType::Interactive, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "", None);
 
         assert!(html.contains("<title>Experiments - My Site</title>"));
         assert!(html.contains("<h1>Experiments</h1>"));
@@ -839,6 +843,7 @@ mod tests {
             "",
             None,
             "",
+            None
         );
         assert!(html.contains(r#"src="/_moss/js/theme.def456.js""#), "theme.js src must be root-relative hashed");
         assert!(!html.contains("../"), "media page must not use ../ relative paths");
@@ -866,6 +871,7 @@ mod tests {
             "",
             None,
             "\n    <script src=\"/_moss/js/search.abc123.js\" defer></script>",
+            None
         );
         assert!(
             html.contains(r#"src="/_moss/js/search.abc123.js""#),
@@ -895,6 +901,7 @@ mod tests {
             "",
             Some("/_moss/js/fullscreen.ghi.js"),
             "",
+            None
         );
         assert!(html_with.contains(r#"src="/_moss/js/fullscreen.ghi.js""#));
 
@@ -911,6 +918,7 @@ mod tests {
             "",
             None,
             "",
+            None
         );
         assert!(!html_without.contains("fullscreen"), "fullscreen script must not appear when js_fullscreen_path is None");
     }

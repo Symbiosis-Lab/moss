@@ -680,6 +680,8 @@ fn is_ladder_of_published_video(out: &str, current: &HashMap<String, String>) ->
 /// `AuthorRemoved` needs evidence: the recorded source of the output (a
 /// page's, or a folder file's via `asset_source_to_output`) no longer exists,
 /// and for a file, no address new to this build serves its bytes.
+/// `withdrawn` names generated files the site's own settings stopped; losing
+/// one is `AuthorRemoved` like a deleted source.
 /// `source_exists` answers from the site folder, not this build's source
 /// lists, since an unreadable page drops out of the build while its file is
 /// still there. Anything else is `Unexplained`, the cautious answer, and
@@ -691,6 +693,7 @@ pub fn removed_addresses(
     baseline: &PublishedSnapshot,
     current: &SealedManifest,
     source_exists: impl Fn(&str) -> bool,
+    withdrawn: &[crate::build::served_path::ServedPath],
 ) -> Vec<RemovedAddress> {
     fn by_output(map: &HashMap<String, String>) -> HashMap<&str, Vec<&str>> {
         let mut m: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -732,6 +735,8 @@ pub fn removed_addresses(
                 // A calendar file exists while a page says `start:`; losing it is
                 // the author's edit of a page that is still on disk.
                 None if crate::build::feeds::calendar::is_calendar_file(out) => RemovalReason::AuthorRemoved,
+                // A generated file a site setting stopped (`withdrawn`) is the owner's act too.
+                None if withdrawn.iter().any(|w| w.as_str() == out) => RemovalReason::AuthorRemoved,
                 _ => RemovalReason::Unexplained,
             };
             let source = recorded.and_then(|srcs| srcs.first()).map(|s| s.to_string());
