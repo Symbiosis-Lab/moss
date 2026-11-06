@@ -1405,6 +1405,8 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
     mask-image: linear-gradient(to bottom, transparent, #000 50%);
   }
 }
+/* subscribe-form:start — scripts/build-backend-scripts.mjs copies from here
+   to the end marker into the project landing page's own stylesheet. */
 /* ==========================================================================
    moss-hosted subscribe form — inline state transitions
    Driven by js-src/site/subscribe/subscribe.ts via `data-state` attribute.
@@ -1524,7 +1526,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   border-top-color: transparent;
   border-radius: 50%;
   /* Keeps animating under reduced motion — indeterminate busy: the motion IS
-     the information (design-vocabulary.md exception). Decided here, once,
+     the information, so it is the one exception to reduced motion. Decided here, once,
      for every .moss-btn surface (subscribe + comment forms). */
   animation: moss-btn-spin 0.7s linear infinite;
 }
@@ -1674,7 +1676,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   color: var(--moss-error, #c85450);
 }
 
-/* Reduced motion jump-cuts to end states (design-vocabulary.md). The spinner
+/* Reduced motion jump-cuts to end states. The spinner
    is deliberately NOT zeroed here — its exception lives on the family rule
    at .moss-btn__spinner::after above. */
 @media (prefers-reduced-motion: reduce) {
@@ -1686,6 +1688,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-status { transition: none; }
   .moss-subscribe-form[data-moss-hosted="true"] .moss-btn__check svg path { stroke-dashoffset: 0; }
 }
+/* subscribe-form:end */
 
 .footer-link {
   color: var(--moss-footer-ink, var(--moss-color-text));

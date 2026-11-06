@@ -46,6 +46,7 @@
 <link rel="alternate" hreflang="zh-Hans" href="https://mosspub.com/zh-hans/">
 <link rel="alternate" hreflang="x-default" href="https://mosspub.com/">
 <!-- landing-discovery:end -->
+<link rel="stylesheet" href="home/subscribe-form.css">
 <style>
   :root {
     --bg: #faf8f5; --text: #2c2825; --text2: #5d5853; --border: #e5e1da; --accent: #2d5a2d;
@@ -384,7 +385,6 @@
   #loop { width: 100vw; height: 100dvh; object-fit: cover; }
   #closing-film { overflow: hidden; }
   #downloads svg, #downloads img { width: 19px; height: 19px; margin-right: 8px; }
-  .form-status { min-height: 1.5em; font-size: 13px; }
   :focus-visible { outline: 2px solid #8aa778; outline-offset: 4px; }
   #closing-film { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: #101110; }
   #five-in { z-index: 1; width: min(1000px, calc(100% - 144px)); padding: 72px 0; }
@@ -398,20 +398,30 @@
   .command button { min-height: 40px; padding: 8px 12px; color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.52); border-radius: 4px; cursor: pointer; }
   #beta, #footer { width: min(1000px, 100%); margin: 56px auto 0; padding-top: 32px; text-align: left; }
   #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: end; }
-  /* Until home/closing.js has wired the form it cannot submit: say so instead of offering it. */
+  /* Until home/subscribe.js has loaded the form cannot submit (its endpoint answers JSON only): say so instead of offering it. */
   #beta { position: relative; }
   .static-signup-note { display: none; position: absolute; inset-block-start: 100%; margin-block-start: 26px; }
-  html:not([data-closing-wired]) .signup { visibility: hidden; }
-  html:not([data-closing-wired]) .static-signup-note { display: block; }
+  html:not([data-signup-wired]) .signup { visibility: hidden; }
+  html:not([data-signup-wired]) .static-signup-note { display: block; }
   #beta h3 { margin: 0 0 8px; font: 400 28px/1.15 var(--heading); }
   #beta p, #footer { color: rgba(255,255,255,.75); }
-  .signup { position: relative; display: grid; gap: 8px; align-self: end; }
-  .signup .form-status { position: absolute; inset: calc(100% + 8px) 0 auto; }
+  /* The sign-up is moss's own subscribe form: its states (loading, success,
+     error) come from home/subscribe-form.css and home/subscribe.js, both copied
+     from moss. Only the resting look below is the landing's: a white button and
+     an underlined field on the dark close. Rules that set what a state also
+     sets stay lighter than moss's state selectors; the two that replace moss's
+     own resting values (the gap, the status line) weigh at least as much and
+     come later, so they win. */
+  /* moss sizes the field and button as one reading line, 1.75 x this; 44px tall. */
+  .signup { align-self: end; --moss-reading-size: calc(44px / 1.75); --moss-color-accent: #8aa778; --moss-color-bg: #101110; --moss-color-muted: rgba(255,255,255,.75); --moss-error: #f08c84; }
+  .signup.moss-subscribe-form[data-moss-hosted] { gap: 8px; }
+  .signup.moss-subscribe-form .moss-subscribe-status { position: absolute; inset: calc(100% + 8px) 0 auto; margin: 0; font-size: 13px; }
+  .signup[data-state="success"] .moss-subscribe-status { position: static; }
+  .signup[data-state="success"] .moss-btn { border-color: transparent; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-  .input-row { display: flex; gap: 8px; }
-  .input-row input { min-width: 0; flex: 1; min-height: 44px; padding: 10px 2px; color: #fff; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.62); border-radius: 0; }
-  .input-row input::placeholder { color: rgba(255,255,255,.7); opacity: 1; }
-  .input-row button { min-height: 44px; padding: 10px 16px; color: #151515; background: #fff; border: 1px solid #fff; border-radius: 4px; cursor: pointer; }
+  .signup .moss-input { min-width: 0; flex: 1; padding: 10px 2px; color: #fff; font: inherit; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.62); border-radius: 0; }
+  .signup .moss-input::placeholder { color: rgba(255,255,255,.7); opacity: 1; }
+  .signup .moss-btn { padding: 10px 16px; color: #151515; font: inherit; background: #fff; border: 1px solid #fff; border-radius: 4px; cursor: pointer; }
   #footer { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
   #footer a { color: inherit; }
   #footer nav { display: flex; width: 100%; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 9px; }
@@ -582,7 +592,7 @@
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
       <div><h3 id="beta-title">取得更新</h3><p>不定期一封，來自青苔團隊的消息。</p></div>
-      <p class="static-signup-note">啟用 JavaScript 即可訂閱。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit" data-track="subscribe-submit">訂閱</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <p class="static-signup-note">啟用 JavaScript 即可訂閱。</p><form id="beta-form" class="signup moss-subscribe-form" data-position="inline" data-moss-hosted="true" data-button-override="true" data-state="idle" method="post" action="https://api.mosspub.com/api/sites/landing/subscribe"><label class="sr-only" for="beta-email">你的電子郵件地址</label><input type="hidden" name="scope" value=""><input id="beta-email" class="moss-input" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><span class="moss-btn-slot"><button type="submit" class="moss-btn" data-track="subscribe-submit"><span class="moss-btn__label">訂閱</span><span class="moss-btn__spinner" aria-hidden="true"></span><span class="moss-btn__check" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span></button></span><div class="moss-subscribe-status" aria-live="polite"><svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6M4 7v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7M4 7l1-1h14l1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-copy="check-email" hidden></span><span data-copy="already-subscribed" hidden></span><span data-copy="error" hidden></span></div></form>
     </section>
     <footer id="footer">
       <nav aria-label="頁尾"><a href="/zh-hant/privacy/">隱私權</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="在 GitHub 查看青苔"><img src="assets/platforms/github.svg" alt=""></a></nav>
@@ -2598,7 +2608,7 @@ function closingRestY() {
   const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
   if (mobileLayout()) return max;
   const top = scrollY + document.querySelector('#five h2').getBoundingClientRect().top;
-  const bottom = scrollY + document.querySelector('#beta .input-row').getBoundingClientRect().bottom;
+  const bottom = scrollY + document.querySelector('#beta-email').getBoundingClientRect().bottom;
   const centered = (top + bottom - innerHeight) / 2;
   const withFormVisible = Math.max(centered, bottom - innerHeight + 56);
   return Math.round(Math.max(0, Math.min(max, withFormVisible)));
@@ -3504,7 +3514,7 @@ Promise.all([when(edFrame, '__editor'), when(shFrame, '__shell'), when(vdFrame, 
     page.inert = false; five.inert = false;
   });
 </script>
-<script src="home/captcha.js" defer></script>
+<script src="home/subscribe.js" defer></script>
 <script src="home/closing.js" defer></script>
 </body>
 </html>

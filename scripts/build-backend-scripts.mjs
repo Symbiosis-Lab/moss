@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { build } from "esbuild";
 
 /**
@@ -62,13 +63,31 @@ export const BUNDLES = [
   // module doc). A directory, not a single file, because the runtime this
   // grows into will need several modules.
   { entry: "crates/moss-build/src/js-src/site/maps/places-explorer/index.ts", out: "crates/moss-build/src/assets/js/maps/places-explorer.js" },
-  // Not embedded: the project's own hand-built landing page answers the
-  // host's bot check with the same module the hosted forms use. It loads the
-  // page as a classic script, so the bundle exposes `window.mossCaptcha`.
-  { entry: "crates/moss-build/src/js-src/site/subscribe/captcha.ts", out: "site/home/captcha.js", globalName: "mossCaptcha" },
+  // Not embedded: the project's hand-built landing page signs readers up with
+  // the hosted subscribe form, so its states and its bot check come from the
+  // same module every moss site ships.
+  { entry: "crates/moss-build/src/js-src/site/subscribe/subscribe.ts", out: "site/home/subscribe.js", globalName: "mossSubscribe" },
 ];
 
+/**
+ * The subscribe form's state rules, copied out of site.css for the landing,
+ * which does not load site.css. Written outside any cascade layer: the
+ * landing's own rules are unlayered too, so specificity decides between them.
+ */
+const SUBSCRIBE_CSS = { from: "crates/moss-build/src/assets/css/site.css", out: "site/home/subscribe-form.css" };
+
+function copySubscribeCss() {
+  const css = readFileSync(SUBSCRIBE_CSS.from, "utf8");
+  const start = css.indexOf("/* subscribe-form:start");
+  const end = css.indexOf("/* subscribe-form:end */");
+  if (start < 0 || end < start) throw new Error(`${SUBSCRIBE_CSS.from}: subscribe-form markers not found`);
+  // Comments stay in site.css, where they explain the rules; the copy ships without them.
+  const body = css.slice(css.indexOf("*/", start) + 2, end).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]+$\n/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  writeFileSync(SUBSCRIBE_CSS.out, `/* Generated from ${SUBSCRIBE_CSS.from} by scripts/build-backend-scripts.mjs; edit it there. */\n${body}\n`);
+}
+
 export async function buildBackendScripts() {
+  copySubscribeCss();
   await Promise.all(
     BUNDLES.map(({ entry, out, format = "iife", globalName }) =>
       build({ entryPoints: [entry], bundle: true, minify: true, format, globalName, outfile: out }),
@@ -77,7 +96,7 @@ export async function buildBackendScripts() {
 }
 
 /** Every file the table writes: what a freshness check compares after a build. */
-export const OUTPUTS = BUNDLES.map((b) => b.out);
+export const OUTPUTS = [...BUNDLES.map((b) => b.out), SUBSCRIBE_CSS.out];
 
 // `--check` builds, then fails if any output differs from the committed copy.
 if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {

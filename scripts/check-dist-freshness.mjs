@@ -72,6 +72,7 @@ const PACKAGES = [
     distPath: OUTPUTS,
     triggers: [
       'crates/moss-build/src/js-src/',
+      'crates/moss-build/src/assets/css/site.css',
       'scripts/build-backend-scripts.mjs',
       'packages/moss-blueprint-grid/',
     ],

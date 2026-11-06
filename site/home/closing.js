@@ -99,72 +99,11 @@
       if (button) copy(button);
     });
 
-    const submit = (form, request, successMessage) => {
-      if (!form) return;
-      const button = form.querySelector('button[type="submit"]');
-      const input = form.querySelector('input[type="email"]');
-      const status = form.querySelector('.form-status');
-      const initialLabel = button.textContent;
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        if (!form.reportValidity() || button.disabled) return;
-        button.disabled = true;
-        const languageSelect = document.querySelector('#language-select');
-        if (languageSelect) languageSelect.disabled = true;
-        button.setAttribute('aria-busy', 'true');
-        button.textContent = window.__landingI18n?.t('sending') || 'Sending…';
-        status.textContent = '';
-        delete status.dataset.state;
-        try {
-          const email = input.value.trim();
-          let response = await request(email);
-          // The host asks for its bot check (home/captcha.js); post again once passed.
-          if (response.status === 403) {
-            const asked = await response.json().catch(() => ({}));
-            if (asked.need_captcha && asked.captcha_url && window.mossCaptcha) {
-              if (!(await window.mossCaptcha.solveCaptcha(asked.captcha_url))) return;
-              response = await request(email);
-            }
-          }
-          if (!response.ok) throw new Error(`Request failed (${response.status})`);
-          let payload;
-          if (form.dataset.subscription) {
-            payload = await response.json();
-            if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.subscribed !== true || (payload.alreadySubscribed !== true && payload.confirmationSent !== true)) {
-              throw new Error('The subscription service returned an unexpected response.');
-            }
-          }
-          form.reset();
-          status.textContent = typeof successMessage === 'function' ? successMessage(payload) : successMessage;
-          status.dataset.state = 'success';
-          status.dataset.messageKey = 'success';
-        } catch (error) {
-          status.textContent = error instanceof TypeError
-            ? (window.__landingI18n?.t('offline') || 'Could not connect. Check your connection and try again.')
-            : (window.__landingI18n?.t('error') || 'Something went wrong. Please try again.');
-          status.dataset.state = 'error';
-          status.dataset.messageKey = error instanceof TypeError ? 'offline' : 'error';
-          input.focus();
-        } finally {
-          button.disabled = false;
-          if (languageSelect) languageSelect.disabled = false;
-          button.removeAttribute('aria-busy');
-          button.textContent = window.__landingI18n?.t('request') || initialLabel;
-        }
-      });
-    };
-
-    submit(
-      document.querySelector('#beta-form'),
-      (email) => fetch('https://api.mosspub.com/api/sites/landing/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email, scope: subscriptionScope() }),
-      }),
-      (payload) => payload.alreadySubscribed
-        ? (window.__landingI18n?.t('alreadySubscribed') || 'You’re already subscribed.')
-        : (window.__landingI18n?.t('success') || 'Check your email to confirm your subscription.')
-    );
+    // The sign-up itself is moss's subscribe form (home/subscribe.js); the
+    // landing only says which newsletter the reader joins.
+    const scope = document.querySelector('#beta-form input[name="scope"]');
+    if (scope) scope.value = subscriptionScope();
+    if (window.mossSubscribe) document.documentElement.dataset.signupWired = 'true';
 
     document.querySelectorAll('a[href="#downloads"]').forEach((link) => {
       link.addEventListener('click', (event) => {
