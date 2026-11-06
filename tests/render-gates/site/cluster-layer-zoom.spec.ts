@@ -40,3 +40,28 @@ test("a work's locator over a layer opens at the layer's depth, not a regional v
   await page.waitForTimeout(500);
   expect(zoomOf(page), "framed on the layer like the places page, not on the region").toBeGreaterThanOrEqual(all - 1e-6);
 });
+
+test("a page's locator shows its static credit only with its static map", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("gate-morning/", { waitUntil: "domcontentloaded" });
+  const host = page.locator(".moss-place-locator figure[data-moss-place-embed]");
+  const credit = host.locator("> .moss-place-map-credit");
+  await host.scrollIntoViewIfNeeded();
+  await expect(host, "the locator becomes the explorer").toHaveAttribute("data-moss-place-embed-state", "ready", { timeout: 15000 });
+  await expect(credit, "the explorer draws its own credit").toBeHidden();
+  for (const [state, shown] of [["waiting", false], ["loading", false], ["consent", false], ["fallback", true]] as const) {
+    await host.evaluate((el, value) => { (el as HTMLElement).dataset.mossPlaceEmbedState = value; }, state);
+    await expect(host.locator("> svg"), `the static map in ${state}`).toBeVisible({ visible: shown });
+    await expect(credit, `the static credit in ${state}`).toBeVisible({ visible: shown });
+  }
+});
+
+test("a locator keeps its static credit when scripts never run", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, javaScriptEnabled: false });
+  const page = await context.newPage();
+  await page.goto(new URL("gate-morning/", test.info().project.use.baseURL).href);
+  const host = page.locator(".moss-place-locator figure[data-moss-place-embed]");
+  await expect(host.locator("> svg")).toBeVisible();
+  await expect(host.locator("> .moss-place-map-credit")).toBeVisible();
+  await context.close();
+});
