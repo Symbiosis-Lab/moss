@@ -2341,10 +2341,8 @@ pub fn generate_blocking_content_for_build(
                 // direct_children_sort exists. Date fallback (None → Date) matches
                 // the legacy meta-slot behavior.
                 None,
-                site_config.math, false,
-                &Default::default(),
-                false, None,
-                Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())),
+                site_config.math,
+                &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), ..Default::default() },
                 now,
             );
             // The generated half of the same split the claimed term page gets

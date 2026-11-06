@@ -4456,6 +4456,44 @@ The opening line of the fourth note.
 // A theme rule with no layer, the way real themes ship one: a boxed field must not draw it as a second box.
 const THEME_FOCUS_RING = `:focus-visible { outline: 2px solid rgb(255, 0, 0); outline-offset: 2px; }\n`;
 
+// A work feed: `pictures:5` rows, each a project page that is only its pictures.
+// Served by playwright/listing-picture-strip.config.ts.
+const STRIP_PROJECT = (title: string) => `---
+title: ${title}
+---
+
+${[1, 2, 3, 4, 5].map((n) => `![${title}, picture ${n}|](../pics/${n}.png)`).join("\n\n")}
+`;
+
+export const LISTING_PICTURE_STRIP_GATE: ScratchSiteSpec = {
+  name: "listing-picture-strip-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    "pics/4.png": syntheticBusyImage(640, 360),
+    "pics/5.png": syntheticBusyImage(300, 450),
+    "index.md": `---
+title: Work feed
+uid: "strip0001"
+children: false
+---
+
+![[work/|style:summary,pictures:5]]
+`,
+    "work/index.md": `---
+title: Work
+uid: "strip0010"
+children: false
+---
+`,
+    "work/alpha.md": STRIP_PROJECT("Alpha Ventures"),
+    "work/beta.md": STRIP_PROJECT("Beta Ventures"),
+    // A linkblog row (external address and publisher) wraps its strip in its own link.
+    "work/gamma.md": STRIP_PROJECT("Gamma Ventures").replace("---\n\n", "external_url: https://example.com/gamma\npublisher: Example Press\n---\n\n"),
+  },
+};
+
 // A request form with one of each kind of field, for tests/render-gates/site/request-form.spec.ts
 // and playwright/request-form.config.ts.
 export const REQUEST_FORM: ScratchSiteSpec = {

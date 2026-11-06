@@ -26,6 +26,9 @@ pub struct FolderEmbedParams {
     /// Listing filter: "past" or "upcoming" keeps only the pages whose event
     /// has ended, or has not. A page with no start or date is past.
     pub when: Option<String>,
+    /// How many of a page's own pictures a `style:summary` row draws as a
+    /// strip, in place of its one cover: [`MIN_PICTURES`] to [`MAX_PICTURES`].
+    pub pictures: Option<usize>,
     /// Raw sizing token (e.g. `"80%"`, `"800x600"`). Parsed to a `Sizing`
     /// at render time and applied ONLY to the static-index iframe branch
     /// (the card-grid listing branch ignores it). Stored raw so the
@@ -106,8 +109,23 @@ pub fn classify_folder_segments(raw: &str) -> FolderEmbedParams {
     out
 }
 
+/// The fewest and the most pictures one listing row draws as a strip; one
+/// picture is the row's ordinary cover.
+pub const MIN_PICTURES: usize = 2;
+pub const MAX_PICTURES: usize = 12;
+
+/// A `pictures:` / `children_pictures:` value: a whole number from
+/// [`MIN_PICTURES`] to [`MAX_PICTURES`]. The one reader of that range, for the
+/// embed option, the marker and the frontmatter key.
+pub fn picture_count(raw: &str) -> Result<usize, String> {
+    match raw.trim().parse::<usize>() {
+        Ok(n) if (MIN_PICTURES..=MAX_PICTURES).contains(&n) => Ok(n),
+        _ => Err(format!("`{}` is not a number from {MIN_PICTURES} to {MAX_PICTURES}", raw.trim())),
+    }
+}
+
 /// Recognized keys for the keyed (`key:value` / `key=value`) grammar.
-pub const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "more", "size"];
+pub const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "pictures", "more", "size"];
 
 /// A segment is keyed when it has at least one known key.
 /// Unknown keys beside a known one are ignored and reported.
@@ -174,6 +192,11 @@ fn merge_keyed_params(out: &mut FolderEmbedParams, raw: &str) {
                 "group" => out.group = Some(v.trim().to_string()),
                 "covers" => out.covers = Some(v.trim().to_string()),
                 "when" => out.when = Some(v.trim().to_string()).filter(|w| matches!(w.as_str(), "past" | "upcoming")),
+                "pictures" => match picture_count(v) {
+                    Ok(n) => out.pictures = Some(n),
+                    // Reported with the unknown keys: the value, not the key, is what moss cannot use.
+                    Err(_) => out.unknown_keys.push(format!("pictures:{}", v.trim())),
+                },
                 "more" => {
                     let v = v.trim();
                     if !v.is_empty() {
@@ -338,6 +361,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(ref w) = params.when {
         parts.push(format!("when={}", w));
+    }
+    if let Some(n) = params.pictures {
+        parts.push(format!("pictures={}", n));
     }
     if let Some(ref m) = params.more {
         parts.push(format!("more={}", marker_encode(m)));

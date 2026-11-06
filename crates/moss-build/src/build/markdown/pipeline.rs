@@ -1543,6 +1543,15 @@ pub fn process_markdown_file(
     let children_more = frontmatter.children_more;
     let children_covers = frontmatter.children_covers;
     let children_when = frontmatter.children_when;
+    let children_pictures = frontmatter.children_pictures.and_then(|n| {
+        match moss_core::resolve::embed_renderer::folder_list::picture_count(&n.to_string()) {
+            Ok(n) => Some(n as u32),
+            Err(why) => {
+                crate::build::cli_output::log_warn_problem!("[{file_path}] children_pictures: {why}, so it is ignored");
+                None
+            }
+        }
+    });
     let children_count = frontmatter.children_count;
     let from_sidebar_alias = frontmatter._from_sidebar_alias;
     let series = frontmatter.series;
@@ -1682,6 +1691,7 @@ pub fn process_markdown_file(
         children_more,
         children_covers,
         children_when,
+        children_pictures,
         children_count,
         from_sidebar_alias,
         series,

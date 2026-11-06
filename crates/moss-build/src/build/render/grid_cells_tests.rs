@@ -403,7 +403,7 @@ fn collection_cells_render_through_the_grid_card_emitter() {
     let mut eager = true;
     for doc in &docs {
         let props = crate::build::components::child_list::props_for_document(
-            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(),
+            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(), None,
         );
         // `list_has_covers=true`: "Ink Study" has a cover, so "Works" (the
         // other cell, coverless) must render through the quote-slot branch,
@@ -1197,7 +1197,7 @@ fn summary_cells_render_through_the_summary_card_emitter() {
     let overrides = HashMap::new();
     for doc in &docs {
         let props = crate::build::components::child_list::props_for_document(
-            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(),
+            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(), None,
         );
         let expected = crate::build::components::child_summary::render_with_sort(
             &props,

@@ -348,6 +348,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "`object-fit` for card covers. `contain` for artwork whose edges carry meaning; `cover` stays right for photography.",
     },
     CustomProp {
+        name: "--moss-card-pictures-ratio",
+        owner: "moss-card-pictures",
+        default: "5 / 3",
+        description: "Aspect ratio every picture in a summary row's strip (`pictures:N`) is cropped to. `--moss-card-cover-fit` applies to the strip too.",
+    },
+    CustomProp {
+        name: "--moss-card-pictures-gap",
+        owner: "moss-card-pictures",
+        default: "var(--moss-space-xs)",
+        description: "Space between the pictures of a summary row's strip.",
+    },
+    CustomProp {
         name: "--moss-card-min",
         owner: "moss-cards",
         default: "280px",

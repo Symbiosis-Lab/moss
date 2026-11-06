@@ -414,6 +414,10 @@ pub struct FrontMatter {
     /// Listing filter: "past" or "upcoming" keeps only the pages whose event
     /// has ended, or has not. Applied before `children_limit`. Absent = no filter.
     pub children_when: Option<String>,
+    /// Draw up to N of each page's own pictures as a strip on a `summary`
+    /// listing's rows, in place of the one cover. Read raw here; the build checks the
+    /// range with `folder_list::picture_count`. Absent = one cover.
+    pub children_pictures: Option<u32>,
     /// What this listing's folder cards say they count: `false` hides it, a
     /// string replaces the text (see [`crate::frontmatter_union::ChildrenCount`]).
     pub children_count: Option<crate::frontmatter_union::ChildrenCount>,
@@ -1097,6 +1101,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         value
                     ),
                 },
+                "children_pictures" => frontmatter.children_pictures = value.parse().ok(),
                 "description" => frontmatter.description = Some(value.to_string()),
                 "nav_label" => frontmatter.nav_label = Some(value.to_string()),
                 "lang" => frontmatter.lang = Some(value.to_string()),

@@ -1223,6 +1223,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "children_pictures",
+        field_type: FieldType::Integer,
+        widget: Widget::NumberInput,
+        score: 86,
+        description: "On a summary listing, draw up to N of each page's own pictures (2 to 12) as a strip, in place of its one cover: a work feed with a strip of each project's pictures. Absent = one cover.",
+        label: Some("Pictures"),
+        label_key: "chip.children_pictures.label",
+        group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "_from_sidebar_alias",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,

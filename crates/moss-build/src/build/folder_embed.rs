@@ -45,7 +45,7 @@ use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
 use moss_core::frontmatter_union::ChildrenCount;
-use moss_core::resolve::embed_renderer::folder_list::{marker_decode, KNOWN_KEYS, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
+use moss_core::resolve::embed_renderer::folder_list::{self, marker_decode, KNOWN_KEYS, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
 use moss_core::resolve::embed_renderer::Sizing;
 use moss_core::resolve::title_params::TitleParams;
 use moss_core::sort::{ResolvedSort, SortAxis};
@@ -81,6 +81,8 @@ struct ParsedMarker<'a> {
     covers: Option<&'a str>,
     /// `"past"` or `"upcoming"`: keeps only the pages whose event has ended, or has not.
     when: Option<&'a str>,
+    /// Pictures per `summary` row (`FolderEmbedParams::pictures`).
+    pictures: Option<usize>,
     /// Internal filter: root homepage's own listing — scope to the default language
     /// tree (drop language-prefix subtrees) when the site is multilingual (homepage only).
     scope_default_tree: bool,
@@ -123,7 +125,7 @@ fn warn_map_fallback_once(path: &str, reason: &str) {
 fn warn_unknown_options(page: &str, parsed: &ParsedMarker<'_>) {
     if let Some(keys) = &parsed.unknown_keys {
         crate::build::cli_output::log_warn_problem!(
-            "[{page}] folder embed '{}' ignores unknown option(s) {keys}; known options: {}",
+            "[{page}] folder embed '{}' ignores unknown or invalid option(s) {keys}; known options: {}",
             parsed.path,
             KNOWN_KEYS.join(", ")
         );
@@ -160,6 +162,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "count" => out.count = Some(ChildrenCount(marker_decode(v.trim()))),
                 "covers" => out.covers = Some(v.trim()),
                 "when" => out.when = Some(v.trim()),
+                "pictures" => out.pictures = folder_list::picture_count(v).ok(),
                 "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
                 "align" => {
                     out.placement.align = match v.trim() {
@@ -402,10 +405,7 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 ///   Weight / explicit order) — the caller has already sorted via
 ///   `sort_by_resolved`, and the date resort would scramble that order.
 /// * `typesetting` - Typesetting mode ("vertical" or "horizontal"); used for CJK numeral formatting
-/// * `is_embed` - true only for a body `![[folder/|…]]` embed; stamps
-///   `data-embed` on the `.moss-cards-container` built here so CSS can give
-///   an embedded listing block rhythm distinct from the trailing automatic
-///   listing.
+/// * `rows` - what the listing says about how its rows are drawn ([`ListingRowOptions`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_children(
     folder_docs: &[&ParsedDocument],
@@ -420,11 +420,7 @@ pub(crate) fn generate_children(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     parent_sort_axis: Option<moss_core::sort::SortAxis>,
     math: bool,
-    is_embed: bool,
-    placement: &moss_core::media::Placement,
-    lazy_cards: bool,
-    count: Option<&ChildrenCount>,
-    listing_tag: Option<&str>,
+    rows: &ListingRowOptions<'_>,
     now: chrono::NaiveDateTime,
 ) -> String {
     if folder_docs.is_empty() {
@@ -449,13 +445,14 @@ pub(crate) fn generate_children(
                 dir_overrides,
                 typesetting,
                 now,
+                rows.pictures.filter(|_| style == "summary"),
             );
             // The grid card is one of those paths: its description comes from
             // `props_for_document` (frontmatter, then the first byline row) and
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
-            props.count_setting = props.count_setting.take().or_else(|| count.cloned());
-            props.lang = listing_tag.and_then(|tag| components::child_list::RowLang::between(doc, tag, lang));
+            props.count_setting = props.count_setting.take().or_else(|| rows.count.cloned());
+            props.lang = rows.listing_tag.and_then(|tag| components::child_list::RowLang::between(doc, tag, lang));
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
                     crate::build::components::child_list::explicit_card_text(doc).as_deref(),
@@ -531,9 +528,9 @@ pub(crate) fn generate_children(
             typesetting,
             Some(media_lookup_ref),
             parent_axis,
-            is_embed,
-            placement,
-            lazy_cards,
+            rows.is_embed,
+            &rows.placement,
+            rows.lazy_cards,
         );
     }
 
@@ -683,7 +680,25 @@ pub(crate) fn generate_children(
     // render through `child_summary` and don't depend on the minimal item CSS.
     // (Grid returns earlier with its own data-layout="grid".)
     let data_layout = if style != "summary" { "minimal" } else { "list" };
-    components::cards_container(data_layout, lead, is_embed, placement, html.trim())
+    components::cards_container(data_layout, lead, rows.is_embed, &rows.placement, html.trim())
+}
+
+/// How a listing draws its rows, as its embed or its folder's frontmatter set it.
+#[derive(Default)]
+pub(crate) struct ListingRowOptions<'a> {
+    /// True only for a body `![[folder/|…]]` embed; stamps `data-embed` on the
+    /// `.moss-cards-container` so CSS can give an embedded listing block
+    /// rhythm distinct from the trailing automatic listing.
+    pub is_embed: bool,
+    /// Width and float the container wears (the figure's, when there is a caption).
+    pub placement: moss_core::media::Placement,
+    /// The card grid's covers all load lazily.
+    pub lazy_cards: bool,
+    pub count: Option<&'a ChildrenCount>,
+    /// The listing page's language tag, to mark a row in another language.
+    pub listing_tag: Option<&'a str>,
+    /// Pictures per `summary` row (`pictures:N`).
+    pub pictures: Option<usize>,
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in
@@ -1565,6 +1580,15 @@ fn render_one(
         None => parsed.placement.clone(),
     };
 
+    let rows = ListingRowOptions {
+        is_embed,
+        placement: container_placement,
+        lazy_cards: parsed.lazy_cards,
+        count: parsed.count.as_ref(),
+        listing_tag: host_tag.as_deref(),
+        pictures: parsed.pictures,
+    };
+
     // Dispatch rendering based on style.
     let render_group = |docs: &[&ParsedDocument]| {
         generate_children(
@@ -1580,11 +1604,7 @@ fn render_one(
             media_lookup,
             Some(resolved.presentation_axis()),
             math,
-            is_embed,
-            &container_placement,
-            parsed.lazy_cards,
-            parsed.count.as_ref(),
-            host_tag.as_deref(),
+            &rows,
             now,
         )
     };
@@ -1819,6 +1839,7 @@ pub(crate) fn synthesize_children_marker_for(
         size: None,
         covers: doc.children_covers.clone(),
         when: doc.children_when.clone(),
+        pictures: doc.children_pictures.map(|n| n as usize),
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),

@@ -436,6 +436,17 @@ const CORE: &[ComponentEntry] = &[
         description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover=\"quote\"` when a sibling card in the same listing has a cover and this one doesn't.",
     },
     ComponentEntry {
+        class: "moss-card-pictures",
+        kind: "instance",
+        parent: "moss-card",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-card-pictures"><div class="moss-card-cover"><img src="..." /></div><div class="moss-card-cover"><img src="..." /></div></div>"#,
+        example_markdown: "![[work/|style:summary,pictures:5]]",
+        status: Status::Confirmed,
+        since: "0.22",
+        description: "A strip of the page's own pictures in a summary row, in place of the single `.moss-card-cover`, when the listing says `pictures:N` (or `children_pictures: N`) and the page has more than one picture. Each picture is a `.moss-card-cover`. One row of equal columns on a wide screen; a sideways scroll row below 48rem.",
+    },
+    ComponentEntry {
         class: "moss-card-no-cover",
         kind: "instance",
         parent: "moss-card",

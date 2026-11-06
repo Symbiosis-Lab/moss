@@ -262,6 +262,10 @@ pub struct ChildItemProps {
     pub description: Option<String>,
     /// Optional cover image path
     pub cover: Option<String>,
+    /// The page's own pictures, cover first, resolved like `cover`, when the
+    /// listing asked for a strip (`pictures:N`) and the page has more than
+    /// one. Empty otherwise: a summary row then draws `cover` alone.
+    pub pictures: Vec<String>,
     /// Type of cover media (image, video, iframe). Defaults to Image when cover is Some.
     pub cover_type: Option<CoverType>,
     /// Optional overline shown above the title (horizontal) or between title
@@ -479,6 +483,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     dir_overrides: &std::collections::HashMap<String, String>,
     typesetting: Option<&str>,
     now: chrono::NaiveDateTime,
+    pictures: Option<usize>,
 ) -> ChildItemProps {
     let path_resolver = PathResolver::new().with_dir_overrides(dir_overrides.clone());
 
@@ -575,6 +580,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         child_count: child_count.or(term_count),
         count_only,
         description: explicit_card_text(doc),
+        pictures: pictures.zip(cover.as_deref()).map_or_else(Vec::new, |(n, cover)| strip_pictures(doc, cover, n, &path_resolver)),
         cover,
         cover_type: cover_path_for_type
             .as_deref()
@@ -607,6 +613,17 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         subtitle: card_subtitle(doc),
         lang: None,
     }
+}
+
+/// The pictures a summary row draws as a strip (`pictures:N`): the card's own
+/// resolved `cover` first, then the page's other pictures resolved the same
+/// way. Empty when the page has no other, so the row draws its cover.
+fn strip_pictures(doc: &ParsedDocument, cover: &str, n: usize, path_resolver: &PathResolver) -> Vec<String> {
+    let rest = crate::build::page::cover::card_pictures_after_cover(doc.listing_cover(), doc.hero_image_url.as_deref(), &doc.body_cover_candidates, n);
+    if rest.is_empty() {
+        return Vec::new();
+    }
+    std::iter::once(cover.to_string()).chain(rest.iter().map(|path| path_resolver.resolve_url(path))).collect()
 }
 
 /// The links of an event card whose page has a web `tickets:` or `online:`

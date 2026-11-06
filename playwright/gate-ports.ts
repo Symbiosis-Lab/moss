@@ -69,6 +69,7 @@ const GATE_PORT_KEYS = [
   'card-cover-ratio',
   'card-cover-auto',
   'lead-listing',
+  'listing-picture-strip',
   'grid-card-image-inline-size',
   'hero-caption',
   'content-width-escape',

@@ -7286,6 +7286,51 @@ article a:where(:not(.moss-btn)):focus {
   opacity: 0;
 }
 
+/* Iframe covers */
+.moss-cards[data-layout="list"] .moss-card-cover iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  margin: 0;
+}
+
+/* A summary row with a strip of the page's own pictures (`pictures:N`): the
+   words, then the strip across the row's full width, so the row stacks where a
+   single cover sits beside it. Wide: the pictures share one row in equal
+   columns, each cropped to one shape. Phone: the strip scrolls sideways, a
+   little of the next picture showing (`--moss-grid-scroll-peek`, as in a grid
+   scroll row), and never widens the page. Hooks, like
+   the cover's: `--moss-card-pictures-ratio` is each picture's shape and
+   `--moss-card-pictures-gap` the space between them. */
+.moss-card-row:has(.moss-card-pictures) {
+  flex-direction: column;
+}
+
+.moss-card-pictures {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--moss-card-pictures-gap, var(--moss-space-xs));
+  min-inline-size: 0;
+}
+
+.moss-cards[data-layout="list"] .moss-card-pictures > .moss-card-cover {
+  inline-size: auto;
+  aspect-ratio: var(--moss-card-pictures-ratio, 5 / 3);
+}
+
+@media (width < 48rem) {
+  .moss-card-pictures {
+    grid-auto-columns: calc(100% - var(--moss-grid-scroll-peek, 2.5rem));
+    overflow-x: auto;
+    scroll-snap-type: inline proximity;
+    overscroll-behavior-inline: contain;
+  }
+  .moss-card-pictures > .moss-card-cover {
+    scroll-snap-align: start;
+  }
+}
+
 /* Lead listing (`children_style: lead`): the first card leads, the rest form a
    register. Phone: the lead stacks picture over words, the register is ruled
    rows with no pictures. Wide: the lead is a picture beside its words and the

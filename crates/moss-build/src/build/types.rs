@@ -457,6 +457,9 @@ pub struct ParsedDocument {
     /// Listing filter: "past" or "upcoming" keeps only the pages whose event
     /// has ended, or has not. Applied before `children_limit`.
     pub children_when: Option<String>,
+    /// Pictures a `summary` row draws as a strip in place of its one cover
+    /// (`children_pictures:`); see `FolderEmbedParams::pictures`.
+    pub children_pictures: Option<u32>,
     /// What this listing's folder cards say they count; absent = the built-in
     /// "N articles" text. Left out of the exported bindings: the listing
     /// reads it, no UI does.

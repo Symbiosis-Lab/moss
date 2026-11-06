@@ -167,14 +167,24 @@ pub fn render_with_sort(
         body.push_str(&links.actions);
     }
 
-    let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);
-    let cover_inner = match (&props.cover, cover_type) {
-        (Some(url), Some(ct)) => {
-            let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
-            let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
-            cover::render_cover_html(cover_path, ct, &props.title, "moss-card-cover", &cover_attrs, true, media_lookup, false)
+    // One cover, or, when the listing asked for `pictures:N` and the page has
+    // more than one, a strip of them. Each picture is a `.moss-card-cover`, so
+    // it takes the cover renderer and its CSS; only the first is named for
+    // assistive technology, since the card's link already carries the title.
+    let draw = |url: &str, ct: CoverType, alt: &str| {
+        let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
+        let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
+        cover::render_cover_html(cover_path, ct, alt, "moss-card-cover", &cover_attrs, true, media_lookup, false)
+    };
+    let cover_inner = if let Some(first) = props.pictures.first() {
+        let rest = props.pictures.iter().skip(1).map(|url| draw(url, CoverType::Image, ""));
+        let cells: String = std::iter::once(draw(first, props.cover_type.unwrap_or(CoverType::Image), &props.title)).chain(rest).collect();
+        format!(r#"<div class="moss-card-pictures">{cells}</div>"#)
+    } else {
+        match (&props.cover, CoverType::resolve(props.cover.as_deref(), props.cover_type)) {
+            (Some(url), Some(ct)) => draw(url, ct, &props.title),
+            _ => String::new(),
         }
-        _ => String::new(),
     };
     // Cover wrapped in an anchor for linkblog cards.
     let cover_html = if is_linkblog && !cover_inner.is_empty() {
