@@ -85,6 +85,7 @@ const GATE_PORT_KEYS = [
   'place-map-tokens',
   'place-map-align',
   'place-map-cut',
+  'cluster-layer-zoom',
   'country-map',
   'country-map-interaction',
   'preview-parity-gate:static',

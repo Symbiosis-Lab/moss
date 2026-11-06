@@ -94,6 +94,7 @@ GATES_BUILD=(
   country-map-interaction
   place-map-align
   place-map-cut
+  cluster-layer-zoom
   place-map-route
   preview-parity-gate
   touch-targets

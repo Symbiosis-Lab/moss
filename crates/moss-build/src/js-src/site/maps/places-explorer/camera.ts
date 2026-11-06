@@ -166,8 +166,8 @@ export const DETAIL_MAX_SCALE = 7.21 * (560 / 480);
 const FIT_PAD_MIN = 36;
 const FIT_PAD_MAX = 90;
 const FIT_PAD_FRACTION = 0.12;
-/** The smallest span `fitPoints` ever fits to, so a single point (zero span) still produces a finite zoom. */
-const FIT_MIN_SPAN = 12;
+/** The smallest span `fitPoints` ever fits to, so a single point (zero span) still produces a finite zoom. Far below one screen pixel at any ceiling a layer allows, so a tight group fits as deep as the ceiling and never shallower than the view it was clicked from. */
+const FIT_MIN_SPAN = 1e-3;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
