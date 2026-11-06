@@ -66,7 +66,7 @@ pub struct CopyOutcome {
     pub handoff: Option<Handoff>,
     /// Why the network refused, with `success: false`.
     #[serde(default)]
-    pub refused: Option<Refusal>,
+    pub refused: Option<CopyRefusal>,
 }
 
 /// What kind of refusal it was, so a person knows what to do about it.
@@ -84,8 +84,10 @@ pub enum Cause {
     Unknown,
 }
 
+/// Named for copies: a host exports every type into one TypeScript module,
+/// where the plugin registry's `Refusal` already lives.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct Refusal {
+pub struct CopyRefusal {
     #[serde(default)]
     pub cause: Cause,
     /// The network's own words.
