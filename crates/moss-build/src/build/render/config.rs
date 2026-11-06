@@ -112,6 +112,8 @@ pub struct SiteConfig {
     /// `ai_policy`, resolved: robots.txt, the robots meta tag, `llms.txt` and
     /// `tdmrep.json` all read this one value.
     pub ai: crate::build::feeds::robots::AiSettings,
+    /// `[site].me` and `[site].atproto_did`.
+    pub identity: crate::config::site_identity::SiteIdentity,
     /// `[site].search` — full-text search, resolved at the construction site
     /// in `build/pipeline.rs`: `true` when the author turned the Services-tab
     /// toggle on. By design, the gate is expressed here in the
@@ -195,6 +197,7 @@ impl Default for SiteConfig {
             site_url_override: None,
             declared_redirects: Vec::new(),
             ai: Default::default(),
+            identity: Default::default(),
             search: false,
             term_kinds: Vec::new(),
             term_nav: Vec::new(),

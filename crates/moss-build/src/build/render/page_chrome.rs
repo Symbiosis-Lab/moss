@@ -168,7 +168,9 @@ impl PageChromeContext<'_, '_> {
             footer: Some(nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),
-            head_alternates: self.assets.head_alternates.map(str::to_string),
+            head_alternates: Some([self.assets.head_alternates.unwrap_or_default(), self.layout.profile_links.as_str()]
+                .iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join("\n    "))
+                .filter(|tags| !tags.is_empty()),
             analytics: analytics_home.and_then(|d| d.analytics.as_ref()).map(|a| a.to_script_tag()),
             body_attrs,
             lang: page_lang_tag, ui_lang,

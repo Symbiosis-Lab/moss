@@ -460,6 +460,11 @@ impl ServedPath {
         ServedPath(".well-known/tdmrep.json".to_string())
     }
 
+    /// The file Bluesky reads to check a domain handle. Path is fixed.
+    pub fn for_atproto_did() -> Self {
+        ServedPath(".well-known/atproto-did".to_string())
+    }
+
     /// Default theme CSS, emitted from the binary-embedded default stylesheet
     /// asset.
     pub fn for_default_stylesheet() -> Self {

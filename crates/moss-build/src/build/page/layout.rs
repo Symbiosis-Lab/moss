@@ -57,6 +57,8 @@ pub struct LayoutConfig {
     /// Term kinds that asked for a nav-bar entry (`[terms.<key>] nav = true`)
     /// and have a root page, one entry per edition, in config order.
     pub term_nav: Vec<crate::build::terms::TermNavEntry>,
+    /// `[site].me` as ready-to-place `<link rel="me">` tags, or `""`.
+    pub profile_links: String,
 }
 
 impl LayoutConfig {
@@ -91,7 +93,14 @@ impl LayoutConfig {
             lang_tag: "en".to_string(),
             place_maps: None,
             term_nav: Vec::new(),
+            profile_links: String::new(),
         }
+    }
+
+    /// Set the `rel="me"` head links — see [`Self::profile_links`].
+    pub fn with_profile_links(mut self, profile_links: String) -> Self {
+        self.profile_links = profile_links;
+        self
     }
 
     /// Set the term kinds that are nav-bar entries — see [`Self::term_nav`].

@@ -1444,7 +1444,7 @@ pub fn generate_blocking_content_for_build(
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
-        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone());
+        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.
         // Localhost fallbacks (no deployment configured) skip RSS/sitemap.
@@ -2542,6 +2542,12 @@ pub fn generate_blocking_content_for_build(
     // not the site has a deployed address, so a preview serves the links the
     // pages carry.
     shared.calendar.emit(output_dir, pending)?;
+    if let Some(did) = site_config.identity.atproto_did() {
+        let path = ServedPath::for_atproto_did();
+        BuildContext::for_render(output_dir, pending)
+            .emit(&path, format!("{did}\n").as_bytes(), HashBucket::Files)
+            .map_err(|e| format!("Failed to emit {}: {}", path.as_str(), e))?;
+    }
     log::debug!(target: "timing", "[render] prelude: rss+sitemap+robots+qr: {:?}", total_start.elapsed());
 
     // Search indexing (Pagefind) does NOT run here. Pagefind walks rendered

@@ -99,7 +99,7 @@ pub struct ManifestFieldInfo {
 pub struct SiteSettingInfo {
     /// Key name under `[site]`.
     pub name: &'static str,
-    /// "bool", "string" or "table".
+    /// "bool", "string", "string[]" or "table".
     pub r#type: &'static str,
     /// The value when the key is absent, as text; `None` when the build has no fixed default.
     pub default: Option<&'static str>,

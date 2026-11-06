@@ -1080,6 +1080,12 @@ Once a switch is set, robots.txt opens with two comment lines naming the three c
 
 `ai_policy` is a name for a state of the three: `"standard"` (the default: search engines and AI answers allowed, training asked not to), `"unrestricted"` (all allowed) or `"restricted"` (all asked not to). A switch you set wins over it, and an unset switch follows it. A site that sets none of the three keeps the robots.txt its `ai_policy` has always written, with no robots tag and no `tdmrep.json`; `llms.txt` follows the AI answers use either way, so a `"restricted"` site does not publish it. Removing all three switches stops `tdmrep.json`, and the publish gate reads that as your choice. A `robots.txt` of your own at the site root replaces the generated one.
 
+## Proving the site is yours
+
+To show Mastodon that your site belongs to your profile there, list the profile addresses in the `[site]` table of `.moss/config.toml`: `me = ["https://social.example/@ana", "https://bsky.example/profile/ana.example"]`. The build writes one `<link rel="me" href="…">` into the head of every page, which is what Mastodon looks for when it marks a profile link as verified (the profile must link back to your site too); other tools that read `rel="me"` links see them as well. Only http and https addresses are used; any other entry is dropped with a build warning naming `me`.
+
+To use your site's domain as your Bluesky handle, set `atproto_did = "did:plc:abcdefghijklmnopqrstuvwx"` in the same table, with the account identifier Bluesky shows you when you change your handle to a domain. The build writes it to `.well-known/atproto-did`, the address Bluesky fetches to check the domain. moss skips every folder whose name starts with a dot in your source, so the file cannot be shipped by hand. A value that does not start with `did:plc:` or `did:web:` is dropped with a build warning naming `atproto_did`.
+
 ## Archival copy: dated editions and citation
 
 Turn on `archival = true` under `[site]` in `.moss/config.toml` for a site that is meant to be cited and kept. It is off when the key is unset, and a site without it builds exactly as before. The edition here is the build's own date and id, unrelated to a language edition such as `de/`. On a footer that ends on a closing picture, the edition block sits on that picture's foot, beside its credit, in the same panel or ink.

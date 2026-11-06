@@ -36,6 +36,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "Publish a dated, citable copy: every page shows its edition line and a citation, and the source files travel with the site.",
         },
         SiteSettingInfo {
+            name: "atproto_did",
+            r#type: "string",
+            default: None,
+            description: "The account identifier (`did:plc:…` or `did:web:…`) that lets the site's domain serve as a Bluesky handle. The build writes it to `.well-known/atproto-did`.",
+        },
+        SiteSettingInfo {
             name: "author",
             r#type: "string",
             default: None,
@@ -130,6 +136,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "bool",
             default: Some("true"),
             description: "Typeset math in pages. false turns math rendering off.",
+        },
+        SiteSettingInfo {
+            name: "me",
+            r#type: "string[]",
+            default: None,
+            description: "Profile addresses on other sites, e.g. `[\"https://social.example/@ana\"]`. Each is written as `<link rel=\"me\">` in the head of every page but media and notebook viewer pages, which is how Mastodon marks the site as verified on that profile. http and https only.",
         },
         SiteSettingInfo {
             name: "rss_footer",

@@ -1504,6 +1504,7 @@ fn build_inner(
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
         ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
+        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref()),
         // One switch: the per-site Services-tab toggle, absent key = off
         // (graduated out of `experimental.preview_features` 2026-08-31).
         // Resolved here into the ONE value the nav button
