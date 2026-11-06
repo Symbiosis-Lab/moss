@@ -951,10 +951,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=1, Importance=1 → score=90
         score: 90,
-        description: "Section accent colour (`#rgb` or `#rrggbb`). Only a folder's home page reads it: the colour then applies to that page and every page under the folder, down to a nested folder that sets its own. Pages carry it as `--moss-section-color` on `<body>`, with the folder's name in `data-section`; no default style uses it",
+        description: "Section accent colour (`#rgb` or `#rrggbb`). On a folder's home page the colour applies to that page and every page under the folder, down to a nested folder that sets its own. On an ordinary page it applies to that page alone, over its folder's colour. Pages carry it as `--moss-section-color` on `<body>`, with the folder's name in `data-section` (an ordinary page in no coloured folder: its own name); no default style uses it",
         label: Some("Section colour"),
         group: "This Page",
-        applies_when: Some(&[FOLDER, HOME]),
+        applies_when: Some(&[PAGE, FOLDER, HOME]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {

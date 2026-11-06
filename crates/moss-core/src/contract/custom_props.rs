@@ -549,7 +549,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-section-color",
         owner: "body",
         default: "unset",
-        description: "The accent colour of the section a page sits in, written by moss as an inline style on `<body>` (and on a listing card for such a page, on the card's root element) when a folder's home page declares `color:`; the nearest coloured ancestor folder wins. No moss style reads it, so nothing changes until a theme does: `var(--moss-section-color, var(--moss-color-accent))`. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
+        description: "The accent colour of the section a page sits in, written by moss as an inline style on `<body>` (and on a listing card for such a page, on the card's root element) when a folder's home page declares `color:`; the nearest coloured ancestor folder wins, and an ordinary page's own `color:` replaces it for that page alone. No moss style reads it, so nothing changes until a theme does: `var(--moss-section-color, var(--moss-color-accent))`. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
     },
     CustomProp {
         name: "--moss-section-text",
@@ -729,7 +729,7 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         selector: "body",
         name: "data-section",
         values: &[],
-        description: "The url path segment of the folder whose home page sets `color:` for this page: `work` for every page under `/work/`, the nearest coloured folder when they nest. Absent on pages outside any coloured folder, and on a site-wide colour set by the front page. Scope a section with `body[data-section=\"work\"]` and tint it with `var(--moss-section-color)`, instead of `body[data-path^=\"/work/\"]`, which breaks when the folder is renamed.",
+        description: "The url path segment of the folder whose home page sets `color:` for this page: `work` for every page under `/work/`, the nearest coloured folder when they nest. An ordinary page's own `color:` does not change it; only on a page outside any coloured folder is it the page's own name. Absent on pages with no colour at all, and on a site-wide colour set by the front page. Scope a section with `body[data-section=\"work\"]` and tint it with `var(--moss-section-color)`, instead of `body[data-path^=\"/work/\"]`, which breaks when the folder is renamed.",
     },
     ScopeAttr {
         selector: "html",
