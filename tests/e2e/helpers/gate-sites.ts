@@ -4627,7 +4627,8 @@ lang = "en"
 };
 
 // Sliding picture strips: three `motion:marquee` rows of a work feed, then a
-// `:::gallery marquee`. Served by playwright/marquee.config.ts.
+// `:::gallery marquee`, then a one-picture gallery too short to fill its box.
+// Served by playwright/marquee.config.ts.
 export const MARQUEE_GATE: ScratchSiteSpec = {
   name: "marquee-gate",
   files: {
@@ -4646,9 +4647,15 @@ children: false
 
 :::gallery marquee
 ![One](pics/1.png)
+*First caption*
 ![Two](pics/2.png)
+*Second caption*
 ![Three](pics/3.png)
 ![Four](pics/4.png)
+:::
+
+:::gallery marquee
+![Alone](pics/5.png)
 :::
 `,
     "work/index.md": `---

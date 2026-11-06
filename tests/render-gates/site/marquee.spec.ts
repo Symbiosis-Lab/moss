@@ -12,7 +12,8 @@ const SIZES = [
   { width: 360, height: 800 },
 ];
 
-const strips = (page: Page) => page.locator("[data-motion='marquee'][data-marquee-ready]");
+/** The strips that actually loop (a strip too short to fill its box is still). */
+const strips = (page: Page) => page.locator("[data-motion='marquee'][data-marquee-ready]:not([data-marquee-still])");
 const trackOf = (strip: ReturnType<Page["locator"]>) => strip.locator("> .moss-marquee-track");
 
 /** The track's horizontal translation, in pixels. */
@@ -102,7 +103,7 @@ test("focus inside a strip pauses it whatever the theme says", async ({ page }) 
 
 test("the keyboard never reaches the copy, and a screen reader meets it never", async ({ page }) => {
   await ready(page);
-  const copies = await page.locator(".moss-marquee-set[inert]").evaluateAll((els) =>
+  const copies = await strips(page).locator(".moss-marquee-set[inert]").evaluateAll((els) =>
     els.map((el) => ({ hidden: el.getAttribute("aria-hidden"), alts: [...el.querySelectorAll("img")].map((i) => i.getAttribute("alt")) })),
   );
   expect(copies).toHaveLength(4);
@@ -117,6 +118,31 @@ test("the keyboard never reaches the copy, and a screen reader meets it never", 
     reached.push(await page.evaluate(() => !!document.activeElement?.closest("[inert]")));
   }
   expect(reached.some(Boolean)).toBe(false);
+});
+
+test("a strip narrower than its box does not animate, and its copy is not drawn", async ({ page }) => {
+  for (const size of [SIZES[0], SIZES[2]]) {
+    await page.setViewportSize(size);
+    await ready(page);
+    const short = page.locator("[data-motion='marquee'][data-marquee-still]");
+    await expect(short).toHaveCount(1);
+    const track = trackOf(short);
+    expect(await track.evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
+    expect(await short.locator(".moss-marquee-set[inert]").evaluate((el) => getComputedStyle(el).display)).toBe("none");
+    expect(await short.locator(".moss-marquee-set").first().evaluate((el) => el.getBoundingClientRect().width)).toBeLessThan(
+      await short.evaluate((el) => el.clientWidth),
+    );
+  }
+});
+
+test("the copy carries the same captions as the real set", async ({ page }) => {
+  await ready(page);
+  const gallery = page.locator(".moss-gallery[data-motion='marquee']").first();
+  const [real, copy] = await gallery.locator(".moss-marquee-set").evaluateAll((sets) =>
+    sets.map((set) => [...set.querySelectorAll(".moss-gallery-caption")].map((c) => c.textContent)),
+  );
+  expect(real).toEqual(["First caption", "Second caption"]);
+  expect(copy).toEqual(real);
 });
 
 test("pictures that slide into view load", async ({ page }) => {
@@ -166,7 +192,7 @@ test.describe("for a reader who asks for less motion", () => {
     const boxes = await strip.locator(".moss-card-cover:visible").evaluateAll((els) => els.map((el) => el.getBoundingClientRect()));
     expect(boxes).toHaveLength(5);
     for (const b of boxes) expect(Math.abs(b.width - boxes[0].width)).toBeLessThanOrEqual(1);
-    const gallery = page.locator(".moss-gallery");
+    const gallery = page.locator(".moss-gallery").first();
     expect(await gallery.locator(".moss-marquee-set[inert]").evaluate((el) => getComputedStyle(el).display)).toBe("none");
   });
 

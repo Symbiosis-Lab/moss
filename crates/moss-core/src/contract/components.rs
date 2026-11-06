@@ -444,7 +444,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[work/|style:summary,pictures:5,motion:marquee]]",
         status: Status::Confirmed,
         since: "0.22",
-        description: "The strip that slides sideways: inside a `.moss-card-pictures[data-motion=\"marquee\"]` (`motion:marquee`) or a `.moss-gallery[data-motion=\"marquee\"]` (`:::gallery marquee`). It holds two `.moss-marquee-set`s and is translated by one set's width, so the loop has no seam. Written once as markup; the stylesheet and marquee.js decide whether it moves.",
+        description: "The strip that slides sideways: inside a `.moss-card-pictures[data-motion=\"marquee\"]` (`motion:marquee`) or a `.moss-gallery[data-motion=\"marquee\"]` (`:::gallery marquee`). It holds two `.moss-marquee-set`s and is translated by one set's width, so the loop has no seam. Written once as markup; the stylesheet and marquee.js decide whether it moves, and a strip whose set is narrower than its box does not.",
     },
     ComponentEntry {
         class: "moss-marquee-set",

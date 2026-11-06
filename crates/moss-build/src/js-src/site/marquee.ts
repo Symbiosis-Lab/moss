@@ -10,7 +10,10 @@
  * short one move at the same pace. It also marks the strip `data-marquee-ready`
  * (the stylesheet draws the loop only then, so without the script the strip is
  * the ordinary still one) and gives every other strip in the page the opposite
- * direction.
+ * direction. A strip whose one set is narrower than the strip's own box cannot
+ * be filled by two copies (the loop would show a gap and jump), so it is marked
+ * `data-marquee-still` and stays put; that is re-decided whenever either box
+ * resizes.
  */
 const DEFAULT_SPEED = 60;
 
@@ -19,8 +22,9 @@ function speedOf(strip: HTMLElement): number {
   return speed > 0 ? speed : DEFAULT_SPEED;
 }
 
-function setDuration(strip: HTMLElement, set: HTMLElement): void {
+function fit(strip: HTMLElement, set: HTMLElement): void {
   const width = set.getBoundingClientRect().width;
+  strip.toggleAttribute("data-marquee-still", !(width > 0 && width >= strip.clientWidth));
   if (width > 0) strip.style.setProperty("--moss-marquee-duration", `${width / speedOf(strip)}s`);
 }
 
@@ -32,11 +36,13 @@ export function initMarquees(root: ParentNode = document): void {
     const set = strip.querySelector<HTMLElement>(".moss-marquee-set");
     if (!set) return;
     strip.setAttribute("data-marquee-ready", "");
-    setDuration(strip, set);
+    fit(strip, set);
     if (watched.has(strip)) return;
     watched.add(strip);
-    // The set's width changes with the viewport and as its pictures load.
-    new ResizeObserver(() => setDuration(strip, set)).observe(set);
+    // The set's width changes as its pictures load, the strip's with the viewport.
+    const observer = new ResizeObserver(() => fit(strip, set));
+    observer.observe(set);
+    observer.observe(strip);
   });
 }
 

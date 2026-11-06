@@ -7424,6 +7424,15 @@ article a:where(:not(.moss-btn)):focus {
     animation-direction: reverse;
   }
 
+  /* A strip no wider than its box stays where it is, the copy undrawn. */
+  [data-marquee-ready][data-marquee-still] > .moss-marquee-track {
+    animation: none;
+  }
+
+  [data-marquee-ready][data-marquee-still] .moss-marquee-set[inert] {
+    display: none;
+  }
+
   [data-marquee-ready]:hover > .moss-marquee-track {
     animation-play-state: var(--moss-marquee-hover, paused);
   }
