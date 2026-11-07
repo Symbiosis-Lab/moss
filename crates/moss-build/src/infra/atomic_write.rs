@@ -34,16 +34,16 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// The temp file is a sibling of `path`, never in a system temp dir: a rename
 /// is only atomic within one filesystem, and `/tmp` is routinely a different
 /// one from app data.
-pub fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+pub fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), String> {
     write_with_permissions(path, contents, false)
 }
 
 /// Atomic replacement whose temporary and final file are owner-only on Unix.
-pub fn write_private_atomic(path: &Path, contents: &str) -> Result<(), String> {
+pub fn write_private_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), String> {
     write_with_permissions(path, contents, true)
 }
 
-fn write_with_permissions(path: &Path, contents: &str, private: bool) -> Result<(), String> {
+fn write_with_permissions(path: &Path, contents: impl AsRef<[u8]>, private: bool) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
@@ -71,7 +71,7 @@ fn write_with_permissions(path: &Path, contents: &str, private: bool) -> Result<
     // that pays for it: it holds deploy state nothing regenerates.
     {
         use std::io::Write;
-        // allow:raw_write writes a sibling temp file then renames; callers are app-data and vault state, never .moss/build.nosync/
+        // allow:raw_write writes a sibling temp file then renames, so a dataless destination is replaced, never truncated; callers are app-data and vault state, never .moss/build.nosync/
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -83,7 +83,7 @@ fn write_with_permissions(path: &Path, contents: &str, private: bool) -> Result<
         let _ = private;
         let mut f = options.open(&tmp)
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
-        f.write_all(contents.as_bytes())
+        f.write_all(contents.as_ref())
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
         f.sync_all()
             .map_err(|e| format!("failed to flush {}: {e}", tmp.display()))?;

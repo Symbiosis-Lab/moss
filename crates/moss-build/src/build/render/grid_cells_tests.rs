@@ -750,17 +750,14 @@ fn a_bare_url_cell_takes_its_title_from_cached_metadata() {
         LinkMeta {
             url: "https://slykiten.com/".to_string(),
             title: Some("Sly Kitten".to_string()),
-            description: None,
             favicon: None,
             og_image: None,
-            cover_oid: None,
-            cover_ext: None,
+            cover: None,
             cover_served_path: None,
             cover_width: None,
             cover_height: None,
             cover_lqip: None,
             cover_color: None,
-            fetched_at: "2026-07-30T00:00:00Z".to_string(),
         },
     );
     let html = both_passes(
@@ -781,17 +778,14 @@ fn a_bare_url_cell_shows_a_cached_favicon_in_the_kicker() {
         LinkMeta {
             url: "https://slykiten.com/".to_string(),
             title: None,
-            description: None,
             favicon: Some("https://slykiten.com/favicon.ico".to_string()),
             og_image: None,
-            cover_oid: None,
-            cover_ext: None,
+            cover: None,
             cover_served_path: None,
             cover_width: None,
             cover_height: None,
             cover_lqip: None,
             cover_color: None,
-            fetched_at: "2026-07-30T00:00:00Z".to_string(),
         },
     );
     let html = both_passes(
@@ -821,17 +815,14 @@ fn an_authored_cover_image_survives_alongside_cached_metadata() {
         LinkMeta {
             url: "https://example.org/".to_string(),
             title: Some("Fetched Title".to_string()),
-            description: None,
             favicon: None,
             og_image: None,
-            cover_oid: None,
-            cover_ext: None,
+            cover: None,
             cover_served_path: None,
             cover_width: None,
             cover_height: None,
             cover_lqip: None,
             cover_color: None,
-            fetched_at: "2026-07-30T00:00:00Z".to_string(),
         },
     );
     let md = ":::grid 1\n[![Alt text](a.jpg)](https://example.org/)\n:::\n";
@@ -1210,7 +1201,6 @@ fn a_grid_folder_card_counts_in_chinese_under_vertical_cjk() {
 fn make_page_doc(title: &str, url_path: &str, date: &str, description: &str) -> ParsedDocument {
     ParsedDocument {
         date: Some(date.to_string()),
-        description: Some(description.to_string()),
         ..make_doc(title, url_path, None)
     }
 }

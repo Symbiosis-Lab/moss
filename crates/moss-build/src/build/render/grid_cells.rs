@@ -308,8 +308,9 @@ pub(crate) fn resolve_page_body(
         // may render empty cards; the next sees populated metadata after sync
         // has run.
         crate::build::page::link_meta::record_urls_for_prewarm(&url_refs, &moss_dir);
+        // The build's materialize step read these URLs into the ledger already.
         Some(crate::build::page::link_meta::read_link_meta_from_cache(
-            &url_refs, &moss_dir,
+            &url_refs, &moss_dir, None,
         ))
     };
     apply_link_previews(&mut plan, &index, link_meta.as_ref());

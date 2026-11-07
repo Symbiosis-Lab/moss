@@ -1897,7 +1897,7 @@ pub fn generate_blocking_content_for_build(
         // gets its cover materialized here.
         if !external_urls_this_build.is_empty() {
             let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
-            let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir);
+            let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir, Some(&input_evidence));
             let _trace = PhaseTrace::start("remote_cover_materialize");
             crate::build::media::remote_cover::materialize_remote_covers(
                 &mut link_meta_cache,

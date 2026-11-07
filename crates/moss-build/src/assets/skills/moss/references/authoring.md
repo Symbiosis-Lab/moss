@@ -452,6 +452,8 @@ Separate a grid's cells with a line that holds only `+++`. A grid takes one to s
 :::
 ```
 
+A cell that links to another site, `[Episode 4](https://example.org/ep4)`, becomes a card with that page's icon and picture, and its title when the link has no text of its own. moss fetches them once, on the first build that sees the link, and keeps them in the site folder under `.moss/data/social/links/`, one file per link, so every machine that syncs the folder draws the same card. To fetch a card again, delete its file there; each file names its `url`.
+
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
 
 A collage quote written in Chinese or Japanese (moss reads the quote's own letters, and marks one with enough kana `lang="ja"`) is set in `--moss-font-cjk`, by default the heading face, at 17px to 21px (16px on a phone) with wide tracking; a long quote keeps its smaller size. A theme's `--moss-font-quote` still takes precedence.

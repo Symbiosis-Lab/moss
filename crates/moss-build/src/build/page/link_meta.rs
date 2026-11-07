@@ -3,74 +3,43 @@
 //! When a grid cell contains a bare URL or empty link text, we fetch the
 //! page's Open Graph / meta tags to populate the link preview automatically.
 
+use crate::build::cloud_ledger::InputEvidence;
+use crate::build::page::link_snapshot;
 use crate::moss_paths::MossPaths;
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Metadata extracted from a URL's HTML page.
-///
-/// `description` is retained for backward compatibility with on-disk cache
-/// entries written by older moss versions, but is no longer rendered or
-/// parsed for new entries — the link-preview card design intentionally
-/// shows only title + favicon/domain. New writes always set it to `None`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// One link card: what was fetched from the linked page, kept in the site
+/// folder (see `link_snapshot`), and what this build derived from its picture.
+/// The card shows only the title, the favicon or domain, and the picture.
+#[derive(Debug, Clone, Default)]
 pub struct LinkMeta {
     pub url: String,
     pub title: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
     pub favicon: Option<String>,
-    /// The linked page's `og:image` (falling back to `twitter:image`),
-    /// resolved to an absolute `http(s)://` URL. This is the REMOTE URL
-    /// only — never emitted in built HTML. The build downloads it into
-    /// moss's own content-addressed cache and stores the resulting LOCAL
-    /// asset in a separate cache (see `build::media::remote_cover`); this
-    /// field exists so that download step knows what to fetch, and so a
-    /// change in the remote URL (a site swapping its social-preview image)
-    /// is visible on the next refresh even though the LOCAL cover cache is
-    /// keyed by content hash, not by this URL.
-    #[serde(default)]
+    /// The linked page's `og:image` (falling back to `twitter:image`), an
+    /// absolute `http(s)://` URL. Never emitted in built HTML: the build
+    /// downloads the picture once and serves its own copy, `cover`.
     pub og_image: Option<String>,
-    /// Content-store id of the downloaded `og_image` bytes (sha256, via
-    /// `ObjectStore::store_bytes`), and the format it was sniffed as
-    /// (never trusted from the URL or a `Content-Type` header). `None`
-    /// when there's no `og_image`, or the download/decode failed.
-    #[serde(default)]
-    pub cover_oid: Option<String>,
-    #[serde(default)]
-    pub cover_ext: Option<String>,
-    /// The rest of these are filled in by
-    /// `build::media::remote_cover::materialize_remote_covers`, once the
-    /// downloaded bytes above have actually been encoded into THIS build's
-    /// output — a separate step from the network fetch above, run with
-    /// `output_dir`/`PendingManifest` in scope. `cover_served_path` is a
-    /// root-relative path already staged on disk (checked with
-    /// `io_utils::output_present` before use — a stale entry whose file
-    /// didn't survive a rebuild must fall back to the placeholder, not
-    /// synthesize a 404ing `<source>`).
-    #[serde(default)]
+    /// The downloaded picture, `<sha256>.<ext>` with the format sniffed from
+    /// its bytes. `None` when the page names no picture or its download failed.
+    pub cover: Option<String>,
+    /// Filled in by `remote_cover::materialize_remote_covers` once `cover` is
+    /// encoded into this build's output: `cover_served_path` is a
+    /// root-relative path staged there.
     pub cover_served_path: Option<String>,
-    #[serde(default)]
     pub cover_width: Option<u32>,
-    #[serde(default)]
     pub cover_height: Option<u32>,
-    #[serde(default)]
     pub cover_lqip: Option<String>,
-    #[serde(default)]
     pub cover_color: Option<String>,
-    pub fetched_at: String, // ISO 8601
 }
 
 /// Parse OG/meta tags from HTML content.
 ///
 /// Priority: og:title > `<title>` for title.
 ///
-/// Description is intentionally not parsed: the external grid card renders
-/// only title + favicon/domain (see `build::components::grid_card::render_external_card`). Skipping the
-/// description selectors saves disk bytes per cache entry and parser work
-/// per fetch — both small but free wins.
+/// No description is read: the card does not show one.
 pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
     let document = Html::parse_document(html);
 
@@ -152,24 +121,9 @@ pub fn parse_link_meta(url: &str, html: &str) -> LinkMeta {
         None => origin.map(|o| format!("{o}/favicon.ico")),
     };
 
-    LinkMeta {
-        url: url.to_string(),
-        title,
-        description: None,
-        favicon,
-        og_image,
-        // Filled in by `fetch_link_meta_with_timeout` after this returns —
-        // downloading the image is I/O, and this function stays pure so it
-        // can be unit-tested with a plain HTML string, no network.
-        cover_oid: None,
-        cover_ext: None,
-        cover_served_path: None,
-        cover_width: None,
-        cover_height: None,
-        cover_lqip: None,
-        cover_color: None,
-        fetched_at: now_iso8601(),
-    }
+    // `cover` is filled in by `fetch_link_meta_with_timeout`: downloading is
+    // I/O, and this stays pure so it can be tested with a plain HTML string.
+    LinkMeta { url: url.to_string(), title, favicon, og_image, ..Default::default() }
 }
 
 /// True for a URL a build may issue an HTTP(S) request against. Used to
@@ -279,59 +233,107 @@ fn resolve_url(href: &str, origin: &Option<String>) -> String {
         }
     }
 }
-
-/// Return current time as ISO 8601 string (UTC, second precision).
-fn now_iso8601() -> String {
-    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
-}
-
-/// Cache directory for link metadata.
+/// `build.nosync/cache/link-meta/`: the URL list for prewarm, entries written
+/// before the fetched half moved into the site folder, and under `covers/`
+/// what each build derives from a picture.
 fn cache_dir(moss_dir: &Path) -> std::path::PathBuf {
     MossPaths::from_moss_dir(moss_dir.to_path_buf()).cache_link_meta()
 }
 
-/// Cache file path for a given URL.
-fn cache_path(moss_dir: &Path, url: &str) -> std::path::PathBuf {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(url.as_bytes());
-    let hex = hex::encode(hash);
-    cache_dir(moss_dir).join(format!("{hex}.json"))
+/// What a build derived from one picture, kept on this machine only.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Derived {
+    served_path: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    lqip: Option<String>,
+    color: Option<String>,
 }
 
-/// Read cached metadata. An entry is kept until it is deleted, never aged
-/// out: a card that refreshed itself on a timer would change between two builds
-/// of the same source.
-fn read_cache(moss_dir: &Path, url: &str) -> Option<LinkMeta> {
-    let path = cache_path(moss_dir, url);
-    let data = std::fs::read_to_string(&path).ok()?;
-    let meta: LinkMeta = serde_json::from_str(&data).ok()?;
+/// An entry as an older moss kept it in `build.nosync`.
+#[derive(serde::Deserialize)]
+struct OldEntry {
+    title: Option<String>,
+    favicon: Option<String>,
+    og_image: Option<String>,
+    cover_oid: Option<String>,
+    cover_ext: Option<String>,
+}
+
+fn derived_path(moss_dir: &Path, cover: &str) -> std::path::PathBuf {
+    cache_dir(moss_dir).join("covers").join(format!("{cover}.json"))
+}
+
+/// A link's card: the fetched half from the site folder, with what this
+/// machine derived from its picture while that picture is here, so a card
+/// whose picture has not reached this machine draws none. An entry still in
+/// the cloud is served URL-only and is not fetched. An entry is kept until it
+/// is deleted, never aged out: a card that refreshed itself would change
+/// between two builds of the same source.
+fn read_cache(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> Option<LinkMeta> {
+    let fetched = match link_snapshot::read(moss_dir, url, evidence) {
+        link_snapshot::Entry::Fetched(fetched) => fetched,
+        link_snapshot::Entry::InCloud => return Some(empty(url)),
+        link_snapshot::Entry::Absent => migrate_old_entry(moss_dir, url)?,
+    };
+    let mut meta = LinkMeta { url: fetched.url, title: fetched.title, favicon: fetched.favicon, og_image: fetched.og_image, cover: fetched.cover, ..Default::default() };
+    let derived = meta
+        .cover
+        .as_deref()
+        .filter(|cover| link_snapshot::is_here(&link_snapshot::cover_path(moss_dir, cover)))
+        .and_then(|cover| serde_json::from_slice::<Derived>(&std::fs::read(derived_path(moss_dir, cover)).ok()?).ok());
+    if let Some(d) = derived {
+        (meta.cover_served_path, meta.cover_width, meta.cover_height, meta.cover_lqip, meta.cover_color) = (d.served_path, d.width, d.height, d.lqip, d.color);
+    }
     Some(meta)
 }
 
-/// Write metadata to cache, atomically. Uses tempfile + rename so a reader
-/// (concurrent render or another prewarm worker) can't observe a half-written
-/// file. Same pattern as `write_url_list_atomic` further down. Same-FS
-/// rename is atomic on POSIX, which is enough here.
-pub(crate) fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
-    let dir = cache_dir(moss_dir);
-    let _ = crate::build::io_utils::create_output_dir_all(&dir);
-    let path = cache_path(moss_dir, &meta.url);
-    let Ok(json) = serde_json::to_string_pretty(meta) else { return };
-    // Tempfile name must collide-avoid across parallel workers writing
-    // distinct URLs to distinct final paths — the destination's filename
-    // (sha256 hex) is unique per URL, so the tempfile names are too.
-    let mut tmp = path.clone();
-    let mut tmp_name = path.file_name().map(|s| s.to_os_string()).unwrap_or_default();
-    tmp_name.push(format!(".tmp.{}", std::process::id()));
-    tmp.set_file_name(tmp_name);
-    if std::fs::write(&tmp, &json).is_err() {  // allow:raw_write the temp for this cache's own atomic save, not the output tree
-        // allow:unlink the link-meta cache under .moss, not staging
-        let _ = std::fs::remove_file(&tmp);
-        return;
+/// Moves an entry an older moss kept in `build.nosync` into the site folder,
+/// once, and removes the old one only after the move is written. Its picture
+/// comes along when this machine still holds the bytes; otherwise the card has
+/// none until its entry is deleted and fetched again, since fetching here
+/// would let two machines disagree.
+fn migrate_old_entry(moss_dir: &Path, url: &str) -> Option<link_snapshot::Fetched> {
+    let old_path = cache_dir(moss_dir).join(format!("{}.json", link_snapshot::url_key(url)));
+    let old: OldEntry = serde_json::from_slice(&std::fs::read(&old_path).ok()?).ok()?;
+    let objects = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
+    let bytes = old.cover_oid.as_deref().and_then(|oid| std::fs::read(objects.ready_blob(oid)?).ok());
+    let cover = bytes.zip(old.cover_ext.as_deref()).and_then(|(b, ext)| link_snapshot::store_cover(moss_dir, &b, ext));
+    let fetched = link_snapshot::Fetched { cover, favicon: old.favicon, og_image: old.og_image, title: old.title, url: url.to_string() };
+    if link_snapshot::write(moss_dir, &fetched).is_ok() {
+        // allow:unlink the old link-meta entry under build.nosync, now in the site folder
+        let _ = std::fs::remove_file(&old_path);
     }
-    // allow:unlink the link-meta cache under .moss, not staging
-    if std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    Some(fetched)
+}
+
+/// Saves what a fetch brought back into the site folder.
+fn save_fetched(moss_dir: &Path, meta: &LinkMeta) {
+    let fetched = link_snapshot::Fetched {
+        cover: meta.cover.clone(),
+        favicon: meta.favicon.clone(),
+        og_image: meta.og_image.clone(),
+        title: meta.title.clone(),
+        url: meta.url.clone(),
+    };
+    if let Err(e) = link_snapshot::write(moss_dir, &fetched) {
+        log::info!(target: "link-meta", "could not save the card for {}: {e}", meta.url);
+    }
+}
+
+/// Saves what this build derived from a card's picture, on this machine only.
+pub(crate) fn save_derived(moss_dir: &Path, meta: &LinkMeta) {
+    let Some(cover) = meta.cover.as_deref() else { return };
+    let derived = Derived {
+        served_path: meta.cover_served_path.clone(),
+        width: meta.cover_width,
+        height: meta.cover_height,
+        lqip: meta.cover_lqip.clone(),
+        color: meta.cover_color.clone(),
+    };
+    let Ok(json) = serde_json::to_string_pretty(&derived) else { return };
+    if let Err(e) = crate::infra::atomic_write::write_atomic(&derived_path(moss_dir, cover), json) {
+        log::info!(target: "link-meta", "{e}");
     }
 }
 
@@ -467,7 +469,7 @@ fn is_unsafe_fetch_target(url: &str) -> bool {
 /// pipeline; it runs only on the worker pool below.
 fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::Duration) -> LinkMeta {
     // 1. Check cache
-    if let Some(cached) = read_cache(moss_dir, url) {
+    if let Some(cached) = read_cache(moss_dir, url, None) {
         return cached;
     }
 
@@ -487,11 +489,8 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
                 // Kept with the page's entry either way, so a picture that
                 // failed to download is not tried again until the entry is
                 // deleted, like the title.
-                if let Some((oid, ext)) = meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout)) {
-                    meta.cover_oid = Some(oid);
-                    meta.cover_ext = Some(ext);
-                }
-                write_cache(moss_dir, &meta);
+                meta.cover = meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout));
+                save_fetched(moss_dir, &meta);
                 meta
             } else {
                 empty(url)
@@ -516,16 +515,15 @@ const MAX_OG_IMAGE_DOWNLOAD_BYTES: u64 = 5 * 1024 * 1024;
 /// that ceiling rather than replacing it.
 const MAX_OG_IMAGE_DIMENSION: u32 = 10_000;
 
-/// Download `image_url`, verify it's actually a raster image moss's
-/// pipeline can re-encode, and store the bytes in the site's
-/// content-addressed cache. Returns `(oid, ext)` — `ext` is derived from
-/// the SNIFFED format (magic bytes via `image::guess_format`), never
-/// trusted from the URL or a `Content-Type` header alone, since both come
-/// from an untrusted server. `None` on any failure: non-image content
-/// type, oversized body, bytes that don't actually decode, or a target
-/// [`is_unsafe_fetch_target`] refuses — every case degrades to "no cover",
-/// never a build failure.
-fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Option<(String, String)> {
+/// Download `image_url`, verify it is a raster image moss's pipeline can
+/// re-encode, and keep it in the site folder (`link_snapshot::store_cover`).
+/// Returns its `cover` name, whose extension is the SNIFFED format (magic
+/// bytes via `image::guess_format`), never trusted from the URL or a
+/// `Content-Type` header, since both come from an untrusted server. `None` on
+/// any failure: non-image content type, oversized body, bytes that don't
+/// decode, or a target [`is_unsafe_fetch_target`] refuses — every case
+/// degrades to "no cover", never a build failure.
+fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Option<String> {
     if is_unsafe_fetch_target(image_url) {
         return None;
     }
@@ -566,28 +564,12 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
     reader.set_format(format);
     reader.limits(limits);
     reader.decode().ok()?;
-    let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
-    let oid = store.store_bytes(&buf, crate::build::cache::RecordMode::Request).ok()?;
-    Some((oid, ext.to_string()))
+    link_snapshot::store_cover(moss_dir, &buf, ext)
 }
 
 /// A `LinkMeta` with only its URL, for a URL that could not be fetched.
 fn empty(url: &str) -> LinkMeta {
-    LinkMeta {
-        url: url.to_string(),
-        title: None,
-        description: None,
-        favicon: None,
-        og_image: None,
-        cover_oid: None,
-        cover_ext: None,
-        cover_served_path: None,
-        cover_width: None,
-        cover_height: None,
-        cover_lqip: None,
-        cover_color: None,
-        fetched_at: now_iso8601(),
-    }
+    LinkMeta { url: url.to_string(), ..Default::default() }
 }
 
 /// Number of concurrent in-flight fetches in a parallel fetch.
@@ -661,7 +643,7 @@ fn fetch_all_link_meta_parallel_bounded(
     // Filter out URLs that are already cached — those need no fetch.
     let cold: Vec<String> = urls
         .iter()
-        .filter(|u| read_cache(moss_dir, u).is_none())
+        .filter(|u| read_cache(moss_dir, u, None).is_none())
         .map(|u| (*u).to_string())
         .collect();
 
@@ -814,11 +796,8 @@ pub fn flush_build_session(moss_dir: &Path) -> usize {
 }
 
 /// Path to the persisted URL list (bridge between render-side recording and
-/// sync-side prewarming). Lives under `.moss/build.nosync/cache/link-meta/` (next to the
-/// per-URL cache files), so wiping the cache clears the bridge too.
-///
-/// The dot-prefix avoids any collision with the SHA256-hex-named cache files
-/// (which are 64 hex chars + ".json"; the dot keeps `.urls.json` distinct).
+/// sync-side prewarming). Lives under `.moss/build.nosync/cache/link-meta/`,
+/// so wiping the cache clears the bridge too.
 pub(crate) fn url_list_path(moss_dir: &Path) -> std::path::PathBuf {
     cache_dir(moss_dir).join(".urls.json")
 }
@@ -864,34 +843,18 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
 /// so render can still produce a card with the URL displayed; the next build's
 /// sync prewarm populates the cache so the build after that renders fully.
 /// An entry is served however old it is, until it is deleted.
-pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path) -> HashMap<String, LinkMeta> {
+/// A card or picture the cloud still holds is marked pending in `evidence`.
+pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path, evidence: Option<&InputEvidence>) -> HashMap<String, LinkMeta> {
     let mut map = HashMap::new();
     let mut missing = 0usize;
     for url in urls {
-        match read_cache(moss_dir, url) {
+        match read_cache(moss_dir, url, evidence) {
             Some(meta) => {
                 map.insert(url.to_string(), meta);
             }
             None => {
                 missing += 1;
-                map.insert(
-                    url.to_string(),
-                    LinkMeta {
-                        url: url.to_string(),
-                        title: None,
-                        description: None,
-                        favicon: None,
-                        og_image: None,
-                        cover_oid: None,
-                        cover_ext: None,
-                        cover_served_path: None,
-                        cover_width: None,
-                        cover_height: None,
-                        cover_lqip: None,
-                        cover_color: None,
-                        fetched_at: now_iso8601(),
-                    },
-                );
+                map.insert(url.to_string(), empty(url));
             }
         }
     }
@@ -936,7 +899,6 @@ mod tests {
         assert_eq!(meta.title.as_deref(), Some("My Cool Site"));
         // Description is intentionally not parsed for new entries (renderer
         // ignores it; saves bandwidth + bytes per cache file).
-        assert_eq!(meta.description, None);
     }
 
     #[test]
@@ -1013,36 +975,15 @@ mod tests {
         "#;
         let meta = parse_link_meta("https://example.com", html);
         assert_eq!(meta.title.as_deref(), Some("Page Title"));
-        assert_eq!(meta.description, None);
-    }
-
-    #[test]
-    fn test_parse_does_not_extract_description() {
-        // Even when a page provides og:description AND <meta name="description">,
-        // we no longer extract them — `description` is always `None` on new
-        // entries. The field stays in the struct only for backward-compat
-        // deserialization of cache files written by older moss versions.
-        let html = r#"
-        <html><head>
-            <meta property="og:title" content="OG Title">
-            <meta property="og:description" content="OG description">
-            <meta name="description" content="Meta desc fallback">
-        </head><body></body></html>
-        "#;
-        let meta = parse_link_meta("https://example.com", html);
-        assert_eq!(meta.title.as_deref(), Some("OG Title"));
-        assert_eq!(meta.description, None);
     }
 
     #[test]
     fn test_parse_empty_html() {
         let meta = parse_link_meta("https://example.com", "");
         assert_eq!(meta.title, None);
-        assert_eq!(meta.description, None);
 
         let meta2 = parse_link_meta("https://example.com", "<html><body>no head</body></html>");
         assert_eq!(meta2.title, None);
-        assert_eq!(meta2.description, None);
     }
 
     #[test]
@@ -1054,25 +995,21 @@ mod tests {
         let meta = LinkMeta {
             url: "https://example.com".to_string(),
             title: Some("Test Title".to_string()),
-            description: Some("Test Desc".to_string()),
             favicon: None,
             og_image: None,
-            cover_oid: None,
-            cover_ext: None,
+            cover: None,
             cover_served_path: None,
             cover_width: None,
             cover_height: None,
             cover_lqip: None,
             cover_color: None,
-            fetched_at: now_iso8601(),
         };
 
-        write_cache(&tmp, &meta);
-        let read_back = read_cache(&tmp, "https://example.com");
+        save_fetched(&tmp, &meta);
+        let read_back = read_cache(&tmp, "https://example.com", None);
         assert!(read_back.is_some());
         let read_back = read_back.unwrap();
         assert_eq!(read_back.title.as_deref(), Some("Test Title"));
-        assert_eq!(read_back.description.as_deref(), Some("Test Desc"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1103,22 +1040,19 @@ mod tests {
         let cached = LinkMeta {
             url: "https://cached.example".to_string(),
             title: Some("Cached".to_string()),
-            description: None,
             favicon: None,
             og_image: None,
-            cover_oid: None,
-            cover_ext: None,
+            cover: None,
             cover_served_path: None,
             cover_width: None,
             cover_height: None,
             cover_lqip: None,
             cover_color: None,
-            fetched_at: now_iso8601(),
         };
-        write_cache(&tmp, &cached);
+        save_fetched(&tmp, &cached);
 
         let urls = vec!["https://cached.example", "https://uncached.example"];
-        let result = read_link_meta_from_cache(&urls, &tmp);
+        let result = read_link_meta_from_cache(&urls, &tmp, None);
 
         assert_eq!(
             result.get("https://cached.example").and_then(|m| m.title.as_deref()),
@@ -1226,16 +1160,6 @@ mod tests {
         assert!(set.contains("https://example.com/path/with\\backslash"));
 
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn now_iso8601_is_second_precision_utc_and_parses_back() {
-        let ts = now_iso8601();
-        let b = ts.as_bytes();
-        assert_eq!(ts.len(), 20, "{ts}");
-        assert!(ts.ends_with('Z'), "{ts}");
-        assert_eq!((b[4], b[7], b[10], b[13], b[16]), (b'-', b'-', b'T', b':', b':'), "{ts}");
-        assert!(chrono::DateTime::parse_from_rfc3339(&ts).is_ok(), "{ts}");
     }
 
     #[test]
@@ -1440,42 +1364,31 @@ mod tests {
         let meta = LinkMeta {
             url: url.to_string(),
             title: Some(title.to_string()),
-            description: None,
             favicon: None,
             og_image: None,
-            cover_oid: None,
-            cover_ext: None,
+            cover: None,
             cover_served_path: None,
             cover_width: None,
             cover_height: None,
             cover_lqip: None,
             cover_color: None,
-            fetched_at: now_iso8601(),
         };
-        write_cache(moss_dir, &meta);
+        save_fetched(moss_dir, &meta);
     }
 
-    /// Helper: write a cache entry fetched a year ago.
-    fn seed_old_cache(moss_dir: &Path, url: &str, title: &str) {
-        let stale_ts = (chrono::Utc::now() - chrono::Duration::days(365))
-            .format("%Y-%m-%dT00:00:00Z")
-            .to_string();
-        let meta = LinkMeta {
-            url: url.to_string(),
-            title: Some(title.to_string()),
-            description: None,
-            favicon: None,
-            og_image: None,
-            cover_oid: None,
-            cover_ext: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
-            fetched_at: stale_ts,
-        };
-        write_cache(moss_dir, &meta);
+    /// Helper: an entry as an older moss left it in `build.nosync`, fetched a
+    /// year ago, its picture in the object store.
+    fn seed_old_cache(moss_dir: &Path, url: &str, title: &str, cover: Option<&[u8]>) {
+        let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.to_path_buf()));
+        let oid = cover.map(|b| store.store_bytes(b, crate::build::cache::RecordMode::Request).unwrap());
+        let old = serde_json::json!({
+            "url": url, "title": title, "favicon": null, "og_image": "https://old.example.test/og.png",
+            "cover_oid": oid, "cover_ext": oid.as_ref().map(|_| "png"),
+            "cover_served_path": "_moss/link/0123456789abcdef.png", "fetched_at": "2025-11-07T00:00:00Z",
+        });
+        let path = cache_dir(moss_dir).join(format!("{}.json", link_snapshot::url_key(url)));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, old.to_string()).unwrap();
     }
 
     #[test]
@@ -1497,7 +1410,7 @@ mod tests {
         assert_eq!(fetched, 0);
         // And the cached titles are still readable as-is.
         assert_eq!(
-            read_cache(&tmp, "https://x.example.test/").and_then(|m| m.title),
+            read_cache(&tmp, "https://x.example.test/", None).and_then(|m| m.title),
             Some("X".to_string())
         );
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1559,7 +1472,7 @@ mod tests {
 
         // Each URL now has a populated cache entry with the parsed og:title.
         for u in &urls {
-            let cached = read_cache(&tmp, u).expect("cache miss after fetch");
+            let cached = read_cache(&tmp, u, None).expect("cache miss after fetch");
             assert_eq!(cached.title.as_deref(), Some("Test Title"));
         }
 
@@ -1571,16 +1484,129 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// An entry is served however old it is, so two builds of the same
-    /// source draw the same card whatever day they run.
+    /// An entry an older moss kept in `build.nosync` moves into the site folder
+    /// once, picture included, and is served without a fetch however old it is.
     #[test]
-    fn an_old_entry_is_served_without_a_fetch() {
+    fn an_old_entry_moves_into_the_site_folder_without_a_fetch() {
         let tmp = unique_tmp("old");
-        seed_old_cache(&tmp, "https://old.example.test/", "Old Title");
-        let urls = ["https://old.example.test/"];
-        assert_eq!(fetch_all_link_meta_parallel(&urls, &tmp, |_| {}), 0);
-        let served = fetch_link_meta_with_timeout(urls[0], &tmp, std::time::Duration::from_millis(1));
+        let url = "https://old.example.test/";
+        seed_old_cache(&tmp, url, "Old Title", Some(b"old picture"));
+        assert_eq!(fetch_all_link_meta_parallel(&[url], &tmp, |_| {}), 0);
+        let served = fetch_link_meta_with_timeout(url, &tmp, std::time::Duration::from_millis(1));
         assert_eq!(served.title.as_deref(), Some("Old Title"));
+        assert_eq!(served.cover_served_path, None, "derived fields are not carried over");
+        let link_snapshot::Entry::Fetched(snapshot) = link_snapshot::read(&tmp, url, None) else { panic!("moved into the site folder") };
+        let cover = snapshot.cover.expect("its picture comes along");
+        assert_eq!(std::fs::read(link_snapshot::cover_path(&tmp, &cover)).unwrap(), b"old picture");
+        assert!(!cache_dir(&tmp).join(format!("{}.json", link_snapshot::url_key(url))).exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A picture this machine no longer holds is not fetched again: the card
+    /// moves without one.
+    #[test]
+    fn an_old_entry_whose_picture_is_gone_moves_without_one() {
+        let tmp = unique_tmp("old_no_cover");
+        let url = "https://old.example.test/";
+        seed_old_cache(&tmp, url, "Old Title", Some(b"old picture"));
+        let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(tmp.clone()));
+        let oid = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(b"old picture"));
+        std::fs::remove_file(store.blob_path(&oid)).unwrap();
+        let served = read_cache(&tmp, url, None).unwrap();
+        assert_eq!((served.title.as_deref(), served.cover), (Some("Old Title"), None));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// An old entry whose move cannot be written is served and kept, so the
+    /// next build tries the move again rather than losing the card.
+    #[test]
+    fn an_old_entry_stays_until_its_move_is_written() {
+        let tmp = unique_tmp("old_unwritable");
+        let url = "https://old.example.test/";
+        seed_old_cache(&tmp, url, "Old Title", None);
+        let social = MossPaths::from_moss_dir(tmp.clone()).social_dir();
+        std::fs::create_dir_all(&social).unwrap();
+        std::fs::write(social.join("links"), b"a file where the folder belongs").unwrap();
+        assert_eq!(read_cache(&tmp, url, None).unwrap().title.as_deref(), Some("Old Title"));
+        assert!(cache_dir(&tmp).join(format!("{}.json", link_snapshot::url_key(url))).exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Deleting a card's entry fetches it again: nothing left in
+    /// `build.nosync` brings the old title back.
+    #[test]
+    fn a_deleted_entry_is_not_restored_from_the_local_cache() {
+        let tmp = unique_tmp("refresh");
+        let url = "https://old.example.test/";
+        seed_old_cache(&tmp, url, "Old Title", None);
+        assert!(read_cache(&tmp, url, None).is_some());
+        let entry = MossPaths::from_moss_dir(tmp.clone()).social_dir().join("links").join(format!("{}.json", link_snapshot::url_key(url)));
+        std::fs::remove_file(entry).unwrap();
+        assert!(read_cache(&tmp, url, None).is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// What a build derived from a picture is read back only for that
+    /// picture, and only while the picture is on this machine.
+    #[test]
+    fn derived_fields_follow_the_picture_they_were_made_from() {
+        let tmp = unique_tmp("derived");
+        let url = "https://x.example.test/";
+        let first = link_snapshot::store_cover(&tmp, b"first", "png");
+        let mut meta = LinkMeta { cover: first.clone(), cover_width: Some(3), ..empty(url) };
+        save_fetched(&tmp, &meta);
+        save_derived(&tmp, &meta);
+        assert_eq!(read_cache(&tmp, url, None).unwrap().cover_width, Some(3));
+        meta.cover = link_snapshot::store_cover(&tmp, b"second", "png");
+        save_fetched(&tmp, &meta);
+        assert_eq!(read_cache(&tmp, url, None).unwrap().cover_width, None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A card whose picture has not reached this machine renders without one,
+    /// even where an earlier build here derived files from it.
+    #[test]
+    fn a_card_draws_no_picture_while_its_picture_is_missing() {
+        let tmp = unique_tmp("missing_picture");
+        let url = "https://x.example.test/";
+        let cover = link_snapshot::store_cover(&tmp, b"picture", "png");
+        let meta = LinkMeta { cover: cover.clone(), cover_served_path: Some("_moss/link/x.png".into()), ..empty(url) };
+        save_fetched(&tmp, &meta);
+        save_derived(&tmp, &meta);
+        std::fs::remove_file(link_snapshot::cover_path(&tmp, &cover.unwrap())).unwrap();
+        let card = &read_link_meta_from_cache(&[url], &tmp, None)[url];
+        assert_eq!((card.title.as_deref(), card.cover_served_path.as_deref()), (None, None));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A card in the cloud is requested and held from publish, not fetched.
+    #[test]
+    fn a_card_in_the_cloud_is_requested_not_fetched() {
+        let tmp = unique_tmp("card_in_cloud");
+        let moss_dir = tmp.join(".moss");
+        let url = "https://x.example.test/";
+        seed_fresh_cache(&moss_dir, url, "Title");
+        let entry = MossPaths::from_moss_dir(moss_dir.clone()).social_dir().join("links").join(format!("{}.json", link_snapshot::url_key(url)));
+        let _cloud = crate::build::icloud::pretend::evicted(&entry);
+        let evidence = InputEvidence::new(&tmp);
+        assert_eq!(read_link_meta_from_cache(&[url], &moss_dir, Some(&evidence))[url].title, None);
+        assert_eq!(crate::build::icloud::pretend::requests_for(&entry), 1);
+        assert_eq!(evidence.unresolved_structural(), [format!(".moss/data/social/links/{}.json", link_snapshot::url_key(url))]);
+        assert_eq!(fetch_all_link_meta_parallel(&[url], &moss_dir, |_| panic!("fetched a card the cloud holds")), 0);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A picture in the cloud is not drawn from an earlier build's files.
+    #[test]
+    fn a_picture_in_the_cloud_is_not_drawn() {
+        let tmp = unique_tmp("picture_in_cloud");
+        let url = "https://x.example.test/";
+        let cover = link_snapshot::store_cover(&tmp, b"picture", "png");
+        let meta = LinkMeta { cover: cover.clone(), cover_served_path: Some("_moss/link/x.png".into()), ..empty(url) };
+        save_fetched(&tmp, &meta);
+        save_derived(&tmp, &meta);
+        let _cloud = crate::build::icloud::pretend::evicted(&link_snapshot::cover_path(&tmp, &cover.unwrap()));
+        assert_eq!(read_cache(&tmp, url, None).unwrap().cover_served_path, None);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1638,17 +1664,14 @@ mod tests {
 
     #[test]
     fn a_short_total_budget_leaves_the_slow_remainder_cold() {
-        // More URLs than `FETCH_CONCURRENCY` (8), each slow enough that the
-        // budget expires before a second round starts. Real proof the
-        // budget bounds WALL TIME, not just a per-request timeout: with no
-        // budget at all this would take 2 rounds * 150ms. The 200ms budget
-        // is comfortably above one 150ms round (so it isn't testing the
-        // stricter "shorter than any single response" case — that's
-        // `the_orchestrator_never_waits_on_a_stuck_worker` below) and
-        // comfortably below two.
+        // More URLs than `FETCH_CONCURRENCY` (8), so the budget bounds wall
+        // time, not just each request: unbudgeted this takes two 300ms rounds.
+        // 450ms fits one round with each worker saving its card to disk, and
+        // not two. A budget shorter than one response is
+        // `the_orchestrator_never_waits_on_a_stuck_worker`.
         let html = "<html><head><title>Slow</title></head></html>";
         let url_count = 16;
-        let (base, server) = spawn_slow_test_server(html, 150, url_count);
+        let (base, server) = spawn_slow_test_server(html, 300, url_count);
         let urls: Vec<String> = (0..url_count).map(|i| format!("{base}/{i}")).collect();
         let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
         let tmp = fresh_tmp("short_budget");
@@ -1657,7 +1680,7 @@ mod tests {
         let fetched = fetch_all_link_meta_parallel_bounded(
             &url_refs,
             &tmp,
-            std::time::Duration::from_millis(200),
+            std::time::Duration::from_millis(450),
             std::time::Duration::from_secs(5),
             |_| {},
         );
@@ -1665,7 +1688,7 @@ mod tests {
 
         assert!(
             fetched < url_count,
-            "a 200ms budget must not let a second 150ms round start: fetched {fetched} of {url_count}"
+            "a 450ms budget must not let a second 300ms round start: fetched {fetched} of {url_count}"
         );
         assert!(fetched > 0, "a budget comfortably above one round's response time should still see it complete");
         assert!(
@@ -1877,11 +1900,10 @@ mod tests {
         let (base, server) = spawn_byte_server(png.clone(), Some("image/png"));
         let tmp = fresh_tmp("download_og_image_ok");
         let result = download_og_image(&format!("{base}/cover.png"), &tmp, std::time::Duration::from_secs(5));
-        let (oid, ext) = result.expect("a real PNG must download and decode");
-        assert_eq!(ext, "png");
-        let store = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(tmp.clone()));
-        let stored = store.ready_blob(&oid).expect("oid must resolve in the object store");
-        assert_eq!(std::fs::read(stored).unwrap(), png, "stored bytes should be identical to the download");
+        let cover = result.expect("a real PNG must download and decode");
+        assert!(cover.ends_with(".png"), "{cover}");
+        let stored = link_snapshot::cover_path(&tmp, &cover);
+        assert_eq!(std::fs::read(stored).unwrap(), png, "stored in the site folder, identical to the download");
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1980,7 +2002,7 @@ mod tests {
         );
         let elapsed = start.elapsed();
         assert_eq!(meta.title, None, "an unsafe target must never be fetched");
-        assert!(read_cache(&tmp, "http://169.254.169.254/latest/meta-data/").is_none());
+        assert!(read_cache(&tmp, "http://169.254.169.254/latest/meta-data/", None).is_none());
         assert!(
             elapsed < std::time::Duration::from_millis(200),
             "must reject before attempting any connection, not after timing one out: {elapsed:?}"

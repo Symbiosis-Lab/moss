@@ -1,12 +1,12 @@
 //! Materializing a downloaded external-link cover (an og:image / twitter:image
-//! `build::page::link_meta` fetched and stored in the content-addressed
-//! cache) as a real local asset this build's output, through the SAME
-//! encoder the vault's own images use.
+//! `build::page::link_meta` fetched and kept in the site folder, see
+//! `page::link_snapshot`) as a real local asset in this build's output,
+//! through the SAME encoder the vault's own images use.
 //!
 //! `link_meta`'s fetch step already downloaded the bytes, decode-verified
-//! them, and stored them under a content-store id (`LinkMeta::cover_oid` /
-//! `cover_ext`). What's left here: re-materialize that blob as a real file
-//! (the encoder needs a path, not bytes), run it through
+//! them, and stored them under their SHA-256 (`LinkMeta::cover`). What's
+//! left here: copy that file into scratch (the encoder needs a path, not
+//! bytes), run it through
 //! `media::image::convert_single_image` exactly as a vault image would be,
 //! stage the fallback original alongside the webp it produces, and record
 //! the result (served path, dimensions, LQIP, dominant color) back onto the
@@ -54,23 +54,34 @@ pub(crate) fn materialize_remote_covers(
 
     let mut materialized = 0usize;
     for meta in link_meta.values_mut() {
-        let (Some(oid), Some(ext)) = (meta.cover_oid.clone(), meta.cover_ext.clone()) else {
+        let Some(name) = meta.cover.clone() else { continue };
+        let Some((oid, ext)) = name.split_once('.') else { continue };
+        let cover = crate::build::page::link_snapshot::cover_path(moss_dir, &name);
+        if crate::build::outcome::not_yet(moss_dir.parent().unwrap_or(moss_dir), &cover) {
+            crate::build::page::link_snapshot::hold(&cover, pending.input_evidence().as_ref());
+            crate::build::cli_output::log_note!("The picture for the link card for {} is still in the cloud — building without it; the download will trigger a rebuild", meta.url);
+            meta.cover_served_path = None;
             continue;
-        };
-        // Re-run the materializer even when the original is already in the
-        // stage tree. A stage tree survives across generations, but the
-        // pending manifest does not: skipping here leaves the old asset
-        // unregistered, so seal's mark-and-sweep drops it from the new
-        // generation. The warm transform path makes this a cheap relink and
-        // re-registers the original, WebP, and rung variants together.
-        match materialize_one(&oid, &ext, &objects, &transforms, &scratch_dir, output_dir, pending) {
+        }
+        if !cover.exists() {
+            // Never fetched again here: a fetch would let two machines draw two cards.
+            crate::build::cli_output::log_warn_problem!(target: "link-meta",
+                "The link card for {} has no picture: {} is missing from the site folder. Delete the card's entry beside it to fetch the card again.",
+                meta.url, cover.display());
+            meta.cover_served_path = None;
+            continue;
+        }
+        // Re-run the materializer even when the original is already staged:
+        // the pending manifest is per generation, and an unregistered asset is
+        // swept from the new one. A warm transform cache makes this a relink.
+        match materialize_one(oid, ext, &cover, &objects, &transforms, &scratch_dir, output_dir, pending) {
             Some(result) => {
                 meta.cover_served_path = Some(result.served_path);
                 meta.cover_width = Some(result.width);
                 meta.cover_height = Some(result.height);
                 meta.cover_lqip = result.lqip;
                 meta.cover_color = result.color;
-                crate::build::page::link_meta::write_cache(moss_dir, meta);
+                crate::build::page::link_meta::save_derived(moss_dir, meta);
                 materialized += 1;
             }
             None => {
@@ -85,7 +96,7 @@ pub(crate) fn materialize_remote_covers(
                     && meta.cover_served_path.is_some()
                 {
                     meta.cover_served_path = None;
-                    crate::build::page::link_meta::write_cache(moss_dir, meta);
+                    crate::build::page::link_meta::save_derived(moss_dir, meta);
                 }
             }
         }
@@ -104,6 +115,7 @@ struct MaterializedCover {
 fn materialize_one(
     oid: &str,
     ext: &str,
+    cover: &Path,
     objects: &ObjectStore,
     transforms: &TransformCache,
     scratch_dir: &Path,
@@ -116,20 +128,6 @@ fn materialize_one(
     let hash16 = &oid[..oid.len().min(16)];
     let original_sp = ServedPath::for_remote_cover(hash16, ext).ok()?;
 
-    // The encoder needs a path. This blob is the cover's source, so unlike
-    // optional transform hits it must be requested when only the cloud has it.
-    let blob_path = match objects.ready_blob(oid) {
-        Some(path) => path,
-        None => {
-            if objects.holds(oid) {
-                let source = objects.blob_path(oid);
-                if crate::build::icloud::is_still_in_the_cloud(&source) {
-                    crate::build::cloud_readiness::request_download(&source);
-                }
-            }
-            return None;
-        }
-    };
     let scratch_source = scratch_dir.join(format!("{oid}.{ext}"));
     // `scratch_source`'s name is content-addressed (oid + ext), not a fresh
     // UUID, so a leftover from a prior run can already sit at this exact
@@ -139,7 +137,7 @@ fn materialize_one(
     // here is exactly the EDEADLK hazard `io_utils` exists to route around.
     // `copy_output` lands in a temp sibling and `rename`s it into place, so
     // truncating a leftover (dataless or merely unwritable) never happens.
-    if io_utils::copy_output(&blob_path, &scratch_source).is_err() {
+    if io_utils::copy_output(cover, &scratch_source).is_err() {
         return None;
     }
 
@@ -245,21 +243,35 @@ mod tests {
     }
 
     fn blank_link_meta(url: &str) -> LinkMeta {
-        LinkMeta {
-            url: url.to_string(),
-            title: None,
-            description: None,
-            favicon: None,
-            og_image: None,
-            cover_oid: None,
-            cover_ext: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
-            fetched_at: "2026-01-01T00:00:00Z".to_string(),
-        }
+        LinkMeta { url: url.to_string(), ..Default::default() }
+    }
+
+    /// Stores a picture where a fetch keeps it and returns its `cover` name.
+    fn stored_cover(moss_dir: &Path, bytes: &[u8]) -> String {
+        crate::build::page::link_snapshot::store_cover(moss_dir, bytes, "png").unwrap()
+    }
+
+    /// A card whose picture has not reached this machine shows none and
+    /// fetches nothing.
+    #[test]
+    fn a_missing_cover_leaves_the_card_without_a_picture() {
+        let root = fresh_moss_dir("missing_cover");
+        let moss_dir = root.join(".moss");
+        let output_dir = root.join("site");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let mut meta = blank_link_meta("https://example.com/post");
+        meta.cover = Some(format!("{}.png", "ab".repeat(32)));
+        // An earlier build's file is still in the output, which an encode
+        // failure would keep serving; a missing picture must not.
+        let earlier = "_moss/link/abababababababab.png";
+        std::fs::create_dir_all(output_dir.join("_moss/link")).unwrap();
+        std::fs::write(output_dir.join(earlier), b"earlier").unwrap();
+        meta.cover_served_path = Some(earlier.into());
+        let mut link_meta = HashMap::from([(meta.url.clone(), meta)]);
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        assert_eq!(materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut pending), 0);
+        assert!(link_meta["https://example.com/post"].cover_served_path.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -270,12 +282,10 @@ mod tests {
         let output_dir = root.join("site");
         std::fs::create_dir_all(&output_dir).unwrap();
 
-        let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+        let cover = stored_cover(&moss_dir, &tiny_png_bytes());
 
         let mut meta = blank_link_meta("https://example.com/post");
-        meta.cover_oid = Some(oid);
-        meta.cover_ext = Some("png".to_string());
+        meta.cover = Some(cover.clone());
         let mut link_meta = HashMap::new();
         link_meta.insert(meta.url.clone(), meta);
 
@@ -306,11 +316,9 @@ mod tests {
         let output_dir = root.join("site");
         std::fs::create_dir_all(&output_dir).unwrap();
 
-        let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+        let cover = stored_cover(&moss_dir, &tiny_png_bytes());
         let mut meta = blank_link_meta("https://example.com/post");
-        meta.cover_oid = Some(oid);
-        meta.cover_ext = Some("png".to_string());
+        meta.cover = Some(cover.clone());
         let mut link_meta = HashMap::from([(meta.url.clone(), meta)]);
 
         let mut first_pending = PendingManifest::new(SiteHashes::default());
@@ -347,13 +355,11 @@ mod tests {
         std::fs::create_dir_all(&moss_dir).unwrap();
         let output_dir = root.join("site");
         std::fs::create_dir_all(&output_dir).unwrap();
-        let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
-        let blob = store.blob_path(&oid);
+        let cover = stored_cover(&moss_dir, &tiny_png_bytes());
+        let blob = crate::build::page::link_snapshot::cover_path(&moss_dir, &cover);
         let _cloud = crate::build::icloud::pretend::evicted_until_requested(&blob);
         let mut meta = blank_link_meta("https://example.com/post");
-        meta.cover_oid = Some(oid);
-        meta.cover_ext = Some("png".into());
+        meta.cover = Some(cover.clone());
         let mut link_meta = HashMap::from([(meta.url.clone(), meta)]);
         let mut pending = PendingManifest::new(SiteHashes::default());
         let before = crate::build::cloud_readiness::WAITS_RUN.with(|n| n.get());
@@ -364,6 +370,31 @@ mod tests {
 
         let mut later = PendingManifest::new(SiteHashes::default());
         assert_eq!(materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut later), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A picture in the cloud is requested and held from publish, not reported
+    /// missing, and the card drops an earlier build's file this generation lacks.
+    #[test]
+    fn a_cover_in_the_cloud_is_requested_and_holds_the_publish() {
+        let root = fresh_moss_dir("cover_in_cloud");
+        let moss_dir = root.join(".moss");
+        let output_dir = root.join("site");
+        let earlier = "_moss/link/abababababababab.png";
+        std::fs::create_dir_all(output_dir.join("_moss/link")).unwrap();
+        std::fs::write(output_dir.join(earlier), b"earlier").unwrap();
+        let cover = stored_cover(&moss_dir, &tiny_png_bytes());
+        let blob = crate::build::page::link_snapshot::cover_path(&moss_dir, &cover);
+        let _cloud = crate::build::icloud::pretend::evicted(&blob);
+        let mut meta = blank_link_meta("https://example.com/post");
+        (meta.cover, meta.cover_served_path) = (Some(cover.clone()), Some(earlier.into()));
+        let mut link_meta = HashMap::from([(meta.url.clone(), meta)]);
+        let evidence = crate::build::cloud_ledger::InputEvidence::new(&root);
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), evidence.clone());
+        assert_eq!(materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut pending), 0);
+        assert_eq!(crate::build::icloud::pretend::requests_for(&blob), 1);
+        assert_eq!(evidence.unresolved_structural(), [format!(".moss/data/social/links/covers/{cover}")]);
+        assert!(link_meta["https://example.com/post"].cover_served_path.is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -383,20 +414,18 @@ mod tests {
         let output_dir = root.join("site");
         std::fs::create_dir_all(&output_dir).unwrap();
 
-        let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(&tiny_png_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+        let cover = stored_cover(&moss_dir, &tiny_png_bytes());
 
         let scratch_dir = MossPaths::from_moss_dir(moss_dir.clone()).cache_tmp().join("remote-cover");
         std::fs::create_dir_all(&scratch_dir).unwrap();
-        let scratch_source = scratch_dir.join(format!("{oid}.png"));
+        let scratch_source = scratch_dir.join(&cover);
         std::fs::write(&scratch_source, b"stale leftover from an earlier run").unwrap();
         let mut perms = std::fs::metadata(&scratch_source).unwrap().permissions();
         std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o444);
         std::fs::set_permissions(&scratch_source, perms).unwrap();
 
         let mut meta = blank_link_meta("https://example.com/post");
-        meta.cover_oid = Some(oid);
-        meta.cover_ext = Some("png".to_string());
+        meta.cover = Some(cover.clone());
         let mut link_meta = HashMap::new();
         link_meta.insert(meta.url.clone(), meta);
 
@@ -438,12 +467,10 @@ mod tests {
         let output_dir = root.join("site");
         std::fs::create_dir_all(&output_dir).unwrap();
 
-        let store = ObjectStore::for_site(&MossPaths::from_moss_dir(moss_dir.clone()));
-        let oid = store.store_bytes(b"not actually a png", crate::build::cache::RecordMode::Request).unwrap();
+        let cover = stored_cover(&moss_dir, b"not actually a png");
 
         let mut meta = blank_link_meta("https://example.com/post");
-        meta.cover_oid = Some(oid);
-        meta.cover_ext = Some("png".to_string());
+        meta.cover = Some(cover.clone());
         let mut link_meta = HashMap::new();
         link_meta.insert(meta.url.clone(), meta);
 

@@ -25,11 +25,21 @@ fn render_for_build_at(
     exits_after_build: bool,
     instant: jiff::Timestamp,
 ) -> std::path::PathBuf {
+    render_with_evidence(test_dir, site_config, exits_after_build, instant, crate::build::cloud_ledger::InputEvidence::new(test_dir))
+}
+
+fn render_with_evidence(
+    test_dir: &std::path::Path,
+    site_config: crate::build::render::blocking::SiteConfig,
+    exits_after_build: bool,
+    instant: jiff::Timestamp,
+    evidence: crate::build::cloud_ledger::InputEvidence,
+) -> std::path::PathBuf {
     let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
     std::fs::create_dir_all(&output_dir).unwrap();
     let project_structure =
         crate::build::scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
-    let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(test_dir));
+    let mut pending = crate::build::manifest::PendingManifest::for_build(crate::types::content::SiteHashes::default(), evidence);
     crate::build::render::generate_blocking_content_for_build(
         &crate::vault::paths::VaultRoot::resolve(test_dir),
         &project_structure,
@@ -10087,6 +10097,28 @@ mod remote_cover_end_to_end_tests {
     fn build_site(test_dir: &std::path::Path) -> String {
         let output_dir = super::render_for_build(test_dir, SiteConfig::default(), true);
         fs::read_to_string(output_dir.join("index.html")).expect("index.html should exist")
+    }
+
+    /// A build whose link card is still in the cloud records it as an input
+    /// the publish waits for.
+    #[test]
+    fn a_card_in_the_cloud_holds_the_publish() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "moss_card_in_cloud_e2e_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).unwrap();
+        let _cleanup = Cleanup(test_dir.clone());
+        let url = "https://card.example.test/page";
+        fs::write(test_dir.join("index.md"), format!(":::grid 1\n<{url}>\n:::\n")).unwrap();
+        let moss_dir = test_dir.join(".moss");
+        let card = crate::build::page::link_snapshot::Fetched { cover: None, favicon: None, og_image: None, title: Some("Card".into()), url: url.into() };
+        crate::build::page::link_snapshot::write(&moss_dir, &card).unwrap();
+        let entry = format!(".moss/data/social/links/{}.json", crate::build::page::link_snapshot::url_key(url));
+        let _cloud = crate::build::icloud::pretend::evicted(&test_dir.join(&entry));
+        let evidence = crate::build::cloud_ledger::InputEvidence::new(&test_dir);
+        super::render_with_evidence(&test_dir, SiteConfig::default(), false, crate::build::inputs::build_instant(), evidence.clone());
+        assert!(evidence.unresolved_structural().contains(&entry), "{:?}", evidence.unresolved_structural());
     }
 
     #[test]
