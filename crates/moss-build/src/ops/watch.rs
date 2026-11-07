@@ -680,7 +680,7 @@ async fn handle_debounced_batch(
         since
     );
 
-    let trigger = classify_trigger(root_path, &actionable);
+    let trigger = classify_trigger(root_path, &actionable, || crate::system::build_records::records().content_hashes(folder_path));
     dispatch(worker::RebuildRequest {
         rename_pairs,
         trigger,

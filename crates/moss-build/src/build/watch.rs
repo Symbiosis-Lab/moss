@@ -82,22 +82,25 @@ use super::BuildTrigger;
 
 /// Classify an actionable debounced batch.
 ///
-/// `Structural` if ANY event in the batch is a create/remove/rename — a
+/// `Structural` if ANY event in the batch changes which files exist — a
 /// mixed batch (e.g. one content edit + one new file) cannot be salvaged as
 /// `ContentOnly` by dropping the structural event, because the rebuild still
-/// has to account for it. `ContentOnly` requires EVERY event to be a plain
-/// modify. Paths are the same `path_passes_filter`-eligible set the trigger
-/// log already computes; `Full` (no paths) should not occur here since the
-/// caller already checked `actionable` is non-empty, but is the safe
-/// fallback if a future caller passes an empty slice.
-pub fn classify_trigger(root: &Path, events: &[&DebouncedEvent]) -> BuildTrigger {
+/// has to account for it. Paths are the same `path_passes_filter`-eligible
+/// set the trigger log already computes; `Full` (no paths) should not occur
+/// here since the caller already checked `actionable` is non-empty, but is the
+/// safe fallback if a future caller passes an empty slice.
+///
+/// `baseline` reads the last build's manifest, when there is one; it is asked
+/// only for a batch that creates, removes or renames something.
+pub fn classify_trigger(root: &Path, events: &[&DebouncedEvent], baseline: impl FnOnce() -> Option<SiteHashes>) -> BuildTrigger {
     let mut paths = Vec::new();
     let mut structural = false;
+    let mut baseline = Some(baseline);
+    let mut known: Option<Option<SiteHashes>> = None;
     for ev in events {
-        if matches!(ev.kind, EventKind::Create(_) | EventKind::Remove(_))
-            || matches!(ev.kind, EventKind::Modify(ModifyKind::Name(_)))
-        {
-            structural = true;
+        if names_files(ev) {
+            let known = known.get_or_insert_with(|| baseline.take().and_then(|read| read()));
+            structural |= reshapes_tree(root, ev, known.as_ref());
         }
         paths.extend(ev.paths.iter().filter(|p| path_passes_filter(root, p)).cloned());
     }
@@ -108,6 +111,22 @@ pub fn classify_trigger(root: &Path, events: &[&DebouncedEvent]) -> BuildTrigger
     } else {
         BuildTrigger::ContentOnly(paths)
     }
+}
+
+/// A create, remove or rename changes which files exist, unless every watched
+/// path it names is a source the last build knew and is still a file now. An
+/// editor's atomic save (a temp file renamed over the page) reaches the
+/// watcher as a rename or a create of that page, and macOS keeps reporting a
+/// path's earlier create on later plain writes to it.
+fn reshapes_tree(root: &Path, ev: &DebouncedEvent, baseline: Option<&SiteHashes>) -> bool {
+    let Some(baseline) = baseline else { return true };
+    !ev.paths.iter().filter(|p| path_passes_filter(root, p)).all(|p| {
+        p.is_file() && path_to_relative_key(root, p).is_some_and(|key| baseline.sources.contains_key(&key))
+    })
+}
+
+fn names_files(ev: &DebouncedEvent) -> bool {
+    matches!(ev.kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)))
 }
 
 /// Pull `(from_rel, to_rel)` source-relative pairs out of stitched rename

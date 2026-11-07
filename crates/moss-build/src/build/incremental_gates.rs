@@ -97,7 +97,9 @@ impl PipelineConfig {
     /// was structural for a reason no markdown parse can see. The render skip
     /// above still refuses `Structural`, and must: listings, nav and folder
     /// indexes move on a create without any page's fingerprint moving, and no
-    /// fingerprint covers that.
+    /// fingerprint covers that. The render verdict's page-set comparison
+    /// (`FullCause::PathSetMoved`) is the second guard: a batch the watcher
+    /// read as content-only that did add or drop a page still renders in full.
     ///
     /// Condition 3 is NARROWER: instead of "every changed path is markdown",
     /// it is "every changed path is markdown OR **parse-irrelevant**".

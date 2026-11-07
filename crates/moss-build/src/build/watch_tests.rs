@@ -4149,3 +4149,41 @@ fn a_page_the_watcher_already_paired_is_not_paired_again() {
     let event = build_rebuild_event_with_renames(&new, &prev, &watcher).expect("event");
     assert_eq!(event.source_renames, Some(watcher.to_vec()));
 }
+
+/// A page saved by renaming a temp file over it, or reported as created again,
+/// is a content edit: only a path the last build did not know, or one that is
+/// gone, changes the tree.
+#[test]
+fn an_atomic_save_of_a_known_page_is_a_content_edit() {
+    use notify::event::{CreateKind, RemoveKind};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for name in ["a.md", "new.md"] {
+        std::fs::write(root.join(name), "Hello.\n").unwrap();
+    }
+    let mut baseline = SiteHashes::default();
+    for name in ["a.md", "gone.md"] {
+        baseline.sources.insert(name.into(), SourceMetadata::from_stat("h".into(), FileStat::whole_second(0, 0)));
+    }
+    let event = |kind, paths: &[&str]| {
+        let mut event = notify::Event::new(kind);
+        for p in paths {
+            event = event.add_path(root.join(p));
+        }
+        DebouncedEvent::new(event, std::time::Instant::now())
+    };
+    let kind = |ev: DebouncedEvent, baseline: Option<&SiteHashes>| match classify_trigger(root, &[&ev], || baseline.cloned()) {
+        BuildTrigger::ContentOnly(_) => "content",
+        BuildTrigger::Structural(_) => "structural",
+        BuildTrigger::Full => "full",
+    };
+    let renamed_over = || event(EventKind::Modify(ModifyKind::Name(RenameMode::Any)), &["a.md"]);
+    assert_eq!(kind(renamed_over(), Some(&baseline)), "content");
+    assert_eq!(kind(event(EventKind::Create(CreateKind::File), &["a.md"]), Some(&baseline)), "content");
+    assert_eq!(kind(event(EventKind::Create(CreateKind::File), &["new.md"]), Some(&baseline)), "structural");
+    assert_eq!(kind(event(EventKind::Remove(RemoveKind::File), &["gone.md"]), Some(&baseline)), "structural");
+    assert_eq!(kind(event(EventKind::Modify(ModifyKind::Name(RenameMode::Both)), &["gone.md", "a.md"]), Some(&baseline)), "structural");
+    assert_eq!(kind(renamed_over(), None), "structural", "with no manifest yet, nothing is known");
+    let plain = event(EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Content)), &["a.md"]);
+    assert!(matches!(classify_trigger(root, &[&plain], || panic!("a plain write needs no manifest")), BuildTrigger::ContentOnly(_)));
+}
