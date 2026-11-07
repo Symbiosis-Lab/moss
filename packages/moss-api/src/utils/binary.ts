@@ -33,7 +33,10 @@ export interface ExecuteOptions {
   args: string[];
   /** Timeout in milliseconds (default: 60000) */
   timeoutMs?: number;
-  /** Additional environment variables */
+  /**
+   * Environment variables to add. Only `GIT_TERMINAL_PROMPT` and
+   * `COPYFILE_DISABLE` are accepted; any other name refuses the call.
+   */
   env?: Record<string, string>;
   /** Data to pass to stdin (useful for commands like `git credential fill`) */
   stdin?: string;
@@ -111,12 +114,12 @@ interface BinaryOutputEvent {
  *
  * @example
  * ```typescript
- * // Run npm install with timeout
+ * // Push without ever waiting on a credential prompt
  * const result = await executeBinary({
- *   binaryPath: "npm",
- *   args: ["install"],
+ *   binaryPath: "git",
+ *   args: ["push"],
  *   timeoutMs: 120000,
- *   env: { NODE_ENV: "production" },
+ *   env: { GIT_TERMINAL_PROMPT: "0" },
  * });
  * ```
  *

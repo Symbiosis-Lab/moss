@@ -564,14 +564,31 @@ mod fetch_full_tests {
 // Binary Execution Helpers
 // ============================================================================
 
-/// Shared request validation for both execution paths (blocking here,
-/// streaming app-side in `binary.rs`).
+/// The only environment variables a plugin may add for a binary it runs. Any
+/// other, `PATH` and `HOME` among them, can change which program runs or what
+/// it loads and executes, so the call is refused rather than the variable
+/// dropped.
+pub const PLUGIN_ENV_ALLOWED: &[&str] = &["GIT_TERMINAL_PROMPT", "COPYFILE_DISABLE"];
+
+/// Request validation for a plugin's binary execution.
 pub fn validate_binary_request(
     binary_path: &str,
     working_dir: &Option<String>,
+    env_vars: &Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     if binary_path.is_empty() {
         return Err("Binary path cannot be empty".to_string());
+    }
+    if let Some(key) = env_vars
+        .iter()
+        .flat_map(|vars| vars.keys())
+        .find(|key| !PLUGIN_ENV_ALLOWED.contains(&key.as_str()))
+    {
+        return Err(format!(
+            "'execute_binary' refused: a plugin may not set the environment variable '{key}' \
+             (allowed: {})",
+            PLUGIN_ENV_ALLOWED.join(", ")
+        ));
     }
     if let Some(dir) = working_dir {
         if dir.is_empty() {
@@ -584,10 +601,10 @@ pub fn validate_binary_request(
     Ok(())
 }
 
-/// Headless half of the split: validation + timeout + blocking
-/// execution, no AppHandle anywhere. The QuickJS engine's `execute_binary`
-/// arm calls this directly (it never streams); the webview command's
-/// streaming branch lives app-side in `binary.rs`.
+/// The only entry for running a plugin's binary: validation, timeout and
+/// blocking execution. The QuickJS engine's `execute_binary` arm calls it;
+/// every other caller goes through it too, so the checks in
+/// [`validate_binary_request`] cannot be skipped.
 pub async fn execute_binary_blocking_impl(
     binary_path: String,
     args: Vec<String>,
@@ -596,7 +613,7 @@ pub async fn execute_binary_blocking_impl(
     timeout_ms: Option<u64>,
     stdin_data: Option<String>,
 ) -> Result<BinaryExecutionResult, String> {
-    validate_binary_request(&binary_path, &working_dir)?;
+    validate_binary_request(&binary_path, &working_dir, &env_vars)?;
     let timeout_duration =
         std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000));
     match tokio::time::timeout(
@@ -613,7 +630,7 @@ pub async fn execute_binary_blocking_impl(
     }
 }
 
-/// Non-streaming execution path: uses `std::process::Command` in a blocking task.
+/// The spawn itself, unvalidated: call [`execute_binary_blocking_impl`].
 pub(crate) async fn execute_binary_blocking(
     binary_path: &str,
     args: &[String],
@@ -882,6 +899,33 @@ mod execute_binary_tests {
             let output = result.unwrap();
             assert!(output.success);
             assert!(output.stdout.contains("test_value"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plugin_sets_only_the_allowed_environment() {
+        use super::execute_binary_blocking_impl;
+        for key in ["PATH", "HOME", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "GIT_SSH_COMMAND", "BASH_ENV"] {
+            let env = HashMap::from([(key.to_string(), "x".to_string())]);
+            let err = execute_binary_blocking_impl("true".into(), vec![], None, Some(env), None, None)
+                .await
+                .expect_err("an environment variable outside the allowlist must refuse");
+            assert!(err.contains(&format!("'{key}'")), "{err}");
+        }
+        #[cfg(unix)]
+        {
+            let env = HashMap::from([("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())]);
+            let out = execute_binary_blocking_impl(
+                "sh".into(),
+                vec!["-c".into(), "echo $GIT_TERMINAL_PROMPT".into()],
+                None,
+                Some(env),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.stdout.trim(), "0");
         }
     }
 

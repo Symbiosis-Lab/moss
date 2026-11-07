@@ -36,7 +36,8 @@ binary: a PATH directory, a standard install directory such as
 optional env?: Record<string, string>;
 ```
 
-Additional environment variables
+Environment variables to add. Only `GIT_TERMINAL_PROMPT` and
+`COPYFILE_DISABLE` are accepted; any other name refuses the call.
 
 ***
 

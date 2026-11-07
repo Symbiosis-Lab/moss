@@ -1463,12 +1463,12 @@ if (result.success) {
 ```
 
 ```typescript
-// Run npm install with timeout
+// Push without ever waiting on a credential prompt
 const result = await executeBinary({
-  binaryPath: "npm",
-  args: ["install"],
+  binaryPath: "git",
+  args: ["push"],
   timeoutMs: 120000,
-  env: { NODE_ENV: "production" },
+  env: { GIT_TERMINAL_PROMPT: "0" },
 });
 ```
 
