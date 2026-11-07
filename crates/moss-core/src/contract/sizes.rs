@@ -114,8 +114,11 @@ pub const SIZES_BODY: &str = "auto, (min-width: 48rem) 47.25rem, 100vw";
 /// blurs — see the module doc's caveat on theme overrides.
 pub const SIZES_CARD: &str = "auto, (min-width: 48rem) 24rem, 100vw";
 
-/// Gallery thumbnails: 2–3 across on desktop.
-pub const SIZES_GALLERY: &str = "(min-width: 48rem) 33vw, 100vw";
+/// Gallery thumbnails: 2–3 across on desktop. Leads with `auto,` for the
+/// reason [`SIZES_CARD`] gives: a gallery's track comes from auto-fill,
+/// `data-columns` or justified rows, and keeps several across on a phone, so
+/// the viewport fallback below overstates a phone thumbnail several times.
+pub const SIZES_GALLERY: &str = "auto, (min-width: 48rem) 33vw, 100vw";
 
 /// The `sizes=` value for a figure carrying a canonical `data-width` token
 /// (`body | wide | page | screen`; `full` is canonicalized to `screen` at
@@ -243,6 +246,16 @@ mod tests {
                 }
             }
             assert_eq!(depth, 0, "unbalanced parentheses: {s}");
+        }
+    }
+
+    #[test]
+    fn contexts_whose_width_layout_decides_lead_with_auto() {
+        // A lazy image in these contexts has a laid-out width no viewport
+        // formula names; without `auto` a 110px gallery thumb on a phone
+        // resolves `100vw` and fetches the top rung.
+        for s in [SIZES_BODY, SIZES_CARD, SIZES_GALLERY] {
+            assert!(s.starts_with("auto, "), "{s}");
         }
     }
 

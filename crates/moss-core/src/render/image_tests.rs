@@ -849,7 +849,7 @@ fn synthesize_gallery_thumb_emits_picture_with_lazy() {
     // with the gallery grid-cell sizes (Task 3, responsive-image-variants).
     assert!(
             out.contains(
-                r#"srcset="photo.w800.webp 800w, photo.webp 1200w" type="image/webp" sizes="(min-width: 48rem) 33vw, 100vw""#
+                r#"srcset="photo.w800.webp 800w, photo.webp 1200w" type="image/webp" sizes="auto, (min-width: 48rem) 33vw, 100vw""#
             ),
             "{out}"
         );
@@ -1842,7 +1842,7 @@ fn webp_source_gallery_context_uses_gallery_sizes() {
         &ImageRenderOptions::default(),
     );
     assert!(
-        html.contains(r#"sizes="(min-width: 48rem) 33vw, 100vw""#),
+        html.contains(r#"sizes="auto, (min-width: 48rem) 33vw, 100vw""#),
         "got: {html}"
     );
     assert!(!html.contains("<picture"), "got: {html}");
