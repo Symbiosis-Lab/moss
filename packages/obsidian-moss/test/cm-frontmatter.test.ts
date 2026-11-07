@@ -59,6 +59,11 @@ describe("schema descriptions and completion", () => {
     expect(fieldCompletions(schema, "---\ntitle: x\n---\n", "").map((field) => field.name)).not.toContain("title");
   });
 
+  it("lists completions by name, not in the schema's hash order", () => {
+    const fields = new Map(["review_score", "review_of"].map((name) => [name, { name, type: "string", description: "", group: "" }]));
+    expect(fieldCompletions({ fields }, "", "review").map((field) => field.name)).toEqual(["review_of", "review_score"]);
+  });
+
   it("matches the core's additive plugin composition", () => {
     const plugins: SitePlugin[] = [{ name: "z-last", fields: { review_score: { type: "string" } } },
       { name: "a-first", fields: {
@@ -69,7 +74,9 @@ describe("schema descriptions and completion", () => {
     const composed = siteSchema(contributed);
     expect(composed.fields.get("title")?.type).toBe("string");
     expect(fieldInfoText(composed, "review_score")).toContain("Reader review score");
-    expect(fieldCompletions(composed, "---\n\n---\n", "review")[0].type).toBe("integer");
+    const review = fieldCompletions(composed, "---\n\n---\n", "review");
+    expect(review.map((field) => field.name)).toEqual(["review_of", "review_score"]);
+    expect(review[1].type).toBe("integer");
     expect(composed.fields.get("children_style")?.enumValues).toContain("board");
     expect(JSON.parse(contributed.schemaJson()).frontmatter.fields.review_score.source).toBe("a-first");
     expect(JSON.parse(contributed.check("page.md", "---\ntitle: Example\nreview_score: 3\nchildren_style: board\n---\n"))).toEqual([]);

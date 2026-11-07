@@ -140,7 +140,8 @@ export function fieldCompletions(schema: MossSchema, doc: string, prefix: string
       insert: `${spec.name}: `,
     });
   }
-  return out;
+  // The schema's field order is a hash order; sort so the list is stable.
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The complete frontmatter knowledge extension (lint + hover). */
