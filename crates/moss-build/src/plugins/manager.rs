@@ -936,6 +936,7 @@ impl PluginManager {
             context,
             project_path: self.project_path.clone(),
             moss_dir: format!("{}/.moss", self.project_path),
+            asked_by,
         };
         if let Err(e) = self.engine.dispatch_hook(invocation, sink).await {
             // Unregister the executing hook so a stale entry can't survive a

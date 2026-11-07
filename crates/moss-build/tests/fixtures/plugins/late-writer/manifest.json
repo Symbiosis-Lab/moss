@@ -1,0 +1,7 @@
+{
+  "name": "late-writer",
+  "version": "0.1.0",
+  "entry": "main.bundle.js",
+  "global_name": "LateWriter",
+  "capabilities": ["process"]
+}

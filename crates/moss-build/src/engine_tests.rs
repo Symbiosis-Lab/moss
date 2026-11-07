@@ -437,7 +437,7 @@ async fn cancel_token_kills_parked_hook() {
     let c2 = cancel.clone();
     let hook = tokio::spawn(async move {
         engine2
-            .dispatch_hook_with_cancel("p", bundle, "P", "process", "{}", "", "", c2)
+            .dispatch_hook_with_cancel("p", bundle, "P", "process", "{}", "", "", crate::plugins::hook_state::AskedBy::Person, c2)
             .await
     });
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -469,7 +469,7 @@ async fn cancel_token_interrupts_sync_loop_hook() {
     let c2 = cancel.clone();
     let hook = tokio::spawn(async move {
         engine2
-            .dispatch_hook_with_cancel("p", bundle, "P", "process", "{}", "", "", c2)
+            .dispatch_hook_with_cancel("p", bundle, "P", "process", "{}", "", "", crate::plugins::hook_state::AskedBy::Person, c2)
             .await
     });
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -521,7 +521,7 @@ async fn cancel_is_scoped_to_its_hook() {
     let ca2 = cancel_a.clone();
     let hook_a = tokio::spawn(async move {
         engine_a
-            .dispatch_hook_with_cancel("a", bundle_a, "A", "process", "{}", "", "", ca2)
+            .dispatch_hook_with_cancel("a", bundle_a, "A", "process", "{}", "", "", crate::plugins::hook_state::AskedBy::Person, ca2)
             .await
     });
     let engine_b = engine.clone();
@@ -585,7 +585,7 @@ async fn cancelled_plugin_context_is_retired() {
     // Hook 1: sets a global, parks 60s. Cancel it → Context poisoned.
     let hook1 = tokio::spawn(async move {
         engine2
-            .dispatch_hook_with_cancel("p", bundle, "P", "process", "{}", "", "", c2)
+            .dispatch_hook_with_cancel("p", bundle, "P", "process", "{}", "", "", crate::plugins::hook_state::AskedBy::Person, c2)
             .await
     });
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -861,7 +861,7 @@ async fn phase4_retire_and_cancel_concurrent() {
     let c1 = cancel1.clone();
     let hook1 = tokio::spawn(async move {
         engine1
-            .dispatch_hook_with_cancel("p", bundle_v1, "V1", "process", "{}", "", "", c1)
+            .dispatch_hook_with_cancel("p", bundle_v1, "V1", "process", "{}", "", "", crate::plugins::hook_state::AskedBy::Person, c1)
             .await
     });
 
@@ -875,7 +875,7 @@ async fn phase4_retire_and_cancel_concurrent() {
     let c2 = cancel2.clone();
     let hook2 = tokio::spawn(async move {
         engine2
-            .dispatch_hook_with_cancel("p", bundle_v2, "V2", "process", "{}", "", "", c2)
+            .dispatch_hook_with_cancel("p", bundle_v2, "V2", "process", "{}", "", "", crate::plugins::hook_state::AskedBy::Person, c2)
             .await
     });
 

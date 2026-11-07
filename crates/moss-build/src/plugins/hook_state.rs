@@ -153,8 +153,8 @@ pub enum AskedBy {
     /// plugin can.
     Person,
     /// A build, or anything else nobody asked for at that moment. The folder
-    /// is the person's, so such a run leaves work that would write it to the
-    /// person (`HookResult::offer`).
+    /// is the person's, so the run writes only inside `.moss/` (see
+    /// `host_fns::reach`) and runs no program.
     Build,
 }
 

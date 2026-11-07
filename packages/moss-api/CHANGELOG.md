@@ -26,6 +26,7 @@ release heading.
 
 ### Migration
 
+- A `process` hook started by a build (`context.trigger` is `"background"`) may write only its own storage (`writePluginFile`) and its own comment-data file under `.moss/data/social/`. `writeFile`, `writeFileBinary` and `downloadAsset` anywhere else in the folder, and `executeBinary`, are refused. A plugin that imports into the folder does it when the person starts it (`context.trigger` is `"onboarding_flow"` or `"settings_manual"`), and on a build returns `offer` instead. Needs moss 0.15.20.
 - A deploy plugin that read the built site from `.moss/` (through `readFile`, a hard-coded path, or `executeBinary` with a working directory there) reads `context.site_dir` instead, and declares `min_moss_version` 0.15.20.
 
 ## [0.16.0] - 2026-11-07

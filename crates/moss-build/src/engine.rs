@@ -53,6 +53,7 @@ pub mod tauri_bridge;
 pub(crate) mod url_shim;
 pub(crate) mod web_shims;
 
+use crate::plugins::hook_state::AskedBy;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -119,6 +120,8 @@ enum Job {
         context_json: String,
         project_path: String,
         moss_dir: String,
+        /// Who asked for the run; a Context serves one asker's runs.
+        asked_by: AskedBy,
         reply: oneshot::Sender<Result<String, String>>,
         /// Per-hook cancellation (condition 6, D3): the manager cancels this from the
         /// three timeout sites. Killing the hook parked: select arm fires first (biased,
@@ -232,7 +235,8 @@ impl QuickJsEngine {
     ///
     /// The per-plugin Context is created (and the bundle loaded with all shims) on
     /// first dispatch and reused across calls. Uses a never-cancelled token — for
-    /// cancellable dispatch see `dispatch_hook_with_cancel`.
+    /// cancellable dispatch see `dispatch_hook_with_cancel`. Runs as a build's
+    /// run: a caller that needs the person's reach says so there.
     #[allow(clippy::too_many_arguments)]
     pub async fn dispatch_hook_raw(
         &self,
@@ -252,6 +256,7 @@ impl QuickJsEngine {
             context_json,
             project_path,
             moss_dir,
+            AskedBy::Build,
             tokio_util::sync::CancellationToken::new(), // never cancelled
         )
         .await
@@ -270,6 +275,7 @@ impl QuickJsEngine {
         context_json: &str,
         project_path: &str,
         moss_dir: &str,
+        asked_by: AskedBy,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<String, String> {
         // D9 lazy spawn: ensure the OS thread exists before we send the job.
@@ -285,6 +291,7 @@ impl QuickJsEngine {
                 context_json: context_json.to_string(),
                 project_path: project_path.to_string(),
                 moss_dir: moss_dir.to_string(),
+                asked_by,
                 reply,
                 cancel,
             })
@@ -359,6 +366,10 @@ struct PluginRuntime {
     timers: Rc<RefCell<self::web_shims::TimerRegistry>>,
     hub: Rc<RefCell<self::tauri_bridge::EventHub>>,
     fingerprint: u64,
+    /// Whose runs this Context serves. A run by the other asker gets a fresh
+    /// Context, so a timer or promise chain one run leaves behind never runs
+    /// alongside the other's, and every host call it makes keeps its asker.
+    asked_by: AskedBy,
     /// Live hook tasks on this Context (engine thread only). Eviction with
     /// in_flight > 0 RETIRES the runtime instead of killing its timers — a
     /// cancel_all here orphans the in-flight hook's awaited setTimeout forever.
@@ -540,11 +551,12 @@ async fn engine_loop(
                 context_json,
                 project_path,
                 moss_dir,
+                asked_by,
                 reply,
                 cancel,
             } => {
                 let fp = bundle_fingerprint(&bundle);
-                if plugins.get(&plugin).map(|pr| pr.fingerprint != fp).unwrap_or(false) {
+                if plugins.get(&plugin).is_some_and(|pr| pr.fingerprint != fp || pr.asked_by != asked_by) {
                     if let Some(pr) = plugins.remove(&plugin) {
                         if pr.in_flight.get() > 0 {
                             // Retire, don't kill (condition 4, D2): the in-flight
@@ -607,7 +619,7 @@ async fn engine_loop(
                             .map_err(|e| format!("install_url error: {e}"))?;
                         self::fetch_shim::install_fetch(&ctx)
                             .map_err(|e| format!("install_fetch error: {e}"))?;
-                        self::host_fns::install_invoke(&ctx, bridge.clone(), &plugin)
+                        self::host_fns::install_invoke(&ctx, bridge.clone(), &plugin, asked_by)
                             .map_err(|e| format!("install_invoke error: {e}"))?;
                         self::tauri_bridge::install_event(
                             &ctx,
@@ -667,6 +679,7 @@ async fn engine_loop(
                             timers,
                             hub,
                             fingerprint: fp,
+                            asked_by,
                             in_flight: Rc::new(Cell::new(0)),
                             poisoned: Rc::new(Cell::new(false)),
                         },
