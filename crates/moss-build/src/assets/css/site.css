@@ -8463,10 +8463,8 @@ body > footer.container:has(> .moss-hero-closing) {
     margin-block-start: 0;
   }
 
-  /* Lead heading keeps 1.5rem — the size the `h1` rule gave it before this
-     was generalised, so nothing already shipping moves. */
   .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
-    font-size: 1.5rem;
+    font-size: var(--moss-hero-title-size, 1.5rem);
   }
 
   .moss-hero-content p {

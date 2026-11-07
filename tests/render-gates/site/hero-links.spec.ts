@@ -27,3 +27,12 @@ for (const width of [390, 1280]) {
     });
   }
 }
+
+test("a stacked phone hero's lead heading takes --moss-hero-title-size, else 1.5rem", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto("/");
+  const size = () => page.locator(".moss-hero:not(.moss-hero-closing) .moss-hero-content h1").first().evaluate((h) => getComputedStyle(h).fontSize);
+  expect(await size(), "no token").toBe("24px");
+  await page.addStyleTag({ content: ":root { --moss-hero-title-size: 40px; }" });
+  expect(await size(), "token set").toBe("40px");
+});
