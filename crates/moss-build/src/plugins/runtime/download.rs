@@ -343,12 +343,9 @@ pub async fn download_asset_impl(
     if url.is_empty() {
         return Err("URL cannot be empty".to_string());
     }
-    if target_dir.is_empty() {
-        return Err("Target directory cannot be empty".to_string());
-    }
-    if target_dir.contains("..") {
-        return Err("Invalid path: directory traversal not allowed".to_string());
-    }
+    // Confined before anything is fetched: an absolute directory would replace
+    // the project root in `join`, and `.moss/` holds plugins and the identity.
+    crate::vault::fs::PluginPath::sandboxed(&target_dir)?.resolve_under(Path::new(project_path))?;
 
     if let Some(name) = &filename {
         if name.is_empty() || name == "." || name.contains(['/', '\\', '\0']) || name.contains("..") {
@@ -421,7 +418,7 @@ pub async fn download_asset_impl(
     let filename = filename.unwrap_or_else(|| derive_filename(&parsed_url, content_type.as_deref()));
     let relative_path = format!("{}/{}", target_dir.trim_end_matches('/'), filename);
 
-    let file_path = Path::new(project_path).join(&relative_path);
+    let file_path = crate::vault::fs::PluginPath::sandboxed(&relative_path)?.resolve_under(Path::new(project_path))?;
     if let Some(parent) = file_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
