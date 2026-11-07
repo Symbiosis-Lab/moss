@@ -2287,8 +2287,18 @@ async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
         crate::build::cache::ObjectStore::new(mp.cache_objects()),
     );
     let first_source = crate::build::cache::ObjectStore::hash_file(&vault.join("videos/first.mov")).unwrap();
-    let first = transforms.get_with(&first_source, crate::build::cache::RecordMode::Request).expect("the first video's encode was recorded");
-    let mp4 = first.transforms["video/mp4"].oid.clone();
+    // The two encodes run side by side, so the second can reach the encoder
+    // before the first has recorded its mp4.
+    let mut mp4 = None;
+    for _ in 0..500 {
+        mp4 = transforms.get_with(&first_source, crate::build::cache::RecordMode::Request)
+            .and_then(|r| r.transforms.get("video/mp4").map(|t| t.oid.clone()));
+        if mp4.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let mp4 = mp4.expect("the first video's encode was recorded");
     // Big enough to be worth sweeping.
     for i in 0..2_048 {
         std::fs::create_dir_all(mp.cache_objects().join("zz").join(format!("{i:04}"))).unwrap();
