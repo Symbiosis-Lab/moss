@@ -135,6 +135,7 @@ impl Schedule {
     }
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "priority_tests.rs"]
 mod priority_tests;

@@ -470,6 +470,7 @@ impl BackgroundDerive {
     }
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "site_tests.rs"]
 mod site_tests;

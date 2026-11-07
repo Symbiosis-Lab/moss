@@ -2,6 +2,8 @@
 //! is a note, not a build problem: `--strict` can pass. A page that links to
 //! it still reports the dead link.
 
+#![cfg(unix)]
+
 #[path = "support/site.rs"]
 mod site;
 

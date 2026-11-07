@@ -6,6 +6,7 @@ use crate::plugins::contributions::derivation::DerivationContribution;
 use crate::system::derive::registry::DerivationEntry;
 
 /// Write an executable `sh` script that has read the request into `$REQ`.
+#[cfg(unix)]
 pub fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let path = dir.join(name);

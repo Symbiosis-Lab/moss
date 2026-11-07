@@ -133,6 +133,7 @@ pub fn run_deriver_answer(
     })
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "run_tests.rs"]
 mod run_tests;

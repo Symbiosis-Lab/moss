@@ -1,6 +1,8 @@
 //! `![[file.ext#fragment]]` through the whole build, with a made-up extension
 //! and a shell-script deriver so nothing here knows a real format.
 
+#![cfg(unix)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

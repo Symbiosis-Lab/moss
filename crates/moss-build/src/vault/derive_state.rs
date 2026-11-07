@@ -151,6 +151,7 @@ pub fn derivation_state(site: &MossPaths, registry: &DerivationRegistry) -> Vec<
     rows
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "derive_state_tests.rs"]
 mod derive_state_tests;

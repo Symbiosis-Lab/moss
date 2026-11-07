@@ -196,6 +196,7 @@ fn derive_with(site: &MossPaths, entry: &DerivationEntry, input: &Path, remember
     }
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "cache_tests.rs"]
 mod cache_tests;

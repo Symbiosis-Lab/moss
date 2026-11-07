@@ -1184,6 +1184,7 @@ mod tests {
     /// `target_str` here is already the link's real current target (just read
     /// via `read_link`). A stale sealed entry must warn and ship it, not abort
     /// the whole deploy the way the old hard `return Err` did.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_drifted_symlink_target_self_heals_instead_of_failing_the_deploy() {
         let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());

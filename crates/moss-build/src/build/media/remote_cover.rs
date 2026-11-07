@@ -367,6 +367,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_preexisting_unwritable_scratch_file_does_not_block_materialization() {
         // `scratch_source` is named `{oid}.{ext}` — content-addressed, not a
