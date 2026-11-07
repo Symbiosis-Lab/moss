@@ -1314,15 +1314,7 @@ pub(super) fn render_page<'d>(
         // A page with its listing off shows no events here; its embedded
         // listings carry their own folders' links (`folder_embed`).
         if let Some(d) = doc {
-            let cards = crate::build::components::field_places::EndCards {
-                graph: context.content_graph,
-                root_path: &project.root_path,
-                dir_overrides,
-                typesetting: resolved_typesetting,
-                now,
-                media_lookup,
-            };
-            finished.push_str(&crate::build::components::field_places::end_for_page(d, all_docs, &cards));
+            finished.push_str(&crate::build::components::field_places::end_for_page(d, all_docs, &crate::build::components::field_places::EndCards { graph: context.content_graph, root_path: &project.root_path, dir_overrides, typesetting: resolved_typesetting, now, media_lookup }));
             if let Some(href) = calendar_at_body_end.as_deref() {
                 finished.push_str(&context.shared.calendar.event_link_html(href, d.lang));
             }
