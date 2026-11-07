@@ -4472,3 +4472,18 @@ fn children_count_text_without_a_placeholder_warns() {
     assert_eq!(children_count_warning("index.md", Some(&ChildrenCount(String::new()))), None);
     assert_eq!(children_count_warning("index.md", None), None);
 }
+
+/// Hosts with no build (the WebAssembly and Swift bindings) draw a one-page
+/// preview with this stylesheet, compiled into them; it must be the one the
+/// standalone renderer uses. Regenerate:
+/// UPDATE_PAGE_CSS=1 cargo test -p moss-build --lib the_bindings_page_css
+#[test]
+fn the_bindings_page_css_matches_the_standalone_stylesheet() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../moss-bindings/assets/page.css");
+    let css = standalone_document_css();
+    if std::env::var_os("UPDATE_PAGE_CSS").is_some() {
+        std::fs::write(&path, &css).unwrap();
+    }
+    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(committed == css, "{} is stale; regenerate it with UPDATE_PAGE_CSS=1 cargo test -p moss-build --lib the_bindings_page_css", path.display());
+}

@@ -26,6 +26,9 @@ struct SiteJson {
     plugins: Vec<PluginJson>,
     #[serde(default)]
     listing_styles: Vec<String>,
+    /// The site's own stylesheets (`.moss/theme/`), applied after moss's.
+    #[serde(default)]
+    theme_css: String,
 }
 
 #[derive(Deserialize)]
@@ -37,7 +40,11 @@ struct PluginJson {
 /// Host-supplied site values, with the effective schema composed once on creation.
 pub struct Site {
     inputs: SiteInputs,
+    css: String,
 }
+
+/// moss's page stylesheet, kept equal to the build's by a moss-build test.
+const PAGE_CSS: &str = include_str!("../assets/page.css");
 
 impl Site {
     pub fn from_json(site_json: &str) -> Result<Self, String> {
@@ -51,6 +58,7 @@ impl Site {
         });
         Ok(Self {
             inputs: SiteInputs { files: site.files, notes: site.notes, schema, lang: site.lang },
+            css: format!("{PAGE_CSS}\n{}", site.theme_css),
         })
     }
 
@@ -72,9 +80,9 @@ impl Site {
     }
 
     /// A full document, its title, and the renderer's diagnostics. Use `check` for validation.
-    pub fn preview(&self, path: &str, text: &str, css: &str, base_href: &str) -> String {
+    pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
         let page = page::render_page(path, text, &self.inputs);
-        let html = page::preview_document(&page, &self.inputs.lang, css, base_href);
+        let html = page::preview_document(&page, &self.inputs.lang, &self.css, base_href);
         serde_json::to_string(&Preview {
             html,
             title: page.title,

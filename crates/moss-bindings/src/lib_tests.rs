@@ -76,17 +76,20 @@ fn all_severities_are_lsp_numbers_including_info() {
 
 #[test]
 fn preview_wraps_page_text_title_language_css_and_base() {
-    let result = json_value(&site().preview("a.md", "---\ntitle: Example\n---\nVisible **words**", "body { color: red; }", "https://example.com/site/"));
+    let themed = Site::from_json(r#"{"files":["a.md"],"lang":"en","theme_css":"body { color: red; }"}"#).unwrap();
+    let result = json_value(&themed.preview("a.md", "---\ntitle: Example\n---\nVisible **words**", "https://example.com/site/"));
     let html = result["html"].as_str().unwrap();
     assert!(html.starts_with("<!doctype html>"));
     assert!(html.contains("<html lang=\"en\">"));
     assert!(html.contains("<base href=\"https://example.com/site/\">"));
-    assert!(html.contains("<style>body { color: red; }</style>"));
+    // moss's own stylesheet first, the site's theme after it so the theme wins.
+    let theme_at = html.find("body { color: red; }</style>").unwrap();
+    assert!(html.find(".moss-article-title").is_some_and(|at| at < theme_at));
     assert!(html.contains("Visible <strong>words</strong>"));
     assert!(html.ends_with("</html>"));
     assert_eq!(result["title"], "Example");
     assert_eq!(result["diagnostics"], json!([]));
-    let warned = json_value(&site().preview("a.md", ":::unknown\nWords\n:::", "", "/"));
+    let warned = json_value(&site().preview("a.md", ":::unknown\nWords\n:::", "/"));
     assert!(warned["diagnostics"].as_array().unwrap().iter().any(|d| d["severity"] == 2));
 }
 
@@ -96,18 +99,18 @@ fn discovered_notes_render_after_atomic_replacement() {
     let text = "![[notes/b]]";
     assert_eq!(json_value(&site.embedded_notes("a.md", text)), json!(["notes/b.md"]));
     site.set_notes(r#"{"notes/b.md":"Embedded **words**"}"#).unwrap();
-    let preview = || json_value(&site.preview("a.md", text, "", "/"))["html"].as_str().unwrap().to_owned();
+    let preview = || json_value(&site.preview("a.md", text, "/"))["html"].as_str().unwrap().to_owned();
     assert!(preview().contains("Embedded <strong>words</strong>"));
     assert!(site.set_notes(r#"{"notes/b.md":42}"#).is_err());
-    assert!(site.preview("a.md", text, "", "/").contains("Embedded"));
+    assert!(site.preview("a.md", text, "/").contains("Embedded"));
     site.set_notes("{}").unwrap();
-    assert!(!site.preview("a.md", text, "", "/").contains("Embedded"));
+    assert!(!site.preview("a.md", text, "/").contains("Embedded"));
 }
 
 #[test]
 fn initial_notes_are_available_to_preview() {
     let site = Site::from_json(r#"{"files":["b.md"],"lang":"en","notes":{"b.md":"Initial note"}}"#).unwrap();
-    assert!(site.preview("a.md", "![[b]]", "", "/").contains("Initial note"));
+    assert!(site.preview("a.md", "![[b]]", "/").contains("Initial note"));
 }
 
 #[test]

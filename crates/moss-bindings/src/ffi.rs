@@ -50,7 +50,7 @@ impl MossSite {
         self.site().set_notes(&notes_json).map_err(|message| MossError::InvalidJson { message })
     }
 
-    pub fn preview(&self, path: String, text: String, css: String, base_href: String) -> String {
-        self.site().preview(&path, &text, &css, &base_href)
+    pub fn preview(&self, path: String, text: String, base_href: String) -> String {
+        self.site().preview(&path, &text, &base_href)
     }
 }

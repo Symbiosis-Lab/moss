@@ -27,8 +27,8 @@ impl MossSite {
         self.0.set_notes(notes_json).map_err(|e| JsValue::from_str(&e))
     }
 
-    pub fn preview(&self, path: &str, text: &str, css: &str, base_href: &str) -> String {
-        self.0.preview(path, text, css, base_href)
+    pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
+        self.0.preview(path, text, base_href)
     }
 }
 
