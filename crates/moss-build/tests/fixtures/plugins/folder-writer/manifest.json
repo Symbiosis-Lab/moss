@@ -1,0 +1,8 @@
+{
+  "name": "folder-writer",
+  "version": "0.1.0",
+  "display_name": "Folder writer",
+  "entry": "main.bundle.js",
+  "global_name": "FolderWriter",
+  "capabilities": ["process"]
+}

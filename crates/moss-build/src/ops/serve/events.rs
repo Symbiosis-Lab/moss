@@ -311,7 +311,7 @@ pub fn shows_on_terminal(event: &crate::build::progress::PipelineEvent) -> bool 
     use crate::build::progress::PipelineEvent;
     matches!(event, PipelineEvent::PluginProgress(_) | PipelineEvent::PluginNeedsConnection { .. })
         || matches!(event, PipelineEvent::BackgroundProgress { task, advisories, .. }
-            if task == "derive" || (task == "addresses" && !advisories.is_empty()))
+            if task == "derive" || task.starts_with("plugin-offer-") || (task == "addresses" && !advisories.is_empty()))
 }
 
 pub struct CarrierReporter;
@@ -492,6 +492,12 @@ mod shows_on_terminal_tests {
     #[test]
     fn other_background_tasks_stay_off_the_terminal() {
         assert!(!shows_on_terminal(&tick("images")));
+    }
+    /// A headless build is the only place a CLI user hears that a plugin has
+    /// work waiting for them to start.
+    #[test]
+    fn a_plugin_offer_shows_on_the_terminal() {
+        assert!(shows_on_terminal(&tick("plugin-offer-matters")));
     }
 }
 

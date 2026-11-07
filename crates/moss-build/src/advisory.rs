@@ -60,6 +60,8 @@ pub enum AppOp {
     RecheckDns,
     /// Download a command-line tool moss needs, after the user asked for it; `args` is `{"tool": "ffmpeg"|"git"}`.
     DownloadTool,
+    /// Run a plugin's process hook as the person's own act, which may write the folder; `args` is `{"plugin": "<id>"}`, and the app names the plugin from its manifest.
+    RunPluginProcess,
 }
 
 impl Action {
@@ -76,6 +78,9 @@ impl Action {
                 "run: moss tools download {}",
                 args.get("tool")?.as_str()?
             )),
+            Action::InApp { op: AppOp::RunPluginProcess, label, .. } => {
+                Some(format!("in the moss app, choose {label} to write it into the folder"))
+            }
             _ => None,
         }
     }
@@ -166,6 +171,22 @@ pub struct Advisory {
     pub what: String,
     /// The recovery affordance, expressed as data.
     pub action: Action,
+    /// How long the app keeps it.
+    #[serde(default)]
+    pub lifetime: AdvisoryLifetime,
+}
+
+/// How long the app keeps an advisory once raised.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(specta::Type)]
+pub enum AdvisoryLifetime {
+    /// A condition of this build: the next build start clears it.
+    #[default]
+    Build,
+    /// Kept across build starts until its own task's next tick, for an
+    /// advisory that a rebuild not running its task cannot speak for (a
+    /// plugin's Sync offer: save-rebuilds run no process hook).
+    UntilTaskRestates,
 }
 
 /// Could `path` resolve under the site root when a caller joins it onto the
@@ -274,7 +295,7 @@ impl Advisory {
                 advisory_log_line(&scope, &severity, item.as_deref(), &what)
             );
         }
-        Self { scope, severity, item, what, action }
+        Self { scope, severity, item, what, action, lifetime: AdvisoryLifetime::Build }
     }
 
     /// One file did not ship, and there is nothing the author can do from the
@@ -394,5 +415,18 @@ mod cli_hint_tests {
             label: "Check".into(),
         };
         assert_eq!(other.cli_hint(), None);
+    }
+
+    #[test]
+    fn run_plugin_action_tells_a_cli_user_where_to_sync() {
+        let action = Action::InApp {
+            op: AppOp::RunPluginProcess,
+            args: serde_json::json!({ "plugin": "matters" }),
+            label: "Sync".into(),
+        };
+        assert_eq!(
+            action.cli_hint().as_deref(),
+            Some("in the moss app, choose Sync to write it into the folder")
+        );
     }
 }

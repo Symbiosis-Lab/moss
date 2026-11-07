@@ -281,6 +281,13 @@ export interface UiHost {
   dragOut?: (paths: string[]) => Promise<void>;
   /** Downloads a tool the build needs (ffmpeg, git). */
   downloadTool?: (tool: string) => Promise<EngineResult<null>>;
+  /**
+   * Runs a plugin's process hook as the person's own act (a Sync), which may
+   * write the folder. Calls `say(true, name)` while it waits for a hook a build
+   * started in that plugin and `say(false, name)` once it runs, `name` being
+   * what the plugin's manifest calls it.
+   */
+  runPlugin?: (plugin: string, say: (waiting: boolean, name: string) => void) => Promise<EngineResult<null>>;
 }
 
 /** Filled by `fillHost` before the UI mounts; read through it, never before. */

@@ -1748,6 +1748,10 @@ const EN = {
   'download_tool.downloading': 'Downloading {name}…',
   'download_tool.done': '{name} is installed.',
   'download_tool.failed': "Couldn't download {name}: {error}",
+  'run_plugin.waiting': 'Waiting for {name} to finish…',
+  'run_plugin.running': 'Syncing {name}…',
+  'run_plugin.done': '{name} is synced.',
+  'run_plugin.failed': "Couldn't sync {name}: {error}",
 };
 
 export type UiStringMap = { [K in keyof typeof EN]: string };
@@ -3218,6 +3222,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'download_tool.downloading': '{name} wird heruntergeladen …',
     'download_tool.done': '{name} ist installiert.',
     'download_tool.failed': '{name} konnte nicht heruntergeladen werden: {error}',
+    'run_plugin.waiting': 'Warte, bis {name} fertig ist …',
+    'run_plugin.running': '{name} wird synchronisiert …',
+    'run_plugin.done': '{name} ist synchronisiert.',
+    'run_plugin.failed': '{name} konnte nicht synchronisiert werden: {error}',
   },
 
   'zh-hans': {
@@ -4753,6 +4761,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'download_tool.downloading': '正在下载 {name}…',
     'download_tool.done': '{name} 已安装。',
     'download_tool.failed': '无法下载 {name}：{error}',
+    'run_plugin.waiting': '正在等待 {name} 完成……',
+    'run_plugin.running': '正在同步 {name}……',
+    'run_plugin.done': '{name} 已同步。',
+    'run_plugin.failed': '无法同步 {name}：{error}',
   },
 
   'zh-hant': {
@@ -6288,5 +6300,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'download_tool.downloading': '正在下載 {name}…',
     'download_tool.done': '{name} 已安裝。',
     'download_tool.failed': '無法下載 {name}：{error}',
+    'run_plugin.waiting': '正在等待 {name} 完成……',
+    'run_plugin.running': '正在同步 {name}……',
+    'run_plugin.done': '{name} 已同步。',
+    'run_plugin.failed': '無法同步 {name}：{error}',
   },
 };

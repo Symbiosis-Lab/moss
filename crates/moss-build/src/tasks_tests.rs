@@ -143,6 +143,7 @@ fn tone_is_computed_from_job_nature() {
 
 fn blocking_advisory() -> crate::advisory::Advisory {
     crate::advisory::Advisory {
+        lifetime: Default::default(),
         scope: crate::advisory::Scope::Account,
         severity: crate::advisory::Severity::Blocking,
         item: None,
@@ -157,6 +158,7 @@ fn blocking_advisory() -> crate::advisory::Advisory {
 
 fn degraded_advisory() -> crate::advisory::Advisory {
     crate::advisory::Advisory {
+        lifetime: Default::default(),
         scope: crate::advisory::Scope::File,
         severity: crate::advisory::Severity::ShippedDegraded,
         item: Some("clip.mov".into()),

@@ -15,6 +15,7 @@ release heading.
 
 ### Added
 
+- `HookResult.offer`: a `process` hook a build started returns `{ title }` ("3 new posts on Matters") for work it may not do itself; moss shows it with a Sync action that runs the hook as the person's act. Needs moss 0.15.20.
 - `DeployContext.site_dir`: an absolute path to a read-only directory holding exactly `site_files`, made for one deploy hook call and removed when it returns; `DeployContext.index_file`: a path beside it for `GIT_INDEX_FILE`. Both need moss 0.15.20.
 
 ### Changed

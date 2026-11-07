@@ -322,6 +322,7 @@ impl TaskState {
 /// re-running the operation is the implicit retry).
 pub fn advisory_from_error(what: impl Into<String>, recoverable: bool) -> Advisory {
     Advisory {
+        lifetime: Default::default(),
         scope: Scope::Config,
         severity: if recoverable {
             Severity::NeedsAction

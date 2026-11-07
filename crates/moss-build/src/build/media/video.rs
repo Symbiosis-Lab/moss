@@ -1180,6 +1180,7 @@ pub(crate) fn run_video_conversion(
                     (crate::infra::app_advisory::t("ffmpeg_install"), Action::None)
                 };
             advisories.push(Advisory {
+                lifetime: Default::default(),
                 scope: Scope::Environment,
                 severity: Severity::NeedsAction,
                 item: None,
