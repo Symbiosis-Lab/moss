@@ -622,12 +622,12 @@ mod tests {
             html.contains("<picture>"),
             "manifested WebP variant must produce <picture> wrap, got: {}", html
         );
-        // 1600px-wide fixture → srcset ladder (responsive-image-variants
-        // Task 3): the w800 rung plus the base descriptor at the deployed
-        // width, with the card grid-cell sizes.
+        // 1600px-wide fixture → srcset ladder: the w800 and w1200 rungs plus
+        // the base descriptor at the deployed width, with the card grid-cell
+        // sizes.
         assert!(
             html.contains(
-                r#"<source srcset="assets/photo.w800.webp 800w, assets/photo.webp 1600w" type="image/webp" sizes="auto, (min-width: 48rem) 24rem, 100vw">"#
+                r#"<source srcset="assets/photo.w800.webp 800w, assets/photo.w1200.webp 1200w, assets/photo.webp 1600w" type="image/webp" sizes="auto, (min-width: 48rem) 24rem, 100vw">"#
             ),
             "<source> must carry the WebP ladder derived from the probe, got: {}", html
         );

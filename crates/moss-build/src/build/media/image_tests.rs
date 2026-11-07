@@ -432,7 +432,7 @@ fn regenerated_cloud_variants_are_available_to_singleflight_followers() {
     );
     let first = convert();
     assert!(first.error.is_none(), "{:?}", first.error);
-    assert_eq!(first.rungs.len(), 2, "exercise both responsive widths");
+    assert_eq!(first.rungs.len(), 3, "exercise every responsive width");
     let oids: Vec<_> = std::iter::once(first.webp_oid.as_ref().unwrap())
         .chain(first.rungs.iter().map(|r| r.oid.as_ref().unwrap())).collect();
     let _cloud: Vec<_> = oids.iter().map(|oid| {
@@ -466,10 +466,9 @@ fn staged_webp_dims(path: &Path) -> (u32, u32) {
     (img.width(), img.height())
 }
 
-/// Test 1 (plan Task 5 Step 2): a 2000×1200 JPEG through the conversion
-/// path produces the base webp AND both ladder rungs, each with EXACTLY
-/// the rung width (arch review: `resize_exact`, never bounding-box
-/// `resize`, which can undershoot on adversarial ratios).
+/// A 2000×1200 JPEG through the conversion path produces the base webp AND
+/// every ladder rung, each with EXACTLY the rung width (`resize_exact`, never
+/// bounding-box `resize`, which can undershoot on adversarial ratios).
 #[test]
 fn rung_encode_produces_exact_width_ladder_files() {
     let h = harness();
@@ -509,6 +508,11 @@ fn rung_encode_produces_exact_width_ladder_files() {
         "w800 rung must decode at EXACTLY 800px wide"
     );
     assert_eq!(
+        staged_webp_dims(&h.staging.join("photo.w1200.webp")),
+        (1200, 720),
+        "w1200 rung must decode at EXACTLY 1200px wide"
+    );
+    assert_eq!(
         staged_webp_dims(&h.staging.join("photo.w1600.webp")),
         (1600, 960),
         "w1600 rung must decode at EXACTLY 1600px wide"
@@ -519,11 +523,12 @@ fn rung_encode_produces_exact_width_ladder_files() {
     // re-encoding.
     let record = h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).unwrap();
     assert!(record.transforms.contains_key("image/webp-w800"));
+    assert!(record.transforms.contains_key("image/webp-w1200"));
     assert!(record.transforms.contains_key("image/webp-w1600"));
 
     // The outcome carries per-rung results for the dispatch layer
     // (set_ready / manifest registration per rung).
-    assert_eq!(outcome.rungs.len(), 2);
+    assert_eq!(outcome.rungs.len(), 3);
     assert!(
         outcome
             .rungs
@@ -629,10 +634,10 @@ fn rung_encode_portrait_ladder_follows_deployed_width() {
     assert_eq!(outcome.rungs.len(), 1);
 }
 
-/// Phase B (Task 12): a WEBP SOURCE is a ladder source too. A 2000×1200
+/// A WEBP SOURCE is a ladder source too. A 2000×1200
 /// webp re-encodes its base webp→webp at the SAME relative name
-/// (`to_webp("photo.webp") == "photo.webp"`) and produces both ladder
-/// rungs from the decoded original — the EXACT rung width set (`[800,
+/// (`to_webp("photo.webp") == "photo.webp"`) and produces every ladder
+/// rung from the decoded original — the EXACT rung width set (`[800, 1200,
 /// 1600]` = `ladder_rungs(2000, 1200, false)`) that emission promises on
 /// `<img srcset>` and registration promises in the AssetRegistry. This is
 /// the encode leg of the emission↔registration↔encode agreement.
@@ -648,7 +653,7 @@ fn rung_encode_produces_ladder_for_webp_source() {
     assert!(moss_core::asset_paths::is_ladder_source_ext("webp"));
     assert_eq!(
         moss_core::asset_paths::ladder_rungs(2000, 1200, false),
-        &[800, 1600][..],
+        &[800, 1200, 1600][..],
         "the width set encode/emission/registration all derive"
     );
 
@@ -682,10 +687,14 @@ fn rung_encode_produces_ladder_for_webp_source() {
         (800, 480)
     );
     assert_eq!(
+        staged_webp_dims(&h.staging.join("photo.w1200.webp")),
+        (1200, 720)
+    );
+    assert_eq!(
         staged_webp_dims(&h.staging.join("photo.w1600.webp")),
         (1600, 960)
     );
-    assert_eq!(outcome.rungs.len(), 2);
+    assert_eq!(outcome.rungs.len(), 3);
     assert!(
         outcome
             .rungs
@@ -2708,8 +2717,12 @@ fn test_dispatch_image_conversions_with_items_produces_webp_headless() {
 /// file. `scan_dimensions` is what the scan reported for it, which decides
 /// which rungs the encoder promises. Returns the context and the staging dir.
 fn unchanged_image_with_cached_base(root: &Path, scan_dimensions: (u32, u32)) -> (BackgroundContext, PathBuf) {
+    cached_base_of_size(root, (1000, 600), scan_dimensions)
+}
+
+fn cached_base_of_size(root: &Path, file_dimensions: (u32, u32), scan_dimensions: (u32, u32)) -> (BackgroundContext, PathBuf) {
     let rel = "photo.jpg";
-    make_big_jpeg(&root.join(rel), 1000, 600);
+    make_big_jpeg(&root.join(rel), file_dimensions.0, file_dimensions.1);
     let moss_dir = root.join(".moss");
     let staging = moss_dir.join("build.nosync").join("staging");
     fs::create_dir_all(&staging).unwrap();
@@ -2766,6 +2779,33 @@ fn an_unchanged_image_missing_a_promised_rung_is_dispatched_to_produce_it() {
 
     assert!(staging.join("photo.w800.webp").exists(), "the missing rung is produced");
     assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused, not re-encoded");
+}
+
+/// A site built before the ladder gained its 1200 rung: base and 800 cached, no
+/// 1200 record. The first warm build after the upgrade must write the 1200 rung
+/// its srcset now names (a `<source>` candidate that 404s has no fallback), and
+/// must not re-encode what it already has.
+#[test]
+fn a_rung_the_ladder_gained_is_written_on_the_first_warm_build() {
+    let _guard = image_fingerprint_test_lock().lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, staging) = cached_base_of_size(tmp.path(), (1400, 840), (1400, 840));
+    assert_eq!(moss_core::asset_paths::ladder_rungs(1400, 840, false), &[800, 1200][..], "premise");
+    let paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    prime_cached_transform(
+        &crate::build::cache::ObjectStore::for_site(&paths),
+        &crate::build::cache::TransformCache::for_site(&paths),
+        &ctx.image_items[0].source_oid,
+        "image/webp-w800",
+        &ImageCompressionConfig::default().to_params(),
+        b"CACHED W800",
+    );
+
+    dispatch_image_conversions(Some(&BuildServices::headless()), &ctx, None);
+
+    assert!(staging.join("photo.w1200.webp").is_file(), "the new rung is written");
+    assert_eq!(fs::read(staging.join("photo.w800.webp")).unwrap(), b"CACHED W800", "the cached rung is reused");
+    assert_eq!(fs::read(staging.join("photo.webp")).unwrap(), b"CACHED BASE", "the cached base is reused");
 }
 
 /// No rung is promised for an image the scan found no wider than the first rung,

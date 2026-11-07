@@ -1960,12 +1960,11 @@ mod tests {
             "expected hero section wrap, got: {out}",
         );
         assert!(out.contains("<picture"), "expected <picture> wrap, got: {out}");
-        // 1920px-wide fixture → srcset ladder (Task 3, responsive-image-
-        // variants): rungs below the deployed base + the base descriptor,
-        // with the hero's full-bleed sizes.
+        // 1920px-wide fixture → srcset ladder: rungs below the deployed
+        // base + the base descriptor, with the hero's full-bleed sizes.
         assert!(
             out.contains(
-                r#"srcset="hero.w800.webp 800w, hero.w1600.webp 1600w, hero.webp 1920w" type="image/webp" sizes="100vw""#
+                r#"srcset="hero.w800.webp 800w, hero.w1200.webp 1200w, hero.w1600.webp 1600w, hero.webp 1920w" type="image/webp" sizes="100vw""#
             ),
             "expected webp srcset ladder, got: {out}",
         );

@@ -277,7 +277,10 @@ pub fn deployed_long_edge(natural_w: u32, natural_h: u32, max_edge: u32) -> u32 
 /// vocabulary (named in the moss-core CHANGELOG); consumers should prefer
 /// [`ladder_rungs`] / [`deployed_width`] over indexing `LADDER` directly, so
 /// ladder policy stays in one place.
-pub const LADDER: [u32; 2] = [800, 1600];
+/// The 1200 rung is the phone's: a full-width image on a 390-430px screen at
+/// DPR 2.6-3 needs 1026-1290px, which 800 understates and 1600 overshoots by
+/// about 1.9x the pixels.
+pub const LADDER: [u32; 3] = [800, 1200, 1600];
 
 /// The most elongated (long edge ÷ short edge) a deployed base may be
 /// before [`ladder_rungs`] gives up on offering any rung at all. A rung is
@@ -1706,10 +1709,12 @@ mod tests {
 
     #[test]
     fn ladder_rungs_below_deployed_base_only() {
-        assert_eq!(ladder_rungs(2000, 1200, false), &[800, 1600][..]);
-        assert_eq!(ladder_rungs(1601, 900, false), &[800, 1600][..]);
+        assert_eq!(ladder_rungs(2000, 1200, false), &[800, 1200, 1600][..]);
+        assert_eq!(ladder_rungs(1601, 900, false), &[800, 1200, 1600][..]);
         // strict: no upscale, no dup of base
-        assert_eq!(ladder_rungs(1600, 900, false), &[800][..]);
+        assert_eq!(ladder_rungs(1600, 900, false), &[800, 1200][..]);
+        assert_eq!(ladder_rungs(1201, 900, false), &[800, 1200][..]);
+        assert_eq!(ladder_rungs(1200, 900, false), &[800][..]);
         assert_eq!(ladder_rungs(801, 600, false), &[800][..]);
         assert_eq!(ladder_rungs(800, 600, false), &[] as &[u32]);
         assert_eq!(ladder_rungs(0, 0, false), &[] as &[u32]);
@@ -1719,10 +1724,10 @@ mod tests {
     fn ladder_rungs_capped_width_never_duplicates_base() {
         // 4000px-wide landscape deploys at DEPLOY_MAX_EDGE (2400) wide;
         // rungs must stay below the cap.
-        assert_eq!(ladder_rungs(4000, 3000, false), &[800, 1600][..]);
-        assert_eq!(ladder_rungs(2400, 1600, false), &[800, 1600][..]);
-        // Square at exactly the cap: base 2400, both rungs below it.
-        assert_eq!(ladder_rungs(2400, 2400, false), &[800, 1600][..]);
+        assert_eq!(ladder_rungs(4000, 3000, false), &[800, 1200, 1600][..]);
+        assert_eq!(ladder_rungs(2400, 1600, false), &[800, 1200, 1600][..]);
+        // Square at exactly the cap: base 2400, every rung below it.
+        assert_eq!(ladder_rungs(2400, 2400, false), &[800, 1200, 1600][..]);
     }
 
     #[test]
@@ -1748,8 +1753,8 @@ mod tests {
         // Far past 2:1 is still "ordinary" under MAX_LADDER_ASPECT: 2400×316
         // (7.6:1) and 6000×1500 (4:1, this crate's own hero and
         // vertical-sizes render-gate fixtures) both keep their full ladder.
-        assert_eq!(ladder_rungs(2400, 316, false), &[800, 1600][..]);
-        assert_eq!(ladder_rungs(6000, 1500, false), &[800, 1600][..]);
+        assert_eq!(ladder_rungs(2400, 316, false), &[800, 1200, 1600][..]);
+        assert_eq!(ladder_rungs(6000, 1500, false), &[800, 1200, 1600][..]);
         // And an ordinary portrait, however far from square, is unaffected
         // the same way — 1500×3000 (2:1) keeps deriving its ladder from
         // deployed_width alone, same as any other source.
@@ -1764,7 +1769,7 @@ mod tests {
         // is the natural one, and the check is exactly `ratio > 10`.
         // Exactly 10:1 (2400×240) is still "ordinary" — the boundary is
         // inclusive on the kept side.
-        assert_eq!(ladder_rungs(2400, 240, false), &[800, 1600][..]);
+        assert_eq!(ladder_rungs(2400, 240, false), &[800, 1200, 1600][..]);
         // One px thinner tips the ratio to ~10.04:1 and empties the ladder.
         assert_eq!(ladder_rungs(2400, 239, false), &[] as &[u32]);
     }
@@ -1799,8 +1804,8 @@ mod tests {
     #[test]
     fn ladder_rungs_portrait_uses_post_resize_width() {
         // 3024×4032 portrait: the encoder shrinks the longest EDGE to 2400,
-        // so the deployed base is 1800 wide — both rungs still below it.
-        assert_eq!(ladder_rungs(3024, 4032, false), &[800, 1600][..]);
+        // so the deployed base is 1800 wide — every rung still below it.
+        assert_eq!(ladder_rungs(3024, 4032, false), &[800, 1200, 1600][..]);
         // Extreme portrait 500×20000: the WebP limit binds (16383 tall), base
         // width 409 — NO rung is below it, so the ladder must be empty (a
         // w800 rung would be WIDER than the base: ladder inversion).
