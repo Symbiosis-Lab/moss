@@ -1153,7 +1153,7 @@ impl HashIndex {
 
     /// What a miss comes to: no read of a file in the cloud, else its hash, recorded at
     /// the stat taken before the read.
-    fn hash_and_record(
+    pub(crate) fn hash_and_record(
         &mut self,
         stat: &FileStat,
         file: &Path,

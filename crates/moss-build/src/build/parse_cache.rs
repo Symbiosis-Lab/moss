@@ -304,14 +304,21 @@ impl FileHasher {
     /// [`compute`](Self::compute) with the read passed in, so a test can change the
     /// file between the read and the record. The index does the rest — stat before the
     /// read, no read of a page still in the cloud, the record — as it does for every
-    /// other reader of it. Rayon's Loop A calls this from many threads, and the index
-    /// lock is held across the read; a page is small and a hit (the usual answer)
-    /// costs a stat.
+    /// other reader of it. Rayon's Loop A calls this from many threads; the index
+    /// lock is held across a miss's read (a page is small), and a hit, the usual
+    /// answer, holds it only for the lookup.
     fn compute_with(&self, relative_path: &str, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<String> {
         let abs = self.root.join(relative_path);
+        // A hit is a stat and a lookup: stat outside the lock, so the threads
+        // asking about different pages do not queue behind each other's stat.
+        let stat = FileStat::of(&std::fs::metadata(&abs).ok()?);
         let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hash) = index.lookup(relative_path, &stat) {
+            return Some(hash.to_owned());
+        }
         index
-            .resolve_with(
+            .hash_and_record(
+                &stat,
                 &abs,
                 relative_path,
                 |path| read(path).map(|bytes| format!("{:x}", Sha256::digest(&bytes))).ok_or_else(|| "unreadable".to_string()),
