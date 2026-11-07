@@ -109,6 +109,7 @@ pub mod embed_handlers;
 pub mod emit;
 pub mod facade;
 pub mod incremental_gates;
+pub(crate) mod inputs;
 pub mod folder_embed;
 pub mod folder_index;
 pub mod feeds;

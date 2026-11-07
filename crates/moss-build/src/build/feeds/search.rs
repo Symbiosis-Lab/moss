@@ -129,17 +129,16 @@ fn canonical_entry(bytes: &[u8]) -> serde_json::Result<Vec<u8>> {
 }
 
 /// One file of Pagefind's output as moss ships it: its path with `/`
-/// separators, and the entry file in canonical order (see [`EntryMeta`]).
-fn bundle_file(file: pagefind::api::SyntheticFile) -> SearchIndexFile {
+/// separators, and the entry file in canonical order (see [`EntryMeta`]). An
+/// entry file moss cannot put in that order fails the index: shipped in
+/// Pagefind's order it would differ from run to run and machine to machine.
+fn bundle_file(file: pagefind::api::SyntheticFile) -> Result<SearchIndexFile, String> {
     let rel_path = file.filename.to_string_lossy().replace('\\', "/");
     let mut bytes = file.contents;
     if rel_path == ENTRY_FILE {
-        match canonical_entry(&bytes) {
-            Ok(canonical) => bytes = canonical,
-            Err(e) => log::info!(target: "search", "{ENTRY_FILE} kept in Pagefind's order: {e}"),
-        }
+        bytes = canonical_entry(&bytes).map_err(|e| format!("search index entry file has an unknown shape: {e}"))?;
     }
-    SearchIndexFile { rel_path, bytes }
+    Ok(SearchIndexFile { rel_path, bytes })
 }
 
 /// One built bundle, together with **how much of the corpus it actually
@@ -682,7 +681,7 @@ pub(crate) fn index_pages(
                 }
 
                 Ok(Some(SearchIndex {
-                    files: files.into_iter().map(bundle_file).collect(),
+                    files: files.into_iter().map(bundle_file).collect::<Result<_, _>>()?,
                     pages: readable,
                     skipped,
                 }))

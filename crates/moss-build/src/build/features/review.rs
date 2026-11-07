@@ -4,7 +4,8 @@
 //! 1. **Process** (`process_reviews`): Scans articles for `review_of` URLs,
 //!    detects the source (NeoDB, Douban, Goodreads, TMDB), fetches metadata
 //!    via NeoDB API (direct or catalog search), and writes
-//!    `.moss/data/social/review.json`. Respects a 24-hour cache TTL.
+//!    `.moss/data/social/review.json`. An item is fetched once per `review_of`
+//!    URL and kept until the URL changes.
 //! 2. **Enhance** (via `render_colophon`): Reads the social data and generates
 //!    HTML colophon footers for each review article.
 
@@ -13,9 +14,6 @@ use crate::moss_paths::MossPaths;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
-
-/// 24-hour cache TTL in seconds.
-const CACHE_TTL_SECS: i64 = 24 * 60 * 60;
 
 // ============================================================================
 // Data types
@@ -282,25 +280,13 @@ pub fn fetch_review_item(url: &str) -> Option<ReviewItem> {
     }
 }
 
-// ============================================================================
-// Cache TTL
-// ============================================================================
-
-/// Check if a cached entry is still fresh (within 24-hour TTL).
-/// Returns `true` if the entry should be used from cache (still fresh).
-pub fn is_cache_fresh(fetched_at: Option<&str>) -> bool {
-    let fetched_at = match fetched_at {
-        Some(s) => s,
-        None => return false,
-    };
-
-    // Parse ISO 8601 timestamp
-    if let Ok(fetched) = chrono::DateTime::parse_from_rfc3339(fetched_at) {
-        let age = chrono::Utc::now().signed_duration_since(fetched);
-        age.num_seconds() < CACHE_TTL_SECS
-    } else {
-        false
-    }
+/// Whether an article's item must be fetched: none is stored, or it was
+/// fetched for another URL. Never its age: `review.json` is part of the source
+/// every build reads, so an item that refreshed itself on a timer would differ
+/// between machines that synced the folder at different times. Changing the
+/// URL, or deleting the item, refreshes it.
+fn needs_fetch(stored: Option<&ReviewItem>, review_of: &str) -> bool {
+    stored.is_none_or(|item| item.source_url != review_of)
 }
 
 // ============================================================================
@@ -319,7 +305,7 @@ pub struct ReviewArticleInput {
 ///
 /// This is the native Rust equivalent of the JS review plugin's `process` hook.
 /// It reads the existing `.moss/data/social/review.json`, checks each article's
-/// `review_of` URL, fetches metadata if the cache is stale or missing, and
+/// `review_of` URL, fetches metadata if none is stored for that URL, and
 /// writes the updated data back.
 ///
 /// Returns the number of items fetched (0 if all were cached).
@@ -348,20 +334,12 @@ pub(in crate::build::features) fn process_reviews(
     let mut fetch_count = 0;
 
     for article in articles {
-        let existing = data.articles.get(&article.uid);
-
-        // Check cache: skip if URL unchanged and fetched within TTL
-        if let Some(existing_item) = existing {
-            if existing_item.source_url == article.review_of
-                && is_cache_fresh(existing_item.fetched_at.as_deref())
-            {
-                // Still update writer_rating if changed
-                if let Some(rating) = article.rating {
-                    let item = data.articles.get_mut(&article.uid).unwrap();
-                    item.writer_rating = Some(rating as i32);
-                }
-                continue;
+        if !needs_fetch(data.articles.get(&article.uid), &article.review_of) {
+            if let Some(rating) = article.rating {
+                let item = data.articles.get_mut(&article.uid).unwrap();
+                item.writer_rating = Some(rating as i32);
             }
+            continue;
         }
 
         // Fetch from detected source
@@ -865,36 +843,13 @@ mod tests {
         assert_eq!(item.title, "Test");
     }
 
-    // =====================================================================
-    // Cache TTL tests
-    // =====================================================================
-
     #[test]
-    fn test_cache_fresh_recent() {
-        let now = chrono::Utc::now().to_rfc3339();
-        assert!(is_cache_fresh(Some(&now)));
-    }
-
-    #[test]
-    fn test_cache_stale_old() {
-        let old = (chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339();
-        assert!(!is_cache_fresh(Some(&old)));
-    }
-
-    #[test]
-    fn test_cache_fresh_23h() {
-        let recent = (chrono::Utc::now() - chrono::Duration::hours(23)).to_rfc3339();
-        assert!(is_cache_fresh(Some(&recent)));
-    }
-
-    #[test]
-    fn test_cache_none() {
-        assert!(!is_cache_fresh(None));
-    }
-
-    #[test]
-    fn test_cache_invalid_timestamp() {
-        assert!(!is_cache_fresh(Some("not-a-timestamp")));
+    fn a_stored_item_is_kept_however_old_until_its_url_changes() {
+        let mut item = sample_review();
+        item.fetched_at = Some("2001-01-01T00:00:00Z".into());
+        assert!(!needs_fetch(Some(&item), &item.source_url));
+        assert!(needs_fetch(Some(&item), "https://neodb.social/movie/other"));
+        assert!(needs_fetch(None, &item.source_url));
     }
 
     // =====================================================================

@@ -16,14 +16,14 @@ fn render_for_build(
     site_config: crate::build::render::blocking::SiteConfig,
     exits_after_build: bool,
 ) -> std::path::PathBuf {
-    render_for_build_at(test_dir, site_config, exits_after_build, crate::build::folder_embed::upcoming::now())
+    render_for_build_at(test_dir, site_config, exits_after_build, crate::build::inputs::build_instant())
 }
 
 fn render_for_build_at(
     test_dir: &std::path::Path,
     site_config: crate::build::render::blocking::SiteConfig,
     exits_after_build: bool,
-    now: chrono::NaiveDateTime,
+    instant: jiff::Timestamp,
 ) -> std::path::PathBuf {
     let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
     std::fs::create_dir_all(&output_dir).unwrap();
@@ -41,7 +41,7 @@ fn render_for_build_at(
         &mut pending,
         exits_after_build,
         false,
-        now,
+        instant,
     )
     .expect("generate_blocking_content_for_build should succeed");
     crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
@@ -7108,7 +7108,7 @@ mod og_url_tests {
                 &SiteUrl::parse("https://example.com").unwrap(),
                 true, false, "favicon.svg", false, Some(dir.path()), &mut og_outputs,
                 source_root,
-                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
             )
             .expect("generate_html_collect_og should succeed")
         }
@@ -7170,7 +7170,7 @@ mod og_url_tests {
                 &SiteUrl::parse("https://example.com").unwrap(),
                 true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
                 vault.path(),
-                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new()),
+                &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new(), crate::build::inputs::now()),
             )
             .expect("render");
             assert!(
@@ -7207,7 +7207,7 @@ mod og_url_tests {
         let shared = crate::build::render::build_shared::BuildShared::new(
             crate::build::emit::scripts::ScriptAssets::resolve(),
             &project,
-            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(), crate::build::inputs::now(),
         );
         let before = BUILT_ON_THIS_THREAD.with(|n| n.get());
         // The homepage and a regular page take different branches, and each
@@ -7261,7 +7261,7 @@ mod og_url_tests {
         let shared = crate::build::render::build_shared::BuildShared::new(
             crate::build::emit::scripts::ScriptAssets::resolve(),
             &project,
-            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(), crate::build::inputs::now(),
         );
 
         let before = SEQUENCES_ORDERED.with(|n| n.get());
@@ -7318,7 +7318,7 @@ mod og_url_tests {
             &SiteUrl::parse("https://example.com").unwrap(),
             true, false, "favicon.png", false, Some(dir.path()), &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new()),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &make_project(), &std::collections::HashMap::new(), crate::build::inputs::now()),
         )
         .expect("render");
 
@@ -7370,7 +7370,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7450,7 +7450,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7516,7 +7516,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7576,7 +7576,7 @@ mod og_url_tests {
                 false,
                 Some(dir.path()),
                 &mut og_outputs,
-                std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+                std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
             )
             .expect("generate_html_collect_og should succeed");
             html.lines()
@@ -7636,7 +7636,7 @@ mod og_url_tests {
             false,
             Some(output_root),
             &mut og_outputs,
-            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+            std::path::Path::new(""), &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7709,7 +7709,7 @@ mod og_url_tests {
             Some(tmp.path()),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed");
 
@@ -7870,7 +7870,7 @@ mod listable_page_card_tests {
             Some(output_root),
             &mut og_outputs,
             std::path::Path::new(""),
-            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new()),
+            &crate::build::render::build_shared::BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), &project, &std::collections::HashMap::new(), crate::build::inputs::now()),
         )
         .expect("generate_html_collect_og should succeed")
     }
@@ -10227,12 +10227,29 @@ mod remote_cover_end_to_end_tests {
     }
 }
 
+/// The build decides past or upcoming as of its day in the site's zone (the
+/// home page's cascaded `timezone:`), never the build machine's: at 02:00 UTC
+/// it is still the evening before in New York, so an event that evening is
+/// upcoming there and past in a site that names no zone.
+#[test]
+fn the_sites_zone_decides_which_day_the_build_is_as_of() {
+    let instant = jiff::Timestamp::from_second(1_773_453_600).unwrap(); // 2026-03-14 02:00 UTC
+    for (home_cascade, want) in [("cascade:\n  timezone: America/New_York\n", "upcoming"), ("", "past")] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("index.md"), format!("---\ntitle: Home\n{home_cascade}---\n\nWelcome.\n")).unwrap();
+        std::fs::write(root.join("talk.md"), "---\ntitle: Talk\nuid: talk0001\nstart: 2026-03-13 18:00\n---\n\nBody.\n").unwrap();
+        let out = render_for_build_at(root, crate::build::render::blocking::SiteConfig::default(), true, instant);
+        let html = std::fs::read_to_string(out.join("talk/index.html")).unwrap();
+        assert!(html.contains(&format!(r#"data-when="{want}""#)), "cascade {home_cascade:?}: {html}");
+    }
+}
+
 /// An event's own page, its card in the folder listing and the card on a page
 /// that links it all take the build's clock, never a clock of their own.
 #[test]
 fn one_build_clock_decides_upcoming_for_the_page_and_every_card() {
-    use chrono::NaiveDate;
-    let at = |y| NaiveDate::from_ymd_opt(y, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    let at = |y: i16| jiff::civil::date(y, 1, 1).to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp();
     for (year, want, other) in [(2019, "upcoming", "past"), (2021, "past", "upcoming")] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

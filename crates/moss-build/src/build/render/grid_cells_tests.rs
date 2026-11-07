@@ -102,7 +102,7 @@ impl<'a> Page<'a> {
             lang: self.lang,
             page_url_path: self.url_path,
             typesetting: self.typesetting,
-            now: crate::build::folder_embed::upcoming::now(),
+            now: crate::build::inputs::now(),
         }
     }
 
@@ -394,7 +394,7 @@ fn a_hero_keeps_the_pages_one_eager_image_from_its_grid_cards() {
         let docs = vec![home.clone(), card.clone()];
         let overrides = HashMap::new();
         let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &overrides, None);
-        resolve_page_body(&home, &docs, None, &overrides, "", &lookup, None, crate::build::folder_embed::upcoming::now()).to_html()
+        resolve_page_body(&home, &docs, None, &overrides, "", &lookup, None, crate::build::inputs::now()).to_html()
     };
     let without_hero = render(false);
     assert!(without_hero.contains(r#"loading="eager""#), "{without_hero}");

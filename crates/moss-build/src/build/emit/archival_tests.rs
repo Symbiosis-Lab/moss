@@ -18,14 +18,6 @@ fn edition(site_url: Option<&str>, author: Option<&str>) -> Edition {
 const PAGE: &str = "<!DOCTYPE html>\n<html lang=\"en\"><head></head><body><!-- moss:footer --><footer class=\"container\">Links</footer><!-- /moss:footer --></body></html>";
 
 #[test]
-fn the_date_is_the_epoch_when_one_is_given_and_the_build_day_otherwise() {
-    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 21).unwrap().and_hms_opt(23, 30, 0).unwrap();
-    assert_eq!(build_date(None, now), "2026-10-21");
-    assert_eq!(build_date(Some("1700000000"), now), "2023-11-14");
-    assert_eq!(build_date(Some("not a number"), now), "2026-10-21");
-}
-
-#[test]
 fn the_citation_names_author_page_site_edition_and_absolute_address() {
     let rendered = edition(Some("https://garden.example"), Some("Ada Example")).render(PAGE, "essays/tea/index.html").unwrap();
     assert!(

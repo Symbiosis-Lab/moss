@@ -1542,11 +1542,12 @@ fn build_inner(
     // `build.rs` so native slot generation can read typed feature flags and
     // slot-only files without rescanning the filesystem.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
-    let build_now = crate::build::folder_embed::upcoming::now();
+    let build_instant = crate::build::inputs::build_instant();
     // Read again by the notebook viewers, after `site_config` is consumed.
     let site_ai = site_config.ai;
     let color_scheme = site_config.color_scheme;
-    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_now)?;
+    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_instant)?;
+    let build_now = site_result.now;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`), gated on the

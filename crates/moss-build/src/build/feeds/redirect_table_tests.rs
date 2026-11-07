@@ -64,7 +64,7 @@ fn build(files: &[(&str, &str)]) -> Built {
         &mut pending,
         true,
         false,
-        crate::build::folder_embed::upcoming::now(),
+        crate::build::inputs::build_instant(),
     )
     .unwrap();
     crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();

@@ -134,7 +134,7 @@ pub fn generate_html(
         emit_source_lines, favicon_filename, false, output_dir,
         None,
         source_root,
-        &BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), project, dir_overrides),
+        &BuildShared::new(crate::build::emit::scripts::ScriptAssets::resolve(), project, dir_overrides, crate::build::inputs::now()),
     )
 }
 

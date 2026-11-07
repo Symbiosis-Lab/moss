@@ -47,6 +47,7 @@ impl BuildShared<'_> {
         scripts: ScriptAssets,
         project: &ProjectStructure,
         dir_overrides: &HashMap<String, String>,
+        now: chrono::NaiveDateTime,
     ) -> Self {
         Self {
             scripts,
@@ -59,7 +60,7 @@ impl BuildShared<'_> {
             sequences: SequenceChains::default(),
             calendar: Default::default(),
             theme_modules: ThemeModules::default(),
-            now: crate::build::folder_embed::upcoming::now(),
+            now,
         }
     }
 }

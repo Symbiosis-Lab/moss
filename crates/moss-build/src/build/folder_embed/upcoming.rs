@@ -1,17 +1,14 @@
 //! `children_group: upcoming`: events that have not ended first, soonest
 //! first; everything else (past events, ordinary articles) after, newest
-//! first. Decided when the site is built.
+//! first. Decided when the site is built, as of the build's day.
 
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::types::ParsedDocument;
-use chrono::Local;
 use moss_core::event::EventTime;
 use std::collections::HashSet;
 
-/// True for an event that has not ended at `now`: see [`ends_at`]. Wall-clock
-/// times are compared with the build machine's clock, since the build carries
-/// no time-zone database. Ordinary articles are never upcoming, whatever
-/// their `date`.
+/// True for an event that has not ended at `now`: see [`ends_at`]. Ordinary
+/// articles are never upcoming, whatever their `date`.
 pub(crate) fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     let Some(ev) = &doc.event else { return false };
     span_is_upcoming(ev.start, ev.end, now)
@@ -59,11 +56,6 @@ pub(super) fn keeps(when: Option<&str>, doc: &ParsedDocument, now: chrono::Naive
         Some("past") => !is_upcoming(doc, now),
         _ => true,
     }
-}
-
-/// The build's "now" for every past/upcoming decision.
-pub(crate) fn now() -> chrono::NaiveDateTime {
-    Local::now().naive_local()
 }
 
 /// The `url_path`s of the upcoming events among `docs`; empty unless `group`

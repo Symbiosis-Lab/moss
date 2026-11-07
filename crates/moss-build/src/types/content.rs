@@ -384,6 +384,11 @@ pub struct SiteResult {
     #[serde(skip)]
     #[specta(skip)]
     pub term_index: crate::build::terms::TermIndex,
+    /// The moment every past/upcoming decision in this build was made as of
+    /// (`inputs::effective_now`), for passes that run after render.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub now: chrono::NaiveDateTime,
 }
 
 /// Hash map of generated site files for change detection.

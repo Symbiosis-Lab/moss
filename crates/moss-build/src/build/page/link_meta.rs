@@ -298,51 +298,14 @@ fn cache_path(moss_dir: &Path, url: &str) -> std::path::PathBuf {
     cache_dir(moss_dir).join(format!("{hex}.json"))
 }
 
-/// Maximum age (in days) for a cached entry to be considered fresh.
-const CACHE_FRESHNESS_DAYS: i64 = 7;
-
-/// Check if a cached entry is still fresh (< CACHE_FRESHNESS_DAYS old).
-fn is_fresh(fetched_at: &str) -> bool {
-    match parse_iso8601_to_days(fetched_at) {
-        Some(cached) => epoch_days_now() - cached < CACHE_FRESHNESS_DAYS,
-        None => false, // unparseable → treat as stale
-    }
-}
-
-/// Days since 1970-01-01 for the current system time.
-fn epoch_days_now() -> i64 {
-    days_since_epoch(chrono::Utc::now().date_naive())
-}
-
-fn days_since_epoch(date: chrono::NaiveDate) -> i64 {
-    use chrono::Datelike;
-    const DAYS_CE_TO_UNIX_EPOCH: i64 = 719_163;
-    i64::from(date.num_days_from_ce()) - DAYS_CE_TO_UNIX_EPOCH
-}
-
-/// Parse the date part of "YYYY-MM-DDTHH:MM:SSZ" → days since 1970-01-01.
-/// Returns `None` on any parse error.
-fn parse_iso8601_to_days(s: &str) -> Option<i64> {
-    let date = chrono::NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok()?;
-    Some(days_since_epoch(date))
-}
-
-/// Read cached metadata, returning it if fresh.
+/// Read cached metadata. An entry is kept until it is deleted, never aged
+/// out: a card that refreshed itself on a timer would change between two builds
+/// of the same source.
 fn read_cache(moss_dir: &Path, url: &str) -> Option<LinkMeta> {
     let path = cache_path(moss_dir, url);
     let data = std::fs::read_to_string(&path).ok()?;
     let meta: LinkMeta = serde_json::from_str(&data).ok()?;
     Some(meta)
-}
-
-/// Read cached metadata only if it's fresh (< 7 days).
-fn read_fresh_cache(moss_dir: &Path, url: &str) -> Option<LinkMeta> {
-    let meta = read_cache(moss_dir, url)?;
-    if is_fresh(&meta.fetched_at) {
-        Some(meta)
-    } else {
-        None
-    }
 }
 
 /// Write metadata to cache, atomically. Uses tempfile + rename so a reader
@@ -372,9 +335,6 @@ pub(crate) fn write_cache(moss_dir: &Path, meta: &LinkMeta) {
     }
 }
 
-/// Fetch metadata for a URL, using cache if available and fresh.
-///
-/// Cache location: `{moss_dir}/build/cache/link-meta/{sha256-of-url}.json`
 /// Response body size cap for a link-metadata fetch. Title and favicon
 /// live in `<head>`, so nothing legitimate needs more; a page that never
 /// closes its head or a misconfigured server pointed at a large binary
@@ -493,8 +453,7 @@ fn is_unsafe_fetch_target(url: &str) -> bool {
     }
 }
 
-/// Fetch (or serve from a fresh cache) one URL's link metadata. Cache TTL:
-/// 7 days.
+/// Fetch (or serve from the cache, however old) one URL's link metadata.
 ///
 /// Its caller is [`fetch_all_link_meta_parallel_bounded`]'s worker pool,
 /// which hands it the per-request timeout rather than this function
@@ -507,14 +466,14 @@ fn is_unsafe_fetch_target(url: &str) -> bool {
 /// timeout given). Calling it from the build's render path freezes the
 /// pipeline; it runs only on the worker pool below.
 fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::Duration) -> LinkMeta {
-    // 1. Check fresh cache
-    if let Some(cached) = read_fresh_cache(moss_dir, url) {
+    // 1. Check cache
+    if let Some(cached) = read_cache(moss_dir, url) {
         return cached;
     }
 
     // 2. Refuse an unsafe target rather than fetch it — see `is_unsafe_fetch_target`.
     if is_unsafe_fetch_target(url) {
-        return stale_or_empty(moss_dir, url);
+        return empty(url);
     }
 
     // 3. Try HTTP fetch
@@ -525,40 +484,20 @@ fn fetch_link_meta_with_timeout(url: &str, moss_dir: &Path, timeout: std::time::
             let (html, read_ok) = read_capped_body(resp.into_reader());
             if read_ok {
                 let mut meta = parse_link_meta(url, &html);
-                // Author content always wins over anything fetched — but
-                // there's no author content to compare against here, only
-                // the fetch itself. "Keep the last successful copy until a
-                // refresh succeeds": carry the PREVIOUS entry's cover
-                // forward whenever this fetch doesn't produce a new one
-                // (no og:image this time, or the download/decode failed),
-                // so a transient failure or a page that dropped its
-                // og:image doesn't blank out a cover that was working.
-                let previous = read_cache(moss_dir, url);
-                match meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout)) {
-                    Some((oid, ext)) => {
-                        meta.cover_oid = Some(oid);
-                        meta.cover_ext = Some(ext);
-                    }
-                    None => {
-                        if let Some(prev) = previous {
-                            meta.cover_oid = prev.cover_oid;
-                            meta.cover_ext = prev.cover_ext;
-                            meta.cover_served_path = prev.cover_served_path;
-                            meta.cover_width = prev.cover_width;
-                            meta.cover_height = prev.cover_height;
-                            meta.cover_lqip = prev.cover_lqip;
-                            meta.cover_color = prev.cover_color;
-                        }
-                    }
+                // Kept with the page's entry either way, so a picture that
+                // failed to download is not tried again until the entry is
+                // deleted, like the title.
+                if let Some((oid, ext)) = meta.og_image.as_deref().and_then(|img| download_og_image(img, moss_dir, timeout)) {
+                    meta.cover_oid = Some(oid);
+                    meta.cover_ext = Some(ext);
                 }
                 write_cache(moss_dir, &meta);
                 meta
             } else {
-                // Return stale cache or empty
-                stale_or_empty(moss_dir, url)
+                empty(url)
             }
         }
-        Err(_) => stale_or_empty(moss_dir, url),
+        Err(_) => empty(url),
     }
 }
 
@@ -584,9 +523,8 @@ const MAX_OG_IMAGE_DIMENSION: u32 = 10_000;
 /// trusted from the URL or a `Content-Type` header alone, since both come
 /// from an untrusted server. `None` on any failure: non-image content
 /// type, oversized body, bytes that don't actually decode, or a target
-/// [`is_unsafe_fetch_target`] refuses — every case degrades to "no cover
-/// this build" (or the carried-forward previous cover), never a build
-/// failure.
+/// [`is_unsafe_fetch_target`] refuses — every case degrades to "no cover",
+/// never a build failure.
 fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Duration) -> Option<(String, String)> {
     if is_unsafe_fetch_target(image_url) {
         return None;
@@ -633,9 +571,9 @@ fn download_og_image(image_url: &str, moss_dir: &Path, timeout: std::time::Durat
     Some((oid, ext.to_string()))
 }
 
-/// Return stale cached data if available, otherwise empty LinkMeta.
-fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
-    read_cache(moss_dir, url).unwrap_or(LinkMeta {
+/// A `LinkMeta` with only its URL, for a URL that could not be fetched.
+fn empty(url: &str) -> LinkMeta {
+    LinkMeta {
         url: url.to_string(),
         title: None,
         description: None,
@@ -649,7 +587,7 @@ fn stale_or_empty(moss_dir: &Path, url: &str) -> LinkMeta {
         cover_lqip: None,
         cover_color: None,
         fetched_at: now_iso8601(),
-    })
+    }
 }
 
 /// Number of concurrent in-flight fetches in a parallel fetch.
@@ -670,9 +608,9 @@ const FETCH_CONCURRENCY: usize = 8;
 /// this value. URLs not fetched this build are picked up next build.
 const FETCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Fetch metadata for multiple URLs in parallel. Skips URLs whose cache is
-/// already fresh, so calling this repeatedly is cheap (no network). Returns
-/// the count of URLs that were actually fetched (i.e. cold or stale entries).
+/// Fetch metadata for multiple URLs in parallel. Skips URLs already in the
+/// cache, so calling this repeatedly is cheap (no network). Returns the count
+/// of URLs that were actually fetched.
 /// `on_cold` hears how many need the network, before any request, so a
 /// caller can say why it is waiting.
 ///
@@ -705,7 +643,7 @@ pub(crate) fn fetch_all_link_meta_parallel(urls: &[&str], moss_dir: &Path, on_co
 /// sees it. But `fetch_link_meta_with_timeout` writes the cache internally
 /// as its very last step before returning — a straggler that eventually
 /// finishes (while the process is still alive; a one-shot CLI build that
-/// exits right after this call kills it first) still leaves a fresh cache
+/// exits right after this call kills it first) still leaves a cache
 /// entry for whatever reads it next, exactly like a URL this budget never
 /// reached at all. Nothing needs to special-case that: it falls out of
 /// simply not cancelling the thread (ureq has no cancellation API, and Rust
@@ -720,10 +658,10 @@ fn fetch_all_link_meta_parallel_bounded(
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Instant;
 
-    // Filter out URLs that are already cached fresh — those need no fetch.
+    // Filter out URLs that are already cached — those need no fetch.
     let cold: Vec<String> = urls
         .iter()
-        .filter(|u| read_fresh_cache(moss_dir, u).is_none())
+        .filter(|u| read_cache(moss_dir, u).is_none())
         .map(|u| (*u).to_string())
         .collect();
 
@@ -797,7 +735,7 @@ fn fetch_all_link_meta_parallel_bounded(
 // ---------------------------------------------------------------------------
 // Render-side API: cache reads + per-build URL recording for prewarm bridge.
 //
-// Design (from a prior review's feedback):
+// Design:
 //
 // 1. Render is a pure cache reader — `read_link_meta_from_cache` has NO
 //    side effects, so two pages racing don't lose-update a shared file.
@@ -808,13 +746,11 @@ fn fetch_all_link_meta_parallel_bounded(
 //    This means the persisted list contains exactly THIS build's URLs, not
 //    a union with prior builds' (no unbounded growth, removed URLs vanish).
 //
-// 3. The bridge file lives in `.moss/cache/link-meta/.urls.json` next to
-//    the cache it indexes — clearing the cache (`rm -rf .moss/cache/`) also
-//    clears the bridge, so they can never disagree about "what's available".
+// 3. The bridge file lives in `.moss/build.nosync/cache/link-meta/.urls.json`
+//    next to the cache it indexes, so clearing that folder also clears the
+//    bridge and the two can never disagree about "what's available".
 //
-// 4. Render returns `read_cache` (allows stale entries) — first build with a
-//    new URL renders the cached title even if expired, while the next build's
-//    sync prewarm refreshes it. Better degraded UX than refusing to show.
+// 4. Render returns `read_cache`: an entry is served until it is deleted.
 // ---------------------------------------------------------------------------
 
 use std::sync::Mutex;
@@ -878,7 +814,7 @@ pub fn flush_build_session(moss_dir: &Path) -> usize {
 }
 
 /// Path to the persisted URL list (bridge between render-side recording and
-/// sync-side prewarming). Lives under `.moss/cache/link-meta/` (next to the
+/// sync-side prewarming). Lives under `.moss/build.nosync/cache/link-meta/` (next to the
 /// per-URL cache files), so wiping the cache clears the bridge too.
 ///
 /// The dot-prefix avoids any collision with the SHA256-hex-named cache files
@@ -927,11 +863,7 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
 /// For URLs not in the cache, returns an empty `LinkMeta` (URL only, no title)
 /// so render can still produce a card with the URL displayed; the next build's
 /// sync prewarm populates the cache so the build after that renders fully.
-///
-/// **Returns stale entries too** (no freshness gate). Rationale: a stale title
-/// is much better UX than "no title". The background prewarm refreshes stale
-/// entries on its next run, so staleness is bounded by sync cadence
-/// (currently every build cycle that triggers `start_background_sync`).
+/// An entry is served however old it is, until it is deleted.
 pub fn read_link_meta_from_cache(urls: &[&str], moss_dir: &Path) -> HashMap<String, LinkMeta> {
     let mut map = HashMap::new();
     let mut missing = 0usize;
@@ -1142,10 +1074,6 @@ mod tests {
         assert_eq!(read_back.title.as_deref(), Some("Test Title"));
         assert_eq!(read_back.description.as_deref(), Some("Test Desc"));
 
-        // Fresh cache should be returned
-        let fresh = read_fresh_cache(&tmp, "https://example.com");
-        assert!(fresh.is_some());
-
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1307,66 +1235,7 @@ mod tests {
         assert_eq!(ts.len(), 20, "{ts}");
         assert!(ts.ends_with('Z'), "{ts}");
         assert_eq!((b[4], b[7], b[10], b[13], b[16]), (b'-', b'-', b'T', b':', b':'), "{ts}");
-        assert_eq!(parse_iso8601_to_days(&ts), Some(epoch_days_now()));
-    }
-
-    #[test]
-    fn parse_iso8601_to_days_counts_from_unix_epoch() {
-        assert_eq!(parse_iso8601_to_days("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(parse_iso8601_to_days("1970-12-31T23:59:59Z"), Some(364));
-        assert_eq!(parse_iso8601_to_days("2000-02-29T00:00:00Z"), Some(11016));
-        assert_eq!(parse_iso8601_to_days("2026-04-26T00:00:00Z"), Some(20569));
-        assert_eq!(parse_iso8601_to_days("not a timestamp"), None);
-    }
-
-    #[test]
-    fn is_fresh_is_actually_seven_days() {
-        let to_iso = |days_ago: i64| -> String {
-            (chrono::Utc::now() - chrono::Duration::days(days_ago))
-                .format("%Y-%m-%dT00:00:00Z")
-                .to_string()
-        };
-
-        assert!(is_fresh(&to_iso(0)), "today is fresh");
-        assert!(is_fresh(&to_iso(6)), "6 days old is fresh");
-        assert!(!is_fresh(&to_iso(8)), "8 days old is stale");
-        assert!(!is_fresh(&to_iso(365)), "1 year old is stale");
-        assert!(!is_fresh("not a timestamp"), "garbage is stale");
-    }
-
-    #[test]
-    fn test_cache_staleness() {
-        let tmp = std::env::temp_dir().join("moss_link_meta_test_stale");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        let meta = LinkMeta {
-            url: "https://example.com/old".to_string(),
-            title: Some("Old Title".to_string()),
-            description: None,
-            favicon: None,
-            og_image: None,
-            cover_oid: None,
-            cover_ext: None,
-            cover_served_path: None,
-            cover_width: None,
-            cover_height: None,
-            cover_lqip: None,
-            cover_color: None,
-            fetched_at: "2020-01-01T00:00:00Z".to_string(), // Very old
-        };
-
-        write_cache(&tmp, &meta);
-
-        // Fresh cache should be None (stale)
-        let fresh = read_fresh_cache(&tmp, "https://example.com/old");
-        assert!(fresh.is_none());
-
-        // But raw read_cache should still return it
-        let raw = read_cache(&tmp, "https://example.com/old");
-        assert!(raw.is_some());
-
-        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(chrono::DateTime::parse_from_rfc3339(&ts).is_ok(), "{ts}");
     }
 
     #[test]
@@ -1586,10 +1455,9 @@ mod tests {
         write_cache(moss_dir, &meta);
     }
 
-    /// Helper: write a STALE (8 days old) cache entry, which a fetch must
-    /// treat as cold.
-    fn seed_stale_cache(moss_dir: &Path, url: &str, title: &str) {
-        let stale_ts = (chrono::Utc::now() - chrono::Duration::days(8))
+    /// Helper: write a cache entry fetched a year ago.
+    fn seed_old_cache(moss_dir: &Path, url: &str, title: &str) {
+        let stale_ts = (chrono::Utc::now() - chrono::Duration::days(365))
             .format("%Y-%m-%dT00:00:00Z")
             .to_string();
         let meta = LinkMeta {
@@ -1703,25 +1571,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// An entry is served however old it is, so two builds of the same
+    /// source draw the same card whatever day they run.
     #[test]
-    fn test_freshness_check_rejects_stale() {
-        // Stale entries (>7 days) are NOT considered fresh. Pins the boundary
-        // that drives parallel-fetch's filter. The full cold→fetch→hot flow
-        // is exercised by `test_parallel_fetch_actually_populates_cold_cache`
-        // against a localhost HTTP server.
-        let tmp = std::env::temp_dir().join(format!(
-            "moss_prewarm_stale_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        seed_stale_cache(&tmp, "https://stale.example.test/", "Old Title");
-
-        // Stale: read_cache returns Some, but read_fresh_cache returns None.
-        assert!(read_cache(&tmp, "https://stale.example.test/").is_some());
-        assert!(read_fresh_cache(&tmp, "https://stale.example.test/").is_none());
+    fn an_old_entry_is_served_without_a_fetch() {
+        let tmp = unique_tmp("old");
+        seed_old_cache(&tmp, "https://old.example.test/", "Old Title");
+        let urls = ["https://old.example.test/"];
+        assert_eq!(fetch_all_link_meta_parallel(&urls, &tmp, |_| {}), 0);
+        let served = fetch_link_meta_with_timeout(urls[0], &tmp, std::time::Duration::from_millis(1));
+        assert_eq!(served.title.as_deref(), Some("Old Title"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -2055,50 +1914,6 @@ mod tests {
         let tmp = fresh_tmp("download_og_image_404");
         let result = download_og_image(&format!("{base}/missing.png"), &tmp, std::time::Duration::from_secs(5));
         assert!(result.is_none());
-        let _ = server.join();
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn fetch_link_meta_carries_forward_the_previous_cover_when_a_refresh_fails() {
-        // "Keep serving the last successfully cached copy until the
-        // metadata refresh succeeds": seed a cache entry with a cover
-        // already materialized-looking, then fetch again against a page
-        // whose og:image now 404s. The cover fields must survive.
-        let tmp = fresh_tmp("carry_forward_cover");
-        let html_with_dead_image = r#"<html><head>
-            <meta property="og:title" content="Still Here">
-            <meta property="og:image" content="/gone.png">
-        </head></html>"#;
-        let (base, server) = spawn_test_server(html_with_dead_image, 1);
-        let url = format!("{base}/post");
-
-        let previous = LinkMeta {
-            url: url.clone(),
-            title: Some("Old Title".to_string()),
-            description: None,
-            favicon: None,
-            og_image: Some(format!("{base}/old-cover.png")),
-            cover_oid: Some("deadbeefdeadbeef".to_string()),
-            cover_ext: Some("png".to_string()),
-            cover_served_path: Some("_moss/link/deadbeefdeadbeef.png".to_string()),
-            cover_width: Some(400),
-            cover_height: Some(300),
-            cover_lqip: Some("data:image/webp;base64,AAAA".to_string()),
-            cover_color: Some("#ff0000".to_string()),
-            fetched_at: "2020-01-01T00:00:00Z".to_string(),
-        };
-        write_cache(&tmp, &previous);
-
-        let meta = fetch_link_meta_with_timeout(&url, &tmp, std::time::Duration::from_secs(5));
-        assert_eq!(meta.title.as_deref(), Some("Still Here"), "title still refreshes normally");
-        assert_eq!(
-            meta.cover_served_path.as_deref(),
-            Some("_moss/link/deadbeefdeadbeef.png"),
-            "the old cover must survive a failed image refresh"
-        );
-        assert_eq!(meta.cover_width, Some(400));
-
         let _ = server.join();
         let _ = std::fs::remove_dir_all(&tmp);
     }

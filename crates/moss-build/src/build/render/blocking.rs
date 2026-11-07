@@ -278,7 +278,7 @@ pub fn generate_blocking_content(
     let output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
         site_config, pending, false, false,
-        crate::build::folder_embed::upcoming::now(),
+        crate::build::inputs::build_instant(),
     )?;
     // No slot pass follows this entry point, so its pages are written as rendered.
     crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
@@ -295,7 +295,8 @@ pub fn generate_blocking_content(
 /// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
 /// rendered pages in `pending` for the slot pass to write. `defer_title_cards`
 /// plans sharing cards for the background phase; standalone callers pass false.
-/// `now` is the build's one clock for every past/upcoming decision.
+/// `instant` is the moment the build is as of; every past/upcoming decision
+/// reads the day it falls on in the site's zone (`inputs::effective_now`).
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -307,7 +308,7 @@ pub fn generate_blocking_content_for_build(
     pending: &mut PendingManifest,
     exits_after_build: bool,
     defer_title_cards: bool,
-    now: chrono::NaiveDateTime,
+    instant: jiff::Timestamp,
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
     let mut og_requests = Vec::new();
@@ -1107,7 +1108,7 @@ pub fn generate_blocking_content_for_build(
     // casing ("Writings") even though the URL slug is lowercased ("writings").
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
     let editions: moss_core::home::Editions;
-    let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar) = {
+    let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar, now) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
         // none of it is skippable by the parse cache — this is the floor on
@@ -1154,6 +1155,7 @@ pub fn generate_blocking_content_for_build(
         // from listings).
         apply_cascade(&mut documents, markdown.fields);
         log::debug!(target: "timing", "[reduce] apply_cascade: {:?}", reduce_start.elapsed());
+        let now = crate::build::inputs::effective_now(instant, crate::build::inputs::site_zone(&documents));
         crate::build::scan::section_color::apply_section_colors(&mut documents);
 
         // Populate `direct_children_sort` on every folder index. Must run AFTER
@@ -1393,6 +1395,7 @@ pub fn generate_blocking_content_for_build(
             show_rss_in_footer,
             term_index,
             calendar,
+            now,
         )
     };
 
@@ -1681,10 +1684,9 @@ pub fn generate_blocking_content_for_build(
     log::debug!(target: "timing", "[render] verdict computed: {:?}", total_start.elapsed());
 
     // Built once here rather than once per page. See `BuildShared`.
-    let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
+    let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides, now);
     shared.calendar = calendar;
     shared.theme_modules = theme_modules;
-    shared.now = now;
 
     let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
     let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
@@ -3356,6 +3358,7 @@ pub fn generate_blocking_content_for_build(
             deferred_paths,
             missing_references,
             term_index,
+            now,
         },
         background_ctx,
         // Surface the parsed page slice to the caller so

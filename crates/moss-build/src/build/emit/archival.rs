@@ -71,16 +71,6 @@ pub(crate) struct Rendered {
     pub block: String,
 }
 
-/// The date an edition carries: `SOURCE_DATE_EPOCH` when set (the
-/// reproducible-builds convention, and how a test pins it), otherwise the
-/// build's own local date.
-pub fn build_date(source_date_epoch: Option<&str>, now: chrono::NaiveDateTime) -> String {
-    let date = source_date_epoch
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
-        .map_or(now.date(), |moment| moment.date_naive());
-    date.format("%Y-%m-%d").to_string()
-}
 
 /// The files the source copy holds, relative to the site root, sorted. A map
 /// layer's source folder is out of the scanned structure but is source a
@@ -160,7 +150,7 @@ pub fn from_build(
         site_url: site_url.as_ref(),
         author: site.author,
         license: site.license,
-        date: build_date(std::env::var("SOURCE_DATE_EPOCH").ok().as_deref(), site.now),
+        date: site.now.date().format("%Y-%m-%d").to_string(),
         site_title,
         style_link: style_link(),
     };
