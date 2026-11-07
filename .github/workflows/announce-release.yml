@@ -31,6 +31,9 @@ on:
         description: "release tag to announce, e.g. v0.11.3"
         required: true
 
+# The dispatch authenticates with DISPATCH_PAT; the job's own token needs nothing.
+permissions: {}
+
 jobs:
   announce:
     # An ffmpeg- release hosts the video tool moss downloads, not a moss version: announce nothing for it.
