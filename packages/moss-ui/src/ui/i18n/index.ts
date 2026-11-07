@@ -84,7 +84,8 @@ export type RefusalLike =
   | { kind: 'revoked'; reason: string }
   | { kind: 'incompatible'; needs: string; host: string }
   | { kind: 'unapproved' }
-  | { kind: 'unavailable'; platforms: string[] };
+  | { kind: 'unavailable'; platforms: string[] }
+  | { kind: 'unreadable_floor'; floor: string };
 
 /** Platform keys as the registry spells them, in the reader's words; an unknown key is shown as written. */
 function platformWords(platforms: string[]): string {
@@ -108,6 +109,8 @@ export function refusalTooltip(refusal: RefusalLike, name: string): string {
       return t('channels.unapproved_tooltip', { name });
     case 'unavailable':
       return t('channels.unavailable_tooltip', { name, where: platformWords(refusal.platforms) });
+    case 'unreadable_floor':
+      return t('channels.unreadable_floor_tooltip', { name, floor: refusal.floor });
   }
 }
 

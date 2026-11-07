@@ -33,4 +33,12 @@ describe('refusalTooltip for an unavailable plugin', () => {
     ];
     for (const c of cases) expect(refusalTooltip(c, 'X')).toContain('X');
   });
+
+  it.each(LOCALES)('names the plugin and the floor it cannot read in %s', (l) => {
+    setLocale(l);
+    const text = refusalTooltip({ kind: 'unreadable_floor', floor: 'whenever' }, 'PDF OCR');
+    expect(text).toContain('PDF OCR');
+    expect(text).toContain('whenever');
+    expect(text).not.toMatch(/\{/);
+  });
 });

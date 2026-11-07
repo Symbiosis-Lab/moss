@@ -233,6 +233,10 @@ pub enum Refusal {
     /// Platform keys rather than a sentence, so the screen words it in the
     /// locale; [`Refusal::sentence`] is the English one-liner.
     Unavailable { platforms: Vec<String> },
+    /// The installed copy's `min_moss_version` is not a version moss can
+    /// compare. Without a readable floor moss cannot tell whether the plugin
+    /// was built for host functions this moss has, so it does not run it.
+    UnreadableFloor { floor: String },
 }
 
 impl Refusal {
@@ -258,6 +262,9 @@ impl Refusal {
             }
             Refusal::Unavailable { platforms } => {
                 crate::plugins::contributions::platform::sentence(&name, platforms)
+            }
+            Refusal::UnreadableFloor { floor } => {
+                format!("{name} {version}'s manifest names a moss version moss can't read: {floor}")
             }
         }
     }
@@ -580,21 +587,23 @@ fn canonical(plugin_dir: &Path) -> PathBuf {
 /// Not applied to the bytes moss itself ships — [`withheld`] says why and
 /// does not ask.
 ///
-/// A floor moss cannot parse is not enforced either. Refusing on it would let
-/// one typo in a manifest disable a plugin with no way for the user to tell
-/// why, and the registry validates the field on submission — so the failure it
-/// would catch cannot reach a published entry, while the plugins it would
-/// break are the hand-installed ones.
+/// A floor moss cannot parse refuses too, as its own kind: a plugin whose
+/// floor cannot be compared may need host functions this moss lacks, and
+/// running it would fail the same deep, unreadable way the floor exists to
+/// prevent. The sentence names the unreadable value, so the author can fix it.
 fn outran_its_host(manifest: &PluginManifest) -> Option<Refusal> {
     let floor = manifest.min_moss_version.as_deref()?;
-    (!host_meets_floor(Some(floor))).then(|| Refusal::Incompatible {
-        // The floor is publisher-authored inside the artifact — the hash pins
-        // provenance, not intent — and it lands in an `aria-label`. Same
-        // treatment as a revocation reason, for the same reason. `host` is
-        // moss's own and needs none.
-        needs: bounded(floor, MAX_NAME),
-        host: crate::system::app_version().to_string(),
-    })
+    // The floor is publisher-authored inside the artifact (the hash pins
+    // provenance, not intent) and it lands in an `aria-label`, so it is
+    // bounded like a revocation reason. `host` is moss's own and needs none.
+    match crate::system::meets_floor(floor) {
+        Some(true) => None,
+        Some(false) => Some(Refusal::Incompatible {
+            needs: bounded(floor, MAX_NAME),
+            host: crate::system::app_version().to_string(),
+        }),
+        None => Some(Refusal::UnreadableFloor { floor: bounded(floor, MAX_NAME) }),
+    }
 }
 
 /// What the kill list says about one id+version, with the published reason
@@ -674,20 +683,7 @@ pub fn installable_entry(plugin_id: &str) -> Result<super::index::IndexEntry, St
 /// 0.11.6 app is asking. Offering it as an update would produce an install
 /// that is refused at load, so an unrunnable version is not an update.
 pub fn host_meets_floor(min_moss_version: Option<&str>) -> bool {
-    let Some(floor) = min_moss_version else { return true };
-    match crate::system::meets_floor(floor) {
-        Some(met) => met,
-        None => {
-            // `debug!`, not `warn!`: the refusal path runs inside
-            // `load_plugin`, which the QuickJS engine re-enters on every hook
-            // dispatch, so one typo'd manifest would otherwise fill the log.
-            log::debug!(
-                target: "registry",
-                "min_moss_version {floor:?} is not a version moss can compare; not enforced"
-            );
-            true
-        }
-    }
+    min_moss_version.is_none_or(|floor| crate::system::meets_floor(floor) == Some(true))
 }
 
 #[cfg(test)]
@@ -762,15 +758,23 @@ mod tests {
     }
 
     #[test]
-    fn the_floor_this_moss_meets_and_the_floor_it_cannot_read_both_load() {
+    fn the_floor_this_moss_meets_loads() {
         assert_eq!(outran_its_host(&manifest_needing(Some(crate::system::app_version()))), None, "equal is met");
         assert_eq!(outran_its_host(&manifest_needing(Some("0.0.1"))), None);
         assert_eq!(outran_its_host(&manifest_needing(None)), None, "no floor is no gate");
+    }
+
+    #[test]
+    fn a_floor_moss_cannot_read_is_refused_and_not_offered() {
+        let unreadable = manifest_needing(Some("whenever"));
+        let refusal = outran_its_host(&unreadable).expect("an unreadable floor refuses");
+        assert_eq!(refusal, Refusal::UnreadableFloor { floor: "whenever".into() });
         assert_eq!(
-            outran_its_host(&manifest_needing(Some("whenever"))),
-            None,
-            "a floor moss cannot compare is not enforced against the plugin"
+            refusal.sentence(&unreadable),
+            "not-a-plugin-moss-ships 2.0.0's manifest names a moss version moss can't read: whenever"
         );
+        assert!(!host_meets_floor(Some("whenever")), "the catalog hides it");
+        assert!(host_meets_floor(None));
     }
 
     /// One test: [`SNAPSHOT`] is process-wide, so two tests publishing

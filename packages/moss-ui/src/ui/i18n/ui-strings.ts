@@ -719,6 +719,7 @@ const EN = {
   'channels.incompatible_tooltip': '{name} needs moss {needs} or newer and will not run until you update. This is moss {host}.',         // {name} {needs} {host}
   'channels.unapproved_tooltip': 'The plugin "{name}" is installed in this folder. Do you trust it?',           // {name}
   'channels.unavailable_tooltip': 'Not available on this computer: {name} runs on {where} only.',  // {name} {where}
+  'channels.unreadable_floor_tooltip': '{name} will not run: its manifest asks for moss version "{floor}", which is not a version number. Its author needs to fix it.',  // {name} {floor}
   'platform.darwin-arm64': 'Apple silicon Macs',
   'platform.darwin-x64': 'Intel Macs',
   'platform.linux-x64': '64-bit Linux computers',
@@ -2352,6 +2353,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.incompatible_tooltip': '{name} braucht moss {needs} oder neuer und läuft erst, wenn du aktualisierst. Du hast moss {host}.',
     'channels.unapproved_tooltip': 'Das Plugin „{name}“ ist in diesem Ordner installiert. Vertraust du ihm?',
     'channels.unavailable_tooltip': 'Auf diesem Computer nicht verfügbar: {name} läuft nur auf {where}.',
+    'channels.unreadable_floor_tooltip': '{name} wird nicht ausgeführt: Das Manifest verlangt moss-Version „{floor}“, und das ist keine Versionsnummer. Die Autorin oder der Autor muss das korrigieren.',
     'platform.darwin-arm64': 'Macs mit Apple-Chip',
     'platform.darwin-x64': 'Intel-Macs',
     'platform.linux-x64': '64-Bit-Linux-Computern',
@@ -3840,6 +3842,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.incompatible_tooltip': '{name} 需要青苔 {needs} 或更新版本，更新后才会运行。当前版本为 {host}。',
     'channels.unapproved_tooltip': '文件夹中安装了插件「{name}」。是否信任该插件？',
     'channels.unavailable_tooltip': '此电脑不可用：{name} 仅支持{where}。',
+    'channels.unreadable_floor_tooltip': '{name} 不会运行：它的清单要求青苔版本“{floor}”，这不是一个版本号，需要作者修正。',
     'platform.darwin-arm64': '搭载 Apple 芯片的 Mac',
     'platform.darwin-x64': '搭载 Intel 的 Mac',
     'platform.linux-x64': '64 位 Linux 电脑',
@@ -5374,6 +5377,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.incompatible_tooltip': '{name} 需要青苔 {needs} 或更新版本，更新後才會執行。目前版本為 {host}。',
     'channels.unapproved_tooltip': '檔案夾中安裝了插件「{name}」。是否信任該插件？',
     'channels.unavailable_tooltip': '此電腦無法使用：{name} 僅支援{where}。',
+    'channels.unreadable_floor_tooltip': '{name} 不會執行：它的清單要求青苔版本「{floor}」，這不是一個版本號，需要作者修正。',
     'platform.darwin-arm64': '搭載 Apple 晶片的 Mac',
     'platform.darwin-x64': '搭載 Intel 的 Mac',
     'platform.linux-x64': '64 位元 Linux 電腦',
