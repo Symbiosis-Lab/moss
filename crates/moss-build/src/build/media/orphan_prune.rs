@@ -195,6 +195,8 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
 
     let mut referenced = HashSet::new();
     let mut resolved_refs = HashSet::new();
+    let remembered = SCANNED.take(stage_dir).unwrap_or_default();
+    let mut kept = std::collections::HashMap::new();
     let (files, mut unreadable) = walk_files(stage_dir);
     for path in files {
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -216,6 +218,17 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
         // UTF-8 are not an I/O fault: nothing moss emits into a scannable
         // extension is binary, so there is no reference to miss, and the file
         // is skipped as before.
+        let stat = std::fs::symlink_metadata(&path).ok().map(|md| crate::build::stat::FileStat::of(&md));
+        let held = stat.as_ref().zip(remembered.get(&path)).filter(|(stat, file)| file.stat.vouches_for(stat, file.read_at));
+        if let Some((_, file)) = held {
+            referenced.extend(file.tails.iter().cloned());
+            resolved_refs.extend(file.resolved.iter().cloned());
+            kept.insert(path, file.clone());
+            continue;
+        }
+        let read_at = crate::build::stat::recording_clock();
+        #[cfg(test)]
+        FILES_READ.with(|n| n.set(n.get() + 1));
         let text = match std::fs::read(&path) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) => text,
@@ -233,10 +246,36 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
             .ok()
             .and_then(|r| r.to_str())
             .map(|r| r.replace('\\', "/"));
-        collect_references(&text, doc.as_deref(), &mut referenced, &mut resolved_refs);
+        let (mut tails, mut resolved) = (HashSet::new(), HashSet::new());
+        collect_references(&text, doc.as_deref(), &mut tails, &mut resolved);
+        referenced.extend(tails.iter().cloned());
+        resolved_refs.extend(resolved.iter().cloned());
+        if let Some(stat) = stat {
+            kept.insert(path, FileRefs { stat, read_at, tails: tails.into_iter().collect(), resolved: resolved.into_iter().collect() });
+        }
     }
+    SCANNED.keep(stage_dir, kept);
     ReferenceScan { tails: referenced, resolved: resolved_refs, unreadable }
 }
+
+/// One scanned file's references and the stat they were read under. A
+/// long-lived process scans the same stage after every edit, and a file whose
+/// stat still vouches for that read is not read again.
+#[derive(Clone)]
+struct FileRefs {
+    stat: crate::build::stat::FileStat,
+    read_at: Option<u64>,
+    tails: Vec<String>,
+    resolved: Vec<String>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files the scans on this thread have read.
+    pub(crate) static FILES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+static SCANNED: crate::build::cache::ProcessMemo<std::collections::HashMap<std::path::PathBuf, FileRefs>> = crate::build::cache::ProcessMemo::new(crate::build::cache::ROOTS);
 
 /// The image references in one scanned file's `text`, read both ways
 /// [`extract_referenced_tails`] reads them, and unioned the same way —

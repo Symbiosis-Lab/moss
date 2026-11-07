@@ -721,3 +721,31 @@ fn nothing_is_suppressed_before_a_prune_has_ever_run() {
 
     assert!(suppressed_variants(tmp.path(), &HashSet::new()).is_empty());
 }
+
+/// A rescan of the same stage reads only the files whose stat moved, and an
+/// edited file's references are its new ones.
+#[test]
+fn a_rescan_reads_only_the_files_that_changed() {
+    let tmp = tmp_dir();
+    write(tmp.path(), "a/index.html", r#"<img src="/assets/one.webp">"#);
+    write(tmp.path(), "b/index.html", r#"<img src="/assets/two.webp">"#);
+    let reads = || FILES_READ.with(|n| n.get());
+
+    let before = reads();
+    let first = extract_referenced_tails(tmp.path());
+    assert_eq!(reads() - before, 2);
+    assert!(first.tails.contains("assets/one.webp") && first.tails.contains("assets/two.webp"));
+
+    let before = reads();
+    let second = extract_referenced_tails(tmp.path());
+    assert_eq!(reads() - before, 0, "an unchanged stage is answered without reading it");
+    assert_eq!(second.tails, first.tails);
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write(tmp.path(), "b/index.html", r#"<img src="/assets/three.webp">"#);
+    let before = reads();
+    let third = extract_referenced_tails(tmp.path());
+    assert_eq!(reads() - before, 1);
+    assert!(third.tails.contains("assets/three.webp") && !third.tails.contains("assets/two.webp"));
+    assert!(third.tails.contains("assets/one.webp"));
+}
