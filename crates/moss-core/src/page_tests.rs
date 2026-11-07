@@ -281,3 +281,15 @@ fn render_dispatches_typed_embeds_and_reports_ast_resolution_diagnostics() {
     assert!(page.body_html.contains("<video"), "{}", page.body_html);
     assert!(page.diagnostics.iter().any(|d| d.message.contains("missing.md")), "{:?}", page.diagnostics);
 }
+
+#[test]
+fn a_site_bundle_round_trips_ignores_unknown_fields_and_composes_a_missing_schema() {
+    let json = r#"{"version":"v1","files":["a.md"],"lang":"en","titles":{"a.md":"A"},
+        "plugins":[{"name":"stars","fields":{"stars_given":{"type":"integer"}}}]}"#;
+    let bundle: SiteBundle = serde_json::from_str(json).unwrap();
+    let again: SiteBundle = serde_json::from_str(&serde_json::to_string(&bundle).unwrap()).unwrap();
+    assert_eq!(again.version.as_deref(), Some("v1"));
+    let inputs = again.inputs();
+    assert_eq!(inputs.schema.frontmatter.fields["stars_given"].source.as_deref(), Some("stars"));
+    assert!(check_page("a.md", "---\ntitle: A\nstars_given: 3\n---\n", &inputs).is_empty());
+}

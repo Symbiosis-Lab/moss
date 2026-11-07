@@ -1,10 +1,9 @@
 //! A shared JSON boundary for hosts that check and preview pages without a build.
 
-use moss_core::page::{self, SiteInputs};
-use moss_core::schema::{self, ContentSchema, FieldDefinition, PluginSchema};
+use moss_core::page::{self, SiteBundle, SiteInputs};
+use moss_core::schema;
 use moss_core::validation::{Diagnostic, EditorDiagnostic};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Serialize;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -12,30 +11,6 @@ pub mod wasm;
 pub mod ffi;
 #[cfg(feature = "ffi")]
 uniffi::setup_scaffolding!();
-
-#[derive(Deserialize)]
-struct SiteJson {
-    files: Vec<String>,
-    lang: String,
-    #[serde(default)]
-    notes: HashMap<String, String>,
-    schema: Option<ContentSchema>,
-    #[serde(default)]
-    declared_name_lists: Vec<String>,
-    #[serde(default)]
-    plugins: Vec<PluginJson>,
-    #[serde(default)]
-    listing_styles: Vec<String>,
-    /// The site's own stylesheets (`.moss/theme/`), applied after moss's.
-    #[serde(default)]
-    theme_css: String,
-}
-
-#[derive(Deserialize)]
-struct PluginJson {
-    name: String,
-    fields: HashMap<String, FieldDefinition>,
-}
 
 /// Host-supplied site values, with the effective schema composed once on creation.
 pub struct Site {
@@ -48,18 +23,9 @@ const PAGE_CSS: &str = include_str!("../assets/page.css");
 
 impl Site {
     pub fn from_json(site_json: &str) -> Result<Self, String> {
-        let site: SiteJson = serde_json::from_str(site_json).map_err(|e| e.to_string())?;
-        let schema = site.schema.unwrap_or_else(|| {
-            let plugins: Vec<_> = site.plugins.iter().map(|plugin| PluginSchema {
-                name: &plugin.name,
-                fields: Some(&plugin.fields),
-            }).collect();
-            schema::compose_schema(&site.declared_name_lists, &plugins, &site.listing_styles).0
-        });
-        Ok(Self {
-            inputs: SiteInputs { files: site.files, notes: site.notes, schema, lang: site.lang },
-            css: format!("{PAGE_CSS}\n{}", site.theme_css),
-        })
+        let bundle: SiteBundle = serde_json::from_str(site_json).map_err(|e| e.to_string())?;
+        let css = format!("{PAGE_CSS}\n{}", bundle.theme_css);
+        Ok(Self { inputs: bundle.inputs(), css })
     }
 
     /// Replace all notes; invalid input keeps the old map.

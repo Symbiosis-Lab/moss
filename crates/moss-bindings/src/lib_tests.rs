@@ -1,4 +1,5 @@
 use super::*;
+use moss_core::schema::ContentSchema;
 use moss_core::validation::Severity;
 use serde_json::{json, Value};
 

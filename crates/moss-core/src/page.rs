@@ -8,6 +8,52 @@ use std::collections::HashMap;
 use crate::resolve::md_extract::{extract_md_references, RefSyntax};
 use crate::validation::{self, Diagnostic, Severity};
 
+/// The site-context bundle a host receives (from the engine, or assembled
+/// from the folder) and passes to every page check and render. One JSON
+/// shape for every host: unknown fields are ignored, so it can grow.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SiteBundle {
+    /// Changes whenever any other field does, so a host refetches only then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub files: Vec<String>,
+    pub lang: String,
+    /// The composed schema. When absent it is composed from the next three.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<crate::schema::ContentSchema>,
+    #[serde(default)]
+    pub declared_name_lists: Vec<String>,
+    #[serde(default)]
+    pub plugins: Vec<BundlePlugin>,
+    #[serde(default)]
+    pub listing_styles: Vec<String>,
+    /// The site's own stylesheets, applied after moss's.
+    #[serde(default)]
+    pub theme_css: String,
+    #[serde(default)]
+    pub notes: HashMap<String, String>,
+}
+
+/// One installed plugin's frontmatter fields, as a bundle carries them.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BundlePlugin {
+    pub name: String,
+    pub fields: HashMap<String, crate::schema::FieldDefinition>,
+}
+
+impl SiteBundle {
+    /// The inputs a check or render takes, composing the schema if the bundle has none.
+    pub fn inputs(self) -> SiteInputs {
+        let schema = self.schema.unwrap_or_else(|| {
+            let plugins: Vec<_> = self.plugins.iter()
+                .map(|p| crate::schema::PluginSchema { name: &p.name, fields: Some(&p.fields) })
+                .collect();
+            crate::schema::compose_schema(&self.declared_name_lists, &plugins, &self.listing_styles).0
+        });
+        SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang }
+    }
+}
+
 /// What a host knows about the site, as values.
 pub struct SiteInputs {
     /// Site-relative paths of every file, for link resolution.
