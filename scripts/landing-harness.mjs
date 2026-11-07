@@ -8,6 +8,7 @@
 // its own engines, the same per-engine loop it had before — only the
 // boilerplate around it moved here.
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -99,11 +100,30 @@ export async function resolveBaseURL(argURL, { root = DEFAULT_BUILD_DIR } = {}) 
 }
 
 export async function loadPlaywright() {
-  const moduleName = process.env.PLAYWRIGHT_MODULE || 'playwright';
+  const override = process.env.PLAYWRIGHT_MODULE;
+  const repo = resolve(HERE, '..');
+  const searched = [];
+  let moduleName = override;
+  const fromCheckout = async (checkout) => {
+    searched.push(checkout);
+    const require = createRequire(join(checkout, 'package.json'));
+    for (const name of ['playwright', '@playwright/test']) {
+      const installed = await stat(join(checkout, 'node_modules', name)).catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (!installed) continue;
+      return require.resolve(name);
+    }
+  };
   try {
-    return await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
+    if (!override) moduleName = await fromCheckout(repo);
+    if (!moduleName) throw new Error('no installed package found');
+    const loaded = await import(moduleName.startsWith('/') ? pathToFileURL(moduleName).href : moduleName);
+    return loaded.default || loaded;
   } catch (error) {
-    throw new Error(`Could not load Playwright from ${moduleName}. Set PLAYWRIGHT_MODULE to playwright/index.mjs in an existing install.\n${error}`);
+    const locations = override ? `PLAYWRIGHT_MODULE=${JSON.stringify(override)}` : searched.map(path => JSON.stringify(path)).join(', ');
+    throw new Error(`Could not load Playwright; searched ${locations}. Set PLAYWRIGHT_MODULE to playwright/index.mjs in an existing install. ${JSON.stringify(error.message)}`);
   }
 }
 

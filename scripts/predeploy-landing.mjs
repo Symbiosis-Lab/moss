@@ -14,10 +14,13 @@
 // the deployed copy instead of the local source: predeploy-landing.mjs [url].
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { loadPlaywright } from './landing-harness.mjs';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
 const fail = (message) => { console.error(`predeploy-landing: ${message}`); process.exit(1); };
+
+await loadPlaywright().catch(error => fail(error.message));
 
 const head = git('rev-parse', 'HEAD');
 // Merged means on the published develop: a checkout's own develop can lag it, and a worktree at a
