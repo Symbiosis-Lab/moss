@@ -2996,6 +2996,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "webp",
+ "webpki-root-certs",
  "whatlang",
  "windows-sys 0.59.0",
  "xxhash-rust",

@@ -2,6 +2,7 @@
 //! crate carried no reqwest; the seta client crossed and
 //! brought reqwest with it, so the adapter follows the caller.
 //! Callers: the seta client, the domain orchestrator, and the setup probes.
+//! [`build_client`] is the one way to build a client for an outside host.
 
 use crate::system::proxy::resolve_proxy_for_url;
 
@@ -19,6 +20,35 @@ pub fn system_proxy() -> reqwest::Proxy {
     reqwest::Proxy::custom(|url| {
         resolve_proxy_for_url(url.as_str()).and_then(|p| reqwest::Url::parse(&p).ok())
     })
+}
+
+/// Builds a reqwest client for an outside host: the system proxy per request
+/// and the platform's CA roots, or Mozilla's roots when the platform has none.
+///
+/// On Linux the platform roots are files (the `ca-certificates` package); a
+/// minimal container or server image without them makes reqwest's builder fail
+/// with "No CA certificates were loaded from the system". macOS and Windows ask
+/// the OS and never take the fallback. `configure` runs once per attempt,
+/// since `build` consumes the builder.
+pub fn build_client(
+    configure: impl Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+) -> reqwest::Result<reqwest::Client> {
+    let builder = || configure(reqwest::Client::builder().proxy(system_proxy()));
+    builder().build().or_else(|platform_error| {
+        #[cfg(target_os = "linux")]
+        if let Ok(client) = builder().tls_certs_only(bundled_roots()).build() {
+            log::warn!("no usable system CA certificates ({platform_error}); using the bundled Mozilla roots");
+            return Ok(client);
+        }
+        Err(platform_error)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn bundled_roots() -> impl Iterator<Item = reqwest::Certificate> {
+    webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .filter_map(|der| reqwest::Certificate::from_der(der.as_ref()).ok())
 }
 
 #[cfg(test)]

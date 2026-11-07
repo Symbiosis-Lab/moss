@@ -190,3 +190,9 @@ proptest = "1.5"
 tokio = { version = "1.0", features = ["rt", "macros", "test-util"] }
 # engine/acceptance.rs: the fetch_url wire-shape gate runs against a local server.
 mockito = "1.4"
+
+# Mozilla's roots, for a Linux host with no system CA store (`build_client`).
+# Already in the tree through rustls-platform-verifier; macOS and Windows ask
+# the OS and never need them.
+[target.'cfg(target_os = "linux")'.dependencies]
+webpki-root-certs = "1"

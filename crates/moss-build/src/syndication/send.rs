@@ -356,11 +356,9 @@ async fn answers(url: &str) -> bool {
     if url.split('/').nth(2).is_some_and(|host| host.ends_with(".onion")) {
         return true;
     }
-    let Ok(client) = reqwest::Client::builder()
-        .proxy(crate::system::proxy_reqwest::system_proxy())
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    else {
+    let Ok(client) = crate::system::proxy_reqwest::build_client(|builder| {
+        builder.timeout(std::time::Duration::from_secs(10))
+    }) else {
         return true;
     };
     for wait in [0, 2, 5] {
