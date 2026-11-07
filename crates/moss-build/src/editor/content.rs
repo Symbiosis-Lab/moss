@@ -458,6 +458,42 @@ mod tests {
         assert_eq!(disk.hash, content_hash(agent.as_bytes()), "the disk's hash is the base of the retry");
     }
 
+    /// A browser's save landed but its answer was lost; the retry carries the
+    /// old base and finds its own text on disk.
+    #[test]
+    fn a_retried_save_that_already_landed_is_saved_not_a_conflict() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "---\ntitle: Harbour\n---\nFirst.\n").unwrap();
+        let read = base(&file);
+        let fm = serde_json::json!({ "title": "Harbour" });
+        let first = persist_editor_content(&file.to_string_lossy(), &fm, "First. Typed.\n", &read, false).unwrap();
+        let SaveResult::Saved { hash, .. } = first else { panic!("expected the first save to land, got {first:?}") };
+
+        let retry = persist_editor_content(&file.to_string_lossy(), &fm, "First. Typed.\n", &read, false).unwrap();
+
+        assert_eq!(retry, SaveResult::Saved { hash, displaced: None });
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "---\ntitle: Harbour\n---\nFirst. Typed.\n");
+    }
+
+    /// The same retry after another writer changed the page is still a conflict.
+    #[test]
+    fn a_retried_save_after_another_writer_changed_the_page_is_a_conflict() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "---\ntitle: Harbour\n---\nFirst.\n").unwrap();
+        let read = base(&file);
+        let fm = serde_json::json!({ "title": "Harbour" });
+        persist_editor_content(&file.to_string_lossy(), &fm, "First. Typed.\n", &read, false).unwrap();
+        let agent = "---\ntitle: Harbour\n---\nFirst. Typed, then an agent wrote.\n";
+        std::fs::write(&file, agent).unwrap();
+
+        let retry = persist_editor_content(&file.to_string_lossy(), &fm, "First. Typed.\n", &read, false).unwrap();
+
+        assert!(matches!(retry, SaveResult::Conflict { .. }), "got {retry:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), agent, "the agent's text must survive");
+    }
+
     /// A save rewrites the page where it is: the same file, so the watcher
     /// reports a content change (which keeps the incremental rebuild), and a
     /// symlinked page stays a symlink with the mode it had.
