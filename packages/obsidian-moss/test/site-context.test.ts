@@ -23,10 +23,10 @@ function vault(files: Record<string, string>) {
 }
 
 describe("site context through the mobile adapter", () => {
-  it("reads lang, sorted hidden CSS and plugin contributions", async () => {
+  it("reads lang, the theme's style.css alone and plugin contributions", async () => {
     const context = await readSiteContext(vault({
       ".moss/config.toml": 'lang = "wrong"\n[site]\nlang = "fr" # language\n[other]\nlang = "de"',
-      ".moss/theme/z.css": "last", ".moss/theme/a.css": "first", ".moss/theme/ignored.txt": "ignored",
+      ".moss/theme/style.css": "/* served-sheet */", ".moss/theme/a.css": "/* unserved-sheet */", ".moss/theme/ignored.txt": "ignored",
       ".moss/plugins/b/manifest.json": JSON.stringify({ name: "b", contributes: { listing_styles: { board: {} } } }),
       ".moss/plugins/a/manifest.json": JSON.stringify({ name: "a", contributes: { frontmatter: { fields: { review_score: { type: "integer" } } }, listing_styles: { cards: {} } } }),
     }));
@@ -36,10 +36,11 @@ describe("site context through the mobile adapter", () => {
     expect(schema.frontmatter.fields.children_style.enum_values).toEqual(expect.arrayContaining(["cards", "board"]));
     const preview = JSON.parse(site.preview("note.md", "# Test", ""));
     expect(preview.html).toContain('lang="fr"');
-    expect(preview.html).toContain("first\nlast");
+    expect(preview.html).toContain("/* served-sheet */");
+    expect(preview.html).not.toContain("unserved-sheet");
     site.free();
     expect(context).toEqual({
-      files: ["images/pic.png", "note.md"], lang: "fr", theme_css: "first\nlast",
+      files: ["images/pic.png", "note.md"], lang: "fr", theme_css: "/* served-sheet */",
       plugins: [{ name: "a", fields: { review_score: { type: "integer" } } }, { name: "b", fields: {} }],
       listing_styles: ["cards", "board"],
     });

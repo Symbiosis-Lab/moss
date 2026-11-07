@@ -29,8 +29,9 @@ async function list(adapter: DataAdapter, path: string) {
 export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">): Promise<SiteContext> {
   const adapter = vault.adapter;
   const config = await adapter.exists(".moss/config.toml") ? await adapter.read(".moss/config.toml") : "";
-  const theme = await list(adapter, ".moss/theme");
-  const css = await Promise.all(theme.files.filter((p) => p.endsWith(".css")).sort().map((p) => adapter.read(p)));
+  // The build serves only style.css; other sheets reach a page through its @import.
+  const theme = ".moss/theme/style.css";
+  const css = await adapter.exists(theme) ? await adapter.read(theme) : "";
   const plugins: SitePlugin[] = [];
   const listingStyles = new Set<string>();
   const directory = await list(adapter, ".moss/plugins");
@@ -47,7 +48,7 @@ export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">
   }
   return {
     files: vault.getFiles().map((file) => file.path).sort(),
-    lang: siteLanguage(config), theme_css: css.join("\n"), plugins, listing_styles: [...listingStyles],
+    lang: siteLanguage(config), theme_css: css, plugins, listing_styles: [...listingStyles],
   };
 }
 
