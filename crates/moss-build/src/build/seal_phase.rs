@@ -198,7 +198,6 @@ pub(crate) fn evict(folder: &Path) {
 /// used to short-circuit on `owns_shared`/`mat_ok` and now read `req.verdict`
 /// (already final) plus the `Promotion` this phase itself computes.
 async fn run_materialize_phase(req: PendingSeal) {
-    let promote_trace = crate::build::phase::PhaseTrace::start("seal_promote");
     let PendingSeal {
         sealed,
         verdict,
@@ -234,7 +233,7 @@ async fn run_materialize_phase(req: PendingSeal) {
     // waiting for this lock while holding the guard would deadlock with it.
     let folder_build_lock = match folder_lock {
         held @ Some(_) => held,
-        None => crate::infra::folder_lock::acquire_async(Path::new(&folder_path)).await,
+        None => crate::phase!("lock_wait", { crate::infra::folder_lock::acquire_async(Path::new(&folder_path)).await }),
     };
 
     // Re-acquire the per-folder stage-write guard, freshly — see
@@ -243,9 +242,10 @@ async fn run_materialize_phase(req: PendingSeal) {
     // `stage_dir` plus the generation GC and search-lane request that follow,
     // all of which depend on the generation `ship_phase` is about to freeze.
     let _stage_write_guard = match &session {
-        Some(s) => Some(s.lock_stage_write().await),
+        Some(s) => Some(crate::phase!("lock_wait", { s.lock_stage_write().await })),
         None => None,
     };
+    let promote_trace = crate::build::phase::PhaseTrace::start("seal_promote");
 
     // Background asset copying has drained by the time this seal is handed
     // off. Refuse promotion if the currently selected page still names a

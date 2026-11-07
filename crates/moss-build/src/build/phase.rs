@@ -129,6 +129,11 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     ("seal_wait", 10_000),
     ("seal_persist", 10_000),
     ("seal_promote", 10_000),
+    // Waiting for another build's hold on the folder lock or the stage-write
+    // guard. `seal_promote` starts after its waits; `build` and `seal_persist`
+    // still contain theirs, so subtract `lock_wait` to read their work. The
+    // lock itself costs well under a millisecond, so the budget is a tripwire.
+    ("lock_wait", 200),
     // Native + plugin slot collection/injection before finalization.
     ("slot_resolution", 10_000),
     // Loop A: parse + resolve every markdown file (blocking.rs). Dominant
@@ -653,6 +658,35 @@ mod tests {
         let before = lines.len();
         append_record(&path, &record).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), before + 1);
+    }
+
+    /// Time spent waiting for another holder of the folder is its own phase,
+    /// not part of the work around it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_build_that_waits_for_the_folder_lock_records_the_wait() {
+        use crate::build::{run_pipeline, PipelineConfig, PluginMode, BuildTrigger};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("index.md"), "---\ntitle: Garden\n---\n\nA quiet garden.\n").unwrap();
+        let held = crate::infra::folder_lock::acquire(&root).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            drop(held);
+        });
+        run_pipeline(PipelineConfig {
+            root: crate::vault::paths::VaultRoot::resolve(&root),
+            progress: Arc::new(crate::build::ports::reporter::NullReporter), plugins: PluginMode::Skip,
+            watch: false, start_server: false,
+            host: crate::build::ports::host::test_host_ports(),
+            trigger: BuildTrigger::Full, exits_after_build: true,
+            site_url_override: None, server_port: None, admission_epoch: None, live_port: None,
+        }).await.expect("fixture builds");
+        release.join().unwrap();
+        let text = std::fs::read_to_string(crate::moss_paths::MossPaths::new(&root).profile()).unwrap();
+        let record: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        let waited: u64 = record["phases"].as_array().unwrap().iter()
+            .filter(|p| p["name"] == "lock_wait").map(|p| p["ms"].as_u64().unwrap()).sum();
+        assert!(waited >= 300, "the wait for the held folder lock is recorded as lock_wait: {record}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

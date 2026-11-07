@@ -2008,7 +2008,7 @@ async fn advertise_sealed(
     // the preview server takes no lock, so the rule that keeps it whole is
     // that nothing in this phase unlinks from `stage_dir`.
     let _stage_write_guard = match &session {
-        Some(s) => Some(s.lock_stage_write().await),
+        Some(s) => Some(crate::phase!("lock_wait", { s.lock_stage_write().await })),
         None => None,
     };
     // Tails that seal together queue on this lock. A newer sealed render's

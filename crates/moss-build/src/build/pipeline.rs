@@ -96,18 +96,6 @@ use super::video::{cleanup_legacy_video_cache, dispatch_video_conversions};
 /// arch review note recommending this lift.
 const NOTEBOOK_IO_TIMEOUT_SECS: u64 = 30;
 
-/// Above this, a stage-write lock wait is reported at `warn`, not `debug` — a
-/// release preview build is where a user feels it and it was invisible there.
-/// Well above the lock's own measured cost — an earlier investigation clocked the
-/// wait at 57µs–288µs on the affected vault and 57µs–12ms in a later
-/// run — so this is a tripwire for an unexplained
-/// stall, not a fraction of a known worst case. That investigation raised the lock as
-/// one hypothesis (H-lock) for a separate, unexplained 1–3s foreground gap;
-/// measurement rejected it (the wait above is nowhere near 1–3s) along with
-/// the other hypothesis (twelve config re-parses), and that gap is still
-/// unexplained.
-const STAGE_WRITE_LOCK_WARN: std::time::Duration = std::time::Duration::from_millis(200);
-
 /// Heuristic detection: does this absolute path live under a known cloud-sync
 /// mount?
 ///
@@ -1214,17 +1202,15 @@ fn build_inner(
     // FolderSession, e.g. one-shot CLI builds) means no concurrent rebuild
     // is possible, so no guard is needed.
     //
-    // The WAIT is timed, not elapsed-since-start: only the wait says whether the
-    // PREVIOUS build's seal tail (which takes this same mutex in
-    // `advertise_sealed`, behind every background worker) is on this build's
-    // critical path — hypothesis H-lock, against H-config
-    // just below.
+    // Both waits are timed as `lock_wait`: a long one means another build, or
+    // the previous build's seal tail (which takes the same guard in
+    // `advertise_sealed`), is on this build's critical path.
     // Cross-PROCESS counterpart of `_stage_write_guard` below. Acquired
     // unconditionally, unlike `_stage_write_guard`: two separate processes
     // with no session between them are exactly the case this exists for.
     // Returned rather than dropped: how long it is held after the render is
     // the caller's to decide — see `infra::folder_lock`'s module doc.
-    let folder_build_lock = crate::infra::folder_lock::acquire(root.path())?;
+    let folder_build_lock = crate::phase!("lock_wait", { crate::infra::folder_lock::acquire(root.path()) })?;
     // Minted under the lock, so that across processes the order of these
     // stamps is the order the builds rendered in, which is what the
     // materialize compares them by. Minted before the lock, a build could
@@ -1233,21 +1219,14 @@ fn build_inner(
     // admission time, despite its name) for `folder_build_lock_test.rs` only.
     let locked_at_nanos: u64 = std::env::var("MOSS_TEST_ADMISSION_NANOS").ok().and_then(|s| s.parse().ok())
         .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0));
-    let t_lock = std::time::Instant::now();
     let _stage_write_guard = services
         .and_then(|s| s.session.as_ref())
-        .map(|s| s.blocking_lock_stage_write());
+        .map(|s| crate::phase!("lock_wait", { s.blocking_lock_stage_write() }));
     // A complete prior route can stay on immutable `current` while staging is
     // rewritten. Final readiness below decides whether to show the new stage.
     if prior_route {
         crate::build::lifecycle::protect_current_before_rebuild(&paths);
     }
-    let lock_wait = t_lock.elapsed();
-    log::log!(
-        target: "timing",
-        if lock_wait >= STAGE_WRITE_LOCK_WARN { log::Level::Info } else { log::Level::Debug },
-        "[build] staging: waited {lock_wait:?} for the stage-write lock (above {STAGE_WRITE_LOCK_WARN:?} means the previous build's seal tail is on this build's critical path)",
-    );
 
     // Step 2: Ensure staging directory exists (persistent across rebuilds)
     // We keep staging/ between rebuilds so that mtime+size checks can skip
