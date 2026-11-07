@@ -15,6 +15,8 @@ const SIZES = [
 /** The strips that actually loop (a strip too short to fill its box is still). */
 const strips = (page: Page) => page.locator("[data-motion='marquee'][data-marquee-ready]:not([data-marquee-still])");
 const trackOf = (strip: ReturnType<Page["locator"]>) => strip.locator("> .moss-marquee-track");
+/** WebKit's Tab skips links, as Safari's does by default; Alt+Tab reaches them. */
+const tabKey = () => (test.info().project.name === "webkit" ? "Alt+Tab" : "Tab");
 
 /** The track's horizontal translation, in pixels. */
 const shift = (track: ReturnType<Page["locator"]>) =>
@@ -94,7 +96,7 @@ test("focus inside a strip pauses it whatever the theme says", async ({ page }) 
   await page.addStyleTag({ content: ":root { --moss-marquee-hover: running; }" });
   // The first stop is the first row's card link, which holds its strip.
   for (let i = 0; i < 12; i++) {
-    await page.keyboard.press("Tab");
+    await page.keyboard.press(tabKey());
     if (await page.evaluate(() => document.activeElement?.matches("a.moss-card") ?? false)) break;
   }
   const track = trackOf(strips(page).first());
@@ -114,7 +116,7 @@ test("the keyboard never reaches the copy, and a screen reader meets it never", 
   }
   const reached: boolean[] = [];
   for (let i = 0; i < 25; i++) {
-    await page.keyboard.press("Tab");
+    await page.keyboard.press(tabKey());
     reached.push(await page.evaluate(() => !!document.activeElement?.closest("[inert]")));
   }
   expect(reached.some(Boolean)).toBe(false);
@@ -208,7 +210,8 @@ for (const size of SIZES.slice(1)) {
 }
 
 test.describe("for a reader who asks for less motion", () => {
-  test.use({ reducedMotion: "reduce" });
+  // A context option, not a top-level `use` key: the test runner ignores an unknown one.
+  test.use({ contextOptions: { reducedMotion: "reduce" } });
 
   test("nothing moves, the copy is not drawn and the strip is the still one", async ({ page }) => {
     await page.setViewportSize(SIZES[0]);
