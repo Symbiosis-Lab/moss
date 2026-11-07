@@ -2784,7 +2784,8 @@ body > header .site-name {
    set itself wraps across two rows, the rows stay visually adjacent. */
 .nav-links {
   display: flex;
-  align-items: center;
+  /* Baseline, not center: a link's own border or padding never lifts its text off the line. */
+  align-items: baseline;
   flex-wrap: wrap;
   gap: var(--moss-space-xs) clamp(var(--moss-space-sm), 2vw, var(--moss-space-md));
   /* .nav-right bottom-aligns its children (align-items: flex-end — see the

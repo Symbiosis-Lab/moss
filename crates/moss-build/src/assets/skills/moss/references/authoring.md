@@ -155,6 +155,8 @@ and focus. To accent them at rest, set `--moss-link-color`, and set
 
 The header is one row, the site name then the nav links then the toggles, for as long as they fit. moss measures them against the header's width rather than at a fixed screen width, so there is no breakpoint to set. When the row overflows at full spacing, moss first draws the outer and toggle gaps in (`data-nav-compact` on `.nav-content`) and keeps the one row if that is enough, which is what keeps a short nav and a tall logo on one row at phone width. Only when the row no longer fits even tightened, the site name stays on the first row alone and the links and toggles move to a second row under it; at 20rem and narrower the links fold into a menu button instead. To keep the nav on one row, use fewer or shorter nav entries (`nav_label:` gives a page a shorter name in the nav than its title) or a smaller logo: `.site-logo` is `1.15em` tall with its width following the image, so a wide logo widens the site name. Without scripting the links still wrap under the name once they do not fit, but the toggles then follow the last link.
 
+moss marks the current page's nav link with a 2px rule under it (`.main-nav a.active`, a bottom border in `--moss-color-ui-accent`). That rule is the link's one mark, so a theme that wants a different mark (an underline, a dot) sets `border-block-end: 0` in the same rule, or the link shows both.
+
 ## Never use @layer
 
 Never write `@layer` in your `style.css` — moss handles cascade order for you.

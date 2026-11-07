@@ -119,6 +119,7 @@ const GATE_PORT_KEYS = [
   'nav-split-order',
   'nav-split-pack',
   'nav-one-row',
+  'nav-current-mark',
   'theme-floor-hooks',
   'hls-short-clip',
   'request-form',

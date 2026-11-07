@@ -3616,6 +3616,50 @@ lang = "en"
   },
 };
 
+export const NAV_CURRENT_MARK_GATE: ScratchSiteSpec = {
+  name: "nav-current-mark-gate",
+  files: {
+    "index.md": `---
+title: Orchard
+uid: "ncm00101"
+---
+
+# Orchard
+
+Scratch site for the current-page nav mark render gate.
+`,
+    "Pears.md": `---
+title: Pears
+uid: "ncm00102"
+nav: true
+---
+
+# Pears
+`,
+    "Plums.md": `---
+title: Plums
+uid: "ncm00103"
+nav: true
+---
+
+# Plums
+`,
+    "Quinces.md": `---
+title: Quinces
+uid: "ncm00104"
+nav: true
+---
+
+# Quinces
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
   name: "nav-split-pack-gate",
   files: {
