@@ -426,6 +426,13 @@ impl MossPaths {
         self.cache_dir().join("hash-index.json")
     }
 
+    /// `.moss/build.nosync/cache/verified-blobs.json` — which CAS blobs the last
+    /// build read and found matching their names, keyed by absolute path and
+    /// stat. Machine-local: the key and the inode mean nothing on another machine.
+    pub fn cache_verified_blobs(&self) -> PathBuf {
+        self.cache_dir().join("verified-blobs.json")
+    }
+
     /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from
     /// the previous build, keyed by source path.
     pub fn cache_dep_graph(&self) -> PathBuf {

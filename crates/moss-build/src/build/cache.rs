@@ -40,7 +40,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-mod blob_residency;
+pub(crate) mod blob_residency;
 mod records;
 mod publication;
 use crate::build::cloud_readiness::StorageOperation;
@@ -81,6 +81,9 @@ pub struct ObjectStore {
     base: PathBuf,
     site: Option<std::sync::Arc<crate::moss_paths::MossPaths>>,
     verified: std::sync::Arc<std::sync::Mutex<HashIndex>>,
+    /// What an earlier process verified, read by `ready_blob` when `verified`
+    /// has no answer; see [`remembering_verified`](Self::remembering_verified).
+    previous: Option<std::sync::Arc<HashIndex>>,
 }
 
 impl ObjectStore {
@@ -89,7 +92,7 @@ impl ObjectStore {
     /// `base` is typically `.moss/cache/objects/`. The directory is created
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
-        Self { base, site: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())) }
+        Self { base, site: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())), previous: None }
     }
 
     /// `mp`'s content-addressed object store — `.moss/cache/objects/`. Prefer this

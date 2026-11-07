@@ -816,16 +816,16 @@ pub(crate) fn reclaim_staging_now(
 /// happens from receipts, so an entry is normally exactly what this build
 /// wrote — but an entry can also be carried from the previous build, and
 /// between the two builds a sync client may have evicted the file, or the
-/// user may have deleted it. `output_present` is one `symlink_metadata` per
-/// entry and no read, so this costs a stat per manifest entry and cannot
-/// itself hit the eviction fault it exists to find.
+/// user may have deleted it. A stage entry costs one `symlink_metadata` and no
+/// read, so it cannot itself hit the eviction fault it exists to find. A
+/// CAS-backed entry is asked of its blob through `ObjectStore::ready_blob`,
+/// which hashes a blob it has not verified at its current stat; that read is
+/// the guard against shipping corrupt bytes, and a store built with
+/// `remembering_verified` skips it for blobs an earlier build already checked.
 ///
-/// Read-only against `stage_dir`. It used to unlink the unusable file — a
-/// 0-byte stub or a dataless placeholder — so the next build would regenerate
-/// rather than trust it. `build::pipeline`'s pre-render sweep does that
-/// instead, keyed off the same dropped entry and still before any producer
-/// looks, but at a moment when the preview server is no longer reading
-/// staging.
+/// Read-only against `stage_dir`. The pre-render sweep removes unusable
+/// files before any producer looks and while the preview server is no longer
+/// reading staging.
 ///
 /// `_moss/math/` is the exception and keeps its entry: those PNGs
 /// are append-only and the published site still serves them, so un-promising

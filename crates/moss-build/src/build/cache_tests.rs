@@ -3429,3 +3429,50 @@ fn gc_drops_a_shared_copy_of_an_original_kept_as_its_own_output() {
     assert!(ObjectStore::new(mp.cache_local_objects()).blob_path(&oid).exists(), "the record keeps it, on this machine");
     assert!(!ObjectStore::new(objects_dir).blob_path(&oid).exists(), "a source copy, though also an output, is not shared");
 }
+
+#[test]
+fn a_saved_verified_index_spares_the_next_process_the_hash_and_still_catches_a_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let saved = dir.path().join("verified-blobs.json");
+    let first = ObjectStore::new(dir.path().join("objects"));
+    let oid = first.store_bytes(b"valid bytes", RecordMode::Request).unwrap();
+    let other = first.store_bytes(b"other bytes", RecordMode::Request).unwrap();
+    let path = first.blob_path(&oid);
+    for blob in [&path, &first.blob_path(&other)] {
+        std::fs::OpenOptions::new().write(true).open(blob).unwrap().set_times(std::fs::FileTimes::new().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_789),
+        )).unwrap();
+    }
+    super::blob_residency::HASH_READS.with(|count| count.set(0));
+    assert_eq!(first.ready_blob(&oid), Some(path.clone()));
+    assert_eq!(first.ready_blob(&other), Some(first.blob_path(&other)));
+    first.save_verified(&saved).unwrap();
+    assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 2);
+
+    // A new process: a fresh store reading what the first one saved.
+    let second = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+    assert_eq!(second.ready_blob(&oid), Some(path.clone()));
+    assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 2, "verified at this stat by the last process");
+    second.save_verified(&saved).unwrap();
+    assert_eq!(HashIndex::load(&saved).entries.len(), 1, "a blob nobody asked about drops out of the saved index");
+
+    // Rewritten in place at the same size: the stat moves, so it is hashed and refused.
+    std::fs::write(&path, b"wrong bytes").unwrap();
+    let third = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+    assert!(third.ready_blob(&oid).is_none());
+    assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 3);
+}
+
+#[test]
+fn a_store_for_one_pass_saves_every_blob_it_verified() {
+    let dir = tempfile::tempdir().unwrap();
+    let saved = dir.path().join("verified-blobs.json");
+    let store = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+    let blobs = super::blob_residency::MAX_VERIFIED_BLOBS + 1;
+    for n in 0..blobs {
+        let oid = store.store_bytes(format!("blob {n}").as_bytes(), RecordMode::Request).unwrap();
+        assert!(store.ready_blob(&oid).is_some());
+    }
+    store.save_verified(&saved).unwrap();
+    assert_eq!(HashIndex::load(&saved).entries.len(), blobs, "past the process-wide bound, nothing is cleared");
+}

@@ -68,8 +68,12 @@ pub(crate) fn repair_staged_html(
     // something other than moss) is asked of its live CAS blob here too,
     // rather than being dropped from the manifest on the strength of a stage
     // path this generation was never going to read from anyway.
-    let object_store = crate::build::cache::ObjectStore::for_site(mp);
+    let verified_blobs = mp.cache_verified_blobs();
+    let object_store = crate::build::cache::ObjectStore::for_site(mp).remembering_verified(&verified_blobs);
     let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed, Some(&object_store));
+    if let Err(e) = object_store.save_verified(&verified_blobs) {
+        log::debug!("[CAS] verified-blob index not saved: {e}");
+    }
     let verdict = crate::build::ship::ShipVerdict::after_presence_pass(sealed, entries, lost.len());
     unshippable.extend(lost);
     unshippable.extend(crate::build::ship::unregistered_referenced_variants(

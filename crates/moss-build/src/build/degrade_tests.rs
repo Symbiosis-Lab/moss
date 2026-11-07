@@ -138,3 +138,31 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     );
 }
 
+/// The presence pass asks every CAS-backed entry of its blob, and a blob is
+/// hashed unless something vouches for it at its current stat. Each build is a
+/// new process with a new store, so only the index the last seal saved can.
+#[test]
+fn the_next_seal_reads_no_blob_the_last_one_verified() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let oid = crate::build::cache::ObjectStore::for_site(&mp)
+        .store_bytes(b"stable bytes", crate::build::cache::RecordMode::Request)
+        .unwrap();
+    let seal = || {
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.apply_message("asset.bin".to_string(), "cafefacecafeface", HashBucket::Files, Some(oid.clone()));
+        pending.seal()
+    };
+    let reads = || crate::build::cache::blob_residency::HASH_READS.with(|count| count.get());
+
+    let before = reads();
+    repair_staged_html(&mp, &stage, &mut seal(), HashSet::new());
+    assert_eq!(reads() - before, 1, "the first seal checks the blob");
+
+    let mut sealed = seal();
+    repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    assert_eq!(reads() - before, 1, "the second seal trusts the first one's check");
+    assert!(sealed.files().contains_key("asset.bin"));
+}
