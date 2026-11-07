@@ -88,6 +88,9 @@ fn preview_wraps_page_text_title_language_css_and_base() {
     assert!(html.contains("Visible <strong>words</strong>"));
     assert!(html.ends_with("</html>"));
     assert_eq!(result["title"], "Example");
+    // The engine's revision for these bytes, so a host can order local and engine renders.
+    assert_eq!(result["revision"], moss_core::page::content_hash("---\ntitle: Example\n---\nVisible **words**".as_bytes()));
+    assert_eq!(result["revision"].as_str().unwrap().len(), 64);
     assert_eq!(result["diagnostics"], json!([]));
     let warned = json_value(&site().preview("a.md", ":::unknown\nWords\n:::", "/"));
     assert!(warned["diagnostics"].as_array().unwrap().iter().any(|d| d["severity"] == 2));

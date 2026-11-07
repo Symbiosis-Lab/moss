@@ -186,6 +186,15 @@ fn parse_config() -> ParseConfig {
     ParseConfig { math: true, hard_line_breaks: true, ..Default::default() }
 }
 
+/// The identity of a page's exact bytes: lowercase hex SHA-256. The engine's
+/// save names its base revision with it and a preview carries it, so a host
+/// can tell which text a render came from. mtimes are not used, because a
+/// sync client can restore an older one and two writes can share a millisecond.
+pub fn content_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 /// A page's resolved title and rendered body, without site chrome.
 pub struct RenderedPage {
     pub title: String,

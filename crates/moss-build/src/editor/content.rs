@@ -81,13 +81,7 @@ pub fn displaced_event(file_path: &str, result: &SaveResult) -> Option<crate::ty
     Some(crate::types::events::MossEvent::OutsideEditKept { path, version_id: version_id.clone() })
 }
 
-/// The identity of a file's exact bytes, as the editor's save names its base:
-/// lowercase hex SHA-256. mtimes are not used, because a sync client can
-/// restore an older one and two writes can share a millisecond.
-pub fn content_hash(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(bytes))
-}
+pub use moss_core::page::content_hash;
 
 /// Frontmatter parsing result exposed to the frontend.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]

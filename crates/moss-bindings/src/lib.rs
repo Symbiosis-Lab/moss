@@ -84,6 +84,7 @@ impl Site {
         let page = page::render_page(path, text, &self.inputs);
         let html = page::preview_document(&page, &self.inputs.lang, &self.css, base_href);
         serde_json::to_string(&Preview {
+            revision: page::content_hash(text.as_bytes()),
             html,
             title: page.title,
             diagnostics: diagnostics(page.diagnostics),
@@ -98,6 +99,8 @@ pub fn builtin_schema_json() -> String {
 
 #[derive(Serialize)]
 struct Preview {
+    /// [`page::content_hash`] of the text this render came from.
+    revision: String,
     html: String,
     title: String,
     diagnostics: Vec<EditorDiagnostic>,
