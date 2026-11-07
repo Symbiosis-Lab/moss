@@ -345,6 +345,8 @@ pub fn generate_blocking_content_for_build(
     // implicit in `pending` (caller seeded it with PendingManifest::new(previous_hashes)).
     // We still need `previous_hashes` for BackgroundContext.previous_hashes.
 
+    crate::build::notebook::register_notebook_sources(pending, source_path_buf, &project_structure.notebook_files, &previous_hashes);
+
     // Create .moss directory if it doesn't exist
     if !moss_dir.exists() {
         // allow:raw_write `.moss` itself; the regenerable tree starts below it

@@ -26,15 +26,15 @@ pub(crate) mod record;
 pub(crate) mod restore;
 pub(crate) mod store;
 pub(crate) mod timeline;
+pub(crate) mod tree;
 
 use std::path::{Path, PathBuf};
-
-use crate::build::manifest::SealedManifest;
 
 pub use record::{Entry, PublishRecord, Trigger};
 pub use restore::{RestoreMode, RestoreReport};
 pub use store::is_live;
 pub use timeline::{Row, SiteVersionPages};
+pub use tree::SourceTree;
 
 /// One site's publish history: the resolved directory (see the module doc)
 /// plus the methods that read and write under it.
@@ -82,17 +82,17 @@ impl HistoryStore {
     }
 
     /// See [`record::snapshot`].
-    pub fn snapshot(&self, vault_root: &Path, sealed: &SealedManifest, target: &str, published_at: &str) -> Result<Option<String>, String> {
-        record::snapshot(&self.root, vault_root, sealed, target, published_at)
+    pub fn snapshot(&self, vault_root: &Path, tree: &SourceTree, target: &str, published_at: &str) -> Result<Option<String>, String> {
+        record::snapshot(&self.root, vault_root, tree, target, published_at)
     }
 
     /// See [`record::snapshot_manual`].
-    pub fn snapshot_manual(&self, vault_root: &Path, sealed: &SealedManifest, target: &str, label: Option<String>) -> Result<Option<String>, String> {
-        record::snapshot_manual(&self.root, vault_root, sealed, target, label)
+    pub fn snapshot_manual(&self, vault_root: &Path, tree: &SourceTree, target: &str, label: Option<String>) -> Result<Option<String>, String> {
+        record::snapshot_manual(&self.root, vault_root, tree, target, label)
     }
 
     /// See [`record::save_before_restore`].
-    pub fn save_before_restore(&self, vault_root: &Path, current: &SealedManifest, target: &str, restoring_id: &str) -> Result<Option<String>, String> {
+    pub fn save_before_restore(&self, vault_root: &Path, current: &SourceTree, target: &str, restoring_id: &str) -> Result<Option<String>, String> {
         record::save_before_restore(&self.root, vault_root, current, target, restoring_id)
     }
 
@@ -118,7 +118,7 @@ impl HistoryStore {
         &self,
         vault_root: &Path,
         id: &str,
-        current: &SealedManifest,
+        current: &SourceTree,
         trash: &dyn Fn(&Path, &str) -> Result<(), String>,
     ) -> RestoreReport {
         restore::restore_site(&self.root, vault_root, id, current, trash)
@@ -135,7 +135,7 @@ impl HistoryStore {
     }
 
     /// See [`timeline::site_version_pages`].
-    pub fn site_version_pages(&self, id: &str, current: &SealedManifest) -> Result<SiteVersionPages, String> {
+    pub fn site_version_pages(&self, id: &str, current: &SourceTree) -> Result<SiteVersionPages, String> {
         timeline::site_version_pages(&self.root, id, current)
     }
 }
@@ -153,7 +153,7 @@ mod tests {
     use sha2::Digest;
 
     use super::*;
-    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::manifest::{HashBucket, PendingManifest, SealedManifest};
     use crate::build::served_path::ServedPath;
     use crate::build::types::SourceMetadata;
     use crate::types::content::SiteHashes;
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(store.store_dir(), dir.path().join("history"));
 
         let sealed = one_page_manifest("a.md", "a/index.html", b"hello");
-        store.snapshot(&vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+        store.snapshot(&vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
 
         let records = store.list_records();
         assert_eq!(records.len(), 1);
@@ -215,7 +215,7 @@ mod tests {
         let store = HistoryStore::at(dir.path().join("history"));
         let sealed = one_page_manifest("a.md", "a/index.html", b"hello");
 
-        store.snapshot_manual(&vault, &sealed, "moss:test", Some("A checkpoint".to_string())).unwrap();
+        store.snapshot_manual(&vault, &SourceTree::from_sealed(&sealed), "moss:test", Some("A checkpoint".to_string())).unwrap();
 
         let page_rows = store.page_timeline("a.md");
         assert_eq!(page_rows.len(), 1);
@@ -234,10 +234,10 @@ mod tests {
         std::fs::write(vault.join("a.md"), b"original").unwrap();
         let store = HistoryStore::at(dir.path().join("history"));
         let sealed = one_page_manifest("a.md", "a/index.html", b"original");
-        store.snapshot(&vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+        store.snapshot(&vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
         let (id, _) = store.list_records().into_iter().next().unwrap();
 
-        let pages = store.site_version_pages(&id, &sealed).unwrap();
+        let pages = store.site_version_pages(&id, &SourceTree::from_sealed(&sealed)).unwrap();
         assert!(pages.changed_since.is_empty(), "nothing changed since the version just taken");
         assert_eq!(pages.unchanged, vec!["a.md".to_string()]);
 
@@ -248,7 +248,7 @@ mod tests {
         std::fs::write(vault.join("a.md"), b"edited again").unwrap();
         let current = one_page_manifest("a.md", "a/index.html", b"edited again");
         let no_trash = |_: &Path, _: &str| -> Result<(), String> { Ok(()) };
-        let report = store.restore_site(&vault, &id, &current, &no_trash);
+        let report = store.restore_site(&vault, &id, &SourceTree::from_sealed(&current), &no_trash);
         assert_eq!(report.restored, vec!["a.md".to_string()]);
         assert_eq!(std::fs::read(vault.join("a.md")).unwrap(), b"original");
     }

@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use super::*;
-use crate::build::manifest::{HashBucket, PendingManifest};
+use crate::build::manifest::{HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
 use crate::build::types::SourceMetadata;
 use crate::deploy::history::store::count_blob_files_for_tests;
@@ -276,9 +276,9 @@ fn page_source_hashes_agrees_with_from_sealed() {
 }
 
 #[test]
-fn current_entry_hashes_includes_pages_and_assets() {
+fn a_sealed_tree_includes_pages_and_assets() {
     let sealed = manifest_with_a_page_and_an_asset();
-    let hashes = current_entry_hashes(&sealed);
+    let hashes = SourceTree::from_sealed(&sealed).hashes();
 
     assert_eq!(hashes.get("hello.md"), Some(&"page-hash".to_string()));
     assert_eq!(hashes.get("assets/logo.png"), Some(&"asset-hash".to_string()), "the asset must still be comparable");
@@ -294,7 +294,7 @@ fn build_entries_includes_the_asset_half_of_sources() {
     let store = ObjectStore::new(dir.path().join("objects"));
 
     let sealed = manifest_with_a_page_and_an_asset();
-    let entries = build_entries(&vault, &sealed, &store, &never_evicted);
+    let entries = build_entries(&vault, &SourceTree::from_sealed(&sealed), &store, &never_evicted);
 
     assert!(entries.contains_key("hello.md"), "the page must be recorded");
     assert!(entries.contains_key("assets/logo.png"), "the asset must be recorded alongside the page");
@@ -311,7 +311,7 @@ fn history_disabled_writes_nothing() {
     let history_root = dir.path().join("history");
 
     let sealed = manifest_with_a_page_and_an_asset();
-    snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
 
     assert!(!history_root.exists(), "a disabled site must leave no trace under the history root");
 }
@@ -325,7 +325,7 @@ fn snapshot_writes_a_well_formed_record() {
     let history_root = dir.path().join("history");
 
     let sealed = manifest_with_a_page_and_an_asset();
-    snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T08:12:33Z").unwrap();
+    snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T08:12:33Z").unwrap();
 
     // `snapshot` takes `history_root` as the site's own resolved directory
     // directly — a fixed vault-relative path, with no key to derive.
@@ -400,7 +400,7 @@ fn snapshot_manual_writes_a_manual_record_with_its_label() {
     let history_root = dir.path().join("history");
     let sealed = manifest_with_a_page_and_an_asset();
 
-    snapshot_manual(&history_root, &vault, &sealed, "moss:test", Some("Before rewriting the intro".to_string()))
+    snapshot_manual(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", Some("Before rewriting the intro".to_string()))
         .unwrap();
 
     let records = store::list_records(&history_root);
@@ -421,12 +421,12 @@ fn save_before_restore_writes_nothing_when_current_matches_the_newest_record() {
     let history_root = dir.path().join("history");
     let sealed = manifest_with_a_page_and_an_asset();
 
-    snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
     let (restoring_id, _) = &store::list_records(&history_root)[0];
 
     // The tree has not changed since that publish: restoring it is a no-op
     // for undo purposes, so no pre-restore record should appear.
-    save_before_restore(&history_root, &vault, &sealed, "moss:test", restoring_id).unwrap();
+    save_before_restore(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", restoring_id).unwrap();
 
     assert_eq!(store::list_records(&history_root).len(), 1, "no redundant pre-restore record");
 }
@@ -439,7 +439,7 @@ fn save_before_restore_saves_when_the_current_tree_differs() {
     fs::write(vault.join("hello.md"), b"hello").unwrap();
     let history_root = dir.path().join("history");
     let sealed = manifest_with_a_page_and_an_asset();
-    snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
     let (restoring_id, restoring_record) = store::list_records(&history_root)[0].clone();
 
     // The author has since edited the page: current entries no longer match
@@ -455,7 +455,7 @@ fn save_before_restore_saves_when_the_current_tree_differs() {
     );
     let current = pending.seal();
 
-    save_before_restore(&history_root, &vault, &current, "moss:test", &restoring_id).unwrap();
+    save_before_restore(&history_root, &vault, &SourceTree::from_sealed(&current), "moss:test", &restoring_id).unwrap();
 
     let records = store::list_records(&history_root);
     assert_eq!(records.len(), 2, "the pre-restore save must be written");

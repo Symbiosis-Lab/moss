@@ -5,8 +5,8 @@
 //!
 //! Neither function saves the present as a version first — that is
 //! [`super::record::save_before_restore`], a separate call the caller makes
-//! (with a freshly sealed manifest) before either of these, exactly as a
-//! manual save is. Composing them into one user-facing "Restore" action is
+//! (with the tree as it stands) before either of these, exactly as a manual
+//! save is. Composing them into one user-facing "Restore" action is
 //! for the slice that has a CLI verb and a panel to drive it from.
 
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::record::{self, Entry};
 use super::store;
 use crate::build::cache::ObjectStore;
-use crate::build::manifest::SealedManifest;
+use super::tree::SourceTree;
 use crate::types::content::MODE_SYMLINK;
 
 /// Where a restored page's bytes go.
@@ -57,8 +57,8 @@ pub(crate) fn restore_page(root: &Path, vault_root: &Path, id: &str, path: &str,
 /// Restore the whole site to one version: every entry whose hash differs
 /// from `current` is written back (this covers both an edit since then and a
 /// deletion since then — a deleted-since path simply is not in `current`'s
-/// hashes); every path `current` has that this version does not goes to the
-/// OS Trash.
+/// hashes); every page source `current` has that this version does not goes
+/// to the OS Trash. Other files absent from the version stay on disk.
 ///
 /// Best-effort like the rest of publish history: one page's restore or trash
 /// failing does not stop the rest, and the report says exactly what
@@ -74,7 +74,7 @@ pub(crate) fn restore_site(
     root: &Path,
     vault_root: &Path,
     id: &str,
-    current: &SealedManifest,
+    current: &SourceTree,
     trash: &dyn Fn(&Path, &str) -> Result<(), String>,
 ) -> RestoreReport {
     let mut report = RestoreReport::default();
@@ -86,7 +86,7 @@ pub(crate) fn restore_site(
         }
     };
     let object_store = store::object_store(root);
-    let current_hashes = record::current_entry_hashes(current);
+    let current_hashes = current.hashes();
 
     for (path, entry) in &record.entries {
         if current_hashes.get(path) == Some(&entry.hash) {
@@ -100,7 +100,7 @@ pub(crate) fn restore_site(
     }
 
     for path in current_hashes.keys() {
-        if record.entries.contains_key(path) {
+        if record.entries.contains_key(path) || !crate::build::scan::classify::is_page_path(Path::new(path)) {
             continue;
         }
         match trash(vault_root, path) {

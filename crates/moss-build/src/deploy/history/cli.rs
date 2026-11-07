@@ -24,11 +24,8 @@
 //! timeline and page-restore forms is a manifest-relative SOURCE path
 //! *within the vault* — see [`relative_source_path`].
 //!
-//! `--save` and `--restore` both need a [`SealedManifest`] of the tree as it
-//! stands right now, and the only way to get one outside the app (which keeps
-//! one live in `AppState`) is to build — [`headless_build_sealed`], the same
-//! shape `moss deploy` builds with (`deploy::push::run_hosted_deploy`), minus
-//! the publish.
+//! `--save` and `--restore` read the tree as the disk holds it
+//! ([`SourceTree::on_disk`]); neither builds.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -36,8 +33,8 @@ use std::path::Path;
 use super::record::{PublishRecord, Trigger};
 use super::restore::{self, RestoreMode, RestoreReport};
 use super::store;
-use super::HistoryStore;
-use crate::build::manifest::{published_record, SealedManifest};
+use super::{HistoryStore, SourceTree};
+use crate::build::manifest::published_record;
 use crate::cli::list::fail;
 use crate::moss_paths::MossPaths;
 use crate::vault_root::{resolve_input, VaultRoot};
@@ -288,38 +285,6 @@ fn resolve_id<'a>(records: &'a [(String, PublishRecord)], needle: &str) -> Resul
     }
 }
 
-/// This process's setup, then a real headless build of `root`, and the
-/// manifest it sealed — [`crate::deploy::one_shot::build_sealed_now`], the
-/// same build `deploy::push::run_hosted_deploy` and
-/// `deploy::plugin_push::run_plugin_deploy` use, minus the publish. `--save`
-/// and `--restore` both need this: neither is running inside the app, which
-/// keeps a sealed manifest live in `AppState` as files change, so a terminal
-/// process has to make its own.
-///
-/// The three setup lines and the runtime are what a fresh CLI process owes and
-/// the shared build does not do — a serving process has already done them, and
-/// `register_session` in particular DRAINS the folder's existing session.
-///
-/// No `--allow-plugins` here — this command has no such flag — so a
-/// sideloaded plugin is refused exactly as a plain `moss build` refuses one;
-/// a plugin the app has already approved still runs.
-pub(crate) fn headless_build_sealed(root: &VaultRoot) -> Result<SealedManifest, String> {
-    crate::build::cli_output::install_headless_logger();
-    crate::plugins::install::registry_client::enforce::install_headless(false);
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("failed to start runtime: {e}"))?;
-    // In the runtime: a second build in this process spawns the first one's shutdown.
-    let _session = {
-        let _context = runtime.enter();
-        crate::system::folder_session::register_session(root.as_str())
-    };
-
-    runtime.block_on(crate::deploy::one_shot::build_sealed_now(root))
-}
-
 /// The site's currently configured publish target, or moss's own target for
 /// a folder that has never named one — the same fallback the app's
 /// `current_deploy_target` makes.
@@ -355,11 +320,11 @@ fn run_save(root: &VaultRoot, name: Option<String>, json: bool) -> i32 {
     }
 }
 
-/// Build `root` and save a version now, as `--save` does; its id and record.
+/// Save a version of `root` as the disk holds it now, as `--save` does; its id and record.
 pub(crate) fn save_version(root: &VaultRoot, label: Option<String>) -> Result<(String, PublishRecord), String> {
     let store = open_store(root);
-    let sealed = headless_build_sealed(root)?;
-    let id = store.snapshot_manual(root.path(), &sealed, &current_target(root), label).map_err(|e| format!("could not save a version: {e}"))?;
+    let tree = SourceTree::on_disk(root.path())?;
+    let id = store.snapshot_manual(root.path(), &tree, &current_target(root), label).map_err(|e| format!("could not save a version: {e}"))?;
     match id.and_then(|id| store.load_record(&id).map(|record| (id, record))) {
         Some(saved) => Ok(saved),
         None => Err("no version was saved; is history turned off with [history] enabled = false?".to_string()),
@@ -423,10 +388,10 @@ fn saved_json(id: &str, record: &PublishRecord) -> serde_json::Result<String> {
 struct RestorePrep {
     store: HistoryStore,
     id: String,
-    sealed: SealedManifest,
+    current: SourceTree,
 }
 
-/// Guard, open the store, resolve `at` to a real id, build the tree as it
+/// Guard, open the store, resolve `at` to a real id, read the tree as it
 /// stands now, and save that as a version before anything is overwritten or
 /// trashed. Both `run_restore_page` and `run_restore_site` are this plus
 /// their own final call — the guard used to be missing from both (finding 1
@@ -443,11 +408,11 @@ fn prepare_restore(root: &VaultRoot, at: &str, whole_site: bool) -> Result<Resto
     // A kept outside edit was published nowhere: its backup takes the site's current target.
     let restored = records.iter().find(|(rid, _)| rid == &id).and_then(|(_, r)| r.published_target());
     let target = restored.map_or_else(|| current_target(root), str::to_string);
-    let sealed = headless_build_sealed(root)?;
-    if let Err(e) = store.save_before_restore(root.path(), &sealed, &target, &id) {
+    let current = SourceTree::on_disk(root.path())?;
+    if let Err(e) = store.save_before_restore(root.path(), &current, &target, &id) {
         eprintln!("warning: could not save a version before restoring: {e}");
     }
-    Ok(RestorePrep { store, id, sealed })
+    Ok(RestorePrep { store, id, current })
 }
 
 fn run_restore_page(root: &VaultRoot, path_arg: &str, at: &str, copy: bool) -> i32 {
@@ -496,7 +461,7 @@ fn run_restore_site(root: &VaultRoot, at: &str, yes: bool) -> i32 {
         }
     };
 
-    let report = prep.store.restore_site(root.path(), &prep.id, &prep.sealed, &restore::real_trash);
+    let report = prep.store.restore_site(root.path(), &prep.id, &prep.current, &restore::real_trash);
     print_restore_report(&report);
     if report.failed.is_empty() {
         0
@@ -991,24 +956,6 @@ mod tests {
     /// and then resolved by `VaultRoot::resolve` — both pure, and the same
     /// two steps every one of `run`'s five forms shares before they diverge,
     /// so proving them once proves all five.
-    ///
-    /// Driven at that seam rather than through a real `--save`: `run_save`
-    /// reaches `headless_build_sealed`, which installs this crate's
-    /// process-wide, set-once plugin admission check
-    /// (`plugins::admission::install_check` — "the first caller wins and
-    /// later ones are dropped") and registers a folder session outside of
-    /// any Tokio runtime. A real `--save` here was tried first: it panicked
-    /// on the missing runtime, and skipping just that panic still left the
-    /// admission check wedged into its "headless, nothing approved" verdict
-    /// for the rest of the test binary, failing 19 unrelated tests across
-    /// `host_fns`, `plugins::manager`, `plugins::registry` and
-    /// `deploy::publish_setup` that rely on the documented default — "nothing
-    /// installed means nothing refused... every test binary"
-    /// (`plugins::admission`'s module doc). `deploy::one_shot`'s own hermetic
-    /// build test avoids the same trap with `PluginMode::Skip` and a
-    /// `#[tokio::test]` runtime; `headless_build_sealed` has no such seam to
-    /// give a caller, so a real save cannot be made hermetic here without
-    /// changing production behaviour.
     #[test]
     fn a_site_folder_positional_is_recognized_as_the_folder_not_the_save_label() {
         let (_dir, site) = tmp_site("resolve-folder");

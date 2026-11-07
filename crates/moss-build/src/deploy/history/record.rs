@@ -5,14 +5,12 @@
 //! page another writer left, kept when the editor saved over it
 //! ([`snapshot_displaced`]).
 //!
-//! # What happens at each publish
+//! # What happens at each record
 //!
-//! One read of the sealed manifest: the page set (via
-//! [`crate::build::manifest::change_set::page_source_hashes`], the same
-//! helper `PublishedSnapshot::from_sealed` uses, so the deploy baseline and
-//! the history record can never drift) plus the asset half of
-//! `SealedManifest::sources`. For every entry, [`record_one`] decides by
-//! `lstat`: a symlink stores its target string; a regular file already in the
+//! One read of a [`SourceTree`]: the sealed build's sources for a publish, so
+//! the deploy baseline and the history record name the same bytes, or the
+//! disk as it stands for every other record. For every entry, [`record_one`]
+//! decides by `lstat`: a symlink stores its target string; a regular file already in the
 //! store, over [`super::store::HISTORY_MEDIA_CEILING`], or cloud-evicted is
 //! recorded by hash without a new blob. Never fails a publish — every I/O
 //! error here is caught, logged at debug, and answered by recording what the
@@ -25,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::store;
+use super::tree::SourceTree;
 use crate::build::cache::ObjectStore;
-use crate::build::manifest::SealedManifest;
 use crate::types::content::{MODE_FILE, MODE_SYMLINK};
 
 /// What caused a record to be written. `#[serde(default)]` on the field that
@@ -109,26 +107,24 @@ pub struct Entry {
 pub(crate) fn snapshot(
     root: &Path,
     vault_root: &Path,
-    sealed: &SealedManifest,
+    tree: &SourceTree,
     target: &str,
     published_at: &str,
 ) -> Result<Option<String>, String> {
-    write_snapshot(root, vault_root, sealed, target, published_at, Trigger::Publish, None)
+    write_snapshot(root, vault_root, tree, target, published_at, Trigger::Publish, None)
 }
 
-/// Save a version now, outside the publish flow. The caller (the app: flush
-/// the editor, wait for rebuild quiet, then seal; the CLI: a headless build)
-/// supplies a fresh sealed manifest — this takes no part in producing one
-/// (design decision 2).
+/// Save a version now, outside the publish flow, of `tree` (the disk as it
+/// stands: [`SourceTree::on_disk`]).
 pub(crate) fn snapshot_manual(
     root: &Path,
     vault_root: &Path,
-    sealed: &SealedManifest,
+    tree: &SourceTree,
     target: &str,
     label: Option<String>,
 ) -> Result<Option<String>, String> {
     let published_at = chrono::Utc::now().to_rfc3339();
-    write_snapshot(root, vault_root, sealed, target, &published_at, Trigger::Manual, label)
+    write_snapshot(root, vault_root, tree, target, &published_at, Trigger::Manual, label)
 }
 
 /// Save the present as a version before a restore overwrites it, so the
@@ -143,7 +139,7 @@ pub(crate) fn snapshot_manual(
 pub(crate) fn save_before_restore(
     root: &Path,
     vault_root: &Path,
-    current: &SealedManifest,
+    current: &SourceTree,
     target: &str,
     restoring_id: &str,
 ) -> Result<Option<String>, String> {
@@ -151,7 +147,7 @@ pub(crate) fn save_before_restore(
         store::load_record(root, restoring_id).ok_or_else(|| format!("no such version: {restoring_id}"))?;
 
     let newest_for_target = store::list_records(root).into_iter().rev().find(|(_, r)| r.target == target);
-    let current_hashes = current_entry_hashes(current);
+    let current_hashes = current.hashes();
     // No prior record for this target is not a real case a restore can reach
     // (you can only restore a record that already exists), but treat it as
     // "differs" rather than panic or skip: the save is still cheap and
@@ -176,21 +172,6 @@ pub(crate) fn flat_hashes(record: &PublishRecord) -> HashMap<String, String> {
     record.entries.iter().map(|(path, entry)| (path.clone(), entry.hash.clone())).collect()
 }
 
-/// The same flat shape, read off a `SealedManifest` instead of a record: the
-/// page half via [`crate::build::manifest::change_set::page_source_hashes`]
-/// (pages the manifest actually hashed) union the asset half of `sources()` —
-/// the same key selection [`build_entries`] stores, but pure: no vault I/O,
-/// no store, just the hashes the manifest already knows. Shared by
-/// [`save_before_restore`]'s "did anything change?" check and
-/// `timeline::site_version_pages`'s comparison against the live tree.
-pub(crate) fn current_entry_hashes(sealed: &SealedManifest) -> HashMap<String, String> {
-    let mut out = crate::build::manifest::change_set::page_source_hashes(sealed);
-    for (src, meta) in sealed.sources() {
-        out.entry(src.clone()).or_insert_with(|| meta.hash.clone());
-    }
-    out
-}
-
 /// "Before restoring Sep 8" — a short human date for the automatic
 /// pre-restore label. Falls back to the raw timestamp if `published_at`
 /// somehow fails to parse, which never happens for a record this module
@@ -208,7 +189,7 @@ pub(crate) fn format_date(rfc3339: &str) -> String {
 fn write_snapshot(
     root: &Path,
     vault_root: &Path,
-    sealed: &SealedManifest,
+    tree: &SourceTree,
     target: &str,
     published_at: &str,
     trigger: Trigger,
@@ -219,12 +200,12 @@ fn write_snapshot(
     }
 
     let object_store = store::object_store(root);
-    let entries = build_entries(vault_root, sealed, &object_store, &crate::build::icloud::is_evicted);
+    let entries = build_entries(vault_root, tree, &object_store, &crate::build::icloud::is_evicted);
     let record = PublishRecord {
         version: 1,
         published_at: published_at.to_string(),
         target: target.to_string(),
-        generation_id: sealed.generation_id().to_string(),
+        generation_id: tree.generation_id().to_string(),
         git_head: resolve_git_head(vault_root),
         trigger,
         label,
@@ -270,24 +251,15 @@ fn write_record(root: &Path, record: &PublishRecord) -> Result<(), String> {
     crate::infra::atomic_write::write_json_atomic(&root.join("publishes").join(filename), record)
 }
 
-/// The page set (via the shared helper) union the asset half of
-/// `sealed.sources()`, each resolved against the real file at landing time.
+/// Every entry of `tree`, each resolved against the real file now.
 pub(crate) fn build_entries(
     vault_root: &Path,
-    sealed: &SealedManifest,
+    tree: &SourceTree,
     store: &ObjectStore,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> BTreeMap<String, Entry> {
-    let page_hashes = crate::build::manifest::change_set::page_source_hashes(sealed);
     let mut out = BTreeMap::new();
-    for (src, hash) in &page_hashes {
-        let size = sealed.sources().get(src).map(|m| m.size);
-        record_one(vault_root, store, src, hash, size, is_evicted, &mut out);
-    }
-    for (src, meta) in sealed.sources() {
-        if page_hashes.contains_key(src) {
-            continue;
-        }
+    for (src, meta) in tree.sources() {
         record_one(vault_root, store, src, &meta.hash, Some(meta.size), is_evicted, &mut out);
     }
     out

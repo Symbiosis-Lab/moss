@@ -127,7 +127,7 @@ for the whole site, so none also removes a place the field already has.
 
 --import-sources <list.json> reads a JSON array of addresses a page was
 imported from. Imports made before `origin:` existed wrote that address into
-`syndicated:`, so the page marks it as a copy for tools. Each page whose
+`syndicated:`, so the page shows it as a copy (\"Also on\"). Each page whose
 `syndicated:` holds one listed address gets it as `origin:` instead; its
 other entries stay. A page is left as written when it already names a
 different origin, holds two listed addresses, shares one with another page,
@@ -198,8 +198,6 @@ fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
     if !(args.apply && report.writable()) {
         return Ok(report);
     }
-    // Planned again after the save, so the plan is checked against the files
-    // the version just recorded.
     let root = VaultRoot::resolve(folder);
     let label = match (&args.lift, &args.import_sources) {
         (Some(class), _) => format!("Before moss migrate --lift .{class}"),
@@ -207,10 +205,6 @@ fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
         (None, None) => "Before moss migrate".to_string(),
     };
     let (id, _) = crate::deploy::history::cli::save_version(&root, Some(label)).map_err(|e| format!("{e} — nothing was changed"))?;
-    report = plan(folder, args)?;
-    if !report.writable() {
-        return Ok(report);
-    }
     let store = crate::deploy::history::HistoryStore::in_vault(folder);
     for change in &report.changes {
         let new_file = change.before.is_empty() && !folder.join(&change.path).exists();
@@ -345,7 +339,7 @@ fn output_unchanged(folder: &Path, changes: &[FileChange]) -> Result<bool, Strin
     copy_site(folder, scratch.path())?;
     let root = VaultRoot::resolve(scratch.path());
     let build = |what: &str| {
-        crate::deploy::history::cli::headless_build_sealed(&root)
+        headless_build_sealed(&root)
             .map(|sealed| sealed.generation_id().to_string())
             .map_err(|e| format!("could not build the scratch copy {what}: {e}"))
     };
@@ -355,6 +349,26 @@ fn output_unchanged(folder: &Path, changes: &[FileChange]) -> Result<bool, Strin
         std::fs::write(scratch.path().join(&change.path), &change.after).map_err(|e| format!("could not write the scratch copy: {e}"))?;
     }
     Ok(build("with the changes")? == before)
+}
+
+/// A real headless build of `root` and the manifest it sealed, with the setup
+/// a fresh CLI process owes first: the headless logger, the plugin admission
+/// check, and a folder session inside a runtime of its own.
+fn headless_build_sealed(root: &VaultRoot) -> Result<crate::build::manifest::SealedManifest, String> {
+    crate::build::cli_output::install_headless_logger();
+    crate::plugins::install::registry_client::enforce::install_headless(false);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to start runtime: {e}"))?;
+    // In the runtime: a second build in this process spawns the first one's shutdown.
+    let _session = {
+        let _context = runtime.enter();
+        crate::system::folder_session::register_session(root.as_str())
+    };
+
+    runtime.block_on(crate::deploy::one_shot::build_sealed_now(root))
 }
 
 /// The site's files, without its build output, version history and git

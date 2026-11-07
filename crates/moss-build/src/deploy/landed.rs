@@ -249,14 +249,14 @@ async fn record_what_is_live(
     // Rebuilt rather than moved: `MossPaths` is a path wrapper, and this keeps
     // the borrow out of the blocking task.
     let root = mp.project_root().to_path_buf();
-    let sealed_for_history = sealed.clone();
+    let tree = crate::deploy::history::SourceTree::from_sealed(sealed);
     let target_owned = target.to_string();
     let history_owned = history.clone();
     let written = tokio::task::spawn_blocking(move || {
         let outcome = published_record::save(&MossPaths::new(&root), &record);
         // Best-effort and independent of the write above: a publish-history
         // failure must never suppress the rename baseline, and vice versa.
-        if let Err(e) = history_owned.snapshot(&root, &sealed_for_history, &target_owned, &now) {
+        if let Err(e) = history_owned.snapshot(&root, &tree, &target_owned, &now) {
             log::warn!("deploy: could not snapshot publish history: {e}");
         }
         outcome

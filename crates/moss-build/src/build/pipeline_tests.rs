@@ -6721,6 +6721,27 @@ fn slot_only_sources_appear_in_sealed_sources() {
     }
 }
 
+#[test]
+fn notebook_sources_appear_in_sealed_sources() {
+    use sha2::{Digest, Sha256};
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    let notebook = br#"{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}"#;
+    fs::write(test_dir.join("index.md"), "# Home\n").unwrap();
+    fs::write(test_dir.join("lab.ipynb"), notebook).unwrap();
+
+    without_jupyterlite_assets(|| {
+        for incremental in [false, true] {
+            build_test_full_with_gates(folder_path, None, None, None, None, &ResolvedSlots::empty(),
+                crate::build::render::IncrementalGates { render_skip: incremental, parse_cache: incremental }).unwrap();
+            let hashes = load_previous_hashes(folder_path);
+            let meta = hashes.sources.get("lab.ipynb").expect("a walked notebook needs a sealed source hash");
+            assert_eq!(meta.hash, format!("{:x}", Sha256::digest(notebook)));
+            assert!(!hashes.source_to_output.contains_key("lab.ipynb"));
+        }
+    });
+}
+
 /// A Finder alias whose target will not resolve is skipped from the output,
 /// but the walk still judges it, so it needs a `sources` entry for the same
 /// reason as the slot files above.

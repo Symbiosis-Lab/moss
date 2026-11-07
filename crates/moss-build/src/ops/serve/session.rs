@@ -5,10 +5,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 
-use crate::build::manifest::SealedManifest;
 use crate::commands::rename_undo::RenameUndoStore;
 use crate::commands::{CommandHost, VaultPath};
 use crate::types::events::MossEvent;
@@ -97,11 +95,6 @@ impl CommandHost for Session {
 
     fn publish(&self, event: &MossEvent) {
         super::events::publish(event);
-    }
-
-    /// No live build here, so this builds.
-    fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>> {
-        Box::pin(crate::deploy::one_shot::build_sealed_now(&self.vault))
     }
 }
 

@@ -3082,9 +3082,7 @@ export type VersionContent = { kept: boolean; text: string | null }
  * for a site-scope drill-down (`scope: "site"`, `path: Some(<version id>)`)
  * — the "A site version" sub-view's Changed-since/Unchanged groups — and
  * `rows` is empty in that mode. One command rather than two: the drill-down
- * reuses [`HistoryStore::site_version_pages`], which needs the live sealed
- * manifest exactly like the top-level list's `live_id` does, so the two
- * share one body instead of duplicating the manifest plumbing.
+ * reuses [`HistoryStore::site_version_pages`] in the same body as the list.
  */
 export type VersionList = { rows: VersionRow[]; 
 /**

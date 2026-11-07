@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use futures::future::BoxFuture;
 use serde_json::{json, Value};
 
 use super::rename_undo::{RenameUndoStore, RENAME_UNDO_CAPACITY};
@@ -205,9 +204,6 @@ impl CommandHost for TestHost {
     ) -> Result<crate::editor::content::SaveResult, String> {
         self.saved.lock().unwrap().push(file_path.to_string());
         save()
-    }
-    fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>> {
-        Box::pin(async { Err("no build in tests".to_string()) })
     }
 }
 
