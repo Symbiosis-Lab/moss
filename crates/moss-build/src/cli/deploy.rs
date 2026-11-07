@@ -1147,6 +1147,23 @@ mod email_wiring_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_fresh_key_on_an_existing_site_is_signed_in_with_email_and_only_with_it() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+        std::fs::write(folder.dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"my-site\"\n").unwrap();
+
+        let _ = deploy(&folder, None).await;
+        assert_eq!(seta.count("POST /auth/request"), 0, "no link without --email");
+
+        let _ = deploy(&folder, Some("ada@example.test")).await;
+        assert_eq!(seta.count("POST /auth/request"), 1, "the unlinked key is signed in");
+
+        *seta.account.lock().unwrap() = Some("ada@example.test");
+        let _ = deploy(&folder, Some("ada@example.test")).await;
+        assert_eq!(seta.count("POST /auth/request"), 1, "a linked key is never re-sent a link");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_refused_first_publish_without_email_requests_nothing_and_names_the_flag() {
         let seta = Seta::start(1, "verified").await;
         let folder = Folder::new(&seta);

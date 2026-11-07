@@ -18,6 +18,10 @@ pub const WAIT_LIMIT: Duration = Duration::from_secs(15 * 60);
 /// refusal by it, so the producer and the recogniser share one constant.
 pub const UNVERIFIED_REFUSAL: &str = "Identity not yet verified for an account.";
 
+/// The service's refusal of a key that does not own the site. A fresh key on a
+/// site that already exists gets this, not [`UNVERIFIED_REFUSAL`].
+const NOT_OWNER_REFUSAL: &str = "Not authorized for this site";
+
 /// Whether `message` is the refusal that `--email` can lift.
 pub fn is_unverified_refusal(message: &str) -> bool {
     message.starts_with(UNVERIFIED_REFUSAL)
@@ -176,8 +180,19 @@ pub async fn refresh_recorded_email(
     let _ = updated.save_public(folder);
 }
 
+/// Whether the hosting service says this folder's key belongs to no account,
+/// as a fresh key does until it is verified. False when it cannot be asked.
+async fn key_is_unlinked(folder: &Path) -> bool {
+    let Ok(identity) = super::keypair::Identity::load_for_signing(folder) else { return false };
+    let env = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
+    let client = crate::seta::client::MossSetaClient::for_environment(&identity, &env);
+    client.whoami().await.is_ok_and(|who| who.email.is_none())
+}
+
 /// Run `attempt`; if it is refused for want of a verified account and `email`
-/// was given, verify that address and run it once more.
+/// was given, verify that address and run it once more. A not-the-owner refusal
+/// counts only when the service says the key belongs to no account (asked
+/// again here because only a refused publish needs the answer).
 pub async fn retrying_after_verification<T, F, Fut>(
     folder: &Path,
     email: Option<&str>,
@@ -190,7 +205,9 @@ where
     Fut: std::future::Future<Output = Result<T, String>>,
 {
     match (attempt().await, email) {
-        (Err(refusal), Some(email)) if is_unverified_refusal(&refusal) => {
+        (Err(refusal), Some(email))
+            if is_unverified_refusal(&refusal) || (refusal.contains(NOT_OWNER_REFUSAL) && key_is_unlinked(folder).await) =>
+        {
             verify_folder_email(folder, email, interval, limit).await?;
             attempt().await
         }
