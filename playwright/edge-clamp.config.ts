@@ -28,6 +28,6 @@ const PORT = gatePort('edge-clamp');
 
 export default defineGateConfig({
   gate: 'edge-clamp',
-  use: { baseURL: `http://localhost:${PORT}`, reducedMotion: 'reduce' },
+  use: { baseURL: `http://localhost:${PORT}`, contextOptions: { reducedMotion: 'reduce' } },
   webServer: { configFile: 'playwright/vite.edge-clamp-harness.config.ts', port: PORT },
 });

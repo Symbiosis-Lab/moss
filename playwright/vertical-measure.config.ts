@@ -14,5 +14,5 @@ import { defineGateConfig } from './define-gate-config';
 export default defineGateConfig({
   gate: 'vertical-measure',
   fullyParallel: true,
-  use: { reducedMotion: 'reduce' },
+  use: { contextOptions: { reducedMotion: 'reduce' } },
 });

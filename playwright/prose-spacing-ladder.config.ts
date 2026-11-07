@@ -17,5 +17,5 @@ import { defineGateConfig } from './define-gate-config';
 export default defineGateConfig({
   gate: 'prose-spacing-ladder',
   fullyParallel: true,
-  use: { reducedMotion: 'reduce' },
+  use: { contextOptions: { reducedMotion: 'reduce' } },
 });

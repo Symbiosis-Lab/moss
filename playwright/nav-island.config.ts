@@ -30,6 +30,6 @@ const PORT = gatePort('nav-island');
 
 export default defineGateConfig({
   gate: 'nav-island',
-  use: { baseURL: `http://localhost:${PORT}`, reducedMotion: 'reduce' },
+  use: { baseURL: `http://localhost:${PORT}`, contextOptions: { reducedMotion: 'reduce' } },
   webServer: { configFile: 'playwright/vite.nav-island-harness.config.ts', port: PORT },
 });

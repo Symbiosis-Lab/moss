@@ -20,6 +20,6 @@ const serveDir = buildScratchSite(CONTENT_WIDTH_ESCAPE_GATE);
 
 export default defineGateConfig({
   gate: 'content-width-escape',
-  use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light', reducedMotion: 'reduce' },
+  use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light', contextOptions: { reducedMotion: 'reduce' } },
   webServer: { serveDir, port: PORT },
 });
