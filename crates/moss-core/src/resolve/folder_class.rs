@@ -18,6 +18,17 @@ pub trait FolderIndex {
     fn dir_has_static_index(&self, root_rel: &str) -> Option<String>;
 }
 
+/// Negative folder index for a resolve that must not treat any reference as a
+/// folder: folder references stay advisory instead of reading as missing
+/// assets, and no whole-site page surface is derived to answer them.
+pub struct NoFolderIndex;
+
+impl FolderIndex for NoFolderIndex {
+    fn is_dir(&self, _root_rel: &str) -> bool { false }
+    fn dir_has_markdown_index(&self, _root_rel: &str) -> bool { false }
+    fn dir_has_static_index(&self, _root_rel: &str) -> Option<String> { None }
+}
+
 #[cfg(test)]
 pub(crate) struct FakeFolderIndex {
     pub dirs: std::collections::HashSet<String>,

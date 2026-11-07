@@ -1,5 +1,24 @@
 use super::policy::*;
 use std::collections::HashSet;
+
+#[test]
+fn free_names_keep_the_extension_and_use_the_first_gap() {
+    use std::path::Path;
+    for (dir, name, taken, expected) in [
+        ("", "a.md", vec![], "a.md"),
+        ("posts", "a.md", vec!["elsewhere/a.md"], "a.md"),
+        ("posts", "a.md", vec!["posts/a.md", "posts/a-2.md", "posts/a-4.md"], "a-3.md"),
+        ("", "notes", vec!["notes", "notes-2"], "notes-3"),
+        ("", "archive.tar.gz", vec!["archive.tar.gz"], "archive.tar-2.gz"),
+        ("", ".hidden", vec![".hidden"], ".hidden-2"),
+        ("", "a-2.md", vec!["a-2.md"], "a-2-2.md"),
+        ("", "a.", vec!["a."], "a-2."),
+        ("照片", "河灣.jpg", vec!["照片/河灣.jpg"], "河灣-2.jpg"),
+    ] {
+        let actual = free_name(Path::new(dir), name.as_ref(), |p| taken.iter().any(|t| Path::new(t) == p));
+        assert_eq!(actual, expected, "{dir}/{name}");
+    }
+}
     #[test]
     fn os_junk_hides_at_every_level_regardless_of_the_toggle() {
         for name in [".DS_Store", FINDER_ICON_MARKER, "Thumbs.db"] {
@@ -157,4 +176,45 @@ fn page_settings_use_existing_exact_files_and_ordered_config() {
     assert!(settings(&["fr", "app", "missing/index.html"]).is_empty());
     assert!(settings(&["index.html", "!index.html"]).is_empty());
     assert_eq!(settings(&["index.html", "!index.html", "index.html"]), HashSet::from([String::new()]));
+}
+
+#[test]
+fn passthrough_roots_are_index_folders_then_config_entries_in_order() {
+    // (scanned HTML files, config entries, expected roots)
+    let cases: &[(&[&str], &[&str], &[&str])] = &[
+        // A folder holding index.html is a root; a root-level page is not.
+        (&["app/index.html", "about.html"], &[], &["app/"]),
+        (&["index.html"], &[], &[]),
+        (&[], &["raw-data"], &["raw-data/"]),
+        // A listed HTML file named in config is an exact root, without `/`.
+        (&["index.html"], &["index.html"], &["index.html"]),
+        (&["index.html"], &["index.html", "!index.html"], &[]),
+        // A dotted name not among the files stays a folder.
+        (&[], &["app.v2"], &["app.v2/"]),
+        (&["app/index.html"], &["!app"], &[]),
+        // A leading slash in config still names the root-relative folder.
+        (&[], &["/app"], &["app/"]),
+        // Empty, bare-slash and lone-`!` entries make no root.
+        (&["real/index.html"], &["", "/", "!"], &["real/"]),
+    ];
+    for (html, config, expected) in cases {
+        let config: Vec<String> = config.iter().map(|e| e.to_string()).collect();
+        let roots = compute_passthrough_roots(html, &config);
+        let expected: HashSet<String> = expected.iter().map(|r| r.to_string()).collect();
+        assert_eq!(roots, expected, "{html:?} with {config:?}");
+    }
+}
+
+#[test]
+fn in_passthrough_matches_whole_segments_or_the_exact_file() {
+    let folders: HashSet<String> = ["app/".to_string(), "app.v2/".to_string()].into();
+    assert!(is_in_passthrough("app/image.png", &folders));
+    assert!(is_in_passthrough("app/sub/deep.js", &folders));
+    assert!(is_in_passthrough("app.v2/index.html", &folders));
+    assert!(!is_in_passthrough("other/image.png", &folders));
+    assert!(!is_in_passthrough("appended/file.png", &folders), "must not prefix-match across separator");
+    let exact: HashSet<String> = ["index.html".to_string()].into();
+    assert!(is_in_passthrough("index.html", &exact));
+    assert!(!is_in_passthrough("index.html/child", &exact));
+    assert!(!is_in_passthrough("index.html.bak", &exact));
 }

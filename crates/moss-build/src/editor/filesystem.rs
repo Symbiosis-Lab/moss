@@ -310,31 +310,10 @@ pub(crate) fn first_free(path: &std::path::Path, claimed: impl Fn(&std::path::Pa
     // symlink_metadata, not exists(): exists() follows symlinks, so a
     // dangling symlink at the destination reads as absent and a write would
     // go through it, outside the folder if it points there.
-    let taken = |p: &std::path::Path| p.symlink_metadata().is_ok() || claimed(p);
-    if !taken(path) {
-        return path.to_path_buf();
-    }
-
-    let stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let ext = path.extension().map(|e| e.to_string_lossy().to_string());
     let parent = path.parent().unwrap_or(path);
-
-    for i in 2u64.. {
-        let new_name = match &ext {
-            Some(e) => format!("{}-{}.{}", stem, i, e),
-            None => format!("{}-{}", stem, i),
-        };
-        let candidate = parent.join(&new_name);
-        if !taken(&candidate) {
-            return candidate;
-        }
-    }
-
-    unreachable!()
+    parent.join(moss_core::source_edit::free_name(parent, path.file_name().unwrap_or_default(), |p| {
+        p.symlink_metadata().is_ok() || claimed(p)
+    }))
 }
 
 // ── Frontmatter helper for tree construction ──────────────────────────────
@@ -356,6 +335,25 @@ pub fn read_frontmatter_only(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_name_skips_disk_entries_and_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let wanted = dir.path().join("a.md");
+        assert_eq!(resolve_collision(&wanted), wanted);
+        std::fs::write(&wanted, "").unwrap();
+        std::fs::create_dir(dir.path().join("a-2.md")).unwrap();
+        assert_eq!(first_free(&wanted, |p| p == dir.path().join("a-3.md")), dir.path().join("a-4.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn free_name_skips_dangling_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let wanted = dir.path().join("a.md");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &wanted).unwrap();
+        assert_eq!(resolve_collision(&wanted), dir.path().join("a-2.md"));
+    }
 
     #[test]
     fn directory_open_failure_keeps_path_and_operation_at_boundary() {

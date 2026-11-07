@@ -113,7 +113,8 @@ impl ServedAddresses {
         let html: Vec<FileInfo> =
             pairs.iter().filter(|(_, then)| bucket(then) == ScanBucket::Html).map(|(_, then)| file_info(then)).collect();
         let config = crate::build::site_config::get_build_passthrough(&root.path().to_string_lossy()).unwrap_or_default();
-        let reserved = reserved_home_dirs(&html, &compute_passthrough_roots(&html, &config));
+        let html_paths: Vec<&str> = html.iter().map(|f| f.path.as_str()).collect();
+        let reserved = reserved_home_dirs(&html, &compute_passthrough_roots(&html_paths, &config));
         let pages = pages_before_dedup(&files, root, &reserved, site_lang, &locate, &is_evicted);
 
         // A page moved under a new name takes a place in the folder listing

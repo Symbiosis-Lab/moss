@@ -1513,8 +1513,19 @@ pub fn scan_folder_with_dedup_emit_with_error(
             log::warn!("[scan] failed to read [build].passthrough from config.toml: {}", e);
             vec![]
         });
+    let html_paths: Vec<&str> = html_files.iter().map(|f| f.path.as_str()).collect();
+    if log::log_enabled!(log::Level::Debug) {
+        for root in crate::build::scan::classify::compute_passthrough_roots(&html_paths, &[]) {
+            log::debug!(
+                "[scan] passthrough subtree auto-detected: {} (contains index.html; \
+                 add \"!{}\" to [build].passthrough in .moss/config.toml to opt out)",
+                root,
+                root.trim_end_matches('/')
+            );
+        }
+    }
     let passthrough_roots = crate::build::scan::classify::compute_passthrough_roots(
-        &html_files, &config_passthrough,
+        &html_paths, &config_passthrough,
     );
     let mut passthrough_media: Vec<String> = Vec::new();
     if !passthrough_roots.is_empty() {

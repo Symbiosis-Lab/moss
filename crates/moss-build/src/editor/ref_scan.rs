@@ -19,7 +19,7 @@ use crate::build::scan::classify::{is_page_path, left_out_of_site, LeftOut};
 use crate::editor::resolve::asset_resolver::project_graph;
 use moss_core::content_graph::ContentGraph;
 use crate::editor::resolve::folder_index::EditorFolderIndex;
-use crate::editor::resolve::url_index::ArticleMapIndex;
+use moss_core::resolve::editor::urls::ArticleMapIndex;
 use crate::editor::ref_rewrite::{matches_target, rewrite_for_removal};
 use moss_core::resolve::md_extract::{
     extract_md_references, extract_structural_asset_refs, AssetPathSpan,
@@ -48,7 +48,7 @@ pub(crate) fn build_indexes(root: &Path) -> (ContentGraph, EditorFolderIndex, Ar
     let moss_dir = root.join(".moss");
     let map = ArticleMap::load(&moss_dir).unwrap_or_default();
     let fs_folders = EditorFolderIndex::new(root, &map);
-    let article_idx = ArticleMapIndex::from_map(&map);
+    let article_idx = ArticleMapIndex::from_map(&crate::editor::resolve::url_index::reference_map(&map));
     (fs_assets, fs_folders, article_idx)
 }
 

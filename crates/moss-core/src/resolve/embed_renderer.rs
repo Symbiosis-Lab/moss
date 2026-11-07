@@ -223,7 +223,7 @@ impl Sizing {
 // ---------------------------------------------------------------------------
 
 /// Image file extensions the wikilink dispatcher routes to the figure arm.
-pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "svg", "webp", "avif"];
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "svg", "webp", "avif"];
 
 #[cfg(test)]
 #[path = "embed_renderer_tests.rs"]

@@ -8,42 +8,12 @@ use crate::build::scan::article_map::ArticleMap;
 
 // ── URL→source path helper ────────────────────────────────────────────────
 
-/// Find the source path for a resolved internal URL, tolerating the
-/// trailing-slash convention of `ArticleMap` keys.
-///
-/// Directory-style pages are stored under keys like `"research/"` (WITH
-/// trailing slash). A naive `trim_matches('/')` strips that slash, causing
-/// the lookup to miss every directory-style page and leaving `resolved_path`
-/// as `None`, which breaks Cmd+Click navigation for the majority of real pages.
-///
-/// This helper tries both the bare key and the trailing-slash variant, so it
-/// handles:
-/// - `"research/"` (stored as-is)
-/// - `"research"` (file-style, no trailing slash)
-/// - `""` (home page, stored in `pages[""]`)
-///
-/// Fragment and query suffixes are stripped before the lookup.
+/// Find the source path for a resolved internal URL: the editor resolver's
+/// own lookup, so a URL opens the same file wherever it is followed from.
 pub fn source_path_for_url(map: &ArticleMap, url: &str) -> Option<String> {
-    let bare = url
-        .split(['#', '?'])
-        .next()
-        .unwrap_or(url)
-        .trim_matches('/');
-    let with_slash = format!("{bare}/");
-
-    // Try the bare key first so that the home page (key `""`) is found
-    // before `"/"` is tried; then fall through to the trailing-slash variant
-    // which handles the common directory-style case.
-    map.articles
-        .get(bare)
-        .map(|i| i.source_path.clone())
-        .or_else(|| {
-            map.articles
-                .get(with_slash.as_str())
-                .map(|i| i.source_path.clone())
-        })
-        .or_else(|| map.pages.get(bare).cloned())
-        .or_else(|| map.pages.get(with_slash.as_str()).cloned())
+    moss_core::resolve::editor::urls::source_path_for_url(url,
+        |key| map.articles.get(key).map(|a| a.source_path.as_str()),
+        |key| map.pages.get(key).map(String::as_str))
 }
 
 // ── Public types ──────────────────────────────────────────────────────────
@@ -979,90 +949,6 @@ mod tests {
         assert_eq!(
             super::resolve_expected_url_for_file("footer-blog.md", folder_path),
             Some("/footer-blog/".to_string()),
-        );
-    }
-
-    // ── source_path_for_url tests ─────────────────────────────────────────────
-
-    /// Regression: directory-style article map keys include a trailing slash
-    /// (e.g. `"research/"`).  `trim_matches('/')` stripped it, so the lookup
-    /// always missed — resolved_path stayed None for every directory-style page
-    /// and Cmd+Click navigation was broken for the majority of real pages.
-    #[test]
-    fn source_path_for_url_tolerates_trailing_slash_keys() {
-        let mut map = ArticleMap::new();
-
-        // directory-style article — key stored WITH trailing slash
-        map.articles
-            .insert("research/".into(), make_article("Research.md", "research/"));
-
-        // folder index in pages map — key also has trailing slash
-        map.pages
-            .insert("news/".into(), "News/News.md".into());
-
-        // home page — key is the empty string (to_pretty_url("index.html") == "")
-        map.pages.insert(String::new(), "main.md".into());
-
-        // directory-style article: URL arriving as "/research/" → "Research.md"
-        assert_eq!(
-            super::source_path_for_url(&map, "/research/"),
-            Some("Research.md".into()),
-            "directory-style article must resolve via trailing-slash key"
-        );
-
-        // same lookup without leading slash
-        assert_eq!(
-            super::source_path_for_url(&map, "research/"),
-            Some("Research.md".into()),
-        );
-
-        // pages map entry: "/news/" → "News/News.md"
-        assert_eq!(
-            super::source_path_for_url(&map, "/news/"),
-            Some("News/News.md".into()),
-            "pages map entry must resolve via trailing-slash key"
-        );
-
-        // home page: "/" → "main.md" (bare key is "", which matches pages[""])
-        assert_eq!(
-            super::source_path_for_url(&map, "/"),
-            Some("main.md".into()),
-            "home page must resolve via empty key"
-        );
-
-        // completely unknown URL → None
-        assert_eq!(
-            super::source_path_for_url(&map, "/nope/"),
-            None,
-            "unknown URL must return None"
-        );
-
-        // Case-sensitive miss: lookup is hash-based; "/Research/" trims to
-        // "Research", but the stored key is "research" — correct to return None
-        // (a mismatch link isn't class=="resolved", so enrichment won't run).
-        assert_eq!(
-            super::source_path_for_url(&map, "/Research/"),
-            None,
-            "wrong-case URL must return None (case-sensitive HashMap)"
-        );
-    }
-
-    /// Fragments and query strings are stripped before lookup.
-    #[test]
-    fn source_path_for_url_strips_fragment_and_query() {
-        let mut map = ArticleMap::new();
-        map.articles
-            .insert("research/".into(), make_article("Research.md", "research/"));
-
-        assert_eq!(
-            super::source_path_for_url(&map, "/research/#heading"),
-            Some("Research.md".into()),
-            "fragment must be stripped before key lookup"
-        );
-        assert_eq!(
-            super::source_path_for_url(&map, "/research/?q=foo"),
-            Some("Research.md".into()),
-            "query string must be stripped before key lookup"
         );
     }
 

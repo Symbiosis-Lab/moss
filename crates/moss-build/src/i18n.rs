@@ -62,14 +62,11 @@ impl Language {
     /// `zh-hant` / `zh-tw` remain distinct for Traditional Chinese.
     /// Returns None if the code is not recognized.
     pub fn from_code(code: &str) -> Option<Language> {
-        let lower = code.to_lowercase();
-        if lower == "de" || lower.starts_with("de-") {
-            return Some(Language::De);
-        }
-        match lower.as_str() {
-            "en" => Some(Language::En),
-            "zh" | "zh-hans" | "zh-cn" => Some(Language::ZhHans),
-            "zh-hant" | "zh-tw" => Some(Language::ZhHant),
+        match moss_core::home::folder_language_code(code) {
+            Some("en") => Some(Language::En),
+            Some("de") => Some(Language::De),
+            Some("zh-hans") => Some(Language::ZhHans),
+            Some("zh-hant") => Some(Language::ZhHant),
             _ => None,
         }
     }

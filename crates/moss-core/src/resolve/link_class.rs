@@ -92,6 +92,16 @@ pub trait UrlIndex {
     }
 }
 
+/// A URL index that knows no address, for a resolve with no deployed URL
+/// space to consult (folder markers never reach it: their path ends in `/`).
+pub struct NoUrlIndex;
+
+impl UrlIndex for NoUrlIndex {
+    fn lookup_exact(&self, _url_path: &str) -> bool { false }
+    fn lookup_normalized(&self, _url_path: &str) -> Option<String> { None }
+    fn resolve_reference_to_url(&self, _reference: &str, _from_source: &str) -> Option<String> { None }
+}
+
 /// Cross-module test fake for `UrlIndex`. `new()` returns the empty/negative
 /// result for every method; `resolving(&[..])` makes `resolve_reference_to_url`
 /// return mapped URLs for the listed references (the other methods stay

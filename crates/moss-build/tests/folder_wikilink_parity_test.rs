@@ -4,9 +4,9 @@
 //! exists to catch: the build starts serving a page the editor still calls
 //! broken, or the reverse.
 //!
-//! Both halves live in this crate — `ContentGraph` (moss-core, re-exported
-//! here) and `ArticleMapIndex` (moss-build) — so this integration test drives
-//! the REAL producer functions end to end: a real `scan_folder` walk, the
+//! Both halves are reachable from this crate — `ContentGraph` and
+//! `ArticleMapIndex` (moss-core, over the build's map) — so this integration
+//! test drives the REAL producer functions end to end: a real `scan_folder` walk, the
 //! real `build_content_graph`, and the real `build_article_map`. Nothing here
 //! hand-assembles a graph or a map; deleting either producer's registration
 //! line is what the two ablations at the bottom exercise.
@@ -27,7 +27,8 @@ use std::path::Path;
 use moss_build::build::scan::article_map::{build_article_map, ArticleInfo};
 use moss_build::build::scan::scan::{build_content_graph, scan_folder};
 use moss_build::build::terms::TermIndex;
-use moss_build::editor::resolve::url_index::ArticleMapIndex;
+use moss_build::editor::resolve::url_index::reference_map;
+use moss_core::resolve::editor::urls::ArticleMapIndex;
 use moss_core::content_graph::ContentGraph;
 use moss_core::resolve::link_class::UrlIndex;
 
@@ -113,10 +114,8 @@ fn editor_and_build_agree_on_folder_wikilinks() {
     // test cannot construct one — `build::render::blocking`'s render loop is
     // the only place that assembles a full one. `ArticleInfo` (the map's
     // OWN entry type) has no such field, so the one page the precedence
-    // case needs is added directly, the same way `url_index_tests.rs`'s own
-    // unit tests build an `ArticleMap` for `ArticleMapIndex`. This is
-    // unrelated to `folder_indexes`, which stays entirely the real
-    // function's output.
+    // case needs is added directly. This is unrelated to `folder_indexes`,
+    // which stays entirely the real function's output.
     article_map.articles.insert(
         "other/writings".to_string(),
         ArticleInfo {
@@ -134,7 +133,7 @@ fn editor_and_build_agree_on_folder_wikilinks() {
         },
     );
 
-    let idx = ArticleMapIndex::from_map(&article_map);
+    let idx = ArticleMapIndex::from_map(&reference_map(&article_map));
 
     // The same graph, with the fixture's overrides installed — the REAL
     // way a resolved source path becomes a URL (`ContentGraph::pinned_url`),

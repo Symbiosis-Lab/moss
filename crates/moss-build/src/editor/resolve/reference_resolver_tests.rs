@@ -482,3 +482,18 @@ fn a_loose_folder_resolves_what_the_document_spells_out_and_links_open_the_file(
     assert_eq!(out[3].kind, ReferenceKind::NotFound);
     assert_eq!(out[4].kind, ReferenceKind::NotFound, "a folder listing is built by a site");
 }
+
+#[test]
+fn a_link_anchor_stays_out_of_the_file_it_opens() {
+    let dir = scratch_root();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::write(root.join("page.md"), b"# Page\n\n## Section").unwrap();
+    let other = root.join("page.md").to_string_lossy().to_string();
+    for scope in [EditorScope::Folder, EditorScope::Site] {
+        let out = resolve_references_batch(&[RefTarget { text: "page#section".into(), is_embed: false }], "note.md", &root, scope);
+        assert_eq!(out[0].kind, ReferenceKind::Link { anchor: Some("section".into()) }, "{scope:?}");
+        assert_eq!(out[0].anchor.as_deref(), Some("section"), "{scope:?}");
+        assert_eq!(out[0].resolved_path.as_deref(), Some(other.as_str()), "{scope:?}");
+        assert_eq!(out[0].url, None, "{scope:?}: an unbuilt page has no URL");
+    }
+}

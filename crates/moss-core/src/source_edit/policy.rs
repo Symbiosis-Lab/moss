@@ -2,6 +2,27 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+/// Return the wanted file name, or its first free `-2`, `-3`, … suffix.
+/// The predicate receives each full path under `dir`; no I/O is performed here.
+pub fn free_name(dir: &Path, name: &std::ffi::OsStr, taken: impl Fn(&Path) -> bool) -> std::ffi::OsString {
+    if !taken(&dir.join(name)) {
+        return name.to_os_string();
+    }
+    let path = Path::new(name);
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = path.extension().map(|e| e.to_string_lossy());
+    for i in 2u64.. {
+        let candidate = match &ext {
+            Some(e) => format!("{}-{}.{}", stem, i, e),
+            None => format!("{}-{}", stem, i),
+        };
+        if !taken(&dir.join(&candidate)) {
+            return candidate.into();
+        }
+    }
+    unreachable!()
+}
+
 /// Agent-instruction filenames that conventionally live at a project root.
 ///
 /// Every coding agent that reads a root-anchored instruction file uses one of
@@ -23,6 +44,69 @@ pub const ROOT_AGENT_CONFIG_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md", "GEMINI
 /// file. The caller decides whether the file is at the root.
 pub fn is_agent_config_name(name: &str) -> bool {
     ROOT_AGENT_CONFIG_FILES.contains(&name)
+}
+
+/// Folder names a site walk skips entirely, besides every dot-folder.
+/// `assets`, `images` and `_`-prefixed folders are ordinary content: skipping
+/// them once dropped media from the build.
+pub const EXCLUDED_DIR_NAMES: &[&str] = &[
+    "node_modules",
+];
+
+/// Whether a site walk skips a folder of this name. Folders only: a file named
+/// like one (`_43A2045.jpg`, `node_modules`) is content.
+pub fn is_excluded_dir_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    // Special case: "." and ".." are navigation, not hidden folders
+    if lower == "." || lower == ".." {
+        return false;
+    }
+    // Hidden directories: .git, .moss, .DS_Store-as-dir, etc.
+    if lower.starts_with('.') {
+        return true;
+    }
+    EXCLUDED_DIR_NAMES.iter().any(|&n| n.to_lowercase() == lower)
+}
+
+/// Why a walk of the site folder leaves an entry out of the site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftOut {
+    /// A directory below the root whose name [`is_excluded_dir_name`] rejects.
+    /// The root is never left out: its name is the author's choice, and a site
+    /// living in `.mysite` would otherwise have its whole walk emptied.
+    ExcludedDir,
+    /// A directory below the root with its own `.moss/`: a different site,
+    /// which the build goes around rather than absorbing its pages.
+    NestedSite,
+    /// An agent-instruction file directly in the site folder. Root only,
+    /// because `posts/agents.md` is an ordinary article about agents; only the
+    /// source root is a location tooling claims.
+    AgentInstructions,
+    /// A page whose name starts with a dot, at any depth: `posts/.draft.md`
+    /// is the author's own marker that it is not for publishing, the same
+    /// reading the file tree and the asset copy already give a dotfile. Only
+    /// pages: a dot-prefixed placeholder such as `.keeper.md.icloud` stands
+    /// for a page still in the cloud and must reach the scan.
+    HiddenFile,
+    /// A folder a `[map.layers.<name>]` table names as its `source`: the
+    /// layer's raw plates, read by the build and never published.
+    LayerSource,
+}
+
+/// The site walk's rule for one entry, `depth` levels below the site folder (a
+/// file directly in it is at depth 1). `holds_site` says whether a folder has a
+/// `.moss/` of its own; it is asked only for a folder every other rule kept.
+pub fn left_out(name: &str, is_dir: bool, depth: usize, holds_site: impl FnOnce() -> bool) -> Option<LeftOut> {
+    if !is_dir {
+        if name.starts_with('.') && is_page_path(Path::new(name)) {
+            return Some(LeftOut::HiddenFile);
+        }
+        return (depth == 1 && is_agent_config_name(name)).then_some(LeftOut::AgentInstructions);
+    }
+    if depth > 0 && is_excluded_dir_name(name) {
+        return Some(LeftOut::ExcludedDir);
+    }
+    (depth > 0 && holds_site()).then_some(LeftOut::NestedSite)
 }
 
 /// Finder's custom-icon carrier: the literal name `Icon` followed by a carriage
@@ -267,4 +351,33 @@ pub fn page_settings_dirs(config: &[String], existing_files: &[&str]) -> HashSet
             .filter(|dir| crate::home::is_known_language_code(dir))
             .map(str::to_string)
     }).collect()
+}
+
+/// The site-relative passthrough subtree roots: every non-root folder holding
+/// an `index.html` or `index.htm`, then the `[build].passthrough` entries in
+/// order. An entry adds a folder root, or an exact listed HTML file; a `!`
+/// entry removes one. Folder roots carry a trailing `/`, exact files do not.
+pub fn compute_passthrough_roots(html_files: &[&str], config_entries: &[String]) -> HashSet<String> {
+    let mut roots = HashSet::new();
+    for file in html_files {
+        let Some((parent, name)) = file.rsplit_once('/') else { continue; };
+        if !parent.is_empty() && parent != "." && (name.eq_ignore_ascii_case("index.html") || name.eq_ignore_ascii_case("index.htm")) {
+            roots.insert(format!("{}/", parent.trim_end_matches('/')));
+        }
+    }
+    for entry in config_entries {
+        let (negate, raw) = entry.strip_prefix('!').map_or((false, entry.as_str()), |rest| (true, rest));
+        // Paths are root-relative: a leading `/` in config would never match.
+        let normalized = raw.trim_matches('/');
+        if normalized.is_empty() { continue; }
+        let key = if html_files.contains(&normalized) { normalized.to_string() } else { format!("{normalized}/") };
+        if negate { roots.remove(&key); } else { roots.insert(key); }
+    }
+    roots
+}
+
+/// Whether `path` is inside a passthrough root: under a folder root (the
+/// trailing `/` keeps `app/` from matching `application/`), or the exact file.
+pub fn is_in_passthrough(path: &str, roots: &HashSet<String>) -> bool {
+    roots.iter().any(|root| if root.ends_with('/') { path.starts_with(root) } else { path == root })
 }

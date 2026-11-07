@@ -146,5 +146,36 @@ fn encode(value: &impl Serialize) -> Result<String, String> {
     serde_json::to_string(value).map_err(|e| e.to_string())
 }
 
+/// Return a file name (not JSON), avoiding the full paths in `taken_json`.
+pub fn free_name(dir: &str, name: &str, taken_json: &str) -> Result<String, String> {
+    let taken: std::collections::HashSet<std::path::PathBuf> = decode(taken_json)?;
+    Ok(moss_core::source_edit::free_name(std::path::Path::new(dir), name.as_ref(), |p| taken.contains(p))
+        .to_string_lossy().into_owned())
+}
+
+/// Lowercase extensions, without dots, supported by image embeds.
+pub fn image_extensions() -> String {
+    encode(&moss_core::resolve::embed_renderer::IMAGE_EXTENSIONS).expect("image extensions are strings")
+}
+
 #[cfg(test)]
 mod source_edit_tests;
+
+/// Resolve editor references from a root-relative file snapshot and optional build map.
+pub fn resolve_references(input_json: &str) -> Result<String, String> {
+    let input: moss_core::resolve::editor::ResolveInput = decode(input_json)?;
+    encode(&moss_core::resolve::resolve_references(&input))
+}
+
+/// Resolve one asset reference the way the desktop's single-asset command
+/// does: an ambiguous name answers the file the build links, where the batch
+/// keeps the ambiguity. Returns a `ResolvedAsset`, or `null` when nothing matches.
+pub fn resolve_asset(input_json: &str, target: &str) -> Result<String, String> {
+    let input: moss_core::resolve::editor::ResolveInput = decode(input_json)?;
+    encode(&moss_core::resolve::editor::resolve_asset(&input, target))
+}
+
+/// Scan shortcode ranges with the editor's shared parser.
+pub fn editor_scan(text: &str) -> Result<String, String> {
+    encode(&moss_core::ast::editor_scan::editor_scan(text))
+}

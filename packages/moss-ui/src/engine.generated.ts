@@ -794,6 +794,7 @@ kind: ReferenceKind;
 resolved: ResolvedAsset | null; 
 /**
  * For Link kinds: the resolved deployed URL (carried from the classifier).
+ * None on a site with no URL map, whose links answer `resolved_path`.
  */
 url: string | null; 
 /**
@@ -801,14 +802,20 @@ url: string | null;
  */
 anchor: string | null; 
 /**
- * The absolute source FILE this reference opens when followed, for the two
- * kinds that have one: a resolved internal Link (via `source_path_for_url`)
- * and a FolderListing embed (via `FolderFacts::index_source_for`, which is
- * the folder's index source, NOT the folder directory).
+ * The source FILE this reference opens when followed: root-relative from
+ * moss-core, absolute once a desktop host's adapter has joined it to the
+ * site root. Set for:
+ * * `Link` and `Moved`: the page's source, from the URL map, or the page
+ * file itself on a site with no map;
+ * * `FolderListing`: the folder's index source, NOT the folder directory;
+ * with no index source in the map, the folder's home file;
+ * * `FolderIndexIframe`: the folder's static `index.html`;
+ * * `Transclusion`, `Notebook` and `Table`: the embedded file.
  * 
- * Always a file, never a directory — every consumer opens it. A folder that
- * publishes no index source of its own leaves this `None`, so the editor
- * shows no follow affordance rather than one that lands nowhere.
+ * Always a listed file, never a directory — every consumer opens it. A
+ * folder with neither an index source nor a home file leaves this `None`,
+ * so the editor shows no follow affordance rather than one that lands
+ * nowhere.
  */
 resolved_path: string | null; 
 /**
@@ -1127,12 +1134,12 @@ stubs_missing: number; skipped: SkippedDerivedFile[]; failed: FailedDerivedFile[
 export type FolderDerivationChoice = { show: string } | "keep"
 
 /**
- * What the LAST BUILD listed under a folder, read from the `ArticleMap`.
+ * What the LAST BUILD listed under a folder, read from the build's URL map.
  * Attached to `FolderListing` embeds so the editor's card can state what will
  * be listed and how, without reimplementing the build's selection.
  * 
  * The fidelity limits of the underlying derivation are documented on
- * [`crate::editor::resolve::url_index::FolderFacts`]; the editor renders these
+ * [`super::urls::FolderFacts`]; the editor renders these
  * counts as a bare number and makes no prose claim about build output.
  */
 export type FolderEmbedInfo = { 
@@ -2263,7 +2270,13 @@ export type ResolveAssetArgs = { target: string; fromFile: VaultPath }
 
 export type ResolveReferencesArgs = { targets: RefTarget[]; fromFile: VaultPath }
 
-export type ResolvedAsset = { absolute_path: string; request_url: string; mime_type: string; width: number | null; height: number | null; size_bytes: number; 
+export type ResolvedAsset = { 
+/**
+ * The asset's file: root-relative from moss-core, absolute once a desktop
+ * host's adapter has joined it to the site root (and filled in its size
+ * and dimensions).
+ */
+absolute_path: string; request_url: string; mime_type: string; width: number | null; height: number | null; size_bytes: number; 
 /**
  * How the path was resolved: literal, bare-fuzzy, separator-fallback, or
  * case-mismatch. Carried from the shared engine.
@@ -2271,7 +2284,7 @@ export type ResolvedAsset = { absolute_path: string; request_url: string; mime_t
  * Read by the editor off the unified reference envelope
  * (`EditorReferenceResolution`), which marks a separator-fallback or
  * case-mismatch path as a problem and offers the file's real path.
- * Also exposed by the singular `editor_resolve_asset` (chip-bar) command.
+ * The single-asset lookup (`resolve_asset`) returns it too.
  */
 provenance: AssetProvenance }
 

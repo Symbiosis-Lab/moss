@@ -41,6 +41,30 @@ const tests = {
   builtinSchemaJson() {
     assert.equal(json(wasm.builtinSchemaJson()).frontmatter.fields.title.type, 'string');
   },
+  resolveReferences() {
+    const input = { files: ['notes/Page.md'], scope: 'site', from_source: 'index.md', targets: [{ text: 'Page#heading', is_embed: false }] };
+    const [reference] = json(wasm.resolveReferences(JSON.stringify(input)));
+    assert.equal(reference.resolved_path, 'notes/Page.md');
+    assert.equal(reference.url, null);
+    assert.equal(reference.anchor, 'heading');
+  },
+  resolveAsset() {
+    const input = { files: ['a/photo.jpg', 'b/photo.jpg'], scope: 'site', from_source: 'post.md', targets: [] };
+    assert.equal(json(wasm.resolveAsset(JSON.stringify(input), 'photo.jpg')).absolute_path, 'a/photo.jpg');
+    assert.equal(json(wasm.resolveAsset(JSON.stringify(input), 'missing.png')), null);
+  },
+  editorScan() {
+    assert.deepEqual(json(wasm.editorScan('Plain text')), { blocks: [], legacy_dash: false });
+    assert.equal(json(wasm.editorScan(':::grid\nOne\n:::')).blocks.length, 1);
+  },
+  freeName() {
+    assert.equal(wasm.freeName('photos', 'a.jpg', '["photos/a.jpg","photos/a-2.jpg","other/a-3.jpg"]'), 'a-3.jpg');
+    assert.equal(wasm.freeName('', 'a.jpg', '[]'), 'a.jpg');
+    assert.throws(() => wasm.freeName('', 'a.jpg', '{}'));
+  },
+  imageExtensions() {
+    assert.deepEqual(json(wasm.imageExtensions()), ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif']);
+  },
   buildTree() {
     const tree = json(wasm.buildTree('[{"path":"index.md","is_dir":false}]', '{"root_name":"Site"}'));
     assert.equal(tree.children[0].is_home, true);
@@ -64,7 +88,7 @@ const tests = {
 };
 
 assert.deepEqual(
-  Object.keys(wasm).filter(name => name !== 'default' && name !== 'initSync' && !name.startsWith('__wbg')).sort(),
+  Object.keys(wasm).filter(name => name !== 'default' && name !== 'initSync' && name !== '__wasm' && !name.startsWith('__wbg')).sort(),
   Object.keys(tests).sort(),
   'Every module export must have a smoke test',
 );

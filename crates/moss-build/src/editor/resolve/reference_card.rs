@@ -6,11 +6,10 @@
 //! reference cache and needs no round trip.
 
 use crate::build::page::meta::resolve_page_description;
-use crate::build::scan::article_map::ArticleMap;
 use crate::editor::content::{compute_heading_state_inner, parse_frontmatter_of, read_vault_text};
-use crate::editor::resolve::links::source_path_for_url;
+use crate::editor::resolve::asset_resolver::EditorScope;
+use crate::editor::resolve::reference_resolver::{resolve_references_batch, RefTarget};
 use moss_core::heading::extract_headings;
-use moss_core::resolve::reference::{classify_reference, ReferenceContext, ReferenceKind};
 use std::path::Path;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, specta::Type)]
@@ -30,9 +29,10 @@ pub struct ReferenceCardInfo {
 ///     `ReferenceKind::Anchor` with nothing to look up, because the
 ///     classifier has no notion of "the file this reference lives in".
 ///     Read `from_file` directly instead.
-///   - anything else — a page link, routed through the SAME
-///     `classify_reference` kernel `resolve_references_batch` uses, so a
-///     card can never show a page the editor's own lint calls broken.
+///   - anything else — a page link, answered by `resolve_references_batch`
+///     itself, so a card can never show a page the editor's own lint calls
+///     broken, and on a site never built it opens the same source the lint
+///     follows.
 pub fn reference_card_for(
     target: &str,
     from_file: &str,
@@ -52,25 +52,12 @@ pub fn reference_card_for(
         });
     }
 
-    let moss_dir = canonical_root.join(".moss");
-    let map = ArticleMap::load(&moss_dir).unwrap_or_default();
-    // A link (not an embed) is classified against the site's addresses alone;
-    // the file graph is never read, so the card does not walk the folder.
-    let fs_assets = moss_core::content_graph::ContentGraph::from_paths(&[]);
-    let fs_folders =
-        crate::editor::resolve::folder_index::EditorFolderIndex::new(&canonical_root, &map);
-    let article_idx = crate::editor::resolve::url_index::ArticleMapIndex::from_map(&map);
-    let resolved = classify_reference(
-        target,
-        from_file,
-        false,
-        &ReferenceContext { assets: &fs_assets, folders: &fs_folders, urls: &article_idx },
-    );
-    let anchor = match &resolved.kind {
-        ReferenceKind::Link { anchor } => anchor.clone(),
-        _ => None,
-    };
-    let source_path = resolved.url.as_deref().and_then(|url| source_path_for_url(&map, url));
+    let link = RefTarget { text: target.to_string(), is_embed: false };
+    let resolved = resolve_references_batch(&[link], from_file, &canonical_root, EditorScope::Site).remove(0);
+    let source_path = resolved.resolved_path.as_deref().map(|abs| {
+        Path::new(abs).strip_prefix(&canonical_root).map_or(abs.to_string(), |rel| rel.to_string_lossy().replace('\\', "/"))
+    });
+    let anchor = resolved.anchor;
     // A resolved URL with no known source is exactly what the frontend's own
     // `followTarget` already treats as "goes to the preview, not a file" —
     // the build synthesized this page (an index-less folder listing, a

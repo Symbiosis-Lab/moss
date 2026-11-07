@@ -11,7 +11,7 @@ mod types;
 pub use tree::{build_tree, build_tree_root, ListingEntry, TreeOptions, TreeNode, DirEntry, EditorFileInfo};
 pub use save::{decide_save, SaveDecision};
 pub use types::{ParsedFrontmatter, SaveResult, SourceRole};
-pub use policy::SpecialFileKind;
+pub use policy::{free_name, SpecialFileKind};
 pub use content::{parse_frontmatter_of, bootstrap_source_path, compute_heading_state_inner,
     describe_source_role_inner, classify_source_read, SourceRead};
 

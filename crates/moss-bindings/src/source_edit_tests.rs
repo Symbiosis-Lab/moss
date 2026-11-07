@@ -6,6 +6,39 @@ fn value(result: Result<String, String>) -> Value {
 }
 
 #[test]
+fn free_name_uses_full_taken_paths_and_returns_a_plain_name() {
+    assert_eq!(free_name("photos", "a.jpg", r#"["photos/a.jpg","photos/a-2.jpg","other/a-3.jpg"]"#).unwrap(), "a-3.jpg");
+    assert_eq!(free_name("", "a.jpg", "[]").unwrap(), "a.jpg");
+    for invalid in ["{}", "[1]", "bad"] {
+        assert!(free_name("", "a.jpg", invalid).is_err());
+    }
+}
+
+#[test]
+fn resolve_references_refuses_an_input_without_its_required_fields() {
+    assert!(resolve_references("{}").is_err());
+}
+
+#[test]
+fn resolve_asset_through_json_is_the_core_lookup() {
+    let input = r#"{"files":["a/photo.jpg","b/photo.jpg","c/only.png"],"scope":"site","from_source":"post.md","targets":[]}"#;
+    let decoded: moss_core::resolve::editor::ResolveInput = serde_json::from_str(input).unwrap();
+    for target in ["photo.jpg", "only.png", "missing.png"] {
+        let direct = serde_json::to_value(moss_core::resolve::editor::resolve_asset(&decoded, target)).unwrap();
+        assert_eq!(value(resolve_asset(input, target)), direct, "{target}");
+    }
+    assert!(value(resolve_asset(input, "photo.jpg"))["absolute_path"].is_string(), "an ambiguous name opens a file");
+    assert!(value(resolve_asset(input, "missing.png")).is_null());
+    assert!(resolve_asset("{}", "photo.jpg").is_err());
+}
+
+#[test]
+fn image_extensions_are_the_embed_renderers_list() {
+    let extensions: Vec<String> = serde_json::from_str(&image_extensions()).unwrap();
+    assert_eq!(extensions, moss_core::resolve::embed_renderer::IMAGE_EXTENSIONS);
+}
+
+#[test]
 fn tree_matches_the_engine_shape_and_filters_before_sorting() {
     let entries = json!([
         {"path":".hidden", "is_dir":false, "modified":null},

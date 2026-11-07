@@ -562,6 +562,19 @@ pub fn detect_home_file<'a>(filenames: &[&'a str]) -> Option<&'a str> {
     detect_home_file_in_folder(filenames, "")
 }
 
+/// The language codes used by folder-index synthesis and the build's interface
+/// language resolver. This intentionally differs from the broader edition list.
+pub fn folder_language_code(code: &str) -> Option<&'static str> {
+    let lower = code.to_lowercase();
+    if lower == "de" || lower.starts_with("de-") { return Some("de"); }
+    match lower.as_str() {
+        "en" => Some("en"),
+        "zh" | "zh-hans" | "zh-cn" => Some("zh-hans"),
+        "zh-hant" | "zh-tw" => Some("zh-hant"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

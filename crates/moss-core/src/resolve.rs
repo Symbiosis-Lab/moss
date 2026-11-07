@@ -14,6 +14,9 @@ use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
 use std::collections::HashMap;
 
+pub mod editor;
+pub use editor::resolve_references;
+
 pub mod asset_class;
 pub mod asset_registry;
 pub mod block_refs;
