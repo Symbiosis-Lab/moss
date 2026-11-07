@@ -19,10 +19,8 @@
 //!   3  `status`: not live yet, waiting for DNS or the certificate
 //!   4  `status`: failed, the hosting service gave up and the link must be redone
 
-use std::path::Path;
-
-use crate::build::site_config::{resolve_environment, site_id_for_folder};
-use crate::identity::keypair::Identity;
+use crate::build::site_config::site_id_for_folder;
+use crate::cli::{client_for_folder, emit, run_async, Outcome};
 use crate::seta::cdn::{CdnStatus, DomainCdn};
 use crate::seta::client::MossSetaClient;
 use crate::vault_root::VaultRoot;
@@ -110,64 +108,6 @@ EXAMPLES:
     moss domain status ~/Sites/landing example.com --json
 "
     );
-}
-
-/// Build a MossSetaClient for `folder`, loading the project's identity.
-fn client_for_folder(folder: &Path) -> Result<MossSetaClient, String> {
-    if !folder.exists() {
-        return Err(format!("folder does not exist: {}", folder.display()));
-    }
-    // Loads the signing key now, so a missing key fails here rather than at
-    // the first signed request. It never regenerates one: a new pubkey would
-    // make seta stop recognizing this account as the owner of the site.
-    let identity = Identity::load_for_signing(folder).map_err(|e| {
-        format!(
-            "signing key unavailable: {} (expected identity at {}/.moss/identity/secret-key)",
-            e,
-            folder.display()
-        )
-    })?;
-    let env = resolve_environment(&folder.to_string_lossy());
-    Ok(MossSetaClient::for_environment(&identity, &env))
-}
-
-fn run_async<F: std::future::Future<Output = i32>>(fut: F) -> i32 {
-    match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt.block_on(fut),
-        Err(e) => {
-            eprintln!("failed to start tokio runtime: {}", e);
-            2
-        }
-    }
-}
-
-/// What a command prints and how it exits, so the flows are testable without
-/// capturing the process's own streams.
-pub(crate) struct Outcome {
-    pub code: i32,
-    pub out: String,
-    pub err: String,
-}
-
-impl Outcome {
-    /// With `--json` an error is an object on stdout, like every other result.
-    fn fail(json: bool, code: i32, msg: impl std::fmt::Display) -> Self {
-        if json {
-            let v = serde_json::json!({ "error": msg.to_string(), "exit": code });
-            Outcome { code, out: format!("{}\n", v), err: String::new() }
-        } else {
-            Outcome { code, out: String::new(), err: format!("error: {}\n", msg) }
-        }
-    }
-}
-
-fn emit(o: Outcome) -> i32 {
-    print!("{}", o.out);
-    eprint!("{}", o.err);
-    o.code
 }
 
 const RERUN: &str = "Re-running the same command is safe: it reuses what already exists.";
@@ -484,7 +424,7 @@ mod tests {
 
     #[test]
     fn client_for_folder_rejects_nonexistent() {
-        let missing = Path::new("/tmp/moss-cli-test-nonexistent-path-xxx");
+        let missing = std::path::Path::new("/tmp/moss-cli-test-nonexistent-path-xxx");
         match client_for_folder(missing) {
             Ok(_) => panic!("expected error for nonexistent path"),
             Err(e) => assert!(e.contains("does not exist"), "got: {}", e),

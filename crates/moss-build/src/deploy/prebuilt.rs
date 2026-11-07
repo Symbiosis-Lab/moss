@@ -225,7 +225,7 @@ async fn push_prebuilt_inner(
     let generation_id = compute_manifest_generation_id(&manifest);
 
     let env = crate::build::site_config::resolve_environment(&project_folder.to_string_lossy());
-    let client = crate::seta::client::MossSetaClient::for_environment(identity, &env);
+    let client = crate::deploy::publish_client(project_folder, identity, &env).await;
 
     let folder_str = project_folder.to_string_lossy().to_string();
 

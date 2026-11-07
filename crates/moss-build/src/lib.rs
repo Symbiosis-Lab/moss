@@ -154,6 +154,24 @@ fn announcing_close(resp: &[u8]) -> Vec<u8> {
     }
 }
 
+/// The next connection a scripted mock should answer, with its request drained.
+/// A publish first asks `/auth/whoami` which account its key belongs to
+/// (`deploy::publish_client`); that request is answered 404 here, so a mock
+/// scripted by connection order does not spend one of its replies on it.
+#[cfg(test)]
+pub(crate) async fn test_accept_skipping_whoami(
+    listener: &tokio::net::TcpListener,
+) -> (tokio::net::TcpStream, Vec<u8>) {
+    loop {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let raw = test_drain_http_request(&mut stream).await;
+        if !raw.starts_with(b"GET /auth/whoami") {
+            return (stream, raw);
+        }
+        test_respond_and_close(&mut stream, b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n").await;
+    }
+}
+
 /// Drain one request off `stream` ([`test_drain_http_request`]), answer it
 /// with `resp` and close ([`test_respond_and_close`]). Returns the raw request
 /// bytes read.

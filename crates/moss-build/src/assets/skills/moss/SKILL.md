@@ -343,6 +343,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   certificate and says what is left; it exits 0 when live, 3 while waiting, 4 if it
   failed. All three take `--json`. Only a registered domain of two labels is
   supported, not `blog.example.com`. `moss domain list <folder>` shows what is linked.
+- **Handing a site to another account:** `moss site transfer <folder> --to <email>` mails that address one link; accepting it moves the site to their account (its address, files, subscribers and history stay), and this folder's key can no longer publish it. When this same folder should keep publishing as the new owner, add `--keep-publishing`: the receiver can then also take this folder's key, on its own button, and the folder publishes as them from then on; it is refused when the key has also published another site of the sender's. Run it with `--dry-run` first; `--cancel` withdraws a pending transfer. A site billed through Stripe, or with a domain bought through moss linked, is refused. Ask the human for the address first: it sends a real email.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
 - **Any other host:** `moss build <folder> --site-url=https://example.com`,

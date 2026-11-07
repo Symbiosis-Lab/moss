@@ -456,8 +456,10 @@ pub enum SetaError {
 /// Extract the user-facing message from a moss-seta error response body.
 ///
 /// moss-seta returns errors as `{"error": "..."}` JSON; auth endpoints sometimes
-/// use `{"message": "..."}`. If either key parses, that string is returned;
-/// otherwise the raw body is returned (length-capped). Used wherever an error
+/// use `{"message": "..."}`. If either key parses, that string is returned,
+/// followed by `": <detail>"` when the body also carries a `detail` (a site
+/// transfer's `key_shared` names the other sites there); otherwise the raw
+/// body is returned (length-capped). Used wherever an error
 /// surface reaches the UI, so we don't dump raw JSON or an HTML page.
 pub(super) fn extract_api_error_message(body: &str) -> String {
     // Cap the raw fallback at 200 chars to avoid leaking full HTML error
@@ -467,10 +469,11 @@ pub(super) fn extract_api_error_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|json| {
-            json.get("error")
-                .or_else(|| json.get("message"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+            let head = json.get("error").or_else(|| json.get("message")).and_then(|v| v.as_str())?;
+            Some(match json.get("detail").and_then(|v| v.as_str()) {
+                Some(detail) => format!("{head}: {detail}"),
+                None => head.to_string(),
+            })
         })
         .unwrap_or_else(|| {
             if body.len() > MAX_RAW_LEN {

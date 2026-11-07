@@ -10,6 +10,8 @@ pub(crate) struct Seta {
     pub(crate) log: Arc<Mutex<Vec<(String, String)>>>,
     pub(crate) polls: Arc<AtomicUsize>,
     pub(crate) url: String,
+    /// What `/auth/whoami` says the key belongs to; `None` answers 404.
+    pub(crate) account: Arc<Mutex<Option<&'static str>>>,
 }
 
 impl Seta {
@@ -29,7 +31,8 @@ impl Seta {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let log: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
         let polls = Arc::new(AtomicUsize::new(0));
-        let (l, p) = (log.clone(), polls.clone());
+        let account: Arc<Mutex<Option<&'static str>>> = Arc::default();
+        let (l, p, a) = (log.clone(), polls.clone(), account.clone());
         tokio::spawn(async move {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -51,6 +54,8 @@ impl Seta {
                     }
                 } else if path.ends_with("/sync") {
                     ("200 OK", r#"{"need":[],"remove":[]}"#.to_string())
+                } else if let (true, Some(email)) = (path == "/auth/whoami", *a.lock().unwrap()) {
+                    ("200 OK", format!(r#"{{"pubkey":"pk","email":"{email}"}}"#))
                 } else if path == "/api/sites" {
                     if p.load(Ordering::SeqCst) >= verify_after && final_status == "verified" {
                         ("200 OK", r#"{"id":"my-site"}"#.to_string())
@@ -67,7 +72,7 @@ impl Seta {
                 crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
             }
         });
-        Seta { log, polls, url }
+        Seta { log, polls, url, account }
     }
 
     /// Requests whose method and path are exactly `line`.

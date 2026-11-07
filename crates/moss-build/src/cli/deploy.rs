@@ -1130,6 +1130,23 @@ mod email_wiring_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_publish_records_the_account_its_key_now_belongs_to_and_leaves_the_key() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+        std::fs::write(folder.dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"my-site\"\n").unwrap();
+        let key_file = folder.dir.path().join(".moss/identity/secret-key");
+        let key_before = (std::fs::read(&key_file).unwrap(), std::fs::metadata(&key_file).unwrap().modified().unwrap());
+        *seta.account.lock().unwrap() = Some("moved@example.test");
+
+        let _ = deploy(&folder, None).await;
+
+        assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("moved@example.test"));
+        assert_eq!(seta.count_exact("GET /auth/whoami"), 1, "one whoami per publish");
+        let key_after = (std::fs::read(&key_file).unwrap(), std::fs::metadata(&key_file).unwrap().modified().unwrap());
+        assert_eq!(key_after, key_before, "the refresh never rewrites the secret key");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_refused_first_publish_without_email_requests_nothing_and_names_the_flag() {
         let seta = Seta::start(1, "verified").await;
         let folder = Folder::new(&seta);

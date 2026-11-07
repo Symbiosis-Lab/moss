@@ -603,6 +603,20 @@ pub(crate) fn stale_copy_refusal(
     ))
 }
 
+/// The client a publish uploads with, built once per publish by both routes
+/// (the hosted push, the app's included, and `--prebuilt`). It also records in
+/// the folder the account its key now belongs to, since a site transfer can
+/// move a key to another account.
+pub(crate) async fn publish_client(
+    folder: &std::path::Path,
+    identity: &crate::identity::Identity,
+    environment: &crate::config::environment::HostingEnvironment,
+) -> crate::seta::client::MossSetaClient {
+    let client = crate::seta::client::MossSetaClient::for_environment(identity, environment);
+    crate::identity::verify_email::refresh_recorded_email(folder, identity, &client).await;
+    client
+}
+
 /// Refuse `moss deploy` from a copy that is behind the live site — see
 /// [`stale_copy_refusal`]. With no record there is nothing to compare, so the
 /// server is not asked; a probe that fails goes ahead, as `push`'s no-op check

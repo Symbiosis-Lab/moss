@@ -388,24 +388,7 @@ impl Identity {
     /// - `public.json`: metadata only (version, pubkey, email)
     /// - `secret-key`: hex-encoded private key (64 chars, 0600 permissions)
     pub fn save(&self, project_path: &Path) -> Result<(), IdentityError> {
-        let identity_dir = project_path.join(".moss").join("identity");
-        if !identity_dir.exists() {
-            fs::create_dir_all(&identity_dir).map_err(|_| IdentityError::DirectoryCreation)?;
-        }
-
-        let identity_path = Self::identity_path(project_path);
-
-        // Always save v3 format (metadata only in JSON)
-        let v3 = Identity {
-            version: IDENTITY_VERSION,
-            pubkey: self.pubkey.clone(),
-            email: self.email.clone(),
-            signing_key: None,
-            project_path: None,
-        };
-        let contents = serde_json::to_string_pretty(&v3)?;
-        // allow:raw_write .moss/identity/ is user-owned key material, not regenerable output
-        fs::write(&identity_path, contents).map_err(IdentityError::FileWrite)?;
+        self.save_public(project_path)?;
 
         // Write the key file if we have the signing key in memory
         if let Some(ref sk) = self.signing_key {
@@ -414,6 +397,30 @@ impl Identity {
         }
 
         Ok(())
+    }
+
+    /// Write `public.json` alone (version, pubkey, email), replacing it in one
+    /// rename so a reader never sees half a file. Never touches `secret-key`:
+    /// for updating what the folder records about its key, not the key.
+    pub fn save_public(&self, project_path: &Path) -> Result<(), IdentityError> {
+        let identity_dir = project_path.join(".moss").join("identity");
+        if !identity_dir.exists() {
+            fs::create_dir_all(&identity_dir).map_err(|_| IdentityError::DirectoryCreation)?;
+        }
+        let v3 = Identity {
+            version: IDENTITY_VERSION,
+            pubkey: self.pubkey.clone(),
+            email: self.email.clone(),
+            signing_key: None,
+            project_path: None,
+        };
+        let contents = serde_json::to_string_pretty(&v3)?;
+        let path = Self::identity_path(project_path);
+        let tmp = path.with_extension("json.tmp");
+        // allow:raw_write .moss/identity/ is user-owned key material, not regenerable output
+        fs::write(&tmp, contents).map_err(IdentityError::FileWrite)?;
+        // allow:unlink rename into place within .moss/identity/
+        fs::rename(&tmp, &path).map_err(IdentityError::FileWrite)
     }
 
     /// Check if identity exists for a project.

@@ -56,6 +56,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "List, link or check custom domains for a project's site; link prints the DNS records to set.",
         },
         CliCommandInfo {
+            name: "site",
+            args: "transfer <folder> (--to <email> [--keep-publishing] [--dry-run] | --cancel) [--json]",
+            description: "Hand a project's hosted site to another email address. The receiver gets one link by email and accepts from it within 72 hours; the address, files, subscribers and history stay with the site, and this folder's key can no longer publish it. With `--keep-publishing` the receiver may also take this folder's key, on its own button, so this folder keeps publishing the site as them; it is refused when the key has published another site of yours. `--dry-run` shows what would move and sends nothing; `--cancel` withdraws a pending transfer.",
+        },
+        CliCommandInfo {
             name: "env",
             args: "<staging|production|local> <folder>  |  <folder>",
             description: "Set or show which seta environment (staging / production / local) a project publishes to.",
@@ -155,7 +160,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 10] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "env", "import", "history"];
+const OWN_HELP: [&str; 11] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "site", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///
@@ -212,6 +217,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("domain", "moss domain list ~/blog/             # Show domains linked to this project's site"),
     ("domain", "moss domain link ~/blog/ example.com # Link a domain; prints the DNS records to set"),
     ("domain", "moss domain status ~/blog/ example.com # Check live DNS and certificate; exit 0 when live"),
+    ("site", "moss site transfer ~/blog/ --to new@example.com --dry-run # What handing the site over would move"),
     ("env", "moss env staging ~/blog/             # Set the mosspub.com environment to staging"),
     ("env", "moss env ~/blog/                     # Show the mosspub.com environment"),
     ("tools", "moss tools download ffmpeg         # Fetch FFmpeg so videos are optimized"),

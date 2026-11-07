@@ -163,8 +163,7 @@ async fn push_site_inner_impl(
     // moved access enforcement into the sync/commit endpoints themselves. This
     // pre-flight was reading a `whoami.subscription` field that no longer
     // exists, causing false `subscription_expired` errors on every deploy.
-    let client =
-        crate::seta::client::MossSetaClient::for_environment(identity, &environment);
+    let client = crate::deploy::publish_client(cx.folder_path, identity, &environment).await;
 
     // Short-circuit: if the server is already live on the generation we're
     // about to deploy, skip the whole sync/upload/commit cycle. Any Err or
@@ -921,11 +920,8 @@ mod tests {
             let last = responses.len().saturating_sub(1);
             let mut tx = Some(tx);
             for (i, resp) in responses.into_iter().enumerate() {
-                let (stream, _) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(_) => return,
-                };
-                let raw = crate::test_mock_http_conn(stream, resp).await;
+                let (mut stream, raw) = crate::test_accept_skipping_whoami(&listener).await;
+                crate::test_respond_and_close(&mut stream, resp).await;
                 if i == last {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send(raw);

@@ -1334,6 +1334,8 @@ macro_rules! signed_call {
 
 signed_call! {
     whoami_is_signed: "GET" "/auth/whoami" => |c| c.whoami();
+    request_transfer_is_signed: "POST" "/api/sites/s1/transfer" => |c| c.request_transfer("s1", "to@example.com", true, false);
+    cancel_transfer_is_signed: "DELETE" "/api/sites/s1/transfer" => |c| c.cancel_transfer("s1");
     send_logs_is_signed: "POST" "/api/logs" => |c| c.send_logs(&serde_json::json!({ "lines": ["a"] }));
     get_domain_cdn_is_signed: "GET" "/api/domains/example.com/cdn" => |c| c.get_domain_cdn("example.com");
     get_domain_connect_is_signed: "GET" "/api/domains/example.com/connect" => |c| c.get_domain_connect("example.com");
@@ -1434,4 +1436,11 @@ fn the_owners_computer_name_never_reaches_the_sign_in_request() {
             }
         }
     }
+}
+
+#[test]
+fn an_error_with_a_detail_keeps_it() {
+    let body = r#"{"error":"key_shared","detail":"this folder's key also publishes second-site"}"#;
+    assert_eq!(extract_api_error_message(body), "key_shared: this folder's key also publishes second-site");
+    assert_eq!(extract_api_error_message(r#"{"error":"forbidden"}"#), "forbidden");
 }

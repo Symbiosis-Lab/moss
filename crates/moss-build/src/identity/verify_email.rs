@@ -156,6 +156,26 @@ pub async fn verify_folder_email(
     Ok(())
 }
 
+/// Record in the folder the account its key belongs to now. `public.json`
+/// holds only a local copy of that, and a key can change accounts: a site
+/// transfer moves it on the receiver's grant. Any failure leaves the copy as
+/// it was; a key the service links to no account changes nothing.
+pub async fn refresh_recorded_email(
+    folder: &Path,
+    identity: &super::keypair::Identity,
+    client: &crate::seta::client::MossSetaClient,
+) {
+    let Ok(Some(email)) = client.whoami().await.map(|who| who.email) else { return };
+    match identity.email.as_deref() {
+        Some(old) if old.eq_ignore_ascii_case(&email) => return,
+        Some(old) => eprintln!("This folder's key now belongs to {email}, not {old}."),
+        None => {}
+    }
+    let mut updated = identity.clone();
+    updated.link_email(email);
+    let _ = updated.save_public(folder);
+}
+
 /// Run `attempt`; if it is refused for want of a verified account and `email`
 /// was given, verify that address and run it once more.
 pub async fn retrying_after_verification<T, F, Fut>(
