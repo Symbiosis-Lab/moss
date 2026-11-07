@@ -80,3 +80,26 @@ fn script_retries_a_bounded_number_of_times_with_one_id_and_no_headers() {
         assert!(!maker.contains(stored), "the id must live only in memory, found {stored}:\n{maker}");
     }
 }
+
+#[test]
+fn script_sends_engagement_links_out_and_downloads_to_their_own_path() {
+    let vault = vault_with_state("[deployment]\nsite_id = \"blog\"\ndeploy_method = \"moss\"\n");
+    let out = tempdir().unwrap();
+    let mut pending = PendingManifest::new(SiteHashes::default());
+
+    let p = vault.path().to_str().unwrap();
+    let deploy = crate::build::site_config::get_domain_config(p).unwrap();
+    emit(&deploy, p, out.path(), &mut pending).unwrap();
+
+    let js = std::fs::read_to_string(out.path().join("_moss/js/beacon.js")).unwrap();
+    // A host that predates these rows answers this path 404 instead of counting them as visits.
+    assert!(js.contains("fetch(body.kind ? endpoint + '/v2' : endpoint,"), "rows with a kind go to /v2:\n{js}");
+    // One engagement event per pageview: a quarter of the page and a time range, nothing finer.
+    assert!(js.contains("kind: 'engage', scroll: Math.max(25, Math.ceil(deepest * 4) * 25), visible: timeRange(onScreenMs / 1e3)"), "engage body:\n{js}");
+    // A link out sends only the host, a download only the path.
+    assert!(js.contains("kind: 'out', event: link.hostname"), "out body:\n{js}");
+    assert!(js.contains("kind: 'download', event: link.pathname"), "download body:\n{js}");
+    for leak in ["link.href", "link.search", "innerText", "textContent", "Storage", "cookie"] {
+        assert!(!js.contains(leak), "the script must not send or keep {leak}:\n{js}");
+    }
+}
