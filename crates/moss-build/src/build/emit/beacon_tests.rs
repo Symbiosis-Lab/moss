@@ -48,9 +48,9 @@ fn script_sends_address_without_fragment_referrer_and_width_and_no_derived_field
     emit(&deploy, p, out.path(), &mut pending).unwrap();
 
     let js = std::fs::read_to_string(out.path().join("_moss/js/beacon.js")).unwrap();
-    assert!(js.contains("{url:u(),referrer:document.referrer||null,screen_width:innerWidth}"), "pageview body:\n{js}");
-    assert!(js.contains("{url:u(),event:t.getAttribute('data-track')}"), "click body:\n{js}");
-    assert!(js.contains("u=function(){return location.origin+location.pathname+location.search}"), "address without its fragment:\n{js}");
+    assert!(js.contains("{ url: address(), referrer: document.referrer || null, screen_width: innerWidth }"), "pageview body:\n{js}");
+    assert!(js.contains("{ url: address(), event: tracked.getAttribute('data-track') }"), "click body:\n{js}");
+    assert!(js.contains("return location.origin + location.pathname + location.search;"), "address without its fragment:\n{js}");
     for derived in ["location.href", "URLSearchParams", "screen_bucket", "utm_source", "utm_medium", "path:"] {
         assert!(!js.contains(derived), "script still derives or sends {derived}:\n{js}");
     }
@@ -67,14 +67,14 @@ fn script_retries_a_bounded_number_of_times_with_one_id_and_no_headers() {
     emit(&deploy, p, out.path(), &mut pending).unwrap();
 
     let js = std::fs::read_to_string(out.path().join("_moss/js/beacon.js")).unwrap();
-    assert!(js.contains("d.id=r();s(d,d.id?0:2)"), "one id per event, set before the first try; no retry without one:\n{js}");
-    assert!(js.contains("if(n<2&&w<10)"), "at most two retries, ten waiting:\n{js}");
-    assert!(js.contains("Math.min(sec||2<<n,30)"), "Retry-After, capped at 30 s:\n{js}");
+    assert!(js.contains("body.id = newId();\n    send(body, body.id ? 0 : 2);"), "one id per event, set before the first try; no retry without one:\n{js}");
+    assert!(js.contains("if (attempt < 2 && waiting < 10)"), "at most two retries, ten waiting:\n{js}");
+    assert!(js.contains("Math.min(seconds || 2 << attempt, 30)"), "Retry-After, capped at 30 s:\n{js}");
     // Any request header would make the beacon a preflighted CORS request.
     assert!(!js.contains("headers:"), "the beacon must send no request headers:\n{js}");
     // The id is made fresh for each event and never kept; other parts of the
     // script may use storage for their own keys, so only the id's maker is checked.
-    let maker = js.split("var r=function(){").nth(1).and_then(|rest| rest.split("};").next()).expect("the id maker");
+    let maker = js.split("function newId() {").nth(1).and_then(|rest| rest.split("\n  }\n").next()).expect("the id maker");
     assert!(maker.contains("crypto.getRandomValues"), "id maker:\n{maker}");
     for stored in ["Storage", "cookie", "indexedDB"] {
         assert!(!maker.contains(stored), "the id must live only in memory, found {stored}:\n{maker}");

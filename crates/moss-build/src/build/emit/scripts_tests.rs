@@ -36,9 +36,10 @@ fn all_on() -> SiteAssets {
 /// files under `_moss/js/`.
 #[test]
 fn every_embedded_script_has_a_row() {
-    // Embedded by this crate but inlined into HTML or injected by the preview
-    // server rather than emitted as a file under `_moss/js/`.
+    // Embedded by this crate but inlined into HTML, or written by an emitter of
+    // its own, rather than emitted through this table.
     const NOT_EMITTED: &[&str] = &[
+        "beacon",          // written by emit::beacon with the site's endpoint
         "comments-artalk", // inlined by features::comment::render
         "subscribe",       // inlined by features (email::SUBSCRIBE_JS)
     ];
