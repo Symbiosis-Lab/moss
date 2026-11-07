@@ -62,7 +62,7 @@ impl HostPorts {
             metadata_dedup: None,
             scan_events: None,
             events: carrier.clone(),
-            announcer: Arc::new(serve::events::CarrierAnnouncer),
+            announcer: Arc::new(serve::events::CarrierAnnouncer { reporter: carrier.clone() }),
             spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
             store,
             plugins: Arc::new(crate::plugins::manager::ManagerCache::headless(carrier)),

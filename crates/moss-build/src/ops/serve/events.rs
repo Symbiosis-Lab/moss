@@ -244,7 +244,9 @@ pub(crate) fn promoted_line(generation_id: &str) -> String {
 /// headless process — deploy in a later process reads `hashes.json`, and no
 /// webview exists to pull a stashed change set — so both drop, like
 /// [`LogAnnouncer`](crate::build::ports::announcer::LogAnnouncer).
-pub struct CarrierAnnouncer;
+pub struct CarrierAnnouncer {
+    pub(crate) reporter: Arc<dyn crate::build::ports::reporter::BuildReporter>,
+}
 
 #[async_trait::async_trait]
 impl crate::build::ports::announcer::SealAnnouncer for CarrierAnnouncer {
@@ -271,7 +273,7 @@ impl crate::build::ports::announcer::SealAnnouncer for CarrierAnnouncer {
             let mut announced = ANNOUNCED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let announced = announced.get_or_insert_with(Default::default);
             if let Some(event) = removal_announcement(announced, project_root, &cs.removed) {
-                crate::build::ports::reporter::BuildReporter::report(&CarrierReporter, &event);
+                self.reporter.report(&event);
             }
         }
     }
@@ -288,7 +290,9 @@ fn removal_announcement(
     folder: &std::path::Path,
     removed: &[crate::build::manifest::change_set::RemovedAddress],
 ) -> Option<crate::build::progress::PipelineEvent> {
-    let event = crate::build::progress::make_removed_addresses_advisory(removed);
+    let accepted = crate::system::build_records::records().accepted_removals(&folder.to_string_lossy());
+    let unaccepted: Vec<_> = removed.iter().filter(|r| !accepted.contains(&r.path)).cloned().collect();
+    let event = crate::build::progress::make_removed_addresses_advisory(&unaccepted);
     if shows_on_terminal(&event) {
         announced.insert(folder.to_path_buf());
         Some(event)
@@ -335,6 +339,32 @@ impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
 }
 
 #[cfg(test)]
+pub(crate) fn collect_removal_warnings() -> (impl Fn(&str) -> crate::build::HostPorts, impl FnMut() -> Vec<String>) {
+    #[derive(Default)]
+    struct Warnings(std::sync::Mutex<Vec<String>>);
+
+    impl crate::build::ports::reporter::BuildReporter for Warnings {
+        fn report(&self, event: &crate::build::progress::PipelineEvent) {
+            if let crate::build::progress::PipelineEvent::BackgroundProgress { task, advisories, .. } = event {
+                if task == "addresses" {
+                    self.0.lock().unwrap().extend(advisories.iter().map(|a| a.what.clone()));
+                }
+            }
+            CarrierReporter.report(event);
+        }
+    }
+
+    let warnings = Arc::new(Warnings::default());
+    let reporter = warnings.clone();
+    let host = move |folder: &str| {
+        let mut host = crate::cli::host::cli_host_ports(folder);
+        host.announcer = Arc::new(CarrierAnnouncer { reporter: reporter.clone() });
+        host
+    };
+    (host, move || std::mem::take(&mut *warnings.0.lock().unwrap()))
+}
+
+#[cfg(test)]
 mod removal_announcement_tests {
     use super::removal_announcement;
     use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
@@ -357,6 +387,47 @@ mod removal_announcement_tests {
             PipelineEvent::BackgroundProgress { advisories, .. } => advisories.len(),
             other => panic!("expected a background tick, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn removal_warning_collectors_are_isolated() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let (first_host, mut first_warnings) = super::collect_removal_warnings();
+        let (second_host, mut second_warnings) = super::collect_removal_warnings();
+        let first_host = first_host(&first.path().to_string_lossy());
+        let second_host = second_host(&second.path().to_string_lossy());
+        let changes = crate::build::manifest::change_set::ChangeSet { removed: lost(), ..Default::default() };
+
+        first_host.announcer.publish_change_set(first.path(), Some(changes.clone())).await;
+        assert!(first_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(second_warnings().is_empty(), "another test's advisories must not leak in");
+        second_host.announcer.publish_change_set(second.path(), Some(changes)).await;
+        assert!(second_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(first_warnings().is_empty(), "another test's advisories must not leak in");
+    }
+
+    #[test]
+    fn accepted_removals_are_quiet_without_hiding_unaccepted_addresses() {
+        let folder = tempfile::tempdir().unwrap();
+        let key = folder.path().to_string_lossy();
+        let records = crate::system::build_records::records();
+        let mut removed = lost();
+        let mut other = removed[0].clone();
+        other.path = "other.xml".into();
+        removed.push(other);
+        records.record_removed_addresses(&key, removed.clone());
+        records.accept_unexplained_removals(&key, &["feed.xml".into()]);
+        let mut announced = HashSet::new();
+        let event = removal_announcement(&mut announced, folder.path(), &removed).unwrap();
+        let PipelineEvent::BackgroundProgress { advisories: notices, .. } = event else { panic!("expected advisory") };
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].what.contains("/other.xml"));
+        assert!(!notices[0].what.contains("/feed.xml"), "accepted removals must not ask for action");
+        records.accept_all_pending_removals(&key);
+        assert_eq!(advisories(removal_announcement(&mut announced, folder.path(), &removed).unwrap()), 0);
+        assert_eq!(records.removed_addresses(&key).unwrap().len(), 2);
+        assert!(removal_announcement(&mut announced, folder.path(), &removed).is_none());
     }
 
     /// A folder that never had removals puts nothing on the shared bus.

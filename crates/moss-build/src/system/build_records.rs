@@ -304,7 +304,7 @@ impl BuildRecords {
         })
     }
 
-    #[cfg(test)]
+    /// Announcers omit accepted paths while retaining the seal's full removal record.
     pub(crate) fn accepted_removals(&self, folder_path: &str) -> BTreeSet<String> {
         self.removals.get(&Self::key(folder_path)).unwrap_or_default().accepted
     }

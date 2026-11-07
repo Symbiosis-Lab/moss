@@ -841,7 +841,11 @@ mod dry_run_tests {
         let fx = Fixture::new(true);
         let before = fx.record_bytes();
 
-        let report = fx.run(true).await.expect("a dry run reports, it does not fail");
+        let (host, mut warnings) = crate::ops::serve::events::collect_removal_warnings();
+        let flags = DeployFlags { dry_run: true, ..DeployFlags::default() };
+        let report = dispatch(fx.dir.path(), &DeployRoute::Hosted, &host, crate::build::PluginMode::Skip, &flags, &printing())
+            .await.expect("a dry run reports, it does not fail");
+        assert!(warnings().iter().any(|w| w.contains("/legacy-feed.xml")));
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
         assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
@@ -1022,10 +1026,11 @@ mod dry_run_tests {
     async fn the_plugin_route_honours_accept_removals() {
         let fx = Fixture::new(true);
         let sink = crate::deploy::progress::silent();
+        let (host, mut warnings) = crate::ops::serve::events::collect_removal_warnings();
         let run = |accept| {
             crate::deploy::plugin_push::run_plugin_deploy(
                 fx.dir.path(),
-                &crate::cli::host::cli_host_ports,
+                &host,
                 crate::build::PluginMode::Skip,
                 crate::deploy::push::PublishOverrides { accept_removals: accept, ..Default::default() },
                 &sink,
@@ -1034,8 +1039,14 @@ mod dry_run_tests {
         let refused = run(false).await.expect_err("an unexplained removal stops a plugin publish too");
         assert!(refused.contains("/legacy-feed.xml"), "{refused}");
 
+        assert!(warnings().iter().any(|w| w.contains("/legacy-feed.xml")));
+
         let past = run(true).await;
         assert!(!matches!(&past, Err(e) if e.contains("legacy-feed.xml")), "accepted, so not the gate: {past:?}");
+        assert!(warnings().is_empty(), "accepted removals must not ask for action");
+        let removed = crate::system::build_records::records()
+            .removed_addresses(&fx.dir.path().to_string_lossy()).unwrap();
+        assert!(removed.iter().any(|r| r.path == "legacy-feed.xml"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -134,7 +134,7 @@ pub async fn run_plugin_deploy(
     // An empty slot is refused rather than shrugged at, by
     // `one_shot::require_sealed` inside the inner body — see its doc for why
     // the absence is a promotion failure and not a missing description.
-    let sealed = super::one_shot::build_and_seal(&root, host, plugins).await?;
+    let sealed = super::one_shot::build_and_seal(&root, host, plugins, overrides.accept_removals).await?;
 
     overrides.accept(folder, sealed.as_ref());
 

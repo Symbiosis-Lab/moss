@@ -721,11 +721,12 @@ pub struct PublishOverrides {
 }
 
 impl PublishOverrides {
-    /// Called between the build and the gates that read its verdicts.
+    /// Called between the build and the gates that read its verdicts. Removals
+    /// are accepted earlier, inside the build's seal, so the build never
+    /// announces an address it was told to let go.
     pub(crate) fn accept(&self, folder: &Path, sealed: Option<&SealedManifest>) {
         let records = crate::system::build_records::records();
         let key = folder.to_string_lossy();
-        if self.accept_removals { records.accept_all_pending_removals(&key); }
         if let (true, Some(sealed)) = (self.accept_stale_content, sealed) {
             records.accept_stale_content(&key, super::removal_gate::stale_content(folder, sealed));
         }
@@ -789,7 +790,7 @@ pub async fn run_hosted_deploy(
 
     let root = crate::vault::paths::VaultRoot::resolve(folder);
     let host = host_ports(&folder_str);
-    let taken = super::one_shot::build_and_seal(&root, host, plugins).await?;
+    let taken = super::one_shot::build_and_seal(&root, host, plugins, overrides.accept_removals).await?;
 
     // Only after the build: the verdict this reads is the build's own, and
     // asking before it would refuse on the previous run's answer or on none.
@@ -1566,9 +1567,17 @@ mod tests {
         ])
         .await;
 
-        let result = with_seta_url(addr, cli_deploy_accepting(folder.path(), PublishOverrides { accept_removals: true, ..Default::default() })).await;
+        let (host, mut warnings) = crate::ops::serve::events::collect_removal_warnings();
+        let result = with_seta_url(addr, run_hosted_deploy(
+            folder.path(), &host, crate::build::PluginMode::Skip, None,
+            PublishOverrides { accept_removals: true, ..Default::default() }, &progress::silent(),
+        )).await;
 
         assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+        assert!(warnings().is_empty(), "accepted removals must not ask for action");
+        let removed = crate::system::build_records::records()
+            .removed_addresses(&folder.path().to_string_lossy()).unwrap();
+        assert!(removed.iter().any(|r| r.path == "legacy-feed.xml"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

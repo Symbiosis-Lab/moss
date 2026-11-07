@@ -65,6 +65,7 @@ impl crate::build::ports::deploy::DeployPorts for HeadlessDeployPorts {
 /// build in the codebase calls, to serve the one caller that publishes.
 pub(crate) struct CapturingAnnouncer {
     inner: std::sync::Arc<dyn crate::build::ports::announcer::SealAnnouncer>,
+    accept_removals: bool,
     sealed: std::sync::Arc<std::sync::Mutex<Option<SealedManifest>>>,
     /// What the seal said publishing would change — see [`Captured`].
     change_set: std::sync::Arc<std::sync::Mutex<Option<crate::build::manifest::change_set::ChangeSet>>>,
@@ -88,6 +89,10 @@ impl crate::build::ports::announcer::SealAnnouncer for CapturingAnnouncer {
         change_set: Option<crate::build::manifest::change_set::ChangeSet>,
     ) {
         *self.change_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = change_set.clone();
+        // The seal has recorded its removals; accept them before the host announces them.
+        if self.accept_removals && change_set.is_some() {
+            crate::system::build_records::records().accept_all_pending_removals(&project_root.to_string_lossy());
+        }
         self.inner.publish_change_set(project_root, change_set).await;
     }
 }
@@ -117,9 +122,14 @@ pub(crate) struct Captured {
 
 /// [`capture_seal`] with the change set too.
 pub(crate) fn capture(host: &mut crate::build::HostPorts) -> Captured {
+    capture_accepting(host, false)
+}
+
+fn capture_accepting(host: &mut crate::build::HostPorts, accept_removals: bool) -> Captured {
     let captured = Captured { sealed: Default::default(), change_set: Default::default() };
     host.announcer = std::sync::Arc::new(CapturingAnnouncer {
         inner: host.announcer.clone(),
+        accept_removals,
         sealed: captured.sealed.clone(),
         change_set: captured.change_set.clone(),
     });
@@ -134,8 +144,9 @@ pub(crate) async fn build_and_seal(
     root: &crate::vault::paths::VaultRoot,
     host: crate::build::HostPorts,
     plugins: crate::build::PluginMode,
+    accept_removals: bool,
 ) -> Result<Option<SealedManifest>, String> {
-    Ok(build_and_describe(root, host, plugins).await?.0)
+    Ok(build_and_describe(root, host, plugins, accept_removals).await?.0)
 }
 
 /// [`build_and_seal`], and the change set the seal computed along the way.
@@ -143,8 +154,9 @@ pub(crate) async fn build_and_describe(
     root: &crate::vault::paths::VaultRoot,
     mut host: crate::build::HostPorts,
     plugins: crate::build::PluginMode,
+    accept_removals: bool,
 ) -> Result<(Option<SealedManifest>, Option<crate::build::manifest::change_set::ChangeSet>), String> {
-    let captured = capture(&mut host);
+    let captured = capture_accepting(&mut host, accept_removals);
     let message = crate::build::run_pipeline(crate::build::PipelineConfig {
         root: root.clone(),
         progress: crate::build::stdout_sink(),
@@ -182,7 +194,7 @@ pub async fn build_sealed_now(
     root: &crate::vault::paths::VaultRoot,
 ) -> Result<SealedManifest, String> {
     let host = crate::cli::host::cli_host_ports(root.as_str());
-    require_sealed(build_and_seal(root, host, crate::build::PluginMode::Blocking).await?)
+    require_sealed(build_and_seal(root, host, crate::build::PluginMode::Blocking, false).await?)
 }
 
 /// The one sentence every publish driver refuses a sealless publish with.

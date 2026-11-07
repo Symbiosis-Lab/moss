@@ -334,7 +334,7 @@ pub async fn run_dry_run(
     // The seal already classified the build against the last publish; asking
     // again would walk the tree twice.
     let (sealed, change_set) =
-        super::one_shot::build_and_describe(&root, host_ports(&folder_str), plugins).await?;
+        super::one_shot::build_and_describe(&root, host_ports(&folder_str), plugins, false).await?;
     let sealed = super::one_shot::require_sealed(sealed)?;
     let change_set = change_set.ok_or("the build produced no change set to describe")?;
 
