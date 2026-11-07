@@ -46,6 +46,16 @@ URLs opened in the action panel; null when it was opened in its loading state
 
 ***
 
+### returnToEditorCount
+
+```ts
+returnToEditorCount: number;
+```
+
+Number of times returnToEditor was called
+
+***
+
 ### systemBrowserUrls
 
 ```ts
