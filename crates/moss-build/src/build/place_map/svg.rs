@@ -5,7 +5,6 @@
 //! target.  That makes the byte output suitable for page snapshots and keeps
 //! the geometry/privacy boundary in [`super::context`] and [`super::geometry`].
 
-use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use sha2::{Digest, Sha256};
@@ -23,7 +22,7 @@ pub(crate) use text::precision_rank;
 mod detail;
 mod dots;
 mod locator;
-use dots::DotLinks;
+pub(crate) use dots::DotLinks;
 use locator::{keep_alternate_bands, LOCATOR_DISPLAY_SCALE};
 pub use locator::{
     emit_locator, emit_locator_svg, LocatorProfile, LocatorSafetyError, LocatorSvg,
@@ -63,9 +62,8 @@ pub struct SvgMapOptions<'a> {
     pub precision: Precision,
     pub href: Option<&'a str>,
     pub(crate) ground: Option<&'a StreetGround>,
-    /// Place page URL by term key. A dot whose place is listed links to it;
-    /// `None` draws plain dots.
-    pub(crate) links: Option<&'a BTreeMap<String, String>>,
+    /// What the dots link to; `None` draws plain dots.
+    pub(crate) links: Option<DotLinks<'a>>,
 }
 
 impl<'a> SvgMapOptions<'a> {
@@ -107,7 +105,7 @@ pub(crate) fn emit_svg_over(
     page_path: &str,
     ordinal: usize,
     ground: Option<&StreetGround>,
-    links: Option<&BTreeMap<String, String>>,
+    links: Option<DotLinks<'_>>,
 ) -> String {
     let location = target
         .aggregate_name
@@ -177,7 +175,7 @@ fn emit_svg_with_mode(
         full_extent: false,
         tile: false,
         ground: options.ground,
-        dot_links: options.links.map(|urls| DotLinks { urls, own_page: options.page_path }),
+        dot_links: options.links,
         linked: false,
     };
     writer.open_figure(
@@ -909,52 +907,24 @@ impl Writer<'_> {
         ));
         if let Some(frame) = target.frame.as_ref() {
             let projection = Projection::new(frame);
-            // Soft fades first, so none covers a dot. A marker that would
-            // draw the same shape on the same pixel as one already drawn is
-            // left out, so several places in one city make one dot.
-            let mut drawn = std::collections::HashSet::new();
-            let places: Vec<&ResolvedPlace> = target.markers_in_draw_order();
-            let slot = |place: &ResolvedPlace| {
-                let point = place.point().and_then(|point| projection.project(point))?;
-                let shape = match place.precision {
-                    Precision::Exact | Precision::City => 0,
-                    Precision::Region => 1,
-                    Precision::Country => 2,
-                };
-                Some((snap(point.0), snap(point.1), shape))
-            };
-            let mut groups: std::collections::HashMap<(i32, i32, u8), Vec<&ResolvedPlace>> = std::collections::HashMap::new();
-            for place in &places {
-                if let Some(slot) = slot(place) {
-                    groups.entry(slot).or_default().push(place);
-                }
-            }
-            for place in places {
-                let Some(point) = place.point().and_then(|point| projection.project(point)) else {
-                    continue;
-                };
+            for dots::MarkerGroup { point, places: group, dots } in dots::marker_groups(target, &projection, self.linked) {
+                let place = group[0];
                 let (x, y) = (snap(point.0), snap(point.1));
-                let shape = match place.precision {
-                    Precision::Exact | Precision::City => 0,
-                    Precision::Region => 1,
-                    Precision::Country => 2,
-                };
-                if !drawn.insert((x, y, shape)) {
-                    continue;
-                }
                 let key = xml_escape(&place.key);
-                let group = groups.remove(&(x, y, shape)).unwrap_or_default();
                 match place.precision {
                     Precision::Exact | Precision::City => {
-                        let radius = marker_radius(place.precision);
                         // A fade below is a geographic extent and may crop at
-                        // the frame; a dot is a fixed-size marker and may not.
-                        let (cx, cy) = clamp_dot(point, radius + 1.0);
-                        let (x, y) = (snap(cx), snap(cy));
-                        let linked = self.open_dot_link(&group, x, y, radius + 5.0, false);
-                        write!(self.output, "{}{}", dot(x, y, radius + 1.0, "var(--moss-place-marker-casing, #ffffff)", ""), dot(x, y, radius, "var(--moss-place-marker, #2d5a2d)", &format!(" data-map-marker=\"{key}\""))).expect("writing to String cannot fail");
+                        // the frame; a dot is a fixed-size marker and may not,
+                        // so its centre is clamped in `marker_groups`.
+                        let radius = marker_radius(place.precision);
+                        let centres: Vec<(i32, i32)> = dots.iter().map(|&(x, y, _)| (x, y)).collect();
+                        let linked = self.open_dot_link(&group, &centres, radius + 5.0, false);
+                        for &(x, y, member) in &dots {
+                            let key = xml_escape(&member.key);
+                            write!(self.output, "{}{}", dot(x, y, radius + 1.0, "var(--moss-place-marker-casing, #ffffff)", ""), dot(x, y, radius, "var(--moss-place-marker, #2d5a2d)", &format!(" data-map-marker=\"{key}\""))).expect("writing to String cannot fail");
+                        }
                         if linked {
-                            self.close_dot_link(x, y);
+                            self.close_dot_link(&centres);
                         }
                     }
                     Precision::Region | Precision::Country => {
@@ -964,10 +934,10 @@ impl Writer<'_> {
                         let radius = fade_edge
                             .and_then(|edge| projection.project(edge))
                             .map_or(marker_radius(place.precision), |edge| (edge.0 - point.0).hypot(edge.1 - point.1).max(REGION_FADE_MIN_RADIUS));
-                        let linked = self.open_dot_link(&group, x, y, 10.0, true);
+                        let linked = self.open_dot_link(&group, &[(x, y)], 10.0, true);
                         write!(self.output, "<circle cx=\"{x}\" cy=\"{y}\" r=\"{radius:.0}\" fill=\"url(#{fade})\" data-map-marker=\"{key}\"/>").expect("writing to String cannot fail");
                         if linked {
-                            self.close_dot_link(x, y);
+                            self.close_dot_link(&[(x, y)]);
                         }
                     }
                 }

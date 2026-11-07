@@ -47,23 +47,22 @@ impl Drop for Cleanup {
 
 const PLACES: &str = "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n\n[\"Harbor Annex\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n\n[\"Inland\"]\nlat = 36.0\nlng = 136.0\nprecision = \"city\"\n";
 
-/// Build a three-article site (`line = false`, no explorer) and return its output folder.
-fn build_site(tmp: &Path) {
+fn write_site(tmp: &Path) {
     write(tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\nlocator = \"align-right\"\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\nline = false\nexplorer = false\n");
     write(tmp, ".moss/places.toml", PLACES);
     write(tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
     write(tmp, "posts/report.md", "---\ntitle: Report\ndate: 2025-05-22\nlocation: Harbor\n---\n\nA single place.\n");
     write(tmp, "posts/annex.md", "---\ntitle: Annex\ndate: 2025-05-23\nlocation: Harbor Annex\n---\n\nSame spot.\n");
     write(tmp, "posts/trip.md", "---\ntitle: Trip\ndate: 2025-05-24\nlocation: Inland\n---\n\nFar.\n");
-    let result = build_sync(&tmp.to_string_lossy());
-    assert!(result.is_ok(), "build failed: {result:?}");
 }
 
 fn built<R>(check: impl FnOnce(&Path) -> R) -> R {
     let tmp = std::env::temp_dir().join(format!("moss_place_dots_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&tmp).unwrap();
     let _cleanup = Cleanup(tmp.clone());
-    build_site(&tmp);
+    write_site(&tmp);
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
     check(&tmp.join(".moss/build.nosync/staging"))
 }
 
@@ -106,4 +105,42 @@ fn the_static_places_root_links_each_dot_and_a_cluster_names_what_it_holds() {
         assert!(map.contains("aria-label=\"Harbor, Harbor Annex\""), "the coincident places are one dot: {map}");
         assert_eq!(map.matches("<a ").count(), 2, "{map}");
     });
+}
+
+#[test]
+fn nearby_dots_cluster_at_the_narrowest_drawn_scale() {
+    let tmp = std::env::temp_dir().join(format!("moss_dot_clusters_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write_site(&tmp);
+    let nearby = PLACES.replace(
+        "[\"Harbor Annex\"]\nlat = 35.0\nlng = 135.0",
+        "[\"Harbor Annex\"]\nlat = 35.4\nlng = 135.4",
+    ).replace("lat = 36.0\nlng = 136.0", "lat = 38.0\nlng = 138.0");
+    write(&tmp, ".moss/places.toml", &nearby);
+    write(&tmp, "posts/nearby.md", "---\ntitle: Nearby\nlocation: [Harbor, Harbor Annex, Inland]\n---\n\nNearby places.\n");
+    write(&tmp, "maps.md", "---\ntitle: Maps\n---\n\n![[places/|style:map]]\n");
+    assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+    let out = tmp.join(".moss/build.nosync/staging");
+    for path in ["places/index.html", "posts/nearby/index.html", "maps/index.html"] {
+        let page = read_page(&out, path);
+        let map = figure(&page);
+        assert!(map.contains("<a href=\"/places/harbor/\" aria-label=\"Harbor, Harbor Annex\">"), "{path}: nearby places must share one named link");
+        assert_eq!(map.matches("<a ").count(), 2, "{path}: the distant dot stays separate");
+        for key in ["places/harbor", "places/harbor-annex", "places/inland"] {
+            let marker = format!("data-map-marker=\"{key}\"");
+            let on_globe = format!("data-map-globe-marker=\"true\" {marker}");
+            assert!(map.matches(&marker).count() > map.matches(&on_globe).count(), "{path}: {key} keeps its own dot");
+        }
+    }
+    let config = fs::read_to_string(tmp.join(".moss/config.toml")).unwrap();
+    write(&tmp, ".moss/config.toml", &config.replace("explorer = false", "explorer = true"));
+    let shared = nearby.replace("[\"Harbor\"]", "[\"Harbor\"]\nparent = \"District\"")
+        .replace("[\"Harbor Annex\"]", "[\"Harbor Annex\"]\nparent = \"District\"");
+    for (places, href) in [(shared.as_str(), "/places/district/"), (nearby.as_str(), "/places/")] {
+        write(&tmp, ".moss/places.toml", places);
+        assert!(build_sync(&tmp.to_string_lossy()).is_ok());
+        let page = read_page(&out, "posts/nearby/index.html");
+        assert!(figure(&page).contains(&format!("<a href=\"{href}\" aria-label=\"Harbor, Harbor Annex\">")), "cluster destination: {href}");
+    }
 }

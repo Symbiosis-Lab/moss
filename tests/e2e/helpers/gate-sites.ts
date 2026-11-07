@@ -2201,6 +2201,29 @@ explorer = false
 lat = 35.0
 lng = 135.0
 precision = "city"
+
+["Harbor Annex"]
+lat = 35.4
+lng = 135.4
+precision = "city"
+
+["Inland"]
+lat = 38.0
+lng = 138.0
+precision = "city"
+`,
+    "nearby.md": `---
+title: Nearby
+location: [Harbor, Harbor Annex, Inland]
+---
+
+Nearby places.
+`,
+    "maps.md": `---
+title: Maps
+---
+
+![[places/|style:map]]
 `,
   },
 };

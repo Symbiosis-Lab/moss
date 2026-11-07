@@ -168,6 +168,22 @@ impl PlaceMapRenderContext {
         self
     }
 
+    /// The explorer is on and its map assets and places data are written.
+    fn explorer_ready(&self) -> bool {
+        self.explorer && !self.map_assets_hash.is_empty() && self.explorer_places_hash.is_some()
+    }
+
+    fn dot_links<'a>(&'a self, own_page: &'a str) -> super::svg::DotLinks<'a> {
+        super::svg::DotLinks {
+            urls: &self.place_pages,
+            own_page,
+            parents: &self.parents,
+            gazetteer: &self.gazetteer,
+            namespace: &self.namespace,
+            explorer: self.explorer_ready(),
+        }
+    }
+
     #[cfg(test)]
     fn with_place_pages(mut self, pages: BTreeMap<String, String>) -> Self {
         self.place_pages = Arc::new(pages);
@@ -233,7 +249,7 @@ impl PlaceMapRenderContext {
             .map(|place| place.precision)
             .max_by_key(precision_rank)
             .unwrap_or(Precision::Country);
-        let options = super::SvgMapOptions { ground: ground.as_ref(), links: Some(&self.place_pages), ..super::SvgMapOptions::new(host_path, ordinal, &first.display, precision) };
+        let options = super::SvgMapOptions { ground: ground.as_ref(), links: Some(self.dot_links(host_path)), ..super::SvgMapOptions::new(host_path, ordinal, &first.display, precision) };
         match super::emit_locator(&self.maps, &target, options) {
             Ok(locator) => {
                 // The article id `places.<hash>.json` keys THIS page's own
@@ -414,7 +430,7 @@ impl PlaceMapRenderContext {
             .or_else(|| target.places.first().map(|place| place.display.clone()))
             .unwrap_or_else(|| key.to_string());
         let ground = self.street_ground(&mut target, EMBED_CSS_WIDTH);
-        let svg = target.has_coordinates().then(|| super::emit_svg_over(&self.maps, &target, page_path, ordinal, ground.as_ref(), Some(&self.place_pages)))?;
+        let svg = target.has_coordinates().then(|| super::emit_svg_over(&self.maps, &target, page_path, ordinal, ground.as_ref(), Some(self.dot_links(page_path))))?;
         let svg = if in_place_explorer { self.with_explorer_handshake(key, svg) } else { svg };
         let scope = if key == self.namespace { String::new() } else { format!("place={key}") };
         let svg = if is_embed { self.with_embed_hydration(svg, &scope, &embed_name) } else { svg };
@@ -431,7 +447,7 @@ impl PlaceMapRenderContext {
     /// untouched: the explorer scopes to the root, so a claimed place's
     /// embed stays exactly the no-JavaScript figure it always was.
     fn with_explorer_handshake(&self, key: &str, svg: String) -> String {
-        if key != self.namespace || !self.explorer || self.map_assets_hash.is_empty() {
+        if key != self.namespace || !self.explorer_ready() {
             return svg;
         }
         let Some(places_hash) = self.explorer_places_hash.as_deref() else { return svg };
@@ -493,11 +509,7 @@ impl PlaceMapRenderContext {
         if !self.explorer || svg.contains("data-moss-places-explorer") || svg.contains("data-map-route=") {
             return svg;
         }
-        // allow:served-path-url-construct (the place-typed namespace root's
-        // own page — not a hashed asset, so `ServedPath` has no constructor
-        // for it; the same bare `format!("/{}/", key)` `terms.rs`'s own
-        // `term_url` builds a root link with).
-        let root = format!("/{}/", self.namespace);
+        let root = super::places_data::root_url(&self.namespace);
         // `data-embed-name`: the plain place/article display name — never a
         // full sentence — so `places-explorer/embed.ts`'s host-page half can
         // compose the hydrated iframe's own accessible `title` through its
