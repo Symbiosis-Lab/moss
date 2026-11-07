@@ -699,30 +699,20 @@ root_name: string | null;
 editor_root: string | null }
 
 /**
- * A validation diagnostic exposed to the frontend.
- * 
- * Lives here rather than in the app crate because both carriers return it:
- * the desktop `validate_content` command and the HTTP arm.
+ * The wire shape every host's editor reads: [`Diagnostic`] with an
+ * LSP-compatible severity number (1 error, 2 warning, 3 info, 4 hint).
  */
-export type EditorDiagnostic = { 
-/**
- * Severity: 1=Error, 2=Warning, 3=Info, 4=Hint (LSP-compatible).
- */
-severity: number; 
-/**
- * Human-readable message.
- */
-message: string; 
+export type EditorDiagnostic = { severity: number; message: string; 
 /**
  * Frontmatter field path (e.g. "title", "also_in[0]").
  */
 path: string | null; 
 /**
- * Source line (1-based), if available.
+ * 1-based line in the whole file, when known.
  */
 line: number | null; 
 /**
- * Source column (1-based), if available.
+ * 1-based column, when known.
  */
 column: number | null }
 

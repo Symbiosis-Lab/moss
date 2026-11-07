@@ -49,6 +49,7 @@ The author edits a folder; `moss-build` watches it, builds it and serves the res
 | Crate | What it's for | What it must never depend on |
 |---|---|---|
 | `moss-core` | pure Rust: markdown parsing, frontmatter typing, schema validation, wikilink/embed resolution, the design-token and HTML-class contract | filesystem I/O, network I/O, any async runtime |
+| `moss-bindings` | the JSON boundary moss-core's page API crosses into WebAssembly and Swift | moss-build, any I/O |
 | `moss-build` | everything that runs without a window: the build pipeline (scan → render → emit), the preview server, the publish path, the plugin engine, the HTTP client for the hosting service | any GUI toolkit, direct or transitive (no Tauri, no wry, no webview) |
 | `moss-cli` | the `moss` binary | anything beyond `moss-build` — it links `moss-build` only, never `moss-core` directly |
 
@@ -66,9 +67,11 @@ Nothing here depends back on the CLI or on any consumer.
 title: The crates. An arrow points at what a crate depends on.
 ---
 flowchart LR
+    moss_bindings["moss-bindings"]:::crate
     moss_build["moss-build"]:::crate
     moss_cli["moss-cli"]:::crate
     moss_core["moss-core"]:::crate
+    moss_bindings --> moss_core
     moss_build --> moss_core
     moss_cli --> moss_build
 ```

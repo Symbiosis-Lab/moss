@@ -1,0 +1,31 @@
+[package]
+name = "moss-bindings"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "JSON bindings for moss-core page checking and preview in WebAssembly and Swift."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+moss-core.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+wasm-bindgen = { version = "=0.2.128", optional = true }
+uniffi = { version = "0.32.2", default-features = false, optional = true }
+
+[features]
+default = []
+wasm = ["dep:wasm-bindgen"]
+ffi = ["dep:uniffi"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/uniffi-bindgen.rs"
+required-features = ["ffi", "uniffi/cli"]

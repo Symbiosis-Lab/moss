@@ -138,6 +138,27 @@ pub struct Diagnostic {
     pub column: Option<usize>,
 }
 
+/// The wire shape every host's editor reads: [`Diagnostic`] with an
+/// LSP-compatible severity number (1 error, 2 warning, 3 info, 4 hint).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct EditorDiagnostic {
+    pub severity: u8,
+    pub message: String,
+    /// Frontmatter field path (e.g. "title", "also_in[0]").
+    pub path: Option<String>,
+    /// 1-based line in the whole file, when known.
+    pub line: Option<usize>,
+    /// 1-based column, when known.
+    pub column: Option<usize>,
+}
+
+impl From<Diagnostic> for EditorDiagnostic {
+    fn from(d: Diagnostic) -> Self {
+        Self { severity: d.severity as u8, message: d.message, path: d.path, line: d.line, column: d.column }
+    }
+}
+
 /// Validate parsed frontmatter against a content schema.
 ///
 /// Returns a list of diagnostics. An empty list means the frontmatter is valid.

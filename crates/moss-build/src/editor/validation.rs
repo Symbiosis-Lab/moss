@@ -4,35 +4,7 @@
 //! `commands.rs`; `diagnose` is the whole body of `validate_content`, which
 //! keeps only the read and the schema resolution.
 
-/// A validation diagnostic exposed to the frontend.
-///
-/// Lives here rather than in the app crate because both carriers return it:
-/// the desktop `validate_content` command and the HTTP arm.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct EditorDiagnostic {
-    /// Severity: 1=Error, 2=Warning, 3=Info, 4=Hint (LSP-compatible).
-    pub severity: u8,
-    /// Human-readable message.
-    pub message: String,
-    /// Frontmatter field path (e.g. "title", "also_in[0]").
-    pub path: Option<String>,
-    /// Source line (1-based), if available.
-    pub line: Option<usize>,
-    /// Source column (1-based), if available.
-    pub column: Option<usize>,
-}
-
-impl From<moss_core::validation::Diagnostic> for EditorDiagnostic {
-    fn from(d: moss_core::validation::Diagnostic) -> Self {
-        Self {
-            severity: d.severity as u8,
-            message: d.message,
-            path: d.path,
-            line: d.line,
-            column: d.column,
-        }
-    }
-}
+pub use moss_core::validation::EditorDiagnostic;
 
 /// The schema for `root` from what is on disk: the built-in fields, the
 /// installed plugins' fields and the name-list fields the site config declares.
