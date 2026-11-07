@@ -1955,6 +1955,7 @@ fn format_probe_cache_hit_survives_source_deletion() {
     assert_eq!(first, Some(SkipReason::Cmyk), "premise: fixture is CMYK");
 
     fs::remove_file(&src).unwrap();
+    forget_probes(&h.transforms);
 
     let second = should_skip(&src, "jpg", size, &cfg, &h.transforms, &source_oid, false);
     assert_eq!(
@@ -2123,6 +2124,23 @@ fn format_probe_cache_key_includes_extension() {
     );
 }
 
+/// A later probe in the same process reads no record: with the records gone,
+/// it still answers and writes none back.
+#[test]
+fn a_reprobe_in_the_same_process_reads_no_record() {
+    let h = harness();
+    let src = h._tmp.path().join("cmyk.jpg");
+    make_cmyk_jpeg(&src);
+    let source_oid = crate::build::cache::ObjectStore::hash_file(&src).unwrap();
+    let cfg = ImageCompressionConfig::default();
+    let size = fs::metadata(&src).unwrap().len();
+
+    assert_eq!(should_skip(&src, "jpg", size, &cfg, &h.transforms, &source_oid, false), Some(SkipReason::Cmyk));
+    fs::remove_dir_all(h.transforms.root()).unwrap();
+    assert_eq!(should_skip(&src, "jpg", size, &cfg, &h.transforms, &source_oid, false), Some(SkipReason::Cmyk));
+    assert!(!h.transforms.root().exists(), "the second probe missed and wrote its record again");
+}
+
 #[test]
 fn format_probe_cache_recomputes_on_corrupt_blob() {
     // The cached blob can outlive its usefulness (truncated write, disk
@@ -2159,6 +2177,7 @@ fn format_probe_cache_recomputes_on_corrupt_blob() {
         .expect("format-probe entry must exist");
     let blob_path = h.objects.get_path(&entry.oid).expect("blob must exist");
     fs::write(&blob_path, b"not valid json").unwrap();
+    forget_probes(&h.transforms);
 
     let recomputed = should_skip(&src, "jpg", size, &cfg, &h.transforms, &source_oid, false);
     assert_eq!(
@@ -7088,4 +7107,9 @@ async fn an_image_that_left_the_site_and_came_back_unchanged_is_still_carried_fo
         other_oid,
         "other.png never left, and stays carried forward under the same oid too"
     );
+}
+
+/// What a later process asking `transforms` starts from.
+fn forget_probes(transforms: &crate::build::cache::TransformCache) {
+    PROBED.retain(|key| key.0 != transforms.root());
 }

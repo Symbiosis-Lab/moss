@@ -519,19 +519,17 @@ pub(crate) fn should_skip(
     // unrelated file's result if two different unresolved-OID images are
     // probed in the same build. Falling through just means this file
     // recomputes fresh, same as before this cache existed.
+    let probe_key = (transforms.root().to_path_buf(), source_oid.to_string(), params.to_string());
     if !source_oid.is_empty() {
-        if let Some(cached_oid) =
-            transforms.find_cached_output(source_oid, FORMAT_PROBE_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
-        {
-            if let Some(blob_path) = transforms.objects().get_path(&cached_oid) {
-                if let Ok(bytes) = fs::read(&blob_path) {
-                    if let Ok(verdict) = serde_json::from_slice::<Option<SkipReason>>(&bytes) {
-                        return verdict;
-                    }
-                }
-            }
-            // Cached blob vanished or is corrupt — fall through and recompute
-            // fresh below; the write-back at the end repairs the entry.
+        // A record whose blob vanished or is corrupt falls through to a fresh
+        // probe below, whose write-back repairs the entry.
+        let known = PROBED.get(&probe_key).or_else(|| {
+            let cached_oid = transforms.find_cached_output(source_oid, FORMAT_PROBE_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
+            serde_json::from_slice::<Option<SkipReason>>(&fs::read(transforms.objects().get_path(&cached_oid)?).ok()?).ok()
+        });
+        if let Some(verdict) = known {
+            PROBED.put(probe_key, verdict.clone());
+            return verdict;
         }
     }
 
@@ -573,10 +571,17 @@ pub(crate) fn should_skip(
                 }
             }
         }
+        PROBED.put(probe_key, verdict.clone());
     }
 
     verdict
 }
+
+/// Format-probe verdicts this process has read or made, by the cache that
+/// holds them and that cache's own key (source content, then params), so a
+/// rebuild in a long-lived process reads no record for an image it has
+/// already asked about.
+static PROBED: crate::build::cache::KeyedMemo<(PathBuf, String, String), Option<SkipReason>> = crate::build::cache::KeyedMemo::new();
 
 /// The expensive, content-stable portion of `should_skip`: magic-byte match,
 /// CMYK-ness, and the AlreadySmall size/dimension carve-out. Extracted so
