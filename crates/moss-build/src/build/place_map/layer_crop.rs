@@ -173,7 +173,7 @@ impl PlaceMapRenderContext {
             }
             let job = CropJob { layer: n, frame, view, width, height };
             let name = crop_name(layer, plan, &job);
-            let Ok(path) = ServedPath::for_place_map_layer_file(self.map_assets_hash(), &layer.name, &format!("crops/{name}.jpg")) else { continue };
+            let Ok(path) = ServedPath::for_place_map_layer_file(self.map_assets_hash(), &layer.name, &format!("crops/{name}.webp")) else { continue };
             self.crops().lock().expect("the crop registry is never held across a panic").entry(name).or_insert(job);
             images.push(LayerImage { href: path.to_relative_url(), footprints });
             if !plan.credit.is_empty() && !credits.contains(&plan.credit.as_str()) {

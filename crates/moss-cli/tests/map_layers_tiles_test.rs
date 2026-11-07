@@ -68,7 +68,7 @@ impl Site {
                 let path = entry.path();
                 if path.is_dir() {
                     stack.push(path);
-                } else if path.extension().is_some_and(|e| e == "jpg") {
+                } else if path.extension().is_some_and(|e| e == "jpg" || e == "webp") {
                     found.push(path);
                 }
             }
@@ -273,11 +273,12 @@ fn locator(html: &str) -> &str {
     &html[start..start + html[start..].find("</figure>").expect("its end")]
 }
 
-/// `(width, height)` from the first start-of-frame marker of a baseline JPEG.
-fn jpeg_size(bytes: &[u8]) -> (u32, u32) {
-    let at = bytes.windows(2).position(|w| w == [0xFF, 0xC0]).expect("a start-of-frame marker");
-    let field = |n: usize| u32::from(u16::from_be_bytes([bytes[at + n], bytes[at + n + 1]]));
-    (field(7), field(5))
+/// `(width, height)` from the frame header of a simple lossy WebP (`VP8 ` chunk).
+fn webp_size(bytes: &[u8]) -> (u32, u32) {
+    assert_eq!(&bytes[12..16], b"VP8 ", "a simple lossy WebP");
+    assert_eq!(&bytes[23..26], [0x9D, 0x01, 0x2A], "a VP8 key frame");
+    let field = |n: usize| u32::from(u16::from_le_bytes([bytes[n], bytes[n + 1]]) & 0x3FFF);
+    (field(26), field(28))
 }
 
 fn crop_hrefs(figure: &str) -> Vec<String> {
@@ -295,17 +296,19 @@ fn an_exact_place_on_a_plate_gets_a_locator_framed_to_it_with_the_plate_clipped_
     let figure = locator(&html);
     let hrefs = crop_hrefs(figure);
     assert_eq!(hrefs.len(), 1, "{figure:.600}");
-    assert!(hrefs[0].contains("/layers/atlas/crops/") && hrefs[0].ends_with(".jpg"), "{}", hrefs[0]);
+    assert!(hrefs[0].contains("/layers/atlas/crops/") && hrefs[0].ends_with(".webp"), "{}", hrefs[0]);
     let written = site.dir.path().join(".moss/build.nosync/current").join(hrefs[0].trim_start_matches('/'));
     let bytes = std::fs::read(&written).unwrap_or_else(|_| panic!("{} was not written", written.display()));
-    assert!(bytes.len() > 1000 && bytes.starts_with(&[0xFF, 0xD8]), "a JPEG");
+    // WebP, not JPEG: the static figure's `<image>` cannot load lazily, so it
+    // competes with the page's first picture and its bytes matter.
+    assert!(bytes.len() > 1000 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP", "a WebP");
     assert!(figure.contains("<clipPath") && figure.contains("<polygon points=\"") && figure.contains("clip-path=\"url(#"), "{figure:.800}");
     // The ground is the flat land tone and the world's own land and relief are not drawn.
     assert!(figure.contains("data-map-layer=\"ground\"") && figure.contains("data-map-layer=\"land\"/>") && figure.contains("data-map-layer=\"relief\"/>"), "{figure:.800}");
     assert!(figure.contains("aria-live=\"polite\">New York Public Library</p>") || html.contains("aria-live=\"polite\">New York Public Library</p>"), "the credit is in the static figure");
     // The picture is cut to the figure's size: 2x the locator's 352 px wide,
     // and as tall as the part of the frame the layer covers.
-    assert_eq!(jpeg_size(&bytes), (704, 490));
+    assert_eq!(webp_size(&bytes), (704, 490));
 }
 
 #[test]
