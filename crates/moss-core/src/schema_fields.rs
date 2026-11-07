@@ -809,7 +809,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,
         score: 94,
-        description: "Marks a page that exists only to be transcluded into other pages with `![[name]]`: it is never built, so it has no URL and is absent from nav, sitemap, feeds, search and listings (e.g. a reusable inline SVG or a repeated block). With `nav: true` and `external_url`, it is a header nav link to that address and nothing else",
+        description: "Marks a page that exists only to be transcluded into other pages with `![[name]]`: it is never built, so it has no URL and is absent from nav, sitemap, feeds, search and listings (e.g. a reusable inline SVG or a repeated block). With `nav: true` and `external_url`, it is a header nav link to that address and nothing else; with `listed: true`, it is a row in its folder's listings with no page behind it",
         label_key: "chip.partial.label",
         group: "This Page",
         ..FIELD_DEFAULTS

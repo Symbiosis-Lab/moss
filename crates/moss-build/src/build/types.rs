@@ -885,6 +885,23 @@ impl ParsedDocument {
         self.draft != Some(true) && self.listed != Some(false) && !self.slot_only && !self.is_not_found_page()
     }
 
+    /// An authored `partial: true` file that is not a draft. Read from the
+    /// frontmatter, not `slot_only`: `footer.md` is slot-only too and is
+    /// neither a header link nor a listing row.
+    pub fn is_partial(&self) -> bool {
+        self.slot_only
+            && self.draft != Some(true)
+            && self.raw_frontmatter.get("partial").and_then(|v| v.as_bool()) == Some(true)
+    }
+
+    /// A partial that says `listed: true`: a row in its own folder's listings
+    /// with no page behind it. Only folder listings take it; every surface
+    /// that needs an address (feeds, sitemap, search, prev/next, the "N pages"
+    /// count) keeps to [`Self::is_listable`].
+    pub fn is_pageless_entry(&self) -> bool {
+        self.is_partial() && self.listed == Some(true)
+    }
+
     /// The site's `404.md`: the page a host shows for an unknown address. It
     /// is a page at `/404/` and a copy at `/404.html`, and it is no part of
     /// the site's content, so no listing surface carries it.

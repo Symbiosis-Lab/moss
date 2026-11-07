@@ -98,7 +98,7 @@ pub fn generate_year_grouped_article_list(
             ArticleListItemProps {
                 date_display,
                 date_raw,
-                url: article_map::to_pretty_url(&doc.url_path),
+                url: Some(article_map::to_pretty_url(&doc.url_path)),
                 // Article listing is chrome; use the plain-text label.
                 title: doc.label.clone(),
                 url_path: doc.url_path.clone(),

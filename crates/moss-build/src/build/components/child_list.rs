@@ -67,8 +67,9 @@ pub struct ArticleListItemProps {
     pub date_display: String,
     /// Raw ISO date string for sorting (e.g., "2025-09-24T20:49:08.546Z")
     pub date_raw: Option<String>,
-    /// URL path to the article (e.g., "posts/my-article.html")
-    pub url: String,
+    /// URL path to the article (e.g., "posts/my-article.html"); `None` for a
+    /// page-less entry ([`ParsedDocument::is_pageless_entry`]), drawn unlinked.
+    pub url: Option<String>,
     /// Article title
     pub title: String,
     /// The page's own `url_path`, which breaks a tie between two rows on the
@@ -105,6 +106,16 @@ impl ArticleListItemProps {
             url_path: &self.url_path,
             weight: self.weight,
         }
+    }
+}
+
+/// A row's or card's own element, opening and closing: an anchor to `url`,
+/// or, for an entry with no page, the same box as a `box_tag` (`span` where it
+/// sits inside a `<p>`). `attrs` starts with a space (` class="moss-card"`).
+pub(crate) fn link_or_box(url: Option<&str>, box_tag: &'static str, attrs: &str) -> (String, String) {
+    match url {
+        Some(url) => (format!(r#"<a href="{}"{attrs}>"#, html_escape(url)), "</a>".to_string()),
+        None => (format!("<{box_tag}{attrs}>"), format!("</{box_tag}>")),
     }
 }
 
@@ -186,10 +197,10 @@ pub fn render(
     typesetting: Option<&str>,
 ) -> String {
     if no_date {
+        let (open, close) = link_or_box(props.url.as_deref(), "span", r#" class="moss-prefix-link""#);
         return format!(
-            r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link">{}</a></p>"#,
+            r#"<p class="moss-card"{}>{open}{}{close}</p>"#,
             root_attrs(props.source_file.as_deref(), props.when),
-            html_escape(&props.url),
             title_with_subtitle(
                 format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
                 props.subtitle.as_deref(),
@@ -229,10 +240,10 @@ pub fn render(
             date_display
         )
     };
+    let (open, close) = link_or_box(props.url.as_deref(), "span", r#" class="moss-prefix-link""#);
     format!(
-        r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link">{}{}</a></p>"#,
+        r#"<p class="moss-card"{}>{open}{}{}{close}</p>"#,
         root_attrs(props.source_file.as_deref(), props.when),
-        html_escape(&props.url),
         prefix,
         title_with_subtitle(
             format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
@@ -245,7 +256,8 @@ pub fn render(
 #[derive(Debug, Clone, Default)]
 pub struct ChildItemProps {
     pub title: String,
-    pub url: String,
+    /// Where the card goes; `None` for a page-less entry, drawn unlinked.
+    pub url: Option<String>,
     /// None for folders
     pub date_display: Option<String>,
     /// Raw ISO date for sorting. For folders: latest article date within
@@ -565,9 +577,11 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     // card's `permalink` so child_summary can emit a `★` mark next to the
     // kicker (the Daring-Fireball linkblog convention).
     let external_url = crate::build::scan::page_map::external_url(&doc.raw_frontmatter);
-    let local_url =
-        path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path));
-    let permalink = external_url.as_ref().map(|_| local_url.clone());
+    // A page-less entry has no local address: no archive mark, and no link
+    // unless it names an outlet.
+    let local_url = (!doc.is_pageless_entry())
+        .then(|| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path)));
+    let permalink = external_url.as_ref().and(local_url.clone());
 
     let when = doc.event.as_ref().map(|e| crate::build::folder_embed::upcoming::when_of(e, now));
     let count_only = child_count.is_none() && term_count.is_some();
@@ -577,7 +591,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     ChildItemProps {
         // Child list cards/rows are chrome; use the plain-text label.
         title: doc.label.clone(),
-        url: external_url.unwrap_or(local_url),
+        url: external_url.or(local_url),
         date_display,
         date_raw,
         child_count: child_count.or(term_count),
@@ -656,12 +670,12 @@ pub(crate) fn event_card_links(props: &ChildItemProps, lang: crate::i18n::Langua
     if tickets.is_none() && online.is_none() {
         return None;
     }
+    let title = html_escape(&props.title);
     Some(EventCardLinks {
-        title: format!(
-            r#"<a class="moss-card-link" href="{}">{}</a>"#,
-            html_escape(&props.url),
-            html_escape(&props.title),
-        ),
+        title: match props.url.as_deref() {
+            Some(url) => format!(r#"<a class="moss-card-link" href="{}">{title}</a>"#, html_escape(url)),
+            None => title,
+        },
         actions: format!("{}{}", tickets.unwrap_or_default(), online.unwrap_or_default()),
     })
 }
@@ -689,7 +703,7 @@ pub(crate) fn max_anchor_depth(html: &str) -> usize {
 /// ordinary row is one anchor around its whole text; an event row keeps the
 /// same flex box as a `<div>`, links only its title, and carries its action
 /// links after the title.
-fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: &str, title_class: &str) -> (String, String, &'static str) {
+fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: &str, title_class: &str) -> (String, String, String) {
     match event {
         Some(links) => (
             format!(r#"<div class="{row_class}">"#),
@@ -698,13 +712,16 @@ fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: 
                 title_with_subtitle(format!(r#"<span class="{title_class}"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), links.title, lang_mark(props.lang.as_ref())), props.subtitle.as_deref()),
                 links.actions
             ),
-            "</div>",
+            "</div>".to_string(),
         ),
-        None => (
-            format!(r#"<a href="{}" class="{row_class}">"#, html_escape(&props.url)),
-            title_with_subtitle(format!(r#"<span class="{title_class}"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())), props.subtitle.as_deref()),
-            "</a>",
-        ),
+        None => {
+            let (open, close) = link_or_box(props.url.as_deref(), "div", &format!(r#" class="{row_class}""#));
+            (
+                open,
+                title_with_subtitle(format!(r#"<span class="{title_class}"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())), props.subtitle.as_deref()),
+                close,
+            )
+        }
     }
 }
 

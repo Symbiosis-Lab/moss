@@ -3,7 +3,7 @@ use super::*;
 fn article_props(title: &str, url: &str) -> ChildItemProps {
     ChildItemProps {
         title: title.to_string(),
-        url: url.to_string(),
+        url: Some(url.to_string()),
         date_display: Some("2025 · 03 · 01".to_string()),
         date_raw: Some("2025-03-01".to_string()),
         ..Default::default()
@@ -13,7 +13,7 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
 fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
     ChildItemProps {
         title: title.to_string(),
-        url: url.to_string(),
+        url: Some(url.to_string()),
         child_count: Some(count),
         ..Default::default()
     }
@@ -161,7 +161,7 @@ fn test_render_folder_card_full() {
 fn test_render_card_escapes_html() {
     let props = ChildItemProps {
         title: "<script>alert('xss')</script>".to_string(),
-        url: "/test/?a=1&b=2".to_string(),
+        url: Some("/test/?a=1&b=2".to_string()),
         description: Some("A & B < C".to_string()),
         cover: Some("/img?x=1&y=2".to_string()),
         ..Default::default()
@@ -359,7 +359,7 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
     // the ★ reads as part of the kicker line: "Publisher · 2024 ★".
     let props = ChildItemProps {
         title: "Article Title".to_string(),
-        url: "https://outlet.example/article".to_string(),
+        url: Some("https://outlet.example/article".to_string()),
         date_display: Some("2024 · 12".to_string()),
         date_raw: Some("2024-12-23".to_string()),
         kicker: Some("The Wire China".to_string()),
@@ -412,7 +412,7 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
     // reachable via direct URL.
     let props = ChildItemProps {
         title: "Article Title".to_string(),
-        url: "https://outlet.example/article".to_string(),
+        url: Some("https://outlet.example/article".to_string()),
         permalink: Some("/works/article/".to_string()),
         ..Default::default()
     };
@@ -445,7 +445,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
     // the card boundary.
     let props = ChildItemProps {
         title: "Article".to_string(),
-        url: "https://outlet.example/".to_string(),
+        url: Some("https://outlet.example/".to_string()),
         date_display: Some("二〇二四年十二月".to_string()),
         kicker: Some("遠聲媒體".to_string()),
         permalink: Some("/archive/foo/".to_string()),
@@ -484,7 +484,7 @@ fn omits_permalink_when_no_external_url() {
     // anchor, no wrapper.
     let props = ChildItemProps {
         title: "Local Post".to_string(),
-        url: "/posts/local/".to_string(),
+        url: Some("/posts/local/".to_string()),
         ..Default::default()
     };
     let html = render_with_sort(
@@ -514,7 +514,7 @@ fn renders_kicker_above_title_horizontal() {
     // separate meta slot is suppressed (no duplication).
     let props = ChildItemProps {
         title: "Notes on writing".to_string(),
-        url: "/posts/notes/".to_string(),
+        url: Some("/posts/notes/".to_string()),
         date_display: Some("2025 · 04".to_string()),
         date_raw: Some("2025-04-01".to_string()),
         kicker: Some("ESSAYS".to_string()),
@@ -557,7 +557,7 @@ fn renders_kicker_above_title_horizontal() {
 fn kicker_absorbing_the_date_still_shows_the_place() {
     let props = ChildItemProps {
         title: "Notes on writing".to_string(),
-        url: "/posts/notes/".to_string(),
+        url: Some("/posts/notes/".to_string()),
         date_display: Some("2025 · 04".to_string()),
         date_raw: Some("2025-04-01".to_string()),
         kicker: Some("ESSAYS".to_string()),
@@ -591,7 +591,7 @@ fn vertical_head_order_matches_horizontal() {
     // page's writing mode does the rotation, not the markup.
     let props = ChildItemProps {
         title: "在公開場合寫作".to_string(),
-        url: "/posts/notes/".to_string(),
+        url: Some("/posts/notes/".to_string()),
         date_display: Some("二〇二五·四".to_string()),
         kicker: Some("FOLDER".to_string()),
         ..Default::default()
@@ -629,7 +629,7 @@ fn vertical_head_order_matches_horizontal() {
 fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
     let props = ChildItemProps {
         title: "在公開場合寫作".to_string(),
-        url: "/posts/notes/".to_string(),
+        url: Some("/posts/notes/".to_string()),
         date_display: Some("二〇二五·四".to_string()),
         place: Some("Cambridge".to_string()),
         ..Default::default()
@@ -656,7 +656,7 @@ fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
 fn meta_renders_date_when_axis_is_date() {
     let props = ChildItemProps {
         title: "Hello".into(),
-        url: "/h/".into(),
+        url: Some("/h/".into()),
         date_display: Some("2025 · 03".into()),
         date_raw: Some("2025-03-01".into()),
         ..Default::default()
@@ -678,7 +678,7 @@ fn meta_renders_date_when_axis_is_date() {
 fn meta_shows_the_resolved_place_next_to_the_date() {
     let props = ChildItemProps {
         title: "Lecture".into(),
-        url: "/lectures/1924/".into(),
+        url: Some("/lectures/1924/".into()),
         date_display: Some("1924".into()),
         date_raw: Some("1924-10-01".into()),
         place: Some("Cambridge".into()),
@@ -725,7 +725,7 @@ fn meta_never_shows_a_place_beside_a_folders_count() {
 fn meta_collapses_when_axis_is_title() {
     let props = ChildItemProps {
         title: "Project".into(),
-        url: "/p/".into(),
+        url: Some("/p/".into()),
         date_display: Some("2025 · 03".into()),
         description: Some("A project".into()),
         ..Default::default()
@@ -747,7 +747,7 @@ fn meta_collapses_when_axis_is_title() {
 fn meta_collapses_when_axis_is_weight() {
     let props = ChildItemProps {
         title: "Intro".into(),
-        url: "/i/".into(),
+        url: Some("/i/".into()),
         ..Default::default()
     };
     let html = render_with_sort(

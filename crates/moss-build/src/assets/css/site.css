@@ -4751,7 +4751,8 @@ body[data-contents="pictures"] [data-island-menu="sections"] a[data-pic] {
   color: var(--moss-color-text);
 }
 
-.moss-prefix-link:hover .moss-prefix-link-title {
+/* Only a row that links somewhere reacts; a row with no page stays still. */
+.moss-prefix-link:where(a, :has(a)):hover .moss-prefix-link-title {
   color: var(--moss-color-accent);
   text-decoration: underline;  /* Underline only title on hover */
 }
@@ -6020,7 +6021,7 @@ hr::before {
  * decoupling never applied here — rescoping to `.moss-card-title-link:hover`
  * just left this rule matching nothing, so hovering the row outside the
  * (short) link stopped lighting the title. Restore the whole-row hover. */
-.moss-cards-minimal-year-group.minimal .moss-card:hover .title {
+.moss-cards-minimal-year-group.minimal .moss-card:where(:has(a)):hover .title {
   color: var(--moss-color-accent);
 }
 
@@ -6765,8 +6766,8 @@ article a:where(:not(.moss-btn)):focus {
   background: var(--moss-color-surface);
 }
 
-.moss-cards[data-layout="grid"] .moss-card:hover,
-.moss-grid > .moss-card:hover {
+.moss-cards[data-layout="grid"] .moss-card:where(a, :has(a)):hover,
+.moss-grid > .moss-card:where(a, :has(a)):hover {
   transform: translateY(-2px);
   box-shadow: var(--moss-elevation-1);
 }

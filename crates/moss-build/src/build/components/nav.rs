@@ -566,10 +566,8 @@ pub fn is_nav_bar_item_doc(
 /// A `partial: true` file with `nav: true` and `external_url:` is a header link
 /// to that address (a section anchor, a `mailto:`) with no page behind it.
 fn is_link_only_partial(doc: &crate::build::types::ParsedDocument) -> bool {
-    doc.slot_only
+    doc.is_partial()
         && doc.nav == Some(true)
-        && doc.draft != Some(true)
-        && doc.raw_frontmatter.get("partial").and_then(|v| v.as_bool()) == Some(true)
         && crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter).is_some()
 }
 

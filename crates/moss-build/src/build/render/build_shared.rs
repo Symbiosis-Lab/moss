@@ -154,9 +154,10 @@ impl FolderIndexPlan {
                 });
                 // A folder whose only pages are partials has nothing to show:
                 // its sources are never built, so an index for it would be a
-                // live, empty page at an address the author never made.
+                // live, empty page at an address the author never made. Rows
+                // with no page of their own are something to show.
                 let mut under = documents.iter().filter(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
-                let partials_only = under.clone().next().is_some() && under.all(|doc| doc.slot_only);
+                let partials_only = under.clone().next().is_some() && under.all(|doc| doc.slot_only && !doc.is_pageless_entry());
                 pending_only || authored_index_pending || partials_only
             }).map(|(_, key)| key).collect();
 

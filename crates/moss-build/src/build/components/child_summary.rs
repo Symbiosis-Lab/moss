@@ -64,6 +64,8 @@ pub fn render_with_sort(
     // `is_linkblog` branch in the emit below).
     let permalink = props.permalink.as_deref().filter(|s| !s.is_empty());
     let is_linkblog = permalink.is_some() && kicker_text.is_some();
+    // A linkblog card's parts link to its outlet; a permalink is only ever set beside one.
+    let outlet = props.url.as_deref().map(html_escape).unwrap_or_default();
     let perma_label = crate::i18n::t(lang, "permalink_to").replace("{}", &html_escape(&props.title));
     let kicker_html = match (&kicker_text, permalink, is_linkblog) {
         (Some(k), Some(perma), true) => format!(
@@ -127,7 +129,7 @@ pub fn render_with_sort(
     let title_html = if is_linkblog {
         format!(
             r#"<a class="moss-card-title-link" href="{}"><h3 class="moss-card-title"{}>{}{}</h3></a>"#,
-            html_escape(&props.url),
+            outlet,
             row_lang,
             html_escape(&props.title),
             row_mark,
@@ -155,7 +157,7 @@ pub fn render_with_sort(
         if is_linkblog {
             body.push_str(&format!(
                 r#"<a class="moss-card-description-link" href="{}">{}</a>"#,
-                html_escape(&props.url),
+                outlet,
                 desc_inner,
             ));
         } else {
@@ -198,7 +200,7 @@ pub fn render_with_sort(
     let cover_html = if is_linkblog && !cover_inner.is_empty() {
         format!(
             r#"<a class="moss-card-cover-link" href="{}">{}</a>"#,
-            html_escape(&props.url),
+            outlet,
             cover_inner,
         )
     } else {
@@ -237,14 +239,12 @@ pub fn render_with_sort(
             cover_html,
         )
     } else {
-        format!(
-            r#"<a href="{}" class="moss-card"{}{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></a>"#,
-            html_escape(&props.url),
-            props.root_attrs(),
-            props.section_style_attr(),
-            body,
-            cover_html,
-        )
+        let (open, close) = child_list::link_or_box(
+            props.url.as_deref(),
+            "div",
+            &format!(r#" class="moss-card"{}{}"#, props.root_attrs(), props.section_style_attr()),
+        );
+        format!(r#"{open}<div class="moss-card-row"><div class="moss-card-body">{body}</div>{cover_html}</div>{close}"#)
     }
 }
 

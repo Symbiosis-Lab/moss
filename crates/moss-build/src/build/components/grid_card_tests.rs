@@ -13,7 +13,7 @@ fn test_render_item_english() {
         credits: None,
         tickets: None,
         title: "Posts".to_string(),
-        url: "posts/".to_string(),
+        url: Some("posts/".to_string()),
         child_count: Some(5),
         ..blank()
     };
@@ -28,7 +28,7 @@ fn test_render_item_chinese() {
         credits: None,
         tickets: None,
         title: "Posts".to_string(),
-        url: "posts/".to_string(),
+        url: Some("posts/".to_string()),
         child_count: Some(5),
         ..blank()
     };
@@ -43,7 +43,7 @@ fn test_render_item_with_cover() {
         credits: None,
         tickets: None,
         title: "Travel".to_string(),
-        url: "travel/".to_string(),
+        url: Some("travel/".to_string()),
         child_count: Some(3),
         cover: Some("https://example.com/cover.jpg".to_string()),
         ..blank()
@@ -59,7 +59,7 @@ fn test_render_item_escapes_html() {
         credits: None,
         tickets: None,
         title: "Code & Tips".to_string(),
-        url: "code/".to_string(),
+        url: Some("code/".to_string()),
         child_count: Some(2),
         ..blank()
     };
@@ -91,7 +91,7 @@ fn test_render_list_multiple() {
             credits: None,
             tickets: None,
             title: "Posts".to_string(),
-            url: "posts/".to_string(),
+            url: Some("posts/".to_string()),
             child_count: Some(5),
             ..blank()
         },
@@ -99,7 +99,7 @@ fn test_render_list_multiple() {
             credits: None,
             tickets: None,
             title: "Projects".to_string(),
-            url: "projects/".to_string(),
+            url: Some("projects/".to_string()),
             child_count: Some(3),
             cover: Some("cover.jpg".to_string()),
             ..blank()
@@ -126,7 +126,7 @@ fn test_render_item_with_subtitle_override() {
         credits: None,
         tickets: None,
         title: "My Article".to_string(),
-        url: "posts/my-article/".to_string(),
+        url: Some("posts/my-article/".to_string()),
         date_display: Some("2025 · 06".to_string()),
         cover: Some("cover.jpg".to_string()),
         ..blank()
@@ -152,7 +152,7 @@ fn grid_card_shows_the_resolved_place_next_to_the_date() {
         credits: None,
         tickets: None,
         title: "Lecture".to_string(),
-        url: "lectures/1924/".to_string(),
+        url: Some("lectures/1924/".to_string()),
         date_display: Some("1924".to_string()),
         place: Some("Cambridge".to_string()),
         when_html: None,
@@ -174,7 +174,7 @@ fn grid_card_never_shows_a_place_beside_a_folders_count() {
         credits: None,
         tickets: None,
         title: "Kyoto Walk".to_string(),
-        url: "works/kyoto-walk/".to_string(),
+        url: Some("works/kyoto-walk/".to_string()),
         child_count: Some(2),
         place: Some("Kyoto".to_string()),
         when_html: None,
@@ -194,7 +194,7 @@ fn test_render_item_cover_uses_img_tag() {
         credits: None,
         tickets: None,
         title: "Travel".to_string(),
-        url: "travel/".to_string(),
+        url: Some("travel/".to_string()),
         child_count: Some(3),
         cover: Some("assets/photo.jpg".to_string()),
         ..blank()
@@ -218,7 +218,7 @@ fn test_render_item_no_cover_no_img() {
         credits: None,
         tickets: None,
         title: "Drafts".to_string(),
-        url: "drafts/".to_string(),
+        url: Some("drafts/".to_string()),
         child_count: Some(2),
         ..blank()
     };
@@ -249,7 +249,7 @@ fn coverless_card_in_covered_list_gets_quote_slot() {
             credits: None,
             tickets: None,
             title: "First".to_string(),
-            url: "first/".to_string(),
+            url: Some("first/".to_string()),
             cover: Some("cover1.jpg".to_string()),
             ..blank()
         },
@@ -257,7 +257,7 @@ fn coverless_card_in_covered_list_gets_quote_slot() {
             credits: None,
             tickets: None,
             title: "Second".to_string(),
-            url: "second/".to_string(),
+            url: Some("second/".to_string()),
             cover: Some("cover2.jpg".to_string()),
             ..blank()
         },
@@ -265,7 +265,7 @@ fn coverless_card_in_covered_list_gets_quote_slot() {
             credits: None,
             tickets: None,
             title: "A Letter".to_string(),
-            url: "letter/".to_string(),
+            url: Some("letter/".to_string()),
             description: Some("Dear friend, the rain has stopped.".to_string()),
             ..blank()
         },
@@ -322,7 +322,7 @@ fn coverless_card_without_description_gets_empty_quote_slot() {
             credits: None,
             tickets: None,
             title: "Has Cover".to_string(),
-            url: "has-cover/".to_string(),
+            url: Some("has-cover/".to_string()),
             cover: Some("cover.jpg".to_string()),
             ..blank()
         },
@@ -330,7 +330,7 @@ fn coverless_card_without_description_gets_empty_quote_slot() {
             credits: None,
             tickets: None,
             title: "Untitled Note".to_string(),
-            url: "note/".to_string(),
+            url: Some("note/".to_string()),
             ..blank()
         },
     ];
@@ -376,7 +376,7 @@ fn coverless_card_in_coverless_list_keeps_no_cover_placeholder() {
         credits: None,
         tickets: None,
         title: "Plain".to_string(),
-        url: "plain/".to_string(),
+        url: Some("plain/".to_string()),
         description: Some("A description.".to_string()),
         ..blank()
     }];
@@ -409,7 +409,7 @@ fn test_render_item_cover_img_has_alt() {
         credits: None,
         tickets: None,
         title: "Travel".to_string(),
-        url: "travel/".to_string(),
+        url: Some("travel/".to_string()),
         child_count: Some(3),
         cover: Some("assets/photo.jpg".to_string()),
         ..blank()
@@ -428,7 +428,7 @@ fn file_card_renders_description_under_title() {
         credits: None,
         tickets: None,
         title: "My Article".to_string(),
-        url: "posts/my-article/".to_string(),
+        url: Some("posts/my-article/".to_string()),
         // A file/article card.
         date_display: Some("2025 · 06".to_string()),
         description: Some("A short description.".to_string()),
@@ -472,7 +472,7 @@ fn folder_card_shows_its_count_and_no_description() {
         credits: None,
         tickets: None,
         title: "Travel".to_string(),
-        url: "travel/".to_string(),
+        url: Some("travel/".to_string()),
         child_count: Some(3), // folder card
         description: Some("A collection of travel stories.".to_string()),
         ..blank()
@@ -496,7 +496,7 @@ fn file_card_without_description_has_no_description_element() {
         credits: None,
         tickets: None,
         title: "Posts".to_string(),
-        url: "posts/".to_string(),
+        url: Some("posts/".to_string()),
         date_display: Some(String::new()),
         ..blank()
     };
@@ -514,7 +514,7 @@ fn file_card_blank_description_is_not_rendered() {
         credits: None,
         tickets: None,
         title: "Posts".to_string(),
-        url: "posts/".to_string(),
+        url: Some("posts/".to_string()),
         description: Some("   ".to_string()),
         ..blank()
     };
@@ -532,7 +532,7 @@ fn file_card_escapes_description() {
         credits: None,
         tickets: None,
         title: "Posts".to_string(),
-        url: "posts/".to_string(),
+        url: Some("posts/".to_string()),
         description: Some("Tips & tricks <b>".to_string()),
         ..blank()
     };
@@ -552,7 +552,7 @@ fn test_render_item_with_video_cover() {
         credits: None,
         tickets: None,
         title: "Demos".to_string(),
-        url: "demos/".to_string(),
+        url: Some("demos/".to_string()),
         child_count: Some(2),
         cover: Some("clip.mp4".to_string()),
         cover_type: Some(CoverType::Video),
@@ -579,7 +579,7 @@ fn test_render_item_with_iframe_cover() {
         credits: None,
         tickets: None,
         title: "Widgets".to_string(),
-        url: "widgets/".to_string(),
+        url: Some("widgets/".to_string()),
         child_count: Some(1),
         cover: Some("demo.html".to_string()),
         cover_type: Some(CoverType::Iframe),
@@ -605,7 +605,7 @@ fn test_render_item_cover_type_defaults_to_image() {
         credits: None,
         tickets: None,
         title: "Photos".to_string(),
-        url: "photos/".to_string(),
+        url: Some("photos/".to_string()),
         child_count: Some(5),
         cover: Some("photo.jpg".to_string()),
         cover_type: None, // should default to Image,
@@ -629,7 +629,7 @@ fn first_card_in_list_gets_eager_loading() {
             credits: None,
             tickets: None,
             title: "First".to_string(),
-            url: "first/".to_string(),
+            url: Some("first/".to_string()),
             child_count: Some(5),
             cover: Some("cover1.jpg".to_string()),
             ..blank()
@@ -638,7 +638,7 @@ fn first_card_in_list_gets_eager_loading() {
             credits: None,
             tickets: None,
             title: "Second".to_string(),
-            url: "second/".to_string(),
+            url: Some("second/".to_string()),
             child_count: Some(3),
             cover: Some("cover2.jpg".to_string()),
             ..blank()
@@ -679,7 +679,7 @@ fn single_card_list_gets_eager_loading() {
         credits: None,
         tickets: None,
         title: "Only".to_string(),
-        url: "only/".to_string(),
+        url: Some("only/".to_string()),
         child_count: Some(1),
         cover: Some("cover.jpg".to_string()),
         ..blank()
@@ -709,7 +709,7 @@ fn first_card_with_cover_gets_eager_even_if_not_first_overall() {
             credits: None,
             tickets: None,
             title: "NoCover".to_string(),
-            url: "no-cover/".to_string(),
+            url: Some("no-cover/".to_string()),
             child_count: Some(5),
             ..blank()
         },
@@ -717,7 +717,7 @@ fn first_card_with_cover_gets_eager_even_if_not_first_overall() {
             credits: None,
             tickets: None,
             title: "WithCover".to_string(),
-            url: "with-cover/".to_string(),
+            url: Some("with-cover/".to_string()),
             child_count: Some(3),
             cover: Some("cover.jpg".to_string()),
             ..blank()
@@ -752,7 +752,7 @@ fn a_card_takes_its_band_color_from_the_covers_color_override() {
         credits: None,
         tickets: None,
         title: "Research".to_string(),
-        url: "/research/".to_string(),
+        url: Some("/research/".to_string()),
         child_count: Some(3),
         cover: Some("research.jpg|color=#0a2a3f".to_string()),
         ..blank()
@@ -777,7 +777,7 @@ fn test_render_item_pipe_encoded_cover_strips_attrs_from_src() {
         credits: None,
         tickets: None,
         title: "Travel".to_string(),
-        url: "travel/".to_string(),
+        url: Some("travel/".to_string()),
         child_count: Some(3),
         cover: Some("assets/photo.jpg|left".to_string()),
         ..blank()
@@ -801,7 +801,7 @@ fn test_render_item_pipe_encoded_cover_adds_style() {
         credits: None,
         tickets: None,
         title: "Travel".to_string(),
-        url: "travel/".to_string(),
+        url: Some("travel/".to_string()),
         child_count: Some(3),
         cover: Some("assets/photo.jpg|contain top".to_string()),
         ..blank()
@@ -820,7 +820,7 @@ fn test_render_item_cover_without_pipe_no_style() {
         credits: None,
         tickets: None,
         title: "Travel".to_string(),
-        url: "travel/".to_string(),
+        url: Some("travel/".to_string()),
         child_count: Some(3),
         cover: Some("assets/photo.jpg".to_string()),
         ..blank()
@@ -839,7 +839,7 @@ fn renders_kicker_above_title() {
         credits: None,
         tickets: None,
         title: "Essays".to_string(),
-        url: "/essays/".to_string(),
+        url: Some("/essays/".to_string()),
         child_count: Some(12),
         kicker: Some("FOLDER".to_string()),
         ..blank()
@@ -863,7 +863,7 @@ fn formats_count_as_chinese_numeral_in_vertical_cjk() {
         credits: None,
         tickets: None,
         title: "文集".to_string(),
-        url: "/essays/".to_string(),
+        url: Some("/essays/".to_string()),
         child_count: Some(12),
         ..blank()
     };
@@ -886,7 +886,7 @@ fn keeps_arabic_count_in_horizontal_western() {
         credits: None,
         tickets: None,
         title: "Essays".to_string(),
-        url: "/essays/".to_string(),
+        url: Some("/essays/".to_string()),
         child_count: Some(12),
         ..blank()
     };
@@ -904,7 +904,7 @@ fn keeps_arabic_count_in_horizontal_cjk() {
         credits: None,
         tickets: None,
         title: "文集".to_string(),
-        url: "/essays/".to_string(),
+        url: Some("/essays/".to_string()),
         child_count: Some(12),
         ..blank()
     };
@@ -924,7 +924,7 @@ fn keeps_arabic_count_in_horizontal_cjk() {
 fn test_card_link_is_named_by_title_and_cover_is_decorative() {
     let props = ChildItemProps {
         title: "Lantern Walk".to_string(),
-        url: "walks/lantern/".to_string(),
+        url: Some("walks/lantern/".to_string()),
         description: Some("A short evening route.".to_string()),
         cover: Some("https://example.com/lantern.jpg".to_string()),
         ..blank()
@@ -941,7 +941,7 @@ fn test_card_link_is_named_by_title_and_cover_is_decorative() {
 fn test_card_without_title_keeps_a_name_on_the_cover() {
     let props = ChildItemProps {
         title: String::new(),
-        url: "walks/untitled/".to_string(),
+        url: Some("walks/untitled/".to_string()),
         cover: Some("https://example.com/untitled.jpg".to_string()),
         ..blank()
     };
@@ -957,7 +957,7 @@ fn event_grid_card_with_only_online_links_title_and_carries_its_online_link() {
     let props = ChildItemProps {
         credits: None,
         title: "Spring Gala".to_string(),
-        url: "spring-gala.html".to_string(),
+        url: Some("spring-gala.html".to_string()),
         online: Some("https://example.test/live".to_string()),
         ..blank()
     };
@@ -976,7 +976,7 @@ fn event_grid_card_with_both_links_puts_tickets_before_online() {
     let props = ChildItemProps {
         credits: None,
         title: "Spring Gala".to_string(),
-        url: "spring-gala.html".to_string(),
+        url: Some("spring-gala.html".to_string()),
         tickets: Some("https://example.test/tickets".to_string()),
         online: Some("https://example.test/live".to_string()),
         ..blank()
@@ -993,7 +993,7 @@ fn event_grid_card_with_tickets_links_title_and_carries_its_own_tickets_link() {
     let props = ChildItemProps {
         credits: None,
         title: "Spring Gala".to_string(),
-        url: "spring-gala.html".to_string(),
+        url: Some("spring-gala.html".to_string()),
         description: Some("Doors open at seven.".to_string()),
         tickets: Some("https://example.test/tickets".to_string()),
         ..blank()
@@ -1022,7 +1022,7 @@ fn event_grid_card_without_tickets_keeps_its_whole_card_anchor() {
     let props = ChildItemProps {
         credits: None,
         title: "Spring Gala".to_string(),
-        url: "spring-gala.html".to_string(),
+        url: Some("spring-gala.html".to_string()),
         ..blank()
     };
     let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);

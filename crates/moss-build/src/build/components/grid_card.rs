@@ -192,21 +192,27 @@ fn render_item(
     let (open, close, title_html, actions_html) = match &event {
         Some(links) => (
             format!(r#"<div class="moss-card"{}{}>"#, props.root_attrs(), cover_color_attrs),
-            "</div>",
+            "</div>".to_string(),
             format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, child_list::lang_attr(props.lang.as_ref()), links.title, child_list::lang_mark(props.lang.as_ref())),
             links.actions.as_str(),
         ),
         None => {
-            let label_attr = if props.title.trim().is_empty() {
+            // A page-less card is a plain box, which may not carry a name of its own.
+            let label_attr = if props.title.trim().is_empty() || props.url.is_none() {
                 String::new()
             } else {
                 // An aria-label replaces the content's name, mark included.
                 let named = props.lang.as_ref().filter(|l| !l.name.is_empty()).map(|l| format!("{} ({})", props.title, l.name));
                 format!(r#" aria-label="{}""#, html_escape(named.as_deref().unwrap_or(&props.title)))
             };
+            let (open, close) = child_list::link_or_box(
+                props.url.as_deref(),
+                "div",
+                &format!(r#" class="moss-card"{}{}{}"#, label_attr, props.root_attrs(), cover_color_attrs),
+            );
             (
-                format!(r#"<a href="{}" class="moss-card"{}{}{}>"#, html_escape(&props.url), label_attr, props.root_attrs(), cover_color_attrs),
-                "</a>",
+                open,
+                close,
                 format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, child_list::lang_attr(props.lang.as_ref()), html_escape(&props.title), child_list::lang_mark(props.lang.as_ref())),
                 "",
             )

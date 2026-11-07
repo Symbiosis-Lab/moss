@@ -133,8 +133,16 @@ fn with_folder_lists<'a>(content: &str, pages_of: impl Fn(&str) -> Option<Vec<&'
         out.push_str(before);
         for page in pages_of(body).unwrap_or_default() {
             let text = page.label.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]");
-            let url = crate::build::scan::article_map::to_pretty_url(&page.url_path);
-            out.push_str(&format!("- [{text}](/{url})\n"));
+            // A row with no page has no address: its outlet, or its words alone.
+            let url = if page.is_pageless_entry() {
+                crate::build::scan::page_map::external_url(&page.raw_frontmatter)
+            } else {
+                Some(format!("/{}", crate::build::scan::article_map::to_pretty_url(&page.url_path)))
+            };
+            match url {
+                Some(url) => out.push_str(&format!("- [{text}]({url})\n")),
+                None => out.push_str(&format!("- {text}\n")),
+            }
         }
         rest = tail;
     }

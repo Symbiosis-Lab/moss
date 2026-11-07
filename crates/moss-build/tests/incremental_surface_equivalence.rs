@@ -321,6 +321,21 @@ publisher: Example Press
 Gamma is syndicated from elsewhere.
 "#,
     );
+
+    // A row with no page (`partial: true` + `listed: true`): it lives only in
+    // the `writings/` listing and the homepage's embed of it.
+    write(
+        root,
+        "writings/delta.md",
+        r#"---
+title: Delta
+uid: writings-delta
+lang: en
+partial: true
+listed: true
+---
+"#,
+    );
 }
 
 /// Reconstruction of the desktop app's `moss::build_sync` from moss-build's
@@ -500,6 +515,24 @@ fn title_edit_on_a_leaf_article() {
         name: "title: leaf article",
         edit: |root| edit_frontmatter(root, "writings/beta.md", "title: Beta", "title: Beta Renamed"),
         changed: "writings/beta.md",
+    });
+}
+
+#[test]
+fn title_edit_on_a_pageless_listing_entry() {
+    run_scenario(&Scenario {
+        name: "title: page-less listing entry",
+        edit: |root| edit_frontmatter(root, "writings/delta.md", "title: Delta", "title: Delta Renamed"),
+        changed: "writings/delta.md",
+    });
+}
+
+#[test]
+fn a_pageless_listing_entry_leaves_its_listing() {
+    run_scenario(&Scenario {
+        name: "listed: page-less entry leaves its listing",
+        edit: |root| edit_frontmatter(root, "writings/delta.md", "listed: true", "listed: false"),
+        changed: "writings/delta.md",
     });
 }
 

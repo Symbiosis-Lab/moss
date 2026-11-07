@@ -3588,10 +3588,10 @@ fn test_css_minimal_year_group_title_hover_accent() {
     // …<span class="...title">`). The rule matched nothing, so hovering the
     // row outside its short link no longer lit the title. There is no
     // linkblog/star variant in minimal year-groups, so the simple
-    // whole-row `.moss-card:hover .title` is the correct restoration.
+    // whole-row hover is the correct restoration, on a row that links somewhere.
     let rule = get_css_rule(
         DEFAULT_CSS,
-        r#".moss-cards-minimal-year-group.minimal .moss-card:hover .title"#,
+        r#".moss-cards-minimal-year-group.minimal .moss-card:where(:has(a)):hover .title"#,
     )
     .expect(
         "Minimal year-group rows must light the title on whole-row hover (regression f0747cb4e)",
