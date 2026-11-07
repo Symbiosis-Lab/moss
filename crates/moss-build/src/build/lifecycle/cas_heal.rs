@@ -226,7 +226,9 @@ impl StagedLinks {
         let stat = metadata.as_ref().ok().filter(|md| md.is_file()).map(crate::build::stat::FileStat::of);
         match crate::build::io_utils::probe_output_stat(staging_path, "100644", metadata) {
             Presence::Unverified(e) => return Placement::Unverified(e),
-            Presence::Present if key.as_deref().zip(stat.as_ref()).is_some_and(|(key, stat)| self.holds_stat(key, stat, oid)) => {
+            Presence::Present if key.as_deref().zip(stat.as_ref()).is_some_and(|(key, stat)| {
+                self.holds_stat(key, stat, oid) || self.renews_named(key, stat, oid, staging_path)
+            }) => {
                 return Placement::Held;
             }
             _ => {}
@@ -262,6 +264,20 @@ impl StagedLinks {
         let held = entry.content_hash == oid && entry.stat.vouches_for(stat, entry.recorded_at);
         if held { self.current.entries.insert(key.to_string(), entry); }
         held
+    }
+
+    /// Whether the present file at `staging_path`, which a record names as
+    /// `oid`'s copy but whose stat no longer vouches for it, still holds
+    /// `oid`'s bytes; records it anew when it does. Replacing it instead would
+    /// move its ctime, which on a coarse-timestamp filesystem never settles.
+    fn renews_named(&mut self, key: &str, stat: &crate::build::stat::FileStat, oid: &str, staging_path: &Path) -> bool {
+        let named = [&self.current, &self.previous].iter().any(|index| index.entries.get(key).is_some_and(|e| e.content_hash == oid));
+        if !named { return false; }
+        let recorded_at = crate::build::stat::recording_clock();
+        let renewed = crate::build::cache::ObjectStore::hash_file(staging_path).is_ok_and(|hash| hash == oid)
+            && std::fs::symlink_metadata(staging_path).is_ok_and(|md| crate::build::stat::FileStat::of(&md) == *stat);
+        if renewed { self.current.update_read_at(key.to_string(), stat, oid.to_string(), recorded_at); }
+        renewed
     }
 
     /// One stat proves both residency and the identity of the staged bytes.

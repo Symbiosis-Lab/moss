@@ -1130,50 +1130,13 @@ impl SiteAssets {
 pub struct SourceMetadata {
     /// SHA-256 hash of the file content
     pub hash: String,
-    /// File size in bytes
-    pub size: u64,
-    /// Modification time as Unix timestamp (seconds since epoch)
-    pub mtime: u64,
-    /// Sub-second component of the modification time, in nanoseconds.
-    ///
-    /// `None` when the writer could not read an mtime at all, or when the
-    /// manifest predates this field (`#[serde(default)]` on read). The
-    /// watcher gate's size+mtime fast path requires `Some` and a match that
-    /// [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for)
-    /// accepts — a whole-second match alone cannot distinguish the hashed file
-    /// from a same-size rewrite landing in the same second, so missing
-    /// precision fails OPEN to hashing, never to suppression.
-    #[serde(default)]
-    pub mtime_nanos: Option<u32>,
-    /// Inode change time (ctime) as Unix seconds, where the platform reports
-    /// one (`None` on Windows and in manifests that predate the field).
-    ///
-    /// mtime can be forged from userland (`rsync -t`, `touch -r`,
-    /// mtime-preserving editors); ctime cannot. A ctime disagreement never
-    /// suppresses — it only demotes the size+mtime fast path to the hash
-    /// tier, so false positives (a permission change bumps ctime) cost one
-    /// hash and self-absorb. git's index does exactly this.
-    #[serde(default)]
-    pub ctime: Option<i64>,
-    /// Inode number, where the platform reports one. Replace-via-rename (the
-    /// atomic-save pattern) changes the inode even when size and mtime are
-    /// preserved. Same fail-open rule as `ctime`: disagreement routes to the
-    /// hash tier, absence changes nothing.
-    #[serde(default)]
-    pub inode: Option<u64>,
+    #[serde(flatten)]
+    pub stat: crate::build::stat::FileStat,
 }
 
 impl SourceMetadata {
-    /// The record for bytes hashing to `hash`, read from a file as it stood at
-    /// `stat` — the one place a stat becomes a manifest source entry.
-    pub(crate) fn from_stat(hash: String, stat: crate::build::stat::FileStat) -> Self {
-        let crate::build::stat::FileStat { size, mtime, mtime_nanos, ctime, inode } = stat;
-        Self { hash, size, mtime, mtime_nanos, ctime, inode }
-    }
-
-    /// The stat record half, for [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for).
-    pub(crate) fn stat(&self) -> crate::build::stat::FileStat {
-        crate::build::stat::FileStat { size: self.size, mtime: self.mtime, mtime_nanos: self.mtime_nanos, ctime: self.ctime, inode: self.inode }
+    pub fn from_stat(hash: String, stat: crate::build::stat::FileStat) -> Self {
+        Self { hash, stat }
     }
 }
 

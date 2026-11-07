@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -19,20 +20,8 @@ fn write(dir: &Path, rel: &str, bytes: &[u8]) -> PathBuf {
 
 fn meta_for(p: &Path, bytes: &[u8]) -> SourceMetadata {
     use sha2::{Digest, Sha256};
-    let md = std::fs::metadata(p).unwrap();
-    let mtime = md
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-    let (ctime, inode) = crate::build::stat::stat_identity(&md);
-    SourceMetadata {
-        hash: format!("{:x}", Sha256::digest(bytes)),
-        size: md.len(),
-        mtime: mtime.map(|d| d.as_secs()).unwrap_or(0),
-        mtime_nanos: mtime.map(|d| d.subsec_nanos()),
-        ctime,
-        inode,
-    }
+    let stat = crate::build::stat::FileStat::of(&std::fs::metadata(p).unwrap());
+    SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat)
 }
 
 fn walked(rel: &str, abs: PathBuf) -> WalkedFile {
@@ -261,19 +250,14 @@ fn an_unjudgeable_file_is_skipped_not_rebuilt() {
 fn the_baselines_capture_clock_arms_the_racy_guard() {
     let dir = tempfile::tempdir().unwrap();
     let p = write(dir.path(), "index.md", b"aaaa");
-    let mut meta = meta_for(&p, b"aaaa");
+    let recorded = meta_for(&p, b"aaaa");
     // Same size, same recorded mtime — but different bytes, as a racy
     // same-second rewrite would leave them. Blind the nanosecond tier and
     // the identity tier so only the racy guard can catch it.
     std::fs::write(&p, b"bbbb").unwrap();
     let md = std::fs::metadata(&p).unwrap();
     let mtime = md.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
-    meta.size = md.len();
-    meta.mtime = mtime.as_secs();
-    meta.mtime_nanos = Some(mtime.subsec_nanos());
-    let (ctime, inode) = crate::build::stat::stat_identity(&md);
-    meta.ctime = ctime;
-    meta.inode = inode;
+    let meta = SourceMetadata::from_stat(recorded.hash, crate::build::stat::FileStat::of(&md));
 
     let mut baseline = SiteHashes::new();
     baseline.sources.insert("index.md".into(), meta);
@@ -351,10 +335,10 @@ fn a_rematerialized_file_hashes_once_then_fast_paths() {
     let mut meta = meta_for(&p, b"# home");
     // A previous life's identity: same bytes and size, different inode/ctime,
     // and an mtime the nanosecond tier cannot match.
-    meta.mtime = 1_000;
-    meta.mtime_nanos = Some(0);
-    meta.ctime = meta.ctime.map(|c| c - 999);
-    meta.inode = meta.inode.map(|i| i + 1);
+    meta.stat.mtime = 1_000;
+    meta.stat.mtime_nanos = Some(0);
+    meta.stat.ctime = meta.stat.ctime.map(|c| c - 999);
+    meta.stat.inode = meta.stat.inode.map(|i| i + 1);
     let mut baseline = SiteHashes::new();
     baseline.sources.insert("index.md".into(), meta);
 
@@ -441,7 +425,7 @@ fn generation(captured_at: Option<u64>, keys: &[&str]) -> SiteHashes {
     for k in keys {
         h.sources.insert(
             (*k).into(),
-            SourceMetadata { hash: "h".into(), size: 1, mtime: 1, mtime_nanos: Some(0), ctime: None, inode: None },
+            SourceMetadata { hash: "h".into(), stat: FileStat { mtime_nanos: Some(0), ..FileStat::whole_second(1, 1) } },
         );
     }
     h
@@ -473,9 +457,9 @@ fn a_sealed_manifest_without_a_clock_is_behind_any_stash_with_one() {
 fn a_pass_with_nothing_new_keeps_the_cache_without_reading_the_manifest() {
     let stash = generation(Some(2000), &["a.md"]);
     let mut cache = generation(Some(2000), &["a.md"]);
-    cache.sources.get_mut("a.md").unwrap().inode = Some(42);
+    cache.sources.get_mut("a.md").unwrap().stat.inode = Some(42);
     let chosen = select_baseline(Some(&stash), Some(cache), || unreachable!("the manifest must not be read")).unwrap();
-    assert_eq!(chosen.sources["a.md"].inode, Some(42));
+    assert_eq!(chosen.sources["a.md"].stat.inode, Some(42));
 }
 
 /// Once the seal has landed the manifest IS the screen: judged as is, with
@@ -487,11 +471,11 @@ fn an_equal_generation_is_judged_and_the_refreshed_copy_wins() {
     let stash = generation(Some(2000), &["a.md"]);
     let mut cache = generation(Some(1000), &["a.md"]);
     cache.captured_at = Some(2000);
-    cache.sources.get_mut("a.md").unwrap().inode = Some(42);
+    cache.sources.get_mut("a.md").unwrap().stat.inode = Some(42);
     let stale_cache = generation(Some(1000), &["a.md"]);
 
     let chosen = select_baseline(None, Some(cache), || Some(sealed.clone())).unwrap();
-    assert_eq!(chosen.sources["a.md"].inode, Some(42), "the refreshed copy, not a reread");
+    assert_eq!(chosen.sources["a.md"].stat.inode, Some(42), "the refreshed copy, not a reread");
 
     let chosen = select_baseline(Some(&stash), Some(stale_cache), || Some(sealed)).unwrap();
     assert_eq!(chosen.captured_at, Some(2000), "a stale cache yields to the new generation");
@@ -507,4 +491,28 @@ fn a_sealed_manifest_newer_than_the_stash_is_judged_as_is() {
     let chosen = select_baseline(Some(&stash), None, || Some(sealed)).unwrap();
     assert_eq!(chosen.captured_at, Some(3000));
     assert!(chosen.sources.contains_key("b.md"));
+}
+
+// A same-size rewrite whose mtime is set back, inside the recorded ctime
+// second, differs from the dispatched stamp only in the sub-second ctime. It
+// waits out one scheduler tick (see the matching test in cache_tests.rs); a run
+// that crosses a second boundary proves nothing, so it is tried again.
+#[cfg(unix)]
+#[test]
+fn a_rewrite_that_restores_its_mtime_moves_the_drift_stamp() {
+    for _ in 0..50 {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(dir.path(), "index.md", b"aaaa");
+        let dispatched = stamp_of(Some(&std::fs::metadata(&p).unwrap()));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        FileStat::rewrite_in_place_keeping_mtime(&p, b"bbbb");
+        let now = stamp_of(Some(&std::fs::metadata(&p).unwrap()));
+        if now.ctime != dispatched.ctime || now.ctime_nanos == dispatched.ctime_nanos {
+            continue;
+        }
+        assert_eq!((now.size, now.mtime, now.mtime_nanos, now.inode), (dispatched.size, dispatched.mtime, dispatched.mtime_nanos, dispatched.inode));
+        assert_ne!(now, dispatched, "the sweep would take the rewrite for the file it already dispatched");
+        return;
+    }
+    panic!("no rewrite landed in the recorded ctime second in 50 tries");
 }

@@ -11,6 +11,7 @@ use std::path::Path;
 use super::*;
 use crate::build::manifest::{HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::deploy::history::store::count_blob_files_for_tests;
 use crate::types::content::{parse_entry, symlink_entry, SiteHashes, MODE_FILE};
@@ -246,14 +247,14 @@ fn manifest_with_a_page_and_an_asset() -> SealedManifest {
     pending.register_source_mapping("hello.md".to_string(), &sp);
     pending.register_page_source_hash(
         "hello.md".to_string(),
-        SourceMetadata { hash: "page-hash".to_string(), size: 5, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: "page-hash".to_string(), stat: FileStat::whole_second(5, 1) },
     );
 
     // An asset: present in `sources()` with no `source_to_output()` mapping,
     // the same shape the deferred media walk produces.
     pending.register_page_source_hash(
         "assets/logo.png".to_string(),
-        SourceMetadata { hash: "asset-hash".to_string(), size: 9, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: "asset-hash".to_string(), stat: FileStat::whole_second(9, 1) },
     );
 
     pending.seal()
@@ -451,7 +452,7 @@ fn save_before_restore_saves_when_the_current_tree_differs() {
     pending.register_source_mapping("hello.md".to_string(), &sp);
     pending.register_page_source_hash(
         "hello.md".to_string(),
-        SourceMetadata { hash: "page-hash-2".to_string(), size: 13, mtime: 2, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: "page-hash-2".to_string(), stat: FileStat::whole_second(13, 2) },
     );
     let current = pending.seal();
 

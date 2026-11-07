@@ -263,11 +263,11 @@ pub(crate) fn build_entries(
 ) -> BTreeMap<String, Entry> {
     let mut out = BTreeMap::new();
     for (src, meta) in tree.sources() {
-        record_one(vault_root, store, src, &meta.hash, Some(meta.size), is_evicted, &mut out);
+        record_one(vault_root, store, src, &meta.hash, Some(meta.stat.size), is_evicted, &mut out);
     }
     for (src, entry) in &mut out {
         entry.source_mtime = tree.sources().get(src)
-            .and_then(|m| m.mtime_nanos.map(|n| (m.mtime, n)));
+            .and_then(|m| m.stat.mtime_nanos.map(|n| (m.stat.mtime, n)));
     }
     out
 }

@@ -184,6 +184,7 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::stat::FileStat;
 
     #[tokio::test]
     async fn coordinator_seals_after_all_senders_drop() {
@@ -273,14 +274,14 @@ mod tests {
         let mut carry = SiteHashes::default();
         carry.sources.insert(
             "stale-source.md".to_string(),
-            SourceMetadata { hash: "old".into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: "old".into(), stat: FileStat::whole_second(1, 1) },
         );
         let (coord, tx) = ManifestCoordinator::new(carry);
 
         let mut fresh = HashMap::new();
         fresh.insert(
             "live-source.md".to_string(),
-            SourceMetadata { hash: "new".into(), size: 42, mtime: 1000, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: "new".into(), stat: FileStat::whole_second(42, 1000) },
         );
         tx.send(EmitMessage::SourcesReplace(fresh)).await.unwrap();
         drop(tx);
@@ -329,7 +330,7 @@ mod tests {
         let mut fresh_sources = HashMap::new();
         fresh_sources.insert(
             "Projects/new.md".to_string(),
-            SourceMetadata { hash: "src-hash".into(), size: 100, mtime: 2000, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: "src-hash".into(), stat: FileStat::whole_second(100, 2000) },
         );
         tx.send(EmitMessage::SourcesReplace(fresh_sources)).await.unwrap();
         drop(tx);

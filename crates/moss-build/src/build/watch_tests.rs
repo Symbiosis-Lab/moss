@@ -942,11 +942,7 @@ fn source_matches_fast_path_when_size_and_mtime_equal() {
         // matching, the fast path must return Unchanged without reading the
         // bytes at all — a hash comparison here would say Changed.
         hash: "fast-path-must-not-hash".into(),
-        size: 5,
-        mtime: gate_mtime_secs(&p),
-        mtime_nanos: Some(gate_mtime_nanos(&p)),
-        ctime: None,
-        inode: None,
+        stat: FileStat { size: 5, mtime: gate_mtime_secs(&p), mtime_nanos: Some(gate_mtime_nanos(&p)), ..FileStat::whole_second(0, 0) },
     };
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Unchanged);
 }
@@ -958,11 +954,7 @@ fn source_unchanged_when_size_matches_but_mtime_differs_and_content_identical() 
     let wrong_mtime = gate_mtime_secs(&p).wrapping_add(1);
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"),
-        size: 5, // matches
-        mtime: wrong_mtime,
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(5, wrong_mtime),
     };
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Unchanged);
 }
@@ -973,11 +965,7 @@ fn source_changed_when_size_differs_short_circuits() {
     let p = gate_write_file(dir.path(), "a.md", b"hello world");
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"),
-        size: 5, // wrong
-        mtime: gate_mtime_secs(&p),
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(5, gate_mtime_secs(&p)),
     };
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Changed);
 }
@@ -989,11 +977,7 @@ fn source_changed_when_content_differs_despite_mtime() {
     let wrong_mtime = gate_mtime_secs(&p).wrapping_add(1);
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"),
-        size: 5,
-        mtime: wrong_mtime,
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(5, wrong_mtime),
     };
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Changed);
 }
@@ -1008,11 +992,7 @@ fn source_changed_when_same_size_write_lands_in_recorded_mtime_second() {
     let p = gate_write_file(dir.path(), "a.md", b"world");
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"), // recorded bytes differ, same size
-        size: 5,
-        mtime: gate_mtime_secs(&p), // same whole second
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(5, gate_mtime_secs(&p)),
     };
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Changed);
 }
@@ -1023,11 +1003,7 @@ fn source_unknown_when_file_missing() {
     let p = dir.path().join("nope.md");
     let meta = SourceMetadata {
         hash: "x".into(),
-        size: 0,
-        mtime: 0,
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(0, 0),
     };
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Unknown);
 }
@@ -1036,17 +1012,13 @@ fn source_unknown_when_file_missing() {
 /// mtime and even nanoseconds, but not ctime. A ctime disagreement must
 /// demote the fast path to the hash tier — where the changed bytes are seen.
 #[test]
-#[cfg(unix)] // stat_identity is (None, None) off unix, so no demotion can fire
+#[cfg(unix)] // ctime and inode are absent off unix, so no demotion can fire
 fn a_ctime_disagreement_demotes_the_fast_path_to_the_hash_tier() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"world");
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"), // recorded bytes differ, same size
-        size: 5,
-        mtime: gate_mtime_secs(&p),
-        mtime_nanos: Some(gate_mtime_nanos(&p)),
-        ctime: Some(i64::MIN), // recorded ctime cannot match the file's
-        inode: None,
+        stat: FileStat { size: 5, mtime: gate_mtime_secs(&p), mtime_nanos: Some(gate_mtime_nanos(&p)), ctime: Some(i64::MIN), ..FileStat::whole_second(0, 0) },
     };
     assert_eq!(
         source_metadata_matches(&meta, &p),
@@ -1058,17 +1030,13 @@ fn a_ctime_disagreement_demotes_the_fast_path_to_the_hash_tier() {
 /// Replace-via-rename (atomic save) changes the inode even when size and
 /// mtime are preserved; same demotion rule as ctime.
 #[test]
-#[cfg(unix)] // stat_identity is (None, None) off unix, so no demotion can fire
+#[cfg(unix)] // ctime and inode are absent off unix, so no demotion can fire
 fn an_inode_disagreement_demotes_the_fast_path_to_the_hash_tier() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"world");
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"),
-        size: 5,
-        mtime: gate_mtime_secs(&p),
-        mtime_nanos: Some(gate_mtime_nanos(&p)),
-        ctime: None,
-        inode: Some(u64::MAX), // a different inode than the file's
+        stat: FileStat { size: 5, mtime: gate_mtime_secs(&p), mtime_nanos: Some(gate_mtime_nanos(&p)), inode: Some(u64::MAX), ..FileStat::whole_second(0, 0) },
     };
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Changed);
 }
@@ -1080,15 +1048,8 @@ fn an_inode_disagreement_demotes_the_fast_path_to_the_hash_tier() {
 fn an_agreeing_identity_keeps_the_fast_path() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"hello");
-    let (ctime, inode) = crate::build::stat::stat_identity(&std::fs::metadata(&p).unwrap());
-    let meta = SourceMetadata {
-        hash: "fast-path-must-not-hash".into(),
-        size: 5,
-        mtime: gate_mtime_secs(&p),
-        mtime_nanos: Some(gate_mtime_nanos(&p)),
-        ctime,
-        inode,
-    };
+    let stat = crate::build::stat::FileStat::of(&std::fs::metadata(&p).unwrap());
+    let meta = SourceMetadata::from_stat("fast-path-must-not-hash".into(), stat);
     assert_eq!(source_metadata_matches(&meta, &p), SourceCheck::Unchanged);
 }
 
@@ -1103,11 +1064,7 @@ fn a_racy_mtime_is_hashed_not_trusted() {
     let p = gate_write_file(dir.path(), "a.md", b"world");
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"), // same size, different bytes
-        size: 5,
-        mtime: gate_mtime_secs(&p),
-        mtime_nanos: Some(gate_mtime_nanos(&p)),
-        ctime: None,
-        inode: None,
+        stat: FileStat { size: 5, mtime: gate_mtime_secs(&p), mtime_nanos: Some(gate_mtime_nanos(&p)), ..FileStat::whole_second(0, 0) },
     };
     // Captured in the same instant the file was written: suspect → hash tier.
     let racy_capture = Some(gate_mtime_secs(&p));
@@ -1150,18 +1107,12 @@ fn a_same_tick_same_size_rewrite_on_a_coarse_stat_is_not_suppressed() {
         .set_modified(UNIX_EPOCH + std::time::Duration::new(secs, 0))
         .unwrap();
     let md = fs::metadata(&p).unwrap();
-    let (fs_ctime, fs_inode) = crate::build::stat::stat_identity(&md);
+    let current = FileStat::of(&md);
 
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"hello"), // the ORIGINAL bytes' hash
-        size: 5,                         // same size as the rewrite
-        mtime: secs,                     // same recorded second
-        mtime_nanos: Some(0),            // what the baseline's coarse stat read
-        // Identity agrees — isolating the sub-second guard as the only signal
-        // that can catch this rewrite; ctime is itself only second-resolution,
-        // so a same-tick rewrite plausibly carries the same recorded value too.
-        ctime: fs_ctime,
-        inode: fs_inode,
+        // Identity agrees, leaving only the coarse mtime guard to catch the rewrite.
+        stat: FileStat { size: 5, mtime: secs, mtime_nanos: Some(0), ..current },
     };
 
     assert_eq!(
@@ -1189,15 +1140,10 @@ fn a_zero_subsecond_mtime_fast_paths_only_when_older_than_the_capture_by_more_th
         .set_modified(UNIX_EPOCH + std::time::Duration::new(secs, 0))
         .unwrap();
     let md = fs::metadata(&p).unwrap();
-    let (ctime, inode) = crate::build::stat::stat_identity(&md);
-    let meta = SourceMetadata {
-        hash: gate_sha256_hex(b"hello"), // not these bytes: only the fast path says Unchanged
-        size: 5,
-        mtime: secs,
-        mtime_nanos: Some(0),
-        ctime,
-        inode,
-    };
+    let stat = crate::build::stat::FileStat::of(&md);
+    assert_eq!((stat.mtime, stat.mtime_nanos), (secs, Some(0)));
+    // Not these bytes' hash: only the fast path says Unchanged.
+    let meta = SourceMetadata::from_stat(gate_sha256_hex(b"hello"), stat);
 
     assert_eq!(
         source_metadata_verdict(&meta, &md, &p, Some(secs + ZERO_NANOS_TRUST_AGE_SECS + 1)),
@@ -1219,23 +1165,24 @@ fn a_hash_confirmed_match_hands_back_the_fresh_identity() {
     let dir = tempfile::tempdir().unwrap();
     let p = gate_write_file(dir.path(), "a.md", b"same bytes");
     let md = fs::metadata(&p).unwrap();
-    let (fs_ctime, fs_inode) = crate::build::stat::stat_identity(&md);
+    let current = FileStat::of(&md);
 
     // Baseline: right hash and size, but a stat identity from a previous life.
     let meta = SourceMetadata {
         hash: gate_sha256_hex(b"same bytes"),
-        size: md.len(),
-        mtime: 1_000, // long ago — mtime tier cannot match
-        mtime_nanos: Some(0),
-        ctime: fs_ctime.map(|c| c - 999),
-        inode: fs_inode.map(|i| i + 1),
+        stat: FileStat {
+            mtime_nanos: Some(0),
+            ctime: current.ctime.map(|c| c - 999),
+            inode: current.inode.map(|i| i + 1),
+            ..FileStat::whole_second(md.len(), 1_000)
+        },
     };
 
     match source_metadata_verdict(&meta, &md, &p, None) {
         SourceVerdict::Unchanged { refreshed: Some(fresh) } => {
             assert_eq!(fresh.hash, meta.hash, "bytes did not change; hash carries over");
-            assert_eq!(fresh.ctime, fs_ctime, "identity is the CURRENT one");
-            assert_eq!(fresh.inode, fs_inode);
+            assert_eq!(fresh.stat.ctime, current.ctime, "identity is the CURRENT one");
+            assert_eq!(fresh.stat.inode, current.inode);
             // And the refreshed record fast-paths: same verdict, no refresh owed.
             assert_eq!(
                 source_metadata_verdict(&fresh, &md, &p, None),
@@ -1302,22 +1249,14 @@ fn gate_suppresses_when_every_path_is_unchanged() {
         "a.md".into(),
         SourceMetadata {
             hash: gate_sha256_hex(b"hello"),
-            size: 5,
-            mtime: gate_mtime_secs(&p_a),
-            mtime_nanos: None,
-            ctime: None,
-            inode: None,
+            stat: FileStat::whole_second(5, gate_mtime_secs(&p_a)),
         },
     );
     hashes.sources.insert(
         "b.md".into(),
         SourceMetadata {
             hash: gate_sha256_hex(b"world"),
-            size: 5,
-            mtime: gate_mtime_secs(&p_b),
-            mtime_nanos: None,
-            ctime: None,
-            inode: None,
+            stat: FileStat::whole_second(5, gate_mtime_secs(&p_b)),
         },
     );
     gate_write_manifest(folder, &hashes);
@@ -1337,11 +1276,7 @@ fn gate_passes_when_any_path_is_changed() {
         "a.md".into(),
         SourceMetadata {
             hash: gate_sha256_hex(b"hello"),
-            size: 5,
-            mtime: 0,
-            mtime_nanos: None,
-            ctime: None,
-            inode: None,
+            stat: FileStat::whole_second(5, 0),
         },
     );
     gate_write_manifest(folder, &hashes);
@@ -1394,11 +1329,7 @@ fn gate_prefers_in_memory_baseline_over_stale_disk_manifest() {
         "a.md".into(),
         SourceMetadata {
             hash: gate_sha256_hex(b"hello"),
-            size: 5,
-            mtime: 0, // force the hash path, not the metadata fast path
-            mtime_nanos: None,
-            ctime: None,
-            inode: None,
+            stat: FileStat::whole_second(5, 0),
         },
     );
     gate_write_manifest(folder, &disk);
@@ -1409,11 +1340,7 @@ fn gate_prefers_in_memory_baseline_over_stale_disk_manifest() {
         "a.md".into(),
         SourceMetadata {
             hash: gate_sha256_hex(b"HELLO"),
-            size: 5,
-            mtime: 0,
-            mtime_nanos: None,
-            ctime: None,
-            inode: None,
+            stat: FileStat::whole_second(5, 0),
         },
     );
 
@@ -1437,11 +1364,7 @@ fn gate_reads_stash_not_disk_when_stash_present() {
         "a.md".into(),
         SourceMetadata {
             hash: gate_sha256_hex(b"hello"),
-            size: 5,
-            mtime: 0,
-            mtime_nanos: None,
-            ctime: None,
-            inode: None,
+            stat: FileStat::whole_second(5, 0),
         },
     );
 
@@ -1470,11 +1393,7 @@ fn a_deferred_modify_on_unchanged_bytes_is_suppressed_at_admission() {
         "a.md".into(),
         SourceMetadata {
             hash: gate_sha256_hex(b"hello"),
-            size: 5,
-            mtime: gate_mtime_secs(&p),
-            mtime_nanos: None,
-            ctime: None,
-            inode: None,
+            stat: FileStat::whole_second(5, gate_mtime_secs(&p)),
         },
     );
     gate_write_manifest(folder, &hashes);
@@ -4055,11 +3974,7 @@ fn a_legacy_manifest_resolves_a_rename_through_the_stem_guess() {
 fn a_renamed_page_that_owns_no_output_is_still_reported_as_a_rename() {
     let meta = |hash: &str| SourceMetadata {
         hash: hash.into(),
-        size: 1,
-        mtime: 0,
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(1, 0),
     };
     let mut prev = manifest(&[("other.md", "other/index.html")], &[]);
     prev.sources.insert("footer.md".into(), meta("h"));
@@ -4085,7 +4000,7 @@ fn page_hashes(path: &str, out: &str, inode: Option<u64>, hash: &str) -> SiteHas
     h.insert(out.into(), "out_hash".into());
     h.source_to_output.insert(path.into(), out.into());
     h.sources.insert(path.into(), crate::build::types::SourceMetadata {
-        hash: hash.into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode,
+        hash: hash.into(), stat: FileStat { inode, ..FileStat::whole_second(1, 1) },
     });
     h
 }

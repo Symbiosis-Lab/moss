@@ -2,6 +2,7 @@ use super::keep;
 use crate::build::manifest::change_set::{PublishedSnapshot, RemovalReason};
 use crate::build::manifest::{backfill, published_record, HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::moss_paths::MossPaths;
 use crate::types::content::SiteHashes;
@@ -21,7 +22,7 @@ fn publish_with_derivative(mp: &MossPaths) {
     for (path, bytes) in [("photo-2.jpg", &b"JPEG"[..]), ("photo-2.webp", &b"WEBP"[..])] {
         pending.register(&ServedPath::from_source(path).unwrap(), bytes, HashBucket::Files);
     }
-    let meta = SourceMetadata { hash: "h".into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None };
+    let meta = SourceMetadata { hash: "h".into(), stat: FileStat::whole_second(1, 1) };
     pending.register_page_source_hash("photo-2.jpg".into(), meta);
     let snap = PublishedSnapshot::from_sealed(&pending.seal(), "moss:site-1", "2026-08-05T00:00:00Z".into());
     published_record::save(mp, &snap).unwrap();

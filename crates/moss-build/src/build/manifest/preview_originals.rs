@@ -61,7 +61,7 @@ impl Originals {
         for (source, metadata) in &hashes.sources {
             let ext = Path::new(source).extension().and_then(|ext| ext.to_str()).unwrap_or("");
             if !moss_core::asset_paths::is_ladder_source_ext(ext) { continue; }
-            let original = Original { source: source.clone(), oid: metadata.hash.clone(), size: metadata.size };
+            let original = Original { source: source.clone(), oid: metadata.hash.clone(), size: metadata.stat.size };
             for url in default_urls(source) {
                 candidates.entry(url).and_modify(|old| {
                     if old.as_ref() != Some(&original) { *old = None; }
@@ -93,7 +93,7 @@ impl SealedManifest {
             let source = source.as_ref()?;
             let metadata = self.inner.sources.get(source)?;
             Some((url.clone(), Original {
-                source: source.clone(), oid: metadata.hash.clone(), size: metadata.size,
+                source: source.clone(), oid: metadata.hash.clone(), size: metadata.stat.size,
             }))
         }).collect();
         let receipt = Originals { generation: self.generation_id().into(), images };

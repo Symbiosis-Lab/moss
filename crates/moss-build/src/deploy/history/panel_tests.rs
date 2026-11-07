@@ -15,6 +15,7 @@ use sha2::Digest;
 use super::*;
 use crate::build::manifest::{HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -38,11 +39,7 @@ fn manifest_of(pages: &[(&str, &[u8])]) -> SealedManifest {
             src.to_string(),
             SourceMetadata {
                 hash: format!("{:x}", sha2::Sha256::digest(bytes)),
-                size: bytes.len() as u64,
-                mtime: 1,
-                mtime_nanos: None,
-                ctime: None,
-                inode: None,
+                stat: FileStat::whole_second(bytes.len() as u64, 1),
             },
         );
     }

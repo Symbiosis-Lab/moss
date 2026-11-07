@@ -415,8 +415,11 @@ fn source_version(hash: &str, mtime: Option<(u64, u32)>) -> crate::build::manife
     pending.register(&output, hash.as_bytes(), HashBucket::Files);
     pending.register_source_mapping("note.md".into(), &output);
     pending.register_page_source_hash("note.md".into(), crate::build::types::SourceMetadata {
-        hash: hash.into(), size: 1, mtime: mtime.map_or(0, |t| t.0),
-        mtime_nanos: mtime.map(|t| t.1), ctime: None, inode: None,
+        hash: hash.into(),
+        stat: crate::build::stat::FileStat {
+            mtime_nanos: mtime.map(|t| t.1),
+            ..crate::build::stat::FileStat::whole_second(1, mtime.map_or(0, |t| t.0))
+        },
     });
     pending.seal()
 }

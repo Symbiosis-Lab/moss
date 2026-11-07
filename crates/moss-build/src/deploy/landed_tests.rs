@@ -17,6 +17,7 @@ use crate::build::manifest::{published_record, PendingManifest, SealedManifest};
 use crate::build::manifest::live_baseline::{self, Baseline};
 use crate::build::served_path::ServedPath;
 use crate::moss_paths::MossPaths;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -30,7 +31,7 @@ fn sealed(pages: &[(&str, &str, &str, &[u8])]) -> SealedManifest {
         pending.register_source_mapping(src.to_string(), &sp);
         pending.register_page_source_hash(
             src.to_string(),
-            SourceMetadata { hash: hash.to_string(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: hash.to_string(), stat: FileStat::whole_second(1, 1) },
         );
     }
     pending.seal()
@@ -225,7 +226,7 @@ async fn a_publish_names_a_folder_file_the_author_deleted() {
     let page = ServedPath::from_source("a/index.html").unwrap();
     pending.register(&page, b"A", crate::build::manifest::HashBucket::Files);
     pending.register_source_mapping("a.md".into(), &page);
-    let meta = |h: &str| SourceMetadata { hash: h.into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None };
+    let meta = |h: &str| SourceMetadata { hash: h.into(), stat: FileStat::whole_second(1, 1) };
     pending.register_page_source_hash("a.md".into(), meta("h-a"));
     let pdf = ServedPath::from_source("guide.pdf").unwrap();
     pending.register(&pdf, b"%PDF", crate::build::manifest::HashBucket::Files);
@@ -268,7 +269,7 @@ async fn second_publish_summary(
         pending.register_source_mapping("a.md".into(), &page);
         pending.register_page_source_hash(
             "a.md".into(),
-            SourceMetadata { hash: "h".into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: "h".into(), stat: FileStat::whole_second(1, 1) },
         );
         for out in extra {
             pending.register(&ServedPath::from_source(out).unwrap(), b"x", crate::build::manifest::HashBucket::Files);

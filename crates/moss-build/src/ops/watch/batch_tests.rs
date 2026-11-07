@@ -88,8 +88,7 @@ async fn a_source_is_announced_even_when_the_content_hash_gate_suppresses_rebuil
     let mut baseline = crate::types::content::SiteHashes::new();
     baseline.sources.insert("P.md".into(), crate::build::types::SourceMetadata {
         hash: format!("{:x}", Sha256::digest(bytes)),
-        size: bytes.len() as u64,
-        ..Default::default()
+        stat: crate::build::stat::FileStat::whole_second(bytes.len() as u64, 0),
     });
     crate::system::build_records::records().record_content_hashes(folder, baseline);
     let (emit, mut events) = recording_relay();

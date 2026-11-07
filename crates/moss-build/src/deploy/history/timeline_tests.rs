@@ -7,6 +7,7 @@ use super::*;
 use crate::build::manifest::change_set::PageVerb;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -21,7 +22,7 @@ fn seed_page(vault: &Path, pending: &mut PendingManifest, src: &str, out: &str, 
     pending.register_source_mapping(src.to_string(), &sp);
     pending.register_page_source_hash(
         src.to_string(),
-        SourceMetadata { hash: hash_of(bytes), size: bytes.len() as u64, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: hash_of(bytes), stat: FileStat::whole_second(bytes.len() as u64, 1) },
     );
 }
 

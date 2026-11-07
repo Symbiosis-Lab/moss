@@ -250,7 +250,7 @@ pub(crate) fn stale_content(
     for (src, hash) in crate::build::manifest::change_set::page_source_hashes(sealed) {
         let Some(previous) = latest.entries.get(&src) else { continue };
         if previous.hash == hash { continue; }
-        let mtime = sealed.sources().get(&src).and_then(|m| m.mtime_nanos.map(|n| (m.mtime, n)));
+        let mtime = sealed.sources().get(&src).and_then(|m| m.stat.mtime_nanos.map(|n| (m.stat.mtime, n)));
         let older_time = mtime.zip(previous.source_mtime).is_some_and(|(now, before)| now < before);
         let older_hash = publishes.iter().any(|r| r.target == latest.target
             && r.entries.get(&src).is_some_and(|e| e.hash == hash));

@@ -452,7 +452,7 @@ fn identity_pairs(
     already: &[(String, String)],
 ) -> Vec<(String, String)> {
     let identity = |h: &SiteHashes, src: &str| {
-        h.sources.get(src).and_then(|m| Some((m.inode?, m.hash.clone())))
+        h.sources.get(src).and_then(|m| Some((m.stat.inode?, m.hash.clone())))
     };
     let paired_old: std::collections::HashSet<&str> = already.iter().map(|(o, _)| o.as_str()).collect();
     let paired_new: std::collections::HashSet<&str> = already.iter().map(|(_, n)| n.as_str()).collect();
@@ -769,7 +769,7 @@ pub(crate) fn source_metadata_verdict(
     captured_at: Option<u64>,
 ) -> SourceVerdict {
     // Size differs: content definitely changed. Don't hash (file may be huge).
-    if md.len() != meta.size {
+    if md.len() != meta.stat.size {
         return SourceVerdict::Changed;
     }
 
@@ -781,7 +781,7 @@ pub(crate) fn source_metadata_verdict(
     // The window sends an mtime near the capture to the hash tier, which
     // catches such a pair when the read was close to the capture.
     let current = FileStat::of(md);
-    if !mtime_is_racy(meta.mtime, captured_at) && meta.stat().vouches_for(&current, captured_at) {
+    if !mtime_is_racy(meta.stat.mtime, captured_at) && meta.stat.vouches_for(&current, captured_at) {
         return SourceVerdict::Unchanged { refreshed: None };
     }
 

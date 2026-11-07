@@ -76,7 +76,7 @@ pub(crate) async fn run(
     // rebuild storm — the exact failure this loop replaces. Sticky paths are
     // suppressed (one WARN) until they change again or a pass comes back
     // quiet. Keyed per PATH, never per set: see `undispatched_paths`.
-    let mut dispatched_drift: std::collections::BTreeMap<String, drift::DriftStamp> =
+    let mut dispatched_drift: std::collections::BTreeMap<String, crate::build::stat::FileStat> =
         std::collections::BTreeMap::new();
     let mut sticky_warned = false;
     // Watcher supervision. Armed by a FRESH drift dispatch — a change the
@@ -727,20 +727,12 @@ fn pending_still_present(path: &std::path::Path) -> bool {
     !pending_confirmed_absent(path)
 }
 
-/// Which drifted paths are worth dispatching: those whose stamp has MOVED
-/// since the dispatch that was supposed to clear them (or that no dispatch
-/// has seen at all).
-///
-/// Per path, never per set. Suppression used to compare whole fingerprints,
-/// so one unrelated path joining or leaving re-dispatched every path in the
-/// set — including ones a rebuild had provably failed to clear. A set that
-/// oscillates therefore never suppressed anything: on the vault that
-/// motivated this the sweep alternated between 877 and 1102 drifted paths
-/// and the guard's WARN never fired once, through minutes of continuous
-/// rebuilding.
+/// Dispatch only paths whose stat moved since their last dispatch.
+/// Comparing per path keeps an unrelated arrival or departure from
+/// redispatching a path whose rebuild has not cleared its drift.
 pub(crate) fn undispatched_paths(
     now: &std::collections::BTreeMap<String, drift::Drift>,
-    dispatched: &std::collections::BTreeMap<String, drift::DriftStamp>,
+    dispatched: &std::collections::BTreeMap<String, crate::build::stat::FileStat>,
 ) -> Vec<String> {
     now.iter()
         .filter(|(rel, d)| dispatched.get(*rel) != Some(&d.stamp))
@@ -758,7 +750,7 @@ pub(crate) fn newest_landing(
 ) -> Option<std::time::SystemTime> {
     fresh
         .iter()
-        .map(|r| drifted.get(r).and_then(|d| d.stamp.3))
+        .map(|r| drifted.get(r).and_then(|d| d.stamp.ctime))
         .try_fold(0i64, |newest, c| c.filter(|c| *c > 0).map(|c| newest.max(c)))
         .map(|secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64 + 1))
 }

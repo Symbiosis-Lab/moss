@@ -9,16 +9,15 @@ use std::path::Path;
 /// from another — the record the [`HashIndex`](crate::build::cache::HashIndex) keeps beside a content hash, and
 /// the record a file must still show for the hash to be trusted.
 ///
-/// The same fields, for the same reasons, as `SourceMetadata` (`build/types.rs`):
-/// a whole-second mtime cannot tell the hashed file from a same-size rewrite
+/// A whole-second mtime cannot tell the hashed file from a same-size rewrite
 /// landing in the same second, ctime cannot be forged from userland where mtime
 /// can, and replace-via-rename changes the inode even when size and mtime survive.
 ///
-/// Serialized the way the hash index stores it (flattened into each entry): an
-/// absent field is omitted, and one missing on read — an index from before it
-/// existed — is `None`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Flattened into hash-index and source-metadata entries: an absent optional
+/// field is omitted, and one missing on read is `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FileStat {
+    /// File size in bytes.
     pub size: u64,
     /// Modification time, whole Unix seconds.
     pub mtime: u64,
@@ -27,8 +26,14 @@ pub struct FileStat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtime_nanos: Option<u32>,
     /// Inode change time, Unix seconds, where the platform reports one.
+    /// A permission change can bump ctime without changing bytes; disagreement
+    /// costs a hash, never suppresses a content change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ctime: Option<i64>,
+    /// Sub-second part of the inode change time, where the platform reports a
+    /// ctime. A missing sub-second part cannot prove an unchanged ctime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctime_nanos: Option<u32>,
     /// Inode number, where the platform reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inode: Option<u64>,
@@ -41,12 +46,19 @@ impl FileStat {
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-        let (ctime, inode) = crate::build::stat::stat_identity(md);
+        #[cfg(unix)]
+        let (ctime, ctime_nanos, inode) = {
+            use std::os::unix::fs::MetadataExt;
+            (Some(md.ctime()), u32::try_from(md.ctime_nsec()).ok(), Some(md.ino()))
+        };
+        #[cfg(not(unix))]
+        let (ctime, ctime_nanos, inode) = (None, None, None);
         Self {
             size: md.len(),
             mtime: mtime.map_or(0, |d| d.as_secs()),
             mtime_nanos: mtime.map(|d| d.subsec_nanos()),
             ctime,
+            ctime_nanos,
             inode,
         }
     }
@@ -54,7 +66,21 @@ impl FileStat {
     /// Size and whole-second mtime only, for a caller that has nothing finer —
     /// see [`HashIndex::lookup_whole_second`].
     pub fn whole_second(size: u64, mtime: u64) -> Self {
-        Self { size, mtime, mtime_nanos: None, ctime: None, inode: None }
+        Self { size, mtime, mtime_nanos: None, ctime: None, ctime_nanos: None, inode: None }
+    }
+
+    /// A later manifest clock must not turn an unsettled zero stamp into proof.
+    /// Drop such readings before carrying this record under a new clock.
+    pub(crate) fn without_unsettled_zero_stamps(mut self, recorded_at: Option<u64>) -> Self {
+        if self.mtime_nanos == Some(0) && !zero_stamp_settled(self.mtime, recorded_at) {
+            self.mtime_nanos = None;
+        }
+        if self.ctime_nanos == Some(0)
+            && !self.ctime.and_then(|s| u64::try_from(s).ok()).is_some_and(|s| zero_stamp_settled(s, recorded_at))
+        {
+            self.ctime_nanos = None;
+        }
+        self
     }
 
     /// Whether `current`, the same file stat'd again, proves it still holds the
@@ -65,8 +91,9 @@ impl FileStat {
     /// miss costs a re-read, a false hit serves stale bytes.
     ///
     /// Size, whole-second mtime and the sub-second mtime must all agree, and a
-    /// ctime or inode both sides report must too ([`identity_disagrees`]). What
-    /// the sub-second agreement proves depends on the reading:
+    /// reported inode must agree through [`identity_disagrees`], and a reported
+    /// ctime through [`ctime_agrees`](Self::ctime_agrees). What
+    /// the sub-second mtime agreement proves depends on the reading:
     ///
     /// - Non-zero on both sides: a real sub-second timestamp, so an equal one is
     ///   the same write.
@@ -86,9 +113,8 @@ impl FileStat {
     /// then sets its mtime back to the exact recorded value (`touch -r`, an archive
     /// extractor restoring an old date). The rewrite still moves ctime, and an
     /// unlink-and-create moves the inode, so the identity check catches it on
-    /// platforms that report those — short of a ctime landing in the recorded
-    /// second, or a platform (Windows) or filesystem that reports neither
-    /// faithfully.
+    /// platforms that report those, short of a platform (Windows) that reports
+    /// neither.
     pub(crate) fn vouches_for(&self, current: &FileStat, recorded_at: Option<u64>) -> bool {
         let same_write = match (self.mtime_nanos, current.mtime_nanos) {
             (Some(a), Some(b)) if a != b => false,
@@ -99,8 +125,23 @@ impl FileStat {
         self.size == current.size
             && self.mtime == current.mtime
             && same_write
-            && !identity_disagrees(self.ctime, current.ctime)
+            && self.ctime_agrees(current, recorded_at)
             && !identity_disagrees(self.inode, current.inode)
+    }
+
+    /// Reported ctimes must agree to the nanosecond; a missing part is no proof.
+    /// A zero part is proof only when ctime was already settled before the read.
+    /// A kernel whose ctime advances once per scheduler tick (Linux without
+    /// multigrain timestamps) can give a change and an mtime-restoring rewrite
+    /// within that tick the same ctime; only hashing can detect that gap.
+    fn ctime_agrees(&self, current: &FileStat, recorded_at: Option<u64>) -> bool {
+        let (Some(secs), Some(now)) = (self.ctime, current.ctime) else { return true };
+        secs == now
+            && match (self.ctime_nanos, current.ctime_nanos) {
+                (Some(0), Some(0)) => u64::try_from(secs).is_ok_and(|s| zero_stamp_settled(s, recorded_at)),
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            }
     }
 }
 
@@ -184,6 +225,16 @@ impl FileStat {
         assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), before.modified().unwrap());
     }
 
+    /// Rewrite `path` in place with same-size `bytes`, then set its mtime back to
+    /// the nanosecond, as an edit followed by `touch -r` does. Size, mtime and
+    /// inode survive; only the ctime moves.
+    pub(crate) fn rewrite_in_place_keeping_mtime(path: &Path, bytes: &[u8]) {
+        let before = fs::metadata(path).unwrap();
+        assert_eq!(bytes.len() as u64, before.len(), "precondition: a same-size rewrite");
+        fs::write(path, bytes).unwrap();
+        fs::File::options().write(true).open(path).unwrap().set_modified(before.modified().unwrap()).unwrap();
+    }
+
     /// This record with each field changed in turn: what a record taken at another
     /// instant of the file can differ in. A consumer that leaves one out of the stat
     /// it looks up (or records) trusts the hash of bytes the file no longer has.
@@ -198,6 +249,9 @@ impl FileStat {
         if let Some(c) = self.ctime {
             rows.push(("ctime", FileStat { ctime: Some(c - 7), ..*self }));
         }
+        if let Some(n) = self.ctime_nanos {
+            rows.push(("sub-second ctime", FileStat { ctime_nanos: Some((n + 250_000_000) % 1_000_000_000), ..*self }));
+        }
         if let Some(i) = self.inode {
             rows.push(("inode", FileStat { inode: Some(i + 1), ..*self }));
         }
@@ -206,27 +260,8 @@ impl FileStat {
 }
 
 
-/// The forgery-resistant half of a stat record: (ctime seconds, inode).
-///
-/// `(None, None)` on platforms that report neither — every consumer must
-/// fail open on `None` (compare only when both sides are `Some`).
-pub fn stat_identity(md: &std::fs::Metadata) -> (Option<i64>, Option<u64>) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        (Some(md.ctime()), Some(md.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = md;
-        (None, None)
-    }
-}
-
-/// Both sides reported a value and they disagree. Absence on either side is
-/// agreement (fail open) — old records and platforms without the field must not
-/// lose their fast path forever. Every consumer of [`stat_identity`] compares
-/// through this one definition.
+/// Both sides reported a value and they disagree. An absent inode cannot
+/// distinguish files, so only a reported disagreement demotes the fast path.
 pub(crate) fn identity_disagrees<T: PartialEq>(recorded: Option<T>, current: Option<T>) -> bool {
     matches!((recorded, current), (Some(a), Some(b)) if a != b)
 }

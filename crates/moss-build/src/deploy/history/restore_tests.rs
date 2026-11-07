@@ -8,6 +8,7 @@ use sha2::Digest;
 use super::*;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::{MODE_FILE, SiteHashes};
 
@@ -26,7 +27,7 @@ fn seed_page(vault: &Path, pending: &mut PendingManifest, src: &str, out: &str, 
     pending.register_source_mapping(src.to_string(), &sp);
     pending.register_page_source_hash(
         src.to_string(),
-        SourceMetadata { hash: hash_of(bytes), size: bytes.len() as u64, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: hash_of(bytes), stat: FileStat::whole_second(bytes.len() as u64, 1) },
     );
 }
 
@@ -139,7 +140,7 @@ fn restore_page_recreates_a_symlink() {
     // see the path; `record_one`'s lstat check does the rest.
     pending.register_page_source_hash(
         "link".to_string(),
-        SourceMetadata { hash: "unused".to_string(), size: 0, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: "unused".to_string(), stat: FileStat::whole_second(0, 1) },
     );
     let sealed = pending.seal();
     record::snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();

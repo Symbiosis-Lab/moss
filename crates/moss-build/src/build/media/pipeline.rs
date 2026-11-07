@@ -133,10 +133,10 @@ fn check_source_cache(
     prev_hashes_mtime_secs: u64,
 ) -> Option<String> {
     let entry = cached?;
-    if entry.size != current_size {
+    if entry.stat.size != current_size {
         return None;
     }
-    if entry.mtime != current_mtime_secs {
+    if entry.stat.mtime != current_mtime_secs {
         return None;
     }
     // Racy-mtime: the file's mtime is suspiciously close to (or after) when
@@ -776,9 +776,9 @@ fn source_blob(
         .unwrap_or(crate::build::stat::FileStat::whole_second(0, 0));
     // A source stat identifies the desired blob; placement verifies or restores
     // its staged copy. Reading the CAS here would rehash every warm asset.
-    if let Some(oid) = cached.filter(|entry| entry.stat().vouches_for(&stat, Some(previous_write)))
+    if let Some(oid) = cached.filter(|entry| entry.stat.vouches_for(&stat, Some(previous_write)))
         .map(|entry| entry.hash.clone())
-        .or_else(|| check_source_cache(cached.filter(|e| e.mtime_nanos.is_none()), stat.size, stat.mtime, previous_write))
+        .or_else(|| check_source_cache(cached.filter(|e| e.stat.mtime_nanos.is_none()), stat.size, stat.mtime, previous_write))
     {
         *cache_hits += 1;
         return Ok(Some((oid, stat)));

@@ -326,17 +326,8 @@ impl PendingManifest {
     pub fn new(carry_forward: SiteHashes) -> Self {
         let mut inner = carry_forward;
         inner.output_collisions.clear();
-        // git's "smudge". A source entry this build does not re-read is carried
-        // under the new, later clock below, which would vouch for it as if it
-        // had been read after that clock started. For a real sub-second mtime
-        // that changes nothing (equality already proves the write); for an
-        // exact-zero one it would trust a same-tick rewrite that landed after
-        // the old read. So a zero reading the OLD clock could not vouch for is
-        // dropped: the entry fails open to the hash tier until re-recorded.
         for meta in inner.sources.values_mut() {
-            if meta.mtime_nanos == Some(0) && !crate::build::stat::zero_stamp_settled(meta.mtime, inner.captured_at) {
-                meta.mtime_nanos = None;
-            }
+            meta.stat = meta.stat.without_unsettled_zero_stamps(inner.captured_at);
         }
         // THIS build's racily-clean clock, not the carried-forward one: the
         // sweep compares file mtimes against the moment hashing began, and a

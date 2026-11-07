@@ -1,6 +1,7 @@
 use super::*;
 use crate::build::manifest::PendingManifest;
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -18,7 +19,7 @@ fn sealed(
         pending.register_source_mapping(src.to_string(), &sp);
         pending.register_page_source_hash(
             src.to_string(),
-            SourceMetadata { hash: hash.to_string(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: hash.to_string(), stat: FileStat::whole_second(1, 1) },
         );
     }
     for (out, bytes) in unmapped {
@@ -62,7 +63,7 @@ fn sealed_with_assets(
 }
 
 fn meta(hash: &str) -> SourceMetadata {
-    SourceMetadata { hash: hash.to_string(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None }
+    SourceMetadata { hash: hash.to_string(), stat: FileStat::whole_second(1, 1) }
 }
 
 /// "The source exists" as this build saw it. The real caller asks the folder.

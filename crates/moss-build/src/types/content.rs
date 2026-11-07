@@ -641,6 +641,7 @@ impl SiteHashes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::stat::FileStat;
 
     // =========================================
     // SiteHashes Tests
@@ -834,10 +835,10 @@ mod tests {
         let mut hashes = SiteHashes::new();
         hashes.sources.insert(
             "posts/hello.md".to_string(),
-            SourceMetadata { hash: "abc".into(), size: 42, mtime: 1000, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: "abc".into(), stat: FileStat::whole_second(42, 1000) },
         );
         let meta = hashes.source_metadata_for("posts/hello.md").expect("present");
-        assert_eq!(meta.size, 42);
+        assert_eq!(meta.stat.size, 42);
         assert!(hashes.source_metadata_for("posts/missing.md").is_none());
     }
 }

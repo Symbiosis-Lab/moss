@@ -546,7 +546,7 @@ impl ObjectStore {
         // Stat the temp instead of trusting fs::copy's return value — on
         // Windows that's CopyFileEx's progress count, which Wine reports as 0.
         let (copied, inode) = match fs::metadata(&tmp) {
-            Ok(m) => (m.len(), crate::build::stat::stat_identity(&m).1),
+            Ok(m) => (m.len(), crate::build::stat::FileStat::of(&m).inode),
             Err(e) => {
                 // allow:unlink the temp this call minted beside the target; the rename replaces the entry in place
                 let _ = fs::remove_file(&tmp);

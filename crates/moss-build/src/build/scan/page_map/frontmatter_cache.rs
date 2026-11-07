@@ -9,11 +9,9 @@ use std::path::{Path, PathBuf};
 /// was captured against. See [`FrontmatterScanCache`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct FrontmatterScanEntry {
-    size: u64,
-    mtime: u64,
-    mtime_nanos: Option<u32>,
-    ctime: Option<i64>,
-    inode: Option<u64>,
+    /// A stat field a file lacks reads as `None`; see [`FileStat`]'s serde shape.
+    #[serde(flatten)]
+    stat: FileStat,
     /// When the file was read for this entry, Unix seconds: the clock
     /// [`FileStat::vouches_for`] needs to trust an exact-zero sub-second mtime.
     /// No [`SCHEMA`] bump: a file written before the field reads it as `None`,
@@ -32,12 +30,6 @@ pub(super) struct FrontmatterScanEntry {
     /// Read by the page-map pass so a partial is `slot_only` there too, not
     /// only once the full parse has run.
     partial: bool,
-}
-
-impl FrontmatterScanEntry {
-    fn stat(&self) -> FileStat {
-        FileStat { size: self.size, mtime: self.mtime, mtime_nanos: self.mtime_nanos, ctime: self.ctime, inode: self.inode }
-    }
 }
 
 /// Bumped whenever [`FrontmatterScanEntry`] gains or loses a field. An entry
@@ -182,7 +174,7 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
         let cached = cache.entries.get(file_path);
 
         let hit = match (&stat, cached) {
-            (Some(current), Some(entry)) => entry.stat().vouches_for(current, entry.recorded_at),
+            (Some(current), Some(entry)) => entry.stat.vouches_for(current, entry.recorded_at),
             _ => false,
         };
 
@@ -248,15 +240,11 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
         }
         let external_url = external_url_raw.filter(|u| super::is_valid_external_url(u));
 
-        if let Some(FileStat { size, mtime, mtime_nanos, ctime, inode }) = stat {
+        if let Some(stat) = stat {
             cache.entries.insert(
                 file_path.clone(),
                 FrontmatterScanEntry {
-                    size,
-                    mtime,
-                    mtime_nanos,
-                    ctime,
-                    inode,
+                    stat,
                     recorded_at,
                     url_override: frontmatter_url.clone(),
                     external_url: external_url.clone(),

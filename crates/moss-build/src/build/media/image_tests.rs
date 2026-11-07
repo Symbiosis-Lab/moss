@@ -5018,6 +5018,47 @@ fn staged_links(h: &TestHarness) -> StagedLinks {
     StagedLinks::load(&MossPaths::from_moss_dir(h._tmp.path().join(".moss")), "test", &h.staging)
 }
 
+#[cfg(unix)]
+#[test]
+fn a_staged_record_without_ctime_precision_is_rehashed_before_relinking() {
+    use crate::build::cache::HashIndex;
+    use crate::build::lifecycle::cas_heal::Placement;
+    use crate::build::stat::FileStat;
+
+    for rewritten in [false, true] {
+        let h = harness();
+        let oid = h.objects.store_bytes(b"valid bytes", crate::build::cache::RecordMode::Request).unwrap();
+        let path = h.staging.join("asset.bin");
+        let saved = MossPaths::from_moss_dir(h._tmp.path().join(".moss")).cache_dir().join("staged-links-test.json");
+        let mut first = staged_links(&h);
+        assert!(matches!(first.link(&h.objects, &oid, &path, None), Placement::Linked));
+        first.save();
+
+        let mut previous = HashIndex::load(&saved);
+        previous.entries.get_mut("asset.bin").unwrap().stat.ctime_nanos = None;
+        previous.save(&saved).unwrap();
+        if rewritten {
+            FileStat::rewrite_in_place_keeping_mtime(&path, b"wrong bytes");
+        }
+        let before = FileStat::of(&fs::metadata(&path).unwrap());
+        assert!(!previous.entries["asset.bin"].stat.vouches_for(&before, previous.entries["asset.bin"].recorded_at));
+
+        let mut next = staged_links(&h);
+        let placement = next.link(&h.objects, &oid, &path, None);
+        if rewritten {
+            assert!(matches!(placement, Placement::Linked), "{placement:?}");
+        } else {
+            assert!(matches!(placement, Placement::Held), "{placement:?}");
+            let after = FileStat::of(&fs::metadata(&path).unwrap());
+            assert_eq!((after.inode, after.ctime, after.ctime_nanos), (before.inode, before.ctime, before.ctime_nanos));
+        }
+        assert_eq!(fs::read(&path).unwrap(), b"valid bytes");
+        next.save();
+        let renewed = HashIndex::load(&saved);
+        assert!(renewed.entries["asset.bin"].stat.ctime_nanos.is_some());
+    }
+}
+
 /// One encode of `photo.jpg`, then one heal that records the link, then one
 /// more build's heal that must find the record and leave the file alone.
 /// Returns what a test needs to tamper with the staged variant and heal again.

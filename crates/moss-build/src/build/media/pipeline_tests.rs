@@ -1,5 +1,6 @@
 use super::*;
 use crate::build::media::fallback_raster::FALLBACK_MAX_EDGE;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 
 /// Seal exactly what the emit channel reported, so a ship assertion is about
@@ -19,11 +20,7 @@ fn drained_sealed(
 fn meta(hash: &str, size: u64, mtime: u64) -> SourceMetadata {
     SourceMetadata {
         hash: hash.to_string(),
-        size,
-        mtime,
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(size, mtime),
     }
 }
 
