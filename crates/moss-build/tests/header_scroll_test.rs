@@ -54,3 +54,23 @@ fn a_header_laid_over_the_opening_hero_is_not_kept() {
     assert!(!over.contains("data-header-scroll"), "{over}");
     assert!(site.html("plain/index.html").contains(r#"data-header-scroll="sticky""#));
 }
+
+/// `<meta name="theme-color">` carries the theme's own page colour, so a
+/// phone's browser chrome matches the page instead of moss's default paper.
+mod theme_color {
+    use super::site::Site;
+
+    #[test]
+    fn the_theme_color_meta_follows_the_themes_page_colour() {
+        let site = Site::with_config(
+            "color_scheme = \"light\"\n",
+            &[
+                ("index.md", "---\ntitle: Home\n---\n\nHello.\n"),
+                (".moss/theme/style.css", ":root { --day: #fbfbfb; --paper: var(--day); }\n:root, body[data-section] { --moss-color-bg: var(--paper); }\n"),
+            ],
+        );
+        let home = site.html("index.html");
+        assert!(home.contains(r##"<meta name="theme-color" content="#fbfbfb">"##), "{home}");
+        assert!(!home.contains("#faf8f5"), "moss's default paper is gone from the head");
+    }
+}

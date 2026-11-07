@@ -1659,6 +1659,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         robots_meta: None,
         colophon: true,
         color_scheme: Default::default(),
+        theme_color: Default::default(),
         colophon_credit: None,
     }
 }

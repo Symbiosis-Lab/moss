@@ -48,6 +48,8 @@ pub struct LayoutConfig {
     pub header_scroll: crate::build::components::nav::HeaderScroll,
     /// `[site].color_scheme` — automatic reader choice or a fixed palette.
     pub color_scheme: crate::build::page::color_scheme::ColorScheme,
+    /// The theme's page colour for `<meta name="theme-color">`.
+    pub theme_color: crate::build::page::color_scheme::ThemeColor,
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
@@ -93,6 +95,7 @@ impl LayoutConfig {
             ai: Default::default(),
             colophon: true,
             color_scheme: Default::default(),
+            theme_color: Default::default(),
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             header_scroll: crate::build::components::nav::HeaderScroll::Static,
@@ -199,6 +202,11 @@ impl LayoutConfig {
 
     pub fn with_color_scheme(mut self, color_scheme: crate::build::page::color_scheme::ColorScheme) -> Self {
         self.color_scheme = color_scheme;
+        self
+    }
+
+    pub fn with_theme_color(mut self, theme_color: crate::build::page::color_scheme::ThemeColor) -> Self {
+        self.theme_color = theme_color;
         self
     }
 

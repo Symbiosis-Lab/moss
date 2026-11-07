@@ -1359,7 +1359,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
+        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_theme_color(crate::build::page::color_scheme::ThemeColor::of_theme(user_css_content.as_deref())).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
         let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.
@@ -2833,7 +2833,7 @@ pub fn generate_blocking_content_for_build(
         let nav_html = nav_builder.generate_navigation();
 
         let color_scheme_attrs = layout_config.color_scheme.html_attrs();
-        let theme_meta = crate::build::page::shell::theme_color_meta(layout_config.color_scheme);
+        let theme_meta = layout_config.theme_color.meta(layout_config.color_scheme);
 
         for (media_type, items) in &media_collections {
             if items.is_empty() {
@@ -3165,7 +3165,7 @@ pub fn generate_blocking_content_for_build(
     // Sources:
     // * description / title  — homepage frontmatter
     // * og:* / twitter:*     — pre-rendered with the homepage's title+description
-    // * theme-color          — matches default.css `--moss-color-bg` light/dark
+    // * theme-color          — the theme's root `--moss-color-bg` (`ThemeColor`)
     // * canonical_url        — derived per-folder at injection time from `site_host`
     // * raster_favicons      — `<link rel="icon">` to the same favicon the moss
     //                           templates emit (user's `assets/favicon.{svg,png,ico}`,
@@ -3279,7 +3279,7 @@ pub fn generate_blocking_content_for_build(
             None
         };
 
-        let (tc_light, tc_dark) = crate::build::page::shell::theme_bg_colors();
+        let crate::build::page::color_scheme::ThemeColor { light: tc_light, dark: tc_dark } = &layout_config.theme_color;
         let owned = SpaDefaultsOwned {
             description: homepage_description,
             og_tags,

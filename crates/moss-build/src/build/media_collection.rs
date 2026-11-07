@@ -403,10 +403,10 @@ mod tests {
 
     #[test]
     fn media_page_keeps_the_resolved_theme_head() {
-        use crate::build::page::{color_scheme::ColorScheme, shell::theme_color_meta};
+        use crate::build::page::color_scheme::{ColorScheme, ThemeColor};
         for scheme in [ColorScheme::Auto, ColorScheme::Light, ColorScheme::Dark] {
             let attrs = scheme.html_attrs();
-            let meta = theme_color_meta(scheme);
+            let meta = ThemeColor::default().meta(scheme);
             let html = generate_media_page(&MediaType::Photography, &[], "Site", "", "/style.css",
                 crate::i18n::Language::En, "en", None, "/theme.js", "", None, "", None, &attrs, &meta);
             assert!(html.contains(&format!(r#"lang="en"{attrs}>"#)));
