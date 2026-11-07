@@ -470,9 +470,7 @@ async fn test_seta_url_is_reachable() {
         }
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
+    let client = crate::system::proxy_reqwest::build_client(|b| b.timeout(std::time::Duration::from_secs(10)))
         .expect("Failed to build HTTP client");
 
     let response = client.get(&url).send().await;

@@ -109,7 +109,12 @@ ureq = { version = "2", features = ["json", "tls", "socks-proxy"] }
 # The async client the moss-seta half of this crate is written on.
 # "socks" mirrors ureq's "socks-proxy" so both clients honour the same system
 # proxy. reqwest 0.13 resolves to hyper 1.x, which the tree requires.
-reqwest = { version = "0.13", features = ["json", "query", "socks"] }
+# No default features: the default TLS links aws-lc-rs, a second crypto
+# provider of about 1.9 MB beside the ring that ureq and `ring` above already
+# link. `build_client` installs ring as the process's provider instead.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "charset", "http2", "system-proxy", "json", "query", "socks"] }
+# Names ring's provider for `build_client`; already in the tree through reqwest.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 url = "2.4"
 urlencoding = "2.1"
 usvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }

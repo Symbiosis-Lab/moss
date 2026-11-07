@@ -10,6 +10,7 @@ fn a_host_without_system_roots_still_gets_a_client() {
     std::env::set_var("SSL_CERT_FILE", "/nonexistent/ca-certificates.crt");
     std::env::set_var("SSL_CERT_DIR", "/nonexistent/certs");
 
+    moss_build::system::proxy_reqwest::install_crypto_provider();
     let plain = reqwest::Client::builder().build();
     assert!(plain.is_err(), "precondition: with no system roots reqwest's own builder fails");
 

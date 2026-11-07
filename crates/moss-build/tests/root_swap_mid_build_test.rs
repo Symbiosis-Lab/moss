@@ -190,7 +190,9 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
     let (port, shutdown) = start_server(ServeConfig::new(served.clone(), 62_532))
         .await
         .expect("server starts");
-    let response = reqwest::get(format!("http://127.0.0.1:{port}/"))
+    let response = moss_build::system::proxy_reqwest::client()
+        .get(format!("http://127.0.0.1:{port}/"))
+        .send()
         .await
         .expect("request completes");
     assert_eq!(response.status(), reqwest::StatusCode::OK);
