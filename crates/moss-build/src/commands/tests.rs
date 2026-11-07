@@ -771,6 +771,7 @@ fn arg_fields(args: &specta::DataType, types: &specta::TypeMap) -> Vec<(String, 
 #[test]
 fn the_contract_carries_what_the_engine_tells_a_ui() {
     let contract = render_contract();
+    assert!(contract.contains("{ kind: \"SourceContentChanged\"; payload: {"));
     for name in ["MossEvent", "ProgressUpdate", "DeployProgress", "AppOp", "AppLanguage", "PanelTaskWire", "BuildComplete", "FileChangeEvent"] {
         assert!(contract.contains(&format!("export type {name} =")), "the contract lacks {name}");
     }

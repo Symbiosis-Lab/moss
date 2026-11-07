@@ -114,6 +114,7 @@ pub struct FileChangeEvent {
     /// edits); the preview ignores it — `changed_output_files` is the refresh
     /// signal. Populated by `build_rebuild_event_with_renames` in `watch.rs`,
     /// which emits it even when no output changed.
+    /// See `MossEvent::SourceContentChanged` for the pre-rebuild announcement.
     pub modified_paths: Option<Vec<String>>,
 }
 
@@ -302,6 +303,18 @@ pub enum MossEvent {
     SourceAssetChanged {
         /// Project-root-relative path with a leading `/`, e.g. `/assets/photo.jpg`.
         path: String,
+    },
+    /// Reload-tracked source bytes changed according to a watcher batch, before
+    /// any rebuild gate. Includes pages and the four synchronous `.moss` sources
+    /// selected by `manifest::is_reload_tracked_source_key`; not hash-confirmed.
+    /// The editor listens to reload its open file (deferred while it has unsaved
+    /// edits). This is not a build result and carries no output facts; tree and
+    /// preview consumers do not subscribe. A build's `FileChanged.modified_paths`
+    /// may repeat these paths.
+    SourceContentChanged {
+        /// Project-relative keys, forward slashes, no leading slash: the
+        /// `FileChangeEvent.modified_paths` domain.
+        paths: Vec<String>,
     },
     /// A file was created on disk via a RAW FS event (outside a process-hook build).
     /// Emitted before the rebuild-eligibility gate so the editor can flash the deepest

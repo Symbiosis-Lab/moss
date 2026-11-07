@@ -322,8 +322,8 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
     None
 }
 
-/// Which source files this rebuild saw appear, disappear, or change in place —
-/// the one statement of "which sources changed". Paths are project-root-
+/// Which source files this rebuild saw appear, disappear, or change in place.
+/// Also the fallback for changes missed by watcher batches. Paths are project-root-
 /// relative, the keys of `SiteHashes.source_to_output` / `sources`.
 struct SourceChanges {
     creates: Vec<String>,
@@ -1014,6 +1014,30 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "svg", "avif", "bmp", "heic", "heif", "tiff", "tif",
     "ico",
 ];
+
+/// The project-relative keys of the files whose bytes one watcher event says
+/// changed: a create, a write, and the destination of an atomic-save rename
+/// (a rename reported per path, as FSEvents does, counts too). A rename's
+/// source, a removal and a metadata change other than a write time are not
+/// changes of content; moss's own output and anything outside the watch scope
+/// are left out.
+pub(crate) fn changed_source_keys(root: &Path, kind: EventKind, paths: &[PathBuf]) -> Vec<String> {
+    use notify::event::MetadataKind;
+    let paths = match kind {
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => return Vec::new(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if paths.len() == 2 => &paths[1..],
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => return Vec::new(),
+        EventKind::Modify(ModifyKind::Metadata(m)) if !matches!(m, MetadataKind::Any | MetadataKind::WriteTime) => return Vec::new(),
+        EventKind::Create(_) | EventKind::Modify(_) => paths,
+        _ => return Vec::new(),
+    };
+    paths.iter()
+        .filter(|path| scope::path_is_watchable(root, path)
+            && !scope::all_paths_moss_written(root, std::slice::from_ref(*path))
+            && !path.is_dir())
+        .filter_map(|path| path_to_relative_key(root, path))
+        .collect()
+}
 
 /// Which `SourceAssetChanged` emissions one debounced event owes the editor.
 ///

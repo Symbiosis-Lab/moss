@@ -449,3 +449,27 @@ mod promoted_line_tests {
         assert_eq!(promoted_line("g1"), "current updated to generation g1");
     }
 }
+
+#[cfg(test)]
+mod source_content_tests {
+    use super::*;
+
+    #[test]
+    fn source_content_changes_keep_their_wire_shape_on_the_carrier() {
+        let mut receiver = bus().subscribe();
+        let payload = serde_json::json!({
+            "kind": "SourceContentChanged",
+            "payload": { "paths": ["notes/page.md", ".moss/config.toml"] },
+        });
+        let event = MossEvent::SourceContentChanged {
+            paths: vec!["notes/page.md".into(), ".moss/config.toml".into()],
+        };
+        publish(&event);
+        let expected = serde_json::json!({ "name": MOSS_EVENT_CHANNEL, "payload": payload });
+        while let Ok(frame) = receiver.try_recv() {
+            let actual: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            if actual == expected { return; }
+        }
+        panic!("the carrier must deliver the source event without build or output fields");
+    }
+}

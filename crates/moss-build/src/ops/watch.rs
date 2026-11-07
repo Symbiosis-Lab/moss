@@ -37,7 +37,7 @@ use crate::build::ports::spawner::Spawner;
 use crate::build::watch::scope;
 use crate::build::watch::{
     any_path_passes_filter, any_path_watchable, classify_trigger, collect_raw_create_keys,
-    extract_rename_pairs, path_passes_filter, pump_gate, should_recompile_for_event,
+    changed_source_keys, extract_rename_pairs, path_passes_filter, pump_gate, should_recompile_for_event,
     source_asset_request_paths, watcher_lost_events, PumpGate,
 };
 use crate::types::events::MossEvent;
@@ -53,6 +53,20 @@ pub mod worker;
 /// Deliver one [`MossEvent`] to whatever frontend the host has — the typed
 /// Tauri bus, the SSE carrier, or both. Resolved once at construction.
 pub type EventRelay = Arc<dyn Fn(MossEvent) + Send + Sync>;
+
+/// Announce observed source changes without waiting for a rebuild. Keys are
+/// project-relative; callers apply their watch scope before handing them here.
+/// Only the editor's reload-tracked sources are included; this is not a build result.
+pub fn announce_source_changes(source_keys: &[String], emit: &EventRelay) {
+    let mut modified: Vec<String> = source_keys.iter()
+        .filter(|key| crate::build::manifest::is_reload_tracked_source_key(key))
+        .cloned()
+        .collect();
+    modified.sort();
+    modified.dedup();
+    if modified.is_empty() { return; }
+    emit(MossEvent::SourceContentChanged { paths: modified });
+}
 
 /// One boxed unit future, the driver's async-callback currency.
 pub type UnitFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
@@ -491,6 +505,14 @@ async fn handle_debounced_batch(
     emit: &EventRelay,
     dispatch: &RebuildDispatch,
 ) {
+    let root_path = Path::new(folder_path);
+    let source_keys: Vec<String> = events.iter()
+        .flat_map(|ev| changed_source_keys(root_path, ev.kind, &ev.paths))
+        .collect();
+    // Before every rebuild gate, including the dropped-events full dispatch.
+    // This also reports moss's own source writes, such as uid stamping.
+    announce_source_changes(&source_keys, emit);
+
     // ── DEDICATED SOURCE-ASSET PASS ──────────────────────────────────────────
     // Runs BEFORE the rebuild-eligibility gate so that asset edits/deletes/
     // renames always notify the editor — even when the content-hash gate would
@@ -506,7 +528,6 @@ async fn handle_debounced_batch(
     // reference resolver revalidated only if a `FileChanged` happened to follow,
     // and stayed stale forever when the rebuild was gated out or its output
     // diff came up empty. See `source_asset_request_paths` for the event policy.
-    let root_path = Path::new(folder_path);
     for ev in &events {
         for request_path in source_asset_request_paths(root_path, ev.kind, &ev.paths) {
             emit(MossEvent::SourceAssetChanged { path: request_path });
@@ -674,3 +695,7 @@ async fn handle_debounced_batch(
 #[cfg(test)]
 #[path = "watch/rearm_tests.rs"]
 mod rearm_tests;
+
+#[cfg(test)]
+#[path = "watch/batch_tests.rs"]
+mod batch_tests;
