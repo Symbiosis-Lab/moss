@@ -9,6 +9,10 @@
 //! Detecting the pair is a comparison of the paths themselves, so it does not
 //! depend on the disk the scan happens to run on.
 //!
+//! Two pictures or videos the build would publish under one name are refused
+//! the same way: `photo.jpg` and `photo.png` both become `photo.webp`, and
+//! which one a reader gets would depend on which encode finished last.
+//!
 //! Two markdown pages are left to the passes that already name them: a clash
 //! of page addresses is reported by `slug::resolve_duplicate_slugs_with_lang`
 //! and a clash for the home page by the home-slot election. Reporting them
@@ -17,6 +21,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use unicode_normalization::UnicodeNormalization;
+
+use moss_core::asset_paths::published_paths;
 
 use crate::types::content::ProjectStructure;
 
@@ -38,22 +44,29 @@ fn is_markdown(path: &str) -> bool {
     lower.ends_with(".md") || lower.ends_with(".markdown")
 }
 
-/// Every pair of paths equal when composed and compared case-insensitively
-/// but not exactly, as `(first, second)` in input order, except pairs where
-/// both are markdown. A group of three yields two pairs, each against the
-/// first path.
-pub(crate) fn case_colliding_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)> {
-    let mut first_seen: HashMap<String, &str> = HashMap::new();
-    let mut pairs = Vec::new();
-    for path in paths {
-        let key = path.nfc().collect::<String>().to_lowercase();
-        match first_seen.get(&key) {
-            Some(first) if *first != path && !(is_markdown(first) && is_markdown(path)) => {
-                pairs.push((first.to_string(), path.to_string()))
-            }
-            Some(_) => {}
-            None => {
-                first_seen.insert(key, path);
+/// A path composed and lowercased: two paths with one fold are one file on a
+/// Mac or Windows disk.
+fn fold(path: &str) -> String {
+    path.nfc().collect::<String>().to_lowercase()
+}
+
+/// Every pair of files the site would publish under one name, folded as
+/// above, as `(first, second, name)` in input order. Every file claims its
+/// own path, and a picture or video (`media`) also the names
+/// [`published_paths`] gives it. Two markdown pages are left to the passes
+/// that already name them.
+fn colliding_pairs<'a>(files: impl IntoIterator<Item = (&'a str, bool)>) -> Vec<(String, String, String)> {
+    let mut owner: HashMap<String, &str> = HashMap::new();
+    let mut pairs: Vec<(String, String, String)> = Vec::new();
+    for (path, media) in files {
+        let published = if media { published_paths(path) } else { Vec::new() };
+        let names = std::iter::once(path.to_string()).chain(published);
+        let start = pairs.len();
+        for name in names {
+            let first = *owner.entry(fold(&name)).or_insert(path);
+            let both_pages = is_markdown(first) && is_markdown(path);
+            if first != path && !both_pages && !pairs[start..].iter().any(|(a, _, _)| a == first) {
+                pairs.push((first.to_string(), path.to_string(), name));
             }
         }
     }
@@ -82,22 +95,42 @@ fn rename_advice(a: &str, b: &str) -> String {
 /// The refusal for a folder holding a colliding pair among every file the
 /// scan found, saying which file of each pair to rename.
 pub(crate) fn refuse_colliding_files(found: &ProjectStructure) -> Result<(), String> {
-    let others = found.image_files.iter().chain(&found.video_files).map(|f| f.path.as_str());
     let files = [&found.markdown_files, &found.html_files, &found.notebook_files, &found.other_files];
-    let paths = files.into_iter().flatten().map(|f| f.path.as_str()).chain(others);
-    let fixes: Vec<String> = case_colliding_paths(paths).iter().map(|(a, b)| rename_advice(a, b)).collect();
-    if fixes.is_empty() {
-        return Ok(());
+    let others = files.into_iter().flatten().map(|f| (f.path.as_str(), false));
+    let media = found.image_files.iter().chain(&found.video_files).map(|f| (f.path.as_str(), true));
+    let (same_name, shared): (Vec<_>, Vec<_>) =
+        colliding_pairs(others.chain(media)).into_iter().partition(|(a, b, _)| fold(a) == fold(b));
+    let mut problems = Vec::new();
+    if !same_name.is_empty() {
+        let fixes: Vec<String> = same_name.iter().map(|(a, b, _)| rename_advice(a, b)).collect();
+        problems.push(format!(
+            "Some files differ only by letter case or by how an accented letter is encoded, so a Mac or Windows disk keeps only one of each pair and the site would build differently there. To build, {}.",
+            fixes.join("; ")
+        ));
     }
-    Err(format!(
-        "Some files differ only by letter case or by how an accented letter is encoded, so a Mac or Windows disk keeps only one of each pair and the site would build differently there. To build, {}.",
-        fixes.join("; ")
-    ))
+    if !shared.is_empty() {
+        let fixes: Vec<String> =
+            shared.iter().map(|(a, b, name)| format!("rename `{a}` or `{b}`, which are both published as `{name}`")).collect();
+        problems.push(format!(
+            "Some pictures or videos would be published under one name, so which one a reader gets would depend on which the build finished writing last. To build, {}.",
+            fixes.join("; ")
+        ));
+    }
+    if problems.is_empty() { Ok(()) } else { Err(problems.join(" ")) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pairs among files that are not pictures or videos, as `(first, second)`.
+    fn case_colliding_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)> {
+        colliding_pairs(paths.into_iter().map(|p| (p, false))).into_iter().map(|(a, b, _)| (a, b)).collect()
+    }
+
+    fn shared(sources: &[&str]) -> Vec<(String, String, String)> {
+        colliding_pairs(sources.iter().map(|p| (*p, true)))
+    }
 
     /// Composed order first, and two spellings of one name never tie, so a
     /// sort never falls back to the order the disk listed them in.
@@ -175,5 +208,35 @@ mod tests {
     #[test]
     fn distinct_names_and_a_repeated_identical_path_are_not_collisions() {
         assert!(case_colliding_paths(["a.png", "b.png", "a.png"]).is_empty());
+    }
+
+    #[test]
+    fn two_pictures_with_one_webp_or_two_videos_with_one_ladder_collide() {
+        let pair = |a: &str, b: &str, name: &str| vec![(a.to_string(), b.to_string(), name.to_string())];
+        assert_eq!(shared(&["photo.jpg", "photo.png"]), pair("photo.jpg", "photo.png", "photo.webp"));
+        assert_eq!(shared(&["photo.png", "photo.webp"]), pair("photo.png", "photo.webp", "photo.webp"));
+        assert_eq!(shared(&["Photo.JPEG", "photo.png"]), pair("Photo.JPEG", "photo.png", "photo.webp"));
+        assert_eq!(shared(&["clip.mov", "clip.mp4"]), pair("clip.mov", "clip.mp4", "clip.mp4"));
+        assert_eq!(shared(&["clip.webm", "clip.mkv"]), pair("clip.webm", "clip.mkv", "clip.thumb.jpg"));
+        assert_eq!(shared(&["clip.mov", "clip.thumb.jpg"]), pair("clip.mov", "clip.thumb.jpg", "clip.thumb.jpg"));
+    }
+
+    #[test]
+    fn media_published_under_different_names_do_not_collide() {
+        assert!(shared(&["photo.jpg", "photo.mov", "logo.gif", "logo.png", "a/photo.png"]).is_empty());
+        assert_eq!(shared(&["photo.jpg", "Photo.jpg"]).len(), 1, "a case pair is one pair, however many names it shares");
+        assert_eq!(shared(&["clip.Mov", "clip.mov"]).len(), 1, "a video's own name counts, not only what it is published as");
+    }
+
+    /// A case pair and two sources for one name are named in one refusal, so
+    /// one rename pass fixes the folder. The scan test cannot make the case
+    /// pair on a Mac disk.
+    #[test]
+    fn both_kinds_of_pair_are_named_in_one_refusal() {
+        let image = |path: &str| crate::types::content::MediaMetadata { path: path.into(), ..Default::default() };
+        let names = ["photo.jpg", "photo.png", "logo.gif", "Logo.gif"];
+        let found = ProjectStructure { image_files: names.map(image).to_vec(), ..Default::default() };
+        let refusal = refuse_colliding_files(&found).unwrap_err();
+        assert!(refusal.contains("rename `logo.gif` or `Logo.gif`") && refusal.contains("which are both published as `photo.webp`"), "{refusal}");
     }
 }

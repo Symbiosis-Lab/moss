@@ -277,6 +277,8 @@ A folder embed takes comma-separated options after the `|` that follows the fold
 
 moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions) if you use raw HTML tags for media that moss owns.
 
+A picture is published under its own name and as a `.webp` of the same name; a video as an `.mp4`, a `.hls/` folder and `.thumb.jpg` and `.poster.jpg` stills. So two pictures, or two videos, whose names differ only in the extension (`photo.jpg` and `photo.png`, `clip.mov` and `clip.mp4`) stop the build, which names both: rename one.
+
 A picture that is only decoration, with nothing a reader needs to be told (a texture, a band of ornament, a faded page behind a heading), belongs in the theme, not in a page: put the file in `.moss/theme/` and paint it with CSS (`background` or `mask` on a moss selector or pseudo-element). An image embedded in a page is content, so it needs alt text. An image without it builds with a note in the build log (`Accessibility: image … has no alt text`), which `--strict` does not fail on, so check the log yourself. A picture inside a link that has its own words, `[![](icon.svg) Opening hours](hours/)`, is named by them and gets no note; a picture that is a link's only content does. Giving decoration made-up alt text to quiet that report makes screen readers announce it.
 
 **Ambient loop video.** Add `|loop` to a video embed for a silent background

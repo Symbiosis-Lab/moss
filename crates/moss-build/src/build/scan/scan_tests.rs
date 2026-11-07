@@ -441,7 +441,8 @@ fn test_video_extensions_categorization() {
     // same matches! arm that extract_media_metadata_cached uses.
     let video_exts = ["mov", "mp4", "webm", "avi", "mkv", "m4v"];
     for ext in &video_exts {
-        fs::write(temp_dir.join(format!("clip.{ext}")), "fake video").unwrap();
+        // One stem each: two videos with one stem share a thumbnail and are refused.
+        fs::write(temp_dir.join(format!("clip-{ext}.{ext}")), "fake video").unwrap();
     }
 
     let result = scan_folder(&temp_dir.to_string_lossy()).unwrap();
@@ -3045,5 +3046,19 @@ fn the_scan_refuses_a_folder_holding_a_colliding_pair() {
         fs::write(dir.path().join(second), b"two").unwrap();
         let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
         assert!(refusal.contains("differ only by letter case"), "{refusal}");
+    }
+}
+
+/// Two pictures that would both be published as one WebP, or two videos as
+/// one ladder, are refused on every disk, since both names fit on each.
+#[test]
+fn the_scan_refuses_two_sources_published_under_one_name() {
+    for (first, second, name) in [("photo.jpg", "photo.png", "photo.webp"), ("clip.mov", "clip.mp4", "clip.mp4")] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
+        fs::write(dir.path().join(first), b"one").unwrap();
+        fs::write(dir.path().join(second), b"two").unwrap();
+        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(refusal.contains(&format!("rename `{first}` or `{second}`, which are both published as `{name}`")), "{refusal}");
     }
 }

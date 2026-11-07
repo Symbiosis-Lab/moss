@@ -1658,33 +1658,13 @@ pub(crate) fn compute_video_item_fingerprint(
     Some(format!("{:x}", hasher.finalize()))
 }
 
-/// Every staging key a video's conversion COULD deliver: mp4, thumbnail, hero poster and the
-/// full HLS ladder as a candidate set, whether or not any of it exists yet.
-/// `video_ladder_rungs` truncates from the top only, so any real ladder is a
-/// prefix of this table.
-///
-/// Deliberately unfiltered by presence: the one caller (`begin_run`, below)
-/// uses it to declare what a run just dispatched is ALLOWED to still write —
-/// including a ladder file that doesn't exist yet because the encode hasn't
-/// reached it — so a concurrent build's `sweep_staging` (pipeline.rs) does not
-/// read a file that appears mid-encode as an orphan and delete it. Never feed
-/// this table straight to `emit_video_outputs_via_channel`: see
-/// `present_video_output_keys` for the registration half, which needs the
-/// opposite property.
-fn video_output_keys(mapped: &str) -> Vec<String> {
-    use moss_core::asset_paths;
-    let mut keys = vec![asset_paths::to_mp4(mapped), asset_paths::to_thumb(mapped), asset_paths::to_poster(mapped)];
-    keys.extend(asset_paths::hls_outputs(mapped, &asset_paths::VIDEO_LADDER));
-    keys
-}
-
-/// `video_output_keys`, narrowed to what's actually staged right now — for a
+/// `published_paths`, narrowed to what's actually staged right now — for a
 /// video whose outputs are being registered as ALREADY DELIVERED (skip_paths,
 /// carry_forward_paths), not merely reserved for a run in flight.
 ///
 /// Unlike mp4/thumbnail, having no HLS ladder (a narrow source) or a shorter one
 /// (a smaller source, or a long one the budget narrowed) is an everyday outcome for a
-/// video, not a coherence violation — so unlike `video_output_keys`, the
+/// video, not a coherence violation — so unlike `published_paths`, the
 /// ladder half is never the full static table. It is
 /// `hls::ladder_members_from_master`'s reading of the gate's own references
 /// — the master playlist is the one file a bigger, EARLIER ladder's now-
@@ -2178,7 +2158,11 @@ pub(crate) fn dispatch_video_conversions(
             svc.cancellation.begin_run(
                 epoch,
                 to_dispatch.iter().filter_map(|(item, fp)| {
-                    let outputs = video_output_keys(&resolve_path_with_overrides(item, &dir_overrides));
+                    // Every name the run may still write, the full ladder included,
+                    // so a concurrent sweep never deletes a file that appears
+                    // mid-encode. Never registered as delivered: see
+                    // `present_video_output_keys`.
+                    let outputs = moss_core::asset_paths::published_paths(&resolve_path_with_overrides(item, &dir_overrides));
                     Some((item.clone(), fp.clone()?, outputs))
                 }),
             );
@@ -3294,7 +3278,7 @@ pub(crate) mod tests {
         crate::ops::watch::worker::deregister(&folder, &worker);
     }
 
-    /// `video_output_keys`' full `VIDEO_LADDER` table is a candidate set, not
+    /// `published_paths`' full `VIDEO_LADDER` table is a candidate set, not
     /// a promise every video has every file of the full table — a narrower ladder (fewer
     /// rungs, from a smaller source or the per-file budget) is
     /// an everyday outcome, not damage. The names above a real ladder's own
