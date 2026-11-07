@@ -9,7 +9,7 @@
       "value": {
         "crates/moss-build/src/build/cache.rs": 1000,
         "crates/moss-build/src/build/folder_embed.rs": 1300,
-        "crates/moss-build/src/build/markdown/pipeline.rs": 1400,
+        "crates/moss-build/src/build/markdown/pipeline.rs": 1300,
         "crates/moss-build/src/build/media/ffmpeg.rs": 900,
         "crates/moss-build/src/build/media/image.rs": 1500,
         "crates/moss-build/src/build/media/pipeline.rs": 1100,
@@ -56,9 +56,9 @@
         "crates/moss-build/src/js-src/bridge": 17,
         "crates/moss-build/src/js-src/site": 27,
         "crates/moss-build/src/plugins": 19,
-        "crates/moss-core/src": 41,
-        "crates/moss-core/src/ast": 29,
-        "crates/moss-core/src/resolve": 17,
+        "crates/moss-core/src": 42,
+        "crates/moss-core/src/ast": 28,
+        "crates/moss-core/src/resolve": 18,
         "crates/moss-build/src/ops/serve": 19,
         "crates/moss-build/src/js-src/site/maps/places-explorer": 18,
         "crates/moss-build/src/vault/import/scrape": 17,
@@ -88,7 +88,7 @@
       "value": {
         "crates/moss-build/Cargo.toml": 85,
         "crates/moss-cli/Cargo.toml": 5,
-        "crates/moss-core/Cargo.toml": 6
+        "crates/moss-core/Cargo.toml": 7
       }
     },
     "lines_per_function": {

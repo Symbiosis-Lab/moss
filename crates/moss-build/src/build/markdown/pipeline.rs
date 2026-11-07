@@ -3,7 +3,7 @@
 //! Covers: `process_markdown_file` (the typed-AST production path),
 //! `render_markdown_to_html` + `render_markdown_to_html_with` (fragment
 //! renderers, also typed-AST), URL
-//! classification (`classify_url_prod`), URL prettification
+//! classification (`moss_core::ast::classify_url`), URL prettification
 //! (`transform_markdown_link`), and private path helpers
 //! (`split_path_suffix`, `relative_pretty_url`, `url_path_to_dir`).
 //!
@@ -16,14 +16,15 @@ use moss_core::heading::TitleOutcome;
 
 use std::collections::HashMap;
 use std::path::Path;
+pub use moss_core::ast::transform_markdown_link;
 
 use super::frontmatter::{
     compute_url_path, frontmatter_block_lines, is_simplified_frontmatter,
     parse_simplified_frontmatter, raw_body_line_offset,
 };
 use super::html_post::{
-    accept_criticmarkup, adjust_relative_paths_for_pretty_urls, inject_article_title_h1,
-    prepare_markdown_source, resolve_to_root_relative, strip_percent_comments,
+    adjust_relative_paths_for_pretty_urls, inject_article_title_h1,
+    prepare_markdown_source, resolve_to_root_relative,
 };
 
 /// The text the parser reads for a whole file: its body with CriticMarkup
@@ -36,7 +37,7 @@ fn parse_ready_body(content: &str) -> String {
     } else {
         normalize_body_like_gray_matter(moss_core::frontmatter::parse(content).render_body())
     };
-    super::html_post::strip_percent_comments(&super::html_post::accept_criticmarkup(&body)).into_owned()
+    moss_core::resolve::prepare_markdown_source(&body, 0).0
 }
 
 /// Reproduce gray_matter's body normalization byte-for-byte.
@@ -1055,55 +1056,18 @@ pub fn process_markdown_file(
     // below, where frontmatter tags are unpacked.
     let inline_tags = moss_core::ast::extract_inline_tags(&doc);
 
-    // 1. Dispatch wikilink embeds.
-    //    LOCKED ORDER: must run BEFORE `resolve_urls` — see constraint (1)
-    //    above. Reads `Inline::Image.src` as `Url::Unresolved(raw)`; the
-    //    dispatcher's internal `resolve_reference` would double-resolve
-    //    if given `Url::Resolved`.
-    let mut wikilink_outgoing: Vec<moss_core::resolve::OutgoingLink> = Vec::new();
-    let mut wikilink_diagnostics: Vec<moss_core::resolve::Diagnostic> = Vec::new();
-    if let Some(g) = graph {
-        let snapshot_for_dispatch =
-            crate::build::media::dimensions::snapshot_or_empty(media_lookup);
-        let dispatch_result = moss_core::ast::dispatch_wikilink_embeds(
-            &mut doc,
-            snapshot_for_dispatch,
-            g,
-            file_path,
-        );
-        wikilink_outgoing.extend(dispatch_result.outgoing_links);
-        wikilink_diagnostics.extend(dispatch_result.diagnostics);
-        // `implicit_figure = false` has to reach the figures the dispatcher
-        // just made, not only the ones the parser made. A `![[tile.png]]`
-        // becomes a `Block::Figure` here — after `parse_with_config` ran its
-        // own unwrap pass — so on an opted-out site the wikilink spelling of
-        // an image kept a `<figure class="moss-image">` that the markdown
-        // spelling of the same image did not have. One authorial intent, two
-        // boxes, and any theme rule keyed on `.moss-image` hit only half the
-        // images on the page.
-        if !site.implicit_figure {
-            moss_core::ast::unwrap_implicit_figures(&mut doc);
-        }
-    }
-
-    // 2. Resolve URLs through the content graph.
-    //    LOCKED ORDER: must run BEFORE `extract_hero` (constraint 2) and
-    //    AFTER `dispatch_wikilink_embeds` (constraint 1). Resolves
-    //    `Url::Unresolved → Url::Resolved` across all Image.src and
-    //    Link.url, INCLUDING the fresh blocks spliced in by
-    //    `dispatch_wikilink_embeds` via EmitKind::Inline / EmitKind::Link
-    //    re-parsing.
-    let graph_resolution = if let Some(g) = graph {
-        moss_core::ast::resolve_urls(&mut doc, g, file_path)
-    } else {
-        moss_core::ast::UrlResolution::default()
-    };
-    // Both resolve streams, one surface. An unresolvable reference kept the
-    // author's bytes rather than becoming a guessed URL, and a typo'd
-    // `![[image.png]]` is the mistake `--strict` most needs to catch, so each
-    // one counts as a build problem as well as a log line.
-    let resolve_diagnostics = || wikilink_diagnostics.iter().chain(&graph_resolution.diagnostics);
-    for diag in resolve_diagnostics() {
+    // Dispatch, graph resolution and host classification share one locked order.
+    let resolution = moss_core::ast::resolve_document(
+        &mut doc,
+        crate::build::media::dimensions::snapshot_or_empty(media_lookup),
+        graph,
+        file_path,
+        site.implicit_figure,
+        &resolve_link,
+    );
+    // Both resolve streams, one surface. Each unresolved reference remains
+    // a build problem as well as a log line.
+    for diag in &resolution.diagnostics {
         crate::build::cli_output::log_warn_problem!(
             "Resolve: {} — ref '{}' in '{}'",
             diag.message,
@@ -1111,19 +1075,7 @@ pub fn process_markdown_file(
             diag.source_path
         );
     }
-    let outgoing_links: Vec<moss_core::resolve::OutgoingLink> = wikilink_outgoing.into_iter().chain(graph_resolution.outgoing).collect();
-
-    // 2b. Host-context URL classification. `resolve_urls` only handles the
-    //     content-graph subset (bare image refs + standard markdown links).
-    //     URLs prefixed with `moss-resolved:` / `moss-newtab:` / `wikilink:`
-    //     by the upstream resolve pipeline are intentionally left as
-    //     `Url::Unresolved` for the host to decode via the production
-    //     `resolve_link` closure.
-    moss_core::ast::visit_urls_mut(&mut doc, |url| {
-        if let moss_core::ast::Url::Unresolved(raw) = url {
-            *url = classify_url_prod(raw, &resolve_link);
-        }
-    });
+    let outgoing_links = resolution.outgoing;
 
     // A footer that ends in a hero closes the page with it.
     let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
@@ -1861,7 +1813,7 @@ fn sweep_unresolved_hrefs(html: &str, resolve_link: &dyn Fn(&str) -> String) -> 
 /// in `page_map`; the suffix passes through verbatim to the final href so
 /// query strings survive resolution.
 ///
-/// Suffix is opaque — round-trip parity with `classify_url_prod` is the
+/// Suffix is opaque — round-trip parity with `moss_core::ast::classify_url` is the
 /// contract; both implementations must share this exact shape.
 fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
     // `find` over a char set returns the FIRST of either delimiter, which is
@@ -1990,7 +1942,7 @@ pub fn render_markdown_to_html(markdown: &str) -> String {
 /// - **No wikilink dispatch.** The AST visitor `dispatch_wikilink_embeds`
 ///   needs a graph; with none, wikilink-form refs reach the
 ///   renderer as `Url::Unresolved` and the host's `resolve_link` closure
-///   takes over via `classify_url_prod`. Fragment callers (the in-file
+///   takes over via `moss_core::ast::classify_url`. Fragment callers (the in-file
 ///   tests that exercise `render_markdown_to_html` directly) do not feed
 ///   wikilink syntax through this path today.
 /// - **No source-line / implicit-figure flags.** The `_with` signature
@@ -2080,13 +2032,7 @@ fn render_markdown_to_html_with_config(
     heading_anchors: bool,
     parse_config: moss_core::ast::ParseConfig,
 ) -> String {
-    // Idempotent pass: `process_markdown_file` already cleans page-level
-    // markdown, but this helper is also callable from `render_markdown_to_html`
-    // (with a default resolver). The `!text.contains('{')` fast path makes
-    // the double-apply free when the input is already clean.
-    let accepted = accept_criticmarkup(markdown);
-    // Strip %%...%% Obsidian-style comments. Cheap no-op when no `%%` present.
-    let accepted = strip_percent_comments(&accepted);
+    let (accepted, _) = moss_core::resolve::prepare_markdown_source(markdown, parse_config.warning_line_offset);
 
     // Parse markdown into the typed AST. Mirrors
     // the call order in `process_markdown_file` minus the production-only
@@ -2097,10 +2043,10 @@ fn render_markdown_to_html_with_config(
 
     // Host-context URL classification. Apply the caller's `resolve_link`
     // closure to every `Url::Unresolved` in the AST. Same shape as the
-    // production path's `classify_url_prod` step (see `process_markdown_file`).
+    // production path's `moss_core::ast::classify_url` step (see `process_markdown_file`).
     moss_core::ast::visit_urls_mut(&mut doc, |url| {
         if let moss_core::ast::Url::Unresolved(raw) = url {
-            *url = classify_url_prod(raw, &resolve_link);
+            *url = moss_core::ast::classify_url(raw, &resolve_link);
         }
     });
 
@@ -2134,62 +2080,6 @@ fn render_markdown_to_html_with_config(
     moss_core::ast::render_document(&doc, &pipeline_hooks)
 }
 
-/// URL-prettification only. Converts `.md` / `.markdown` hrefs to pretty
-/// URLs (trailing slash or folder-index collapse) and leaves external /
-/// anchor / mailto URLs untouched.
-///
-/// This function does NOT perform content-graph resolution. By the time
-/// an href reaches it, `moss-core`'s resolve pipeline has already rewritten
-/// any resolvable reference through `ContentGraph::resolve_path`. Any href
-/// here is either external, pre-resolved (then stripped of the
-/// `moss-resolved:` prefix), or an already-absolute-like path that only
-/// needs format normalization.
-///
-/// # Examples
-/// - `transform_markdown_link("./roadmap.md")` → `"./roadmap/"`
-/// - `transform_markdown_link("file.md#anchor")` → `"file/#anchor"`
-/// - `transform_markdown_link("https://example.com/file.md")` → unchanged
-pub fn transform_markdown_link(url: &str) -> String {
-    // Don't transform external URLs
-    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("//") {
-        return url.to_string();
-    }
-
-    // Split URL into path and fragment (the `#` stays with the fragment)
-    let (path, fragment) = match url.find('#') {
-        Some(pos) => (url.get(..pos).unwrap_or(url), url.get(pos..)),
-        None => (url, None),
-    };
-
-    // Transform .md or .markdown to pretty URL format
-    let transformed_path = if path.ends_with(".md") || path.ends_with(".markdown") {
-        let stem = if path.ends_with(".md") {
-            path.strip_suffix(".md").unwrap()
-        } else {
-            path.strip_suffix(".markdown").unwrap()
-        };
-        let filename = stem.rsplit('/').next().unwrap_or(stem);
-        if moss_core::home::is_index_stem(filename) {
-            let dir = stem.strip_suffix(filename).unwrap_or("");
-            if dir.is_empty() {
-                "./".to_string()
-            } else {
-                dir.to_string()
-            }
-        } else {
-            format!("{}/", stem)
-        }
-    } else {
-        path.to_string()
-    };
-
-    // Recombine with fragment if present
-    if let Some(frag) = fragment {
-        transformed_path + frag
-    } else {
-        transformed_path
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Phase B production path (typed-ast-migration)
@@ -2513,7 +2403,7 @@ fn resolve_note_link<R: Fn(&str) -> String>(
     let mut href = None;
     moss_core::ast::visit_urls_mut(&mut doc, |url| {
         let resolved = match url {
-            moss_core::ast::Url::Unresolved(raw) => classify_url_prod(raw, resolve_link),
+            moss_core::ast::Url::Unresolved(raw) => moss_core::ast::classify_url(raw, resolve_link),
             resolved => resolved.clone(),
         };
         if let moss_core::ast::Url::Resolved(r) = resolved {
@@ -2530,35 +2420,6 @@ fn resolve_note_link<R: Fn(&str) -> String>(
 /// Called from `process_markdown_file` via `visit_urls_mut` to classify
 /// host-context URLs the typed-AST `resolve_urls` pass left as
 /// `Url::Unresolved`.
-fn classify_url_prod<R: Fn(&str) -> String>(raw: &str, resolve_link: &R) -> moss_core::ast::Url {
-    use moss_core::ast::{ResolvedUrl, Url, UrlKind};
-
-    if let Some(rest) = raw.strip_prefix("mailto:") {
-        return Url::Resolved(ResolvedUrl::new(format!("mailto:{rest}"), UrlKind::Mailto));
-    }
-    if let Some(rest) = raw.strip_prefix("tel:") {
-        return Url::Resolved(ResolvedUrl::new(format!("tel:{rest}"), UrlKind::Tel));
-    }
-    if raw.starts_with('#') {
-        return Url::Resolved(ResolvedUrl::new(raw.to_string(), UrlKind::Anchor));
-    }
-    if raw.starts_with("http://")
-        || raw.starts_with("https://")
-        || raw.starts_with("//")
-        || raw.starts_with("data:")
-    {
-        return Url::Resolved(ResolvedUrl::new(raw.to_string(), UrlKind::External));
-    }
-
-    let resolved = resolve_link(raw);
-    if let Some(href) = resolved.strip_prefix("wikilink:") {
-        Url::Resolved(ResolvedUrl::new(href.to_string(), UrlKind::Wikilink))
-    } else if let Some(href) = resolved.strip_prefix("moss-newtab:") {
-        Url::Resolved(ResolvedUrl::new(href.to_string(), UrlKind::AssetNewtab))
-    } else {
-        Url::Resolved(ResolvedUrl::new(resolved, UrlKind::Internal))
-    }
-}
 
 // Tests for the pipeline module are co-located with their subjects in
 // build/markdown/{frontmatter,pipeline,html_post}.rs .

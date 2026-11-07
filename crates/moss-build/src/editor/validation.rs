@@ -46,55 +46,25 @@ pub fn schema_on_disk(root: &std::path::Path) -> moss_core::schema::ContentSchem
     compose_schema(&plugins, &declared)
 }
 
-/// Compose the effective schema by merging builtin fields with plugin
-/// contributions.
-///
-/// Merge rules:
-/// - Additive only: plugins add fields, cannot modify/remove builtin fields
-/// - Builtin wins: if a plugin tries to redefine a builtin field, it is ignored
-///   with a warning
-/// - First-plugin wins: if two plugins define the same field, the first
-///   (alphabetical) wins
-/// - Every conflict produces a log warning — no silent overwrites
-///
-/// `declared_name_lists` are the site's own name-list fields
-/// ([`crate::build::terms::declared_name_list_fields`]); each takes the
-/// `author` definition, so a declared field is validated as a list of names.
+/// The effective schema from the installed plugins and the site's declared
+/// name-list fields ([`crate::build::terms::declared_name_list_fields`]); the
+/// merge rules are [`moss_core::schema::compose_schema`]'s.
 pub fn compose_schema(
     plugins: &[crate::plugins::types::Plugin],
     declared_name_lists: &[String],
 ) -> moss_core::schema::ContentSchema {
-    let mut schema = moss_core::schema::builtin_schema();
-    if let Some(author) = schema.frontmatter.fields.get("author").cloned() {
-        for name in declared_name_lists {
-            schema.frontmatter.fields.entry(name.clone()).or_insert_with(|| author.clone());
-        }
-    }
-    for plugin in plugins {
-        if let Some(ref contributes) = plugin.manifest.contributes {
-            if let Some(ref fm) = contributes.frontmatter {
-                for (name, field_def) in &fm.fields {
-                    if schema.frontmatter.fields.contains_key(name) {
-                        log::warn!(
-                            "Plugin '{}' tried to redefine field '{}', ignoring",
-                            plugin.manifest.name,
-                            name
-                        );
-                        continue;
-                    }
-                    let mut fd = field_def.clone();
-                    fd.source = Some(plugin.manifest.name.clone());
-                    schema.frontmatter.fields.insert(name.clone(), fd);
-                }
-            }
-        }
-    }
-    // `children_style` also accepts the id of any listing style an installed
-    // plugin contributes.
-    if let Some(field) = schema.frontmatter.fields.get_mut("children_style") {
-        let plan = crate::plugins::contributions::listing_style::ListingStylePlan::from_plugins(plugins);
-        let allowed = field.enum_values.get_or_insert_with(Vec::new);
-        allowed.extend(plan.ids().map(str::to_string));
+    let contributions: Vec<_> = plugins
+        .iter()
+        .map(|plugin| moss_core::schema::PluginSchema {
+            name: &plugin.manifest.name,
+            fields: plugin.manifest.contributes.as_ref().and_then(|c| c.frontmatter.as_ref()).map(|fm| &fm.fields),
+        })
+        .collect();
+    let plan = crate::plugins::contributions::listing_style::ListingStylePlan::from_plugins(plugins);
+    let styles: Vec<String> = plan.ids().map(str::to_string).collect();
+    let (schema, ignored) = moss_core::schema::compose_schema(declared_name_lists, &contributions, &styles);
+    for message in ignored {
+        log::warn!("{message}");
     }
     schema
 }

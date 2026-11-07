@@ -322,6 +322,47 @@ pub fn builtin_schema() -> ContentSchema {
     }
 }
 
+/// One plugin's schema contribution, as values.
+pub struct PluginSchema<'a> {
+    pub name: &'a str,
+    pub fields: Option<&'a HashMap<String, FieldDefinition>>,
+}
+
+/// The effective schema for a site: the built-in fields; each site-declared
+/// name-list field typed like `author`; plugin fields, additive only (a
+/// built-in or an earlier plugin keeps a name it already has); and the
+/// listing-style ids plugins contribute as `children_style` values.
+/// Returns the schema and one message per ignored redefinition.
+pub fn compose_schema(
+    declared_name_lists: &[String],
+    plugins: &[PluginSchema<'_>],
+    listing_styles: &[String],
+) -> (ContentSchema, Vec<String>) {
+    let mut schema = builtin_schema();
+    let mut ignored = Vec::new();
+    let fields = &mut schema.frontmatter.fields;
+    if let Some(author) = fields.get("author").cloned() {
+        for name in declared_name_lists {
+            fields.entry(name.clone()).or_insert_with(|| author.clone());
+        }
+    }
+    for plugin in plugins {
+        for (name, def) in plugin.fields.into_iter().flatten() {
+            if fields.contains_key(name) {
+                ignored.push(format!("Plugin '{}' tried to redefine field '{}', ignoring", plugin.name, name));
+                continue;
+            }
+            let mut def = def.clone();
+            def.source = Some(plugin.name.to_string());
+            fields.insert(name.clone(), def);
+        }
+    }
+    if let Some(field) = fields.get_mut("children_style") {
+        field.enum_values.get_or_insert_with(Vec::new).extend(listing_styles.iter().cloned());
+    }
+    (schema, ignored)
+}
+
 /// Parse a content schema from a JSON string.
 pub fn parse_schema(json: &str) -> Result<ContentSchema, String> {
     serde_json::from_str(json).map_err(|e| format!("schema parse error: {}", e))
@@ -334,6 +375,21 @@ pub fn parse_schema(json: &str) -> Result<ContentSchema, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plugin_adds_fields_but_never_replaces_one() {
+        let mut title = builtin_schema().frontmatter.fields["title"].clone();
+        title.description = Some("plugin title".into());
+        let fields = HashMap::from([("stars_given".to_string(), title.clone()), ("title".to_string(), title)]);
+        let plugins = [PluginSchema { name: "stars", fields: Some(&fields) }];
+        let (schema, ignored) = compose_schema(&["conductor".into()], &plugins, &["board".into()]);
+        let fm = &schema.frontmatter.fields;
+        assert_eq!(fm["stars_given"].source.as_deref(), Some("stars"));
+        assert_ne!(fm["title"].description.as_deref(), Some("plugin title"));
+        assert_eq!(ignored.len(), 1, "{ignored:?}");
+        assert_eq!(fm["conductor"].field_type, fm["author"].field_type);
+        assert!(fm["children_style"].enum_values.as_ref().unwrap().contains(&"board".to_string()));
+    }
 
     #[test]
     fn test_builtin_schema_parses() {

@@ -71,7 +71,7 @@ pub use parser::{clear_heading_ids, parse, parse_with_config, parser_options, un
 pub use plain_text::{inlines_to_plain_text, render_plain_text};
 pub use query::{block_images, find_first_block_image, has_raw_style_block, has_viewable_picture_recursive, images_without_text, marked_media_at, image_word_warnings, MarkedMedia, MediaMarker};
 pub use render::{render_block_with_meta, render_blocks, render_blocks_with_meta, render_document};
-pub use resolve_urls::{classify_remaining_urls, resolve_urls, UrlResolution};
+pub use resolve_urls::{classify_remaining_urls, classify_url, resolve_document, resolve_urls, transform_markdown_link, UrlResolution};
 pub use shortcode::{
     ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode, HeroShortcode,
     RecentShortcode, Shortcode, ShortcodeKind, ShortcodeSource, SourceFragment, SubscribeShortcode,
@@ -79,3 +79,4 @@ pub use shortcode::{
 pub use tags::extract_inline_tags;
 pub use url::{ResolvedUrl, Url, UrlKind};
 pub use visit::{for_each_child_sequence, forms_recursive, has_callout_recursive, has_diagram_recursive, is_diagram_lang, has_scroll_row_recursive, has_marquee_recursive, has_shortcode_recursive, visit_block_raw_html_mut, visit_blocks, visit_urls_mut};
+

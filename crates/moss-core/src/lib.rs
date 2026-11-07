@@ -109,6 +109,7 @@ pub use heading::{extract_headings, HeadingInfo};
 pub mod inert_regions;
 pub mod link_completions;
 pub mod media;
+pub mod page;
 pub mod page_kind;
 pub use page_kind::PageKind;
 pub mod render;

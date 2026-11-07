@@ -279,7 +279,7 @@ fn body_cover_path_skips_raw_html_img_in_markdown() {
 // body-cover-path capture time lives inside
 // `find_first_block_image` / `process_markdown_file`'s
 // `body_cover_path` derivation, which reads `Url::Resolved` from the
-// typed AST — the sentinel is decoded by `classify_url_prod` before
+// typed AST — the sentinel is decoded by `moss_core::ast::classify_url` before
 // it ever reaches the cover field. The end-to-end coverage is
 // preserved by `body_cover_path_*` integration tests in this module.
 
