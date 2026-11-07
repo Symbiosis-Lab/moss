@@ -284,7 +284,8 @@ pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> Rendered
         parse_config().implicit_figure, &|target| page_url(target, source_path, &graph),
     );
     diagnostics.extend(resolved.diagnostics.into_iter().chain(resolution.diagnostics).map(|d| {
-        Diagnostic { severity: Severity::Warning, message: d.message, path: Some(d.source_path), line: None, column: None }
+        // `path` names a frontmatter field in every diagnostic; the message names the reference.
+        Diagnostic { severity: Severity::Warning, message: d.message, path: None, line: None, column: None }
     }));
     let inputs = HeadingInputs {
         file_path: source_path,

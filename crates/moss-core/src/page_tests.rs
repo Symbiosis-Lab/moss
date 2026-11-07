@@ -217,7 +217,7 @@ fn transclusions_use_supplied_notes_and_missing_notes_are_visible() {
     let mut inputs = site(&["a.md", "b.md"]);
     assert_eq!(embedded_notes("a.md", "![[b]]", &inputs), vec!["b.md"]);
     let missing = render_page("a.md", "![[b]]", &inputs);
-    assert!(missing.diagnostics.iter().any(|d| d.severity == Severity::Warning && d.message.contains("b.md")));
+    assert!(missing.diagnostics.iter().any(|d| d.severity == Severity::Warning && d.message.contains("b.md") && d.path.is_none()));
     assert!(missing.body_html.contains("<div class=\"moss-embed-missing\">Embed unavailable: b.md</div>"), "{}", missing.body_html);
     inputs.notes.insert("b.md".into(), "Text from the embedded note.".into());
     let supplied = render_page("a.md", "![[b]]", &inputs);
