@@ -1659,13 +1659,21 @@ fn build_inner(
     let content_hashes_for_watch = site_result.hashes.clone();
     let missing_references_for_publish = site_result.missing_references.clone();
     let new_hashes = &site_result.hashes;
-    let has_output_changes = !current_ptr_exists
-        || builder_changed
-        || !new_hashes.get_changed_files(&previous_hashes).is_empty()
-        || !new_hashes.get_new_files(&previous_hashes).is_empty()
-        || !new_hashes.get_deleted_files(&previous_hashes).is_empty();
+    let (changed, new, deleted) = (
+        new_hashes.get_changed_files(&previous_hashes),
+        new_hashes.get_new_files(&previous_hashes),
+        new_hashes.get_deleted_files(&previous_hashes),
+    );
+    let has_output_changes = !current_ptr_exists || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
 
     log::debug!(target: "timing", "[build] staging: hash_compare (changed={}): {:?}", has_output_changes, build_start.elapsed());
+    if has_output_changes && current_ptr_exists {
+        let first = |paths: &[String]| paths.iter().take(5).cloned().collect::<Vec<_>>();
+        log::debug!(
+            "[build] output differs from the last build: builder {}, changed {} {:?}, new {} {:?}, deleted {} {:?}",
+            builder_changed, changed.len(), first(&changed), new.len(), first(&new), deleted.len(), first(&deleted),
+        );
+    }
 
     crate::build::phase::record_value("output_unchanged", usize::from(!has_output_changes));
     let is_empty = project_structure.total_files == 0;

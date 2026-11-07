@@ -276,11 +276,15 @@ pub(super) fn verbatim_collisions(
 /// readers get, so its markdown is only metadata: its title and description
 /// still serve the site, but its text must not reach `llms.txt`, a feed or any
 /// other surface built from the documents.
+///
+/// Returns those addresses. The render emits no page at one: the asset copy
+/// writes the file there, and a page rendered first would only be overwritten,
+/// while its hash told the build that the site's output had changed.
 pub(super) fn withhold_shadowed_bodies(
     documents: &mut [ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &HashMap<String, String>,
-) {
+) -> HashSet<String> {
     let owned: HashSet<String> = project
         .html_files
         .iter()
@@ -298,6 +302,7 @@ pub(super) fn withhold_shadowed_bodies(
         doc.content.clear();
         doc.html_content.clear();
     }
+    owned
 }
 
 /// The old addresses of language-tree homes whose `index.md` used to be

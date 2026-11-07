@@ -1640,7 +1640,7 @@ pub fn generate_blocking_content_for_build(
     // every pseudo-folder document exists.
     crate::build::terms::set_term_cards(&mut documents, &term_index);
     pending.record_output_collisions(super::build_shared::verbatim_collisions(&documents, project_structure, &dir_overrides));
-    super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
+    let owned_by_documents = super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places
     // asset URL that its own map markup renders below.
@@ -1731,9 +1731,11 @@ pub fn generate_blocking_content_for_build(
     // carry-forward gate below (keyed on "was anything carried this build")
     // can see it too.
     let homepage_index_sp = ServedPath::from_source("index.html").unwrap();
+    // An authored homepage is written by the asset copy: nothing is rendered or carried there.
+    let authored_home = owned_by_documents.contains(homepage_index_sp.as_str());
     let homepage_carry_proof = documents
         .iter()
-        .find(|d| d.url_path == "index.html")
+        .find(|d| d.url_path == "index.html" && !authored_home)
         .and_then(|doc| {
             crate::build::render::incremental::CarryProof::for_document(
                 doc,
@@ -1816,7 +1818,8 @@ pub fn generate_blocking_content_for_build(
             .filter(|doc| {
                 !(doc.url_path == "index.html"
                     || (doc.kind == PageKind::Folder && doc.source_path.is_none())
-                    || doc.slot_only)
+                    || doc.slot_only
+                    || owned_by_documents.contains(&doc.url_path))
             })
             .fold((Vec::new(), Vec::new()), |(mut render, mut carry), doc| {
                 match crate::build::render::incremental::CarryProof::for_document(
@@ -2059,6 +2062,16 @@ pub fn generate_blocking_content_for_build(
                         page_meta_of(doc),
                     );
                 }
+                *count += 1;
+            }
+
+            // A language home an authored document owns emits nothing, but its
+            // source still maps to that address and its metadata still serves.
+            for doc in documents.iter().filter(|d| d.url_path != "index.html" && owned_by_documents.contains(&d.url_path)) {
+                let (Some(src), Ok(sp)) = (doc.source_path.as_ref(), ServedPath::from_source(&doc.url_path)) else { continue };
+                pending.register_source_mapping(src.clone(), &sp);
+                register_page_source(pending, &page_source_hashes, src);
+                pending.register_page_meta(src.clone(), page_meta_of(doc));
                 *count += 1;
             }
 
@@ -2538,7 +2551,7 @@ pub fn generate_blocking_content_for_build(
             // reads has moved — reuse the previous build's index.html
             // verbatim instead of re-running folder_embed's card synthesis.
             homepage_carry_proof.as_ref().expect("homepage carry has proof").register_all(pending);
-        } else {
+        } else if !authored_home {
             let _phase_home = PhaseTrace::start("render_homepage");
             let mut homepage_og_outputs = if defer_title_cards {
                 crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
