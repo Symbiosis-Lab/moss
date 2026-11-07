@@ -208,6 +208,9 @@ pub(crate) async fn handle_upload(
     // walks out via `..`: the join is textual, not lexically normalized, so a
     // `..` segment survives into the traversal check rather than being
     // silently resolved away by it.
+    if let Err(e) = crate::commands::refuse_moss_internal(&project_root, &project_root.join(&dir_rel), &dir_rel) {
+        return bad_request(&e);
+    }
     let dir_for_target = project_root.join(&dir_rel).to_string_lossy().into_owned();
     // A missing attachment folder is created by `prepare_copy_target`.
     let target = match crate::editor::copy_in::prepare_copy_target(&project_root, &dir_for_target) {
@@ -361,6 +364,33 @@ mod tests {
         assert_eq!(report["copied"][0]["original_name"], "photo.jpg");
         assert_eq!(report["copied"][0]["final_name"], "photo.jpg");
         assert!(vault_root.join("posts/photo.jpg").exists());
+
+        let _ = shutdown_tx.send(());
+    }
+
+    /// An upload never lands in moss's own files, even with the token.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_upload_into_moss_own_files_is_refused() {
+        let (vault, site_dir) = served_vault();
+        let vault_root = vault.path().to_path_buf();
+        let ctx = InvokeCtx::standalone();
+        let (port, shutdown_tx) = start_server(ServeConfig {
+            invoke: Some(ctx.clone()),
+            kind: HostKind::Cli,
+            ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64260)
+        })
+        .await
+        .expect("server should start");
+        let token = ctx.token().expect("start_server binds the served vault").to_string();
+
+        let (body, content_type) = multipart_body(&[("dir", ".moss/plugins")], &[("file", "evil.wasm", b"bytes")]);
+        let resp = ureq::post(&format!("http://localhost:{port}/__moss/upload"))
+            .set(TOKEN_HEADER, &token)
+            .set("Content-Type", &content_type)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_bytes(&body);
+        assert!(matches!(resp, Err(ureq::Error::Status(400, _))), "got {resp:?}");
+        assert!(!vault_root.join(".moss/plugins/evil.wasm").exists());
 
         let _ = shutdown_tx.send(());
     }

@@ -83,11 +83,8 @@ use crate::moss_paths::MossPaths;
 /// forced through a preflight the server never approves.
 pub const TOKEN_HEADER: &str = "x-moss-token";
 
-/// The cookie name [`admit`] also accepts the token in, set by
-/// `session_route::handle_session`'s `Set-Cookie` response. `SameSite=Strict`
-/// keeps it off any cross-site request, so it widens who can authenticate
-/// (a plain browser tab with no script) without widening what a foreign page
-/// can forge.
+/// The cookie name `session_route::handle_session` sets. [`admit`] does not
+/// accept it: the site's own scripts share this origin and send its cookies.
 pub const SESSION_COOKIE: &str = "moss_token";
 
 /// The loopback-readable file the session token is published to, relative to the
@@ -319,31 +316,17 @@ pub(crate) fn admit(
     let Some(session) = ctx.bind(site_dir) else {
         return Err(unauthorized());
     };
-    // The header wins when both are present; the cookie is the fallback a
-    // plain browser tab (no script setting `X-Moss-Token`) relies on.
     let provided = request
         .headers()
         .get(TOKEN_HEADER)
         .and_then(|v| v.to_str().ok())
-        .filter(|v| !v.is_empty())
-        .or_else(|| cookie_token(request.headers()));
+        .filter(|v| !v.is_empty());
     if let Some(provided) = provided {
         if constant_time_eq(provided, session.token()) {
             return Ok(session);
         }
     }
     Err(unauthorized())
-}
-
-/// The [`SESSION_COOKIE`] value out of a `Cookie` request header, if present.
-/// `Cookie` packs multiple pairs as `a=b; c=d`; this finds the one named
-/// [`SESSION_COOKIE`] without pulling in a cookie-parsing crate for one name.
-fn cookie_token(headers: &http::HeaderMap) -> Option<&str> {
-    let raw = headers.get(http::header::COOKIE)?.to_str().ok()?;
-    raw.split(';').find_map(|pair| {
-        let (name, value) = pair.trim().split_once('=')?;
-        (name == SESSION_COOKIE).then_some(value)
-    })
 }
 
 /// `pub(crate)` so the yield route's no-session-bound case (no carrier to

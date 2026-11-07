@@ -3220,11 +3220,11 @@ export type WriteEditorFileBinaryArgs = { relativePath: VaultPath; dataBase64: s
 
 export type EngineCommands = {
 	scan_shortcodes: { args: ScanShortcodesArgs; out: EditorScanResult };
-	parse_frontmatter: { args: FileArgs; out: ParsedFrontmatter };
 	editor_resolve_asset: { args: ResolveAssetArgs; out: ResolvedAsset | null };
 	editor_resolve_references: { args: ResolveReferencesArgs; out: EditorReferenceResolution[] };
 	set_image_width: { args: SetImageWidthArgs; out: string };
 	editor_bootstrap: { args: BootstrapArgs; out: EditorBootstrap };
+	parse_frontmatter: { args: FileArgs; out: ParsedFrontmatter };
 	list_directory: { args: ListDirectoryArgs; out: DirEntry[] };
 	list_tree: { args: ListTreeArgs; out: TreeNode };
 	get_file_info: { args: FileArgs; out: EditorFileInfo };
@@ -3280,11 +3280,11 @@ export type EngineCommand = keyof EngineCommands;
 
 export const ENGINE_TIER = {
 	scan_shortcodes: "public_read",
-	parse_frontmatter: "public_read",
 	editor_resolve_asset: "public_read",
 	editor_resolve_references: "public_read",
 	set_image_width: "public_read",
 	editor_bootstrap: "session_read",
+	parse_frontmatter: "session_read",
 	list_directory: "session_read",
 	list_tree: "session_read",
 	get_file_info: "session_read",
@@ -3340,11 +3340,11 @@ export const ENGINE_TIER = {
 // an Args struct's field order is its client's argument order, so reordering fields is a breaking change.
 export type EngineParams = {
 	scan_shortcodes: [text: string];
-	parse_frontmatter: [filePath: VaultPath];
 	editor_resolve_asset: [target: string, fromFile: VaultPath];
 	editor_resolve_references: [targets: RefTarget[], fromFile: VaultPath];
 	set_image_width: [imageMd: string, width: string | null];
 	editor_bootstrap: [sourcePath: VaultPath | null];
+	parse_frontmatter: [filePath: VaultPath];
 	list_directory: [path: VaultPath, showInternal: boolean];
 	list_tree: [showInternal: boolean];
 	get_file_info: [filePath: VaultPath];
@@ -3398,11 +3398,11 @@ export type EngineParams = {
 
 export const ENGINE_PARAMS = {
 	scan_shortcodes: ["text"],
-	parse_frontmatter: ["filePath"],
 	editor_resolve_asset: ["target", "fromFile"],
 	editor_resolve_references: ["targets", "fromFile"],
 	set_image_width: ["imageMd", "width"],
 	editor_bootstrap: ["sourcePath"],
+	parse_frontmatter: ["filePath"],
 	list_directory: ["path", "showInternal"],
 	list_tree: ["showInternal"],
 	get_file_info: ["filePath"],

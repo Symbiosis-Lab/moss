@@ -73,11 +73,14 @@ impl Session {
     }
 }
 
-/// The carrier's caller is untrusted, so [`CommandHost::resolve`] here is the
-/// one place a caller path is confined to the folder.
+/// The carrier's caller is untrusted: its paths stay out of moss's own files.
 impl CommandHost for Session {
     fn root(&self) -> &Path {
         self.vault.path()
+    }
+
+    fn refuses_moss_dir(&self) -> bool {
+        true
     }
 
     fn rename_undo(&self) -> &RenameUndoStore {
