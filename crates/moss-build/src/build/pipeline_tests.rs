@@ -465,7 +465,7 @@ fn test_build_empty_folder_returns_true() {
     // Build with no content files
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
 
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert!(result.unwrap(), "Empty folder should return is_empty=true");
 }
 
@@ -492,7 +492,7 @@ fn test_build_with_site_dir_state() {
         &ResolvedSlots::empty(),
     );
 
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     // Staging/ is sole build output
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
@@ -534,7 +534,7 @@ fn test_site_stage_persists_after_empty_build() {
 
     // Build with no content (empty folder)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Even empty builds use staging — site-stage/ is created
     assert!(
@@ -558,7 +558,7 @@ fn test_site_stage_persists_after_rebuild() {
     let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
     let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify site-stage persists for incremental rebuilds
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
@@ -611,7 +611,7 @@ fn test_site_stage_persists_when_no_changes() {
 
     // Second build with same content (should detect no changes)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify site-stage persists
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
@@ -684,7 +684,7 @@ fn test_empty_slots_leave_no_markers() {
     fs::write(test_dir.join("index.md"), "# Hello").unwrap();
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Check staging/ (sole output)
     let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
@@ -847,7 +847,7 @@ fn test_rebuild_when_site_emptied() {
 
     // First build
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     // staging/ has the output
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
@@ -889,7 +889,7 @@ fn test_rebuild_when_staging_deleted() {
 
     // First build
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
     // Delete staging directory completely (simulates a partial cleanup)
@@ -957,7 +957,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     // First build
     fs::write(test_dir.join("index.md"), "# First").unwrap();
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify first content (in staging/)
     let content = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
@@ -977,7 +977,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
 
     // Second build - should use staging pattern (site has content)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify new content from site-stage (the staging directory).
     // Note: site/ is updated by ship_phase which runs synchronously before
@@ -1233,7 +1233,7 @@ fn test_html_available_immediately_after_build() {
     fs::write(test_dir.join("about/index.md"), "# About\nAbout page").unwrap();
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // All HTML files must be available immediately (in staging/)
     assert!(
@@ -1293,7 +1293,7 @@ fn test_blocking_phase_includes_essential_files() {
     fs::write(test_dir.join("assets/favicon.svg"), "<svg></svg>").unwrap();
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Essential files for page rendering (in staging/)
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
@@ -3426,7 +3426,7 @@ fn test_resolve_source_hash_uses_cached_hash_on_mtime_match() {
 
     let result =
         super::super::video::resolve_source_hash(&video_file, "video.mov", &mut hash_index);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert_eq!(result.unwrap(), "cached_hash_abc123");
 }
 
@@ -3451,7 +3451,7 @@ fn test_resolve_source_hash_rehashes_on_mtime_mismatch() {
 
     let result =
         super::super::video::resolve_source_hash(&video_file, "video.mov", &mut hash_index);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     let hash = result.unwrap();
     assert_ne!(hash, "stale_hash", "Should NOT return stale hash");
     assert_eq!(hash.len(), 64, "Should be a SHA-256 hex hash");
@@ -3470,7 +3470,7 @@ fn test_resolve_source_hash_updates_index_on_miss() {
 
     let result =
         super::super::video::resolve_source_hash(&video_file, "video.mov", &mut hash_index);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     assert!(
         hash_index.entries.contains_key("video.mov"),
