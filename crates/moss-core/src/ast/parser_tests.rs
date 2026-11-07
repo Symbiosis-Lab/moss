@@ -10,7 +10,7 @@ fn first_block(md: &str) -> Block {
 }
 
 // -----------------------------------------------------------------
-// Phase 4 PR4: Block::Callout migration + Obsidian alias canonicalization
+// Block::Callout + Obsidian alias canonicalization
 // -----------------------------------------------------------------
 
 #[test]
@@ -195,9 +195,7 @@ fn callout_foldable_without_title() {
 
 #[test]
 fn callout_unknown_kind_falls_back_to_note() {
-    // Per shape-spec § 1 — unknown kind canonicalizes to Note.
-    // Diagnostic emission is a Phase 4 followup (see parser.rs
-    // `promote_callout` comment).
+    // An unknown kind canonicalizes to Note.
     match first_block("> [!unknownkind] body\n") {
         Block::Callout { kind, .. } => assert_eq!(kind, CalloutKind::Note),
         other => panic!("expected Callout (fallback to Note), got {other:?}"),
@@ -234,9 +232,8 @@ fn callout_multi_paragraph_body_preserves_blocks() {
 
 #[test]
 fn callout_nested_inside_callout() {
-    // The docs promise nested callouts. After PR4 the outer is
-    // Block::Callout containing an inner Block::Callout in its
-    // children (no Stage 1 rewrite needed).
+    // The docs promise nested callouts: the outer is a Block::Callout
+    // containing an inner Block::Callout in its children.
     let md = "> [!warning] Outer\n> Outer content.\n>\n> > [!tip] Inner\n> > Inner content.\n";
     match first_block(md) {
         Block::Callout {
@@ -272,7 +269,7 @@ fn plain_blockquote_without_marker_stays_blockquote() {
 #[test]
 fn blockquote_with_text_starting_like_callout_but_unknown_kind_still_promotes() {
     // The marker `[!xyz]` is structurally a callout — we promote
-    // and fall back to Note (per shape-spec). The author can fix
+    // and fall back to Note. The author can fix
     // by removing the bracket prefix if they wanted a plain quote.
     match first_block("> [!xyz] not a real kind\n> body\n") {
         Block::Callout { kind, .. } => assert_eq!(kind, CalloutKind::Note),
@@ -282,7 +279,7 @@ fn blockquote_with_text_starting_like_callout_but_unknown_kind_still_promotes() 
 
 #[test]
 fn callout_case_insensitive_kind() {
-    // Stage 1 was case-insensitive; preserve that contract.
+    // Kind matching is case-insensitive.
     match first_block("> [!WARNING] Loud\n> body\n") {
         Block::Callout { kind, .. } => assert_eq!(kind, CalloutKind::Warning),
         other => panic!("expected Callout, got {other:?}"),
@@ -291,8 +288,7 @@ fn callout_case_insensitive_kind() {
 
 #[test]
 fn callout_pending_alias_canonicalizes_to_todo() {
-    // Existing sites use `> [!pending]` — carried over from Stage 1
-    // support.
+    // Existing sites use `> [!pending]`.
     match first_block("> [!pending] Trailer video\n> Add when ready.\n") {
         Block::Callout { kind, title, .. } => {
             assert_eq!(kind, CalloutKind::Todo);
@@ -318,7 +314,7 @@ fn parses_h1_heading() {
             ..
         } => {
             assert_eq!(level, 1);
-            // Phase 4 PR2: parser populates id with the Obsidian anchor slug.
+            // Parser populates id with the Obsidian anchor slug.
             assert_eq!(id.as_deref(), Some("hello"));
             assert!(matches!(&children[0], Inline::Text(t) if t == "Hello"));
         }
@@ -512,12 +508,11 @@ fn parses_link_with_moss_resolved_prefix_unchanged() {
 
 #[test]
 fn parser_link_inherits_wikilink_from_pulldown_cmark() {
-    // PR7a Decision 2: pulldown-cmark with ENABLE_WIKILINKS emits
+    // pulldown-cmark with ENABLE_WIKILINKS emits
     // `Tag::Link { link_type: LinkType::WikiLink, .. }` for `[[target]]`
     // syntax. The typed AST must preserve that discriminator via
-    // `Inline::Link::is_wikilink`. After PR7a flips render_document
-    // to production, this flag drives the `class="wikilink"` emission
-    // on the <a> tag.
+    // `Inline::Link::is_wikilink`. This flag drives the `class="wikilink"`
+    // emission on the <a> tag.
     match first_block("[[wikilink-target]]\n") {
         Block::Paragraph(children) => {
             let link = children
@@ -562,9 +557,8 @@ fn parses_link_with_title() {
 
 #[test]
 fn parses_image_with_alt() {
-    // Phase 4 PR3 (2026-05-27): an image-only paragraph is now
-    // promoted to Block::Figure. Inline::Image lives inside the
-    // Figure variant; the URL/alt/title contract is unchanged.
+    // An image-only paragraph is promoted to Block::Figure.
+    // Inline::Image lives inside the Figure variant.
     // For image+text (where Block::Paragraph still applies), see
     // `image_with_caption_text_does_not_promote` below.
     match first_block("![cat photo](cat.jpg)\n") {
@@ -650,10 +644,9 @@ fn parses_unordered_list() {
 
 #[test]
 fn parser_handles_tight_list_items_with_inline_content() {
-    // Phase 4 PR0.6 regression — pulldown-cmark's tight-list mode emits
-    // inline events (Text/Strong/etc.) directly inside Tag::Item without
-    // wrapping in Tag::Paragraph. Previously `parse_block` dropped these
-    // stray inlines, producing empty <li></li> instead of the expected
+    // Regression — pulldown-cmark's tight-list mode emits inline events
+    // (Text/Strong/etc.) directly inside Tag::Item without wrapping in
+    // Tag::Paragraph. They must not be dropped (empty <li></li>); expected
     // <li><strong>bold</strong> text</li>.
     match first_block("- **bold** text\n- another item\n") {
         Block::List { ordered, items, .. } => {
@@ -890,7 +883,7 @@ fn link_inside_heading_is_preserved() {
 }
 
 // -----------------------------------------------------------------
-// Phase 4 PR2: heading ID injection
+// Heading ID injection
 // -----------------------------------------------------------------
 
 fn heading_id(md: &str) -> Option<String> {
@@ -1120,7 +1113,7 @@ fn link_inside_emphasis_unwraps_correctly() {
 }
 
 // -----------------------------------------------------------------
-// Phase 4 PR3 (2026-05-27): Block::Figure detection in Tag::Paragraph
+// Block::Figure detection in Tag::Paragraph
 // -----------------------------------------------------------------
 
 #[test]
@@ -1193,7 +1186,7 @@ fn image_with_whitespace_text_still_promotes_to_figure() {
 
 #[test]
 fn image_with_caption_text_does_not_promote() {
-    // Critical regression guard (cf. PR1 v2 commit 71c657af3): a
+    // Critical regression guard: a
     // paragraph carrying image + prose / emphasis must NOT be
     // promoted to a figure. If we promoted, the caption text would
     // be lost and we'd produce a malformed figure with sibling
@@ -1429,7 +1422,7 @@ fn subscribe_block_alongside_other_content_preserves_order() {
 }
 
 // -----------------------------------------------------------------
-// 2026-05-28 (Phase 4 source-line wiring): ParseConfig threading
+// ParseConfig threading
 // -----------------------------------------------------------------
 
 #[test]
@@ -1544,7 +1537,7 @@ fn parse_with_source_lines_lists_and_blockquotes() {
 }
 
 // -----------------------------------------------------------------
-// 2026-05-28 (Phase 4 source-line followup): per-<li> + per-<tr>
+// Per-<li> + per-<tr>
 // line tracking on Block::List and Block::Table.
 // -----------------------------------------------------------------
 
@@ -1720,7 +1713,7 @@ fn parse_partial_alignment_keeps_none_for_unmarked_columns() {
 }
 
 // -----------------------------------------------------------------
-// 2026-05-28 (Phase 4 followup B): ordered-list explicit start
+// Ordered-list explicit start
 // number captured from pulldown-cmark's `Tag::List(Option<u64>)`
 // payload and round-tripped to the renderer as `<ol start="N">`.
 // -----------------------------------------------------------------

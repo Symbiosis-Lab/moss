@@ -1,5 +1,6 @@
 import { solveCaptcha } from "../subscribe/captcha";
 import { installQuoteFloat } from "./quote-float";
+import { readStored, writeStored } from "../safe-storage";
 import { widgetCopy } from "./i18n";
 import { langBucket } from "../subscribe/i18n";
 
@@ -109,7 +110,7 @@ interface LiveComment {
     : null;
 
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    const saved = JSON.parse(readStored(STORAGE_KEY) || "{}");
     if (saved.name) (form.querySelector('[name="name"]') as HTMLInputElement).value = saved.name;
     if (saved.email) (form.querySelector('[name="email"]') as HTMLInputElement).value = saved.email;
     if (saved.link) (form.querySelector('[name="link"]') as HTMLInputElement).value = saved.link;
@@ -540,9 +541,7 @@ interface LiveComment {
       return;
     }
 
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ name: nameVal, email: emailVal, link: normalizedLink }));
-    } catch { /* ignore */ }
+    writeStored(STORAGE_KEY, JSON.stringify({ name: nameVal, email: emailVal, link: normalizedLink }));
 
     const quotePrefix = quoteFloat?.getQuotePrefix() ?? "";
     const finalContent = quotePrefix + content;

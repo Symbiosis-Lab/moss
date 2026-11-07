@@ -31,6 +31,8 @@ fn article(source_path: &str, url_path: &str) -> ArticleInfo {
         date: None,
         tags: vec![],
         uid: None,
+        syndicate: None,
+        untitled: false,
     }
 }
 

@@ -2,12 +2,9 @@
 //! every Job producer (Build, Domain, Deploy, plugins). Pure values, zero I/O
 //! (Hickey: model values, decomplect producer/state/rendering/recovery).
 //!
-//! Moved here from `build::progress` in Step 3 so producers outside `build`
-//! (Domain, Deploy, plugins) can speak the model without depending on the
-//! build pipeline, then into `moss-build` (2026-08-27, M6a B3) because the
-//! pipeline is the chief producer and must reach the vocabulary after the
-//! crate move. Pure values with no `crate::` reference of their own, so the
-//! move is a relocation and nothing more.
+//! Lives outside `build` so producers (Domain, Deploy, plugins) can speak the
+//! model without depending on the build pipeline, itself the chief producer.
+//! Pure values with no `crate::` reference of their own.
 //!
 //! `PartialEq` is derived on every type here (it was absent on the originals)
 //! so adapters and smart-constructor tests can compare advisories by value.

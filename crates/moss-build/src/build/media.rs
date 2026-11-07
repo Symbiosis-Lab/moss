@@ -40,6 +40,7 @@ pub mod ffmpeg;
 pub mod image;
 pub(crate) mod manifest_hash_memo;
 pub mod orphan_prune;
+mod output_emit;
 pub mod pipeline;
 pub(crate) mod promise;
 pub mod qr;

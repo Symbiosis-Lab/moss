@@ -817,8 +817,9 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
 ///
 /// `None` for every document when the site declares no place-typed kind at
 /// all, and for every document when that kind sets `line = false`. A page
-/// suppresses its own line only by leaving `location:` unset — there is no
-/// opt-out frontmatter key; this is generated chrome with no authored form.
+/// has no line when it leaves `location:` unset or is titled with its only
+/// place; there is no opt-out frontmatter key, because this is generated
+/// chrome with no authored form.
 ///
 /// Also sets [`ParsedDocument::place_names`] from the SAME filtered, ordered
 /// name list — a card's meta line reads that field rather than re-deriving
@@ -835,13 +836,16 @@ pub fn set_place_lines(documents: &mut [ParsedDocument], index: &TermIndex, lang
         for name in &doc.location {
             let name = name.trim();
             let Some(url) = index.term_url_in("", &place_kind.key, name) else { continue };
-            links.push(format!("[{}]({})", name, url));
             names.push(name);
+            // A page titled with the place already names it; the line would only repeat the title.
+            if name.to_lowercase() != doc.title.trim().to_lowercase() {
+                links.push(format!("[{}]({})", name, url));
+            }
         }
-        if links.is_empty() {
+        if names.is_empty() {
             continue;
         }
-        doc.place_line = place_kind.line.unwrap_or(true).then(|| format!(
+        doc.place_line = (place_kind.line.unwrap_or(true) && !links.is_empty()).then(|| format!(
             "{}{}{}",
             crate::i18n::t(lang, "term_role_location"),
             crate::i18n::t(lang, "place_line_separator"),
@@ -1524,6 +1528,27 @@ mod tests {
         set_place_lines(&mut docs, &index, crate::i18n::Language::En);
         assert_eq!(docs[1].place_line, None);
         assert_eq!(docs[1].place_names.as_deref(), Some("Kyoto"));
+    }
+
+    #[test]
+    fn a_page_titled_with_its_place_gets_no_line_but_keeps_its_place_names() {
+        let kinds = vec![places_kind_with_parents(&[])];
+        let mut docs = vec![
+            doc("about/kyoto/index.html", "Kyoto"),
+            doc("about/nara/index.html", "Nara"),
+            doc("posts/a/index.html", "kyoto"),
+            doc("posts/b/index.html", "Kyoto"),
+        ];
+        docs[0].place_page = Some(TermClaim::UseTitle);
+        docs[1].place_page = Some(TermClaim::UseTitle);
+        docs[2].location = vec!["Kyoto".to_string()];
+        docs[3].location = vec!["Kyoto".to_string(), "Nara".to_string()];
+        let index = derive_terms(&mut docs, kinds);
+        set_place_lines(&mut docs, &index, crate::i18n::Language::En);
+        assert_eq!(docs[2].place_line, None);
+        assert_eq!(docs[2].place_names.as_deref(), Some("Kyoto"));
+        assert_eq!(docs[3].place_line.as_deref(), Some("Location: [Nara](/about/nara/)"));
+        assert_eq!(docs[3].place_names.as_deref(), Some("Kyoto, Nara"));
     }
 
     #[test]

@@ -261,10 +261,8 @@ fn extracts_quadruple_colon_buttons() {
 #[test]
 fn extracts_grid_with_nested_buttons_via_arity() {
     // A common site pattern: `::::buttons` (4-colon) nested inside `:::grid`
-    // (3-colon). Phase 4 PR4.5 (2026-05-28) promoted cells from raw
-    // markdown strings to `Vec<Vec<Block>>`. The inner `::::buttons`
-    // now extracts into a typed `Block::Shortcode(Buttons)` inside the
-    // cell at parse time (via the recursive `super::parser::parse` call
+    // (3-colon). The inner `::::buttons` extracts into a typed
+    // `Block::Shortcode(Buttons)` inside the cell at parse time (via the recursive `super::parser::parse` call
     // in `parse_cell_to_blocks`), not at render time.
     let md = ":::grid 2\n::::buttons\n[Tickets](go/)\n::::\n+++\nfooter cell\n:::\n";
     let result = extract_shortcodes(md);
@@ -1054,7 +1052,6 @@ fn extracts_grid_with_positional_columns() {
     // with `---` cell divider. Both the positional cols and the legacy
     // `---` divider are accepted during the migration window.
     //
-    // Phase 4 PR4.5 (2026-05-28): cells are now typed Vec<Vec<Block>>.
     // Each "cell A" / "cell B" parses to a single Paragraph block.
     let md = ":::grid 2\ncell A\n---\ncell B\n:::\n";
     let result = extract_shortcodes(md);
@@ -1074,7 +1071,7 @@ fn extracts_grid_with_positional_columns() {
 /// Test helper: assert that `cell_blocks` is a single `Block::Paragraph`
 /// whose inline text content (concatenated) equals `expected`.
 ///
-/// PR4.5 cells parse via pulldown-cmark; trivial cells like `"A"` yield
+/// Cells parse via pulldown-cmark; trivial cells like `"A"` yield
 /// `[Block::Paragraph(vec![Inline::Text("A".into())])]`.
 fn assert_paragraph_text(cell_blocks: &[Block], expected: &str) {
     if cell_blocks.is_empty() && expected.is_empty() {
@@ -1201,7 +1198,7 @@ fn extracts_grid_single_cell_no_separator() {
 fn extracts_grid_with_empty_middle_cell() {
     // Two consecutive `+++` dividers leave a middle cell empty.
     // Legacy behavior preserved this; verify the typed extractor
-    // does too. PR4.5: empty cells are `Vec<Block>::new()` (the
+    // does too. Empty cells are `Vec<Block>::new()` (the
     // parser sees no content and emits zero blocks).
     let md = ":::grid 3\nA\n+++\n+++\nC\n:::\n";
     let result = extract_shortcodes(md);
@@ -1320,10 +1317,9 @@ fn divider_inside_a_code_fence_does_not_split_a_grid_cell() {
 #[test]
 fn extracts_grid_with_compound_link_cell_typed_as_link_card() {
     // Poster-card pattern: a cell whose entire body is a single markdown
-    // link wrapping multiple block children. Phase 4 PR4.5
-    // (2026-05-28) detects this at the cell-string level (before
-    // pulldown-cmark, which can't represent `[heading](url)`) and
-    // emits a typed [`Block::LinkCard { url, children }`] with the
+    // link wrapping multiple block children. The extractor detects this at
+    // the cell-string level (before pulldown-cmark, which can't represent
+    // `[heading](url)`) and emits a typed [`Block::LinkCard { url, children }`] with the
     // inner content parsed as blocks. The second cell is a plain
     // markdown link that fits the compound shape too (single line,
     // no block children) — also typed as `Block::LinkCard`.

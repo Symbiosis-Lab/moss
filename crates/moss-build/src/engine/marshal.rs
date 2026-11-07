@@ -1,6 +1,6 @@
 //! rquickjs::Value -> serde_json::Value marshaling.
 //!
-//! rquickjs 0.12 has NO serde feature (research report 1 §3). The verified
+//! rquickjs 0.12 has NO serde feature. The verified
 //! bridge is Ctx::json_parse / json_stringify (ctx.rs:280 / :301) — go through
 //! a JSON string. `undefined`/functions/symbols drop (JSON.stringify semantics);
 //! NaN/Infinity become null. This matches the WKWebview __TAURI__.invoke behavior,

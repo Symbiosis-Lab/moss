@@ -9,6 +9,7 @@ use engine_adapter::PluginEngine;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+pub mod copies;
 pub mod engine_adapter;
 pub mod listing;
 mod hook_context;
@@ -32,8 +33,8 @@ pub struct ManagerCache {
     make_host: Box<dyn Fn() -> AdapterHost + Send + Sync>,
 }
 
-/// Pure lookup of a `contributes.jobs[job_id]` descriptor in a plugin slice
-/// (Step 3 Phase 5, §8 + R13). Split out from `resolve_job_descriptor` so the
+/// Pure lookup of a `contributes.jobs[job_id]` descriptor in a plugin slice.
+/// Split out from `resolve_job_descriptor` so the
 /// production consumer of `JobDescriptor`/`ContributedJobs` is unit-testable
 /// without building a `PluginManager`.
 pub(crate) fn resolve_job_descriptor_in(
@@ -88,7 +89,7 @@ impl ManagerCache {
     }
 
     /// Resolve a plugin's `contributes.jobs[job_id]` descriptor across every
-    /// loaded manager (Step 3 Phase 5, §8 + R13) — the PRODUCTION CONSUMER of
+    /// loaded manager — the PRODUCTION CONSUMER of
     /// `JobDescriptor`/`ContributedJobs` (CLAUDE.md: "every module must have a
     /// consumer before it ships").
     ///
@@ -197,7 +198,7 @@ pub struct PluginManager {
 
 /// Build the hook-dispatch engine.
 ///
-/// CARDINALITY (Phase-3 D1): one engine per PluginManager (per project). The engine's
+/// CARDINALITY: one engine per PluginManager (per project). The engine's
 /// per-plugin Context map is keyed by name only; per-manager keeps it project-safe and
 /// folder-close teardown replaces a dead engine. Process-global was rejected.
 fn build_engine(
@@ -302,11 +303,6 @@ impl PluginManager {
     /// Called after installing or uninstalling a plugin. The runtime window and
     /// initialized JS instances are preserved — only the Rust-side plugin list
     /// is refreshed.
-    ///
-    /// Carried a Phase-4 condition-3 warning about engine_kind never being
-    /// re-evaluated here: a mid-session `enhance` install left one bundle
-    /// loaded in two runtimes with split module state. Retiring the
-    /// capability retired the only way to reach that state.
     pub fn rediscover_plugins(&self) {
         match discover_plugins(&self.project_path) {
             Ok(plugins) => {
@@ -560,6 +556,7 @@ impl PluginManager {
             .filter(|p| {
                 channels_config.is_installed(&p.manifest.name)
                     && !builtin_ids.contains(&p.manifest.name.as_str())
+                    && copies::copy_spec(&p.manifest).is_none()
             })
             .collect();
 
@@ -701,13 +698,12 @@ impl PluginManager {
 
         // --- Singleflight: deduplicate concurrent dispatch of the same hook ---
         //
-        // TWO purposes (Phase-4 verified-and-kept — plan D7 / flip-surfaces probe
-        // F5; do NOT remove this mechanism):
+        // TWO purposes (do NOT remove this mechanism):
         //
         // 1. Context-clobber protection. run_hook sets the per-Context global
         //    __MOSS_INTERNAL_CONTEXT__ at dispatch start and clears it at end
         //    (engine.rs / loader.rs), so two overlapping hooks of ONE plugin
-        //    clobber each other (Phase-3 plan "Known latent issue #2"). Per-plugin
+        //    clobber each other. Per-plugin
         //    Contexts already rule out the cross-plugin form; the plugin::hook key
         //    covers the same-plugin/same-HOOK subset that remains.
         //
@@ -717,7 +713,7 @@ impl PluginManager {
         //    concurrently: duplicate downloads, racing project-file writes).
         //
         // True retirement of purpose 1 = pass the hook context per-call instead
-        // of via a Context global — recorded Phase-5 item (same dispatch spine as
+        // of via a Context global (same dispatch spine as
         // per-Context serialization; see execute_plugin_javascript_with_result).
         let singleflight_key = format!("{}::{}", plugin.manifest.name, hook_name);
         let (is_first, mut rx) = hook_state.in_flight_hooks.try_start(&singleflight_key);
@@ -846,7 +842,7 @@ impl PluginManager {
         // Initialize activity tracking for this hook
         hook_state.init_activity(&plugin.manifest.name, hook_name);
 
-        // Phase 2 B2 interim: register the executing hook name so that
+        // Register the executing hook name so that
         // `apply_awaiting` can mark THIS hook (not just the task's UI hook label)
         // as awaiting when the plugin reports Awaiting. This fixes the key mismatch
         // where matters `process` creates its task with `hook:"import"`, causing
@@ -887,6 +883,8 @@ impl PluginManager {
                     break match completion {
                         Ok(completion_result) => {
                             if completion_result.success {
+                                Ok((completion_result.result, completion_result.returned))
+                            } else if completion_result.result.is_some() && copies::refusal_is_an_answer(hook_name) {
                                 Ok((completion_result.result, completion_result.returned))
                             } else {
                                 // Prefer .error (set for throw-path failures), then fall
@@ -936,7 +934,7 @@ impl PluginManager {
         let _errors = hook_state.take_errors(&plugin.manifest.name, hook_name);
         hook_state.clear(&plugin.manifest.name, hook_name);
 
-        // Phase 2 B2 interim: teardown — unregister the executing hook so a
+        // Teardown — unregister the executing hook so a
         // future invocation of a different hook name for this plugin starts clean.
         hook_state.unregister_executing_hook(&plugin.manifest.name);
 
@@ -1048,6 +1046,7 @@ mod tests {
             context: None,
             deployment: None,
             setup: None,
+            copy: None,
         };
         let with_message = CompletionResult {
             success: false,
@@ -1092,7 +1091,7 @@ mod tests {
         assert!(!has_login_deploy, "Non-login plugin: gate evaluates false → advisory fires");
     }
 
-    // ── bundle_source_for_project (B.7) ───────────────────────────────────
+    // ── bundle_source_for_project ───────────────────────────────────
 
     /// The source reads the installed plugin FRESH on every call: the derive
     /// fallback ("DemoPlugin") applies when the manifest has no global_name; a
@@ -1131,7 +1130,7 @@ mod tests {
         assert!(err.contains("ghost"), "error must name the plugin: {err}");
     }
 
-    // ── contributes.jobs descriptor lookup (Step 3 Phase 5, §8 + R13) ──────
+    // ── contributes.jobs descriptor lookup ──────
     //
     // Proves `JobDescriptor`/`ContributedJobs` has a PRODUCTION CONSUMER
     // (CLAUDE.md: "every module must have a consumer before it ships"): the

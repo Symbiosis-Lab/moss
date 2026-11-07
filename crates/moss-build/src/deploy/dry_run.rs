@@ -60,6 +60,8 @@ pub struct DryRun {
     pub kept_as_redirect: Vec<Kept>,
     /// The removals that refuse this publish, as the publish gate holds them.
     pub pending_removals: Vec<change_set::PendingRemoval>,
+    /// The copies a publish would post to other networks, each shaped.
+    pub copies: Vec<crate::syndication::preview::PreviewCopy>,
 }
 
 impl DryRun {
@@ -81,6 +83,7 @@ impl DryRun {
             prebuilt,
             kept_as_redirect,
             pending_removals,
+            copies,
         } = self;
         let mut change_set = serde_json::to_value(set).expect("a change set serializes");
         if let Some(fields) = change_set.as_object_mut() {
@@ -113,6 +116,7 @@ impl DryRun {
             "would_create_key": would_create_key,
             "needs_verification": needs_verification,
             "prebuilt": prebuilt,
+            "copies": copies,
         })
     }
 
@@ -184,6 +188,22 @@ impl DryRun {
             "Not run, because it needs the server: whether another copy of this folder published since this one, and the upload itself. \
              A real deploy can still stop there.\n",
         );
+        for c in &self.copies {
+            let what = match (&c.action, &c.error, c.form) {
+                (_, Some(e), _) => format!("not postable: {e}"),
+                (crate::syndication::plan::Action::Skip { reason }, ..) => format!("not posted: {reason}"),
+                (crate::syndication::plan::Action::Adopt { url }, ..) => format!("already there: {url}"),
+                (action, None, form) => {
+                    let verb = if matches!(action, crate::syndication::plan::Action::Update) { "would update" } else { "would post" };
+                    let sizes: Vec<String> = c.parts.iter().map(|p| match p.max_chars {
+                        Some(max) => format!("{}/{max}", p.chars),
+                        None => p.chars.to_string(),
+                    }).collect();
+                    format!("{verb} as {} ({} characters)", form.map(|f| format!("{f:?}").to_lowercase()).unwrap_or_default(), sizes.join(", "))
+                }
+            };
+            out.push_str(&format!("Copy to {}: {} — {what}\n", c.channel, c.source_path));
+        }
         out
     }
 }
@@ -351,6 +371,7 @@ pub async fn run_dry_run(
         prebuilt: false,
         kept_as_redirect: kept_as_redirect(&folder_str),
         pending_removals: crate::system::build_records::records().pending_removals(&folder_str),
+        copies: crate::syndication::preview::for_dry_run(folder, &sealed),
     })
 }
 
@@ -405,6 +426,7 @@ pub async fn run_prebuilt_dry_run(
         prebuilt: true,
         kept_as_redirect: Vec::new(),
         pending_removals: Vec::new(),
+        copies: Vec::new(),
     })
 }
 
@@ -426,6 +448,7 @@ mod tests {
                 reason: RemovalReason::Unexplained,
                 moved_to: None,
                 source: None,
+                withdrawn_by: None,
             }]),
             transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["legacy-feed.xml".into(), "style.1a2b3c.css".into()] },
             refusal: Some(crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, "Nothing published — REFUSED".into())),
@@ -435,6 +458,7 @@ mod tests {
             prebuilt: false,
             kept_as_redirect: Vec::new(),
             pending_removals: Vec::new(),
+            copies: Vec::new(),
         }
     }
 
@@ -458,6 +482,7 @@ mod tests {
             prebuilt: false,
             kept_as_redirect: Vec::new(),
             pending_removals: Vec::new(),
+            copies: Vec::new(),
         };
 
         let text = dry.render();
@@ -545,6 +570,7 @@ mod tests {
             reason: RemovalReason::Unexplained,
             moved_to: None,
             source: None,
+            withdrawn_by: None,
         });
         dry.transfer = Transfer::SinceLastPublish {
             upload: 0,
@@ -568,6 +594,7 @@ mod tests {
             prebuilt: false,
             kept_as_redirect: Vec::new(),
             pending_removals: Vec::new(),
+            copies: Vec::new(),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");

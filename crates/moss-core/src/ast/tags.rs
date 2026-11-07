@@ -133,7 +133,7 @@ fn in_block(block: &Block, out: &mut Vec<String>) {
             }
         }
         // `:::grid` cells and a `:::hero` overlay are typed `Vec<Block>`
-        // (PR4.5) that the renderer publishes as ordinary prose, so their
+        // that the renderer publishes as ordinary prose, so their
         // tags are as real as any other. Mirrors `visit.rs::visit_block`.
         Block::Shortcode(Shortcode::Grid(args)) => {
             for cell in &args.cells {

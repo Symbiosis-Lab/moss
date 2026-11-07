@@ -55,25 +55,28 @@ pub fn compute_binary_hash_file(path: &std::path::Path) -> Result<String, String
 /// the edge this removed. Those hashes still run inside work a publish waits
 /// on (`deploy::drain_in_flight_work`, `STALL_TIMEOUT` 300s), so a single file
 /// whose read SUCCEEDS but takes over 300s with no other build event in the
-/// window would now abort a publish that was progressing fine. Narrow, and not
-/// nothing. Closing it properly is a reporter-shaped concern, which
-/// is the port seam's business (NORTH-STAR:88, ratchet row (o)) — not a
-/// re-added `crate::deploy` call.
+/// window would now abort a publish that was progressing fine. Narrow, but real.
+/// Closing it properly is a reporter-shaped concern, which belongs to the port
+/// seam, not a re-added `crate::deploy` call.
 pub fn compute_binary_hash_file_with_heartbeat(
     path: &std::path::Path,
     on_chunk: &dyn Fn(),
 ) -> Result<String, String> {
-    use std::io::Read;
-    use xxhash_rust::xxh3::Xxh3Default;
-
     let mut file = std::fs::File::open(path)
         .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
+    hash_reader(&mut file, on_chunk).map_err(|e| format!("Failed to read {}: {}", path.display(), e))
+}
+
+/// The streaming form of [`compute_binary_hash`] over everything `reader`
+/// yields. The `io::Error` comes back unflattened, for a caller that must
+/// classify it (absent, still in the cloud, unreadable).
+pub fn hash_reader(reader: &mut impl std::io::Read, on_chunk: &dyn Fn()) -> std::io::Result<String> {
+    use xxhash_rust::xxh3::Xxh3Default;
+
     let mut hasher = Xxh3Default::new();
     let mut buf = vec![0u8; HASH_FILE_BUF_SIZE];
     loop {
-        let n = file
-            .read(&mut buf)
-            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
@@ -91,7 +94,7 @@ pub fn compute_binary_hash_file_with_heartbeat(
 /// requirement: `HashMap` iteration order is non-deterministic, so an unsorted
 /// feed would produce a different id for the same content across processes.
 ///
-/// Same `files` content always yields the same id (I2 invariant from Stage 1 design).
+/// Same `files` content always yields the same id.
 /// Co-located with `compute_binary_hash` to share the `xxh3_64` import.
 pub fn compute_manifest_generation_id(files: &std::collections::HashMap<String, String>) -> String {
     use std::collections::BTreeMap;
@@ -206,41 +209,6 @@ impl PathResolver {
         }
     }
 
-    /// The lazy-chunk pointers carried by the theme `<script>` tag.
-    ///
-    /// Every `Load::Lazy` script is content-hashed, so the source that
-    /// `import()`s it cannot name it — it reads the URL off this tag instead
-    /// (see `selection-actions.ts`'s `loadShareCard` and `hls-boot.ts`). One
-    /// owner for all of them rather than one method per chunk: these values are
-    /// build-global, byte-identical on every page, and adding the third one
-    /// should not mean a third template variable threaded through four render
-    /// paths. Attributes on the existing tag rather than extra inline
-    /// `<script>`s, for the same reason: fewer elements, and a build-global
-    /// value does not trip the preview morph-guard's `scriptsDiffer` reload.
-    ///
-    /// `hls_hash` is `None` on a site with no ladder, and then the attribute
-    /// is absent rather than dangling. It reads as belt-and-braces — the only
-    /// reader, `hls-boot.js`, is gated on the same fact and is not on the page
-    /// either — but the snapshot suite priced the alternative: an
-    /// unconditional attribute is 45 bytes on every page of every moss site,
-    /// naming a file that most of them never emit.
-    pub fn lazy_chunk_attrs(&self, share_card_hash: &str, hls_hash: Option<&str>) -> String {
-        let mut out = format!(
-            " data-share-card=\"{}\"",
-            Self::hashed_js_url("share-card", share_card_hash)
-        );
-        if let Some(hash) = hls_hash {
-            out.push_str(&format!(" data-hls=\"{}\"", Self::hashed_js_url("hls", hash)));
-        }
-        out
-    }
-
-    fn hashed_js_url(name: &str, hash: &str) -> String {
-        ServedPath::for_runtime_js_hashed(name, hash)
-            .expect("SITE_SCRIPTS names are valid")
-            .to_relative_url()
-    }
-
     /// Resolve a URL path to a root-relative href.
     ///
     /// Absolute URLs (`http://`, `https://`) pass through unchanged.
@@ -257,7 +225,7 @@ impl PathResolver {
     /// has to RECOGNISE a URL then saw a shape it was not written against —
     /// `orphan_prune`'s reference scanner reads its token class straight off the
     /// encoder's output set, so raw non-ASCII covers read as unreferenced and
-    /// were deleted, 404ing the live site (2026-08-06, `LOG-8D03-T1529-08-06`).
+    /// were deleted, 404ing the live site.
     /// A second implementation of a conversion is a second answer; keep one.
     ///
     /// Examples (without overrides):

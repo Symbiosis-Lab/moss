@@ -30,14 +30,11 @@ use crate::types::content::SiteHashes;
 /// is over"), so they are emitted from the same place: the SINGLE post-join
 /// point in `await_completion`, after the coordinator seal.
 ///
-/// History, because it repeats: both receipts used to hang off the video
-/// worker's `finish_build`. The Job half was moved here first (Step 3 Phase 4,
-/// FIX 2) because that coupling leaked the parent on images-only,
-/// images-finish-last and epoch-superseded builds. The `BuildComplete` half was
-/// left behind, and rotted the same way for the same reason — worse, in fact:
-/// `pipeline.rs` only spawns the video worker when the site HAS videos, so on a
-/// site with images and no videos the event was never emitted at all, and the
-/// preview never refreshed after its first build (LOG-C2CF-T0935-08-14).
+/// Neither receipt hangs off the video worker's `finish_build`: coupling to it
+/// leaks the parent Job on images-only, images-finish-last and
+/// epoch-superseded builds, and `pipeline.rs` only spawns the video worker when
+/// the site HAS videos, so `BuildComplete` would never fire on a site with
+/// images and no videos and the preview would never refresh.
 /// Anything that means "the build finished" belongs here, not on a worker that
 /// may not run.
 ///
@@ -723,7 +720,7 @@ mod tests {
         assert_eq!(amount.noun, "pages");
         assert_eq!(task.verb.as_ref().unwrap().0, "Built");
     }
-    // ── The receipt every finished build owes (LOG-C2CF-T0935-08-14) ──────────
+    // ── The receipt every finished build owes ──────────
 
     #[tokio::test]
     async fn a_build_with_no_workers_at_all_still_reaches_its_terminal_receipt() {

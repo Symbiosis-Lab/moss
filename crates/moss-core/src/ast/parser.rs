@@ -8,7 +8,7 @@
 //! [`Url::Resolved`] is the job of [`crate::ast::visit::visit_urls_mut`]
 //! (a separate pass).
 //!
-//! Heading IDs ARE assigned by this parser. Phase 4 PR2: each
+//! Heading IDs ARE assigned by this parser: each
 //! `Tag::Heading` arm computes the Obsidian-compatible anchor slug from
 //! the heading's text content (only `Event::Text` / `Event::Code`,
 //! matching the retired `transform_events` pass in moss-build's
@@ -179,8 +179,8 @@ pub fn parser_options(math: bool) -> Options {
     // is an ordinary paragraph, so the arms in `parse_block_with_tag` never see
     // the events.
     options.insert(Options::ENABLE_DEFINITION_LIST);
-    // Phase 3 PR2: pulldown-cmark emits `LinkType::WikiLink` events for
-    // `[[…]]` / `![[…]]` natively. The typed-AST parser preserves them as
+    // pulldown-cmark emits `LinkType::WikiLink` events for `[[…]]` /
+    // `![[…]]` natively. The typed-AST parser preserves them as
     // `Inline::Link`/`Inline::Image` with `Url::Unresolved`; resolution
     // happens in the later `visit_urls_mut` pass.
     options.insert(Options::ENABLE_WIKILINKS);
@@ -749,10 +749,9 @@ fn parse_block(
             //
             // The tight-list-item case where the inlines are emitted directly
             // (no Tag::Paragraph wrap) was the load-bearing reason this branch
-            // looked relevant; PR0.6 moved that responsibility into
-            // `collect_item_blocks`, which synthesizes a Block::Paragraph for
-            // stray inlines inside Tag::Item. See parser.rs's collect_item_blocks
-            // helper.
+            // looked relevant; `collect_item_blocks` handles it by
+            // synthesizing a Block::Paragraph for stray inlines inside
+            // Tag::Item.
             (None, 1)
         }
         Event::End(_) => (None, 1),
@@ -834,9 +833,8 @@ fn parse_block_with_tag(
             let (children, end) = collect_inlines_until(events, start + 1, |e| {
                 matches!(e, Event::End(TagEnd::Paragraph))
             });
-            // Phase 4 PR3 (2026-05-27): detect image-only paragraphs and
-            // promote to `Block::Figure`. See shape-spec § 1 detection
-            // rule: exactly one `Inline::Image` plus any number of
+            // Detect image-only paragraphs and promote to `Block::Figure`.
+            // The rule: exactly one `Inline::Image` plus any number of
             // whitespace-only `Inline::Text` / `Inline::LineBreak`
             // siblings qualifies. Caption defaults to the image's alt
             // text (mirroring transform_events' implicit-figure path);
@@ -845,10 +843,9 @@ fn parse_block_with_tag(
             //
             // A paragraph with image+prose (e.g. `![img](src) caption text`)
             // does NOT qualify; it stays as `Block::Paragraph`. This is the
-            // critical regression guard — see PR1 v2 (commit 71c657af3)
-            // for the analogous shape decision at the inline image hook
-            // level: inline images use `MarkdownInline` (no figure wrap);
-            // only the standalone figure case here uses the figure wrap.
+            // critical regression guard: inline images use `MarkdownInline`
+            // (no figure wrap); only the standalone figure case here uses
+            // the figure wrap.
             let block = match try_promote_to_figure(children, events, start, line_ctx) {
                 Ok(figure) => figure,
                 Err(original_inlines) => Block::Paragraph(original_inlines),
@@ -876,17 +873,15 @@ fn parse_block_with_tag(
             (Some(Block::CodeBlock { lang, value }), i - start + 1)
         }
         Tag::BlockQuote(_) => {
-            // Phase 4 PR4: detect Obsidian-style callouts. A blockquote
-            // whose first paragraph's leading text matches `[!<kind>]`
+            // Detect Obsidian-style callouts. A blockquote whose first paragraph's leading text matches `[!<kind>]`
             // (with optional `+`/`-` foldable suffix and optional
             // inline title) promotes to `Block::Callout`. Otherwise it
-            // stays a plain blockquote. See shape-spec § 1.
+            // stays a plain blockquote.
             //
             // Detection works on the EVENT stream (not the parsed
             // children) because pulldown-cmark's SoftBreak events
             // become `Inline::Text("\n")` during inline parsing
-            // (PR4.5 aligned to CommonMark spec — see
-            // `parse_inline` SoftBreak handling). Working on events
+            // (see `parse_inline` SoftBreak handling). Working on events
             // preserves the structural break before inline
             // collapse, which is what the marker-line-vs-body-line
             // boundary check needs.
@@ -1126,7 +1121,7 @@ fn parse_block_with_tag(
 }
 
 /// Decide whether a paragraph's inlines qualify for promotion to
-/// [`Block::Figure`]. Per shape-spec § 1: exactly one [`Inline::Image`]
+/// [`Block::Figure`]: exactly one [`Inline::Image`]
 /// plus any number of whitespace-only [`Inline::Text`] /
 /// [`Inline::LineBreak`] siblings. Any other inline shape (Emphasis,
 /// Strong, Link, Code, non-whitespace Text, …) disqualifies the
@@ -1560,14 +1555,9 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
     match &events[start] {
         Event::Text(t) => (Some(Inline::Text(t.to_string())), 1),
         Event::Code(c) => (Some(Inline::Code(c.to_string())), 1),
-        // Phase 4 PR4.5 (2026-05-28): match pulldown-cmark's `push_html`
-        // byte shape — SoftBreak emits `\n` between inline siblings, not a
-        // space. The space form was a long-standing AST quirk surfaced
-        // by Grid cells now flowing through the AST renderer; production
-        // baselines (real sites and snapshot fixtures) preserve the
-        // newline (e.g. `Main Hall · Riverside Center\n12 Example
-        // Street`). Aligning here closes one row of the parity probe's
-        // `whitespace_attribute_order` category.
+        // Match pulldown-cmark's `push_html` byte shape — SoftBreak emits
+        // `\n` between inline siblings, not a space (e.g. `Main Hall ·
+        // Riverside Center\n12 Example Street`).
         Event::SoftBreak => (Some(Inline::Text("\n".to_string())), 1),
         Event::HardBreak => (Some(Inline::LineBreak), 1),
         Event::Html(s) | Event::InlineHtml(s) => (Some(Inline::Other(s.to_string())), 1),
@@ -1629,8 +1619,7 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                 } else {
                     Some(title.to_string())
                 };
-                // Phase 4 PR7a (2026-05-28): preserve pulldown-cmark's
-                // `LinkType::WikiLink` discriminator on the typed AST so
+                // Preserve pulldown-cmark's `LinkType::WikiLink` discriminator on the typed AST so
                 // the renderer can emit `class="wikilink"` and graph
                 // builders can identify wikilink targets.
                 let is_wikilink = matches!(*link_type, pulldown_cmark::LinkType::WikiLink { .. });
@@ -2163,7 +2152,7 @@ fn flush_pending_paragraph(out: &mut Vec<Block>, pending_inlines: &mut Vec<Inlin
 /// visible section, while `[[Note#Notes]]` — slugged from heading text with
 /// no counter — kept pointing at `#notes`.
 ///
-/// Headings whose base slug is `None` (shouldn't happen post-PR2, but
+/// Headings whose base slug is `None` (not expected, but
 /// safe-guarded) are left untouched.
 fn assign_heading_id_suffixes(blocks: &mut [Block]) {
     let mut id_counts: HashMap<String, usize> = HashMap::new();
@@ -2351,7 +2340,7 @@ fn collect_heading_id_slots<'a>(
             }
             Block::Shortcode(sc) => match sc {
                 // Grid cells and the Hero overlay are typed `Vec<Block>`
-                // (PR4.5) rendered into this page. Each is parsed by a
+                // and rendered into this page. Each is parsed by a
                 // RECURSIVE `parse_fragment_with_config`, which is told to
                 // skip `assign_heading_id_suffixes` precisely so they arrive
                 // here holding un-disambiguated base slugs — this walk is the

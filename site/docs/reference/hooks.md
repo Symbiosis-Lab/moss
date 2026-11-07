@@ -15,7 +15,7 @@ Scan folder
   → process hooks (pre-generation)
     → moss builds HTML (no plugin hook)
       → deploy hook (push to hosting)
-        → syndicate hooks (POSSE to platforms)
+        → copy hooks (a copy of each new post on other networks)
 ```
 
 `login` runs outside this pipeline: moss invokes it once, via `connect_account`, when the user starts a connection flow — not on every build.
@@ -29,7 +29,11 @@ Plugins attach to stages by declaring **capabilities** in their manifest.
 |---|---|---|---|
 | `process` | multiple | `ProcessContext` | Pre-process source files before generation (e.g. download remote assets, transform markdown). |
 | `deploy` | single | `DeployContext` | Deploy the built site to a hosting platform (e.g. GitHub Pages, Netlify). |
-| `syndicate` | multiple | `SyndicateContext` | POSSE-distribute published content after deployment (e.g. cross-post to Matters, RSS). |
+| `syndicate` | multiple | `SyndicateContext` | Being removed: the earlier way to cross-post, one call for every article. A channel posts through the copy hooks instead. |
+| `publish_copy` | multiple | `CopyJob` | Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address. |
+| `update_copy` | multiple | `CopyJob` | Edit a posted copy after its post's source changed; optional, absent means the network cannot edit a copy. |
+| `delete_copy` | multiple | `CopyJob` | Remove a deleted post's copy, when the author asks; optional. |
+| `find_copy` | multiple | `CopyJob` | Look a copy up after a send whose outcome is unknown, or a draft left for the author to publish on the network; optional. |
 | `listing` | multiple | `ListingContext` | Draw a folder's listing in a style the plugin contributes (contributes.listing_styles); runs after render, once per folder home page whose children_style names one of the plugin's styles. |
 | `login` | multiple | `BaseContext` | Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline. |
 <!-- auto:end:hooks -->
@@ -61,19 +65,19 @@ Use for: GitHub Pages, Netlify, or custom hosting.
 
 **Context:** Includes `site_files` (all compiled output), `deployment` info, and `domain`.
 
-## syndicate
+## The copy hooks
 
-Distributes published content to external platforms (POSSE). Multiple plugins can have this capability.
+A channel posts a copy of each new post to another network (POSSE: publish on your own site, syndicate elsewhere). It declares what its network carries under `contributes.channel.syndication`, and moss decides which posts are due, shapes each copy to the network's limits, never posts one twice, and writes each copy's address back into the post's `syndicated:`. The channel exports one function per operation, each handling exactly one copy: `publish_copy`, and optionally `update_copy`, `delete_copy` and `find_copy`.
 
-Use for: cross-posting to Matters.town, Substack, social media.
+Use for: cross-posting to Bluesky, Mastodon, Matters.town, LinkedIn, X; a hand-off for a network with no posting API.
 
-**Context:** Includes `articles` (published URLs and metadata) and deployment info.
+**Context:** a `CopyJob`: the post's address, title, language, date and tags, the form moss chose, and the copy already shaped. The full contract is in the [syndication design](https://github.com/Symbiosis-Lab/moss/tree/develop/docs/proposals/syndication).
 
 ## login
 
 Connects a user account for a plugin that needs one to operate (e.g. Matters). Not a build-pipeline stage: moss calls it once via `connect_account` when the user starts a connection flow — clicking "Connect" in the plugin's settings row, or the auto-open nudge on a folder with no bound session — not on every build.
 
-Use for: authenticating with a remote platform before `process` or `syndicate` can act on the user's behalf.
+Use for: authenticating with a remote platform before `process` or a copy hook can act on the user's behalf.
 
 **Context:** `BaseContext` — `project_info` and the plugin's resolved `config`.
 

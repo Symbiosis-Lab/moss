@@ -287,7 +287,7 @@ fn test_build_schema_json_ld_basic() {
         Some("2024-01-15"),
         None,
         &[],
-        &site_url,
+        &site_url, &[],
     );
 
     assert!(result.contains(r#""@context": "https://schema.org""#));
@@ -310,7 +310,7 @@ fn test_build_schema_json_ld_with_keywords() {
         None,
         None,
         &["rust".to_string(), "wasm".to_string()],
-        &site_url,
+        &site_url, &[],
     );
 
     let inner = result
@@ -2492,7 +2492,7 @@ fn json_ld_blocks_cannot_be_broken_out_of_by_page_text() {
     let hostile = "</script><img src=x onerror=alert(1)><!-- x";
     let article = build_schema_json_ld(
         hostile, hostile, "https://example.com/", hostile, None, None,
-        &[hostile.to_string()], &test_site_url(),
+        &[hostile.to_string()], &test_site_url(), &[],
     );
     let website = build_schema_website(hostile, hostile, "https://example.com/", "en");
     for block in [article, website] {
@@ -2590,4 +2590,26 @@ fn a_card_description_shows_the_plain_excerpts_words_and_no_markdown() {
     // A lead bold throughout keeps its bold, closed before the ellipsis.
     let content = format!("Our group hosted its first public lecture by **Dr. Ada Lovelace** of the Analytical Society on **March 3, 2026 at 4:00 pm** in **Room 12, East Hall of the Old Library Building**{tail}");
     assert!(extract_description_markdown(&content, true).ends_with("**…"));
+}
+
+#[test]
+fn an_article_lists_its_citations_and_a_page_without_any_has_no_key() {
+    let ld = |citations: &[moss_core::ast::quote_source::QuoteSource]| {
+        let html = build_schema_json_ld("T", "D", "https://example.com/", "S", None, None, &[], &test_site_url(), citations);
+        let inner = html
+            .strip_prefix(r#"<script type="application/ld+json">"#)
+            .and_then(|b| b.strip_suffix("</script>"))
+            .unwrap();
+        serde_json::from_str::<serde_json::Value>(inner).expect("valid JSON")
+    };
+    let source = |name: &str, href: &str| moss_core::ast::quote_source::QuoteSource { href: href.into(), text: name.into() };
+    let v = ld(&[source("Say \"hi\" </script>", "https://example.org/a"), source("B", "https://example.org/b")]);
+    assert_eq!(
+        v["citation"],
+        serde_json::json!([
+            {"@type": "CreativeWork", "name": "Say \"hi\" </script>", "url": "https://example.org/a"},
+            {"@type": "CreativeWork", "name": "B", "url": "https://example.org/b"},
+        ])
+    );
+    assert!(ld(&[]).get("citation").is_none());
 }

@@ -129,6 +129,8 @@ fn editor_and_build_agree_on_folder_wikilinks() {
             date: None,
             tags: vec![],
             uid: None,
+            syndicate: None,
+            untitled: false,
         },
     );
 

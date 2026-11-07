@@ -24,12 +24,9 @@
 //! `.tmp` from sync, which is the wrong signal for a file about to become a
 //! real output. Same convention as `emit/math_png.rs` and `og_card.rs`.
 //!
-//! This module owns atomic site-output writes today. A sketch once explored folding
-//! it into a future `StageWriter` with a per-build path-claim registry (M6b);
-//! that registry was never built, and the correctness gap it was later
-//! invoked for — a concurrent build racing the shared staging tree between
-//! seal and ship — shipped instead as content-addressed manifest entries, as
-//! of a 2026-09-17 revisit that found no registry was needed after all.
+//! This module owns atomic site-output writes. There is no per-build
+//! path-claim registry: a concurrent build racing the shared staging tree
+//! between seal and ship is covered by content-addressed manifest entries.
 //! `output_write_invariant_test` keeps raw writes out of `src/build/` unless
 //! they carry an `// allow:raw_write <reason>` marker.
 

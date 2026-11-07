@@ -55,7 +55,7 @@ pub struct FeatureStyle {
 
 /// Every feature stylesheet, keyed by the name callers pass to [`link_tag`].
 ///
-/// A registration table in the NORTH-STAR pattern-glossary #2 sense, and the
+/// A registration table, and the
 /// sibling of `emit::stylesheet::CSS_PARTIALS` — same shape, different phase.
 /// The totality test is `feature_styles_tests::every_feature_css_file_has_a_row`.
 pub const FEATURE_STYLES: &[FeatureStyle] = &[
@@ -115,7 +115,7 @@ pub fn link_tag(name: &str) -> String {
 /// Every registered sheet's content hash, in table order.
 ///
 /// Folded into `FacadeCache::asset_versions` so a sheet whose bytes move
-/// invalidates the Stage 5b render skip. Without it, a `ContentOnly` watch
+/// invalidates the incremental render skip. Without it, a `ContentOnly` watch
 /// rebuild in dev — where [`load_js_asset`] re-reads `comments.css` from disk —
 /// deletes the old file via `remove_stale_files` while every skipped page keeps
 /// the old `<link href>`, and the whole comment UI loses its styling.

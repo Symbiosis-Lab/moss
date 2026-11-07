@@ -92,5 +92,6 @@ fn date_key(doc: &ParsedDocument) -> moss_core::sort::DateSortKey<'_> {
         is_folder: false,
         label: &doc.label,
         url_path: &doc.url_path,
+        weight: doc.weight,
     }
 }

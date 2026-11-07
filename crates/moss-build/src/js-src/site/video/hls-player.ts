@@ -69,7 +69,7 @@ export function attach(video: HTMLVideoElement, url: string): void {
   const sharpen = shortClipSharpener(hls, video);
   hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
     if (!isMediaFragment(data.frag)) return;
-    stepIntoBuffer(video);
+    stepIntoBuffer(video, hls.config.skipBufferHolePadding);
     rememberEstimate(hls);
     sharpen(data.frag);
   });
@@ -106,18 +106,23 @@ export function attach(video: HTMLVideoElement, url: string): void {
 const MAX_START_GAP_S = 1;
 
 /**
- * Move the playhead to where the buffered media begins when it sits just
- * before it. A ladder encoded with B-frames starts a frame or two after zero:
- * the MP4's edit list hides that, but Media Source ignores edit lists.
- * Chromium steps over such a gap; WebKit waits at zero for data that never
- * comes, so an autoplaying clip never becomes ready to play and stays on its
- * poster.
+ * Move the playhead into the buffered media when it sits just before it. A
+ * ladder encoded with B-frames starts a frame or two after zero: the MP4's
+ * edit list hides that, but Media Source ignores edit lists. Chromium steps
+ * over such a gap; WebKit waits at zero for data that never comes, so an
+ * autoplaying clip never becomes ready to play and stays on its poster.
+ *
+ * The step lands `past` seconds inside the media (the padding hls.js adds
+ * when it jumps a start gap itself, which it does only while playing), not on
+ * its first instant: WebKit parked there reports `HAVE_FUTURE_DATA` with the
+ * whole clip buffered and usually never reaches the `HAVE_ENOUGH_DATA` that
+ * autoplay waits for.
  */
-export function stepIntoBuffer(video: HTMLVideoElement): void {
+export function stepIntoBuffer(video: HTMLVideoElement, past: number): void {
   if (video.seeking || video.buffered.length === 0) return;
   const start = video.buffered.start(0);
   const gap = start - video.currentTime;
-  if (gap > 0 && gap <= MAX_START_GAP_S) video.currentTime = start;
+  if (gap > 0 && gap <= MAX_START_GAP_S) video.currentTime = Math.min(start + past, video.buffered.end(0));
 }
 
 // ── A clip that is not playing does not load ────────────────────────

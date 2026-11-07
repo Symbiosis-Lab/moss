@@ -141,6 +141,43 @@ fn a_folder_with_nothing_in_the_cloud_is_fetched_without_a_write() {
     assert!(!site.join(".moss").exists(), "fetch must not create .moss");
 }
 
+/// What moss regenerates is not fetched, and everything else under `.moss` is:
+/// a copy for a build leaves the cache out, and a build makes it again.
+#[test]
+fn files_moss_regenerates_are_not_fetched() {
+    let (_tmp, site) = site_in_a_drive_folder();
+    for dir in [".moss/cache/objects/ab", ".moss/build.nosync/cache", ".moss/identity"] {
+        std::fs::create_dir_all(site.join(dir)).unwrap();
+        std::fs::write(site.join(dir).join("blob"), "x").unwrap();
+    }
+    let _in_cloud: Vec<_> = [".moss/cache/objects/ab/blob", ".moss/build.nosync/cache/blob", ".moss/identity/blob"]
+        .iter()
+        .map(|f| icloud::pretend::evicted(&site.join(f)))
+        .collect();
+    let asked: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
+    let (mut said, mut out) = (Vec::new(), Vec::new());
+    let record = asked.clone();
+    let wait = move || {
+        let record = record.clone();
+        let seen = record.clone();
+        let pool = Prefetcher::with_materializer(
+            3,
+            Arc::new(move |p| {
+                record.lock().unwrap().push(p.to_path_buf());
+                Ok(())
+            }),
+            false,
+        );
+        Wait::with(pool, move |p| icloud::is_still_in_the_cloud(p) && !seen.lock().unwrap().contains(&p.to_path_buf()), Duration::from_secs(5), Duration::from_millis(10))
+    };
+
+    let code = fetch_folder(&site, &wait, &mut |l| said.push(l.to_string()), &mut |l| out.push(l.to_string()));
+
+    assert_eq!(code, 0, "{said:?}");
+    assert!(out[0].starts_with("Fetched 1 files"), "{out:?}");
+    assert_eq!(*asked.lock().unwrap(), [site.join(".moss/identity/blob")]);
+}
+
 #[test]
 fn a_stalled_provider_exits_non_zero_and_names_itself() {
     let (_tmp, site) = site_in_a_drive_folder();

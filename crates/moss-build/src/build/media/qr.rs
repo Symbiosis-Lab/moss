@@ -47,8 +47,10 @@ pub struct ShareQr {
 
 /// The QR code for a page, or `None` when this page has none.
 ///
-/// A page has one when all three hold:
+/// A page has one when all four hold:
 ///
+/// - **The site offers Share** (`[site].selection_tools`). The code exists
+///   only to sit on the shared picture's corner.
 /// - **The site has a real URL.** `is_deployed()` is false for the localhost
 ///   fallback a never-published site builds against, and a code encoding
 ///   `http://localhost:1420/...` is worse than no code. This is why an
@@ -64,8 +66,9 @@ pub fn share_qr_for_page(
     url_path: &str,
     is_public_page: bool,
     site_url: &SiteUrl,
+    selection_tools: bool,
 ) -> Option<ShareQr> {
-    if !is_public_page || !site_url.is_deployed() {
+    if !selection_tools || !is_public_page || !site_url.is_deployed() {
         return None;
     }
     let payload =
@@ -136,12 +139,18 @@ pub fn qr_key_for_url_path(url_path: &str) -> String {
     format!("qr/{}.svg", segments.join("/"))
 }
 
+/// Whether `path` is an output key of the shape [`qr_key_for_url_path`] makes:
+/// a page's code, or a redirect's copy of one at its old address.
+pub fn is_share_qr_path(path: &str) -> bool {
+    path.starts_with("qr/") && path.ends_with(".svg")
+}
+
 /// The `data-share-qr` attribute for a page, or an empty string when it has no
 /// code. This is what the reader reads; [`emit_share_qr`] writes what it points
 /// at, and both derive it from [`share_qr_for_page`], so the attribute cannot
 /// name a file the build did not write.
-pub fn share_qr_attr(url_path: &str, is_public_page: bool, site_url: &SiteUrl) -> String {
-    match share_qr_for_page(url_path, is_public_page, site_url) {
+pub fn share_qr_attr(url_path: &str, is_public_page: bool, site_url: &SiteUrl, selection_tools: bool) -> String {
+    match share_qr_for_page(url_path, is_public_page, site_url, selection_tools) {
         Some(qr) => format!(
             r#" data-share-qr="/{}""#,
             crate::build::page::meta::escape_html_attr(&qr.served_path)
@@ -162,6 +171,7 @@ pub fn share_qr_attr(url_path: &str, is_public_page: bool, site_url: &SiteUrl) -
 pub fn emit_share_qrs(
     documents: &[crate::build::types::ParsedDocument],
     site_url: &SiteUrl,
+    selection_tools: bool,
     output_dir: &std::path::Path,
     pending: &mut crate::build::manifest::PendingManifest,
 ) -> Result<(), String> {
@@ -170,26 +180,28 @@ pub fn emit_share_qrs(
             &doc.url_path,
             doc.is_public_page(),
             site_url,
+            selection_tools,
             output_dir,
             pending,
         )?;
     }
     if !documents.is_empty() && !documents.iter().any(|d| d.url_path == "index.html") {
-        emit_share_qr("index.html", true, site_url, output_dir, pending)?;
+        emit_share_qr("index.html", true, site_url, selection_tools, output_dir, pending)?;
     }
     Ok(())
 }
 
 /// Writes a page's QR code, if it has one. A generation failure is logged and
 /// skipped: a card without a corner code is a smaller loss than a failed build.
-pub fn emit_share_qr(
+fn emit_share_qr(
     url_path: &str,
     is_public_page: bool,
     site_url: &SiteUrl,
+    selection_tools: bool,
     output_dir: &std::path::Path,
     pending: &mut crate::build::manifest::PendingManifest,
 ) -> Result<(), String> {
-    let Some(qr) = share_qr_for_page(url_path, is_public_page, site_url) else {
+    let Some(qr) = share_qr_for_page(url_path, is_public_page, site_url, selection_tools) else {
         return Ok(());
     };
     let sp = crate::build::served_path::ServedPath::from_source(&qr.served_path)
@@ -362,7 +374,7 @@ mod tests {
 
     #[test]
     fn a_public_page_gets_a_code_encoding_its_canonical_url() {
-        let qr = share_qr_for_page("posts/a/index.html", true, &deployed()).unwrap();
+        let qr = share_qr_for_page("posts/a/index.html", true, &deployed(), true).unwrap();
         assert_eq!(qr.served_path, "qr/posts/a.svg");
         // Canonical — not `{site}/{url_path}`, which appended `/index.html`.
         assert_eq!(qr.payload, "https://example.com/posts/a/");
@@ -375,14 +387,14 @@ mod tests {
         // `PageKind::Folder` skip left every one of them with a card that had
         // an empty corner. Nothing about the page kind reaches this decision
         // any more — there is no parameter for it to arrive on.
-        let qr = share_qr_for_page("awards/s2/rainy-season/index.html", true, &deployed()).unwrap();
+        let qr = share_qr_for_page("awards/s2/rainy-season/index.html", true, &deployed(), true).unwrap();
         assert_eq!(qr.served_path, "qr/awards/s2/rainy-season.svg");
         assert_eq!(qr.payload, "https://example.com/awards/s2/rainy-season/");
     }
 
     #[test]
     fn the_homepage_gets_one_too_and_it_points_at_the_root() {
-        let qr = share_qr_for_page("index.html", true, &deployed()).unwrap();
+        let qr = share_qr_for_page("index.html", true, &deployed(), true).unwrap();
         assert_eq!(qr.served_path, "qr/index.svg");
         assert_eq!(qr.payload, "https://example.com/");
     }
@@ -390,19 +402,25 @@ mod tests {
     #[test]
     fn an_onion_site_gets_a_code_a_tor_browser_can_open() {
         let onion = SiteUrl::parse("http://abcdefghij.onion").unwrap();
-        let qr = share_qr_for_page("posts/a/index.html", true, &onion).unwrap();
+        let qr = share_qr_for_page("posts/a/index.html", true, &onion, true).unwrap();
         assert_eq!(qr.payload, "http://abcdefghij.onion/posts/a/");
     }
 
     #[test]
+    fn a_site_without_selection_tools_gets_no_code() {
+        assert_eq!(share_qr_for_page("posts/a/index.html", true, &deployed(), false), None);
+        assert_eq!(share_qr_attr("posts/a/index.html", true, &deployed(), false), "");
+    }
+
+    #[test]
     fn a_draft_or_slot_file_gets_none() {
-        assert_eq!(share_qr_for_page("posts/a/index.html", false, &deployed()), None);
+        assert_eq!(share_qr_for_page("posts/a/index.html", false, &deployed(), true), None);
     }
 
     #[test]
     fn an_unpublished_site_gets_none_rather_than_a_localhost_code() {
         let local = SiteUrl::parse("http://localhost:1420").unwrap();
-        assert_eq!(share_qr_for_page("posts/a/index.html", true, &local), None);
+        assert_eq!(share_qr_for_page("posts/a/index.html", true, &local, true), None);
     }
 
     #[test]

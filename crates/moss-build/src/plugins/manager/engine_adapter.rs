@@ -1,4 +1,4 @@
-//! Engine abstraction for plugin hook dispatch (Phase 2).
+//! Engine abstraction for plugin hook dispatch.
 //!
 //! Abstracts ONLY the dispatch primitive (eval_to_runtime, manager.rs:365).
 //! PluginHookState plumbing stays host-side and engine-agnostic (signal_route).
@@ -63,7 +63,7 @@ pub trait PluginEngine: Send + Sync {
     /// Teardown: cancel drive(), abort timers, drop Contexts.
     async fn teardown(&self);
 
-    /// Best-effort kill of an in-flight hook (Phase-4 condition 6, D3). Default
+    /// Best-effort kill of an in-flight hook. Default
     /// no-op: an engine without a per-hook kill lets its runaway JS die with
     /// webview destroy at folder close — parity). QuickJsEngineAdapter cancels the
     /// dispatch's CancellationToken, killing the hook parked OR wedged in sync JS.
@@ -105,11 +105,11 @@ pub type BundleSource = Arc<dyn Fn(&str) -> Result<PluginBundle, String> + Send 
 /// Both residual hazards are WEBVIEW PARITY: the webview path's
 /// (plugin, hook)-keyed plugin_message routing + send_completion has the
 /// identical behavior. True engine-side hook cancellation (which kills the
-/// orphan instead of racing it) is the Phase-4 CancellationToken item.
+/// orphan instead of racing it) is the `cancel_hook` CancellationToken path.
 struct SinkEntry {
     generation: u64,
     sink: HookSignalSink,
-    /// CancellationToken for this dispatch (Phase-4 condition 6, D3). Cancelled
+    /// CancellationToken for this dispatch. Cancelled
     /// by `cancel_hook` on the adapter; the engine-side select! arm and interrupt
     /// handler propagate the cancel to parked and sync-wedged hooks respectively.
     cancel: tokio_util::sync::CancellationToken,
@@ -121,7 +121,7 @@ type SinkMap = Arc<Mutex<HashMap<(String, String), SinkEntry>>>;
 /// (plugin, event name) — ONE forwarding listener per pair, installed on the
 /// first `__engine_listen__` from that plugin's JS `listen(name)` call.
 ///
-/// Lifetime note (known gap, Phase-3 accepted): bridged registrations live
+/// Lifetime note (known gap, accepted): bridged registrations live
 /// until adapter TEARDOWN, not per-JS-unlisten — bounded by the handful of
 /// event names plugins use (`browser-closed`, `github:deploy-choice`,
 /// `github:auth-cancel`). A post-unlisten forward is dropped harmlessly by
@@ -520,7 +520,7 @@ impl PluginEngine for QuickJsEngineAdapter {
         let generation = self
             .next_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // Phase-4 condition 6 (D3): one CancellationToken per dispatch. Stored in
+        // One CancellationToken per dispatch. Stored in
         // the SinkEntry so cancel_hook can reach it; cloned into the spawn so the
         // completion task forwards it to dispatch_hook_with_cancel on the engine.
         let cancel = tokio_util::sync::CancellationToken::new();
@@ -642,7 +642,7 @@ impl PluginEngine for QuickJsEngineAdapter {
     /// (plugin, hook), so on the no-singleflight with_result path two overlapping
     /// same-key dispatches leave only the NEWEST entry's token reachable here —
     /// an older orphan stays unkillable. Same class exists on webview (no per-hook
-    /// kill at all); not widened by Phase 4.
+    /// kill at all); not widened here.
     fn cancel_hook(&self, plugin_name: &str, hook_name: &str) {
         let token = self
             .sinks

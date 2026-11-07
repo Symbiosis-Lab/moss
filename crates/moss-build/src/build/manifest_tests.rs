@@ -709,7 +709,7 @@ fn every_bucket_variant_produces_files_membership() {
 }
 
 // ---------------------------------------------------------------------------
-// generation_id on SealedManifest (PR1)
+// generation_id on SealedManifest
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -787,13 +787,13 @@ fn seal_generation_id_changes_when_content_changes() {
 }
 
 // ---------------------------------------------------------------------------
-// Determinism regression guard (Stage 0 invariant)
+// Determinism regression guard
 // ---------------------------------------------------------------------------
 
 /// Two PendingManifests built with the same content but different
 /// registration orders must produce equal generation_ids after seal.
 ///
-/// Regression guard for the Stage 0 determinism requirement.
+/// Guards the determinism requirement.
 /// If this fails: compute_manifest_generation_id is not sorting before hashing.
 #[test]
 fn generation_id_determinism_across_registration_orders() {
@@ -996,7 +996,7 @@ fn sp(path: &str) -> crate::build::served_path::ServedPath {
     crate::build::served_path::ServedPath::from_source(path).unwrap()
 }
 
-/// A page this build never re-read (Stage-5b skip, parse-cache hit, iCloud
+/// A page this build never re-read (render skip, parse-cache hit, iCloud
 /// defer) keeps the hash the previous build recorded. Without the carry the
 /// page has an output mapping and no hash, which the classifier can only read
 /// as added or deleted — and a watch-loop rebuild skips most of a large site.

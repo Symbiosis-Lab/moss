@@ -7,7 +7,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.80-blue.svg)](./Cargo.toml)
 
-[moss](https://mosspub.com) is a desktop publishing app; this crate is its content engine. Pure Rust, no I/O — takes data in (strings, structs), returns data out (parsed AST, frontmatter, rendered HTML).
+[moss](https://mosspub.com) turns a folder of markdown into a website, wherever you write; this crate is its content engine. Pure Rust, no I/O — takes data in (strings, structs), returns data out (parsed AST, frontmatter, rendered HTML).
 
 - [Quickstart](#quickstart)
 - [Stability](#stability)

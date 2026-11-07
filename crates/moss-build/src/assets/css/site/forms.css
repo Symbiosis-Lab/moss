@@ -95,60 +95,6 @@
   white-space: nowrap;
 }
 
-.moss-form .moss-btn-slot { align-self: flex-start; }
-
-.moss-form__status {
-  /* The error red alone is under 4.5:1 on the page ground; mixing in the text colour clears it in light and dark. */
-  color: color-mix(in oklch, var(--moss-error, #c85450) 65%, var(--moss-color-text));
-}
-
-/* A text area has no single edge to underline, so it keeps a full border. */
-.moss-form textarea.moss-input {
-  box-sizing: border-box;
-  padding: var(--moss-space-xs, 0.5rem);
-  border: 1px solid var(--moss-border-strong);
-  resize: vertical;
-}
-.moss-form .moss-input[aria-invalid="true"] {
-  border-color: var(--moss-error, #c85450);
-}
-
-/* The base rule hides the focus outline in favour of a darker underline,
-   which a keyboard user can miss; the ring comes back for keyboard focus. */
-.moss-form .moss-input:focus-visible,
-.moss-form__choice input:focus-visible {
-  outline: 2px solid var(--moss-color-ui-accent);
-  outline-offset: 2px;
-}
-
-.moss-form__choice {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  min-block-size: 2.75rem;
-}
-.moss-form__choice input {
-  flex: none;
-  inline-size: 1.15rem;
-  block-size: 1.15rem;
-  margin: 0;
-  accent-color: var(--moss-color-accent);
-}
-.moss-form__choice input[aria-invalid="true"] {
-  outline: 2px solid var(--moss-error, #c85450);
-  outline-offset: 2px;
-}
-
-/* The honeypot is for software: out of sight, out of the tab order. */
-.moss-form__hp {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 .moss-form .moss-btn-slot {
   align-self: flex-start;
   min-block-size: 2.75rem;

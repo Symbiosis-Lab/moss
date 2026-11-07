@@ -1542,7 +1542,7 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
     let hashes_path = mp.hashes();
     let unreadable = |input: &Path, e: std::io::Error| format!("{} unreadable ({})", input.display(), e);
 
-    // Phase 0: the HashIndex names the live source OIDs.
+    // The HashIndex names the live source OIDs.
     let hash_index = HashIndex::load_strict(&hash_index_path)
         .map_err(|e| unreadable(&hash_index_path, e))?
         .unwrap_or_else(HashIndex::new);
@@ -1552,7 +1552,7 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
         .map(|e| e.content_hash.as_str())
         .collect();
 
-    // Phase 1: mark transform records. A live record's outputs are live in
+    // Mark transform records. A live record's outputs are live in
     // both stores. A source oid is live only in `local-objects/`, even when it
     // is also an output (a video kept as its web file): a copy in the synced
     // store is moved to this machine's store, or dropped if one is there.
@@ -1605,7 +1605,7 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
         shard_dirs.push(p1);
     }
 
-    // Phase 2: mark the output hashes `hashes.json` names (they may be blobs).
+    // Mark the output hashes `hashes.json` names (they may be blobs).
     match fs::read_to_string(&hashes_path) {
         Ok(content) => {
             let site_hashes = serde_json::from_str::<serde_json::Value>(&content).map_err(|e| {

@@ -16,9 +16,9 @@ describe('hosted form helpers', () => {
     expect(claim(el)).toBe(false);
   });
 
-  test('loading and success disable the button for assistive tech, idle and error do not', () => {
+  test('only loading disables the button for assistive tech: on success it resets the form', () => {
     const { form, btn } = mount('row');
-    for (const [state, disabled] of [['loading', true], ['success', true], ['error', false], ['idle', false]] as const) {
+    for (const [state, disabled] of [['loading', true], ['success', false], ['error', false], ['idle', false]] as const) {
       setState(form, state);
       expect(form.dataset.state).toBe(state);
       expect(btn.hasAttribute('aria-disabled')).toBe(disabled);

@@ -348,6 +348,7 @@ mod removal_announcement_tests {
             reason: RemovalReason::Unexplained,
             moved_to: None,
             source: None,
+            withdrawn_by: None,
         }]
     }
 

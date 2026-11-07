@@ -31,8 +31,8 @@
 // Rust-owned constants (bundle mount URL + palette strings) arrive via the
 // generated module — `generate-artifacts -- search-runtime` — never hand-mirrored.
 import { BUNDLE_PATH, STRINGS, type SearchStrings } from "./search.generated";
+import { langBucket } from "./subscribe/i18n";
 import { holdPageScroll } from "./viewport";
-import { pageLanguage } from "./writing-mode";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -69,8 +69,7 @@ interface PagefindApi {
   search: (query: string) => Promise<{ results: PagefindResult[] }>;
 }
 
-/** Resolve `<html lang>` the same way `Language::from_bcp47` does: any zh-* by region. */
-const S: SearchStrings = STRINGS[pageLanguage()];
+const S: SearchStrings = STRINGS[langBucket(document.documentElement.lang)];
 
 // ---------------------------------------------------------------------------
 // State

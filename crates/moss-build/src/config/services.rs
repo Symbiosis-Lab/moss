@@ -1,8 +1,7 @@
 //! `[services]` schema v2 — the typed shape of `.moss/config.toml`'s services.
 //!
-//! Moved from the app crate's `domain/config.rs` (2026-08-27, M6a B3): the
-//! build tree decides footer chrome and slot resolution from these types, so
-//! they must be reachable from `moss-build` when the pipeline crosses. The
+//! The build tree decides footer chrome and slot resolution from these types,
+//! so they must be reachable from `moss-build`. The
 //! path-taking readers live in `build::site_config` and the write primitive in
 //! `vault::config` — this module is the vocabulary,
 //! not the file access.
@@ -115,6 +114,15 @@ pub struct FormsService {
     pub endpoint: Option<String>,
 }
 
+pub mod booking;
+pub use booking::BookingService;
+
+/// A service address must be a web address; the message names the table it came from.
+pub(crate) fn endpoint_problem(table: &str, endpoint: &str) -> Option<String> {
+    (!endpoint.starts_with("https://") && !endpoint.starts_with("http://"))
+        .then(|| format!("[services.{table}] endpoint '{endpoint}' must start with https:// or http://"))
+}
+
 /// Root `[services]` table, one field per `ServiceKind`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[derive(specta::Type)]
@@ -214,10 +222,8 @@ impl ServicesConfig {
         if let Some(e) = &self.email {
             check("email", &e.common, &["buttondown"], e.api_key.is_some(), hosted_on_moss)?;
         }
-        if let Some(endpoint) = self.forms.as_ref().and_then(|f| f.endpoint.as_deref()) {
-            if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
-                return Err(format!("[services.forms] endpoint '{endpoint}' must start with https://"));
-            }
+        if let Some(problem) = self.forms.as_ref().and_then(|f| f.endpoint.as_deref()).and_then(|e| endpoint_problem("forms", e)) {
+            return Err(problem);
         }
         Ok(())
     }

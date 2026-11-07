@@ -256,6 +256,20 @@ pub fn emit_country_notice(documents: &[crate::build::types::ParsedDocument], ou
     }
 }
 
+/// The country search index, once for the site, in the notice's directory. Only a
+/// site with a country map whose search is on pays for it.
+pub fn emit_country_search(documents: &[crate::build::types::ParsedDocument], output_dir: &Path, pending: &mut PendingManifest) {
+    if !documents.iter().filter_map(|d| d.country_map.as_ref()).any(|m| m.spec.search) {
+        return;
+    }
+    let result = ServedPath::for_place_map_asset(&place_map::country_map::shapes::embedded().digest, place_map::country_map::search::FILE)
+        .map_err(|e| e.to_string())
+        .and_then(|sp| BuildContext::for_render(output_dir, pending).emit(&sp, place_map::country_map::search::index().as_bytes(), HashBucket::Files).map_err(|e| e.to_string()));
+    if let Err(error) = result {
+        crate::build::cli_output::log_warn_problem!("country-map search index could not be emitted: {error}");
+    }
+}
+
 /// `pipeline.rs`'s one call site, matching this crate's `emit/`-family
 /// convention of a single build-phase entry point the caller merely gates
 /// (see `emit.rs`'s module doc). `render_context` is `Some` exactly when

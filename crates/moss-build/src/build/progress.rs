@@ -58,12 +58,9 @@ pub struct BackgroundProgress {
     pub advisories: Vec<Advisory>,
 }
 
-// The advisory value objects live in `crate::advisory` (Step 3 Phase 2
-// moved them out of this file so non-build producers reach them without
-// depending on the build pipeline; M6a B3 moved them into the open crate,
-// where the pipeline can still reach them after the crate split). The legacy
-// `build::progress::*` re-export was removed in Step 3 Phase 6 once every call
-// site migrated; the build pipeline now imports the names it uses privately.
+// The advisory value objects live in `crate::advisory` so non-build producers
+// reach them without depending on the build pipeline; the build pipeline
+// imports the names it uses privately.
 use crate::advisory::{Action, Advisory, Scope, Severity};
 
 /// Asset ready notification for placeholder swapping
@@ -784,7 +781,7 @@ mod tests {
     }
 
     // =========================================================================
-    // PipelineEvent Tests (Phase 3)
+    // PipelineEvent Tests
     // =========================================================================
 
     #[test]
@@ -1051,7 +1048,7 @@ mod tests {
         // All survived — invariant holds
     }
 
-    // ── Step 3 Phase 4: media child Jobs + Build parent receipt ───────────
+    // ── Media child Jobs + Build parent receipt ───────────
 
     use crate::tasks::{TaskKind, TaskScope, TaskState, WindowId};
     use crate::types::services::BuildServices;
@@ -1726,7 +1723,7 @@ mod removed_addresses_advisory_tests {
     use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 
     fn removed(path: &str, reason: RemovalReason) -> RemovedAddress {
-        RemovedAddress { path: path.into(), reason, moved_to: None, source: None }
+        RemovedAddress { path: path.into(), reason, moved_to: None, source: None, withdrawn_by: None }
     }
 
     fn advisories(event: PipelineEvent) -> Vec<Advisory> {

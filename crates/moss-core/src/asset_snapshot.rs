@@ -1,4 +1,4 @@
-//! Pre-fetched asset metadata available to Stage 1 + Stage 2.
+//! Pre-fetched asset metadata available to moss-core's synthesizers.
 //!
 //! moss-build's asset pipeline populates this before any markdown processing
 //! runs. moss-core consumes it as input — pure Rust, zero I/O, full data.
@@ -28,8 +28,7 @@ use std::path::PathBuf;
 /// from pre-Phase-2E days; semantically a layout-shift hint, not a real
 /// dimension. Synthesizer callers may choose to omit width/height entirely
 /// when the dimension lookup returns the fallback (honest-degradation path),
-/// but production keeps them today for byte-shape parity with the
-/// (since-retired) Stage 3 regex post-pass.
+/// but production keeps them for a stable `<img>` byte shape.
 pub const FALLBACK_WIDTH: u32 = 800;
 pub const FALLBACK_HEIGHT: u32 = 600;
 

@@ -56,8 +56,7 @@ pub trait RenderHooks {
         is_wikilink: bool,
         content: &str,
     ) {
-        // PR7a-flip-core-A: is_wikilink and UrlKind::AssetNewtab are
-        // orthogonal. A wikilink that resolves to an asset-newtab kind
+        // is_wikilink and UrlKind::AssetNewtab are orthogonal. A wikilink that resolves to an asset-newtab kind
         // emits BOTH `class="wikilink"` AND `target="_blank" rel="noopener"`
         // — neither concern shadows the other.
         //
@@ -162,15 +161,14 @@ pub trait RenderHooks {
 
     /// Optional [`AssetSnapshot`] for the gallery synth path.
     ///
-    /// Phase 2E v5 PR3 (2026-05-26): when the impl returns
-    /// `Some(snapshot)`, [`render_shortcode`]'s `Gallery` arm routes each
-    /// item through [`crate::render::image::synthesize_image_html`] with
+    /// When the impl returns `Some(snapshot)`, [`render_shortcode`]'s
+    /// `Gallery` arm routes each item through
+    /// [`crate::render::image::synthesize_image_html`] with
     /// [`ImageContext::GalleryThumb`], producing the canonical synth byte
     /// shape (`<picture><source srcset=*.webp>`, dims, LQIP, lazy
     /// loading). When the impl returns `None` (tests, fragment-render
-    /// paths, downstream consumers without a snapshot), the legacy
-    /// bare-`<img>` emission survives so the regex post-pass picks up
-    /// the attributes.
+    /// paths, downstream consumers without a snapshot), an empty snapshot
+    /// is used: same shape with fallback dims and no LQIP.
     ///
     /// Default impl: `None`. [`DefaultHooks::with_snapshot`] overrides
     /// to expose the constructor-provided snapshot.
@@ -242,14 +240,10 @@ pub trait RenderHooks {
                     class_attr.push(' ');
                     class_attr.push_str(&args.classes);
                 }
-                // An author-specified column count is emitted TWICE on
-                // purpose: `--moss-gallery-columns` is the value `repeat()` can
-                // compute with, and `data-columns` is the selector hook that
-                // lets site.css give the counted and count-less galleries
-                // different track rules (CSS cannot branch on "is this custom
-                // property set?"). Mirrors `.moss-grid[data-columns]`.
-                // Without the split, an explicit N inherits auto-fill's 200px
-                // track floor and the gallery overflows its container.
+                // A column count is written twice: `--moss-gallery-columns`
+                // for `repeat()` to compute with, and `data-columns` for
+                // site.css to select on, since CSS cannot ask whether a custom
+                // property is set (as `.moss-grid[data-columns]` does).
                 let count_attrs = match args.columns {
                     Some(n) => format!(r#" data-columns="{n}" style="--moss-gallery-columns: {n}""#),
                     None => String::new(),
@@ -267,21 +261,11 @@ pub trait RenderHooks {
                     out.push_str(r#" data-layout="rows""#);
                 }
                 out.push('>');
-                // Phase 4 PR1 (2026-05-27): every gallery item routes
-                // through `render::image::synthesize_image_html` with
-                // `ImageContext::GalleryThumb`. When the impl carries an
-                // `AssetSnapshot` (production path via
-                // `DefaultHooks::with_snapshot`), the synth emits the
-                // canonical byte shape — `<picture><source srcset=*.webp>`
-                // wrap, dims from the snapshot, LQIP, `loading="lazy"`.
-                // When the impl carries no snapshot (test / fragment-render
-                // paths), an empty `AssetSnapshot` is threaded through:
-                // synth still emits `<picture>` for raster originals but
-                // with fallback dims (800×600) and no LQIP/color style.
-                // The legacy bare-`<img>` fallback was retired in Phase 4
-                // PR1 — every `<img>` must be synth-emitted (or a
-                // documented carve-out) per the `img_contract_test`
-                // invariant.
+                // Every item goes through `synthesize_image_html` as a
+                // `GalleryThumb`, so every `<img>` is synth-emitted (the
+                // `img_contract_test` invariant). With no snapshot (tests,
+                // fragment renders) an empty one gives fallback dims and no
+                // LQIP.
                 let empty_snapshot = crate::asset_snapshot::AssetSnapshot::new();
                 let assets_for_synth = self.gallery_assets().unwrap_or(&empty_snapshot);
                 let total = args.items.len();
@@ -363,6 +347,11 @@ pub trait RenderHooks {
                     out.push_str("</div>");
                 }
                 out.push_str("</div>");
+                if !args.caption.is_empty() {
+                    out.push_str(r#"<p class="moss-gallery-caption">"#);
+                    out.push_str(&super::render::render_inlines_html(self, &args.caption));
+                    out.push_str("</p>");
+                }
             }
             Shortcode::Buttons(args) => {
                 if args.items.is_empty() {
@@ -571,16 +560,8 @@ pub trait RenderHooks {
                     }
                 }
                 if !args.overlay.is_empty() {
-                    // Render via `render_blocks`, then collapse
-                    // tag-adjacent newlines to match the byte shape of
-                    // `render_markdown_to_html_with` (pulldown-cmark's
-                    // `push_html` emits none).
-                    //
-                    // `DefaultHooks::without_heading_anchors` suppresses
-                    // moss-heading-anchor on overlay headings. We rebuild
-                    // DefaultHooks from gallery_assets() rather than coercing
-                    // `self` to `&dyn RenderHooks` — the coercion requires
-                    // `Self: Sized`, which the trait default cannot guarantee.
+                    // Tag-adjacent newlines collapse to the byte shape
+                    // pulldown-cmark's `push_html` emits.
                     let mut overlay_html = String::new();
                     render_hero_overlay_blocks(
                         self.gallery_assets(),
@@ -652,6 +633,9 @@ pub trait RenderHooks {
         true
     }
 
+    /// A class for a paragraph's `<p>`, from what it holds. Default: none.
+    fn paragraph_class(&self, _children: &[super::node::Inline]) -> Option<&'static str> { None }
+
     /// Whether a heading at `level` carries the `moss-heading-anchor`
     /// permalink. The `id` is kept regardless of the answer, so a fragment
     /// link (`#section`) still resolves either way — this only gates the
@@ -709,9 +693,7 @@ pub trait RenderHooks {
     /// RPC). When `None` (default config / fragment-render paths), no
     /// attr is emitted — byte-identical to the pre-source-line shape.
     ///
-    /// Source-line wiring added 2026-05-28 (Phase 4 cleanup): restores
-    /// the preview-scroll paragraph-precision feature that PR7a's
-    /// `transform_events` deletion removed.
+    /// The attr gives the preview paragraph-precision scrolling.
     fn render_heading(
         &self,
         out: &mut String,
@@ -797,12 +779,10 @@ pub struct HeadingMarks<'a> {
 /// Default render hooks. moss-core ships this as the base implementation
 /// of [`RenderHooks`]; the methods are the trait's default impls.
 ///
-/// Phase 2E v5 PR3 (2026-05-26): refactored from a unit struct to a
-/// lifetime-parameterized struct so callers can attach an
+/// Lifetime-parameterized so callers can attach an
 /// [`AssetSnapshot`] for the gallery synth path. Use
 /// [`DefaultHooks::new`] / `Default::default()` for the no-snapshot
-/// behavior (legacy bare-`<img>` emission; surviving regex post-pass
-/// fills in attributes); use [`DefaultHooks::with_snapshot`] for the
+/// behavior (empty snapshot: fallback dims, no LQIP); use [`DefaultHooks::with_snapshot`] for the
 /// production path (full synth byte shape — `<picture><source srcset>`,
 /// dims, LQIP, lazy loading).
 ///
@@ -828,6 +808,8 @@ pub struct DefaultHooks<'a> {
     suppress_heading_anchors: bool,
     /// The page is vertically typeset (see [`DefaultHooks::vertical`]).
     vertical: bool,
+    /// See [`DefaultHooks::hero_words`].
+    hero_words: bool,
     /// Overrides [`RenderHooks::gallery_link_template`] when set.
     gallery_link_template: Option<&'a str>,
     /// Body images emitted by [`RenderHooks::render_image`] load eagerly
@@ -939,6 +921,12 @@ impl<'a> DefaultHooks<'a> {
             ..Self::default()
         }
     }
+
+    /// Hooks for a hero's words: no permalinks, and a paragraph of nothing but links is
+    /// `moss-hero-actions`, the buttons, which CSS cannot tell from a link in a sentence.
+    pub fn hero_words(assets: Option<&'a crate::asset_snapshot::AssetSnapshot>) -> Self {
+        Self { hero_words: true, ..Self::without_heading_anchors(assets) }
+    }
 }
 
 const GALLERY_LINK_TEMPLATE_EN: &str = "Open image {n} of {m}";
@@ -962,6 +950,10 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
 
     fn emit_heading_anchors(&self, level: u8) -> bool {
         level != 1 && !self.suppress_heading_anchors
+    }
+
+    fn paragraph_class(&self, children: &[super::node::Inline]) -> Option<&'static str> {
+        (self.hero_words && super::node::is_link_row(children)).then_some("moss-hero-actions")
     }
 
     fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {
@@ -1026,9 +1018,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
                 return;
             }
         };
-        // PR1 v2 (post-Wave-0.5 parity probe): MarkdownInline (no figure
-        // wrap) for inline images. PR3's Block::Figure handles the figure
-        // wrap for image-only paragraphs.
+        // MarkdownInline (no figure wrap) for inline images; `Block::Figure`
+        // handles the figure wrap for image-only paragraphs.
         let ctx = crate::render::image::ImageContext::MarkdownInline;
         // The CommonMark title is the image's `title` attribute, before the
         // `style` fragment; neither is emitted when absent.
@@ -1102,9 +1093,7 @@ fn push_bare_img(
     out.push_str(" />");
 }
 
-/// Render hero overlay blocks into `out` via [`DefaultHooks::without_heading_anchors`]
-/// so that headings inside the overlay don't carry a `moss-heading-anchor`
-/// permalink.
+/// Render hero overlay blocks into `out` via [`DefaultHooks::hero_words`].
 ///
 /// Accepts an optional `AssetSnapshot` reference (from the caller's
 /// `gallery_assets()`) to route inline images through the synth path when
@@ -1123,7 +1112,7 @@ fn render_hero_overlay_blocks(
     metas: &[super::document::BlockMeta],
     out: &mut String,
 ) {
-    super::render::render_blocks_with_meta(&DefaultHooks::without_heading_anchors(snapshot), out, blocks, metas);
+    super::render::render_blocks_with_meta(&DefaultHooks::hero_words(snapshot), out, blocks, metas);
 }
 
 /// Collapse `\n` that follows a heading or paragraph closing tag when the
@@ -1133,7 +1122,7 @@ fn render_hero_overlay_blocks(
 /// `</p><div>`), but `</li>`, `</ul>`, `</ol>`, etc. keep their trailing
 /// `\n` (`<ul>\n<li>`, `</li>\n<li>`, `</li>\n</ul>`).
 ///
-/// Phase 4 PR4.5 (2026-05-28): introduced for the Grid arm's per-cell
+/// Used by the Grid arm's per-cell
 /// rendering. The AST `render_block` emits trailing `\n` after every
 /// block-level child to keep top-level document HTML readable; inside a
 /// grid cell, that whitespace needs surgical removal to byte-match
@@ -1314,8 +1303,7 @@ mod tests {
 
     #[test]
     fn default_hooks_render_link_is_wikilink_flag_injects_class() {
-        // PR7a-flip-core-A: `is_wikilink: true` injects `class="wikilink"`
-        // regardless of `url.kind` — the flag carries the parse-time
+        // `is_wikilink: true` injects `class="wikilink"` regardless of `url.kind` — the flag carries the parse-time
         // discriminator (pulldown-cmark `LinkType::WikiLink`) and is
         // honored independently from the resolved URL classification.
         let hooks = DefaultHooks::new();
@@ -1347,8 +1335,7 @@ mod tests {
 
     #[test]
     fn default_hooks_render_link_wikilink_and_newtab_compose() {
-        // PR7a-flip-core-A: `is_wikilink` and `UrlKind::AssetNewtab` are
-        // orthogonal flags — a wikilink that resolves to an asset-newtab
+        // `is_wikilink` and `UrlKind::AssetNewtab` are orthogonal flags — a wikilink that resolves to an asset-newtab
         // target emits BOTH `class="wikilink"` AND `target="_blank"
         // rel="noopener"`. Pins the composition so a future refactor that
         // re-fuses the two concerns (e.g. via a single match arm) gets
@@ -1524,6 +1511,28 @@ mod tests {
         assert!(
             html.contains(r#"</a><p class="moss-gallery-caption">Dusk, <a href="../quay/">Quay</a></p></div>"#),
             "the caption follows the image link and keeps its own link: {html}"
+        );
+    }
+
+    #[test]
+    fn gallery_row_caption_follows_the_whole_gallery() {
+        let item = |src: &str| GalleryItem {
+            src: Url::resolved(src, UrlKind::Asset),
+            alt: "Alt".to_string(),
+            alt_only: false,
+            attrs: String::new(),
+            caption: Vec::new(),
+            title: None,
+        };
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![item("a.jpg"), item("b.jpg")],
+            caption: vec![Inline::Text("Both covers".to_string())],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert!(
+            html.ends_with(r#"</div></div><p class="moss-gallery-caption">Both covers</p>"#),
+            "the caption follows the gallery, not an item: {html}"
         );
     }
 
@@ -1736,7 +1745,7 @@ mod tests {
 
     #[test]
     fn grid_with_width_wide_emits_data_width() {
-        // PR4.5: cells are Vec<Vec<Block>>; build trivial Paragraph cells.
+        // Build trivial Paragraph cells.
         let sc = Shortcode::Grid(GridShortcode {
             columns: 2,
             width: Some("wide".to_string()),
@@ -1769,24 +1778,16 @@ mod tests {
         );
     }
 
-    // ── DefaultHooks Gallery synth path (Phase 4 PR1) ────────────────
+    // ── DefaultHooks Gallery synth path ────────────────
     //
-    // Pre-Phase-4-PR1, `DefaultHooks::new()` (no snapshot) emitted a
-    // legacy bare-`<img>` gallery-item shape and relied on a surviving
-    // regex post-pass to inject dims / LQIP / `<picture>` downstream.
-    // Phase 4 PR1 (2026-05-27) deleted that bare-`<img>` fallback: every
-    // gallery item now routes through
+    // Every gallery item routes through
     // `synthesize_image_html(..., GalleryThumb, ...)`, threading an empty
     // `AssetSnapshot` through when no snapshot is in scope. Synth emits
     // `<picture>` for raster originals in both cases (snapshot-present
     // uses real dims/LQIP; snapshot-absent uses fallback dims, no LQIP).
     //
     // Rationale: the `img_contract_test` invariant requires every `<img>`
-    // in moss output to be synth-emitted or a documented carve-out. The
-    // legacy bare-img fallback was unreachable from production code paths
-    // (PipelineHooks always provides a snapshot) but became reachable the
-    // moment `render_document` is wired into production — closing the
-    // gap preemptively in PR1.
+    // in moss output to be synth-emitted or a documented carve-out.
 
     use crate::asset_snapshot::{AssetSnapshot, VariantKindSet};
     use std::path::PathBuf;
@@ -1807,9 +1808,8 @@ mod tests {
 
     #[test]
     fn default_hooks_new_gallery_routes_through_synth_with_empty_snapshot() {
-        // Phase 4 PR1 (2026-05-27): the legacy bare-`<img>` fallback for
-        // the no-snapshot Gallery path is deleted; an empty
-        // `AssetSnapshot` is threaded through synth instead. For raster
+        // The no-snapshot Gallery path threads an empty
+        // `AssetSnapshot` through synth. For raster
         // originals (.jpg/.jpeg/.png), synth still emits `<picture>` —
         // with fallback dims (800×600) and no LQIP/color style — so the
         // byte shape is identical between snapshot-present and snapshot-
@@ -1819,7 +1819,7 @@ mod tests {
         DefaultHooks::new().render_shortcode(&mut out, &sc, None);
         assert!(
             out.contains("<picture"),
-            "expected <picture> wrap even without snapshot (PR1: every <img> is synth), got: {out}",
+            "expected <picture> wrap even without snapshot (every <img> is synthesized), got: {out}",
         );
         assert!(out.contains(r#"src="photos/cat.jpg""#), "got: {out}");
         assert!(out.contains(r#"alt="photo""#), "got: {out}");
@@ -1867,10 +1867,9 @@ mod tests {
         assert!(out.contains(r#"height="600""#), "expected height=600, got: {out}");
     }
 
-    // ── DefaultHooks Hero synth path (Phase 4 PR1) ───────────────────
+    // ── DefaultHooks Hero synth path ───────────────────
     //
-    // Phase 4 PR1 (2026-05-27): the Hero arm of `render_shortcode` no
-    // longer emits a raw `<img src="…" alt="" />` — it routes through
+    // The Hero arm of `render_shortcode` routes through
     // `synthesize_image_html` with `ImageContext::Hero` (snapshot
     // present) or `ImageContext::HeroBare` (no snapshot — the legitimate
     // carve-out). Both shapes satisfy `img_contract_test`'s
@@ -1975,7 +1974,7 @@ mod tests {
         assert!(!out.contains(r#"sizes="100vw""#), "got: {out}");
     }
 
-    // ── DefaultHooks::render_image synth path (Phase 4 PR1) ──────────
+    // ── DefaultHooks::render_image synth path ──────────
     //
     // The `RenderHooks::render_image` default emits a bare `<img>`. The
     // `DefaultHooks` impl overrides this to route through synth when a
@@ -1984,18 +1983,12 @@ mod tests {
 
     #[test]
     fn default_hooks_with_snapshot_render_image_emits_picture_no_figure_wrap() {
-        // PR1 v2 (post-Wave-0.5 parity probe): inline `Inline::Image`
-        // rendering uses `MarkdownInline` — emits `<picture><img></picture>`
-        // for raster originals, NO `<figure>` wrap. The figure wrap is
-        // PR3's territory: `Block::Figure` is the typed variant for
-        // image-only paragraphs and its renderer uses
-        // `MarkdownStandalone`.
-        //
-        // Before v2 (early PR1) used `MarkdownStandalone` here and applied
-        // figure wrap to every inline image — incorrect for paragraphs
-        // with sibling content (image + italic caption + prose). Parity
-        // probe surfaced this as 9 false-positive divergences on a real
-        // site's CJK fixtures.
+        // Inline `Inline::Image` rendering uses `MarkdownInline` — emits
+        // `<picture><img></picture>` for raster originals, NO `<figure>`
+        // wrap. The figure wrap belongs to `Block::Figure` (image-only
+        // paragraphs), whose renderer uses `MarkdownStandalone`; wrapping
+        // every inline image would be wrong for paragraphs with sibling
+        // content (image + italic caption + prose).
         let src = "photos/cat.jpg";
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
@@ -2025,14 +2018,12 @@ mod tests {
 
     #[test]
     fn default_hooks_with_snapshot_render_image_emits_title_attribute_when_present() {
-        // PR1 v2 (post-parity-probe correction): with `MarkdownInline`,
-        // `title` becomes a `title=""` HTML attribute on the inner `<img>`,
-        // NOT a `<figcaption>` (the figure-wrap is PR3 territory).
+        // With `MarkdownInline`, `title` becomes a `title=""` HTML attribute
+        // on the inner `<img>`, NOT a `<figcaption>` (the figure wrap is
+        // `Block::Figure`'s).
         //
         // Verifying title round-trips through synth ensures we don't drop
-        // CommonMark `[text](href "title")` data through the AST path —
-        // the documented gap on `render_link` is fixed in PR8; for images
-        // it lands here in PR1.
+        // CommonMark `[text](href "title")` data through the AST path.
         let src = "photos/cat.jpg";
         let mut snap = AssetSnapshot::new();
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
@@ -2055,9 +2046,8 @@ mod tests {
         // The MarkdownInline path's title handling depends on synth's
         // implementation; assert it doesn't disappear silently.
         // Note: if synth currently drops title in MarkdownInline mode,
-        // that's a separate finding to file — flagged as a Phase 4
-        // followup since the production wikilink dispatcher carries title
-        // via TitleParams.
+        // that's a separate finding; the production wikilink dispatcher
+        // carries title via TitleParams.
         assert!(out.contains("<picture") || out.contains("<img"), "got: {out}");
     }
 

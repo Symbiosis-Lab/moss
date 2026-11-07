@@ -751,12 +751,39 @@ fn nav_weight_edit_verdict_log_shows_a_narrowed_incremental_render() {
     );
 }
 
+/// QR codes exist only on a site with Share on selected text.
+const SELECTION_TOOLS_ON: &str = "schema_version = 6\n\n[site]\nlang = \"en\"\nselection_tools = true\n";
+
+#[test]
+fn a_deployed_site_without_selection_tools_carries_pages_that_have_no_code() {
+    let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let logger = capture();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("no-tools");
+    write(&root, "index.md", "---\ntitle: Home\n---\n\nHome page.\n");
+    write(&root, "notes/child.md", "---\ntitle: Child\n---\n\nFirst paragraph.\n");
+    let site = Some("https://example.com");
+    assert!(build_with_site_url(&root.to_string_lossy(), moss_build::build::BuildTrigger::Full, site).is_ok());
+    assert!(!staging_dir(&root).join("qr").exists());
+
+    logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+    let noop = build_with_site_url(
+        &root.to_string_lossy(),
+        moss_build::build::BuildTrigger::ContentOnly(vec![root.join("index.md")]),
+        site,
+    );
+    assert!(noop.is_ok(), "{noop:?}");
+    let log = logger.lines.lock().unwrap_or_else(std::sync::PoisonError::into_inner).join("\n");
+    assert!(log.contains("0 generated folder indexes rendered, 1 carried"), "a page with no code to prove is carried:\n{log}");
+}
+
 #[test]
 fn generated_folder_index_carries_with_its_qr_and_rerenders_for_child_excerpt_changes() {
     let _guard = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let logger = capture();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("generated");
+    write(&root, ".moss/config.toml", SELECTION_TOOLS_ON);
     write(&root, "index.md", "---\ntitle: Home\n---\n\nHome page.\n");
     write(&root, "notes/child.md", "---\ntitle: Child\n---\n\nFirst paragraph.\n\nTail.\n");
 
@@ -815,6 +842,7 @@ fn generated_folder_index_carries_with_its_qr_and_rerenders_for_child_excerpt_ch
     assert!(changed_log.contains("1 generated folder indexes rendered, 0 carried"), "{changed_log}");
 
     let full_root = tmp.path().join("full");
+    write(&full_root, ".moss/config.toml", SELECTION_TOOLS_ON);
     write(&full_root, "index.md", "---\ntitle: Home\n---\n\nHome page.\n");
     write(&full_root, "notes/child.md", "---\ntitle: Child\n---\n\nUpdated first paragraph.\n\nTail.\n");
     std::fs::File::open(full_root.join("notes/child.md"))

@@ -9,6 +9,7 @@
 //! Terminology follows Hugo conventions:
 //! Reference: https://gohugo.io/quick-reference/glossary/
 
+use crate::build::theme_lint::{comment_end, string_end};
 use crate::build::types::ParsedDocument;
 use moss_core::PageKind;
 
@@ -604,33 +605,16 @@ pub fn minify_css(css: &str) -> String {
 
     // Pass 1: strip comments and collapse whitespace
     while i < len {
-        // Strip /* ... */ comments
-        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
-            }
-            i += 2; // skip */
+        if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i = comment_end(bytes, i);
             continue;
         }
 
         // Preserve quoted strings as-is
         if bytes[i] == b'"' || bytes[i] == b'\'' {
-            let quote = bytes[i];
-            result.push(bytes[i]);
-            i += 1;
-            while i < len && bytes[i] != quote {
-                if bytes[i] == b'\\' && i + 1 < len {
-                    result.push(bytes[i]);
-                    i += 1;
-                }
-                result.push(bytes[i]);
-                i += 1;
-            }
-            if i < len {
-                result.push(bytes[i]);
-                i += 1;
-            }
+            let end = (string_end(bytes, i, bytes[i]) + 1).min(len);
+            result.extend_from_slice(&bytes[i..end]);
+            i = end;
             continue;
         }
 

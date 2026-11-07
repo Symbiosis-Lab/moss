@@ -65,7 +65,7 @@ fn default_deployer() -> &'static str {
 /// migrating IN MEMORY when the schema is old. Returns `Ok(None)` if the
 /// file does not exist.
 ///
-/// Since the M6a move this reader never writes: the on-disk migration (backup,
+/// This reader never writes: the on-disk migration (backup,
 /// save, gitignore rewrite) is the app's `persist_migration`, run only when an
 /// author edits the file (readers cross, writers stay). Migrating the parsed
 /// value here keeps every read correct without it.

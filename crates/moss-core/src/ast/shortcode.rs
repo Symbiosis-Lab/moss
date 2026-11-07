@@ -129,6 +129,10 @@ pub struct GalleryShortcode {
     /// the width and every photo keeps its proportions) instead of the grid.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rows: bool,
+    /// A caption for the whole gallery: the italic line under a line of several
+    /// pictures, which no single picture owns. Empty when the author wrote none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption: Vec<Inline>,
 }
 
 /// One image in a [`GalleryShortcode`].
@@ -222,10 +226,8 @@ pub struct GridShortcode {
     pub classes: String,
     /// The `id` for the wrapping `<div>` (from `{#rooms}`).
     pub id: Option<String>,
-    /// Each cell's parsed block content. Phase 4 PR4.5 (2026-05-28)
-    /// promoted this from `Vec<String>` (raw markdown source) to
-    /// `Vec<Vec<Block>>` (fully-typed AST). Nested shortcodes inside a
-    /// cell (`::::buttons` in `:::grid`) extract through
+    /// Each cell's parsed block content (`Vec<Vec<Block>>`). Nested
+    /// shortcodes inside a cell (`::::buttons` in `:::grid`) extract through
     /// [`crate::ast::parser::parse`] recursion in
     /// [`crate::ast::shortcode_extract::parse_grid`].
     ///
@@ -362,10 +364,8 @@ pub struct HeroShortcode {
     pub attrs: String,
     /// Extra CSS classes for the wrapping `<section>` (from `{.foo .bar}`).
     pub classes: String,
-    /// Parsed block content for the overlay. Phase 4 PR4.5 (2026-05-28)
-    /// promoted this from `overlay_markdown: String` to `overlay: Vec<Block>`
-    /// (fully-typed AST). Nested shortcodes inside the overlay
-    /// (`::::buttons` inside `:::hero`) extract through
+    /// Parsed block content for the overlay. Nested shortcodes inside the
+    /// overlay (`::::buttons` inside `:::hero`) extract through
     /// [`crate::ast::parser::parse`] recursion in
     /// [`crate::ast::shortcode_extract::parse_hero`].
     pub overlay: Vec<Block>,
@@ -374,8 +374,7 @@ pub struct HeroShortcode {
     pub source: ShortcodeSource,
     /// Plain-text overlay source for downstream OG-fallback extraction.
     ///
-    /// PR4.5 (2026-05-28): captured at parse time alongside the typed
-    /// `overlay` because `crate::build::page::meta::extract_description`
+    /// Captured at parse time alongside the typed `overlay` because `crate::build::page::meta::extract_description`
     /// (the homepage-hero rung in the description chain) operates on
     /// markdown source — round-tripping `Vec<Block>` to markdown would
     /// invite drift. The renderer uses `overlay` for HTML; downstream
@@ -383,14 +382,13 @@ pub struct HeroShortcode {
     ///
     /// Empty when the author wrote no overlay body.
     ///
-    /// TODO(phase4-cleanup): replace with a Vec<Block>-walking
+    /// TODO: replace with a Vec<Block>-walking
     /// `to_plain_text(blocks: &[Block]) -> String` helper in moss-core
     /// + consume `overlay` directly in `meta.rs::extract_description`,
     /// deleting this field. Carrying both `overlay: Vec<Block>` AND
     /// `overlay_text: String` makes the AST non-canonical (which is the
     /// source of truth?); per cross-SSG research, lossy or duplicate
-    /// state is Gatsby's mistake. This is transitional — flag if it
-    /// survives past PR7a. (Architecture review caveat 2026-05-28.)
+    /// state is Gatsby's mistake. This is transitional.
     pub overlay_text: String,
     /// Spec § P9 width attribute: `body | wide | page | screen` (with
     /// `full` aliased to `screen`). `None` means the author did not set
@@ -734,6 +732,7 @@ mod tests {
             ],
             width: None,
             rows: false,
+            caption: Vec::new(),
         });
         match &sc {
             Shortcode::Gallery(args) => {
@@ -769,6 +768,7 @@ mod tests {
             }],
             width: None,
             rows: false,
+            caption: Vec::new(),
         });
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");

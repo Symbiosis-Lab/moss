@@ -1,4 +1,5 @@
 use super::*;
+use crate::system::redirects::MAX_REDIRECT_HOPS;
 
 #[test]
 fn transient_error_classification() {

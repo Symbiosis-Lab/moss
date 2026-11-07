@@ -293,7 +293,7 @@ async fn test_live_generation_200_carries_id_and_deployed_at() {
 }
 
 // ============================================================================
-// Generation-id header threading tests (Stage 2 showstopper fix)
+// Generation-id header threading tests
 //
 // Verify that sync_manifest, upload_file, and the chunked create-session POST
 // each send `X-Moss-Generation` with the caller-supplied generation_id, so the

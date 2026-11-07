@@ -91,11 +91,7 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       return;
     }
 
-    const scopeInput = form.querySelector<HTMLInputElement>('input[name="scope"]');
-    const jsonBody: { email: string; scope?: string } = { email };
-    if (scopeInput) {
-      jsonBody.scope = scopeInput.value;
-    }
+    const jsonBody = { email, scope: form.querySelector<HTMLInputElement>('input[name="scope"]')?.value, lang };
 
     const post = async (): Promise<[Response, SubscribeResponse]> => {
       const res = await fetch(form.action, {
@@ -117,7 +113,10 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
         }
         [res, data] = await post();
       }
-      if (!res.ok) {
+      // A 2xx that does not say the address is subscribed (an empty or
+      // unreadable body, a proxy's page) is not a subscription.
+      const subscribed = data.subscribed === true && (data.confirmationSent === true || data.alreadySubscribed === true);
+      if (!res.ok || !subscribed) {
         showStatus(form, 'error', copy);
         setState(form, 'error', btn);
         return;

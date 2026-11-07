@@ -7,6 +7,8 @@ fn all_on() -> SiteAssets {
         forms: true,
         link_preview: true,
         heading_anchors: true,
+        selection_tools: true,
+        selection_comments: true,
         math: true,
         media_pages: true,
         viewer: true,
@@ -111,14 +113,12 @@ fn gates_change_which_scripts_ship() {
     let off = shipped(&none);
     let on = shipped(&all_on());
     assert!(off.len() < on.len(), "an all-false asset set must ship fewer scripts");
-    // The unconditional two are the floor. (The blueprint placeholder ships on
-    // every previewed page, but the preview server injects it — no row here,
-    // and nothing in a published site.)
-    for always in ["theme", "share-card"] {
-        assert!(off.contains(always), "'{always}' must ship regardless of config");
-    }
-    // And the five gated ones are genuinely absent.
-    for gated in ["preview", "heading-anchor", "math-copy", "search", "fullscreen"] {
+    // theme is the floor. (The blueprint placeholder ships on every previewed
+    // page, but the preview server injects it — no row here, and nothing in a
+    // published site.)
+    assert!(off.contains("theme"), "'theme' must ship regardless of config");
+    // And the gated ones are genuinely absent.
+    for gated in ["preview", "heading-anchor", "math-copy", "search", "fullscreen", "share-card", "selection"] {
         assert!(!off.contains(gated), "'{gated}' must not ship when its gate is off");
     }
 }
@@ -127,14 +127,16 @@ fn gates_change_which_scripts_ship() {
 /// field would make a config flag silently control the wrong script.
 #[test]
 fn each_gate_reads_a_distinct_fact() {
-    let fields: &[(&str, fn(&mut SiteAssets))] = &[
-        ("preview", |a| a.link_preview = true),
-        ("heading-anchor", |a| a.heading_anchors = true),
-        ("math-copy", |a| a.math = true),
-        ("hero-ends", |a| a.hero_ends = true),
-        ("search", |a| a.search = true),
-        ("fullscreen", |a| a.media_pages = true),
-        ("fullscreen", |a| a.viewer = true),
+    let fields: &[(&[&str], fn(&mut SiteAssets))] = &[
+        (&["preview"], |a| a.link_preview = true),
+        (&["heading-anchor"], |a| a.heading_anchors = true),
+        (&["math-copy"], |a| a.math = true),
+        (&["hero-ends"], |a| a.hero_ends = true),
+        (&["search"], |a| a.search = true),
+        (&["selection", "share-card"], |a| a.selection_tools = true),
+        (&["selection"], |a| a.selection_comments = true),
+        (&["fullscreen"], |a| a.media_pages = true),
+        (&["fullscreen"], |a| a.viewer = true),
     ];
     for (name, set) in fields {
         let mut assets = SiteAssets::default();
@@ -147,12 +149,12 @@ fn each_gate_reads_a_distinct_fact() {
         let gated: BTreeSet<&str> = on
             .iter()
             .copied()
-            .filter(|n| !["theme", "share-card"].contains(n))
+            .filter(|n| *n != "theme")
             .collect();
         assert_eq!(
             gated,
-            BTreeSet::from([*name]),
-            "setting the fact for '{name}' turned on {gated:?}"
+            name.iter().copied().collect::<BTreeSet<&str>>(),
+            "setting the fact for {name:?} turned on {gated:?}"
         );
     }
 }

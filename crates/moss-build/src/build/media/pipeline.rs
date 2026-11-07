@@ -970,6 +970,39 @@ fn record_blob(
     staged_oids.insert(out_path.as_str().to_string(), staged_oid.to_string());
 }
 
+/// What one `copy_deferred_assets` walk accumulates. `stats` also carries the
+/// per-item counts: preserved symlinks and aliases are counted because their
+/// per-item log line is DEBUG, so without them the summary reports nothing.
+#[derive(Default)]
+struct AssetWalkTally {
+    stats: AssetPipelineRunStats,
+    /// Output paths the walk found in the source. After the walk, carried-forward
+    /// entries not in this set are stale and removed from `site_hashes`.
+    live_asset_keys: std::collections::HashSet<String>,
+    /// The same keyed by source-relative path, used to prune
+    /// `site_hashes.sources`; without it deleted or renamed sources stay in the
+    /// metadata cache and `hashes.json` grows without bound.
+    live_source_keys: std::collections::HashSet<String>,
+    /// Symlinks preserved from source to output (also Finder Aliases resolved
+    /// to symlinks), so `remove_stale_symlinks` can prune entries removed
+    /// between builds.
+    ///
+    /// INVARIANT: this one set drives stale cleanup of both the staging and
+    /// the shipped directory because the symlink branch dual-writes the same
+    /// rel_paths. Populating the two asymmetrically may prune a live symlink.
+    ///
+    /// Real symlinks are not entered into the two sets above: they have no
+    /// content hash and are not in the object-store cache. A Finder alias is a
+    /// regular file, so its own bytes are a source (`register_alias_source`).
+    live_symlinks: std::collections::HashSet<String>,
+    /// Output path -> the CAS object id already backing those staged bytes, for
+    /// every entry registered via `record_blob`. Threaded onto the re-emitted
+    /// `EmitMessage::File` so `ship_phase` can copy straight from the CAS
+    /// (`ShipSource::Cas`). A symlink entry or direct-copy fallback never gets
+    /// one and ships from the stage path.
+    staged_oids: HashMap<String, String>,
+}
+
 /// After all assets are placed, stale cleanup runs to remove output files that
 /// no longer have a corresponding source.
 ///
@@ -1047,8 +1080,6 @@ pub(crate) fn copy_deferred_assets(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let mut cache_hits: u32 = 0;
-    let mut cache_misses: u32 = 0;
 
     // Markdown extensions that were handled in the blocking phase
     let markdown_exts = moss_core::page_kind::PAGE_EXTENSIONS;
@@ -1060,49 +1091,7 @@ pub(crate) fn copy_deferred_assets(
     // Document types processed in blocking phase (rendered to HTML)
     let doc_exts = ["pages", "docx", "doc"];
 
-    let mut copied = 0u32;
-    let mut skipped = 0u32;
-    let mut skipped_symlinks = 0u32;
-    // Preserved symlinks / resolved aliases. Counted because the per-item log
-    // line is DEBUG: without these the summary reports nothing.
-    let mut preserved_symlinks = 0u32;
-    // Only the macOS alias branch writes this; elsewhere it stays 0.
-    #[allow(unused_mut)]
-    let mut preserved_aliases = 0u32;
-    // Track which asset keys the background walk actually found in the source.
-    // After all walks, carried-forward entries NOT in this set are stale
-    // (source file was deleted) and must be removed from site_hashes.
-    let mut live_asset_keys = std::collections::HashSet::<String>::new();
-    // Parallel set keyed by *source-relative* path (not output path) — used
-    // to prune `site_hashes.sources` after the walk. Without this, deleted
-    // / renamed source files leave entries in the metadata cache forever
-    // and `hashes.json` grows unbounded over the project's lifetime.
-    let mut live_source_keys = std::collections::HashSet::<String>::new();
-    // Output path → the CAS object id already backing those exact staged
-    // bytes, for every entry this walk registers via the `Ok(oid)` arm below
-    // (assets) or the `.moss/theme` mirror. Threaded onto the re-emitted
-    // `EmitMessage::File` at the end of this function so `ship_phase` can
-    // copy straight from the CAS instead of the mutable stage path — see
-    // `PendingManifest::ship_sources` (`ShipSource::Cas`). A symlink entry or
-    // a direct-copy fallback never gets one, and ships exactly as before.
-    let mut staged_oids: HashMap<String, String> = HashMap::new();
-
-    // Symlinks preserved from source to output (also: Finder Aliases
-    // resolved to symlinks on macOS). Tracked separately so
-    // `remove_stale_symlinks` can prune entries removed between builds.
-    //
-    // INVARIANT: this single set is reused for stale cleanup of BOTH
-    // `output_dir` (staging) because the symlink
-    // branch dual-writes the same rel_paths to both. If a future change
-    // populates the dirs asymmetrically (e.g. only writing to staging and
-    // letting `ship_phase` mirror), `remove_stale_symlinks` may prune a live
-    // symlink on the side that wasn't populated. Keep the dual-write.
-    //
-    // Real symlinks are NOT entered into `live_asset_keys` / `live_source_keys`
-    // — they have no content hash and aren't in the object-store cache. A
-    // Finder alias is a regular file, so its own bytes are a source
-    // (`register_alias_source`).
-    let mut live_symlinks = std::collections::HashSet::<String>::new();
+    let mut run = AssetWalkTally::default();
 
     // Canonical source root, computed once for the containment check
     // inside `handle_symlink_entry`. Matches against canonical paths only.
@@ -1142,10 +1131,10 @@ pub(crate) fn copy_deferred_assets(
                 &canonical_source_root,
                 output_dir,
             );
-            if preserve_link(&outcome, &mut site_hashes, &mut live_symlinks, "symlink") {
-                preserved_symlinks += 1;
+            if preserve_link(&outcome, &mut site_hashes, &mut run.live_symlinks, "symlink") {
+                run.stats.preserved_symlinks += 1;
             } else {
-                skipped_symlinks += 1;
+                run.stats.skipped_symlinks += 1;
             }
             continue;
         }
@@ -1166,14 +1155,14 @@ pub(crate) fn copy_deferred_assets(
             ) {
                 // Count any non-Preserved alias outcome (escape/broken/
                 // processable/absolute/unresolvable) as a skipped symlink.
-                if preserve_link(&outcome, &mut site_hashes, &mut live_symlinks, "alias") {
-                    preserved_aliases += 1;
+                if preserve_link(&outcome, &mut site_hashes, &mut run.live_symlinks, "alias") {
+                    run.stats.preserved_aliases += 1;
                 } else {
-                    skipped_symlinks += 1;
+                    run.stats.skipped_symlinks += 1;
                 }
                 let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel),
-                    prev_hashes_mtime_secs, &object_store, &mut cache_hits, &mut cache_misses);
-                register_alias_source(entry.path(), source_root, &mut site_hashes, &mut live_source_keys, blob);
+                    prev_hashes_mtime_secs, &object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses);
+                register_alias_source(entry.path(), source_root, &mut site_hashes, &mut run.live_source_keys, blob);
                 continue;
             }
             // handle_alias_entry returns None ONLY for a genuine non-alias
@@ -1208,8 +1197,8 @@ pub(crate) fn copy_deferred_assets(
         if let Some(real) = crate::build::icloud::icloud_stub_target(file_path) {
             if let Ok(rel) = real.strip_prefix(source_root) {
                 let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
-                live_asset_keys.insert(resolve_path_with_overrides(&rel, &ctx.dir_overrides));
-                live_source_keys.insert(rel.clone());
+                run.live_asset_keys.insert(resolve_path_with_overrides(&rel, &ctx.dir_overrides));
+                run.live_source_keys.insert(rel.clone());
                 crate::build::cloud_readiness::request_download(&real);
                 log::debug!("[background-assets] Holding {} — still in the cloud (pre-Sonoma stub)", rel);
             }
@@ -1292,14 +1281,14 @@ pub(crate) fn copy_deferred_assets(
         let mapped_path = resolve_path_with_overrides(&relative_path, &ctx.dir_overrides);
 
         // Claim before any deferred read: cloud-only sources still exist.
-        live_asset_keys.insert(mapped_path.clone());
+        run.live_asset_keys.insert(mapped_path.clone());
         // Also record the *source-relative* path for `sources` map pruning
         // below. Sources is keyed by source path (pre-mapping), unlike
         // `files` which is keyed by output path (post-mapping).
-        live_source_keys.insert(relative_path.clone());
+        run.live_source_keys.insert(relative_path.clone());
 
         match source_blob(file_path, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
-            &object_store, &mut cache_hits, &mut cache_misses)
+            &object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses)
         {
             Ok(None) => continue,
             Ok(Some((oid, src_stat))) => {
@@ -1358,7 +1347,7 @@ pub(crate) fn copy_deferred_assets(
                     }
                 }
 
-                // Bundled-SPA `<head>` injection (link-preview-defaults Phase 5).
+                // Bundled-SPA `<head>` injection (link-preview defaults).
                 // After the source HTML has been linked into the output, post-
                 // process bundled-SPA `index.html` files (e.g. a Vite app at
                 // `cities-heat-map/index.html`) to inject site-level meta
@@ -1438,12 +1427,12 @@ pub(crate) fn copy_deferred_assets(
                             fallback_oid: &oid,
                             log_context: "output",
                         };
-                        record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &staged_oid);
-                        copied += 1;
+                        record_blob(&manifest_hash_memo, &mut site_hashes, &mut run.staged_oids, hash, &out_path, &staged_oid);
+                        run.stats.copied += 1;
                     }
                     Err(e) => {
                         log::warn!("[background-assets] Skipping file with invalid path '{}': {}", mapped_path, e);
-                        skipped += 1;
+                        run.stats.skipped += 1;
                     }
                 }
             }
@@ -1457,7 +1446,7 @@ pub(crate) fn copy_deferred_assets(
                         relative_path, copy_err
                     );
                 }
-                skipped += 1;
+                run.stats.skipped += 1;
             }
         }
     }
@@ -1508,21 +1497,21 @@ pub(crate) fn copy_deferred_assets(
                 Ok(p) => p,
                 Err(e) => {
                     log::warn!("[background-assets] Skipping theme asset '{}': {}", relative_path, e);
-                    skipped += 1;
+                    run.stats.skipped += 1;
                     continue;
                 }
             };
 
-            live_asset_keys.insert(out_path.as_str().to_string());
+            run.live_asset_keys.insert(out_path.as_str().to_string());
 
             let source_key = format!(".moss/theme/{relative_path}");
-            live_source_keys.insert(source_key.clone());
+            run.live_source_keys.insert(source_key.clone());
             if stub_target.is_some() {
                 crate::build::cloud_readiness::request_download(effective);
                 continue;
             }
             match source_blob(file_path, prev_sources.get(&source_key), prev_hashes_mtime_secs,
-                &object_store, &mut cache_hits, &mut cache_misses)
+                &object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses)
             {
                 Ok(None) => continue,
                 Ok(Some((oid, stat))) => {
@@ -1542,12 +1531,12 @@ pub(crate) fn copy_deferred_assets(
                         crate::build::types::SourceMetadata::from_stat(oid.clone(), stat));
                     let hash =
                         OutputHash { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
-                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut staged_oids, hash, &out_path, &oid);
-                    copied += 1;
+                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut run.staged_oids, hash, &out_path, &oid);
+                    run.stats.copied += 1;
                 }
                 Err(e) => {
                     log::info!("[background-assets] Failed to store .moss/theme/{}: {}", relative_path, e);
-                    skipped += 1;
+                    run.stats.skipped += 1;
                 }
             }
         }
@@ -1573,7 +1562,7 @@ pub(crate) fn copy_deferred_assets(
         .files
         .iter()
         .filter(|(key, _)| {
-            !live_asset_keys.contains(*key) && !live_symlinks.contains(*key)
+            !run.live_asset_keys.contains(*key) && !run.live_symlinks.contains(*key)
         })
         .map(|(key, _)| key.clone())
         .collect();
@@ -1589,7 +1578,7 @@ pub(crate) fn copy_deferred_assets(
     let stale_sources: Vec<String> = site_hashes
         .sources
         .keys()
-        .filter(|k| !live_source_keys.contains(*k))
+        .filter(|k| !run.live_source_keys.contains(*k))
         .cloned()
         .collect();
     for key in &stale_sources {
@@ -1647,7 +1636,7 @@ pub(crate) fn copy_deferred_assets(
             rel_path: rel_path.clone(),
             hash: hash_entry.strip_prefix("100644:").unwrap_or(hash_entry).to_string(),
             bucket: HashBucket::Files,
-            oid: staged_oids.get(rel_path).cloned(),
+            oid: run.staged_oids.get(rel_path).cloned(),
         };
         if let Err(e) = tx.blocking_send(msg) {
             log::info!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);
@@ -1682,17 +1671,8 @@ pub(crate) fn copy_deferred_assets(
     }
     manifest_hash_memo.log_summary();
 
-    let stats = AssetPipelineRunStats {
-        copied,
-        skipped,
-        cache_hits,
-        cache_misses,
-        skipped_symlinks,
-        preserved_symlinks,
-        preserved_aliases,
-    };
-    log::info!("{}", format_asset_run_summary(&stats));
-    stats
+    log::info!("{}", format_asset_run_summary(&run.stats));
+    run.stats
 }
 
 #[cfg(test)]

@@ -12,8 +12,9 @@ use crate::config::deployment::{DomainDeploymentConfig, MOSS_TARGET_ID};
 
 /// The script body. `ENDPOINT` is replaced by the JSON-encoded endpoint URL.
 /// The hosting server decides which events count, so this carries no
-/// hostname checks of its own.
-const BEACON_TEMPLATE: &str = r#"(function(){var b=ENDPOINT;var s=function(d){fetch(b,{method:'POST',body:JSON.stringify(d),keepalive:true}).catch(function(){})};var v=function(){s({url:location.href,referrer:document.referrer||null,screen_width:innerWidth})};v();addEventListener('pageshow',function(e){if(e.persisted)v()});document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-track]');if(t)s({url:location.href,event:t.getAttribute('data-track')})})})();"#;
+/// hostname checks of its own. The address goes without its `#fragment`:
+/// the server never reads one, and sign-in links put tokens there.
+const BEACON_TEMPLATE: &str = r#"(function(){var b=ENDPOINT;var u=function(){return location.origin+location.pathname+location.search};var s=function(d){fetch(b,{method:'POST',body:JSON.stringify(d),keepalive:true}).catch(function(){})};var v=function(){s({url:u(),referrer:document.referrer||null,screen_width:innerWidth})};v();addEventListener('pageshow',function(e){if(e.persisted)v()});document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-track]');if(t)s({url:u(),event:t.getAttribute('data-track')})})})();"#;
 
 /// Whether this site gets the visit counter: moss-hosted, with a site id. The
 /// tag and the file both gate on this, so a tag never names a file that was not written.

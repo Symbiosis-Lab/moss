@@ -1,8 +1,8 @@
 //! Listing-group tests.
 //!
-//! Three of the four correctness gates the design requires with Stage 2 live
+//! Three of the four correctness gates the listing-host skip requires live
 //! here (the fourth, shadow verification, is an end-to-end switch), plus the
-//! Stage-1b selector fixture. They are unit tests rather than end-to-end
+//! selector fixture. They are unit tests rather than end-to-end
 //! builds because the claim under test is about the *digest* — whether a given
 //! edit moves it — and a build can only observe the consequence one layer
 //! later, where a dozen other gates could explain the same outcome.
@@ -88,7 +88,7 @@ fn members(docs: &[ParsedDocument], slug: &str, flatten: bool) -> Vec<String> {
         .collect()
 }
 
-// ---- Stage 1b: one selector, no drift ------------------------------------
+// ---- One selector, no drift ------------------------------------
 
 /// The synthetic folder-index loop in `render/blocking.rs` used to carry an
 /// inlined second copy of this filter, which is why "one selector, therefore

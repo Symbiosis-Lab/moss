@@ -12,16 +12,34 @@ use crate::infra::edit_distance::levenshtein;
 pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
     vec![
         SiteSettingInfo {
+            name: "ai_answers",
+            r#type: "bool",
+            default: None,
+            description: "Whether AI assistants may read pages to answer a person's question. false asks them not to in robots.txt and stops publishing llms.txt. Unset follows `ai_policy`.",
+        },
+        SiteSettingInfo {
             name: "ai_policy",
             r#type: "string",
             default: Some("standard"),
-            description: "AI crawler policy written to robots.txt: \"standard\" (search and AI input allowed, AI training refused), \"unrestricted\", or \"restricted\" (all refused).",
+            description: "A name for a state of the three switches: \"standard\" (search engines and AI answers allowed, AI training asked not to), \"unrestricted\" (all allowed) or \"restricted\" (all asked not to). A site that sets none of `search_engines`, `ai_answers` and `ai_training` keeps the robots.txt this name has always written; \"restricted\" also stops llms.txt.",
+        },
+        SiteSettingInfo {
+            name: "ai_training",
+            r#type: "bool",
+            default: None,
+            description: "Whether AI companies may train models on the site. false asks the known training crawlers not to in robots.txt, adds `noai, noimageai` to every page and reserves text-and-data mining in /.well-known/tdmrep.json. Unset follows `ai_policy`.",
         },
         SiteSettingInfo {
             name: "archival",
             r#type: "bool",
             default: Some("false"),
             description: "Publish a dated, citable copy: every page shows its edition line and a citation, and the source files travel with the site.",
+        },
+        SiteSettingInfo {
+            name: "atproto_did",
+            r#type: "string",
+            default: None,
+            description: "The account identifier (`did:plc:…` or `did:web:…`) that lets the site's domain serve as a Bluesky handle. The build writes it to `.well-known/atproto-did`.",
         },
         SiteSettingInfo {
             name: "author",
@@ -102,6 +120,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "The licence of the edition, stated on every page of an archival copy and in its source README.",
         },
         SiteSettingInfo {
+            name: "selection_tools",
+            r#type: "bool",
+            default: Some("false"),
+            description: "When a reader selects text, offer Share (a picture of the passage with the page's QR code) and Copy (the passage with its source). false ships neither, and no QR codes.",
+        },
+        SiteSettingInfo {
             name: "link_preview",
             r#type: "bool",
             default: Some("true"),
@@ -120,6 +144,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "Typeset math in pages. false turns math rendering off.",
         },
         SiteSettingInfo {
+            name: "me",
+            r#type: "string[]",
+            default: None,
+            description: "Profile addresses on other sites, e.g. `[\"https://social.example/@ana\"]`. Each is written as `<link rel=\"me\">` in the head of every page but media and notebook viewer pages, which is how Mastodon marks the site as verified on that profile. http and https only.",
+        },
+        SiteSettingInfo {
             name: "rss_footer",
             r#type: "bool",
             default: Some("false"),
@@ -130,6 +160,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "bool",
             default: Some("false"),
             description: "Build the client-side search index and show the search button.",
+        },
+        SiteSettingInfo {
+            name: "search_engines",
+            r#type: "bool",
+            default: None,
+            description: "Whether search engines may list the site. false adds `noindex` to every page (search engines stay free to read pages, so they see it), asks AI search crawlers not to in robots.txt and drops its Sitemap line. Unset follows `ai_policy`.",
         },
         SiteSettingInfo {
             name: "typesetting",

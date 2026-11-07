@@ -1,13 +1,10 @@
 //! PDF embed synthesizer.
 //!
-//! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
+//! Receives a [`TitleParams`] (already parsed by the dispatcher), the
 //! source URL, and an [`AssetSnapshot`]. Emits the final `<object>`-based
-//! PDF embed HTML — preserving the exact byte shape moss-core's pre-Phase-0
-//! PDF renderer used to emit before Phase 0's Stage 1 migration (that
-//! renderer's own `render()` was unreachable dead code by the time it was
-//! removed; the byte shape lives on here, which is the actual live path).
+//! PDF embed HTML.
 //!
-//! Pre-Phase-0 byte shape:
+//! Byte shape:
 //!
 //! ```text
 //! <object class="moss-embed" data-type="pdf"{data-width?} type="application/pdf"
@@ -16,9 +13,9 @@
 //! </object>
 //! ```
 //!
-//! The `<object>` element (rather than `<iframe>`) was chosen by the original
-//! renderer for keyboard-navigation parity and an inline download fallback
-//! in browsers that can't render PDFs natively.
+//! The `<object>` element (rather than `<iframe>`) gives keyboard-navigation
+//! parity and an inline download fallback in browsers that can't render
+//! PDFs natively.
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::media::Placement;
@@ -28,7 +25,7 @@ use crate::resolve::title_params::TitleParams;
 
 /// Synthesize PDF embed HTML for `Tag::Link` with `moss:kind=pdf` title.
 ///
-/// Params consumed (all optional except `kind=pdf` which the Stage 2
+/// Params consumed (all optional except `kind=pdf` which the
 /// dispatcher already checked):
 ///
 /// - `data-width` — canonical wrapper width (`body|wide|page|screen`), spec § P9
@@ -75,7 +72,7 @@ pub fn synthesize_pdf_html(
     let name = file_stem(src);
 
     // <object> with inline download fallback for browsers that can't render PDFs.
-    // Attribute order matches the pre-Phase-0 PDF renderer's byte shape exactly.
+    // Attribute order is part of the byte shape; keep it stable.
     format!(
         "<object class=\"{}\" data-type=\"pdf\"{}{} type=\"application/pdf\" data=\"{}\"{}{}{}><a href=\"{}\">Download {}</a></object>",
         class_value,
@@ -103,7 +100,7 @@ mod tests {
     fn pdf_basic_shape() {
         let p = params_with(&[("kind", "pdf")]);
         let out = synthesize_pdf_html(&p, &Placement::default(), "doc.pdf", &empty_snapshot());
-        // Pre-Phase-0 byte shape: <object class="moss-embed" data-type="pdf" ...>
+        // Byte shape: <object class="moss-embed" data-type="pdf" ...>
         assert!(
             out.contains(r#"<object class="moss-embed" data-type="pdf""#),
             "got: {}",

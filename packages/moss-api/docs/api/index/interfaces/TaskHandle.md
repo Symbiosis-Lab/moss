@@ -40,7 +40,7 @@ lost in the round-trip.
 advise(advisory): Promise<void>;
 ```
 
-PROPOSE an advisory on this task (Step 3 Phase 5, §8 + R13). Accumulates
+PROPOSE an advisory on this task. Accumulates
 the proposal on the handle; it is flushed into the next terminal call
 (`succeeded`/`failed`) as `advisories: PluginAdvisory[]`. moss holds the
 severity gavel server-side: a `Blocking` proposal with no actionable

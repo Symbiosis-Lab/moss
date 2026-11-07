@@ -5,6 +5,9 @@
  * - Desktop: popover above selection with 分享 / 评论 / 复制 buttons
  * - Mobile: bottom bar with 分享 / 评论 (no copy — iOS native menu handles it)
  *
+ * Share and Copy ship only on a site with `[site].selection_tools` on; Comment
+ * appears wherever the page has comments.
+ *
  * Copy with attribution wraps text in 「」 with author, title, and URL.
  */
 
@@ -38,10 +41,14 @@ import { clampLeft, verticalSlot } from "./viewport";
  */
 let shareCardLoad: Promise<typeof import("./share-card")> | null = null;
 
+/** The share-card chunk's URL. The build names it only when Share exists. */
+function shareCardSrc(): string | undefined {
+  return document.querySelector<HTMLScriptElement>("script[data-share-card]")?.dataset.shareCard;
+}
+
 function loadShareCard(): Promise<typeof import("./share-card")> {
   if (shareCardLoad) return shareCardLoad;
-  const src = document.querySelector<HTMLScriptElement>("script[data-share-card]")
-    ?.dataset.shareCard;
+  const src = shareCardSrc();
   if (!src) {
     // No attribute means a build that did not emit the chunk. Reject rather
     // than import a bogus URL, and drop the memo so a later morph that brings
@@ -124,6 +131,9 @@ export function initSelectionActions(): void {
   // and the page didn't explicitly opt out via data-comments="false".
   const hasComments = !!document.querySelector(".moss-comments")
     && article.getAttribute("data-comments") !== "false";
+  // `[site].selection_tools`: Copy goes with Share.
+  const hasTools = shareCardSrc() !== undefined;
+  if (!hasTools && !hasComments) return;
 
   // Detect language bucket for button labels
   const lang = langBucket(document.documentElement.lang);
@@ -131,10 +141,10 @@ export function initSelectionActions(): void {
   const isZh = lang === "zh-hans" || lang === "zh-hant";
 
   // Create UI elements
-  const popover = createPopover(labels, hasComments);
+  const popover = createPopover(labels, hasTools, hasComments);
   document.body.appendChild(popover);
 
-  const mobileBar = createMobileBar(labels, hasComments);
+  const mobileBar = createMobileBar(labels, hasTools, hasComments);
   document.body.appendChild(mobileBar);
 
   const isMobile =
@@ -188,36 +198,32 @@ export function initSelectionActions(): void {
 
 // ── DOM creation ─────────────────────────────────────────────────────────
 
-function createPopover(labels: { share: string; comment: string; copy: string; group: string }, hasComments: boolean): HTMLDivElement {
+function createPopover(
+  labels: { share: string; comment: string; copy: string; group: string },
+  hasTools: boolean,
+  hasComments: boolean,
+): HTMLDivElement {
   const el = document.createElement("div");
   el.className = "sel-popover";
   el.setAttribute("role", "group");
   el.setAttribute("aria-label", labels.group);
-  const commentHtml = hasComments
-    ? `<span class="sel-sep"></span>
-    <button class="sel-comment" type="button">${labels.comment}</button>`
-    : '';
-  el.innerHTML = `
-    <button class="sel-share" type="button">${labels.share}</button>
-    ${commentHtml}
-    <span class="sel-sep"></span>
-    <button class="sel-copy" type="button">${labels.copy}</button>
-  `;
+  const buttons = [
+    hasTools && `<button class="sel-share" type="button">${labels.share}</button>`,
+    hasComments && `<button class="sel-comment" type="button">${labels.comment}</button>`,
+    hasTools && `<button class="sel-copy" type="button">${labels.copy}</button>`,
+  ].filter(Boolean);
+  el.innerHTML = buttons.join(`<span class="sel-sep"></span>`);
   return el;
 }
 
-function createMobileBar(labels: { share: string; comment: string }, hasComments: boolean): HTMLDivElement {
+function createMobileBar(labels: { share: string; comment: string }, hasTools: boolean, hasComments: boolean): HTMLDivElement {
   const el = document.createElement("div");
   el.className = "mobile-bar";
-  const commentHtml = hasComments
-    ? `<button class="pill-bar-btn sel-comment" type="button">${labels.comment}</button>`
-    : '';
-  el.innerHTML = `
-    <div class="pill-bar">
-      <button class="pill-bar-btn sel-share" type="button">${labels.share}</button>
-      ${commentHtml}
-    </div>
-  `;
+  const buttons = [
+    hasTools && `<button class="pill-bar-btn sel-share" type="button">${labels.share}</button>`,
+    hasComments && `<button class="pill-bar-btn sel-comment" type="button">${labels.comment}</button>`,
+  ].filter(Boolean);
+  el.innerHTML = `<div class="pill-bar">${buttons.join("")}</div>`;
   return el;
 }
 

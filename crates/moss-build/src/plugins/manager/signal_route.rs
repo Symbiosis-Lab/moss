@@ -1,4 +1,4 @@
-//! Engine-agnostic hook-signal routing (Phase 2).
+//! Engine-agnostic hook-signal routing.
 //!
 //! Every hook signal — from the `plugin_message` Tauri command or from the
 //! QuickJS host dispatch's interception of the same call — lands in the SAME
@@ -53,8 +53,7 @@ pub enum HookSignal {
 /// Route one signal: into the hook state, then Progress on to the reporter.
 ///
 /// Every kind stamps activity, Log included — any word from the plugin means
-/// it is alive (Phase-3 plan D7). The command path once skipped the stamp for
-/// Log while the engine path made it, which is the drift one arm ends.
+/// it is alive.
 pub fn route_signal(
     state: &PluginHookState,
     reporter: &dyn BuildReporter,

@@ -103,18 +103,18 @@ pub enum ImageContext<'a> {
         caption: Option<&'a str>,
         width: Option<&'a str>,
         /// Editorial runaround alignment, surfaced as a CSS class on the
-        /// outer `<figure>`. Phase 1 C1 (2026-05-25): Stage 2 dispatcher
+        /// outer `<figure>`. The dispatcher
         /// passes `Some("moss-align-left")` / `Some("moss-align-right")`
         /// when the markdown image's title carries `moss:align=left|right`.
         /// `None` omits the class.
         align: Option<&'a str>,
         /// Arbitrary CSS class names from `moss:classes="foo bar"` title
-        /// params (Phase 1 C1). Each entry is appended to the figure's
+        /// params. Each entry is appended to the figure's
         /// `class="moss-image …"` attribute, space-separated. Empty slice
         /// leaves the class list at its default (`moss-image`).
         class_names: &'a [String],
         /// Arbitrary `key="value"` HTML attributes from leftover
-        /// `moss:` title params (Phase 1 C1). The dispatcher passes
+        /// `moss:` title params. The dispatcher passes
         /// every param that isn't a known field (kind/width/align/classes)
         /// through here so future params propagate without code changes.
         /// Keys are emitted in BTreeMap order for stable byte shape.
@@ -141,16 +141,16 @@ pub enum ImageContext<'a> {
     /// no LQIP, no responsive variants.
     Favicon,
 
-    /// Phase 2 scaffold (filled by Phase 2B agent): site-header / nav logo.
+    /// Site-header / nav logo.
     /// Bare `<img>` with `class="site-logo"`, no LQIP, no `<picture>`, no
     /// `loading="lazy"` (logo is above-the-fold). CSS handles sizing
     /// (`.site-logo { height: 1.8em }`).
     SiteLogo,
-    /// Phase 2 scaffold (filled by Phase 2C agent): RSS read-tracking pixel.
+    /// RSS read-tracking pixel.
     /// 1×1 invisible `<img>`. No `loading="lazy"` (the pixel must fire on
     /// read for tracking). No LQIP, no `<picture>`.
     TrackingPixel,
-    /// Phase 2 scaffold (filled by Phase 2D agent): newsletter email body
+    /// Newsletter email body
     /// image. Email-client-safe HTML subset: no `<picture>`, no `data-*`,
     /// inline `style="display:block;max-width:100%;height:auto"` for
     /// responsive email layouts. Explicit dims when known (callers pass
@@ -161,8 +161,7 @@ pub enum ImageContext<'a> {
         height: Option<u32>,
     },
 
-    /// Phase 2E v5 PR3 (2026-05-26): `:::gallery` body image. Below-the-
-    /// fold thumbnail (`loading="lazy"`); same `<picture>`/dims/LQIP byte
+    /// `:::gallery` body image. Below-the-fold thumbnail (`loading="lazy"`); same `<picture>`/dims/LQIP byte
     /// shape as `MarkdownInline`. The outer `.moss-gallery-item` wrapper
     /// is owned by the gallery shortcode's `DefaultHooks` impl in
     /// `crates/moss-core/src/ast/hooks.rs`; this variant emits just the
@@ -175,8 +174,7 @@ pub enum ImageContext<'a> {
     /// shape via `synthesize_inner`.
     GalleryThumb,
 
-    /// Phase 2E PR2 (2026-05-26): bare `<img>` emission with no `<picture>`
-    /// wrap, no `<source>`, no LQIP, no width/height, no `loading` attr.
+    /// Bare `<img>` emission with no `<picture>` wrap, no `<source>`, no LQIP, no width/height, no `loading` attr.
     /// Used by the hero typed-renderer fallback path
     /// (`typed_renderers.rs::render_hero_html_typed`) when no manifest
     /// (`MediaDimensionLookup`) is in scope — i.e. test / fragment-render
@@ -342,9 +340,7 @@ pub fn synthesize_image_html(
         );
     }
     if matches!(context, ImageContext::HeroBare) {
-        // Phase 2E PR2 (2026-05-26): no-snapshot hero fallback. Byte
-        // shape matches the pre-PR2 emission at
-        // `typed_renderers.rs::render_hero_html_typed` lines 554-557:
+        // No-snapshot hero fallback. Byte shape:
         // `<img src="X" alt="Y"[ STYLE] />`. `assets` is intentionally
         // unused (the caller passes an empty snapshot via the no-
         // manifest branch); the snapshot is part of the signature only
@@ -352,11 +348,10 @@ pub fn synthesize_image_html(
         // `options.eager` are ignored — hero chrome (CSS / `<header>`)
         // handles styling and loading priority.
         //
-        // The inline `style=` fragment that the legacy fallback baked
-        // directly into `format!` is now threaded through
+        // The inline `style=` fragment is threaded through
         // `options.extra_attrs` (the caller pre-escapes the value and
-        // omits the leading space, matching the existing extra_attrs
-        // contract — the synthesizer prepends a single space).
+        // omits the leading space, matching the extra_attrs contract —
+        // the synthesizer prepends a single space).
         let extra = options
             .extra_attrs
             .map(|s| format!(" {}", s))
@@ -946,13 +941,10 @@ pub(crate) fn render_img_tag(
     // resolved URL the upstream renderer baked (potentially absolute, e.g.
     // `/image/cover.jpg`). Scan stores relative keys (`image/cover.jpg`),
     // so the synthesizer probes both forms via `lookup_dims`. Snapshot
-    // lookups absent → fall back to the legacy 800×600 (matches the prior
-    // `MediaDimensionLookup::get` semantics before the Phase 1 B1 migration).
-    // Stem fallback (extension-mismatch — e.g. `.mov` vs `.mp4`) was
-    // previously handled in MediaDimensionLookup::get; since AssetSnapshot
-    // exposes only exact-path access, that case will need follow-up if
-    // production sites rely on it (likely only for video posters, which
-    // are out of this Tag::Image path).
+    // lookups absent → fall back to 800×600. There is no stem fallback
+    // for an extension mismatch (e.g. `.mov` vs `.mp4`): AssetSnapshot
+    // exposes only exact-path access, and that case likely only arises for
+    // video posters, which are out of this Tag::Image path.
     let (width, height) = lookup_dims(assets, src).unwrap_or((FALLBACK_WIDTH, FALLBACK_HEIGHT));
 
     let class_attr = options

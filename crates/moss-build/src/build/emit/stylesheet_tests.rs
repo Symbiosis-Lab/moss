@@ -406,7 +406,7 @@ fn gates_are_independent() {
 }
 
 /// Distinct asset sets must produce distinct stylesheet BYTES, because the
-/// stylesheet's content hash is what the Stage 5b global invalidator keys on
+/// stylesheet's content hash is what the global invalidator keys on
 /// (`FacadeCache::asset_versions`). If two different sets could assemble to
 /// identical bytes, a partial-set change would slip past the invalidator
 /// while still changing what the site needs.

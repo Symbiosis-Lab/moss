@@ -25,3 +25,13 @@ size_bytes = 49928
 published_version = "5.1.1"
 members = ["ne_50m_admin_0_breakaway_disputed_areas.shp", "ne_50m_admin_0_breakaway_disputed_areas.dbf", "ne_50m_admin_0_breakaway_disputed_areas.shx", "ne_50m_admin_0_breakaway_disputed_areas.prj", "ne_50m_admin_0_breakaway_disputed_areas.cpg"]
 layer = "disputed"
+
+[[sources]]
+name = "populated_places"
+artifact = "ne_50m_populated_places_simple.zip"
+url = "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_populated_places_simple.zip"
+sha256 = "a6ebb4be4672de4cd2b94b04cdc9a1bd5a5cb684d28c0e75f535152e5f07a296"
+size_bytes = 133631
+published_version = "5.1.2"
+members = ["ne_50m_populated_places_simple.shp", "ne_50m_populated_places_simple.dbf", "ne_50m_populated_places_simple.shx", "ne_50m_populated_places_simple.prj", "ne_50m_populated_places_simple.cpg"]
+layer = "places"

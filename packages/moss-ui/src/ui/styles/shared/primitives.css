@@ -1,0 +1,1671 @@
+/* moss Design System — Shared Component Primitives */
+
+/* Button primitive - structural only, no colors */
+.moss-btn {
+  font-family: inherit;
+  font-size: var(--moss-size-sm, 1rem);
+  font-weight: 500;
+  border: none;
+  border-radius: var(--moss-radius-capsule); /* every button is a capsule */
+  padding: var(--moss-space-xs) var(--moss-space-md);
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-block;
+  transition: background var(--moss-transition-fast), border-color var(--moss-transition-fast), color var(--moss-transition-fast);
+}
+/* `display: inline-block` above beats the UA's `[hidden] { display: none }`, so
+   without this a button toggled with `.hidden` stays on screen. One rule here covers
+   every `.moss-btn` instead of a `[hidden]` rule per caller. */
+.moss-btn[hidden] {
+  display: none;
+}
+.moss-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--moss-focus-ring);
+}
+
+/* Small button variant — tighter padding + smaller font. Horizontal padding
+   is wider than the vertical rhythm alone would suggest: at this font size
+   the capsule's half-height runs to ~12px, and --moss-space-xs (8px) let the
+   rounded ends crowd the label. */
+.moss-btn--small {
+  padding: var(--moss-space-2xs) var(--moss-space-sm);
+  font-size: 0.875rem;
+}
+
+/* Full-width opt-in modifier — use when a form-completion button spanning
+   the full container width is intentional (e.g. onboarding, mobile). */
+.moss-btn--full {
+  width: 100%;
+}
+
+/* Input primitive - underline style, structural only, no colors */
+.moss-input {
+  font-family: inherit;
+  font-size: var(--moss-font-size, 1.125rem);
+  border: none;
+  /* Not border-medium: the underline is the only thing that says "type here",
+     so it is a meaningful non-text element and owes 3:1 against the surface
+     (WCAG 1.4.11). Mirrors .moss-input in site.css. */
+  border-bottom: 1px solid var(--moss-border-strong);
+  border-radius: 0;
+  padding: var(--moss-space-xs) 0;
+  width: 100%;
+  outline: none;
+  background: transparent;
+  /* Pin foreground to the theme token. Without this, the UA gives form controls
+     an OS-appearance-driven color (white under OS dark), which mismatches the
+     app's themed surface — the white-on-light textarea bug. */
+  color: var(--moss-color-text);
+  transition: border-color var(--moss-transition-fast);
+}
+.moss-input:focus {
+  border-bottom-color: var(--moss-color-text);
+}
+.moss-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Inline input modifier — auto width, for right-aligned setting-row controls.
+   Usage: <select class="moss-input moss-input--inline"> */
+.moss-input--inline {
+  width: auto;
+}
+
+/* Select dropdown — chevron only. moss's settings surfaces have one control
+   family: compose this with
+   .moss-select--pill below for the box — there is no other boxed select.
+   Usage: <select class="moss-select moss-select--pill">
+   Lives in primitives (not the app shell's stylesheet) so the launcher webview — which
+   imports only tokens + primitives — renders the themed chevron instead of
+   the raw UA <select> arrow. */
+.moss-select {
+  font-size: 14px;
+  color: var(--moss-color-text);
+  appearance: none;
+  padding-right: 36px; /* make room for chevron */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' fill='none' stroke='%235d5853' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  cursor: pointer;
+}
+[data-theme="dark"] .moss-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' fill='none' stroke='%23b8b5b0' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+/* Label primitive - structural only */
+.moss-label {
+  display: block;
+  font-size: var(--moss-size-sm, 1rem);
+  margin-bottom: var(--moss-space-xs, 0.5rem);
+}
+
+/* Small label variant */
+.moss-label--small {
+  font-size: 0.875rem;
+}
+
+/* Form field - vertical label + input */
+.moss-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--moss-space-2xs); /* was 4px — now token (same computed value) */
+}
+.moss-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--moss-space-sm);
+}
+.moss-field--inline .moss-input {
+  flex: 1;
+}
+
+/* Help text slot — contextual hint below the control */
+.moss-field__help {
+  font-size: 0.875rem;
+  color: var(--moss-color-text-secondary);
+  margin: var(--moss-space-2xs) 0 0 0;
+  line-height: 1.4;
+}
+
+/* Error text slot — form validation error below the control.
+   Note: .moss-input-feedback is for auto-save status (different concept). */
+.moss-field__error {
+  font-size: 0.875rem;
+  color: var(--moss-color-danger);
+  margin: var(--moss-space-2xs) 0 0 0;
+  line-height: 1.4;
+}
+
+/* Caption text below a field — e.g. "guo.mosspub.com · 5 hours ago" */
+.moss-field-caption {
+  font-size: 0.8125rem;
+  color: var(--moss-color-text-secondary);
+  margin-top: var(--moss-space-2xs);
+  line-height: 1.4;
+}
+
+/* Host row caption stack — the deployed-state lines under the Host pill
+   (live URL · time, email · re-verify). Block container: the pill's menu
+   wrap is inline-flex, so the lines must not flow onto the pill's line. */
+.moss-host-captions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--moss-space-2xs);
+}
+.moss-host-captions:empty {
+  display: none;
+}
+/* Links inside captions — keep the underline (clickability cue) but soften
+   the accent to caption tones; re-verify/retry are quiet secondary actions.
+   Compound selector: these buttons also carry .moss-link (declared later in
+   this file at equal specificity), so a bare .moss-caption-link would lose
+   the color war and render accent at rest. */
+.moss-link.moss-caption-link {
+  font-size: inherit;
+  color: var(--moss-color-text-secondary);
+}
+.moss-link.moss-caption-link:hover {
+  color: var(--moss-color-text);
+}
+.moss-caption-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Warn fragment inside a caption (revoked access, DNS trouble tails). */
+.moss-caption-warn {
+  color: var(--moss-color-danger, #c85450);
+}
+
+/* Info grid — aligned label + value rows.
+
+   A real grid, not a column of flex rows: the label column has to be ONE width
+   down the whole list, and only a grid can size that column to the longest
+   label in it. Each row is `display: contents` so its label and its body land
+   in the grid's own two tracks — safe because every row here is exactly a
+   `.moss-label` plus one body element (createInfoRow, createHostField,
+   createField, the domain row), and nothing styles the row box itself.
+
+   `fit-content(9rem)` is what lets a plugin name its own rows: the column
+   grows to the longest label and stops there. A fixed width sized for moss's
+   own short labels would wrap a plugin's longer one onto several lines. */
+.moss-info-grid {
+  display: grid;
+  grid-template-columns: fit-content(9rem) minmax(0, 1fr);
+  /* baseline, not start — see the Domain row's note near the bottom of this
+     file for what that buys a row whose body is tall. */
+  align-items: baseline;
+  gap: var(--moss-space-md) var(--moss-space-sm);
+}
+.moss-info-grid > .moss-field--inline {
+  display: contents;
+}
+.moss-info-grid > .moss-field--inline > .moss-label {
+  margin-bottom: 0;
+  text-align: left;
+}
+/* A grid item's automatic minimum size is its min-content width, so ONE
+   unbreakable value — a 59-character CID, a gateway URL — would otherwise push
+   the column, the grid and the panel holding it wider than the space they have
+   and clip. Wrapping the value is the row's own job (`overflow-wrap`); this is
+   what gives it somewhere narrower to wrap into. */
+.moss-info-grid > .moss-field--inline > .moss-field-body {
+  min-width: 0;
+}
+/* Row grammar additions: a grid-spanning heading for grouped rows, a
+   `[hidden]` override for `when`-driven rows, and switch-row alignment. */
+.moss-info-grid > .moss-settings-section-title {
+  grid-column: 1 / -1;
+}
+/* The credentials-intro paragraph SchemaFieldRenderer drops into the same
+   grid is prose, not a row — same span rule as
+   the heading above, or it would render squeezed into the label column. */
+.moss-info-grid > .moss-settings-description {
+  grid-column: 1 / -1;
+}
+/* `.moss-field--inline` gets `display: contents` from the rule above, an
+   author-origin rule that always beats the UA `[hidden] { display: none; }`
+   regardless of selector specificity — without this override a `when`-hidden
+   row renders anyway. */
+.moss-info-grid > .moss-field--inline[hidden] {
+  display: none;
+}
+/* The grid aligns its two columns at baseline, and a text-less 22px switch
+   has no baseline of its own, so a switch row aligns both cells at `start`
+   instead and gives the label a 22px line so its centre meets the switch's. */
+.moss-info-grid > .moss-field--switch > .moss-label,
+.moss-info-grid > .moss-field--switch > .moss-field-body {
+  align-self: start;
+}
+.moss-info-grid > .moss-field--switch > .moss-label {
+  line-height: 22px;
+}
+/* `.moss-toggle`'s own `padding: var(--moss-space-sm) 0` (16px) exists for a
+   standalone toggle LIST (Services tab), where it is the only vertical
+   rhythm between rows. Inside a grid row the grid's own `gap` already
+   supplies that, and the padding instead sinks the switch 16px below the
+   label's line box — the plugin-settings-form-controls gate's centring
+   assertion measured exactly that offset. Zeroed here, not in the shared
+   primitive, so the Services tab keeps its spacing. */
+.moss-info-grid > .moss-field--switch > .moss-field-body > .moss-toggle {
+  padding: 0;
+}
+
+/* ==========================================================================
+   Section primitive — general-purpose logical group with title + content.
+   The settings modal's own layout is .moss-settings-section, in the app
+   shell's stylesheet.
+   ========================================================================== */
+
+/* Outer container — vertical stack of header + content */
+.moss-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--moss-space-sm);
+  margin-bottom: var(--moss-space-lg);
+}
+
+/* Header slot — holds title and optional description */
+.moss-section__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--moss-space-2xs);
+}
+
+/* Section title — use on <h2> or similar; resets browser margin */
+.moss-section__title {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--moss-color-text);
+  margin: 0;
+}
+
+/* Section description — secondary prose below the title */
+.moss-section__description {
+  font-size: 0.875rem;
+  color: var(--moss-color-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   Toggle primitive — general-purpose boolean switch with label + description.
+   The only toggle in moss.
+   ========================================================================== */
+
+/* Outer container row: label-body on left, switch on right */
+.moss-toggle,
+.moss-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moss-space-sm);
+  padding: var(--moss-space-sm) 0;
+}
+
+/* Left column: label + optional description */
+.moss-toggle__body,
+.moss-setting-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--moss-space-2xs);
+}
+
+/* Primary label */
+.moss-toggle__label,
+.moss-setting-row__label {
+  font-size: var(--moss-size-sm, 1rem);
+  color: var(--moss-color-text);
+}
+
+/* Secondary help text */
+.moss-toggle__description,
+.moss-setting-row__description {
+  font-size: 0.875rem;
+  color: var(--moss-color-text-secondary);
+  line-height: 1.4;
+}
+
+/* Switch track — 40×22px pill */
+.moss-toggle__switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--moss-border-medium);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--moss-transition-fast);
+}
+
+/* Switch thumb — 18×18px circle */
+.moss-toggle__switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: var(--moss-color-bg);
+  border-radius: 50%;
+  box-shadow: var(--moss-elevation-1);
+  transition: transform var(--moss-transition-fast);
+}
+
+/* Active (on) state — track */
+.moss-toggle__switch.active {
+  background: var(--moss-color-accent);
+}
+
+/* Active (on) state — thumb slides right */
+.moss-toggle__switch.active::after {
+  transform: translateX(18px); /* track width(40) - thumb(18) - 2*inset(2) = 18px */
+}
+
+/* Keyboard focus ring */
+.moss-toggle__switch:focus-visible {
+  outline: none;
+  box-shadow: var(--moss-focus-ring);
+}
+
+/* Disabled modifier — applied to the whole row */
+.moss-toggle--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Table primitive — aligned row/column layout for tabular data.
+   ========================================================================== */
+
+/* Outer container */
+.moss-table {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--moss-border-light);
+}
+
+/* Header row — no hover, uppercase labels */
+.moss-table__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moss-space-sm);
+  padding: var(--moss-space-xs) var(--moss-space-sm);
+  border-bottom: 1px solid var(--moss-border-light);
+  background: var(--moss-color-surface);
+  font-size: 0.875rem;
+  color: var(--moss-color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Data row */
+.moss-table__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moss-space-sm);
+  padding: var(--moss-space-xs) var(--moss-space-sm);
+  border-bottom: 1px solid var(--moss-border-light);
+  transition: background var(--moss-transition-fast);
+}
+
+.moss-table__row:hover {
+  background: var(--moss-hover-overlay);
+}
+
+/* Generic cell — clips long text */
+.moss-table__cell {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Primary cell — bold, primary text color */
+.moss-table__cell--primary {
+  font-weight: 500;
+  color: var(--moss-color-text);
+}
+
+/* Secondary cell — muted, smaller */
+.moss-table__cell--secondary {
+  font-size: 0.875rem;
+  color: var(--moss-color-text-secondary);
+}
+
+/* Numeric cell — right-aligned, tabular figures */
+.moss-table__cell--numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   StateMessage primitive — empty / loading / error presentation.
+   ========================================================================== */
+
+/* Outer container — centred column */
+.moss-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--moss-space-sm);
+  padding: var(--moss-space-2xl) var(--moss-space-lg);
+  text-align: center;
+}
+
+/* Optional icon slot — inherits color from parent */
+.moss-state__icon {
+  font-size: 2rem;
+  opacity: 0.6;
+  line-height: 1;
+}
+
+/* Title — same style as .moss-section__title */
+.moss-state__title {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--moss-color-text);
+  margin: 0;
+}
+
+/* Description prose */
+.moss-state__description {
+  font-size: 0.875rem;
+  color: var(--moss-color-text-secondary);
+  max-width: 32rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Action slot — wraps a .moss-btn */
+.moss-state__action {
+  margin-top: var(--moss-space-xs);
+}
+
+/* Semantic icon color modifiers */
+.moss-state--empty .moss-state__icon,
+.moss-state--loading .moss-state__icon {
+  /* muted: inherited opacity from .moss-state__icon is sufficient */
+  color: var(--moss-color-text-secondary);
+}
+
+.moss-state--error .moss-state__icon {
+  color: var(--moss-color-danger);
+  opacity: 0.8;
+}
+
+/* Clickable text link. Resets <button> user-agent chrome so it renders as
+   plain underlined text regardless of whether it's a <button> or <a>. */
+.moss-link {
+  color: var(--moss-color-accent);
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.moss-link:hover {
+  text-decoration: underline;
+}
+
+/* Subtle link variant — muted color until hover. Used for secondary actions
+   like Re-verify where the accent color would overstate the emphasis. */
+.moss-link--subtle {
+  color: var(--moss-color-text-secondary);
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+.moss-link--subtle:hover {
+  color: var(--moss-color-text);
+  text-decoration: underline;
+}
+
+/* Form row - horizontal layout */
+.moss-row {
+  display: flex;
+  gap: 12px;
+}
+.moss-row > .moss-field { flex: 1; }
+
+/* ── Spacing primitives ──────────────────────────────────────────────────
+   Vertical rhythm is owned by the CONTAINER, never by the children. A child
+   added without its own margin rule therefore can never collide with its
+   neighbour (the "Publishing as … · change" zero-gap bug). Override density
+   per context with --moss-stack-space.
+
+   Why the adjacent-sibling ("owl") selector instead of flex+gap: it adds ONLY
+   block-axis spacing and leaves each child's display + cross-axis sizing
+   untouched, so an inline-block CTA stays auto-width instead of being
+   stretched full-width by `align-items: stretch`. Use flex+gap (e.g.
+   .moss-actions) only where every child is a uniform inline element (a button
+   row). Caveat: margin-block-start is ignored on `display: inline` children —
+   give such a child `display: inline-block` so the stack can space it.
+
+   NOTE: primitives.css is also loaded in the launcher and editor webviews.
+   For a horizontal button/affordance row, use flex+gap directly on that row
+   (e.g. .moss-modal-actions, .first-publish-success-buttons). */
+/* Children own no block margin — the container owns every gap, so a child added
+   later can never collide with its neighbour. The class is repeated
+   (`.moss-stack.moss-stack`, specificity 0,2,0) so this reset out-ranks
+   single-class component margins — notably moss's legacy
+   `.moss-field { margin-bottom: 16px }`, which lives in the app shell's stylesheet and would
+   otherwise win on source order (primitives.css is @imported first). That
+   matters because an inline-block child (e.g. the Publish button) does NOT
+   margin-collapse, so a leftover field margin would ADD to the owl gap. This
+   keeps the stack authoritative without !important (which moss avoids). */
+.moss-stack.moss-stack > * {
+  margin-block: 0;
+}
+.moss-stack.moss-stack > * + * {
+  margin-block-start: var(--moss-stack-space, var(--moss-space-md));
+}
+
+/* Muted secondary text. No layout — colour only — so it composes onto any
+   element (e.g. `class="moss-modal-body moss-text--muted"`). */
+.moss-text--muted {
+  color: var(--moss-color-muted);
+}
+
+/* Input feedback — auto-save status hint (distinct from .moss-field__error which is
+   for form validation; this is ephemeral saved/error state on individual inputs) */
+.moss-input-feedback {
+  font-size: 0.75rem;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  min-height: 1em;
+}
+.moss-input-feedback--success {
+  color: var(--moss-success, #0d9869);
+  opacity: 1;
+}
+.moss-input-feedback--error {
+  color: var(--moss-error, #c85450);
+  opacity: 1;
+}
+.moss-input-feedback--fade-out {
+  opacity: 0;
+}
+
+/* --- Glass-pill settings primitives --- */
+
+.moss-pill-input {
+  height: 36px;
+  border-radius: 18px;
+  background: var(--moss-glass-pill-bg);
+  box-shadow: var(--moss-elevation-1);
+  border: 1px solid transparent;
+  padding: 0 18px;
+  font-family: inherit;
+  font-size: var(--moss-size-sm, 1rem);
+  color: var(--moss-color-text);
+  outline: none;
+  transition: border-color var(--moss-transition-fast), box-shadow var(--moss-transition-fast);
+}
+.moss-pill-input::placeholder { color: var(--moss-text-placeholder); }
+.moss-pill-input:focus-visible {
+  border-color: var(--moss-color-accent);
+  box-shadow: var(--moss-elevation-1), 0 0 0 2px var(--moss-accent-light);
+}
+
+/* Wrapper that positions the pill row; the picker menu is the shared ctx-menu. */
+.moss-pill-combo-wrap {
+  position: relative;
+}
+
+/* Pill combo — the choose-one trigger twin of .moss-pill-input. Also usable
+   on a <button> (resets appearance/border/font); pair with an absolutely
+   positioned .moss-pill-combo-caret chevron on the right. */
+.moss-pill-combo {
+  appearance: none;
+  height: 36px;
+  border-radius: 18px;
+  background: var(--moss-glass-pill-bg);
+  box-shadow: var(--moss-elevation-1);
+  border: 1px solid transparent;
+  padding: 0 36px 0 18px;
+  font-family: inherit;
+  font-size: var(--moss-size-sm, 1rem);
+  color: var(--moss-color-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+  outline: none;
+  transition: border-color var(--moss-transition-fast), box-shadow var(--moss-transition-fast);
+}
+.moss-pill-combo:hover {
+  border-color: var(--moss-border-medium);
+}
+.moss-pill-combo:focus-visible {
+  border-color: var(--moss-color-accent);
+  box-shadow: var(--moss-elevation-1), 0 0 0 2px var(--moss-accent-light);
+}
+.moss-pill-combo .moss-pill-combo-caret {
+  position: absolute;
+  right: 14px;
+  color: var(--moss-color-muted);
+  display: inline-flex;
+  pointer-events: none;
+}
+.moss-pill-combo .moss-pill-combo-placeholder { color: var(--moss-text-placeholder); }
+
+/* Native <select> as a glass pill — self-sufficient: full pill box + the
+   .moss-select chevron repositioned for the pill's inset. The pill is the
+   only box a select gets now. Usage: <select class="moss-select moss-select--pill">. */
+.moss-select--pill {
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background-color: var(--moss-glass-pill-bg);
+  box-shadow: var(--moss-elevation-1);
+  padding: 0 36px 0 18px;
+  font-family: inherit;
+  font-size: var(--moss-size-sm, 1rem);
+  /* Same glyph as .moss-pill-combo-caret (12px stroke-2, muted) — the base
+     .moss-select chevron is a heavier stroke-1.5 in a darker ink and would
+     read as a different control next to the combo pills. Data URIs can't use
+     CSS vars, so the muted token values are inlined (light #716d69 / dark
+     #9a9080 below). */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6' fill='none' stroke='%23716d69' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 14px center;
+  outline: none;
+  transition: border-color var(--moss-transition-fast), box-shadow var(--moss-transition-fast);
+}
+[data-theme="dark"] .moss-select--pill {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6' fill='none' stroke='%239a9080' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.moss-select--pill:hover {
+  border-color: var(--moss-border-medium);
+}
+.moss-select--pill:focus-visible {
+  border-color: var(--moss-color-accent);
+  box-shadow: var(--moss-elevation-1), 0 0 0 2px var(--moss-accent-light);
+}
+
+.moss-pill-btn--primary {
+  height: 36px;
+  border-radius: 18px;
+  background: var(--moss-pill-filled-bg);
+  color: var(--moss-pill-filled-text);
+  border: none;
+  font-family: inherit;
+  font-size: var(--moss-size-sm, 1rem);
+  font-weight: 500;
+  padding: 0 20px;
+  cursor: pointer;
+  transition: filter var(--moss-transition-fast);
+}
+.moss-pill-btn--primary:hover { filter: brightness(1.08); }
+.moss-pill-btn--primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--moss-color-accent);
+}
+
+/* Skeleton row — shown in the domain picker during in-flight searches. Reuses moss-pulse-dots
+   keyframe (defined for email-verification waiting state) so we don't add
+   another animation. */
+.moss-skeleton-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+}
+.moss-skeleton-bar {
+  display: inline-block;
+  height: 0.875rem;
+  background: var(--moss-hover-overlay);
+  border-radius: 3px;
+  animation: moss-pulse-dots 1.2s ease-in-out infinite;
+}
+.moss-skeleton-bar--name { width: 8rem; }
+.moss-skeleton-bar--price { width: 3.5rem; }
+
+/* Stagger each bar so the effect reads as smooth motion, not a strobe.
+   Matches the moss-pill-waiting-dots pattern at ~L705 of this file.
+   Between-row delay (row 1 leads, rows 2–3 follow). */
+.moss-skeleton-row:nth-child(2) .moss-skeleton-bar { animation-delay: 0.15s; }
+.moss-skeleton-row:nth-child(3) .moss-skeleton-bar { animation-delay: 0.3s; }
+/* Within-row: price bar trails the name bar by a further 0.075s. */
+.moss-skeleton-bar--price { animation-delay: 0.075s; }
+.moss-skeleton-row:nth-child(2) .moss-skeleton-bar--price { animation-delay: 0.225s; }
+.moss-skeleton-row:nth-child(3) .moss-skeleton-bar--price { animation-delay: 0.375s; }
+
+/* Inline email verification: prompt line above a
+   pill-input + Verify row, feedback line below. */
+.moss-email-verify-inline {
+  margin-top: var(--moss-space-xs);
+}
+.moss-email-verify-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.moss-email-verify-prompt {
+  margin-bottom: var(--moss-space-2xs);
+}
+.moss-deployment-email-feedback {
+  font-size: var(--moss-size-sm, 1rem);
+  color: var(--moss-color-danger, #c85450);
+  margin-top: var(--moss-space-2xs);
+}
+.moss-deployment-email-feedback:empty {
+  display: none;
+}
+
+/* Waiting pill (email verification polling) */
+.moss-pill-waiting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  border-radius: 18px;
+  background: var(--moss-glass-pill-bg);
+  box-shadow: var(--moss-elevation-1);
+  padding: 0 18px;
+  font-size: 0.875rem;
+  color: var(--moss-color-text);
+}
+.moss-pill-waiting-dots { display: inline-flex; gap: 3px; align-items: center; }
+.moss-pill-waiting-dots > .d {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--moss-color-muted);
+  animation: moss-pulse-dots 1.2s ease-in-out infinite;
+}
+.moss-pill-waiting-dots > .d:nth-child(2) { animation-delay: 0.2s; }
+.moss-pill-waiting-dots > .d:nth-child(3) { animation-delay: 0.4s; }
+@keyframes moss-pulse-dots {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+.moss-pill-waiting-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+}
+.moss-pill-waiting-actions > button {
+  background: none; border: none; padding: 0;
+  color: var(--moss-color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--moss-border-medium);
+  text-underline-offset: 3px;
+}
+
+/* ── Deployment setup panel (per-stage progress under the Domain field) ── */
+
+.moss-setup-status {
+  margin-top: var(--moss-space-sm);
+  padding: var(--moss-space-sm);
+  background: var(--moss-hover-overlay);
+  border: 1px solid var(--moss-border-light);
+  border-radius: 8px;
+}
+
+.moss-setup-status__headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--moss-space-sm);
+  margin-bottom: var(--moss-space-sm);
+}
+.moss-setup-status__title {
+  font-size: 0.95rem;
+  font-weight: 450;
+  margin: 0;
+}
+.moss-setup-status__title--success { color: var(--moss-color-accent); }
+.moss-setup-status__title--warn    { color: var(--moss-warning); }
+.moss-setup-status__title--error   { color: var(--moss-color-danger); }
+.moss-setup-status__sub {
+  font-size: 0.78rem;
+  color: var(--moss-color-muted);
+  font-feature-settings: "tnum";
+}
+
+.moss-setup-status__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.moss-setup-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  padding: 0.25rem 0;
+  font-size: 0.875rem;
+}
+.moss-setup-row__icon {
+  flex: 0 0 1rem;
+  font-family: var(--moss-font-mono);
+  font-size: 0.875rem;
+  text-align: center;
+  line-height: 1;
+}
+.moss-setup-row__icon--ok       { color: var(--moss-success); }
+.moss-setup-row__icon--checking { color: var(--moss-color-muted); }
+.moss-setup-row__icon--warn     { color: var(--moss-warning); }
+.moss-setup-row__icon--failed   { color: var(--moss-color-danger); }
+
+/* moss-spin is the app's ONE spin keyframe — styles/shared/progress.css,
+   which every entry importing this file also imports. */
+.moss-setup-row__icon--checking::before {
+  content: "◐";
+  display: inline-block;
+  animation: moss-spin 1.4s linear infinite;
+}
+.moss-setup-row__icon--ok::before     { content: "✓"; }
+.moss-setup-row__icon--warn::before   { content: "!"; font-weight: 600; }
+.moss-setup-row__icon--failed::before { content: "×"; font-weight: 600; }
+
+.moss-setup-row__label {
+  flex: 1;
+  color: var(--moss-color-text);
+}
+.moss-setup-row--checking .moss-setup-row__label,
+.moss-setup-row--warn     .moss-setup-row__label {
+  color: var(--moss-color-text-secondary);
+}
+.moss-setup-row__detail {
+  font-size: 0.78rem;
+  color: var(--moss-color-muted);
+  font-feature-settings: "tnum";
+  text-align: right;
+}
+
+.moss-setup-status__footer {
+  margin-top: var(--moss-space-sm);
+  padding-top: var(--moss-space-sm);
+  border-top: 1px solid var(--moss-border-light);
+  display: flex;
+  align-items: center;
+  gap: var(--moss-space-xs);
+  flex-wrap: wrap;
+}
+.moss-setup-btn {
+  font-size: 0.85rem;
+  font-weight: 400;
+  /* Horizontal padding widened from 0.75rem so the capsule's rounded ends
+     (half-height ≈ 13.75px at this size) don't crowd the label. */
+  padding: 0.35rem 1rem;
+  border: 1px solid var(--moss-border-medium);
+  background: var(--moss-color-surface);
+  color: var(--moss-color-text);
+  border-radius: var(--moss-radius-capsule); /* every button is a capsule */
+  cursor: pointer;
+  font-family: inherit;
+}
+.moss-setup-btn:hover { background: var(--moss-hover-overlay); }
+.moss-setup-btn--primary {
+  background: var(--moss-color-accent);
+  color: var(--moss-pill-filled-text);
+  border-color: var(--moss-color-accent);
+}
+.moss-setup-btn--primary:hover { background: var(--moss-color-accent-hover); }
+.moss-setup-btn--subtle {
+  background: none;
+  border-color: transparent;
+  color: var(--moss-color-text-secondary);
+}
+.moss-setup-btn--subtle:hover { background: var(--moss-hover-overlay); }
+
+.moss-setup-disclosure {
+  font-size: 0.78rem;
+  color: var(--moss-color-muted);
+  margin-left: auto;
+  text-align: right;
+  max-width: 60%;
+  line-height: 1.4;
+}
+.moss-setup-disclosure a {
+  color: var(--moss-color-accent);
+  text-decoration: underline;
+}
+
+.moss-setup-offline-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--moss-space-xs);
+  padding: var(--moss-space-sm);
+  background: var(--moss-warning-subtle);
+  border: 1px solid var(--moss-warning);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--moss-color-text);
+}
+.moss-setup-offline-banner::before {
+  content: "⚠";
+  font-size: 1rem;
+  color: var(--moss-warning);
+}
+
+/* ── Settings status primitives (the launcher webview imports them for App Settings) ── */
+.moss-settings-description {
+  font-size: 12px;
+  color: var(--moss-color-text-secondary);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.moss-status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.moss-status-indicator.moss-status-active {
+  background: var(--moss-success);
+}
+.moss-status-indicator.moss-status-warning {
+  background: var(--moss-warning);
+}
+
+.moss-status-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.moss-status-badge--green {
+  color: var(--moss-success);
+  background: var(--moss-success-subtle, rgba(16, 185, 129, 0.1));
+}
+.moss-status-badge--yellow {
+  color: var(--moss-warning);
+  background: var(--moss-warning-subtle, rgba(245, 158, 11, 0.1));
+}
+.moss-status-badge--red {
+  color: var(--moss-error);
+  background: var(--moss-error-subtle, rgba(200, 84, 80, 0.1));
+}
+
+/* ==========================================================================
+   InlineEdit primitive — click-to-edit field with idle/active/validating/error
+   states. Native <input> always in DOM (never swapped). CSS-only appearance
+   switch via data-state. No aria-readonly toggling (Roselli 2024).
+   ========================================================================== */
+
+.moss-inline-edit {
+  display: inline-flex;
+  /* baseline (not center) so the editable segment and the adjacent suffix read
+   * as one continuous hostname — "[my-blog].staging.mosspub.com" — sitting on a
+   * shared text baseline rather than box-centred against each other. */
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--moss-space-xs);
+  max-width: 28ch;
+  position: relative;
+}
+
+/* Slug modifier — wider cap */
+.moss-inline-edit--slug {
+  max-width: 40ch;
+}
+
+/* The native input — always in DOM */
+.moss-inline-edit__input {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--moss-color-text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  padding: 2px 0;
+  min-width: 0;
+  /* Auto-width: input grows/shrinks with its content so the suffix can sit
+   * immediately after it on the same line. `width` MUST stay `auto` here — an
+   * explicit `width: 100%` is a *definite* width that suppresses `field-sizing`
+   * entirely (the input then fills the whole flex line and `flex-wrap: wrap`
+   * pushes the suffix onto its own row). The `max-width` on `.moss-inline-edit`
+   * bounds the growth. WebKit/Tauri support field-sizing. */
+  width: auto;
+  flex: 0 1 auto;
+  field-sizing: content;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-bottom-color var(--moss-transition-fast);
+  cursor: default;
+}
+
+/* Idle: dashed underline affordance on hover */
+.moss-inline-edit[data-state="idle"] .moss-inline-edit__input {
+  cursor: default;
+}
+.moss-inline-edit[data-state="idle"] .moss-inline-edit__input:hover {
+  border-bottom-color: var(--moss-border-medium);
+  border-bottom-style: dashed;
+  cursor: text;
+}
+
+/* Active / validating / error: solid underline */
+.moss-inline-edit[data-state="active"] .moss-inline-edit__input,
+.moss-inline-edit[data-state="validating"] .moss-inline-edit__input {
+  border-bottom-color: var(--moss-border-medium);
+  border-bottom-style: solid;
+  cursor: text;
+}
+
+.moss-inline-edit[data-state="error"] .moss-inline-edit__input {
+  border-bottom-color: var(--moss-color-danger);
+  border-bottom-style: solid;
+  cursor: text;
+}
+
+/* Suffix — e.g. ".mosspub.com" shown adjacent to the input */
+.moss-inline-edit__suffix {
+  color: var(--moss-color-muted);
+  font-size: inherit;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Shared inline waiting dots — the shell's fp-loader idiom as a primitive,
+   so InlineEdit and non-fp surfaces can trail a waiting sentence with the
+   same three pulsing dots. Always aria-hidden; always a SIBLING of the
+   live-region caption, never a child: a decorative node changing inside
+   role=status re-announces the sentence. */
+.moss-checking-dots {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.moss-checking-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--moss-color-accent-quiet);
+  animation: moss-checking-pulse 1400ms ease-in-out infinite;
+}
+.moss-checking-dots span:nth-child(2) { animation-delay: 200ms; }
+.moss-checking-dots span:nth-child(3) { animation-delay: 400ms; }
+@keyframes moss-checking-pulse {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still reads as "in progress" — it just stops moving. Same rule the
+     first-publish form documents for .fp-loader. */
+  .moss-checking-dots span {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* Status row — caption (live region) + trailing checking dots. The row takes
+   the full-width wrap (flex-basis) so `__status` keeps its class, role, and
+   text styling for every existing consumer and test that targets it. */
+.moss-inline-edit__status-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--moss-space-xs);
+}
+
+/* Only fields that can ever populate this row reserve its height — a field
+   with no validators never writes here, and reserving space regardless left
+   a permanent blank gap under fields like the email composer's sender name. */
+.moss-inline-edit__status-row--reserved {
+  min-height: 1.4em;
+}
+
+/* Status slot — always in DOM; holds sync/async validation messages */
+.moss-inline-edit__status {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  min-height: 0;
+  color: var(--moss-color-muted);
+}
+
+/* Dots render only while validating. The :not() form beats the shared class's
+   own display at (0,2,0) without depending on source order. */
+.moss-inline-edit:not([data-state="validating"]) .moss-inline-edit__loader {
+  display: none;
+}
+
+.moss-inline-edit__status.--error {
+  color: var(--moss-color-danger);
+}
+
+.moss-inline-edit__status.--success {
+  color: var(--moss-success);
+}
+
+/* Save button — only visible in explicit-save mode when valid + available */
+.moss-inline-edit__save {
+  /* Inherits .moss-btn + .moss-btn--small structural styles */
+  background: var(--moss-color-accent, #6366f1);
+  color: #fff;
+}
+.moss-inline-edit__save:hover:not(:disabled) {
+  background: var(--moss-color-accent-hover, #4f46e5);
+}
+.moss-inline-edit__save:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* === Canonical copy button -- ONE source, used everywhere, so
+   launcher/editor webviews style toast copy-actions too === */
+.moss-copy-btn {
+  /* ghost button: no background, no border, cursor pointer */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  /* Ghost button: no fill or border at rest or on hover, so there is no
+     rendered capsule outline to crowd — the token is read for consistency,
+     not because this one had a rounding bug to fix. */
+  border-radius: var(--moss-radius-capsule);
+  cursor: pointer;
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-muted);
+  opacity: 0.7;
+  transition: opacity 0.1s, color 0.1s;
+  line-height: 1;
+}
+.moss-copy-btn:hover,
+.moss-copy-btn:focus-visible {
+  opacity: 1;
+  color: var(--moss-color-accent);
+  outline: none;
+}
+.moss-copy-btn--copied {
+  color: var(--moss-color-accent);
+  opacity: 1;
+}
+.moss-copy-btn__icon--check {
+  display: none;
+}
+.moss-copy-btn--copied .moss-copy-btn__icon--copy {
+  display: none;
+}
+.moss-copy-btn--copied .moss-copy-btn__icon--check {
+  display: inline-block;
+}
+.moss-copy-btn__label {
+  font-size: var(--moss-size-xs);
+}
+
+/* Busy affordance for an in-flight user action (shared/ui/run-action.ts).
+   Applied to whatever was clicked — a button, a card, a tile, a menu item, an
+   icon — alongside aria-disabled + aria-busy. `runAction` deliberately does NOT
+   set the `disabled` property: an element that becomes non-focusable while
+   focused is unfocused per spec, which drops focus out of a modal's focus trap
+   for the whole round trip. The guard, not the DOM, is what stops the second
+   click; these rules are what make the first one visible.
+
+   The trigger KEEPS its pointer events on purpose. An element that takes no
+   pointer events shows no cursor, so `cursor: progress` would never render,
+   and a repeat click would never reach it, so "a repeat click re-asserts the
+   busy paint" could not happen. The re-entrancy guard in run-action.ts refuses
+   the second invocation, and no surface using this class has an ancestor
+   handler that a bubbled second click could trip.
+
+   The selector is doubled to raise specificity from one class to two. Both
+   `.moss-folder-mode__card` and `.moss-composer__btn` set `cursor: pointer`
+   in stylesheets the editor @imports AFTER primitives.css, so at equal
+   specificity source order handed them the win and the busy cursor was lost
+   on exactly the surfaces that need it most. moss has no @layer to express
+   this, and `!important` here would be un-overridable by any future surface;
+   doubling stays inside normal cascade rules. */
+.moss-is-busy.moss-is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* ============================================================================
+   The Domain row (custom domains)
+   ============================================================================
+   Every rule here answers a question the design settled; the comments record which, because several
+   of them look like arbitrary pixel choices and are not.
+   ---------------------------------------------------------------------- */
+
+/* The label sits on the PILL's line, whatever the body height.
+   `.moss-info-grid` already sets `align-items: baseline` — baseline, not
+   start, so the label lands on the pill's own text rather than on the top edge
+   of its padding box. What is added here is the body: it must be a grid whose
+   FIRST baseline is the pill's, or a tall body (a records block, a ledger)
+   drags "Domain" to the vertical middle and it stops reading as the pill's
+   label.
+
+   `min-width: 0` (against the ledger's longest step label setting a
+   min-content floor) applies to every body in the grid, up where the grid
+   is declared. */
+.moss-field[data-field='domain'] > .moss-field-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.moss-domain-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.moss-domain-pill-row > .moss-pill-input {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* The state rides the domain's line — beside the pill, level with it — because
+   it is a fact about the domain, and everything below it is subordinate
+   detail. An earlier draft gave it its own row above the ledger, at the same
+   left edge and with the same dot, so "Connected" read as the ledger's first
+   entry rather than as its headline. */
+.moss-domain-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--moss-size-sm);
+  min-width: 0;
+}
+.moss-domain-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.moss-domain-dot--ok {
+  background: var(--moss-color-accent);
+}
+.moss-domain-dot--pending {
+  background: transparent;
+  border: 1.5px solid var(--moss-color-muted);
+}
+.moss-domain-dot--warn {
+  background: var(--moss-color-muted);
+}
+.moss-domain-state-label {
+  color: var(--moss-color-text);
+}
+.moss-domain-state--warn .moss-domain-state-label {
+  color: var(--moss-color-text-secondary);
+}
+/* Truncates rather than wraps: the detail is an elaboration, and a second line
+   of it would outweigh the state it is elaborating. */
+.moss-domain-state-detail {
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The freshness stamp IS the recheck control — no separate "Check now" chrome
+   competing with the real content. It foots the LEDGER rather than the pill
+   row, because it says how fresh THOSE observations are; on the pill row it
+   crowded out the state detail standing next to it. */
+.moss-domain-stamp {
+  font: inherit;
+  font-size: var(--moss-size-xs);
+  background: none;
+  border: none;
+  padding: 0;
+  justify-self: start;
+  margin: 3px 0 0 24px;
+  color: var(--moss-color-text-secondary);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.moss-domain-stamp:hover {
+  color: var(--moss-color-text);
+}
+
+/* The ledger: read-only, subordinate, one leg at a time. */
+.moss-domain-ledger {
+  display: grid;
+  padding-left: 2px;
+}
+.moss-domain-step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  padding: 1px 0 5px;
+  font-size: var(--moss-size-xs);
+  position: relative;
+}
+/* The rail is drawn PER STEP over the step's FULL height, with the glyph
+   painted on top, so the line stays continuous however tall a step grows when
+   it carries a detail line. Hanging a fixed 12px segment off each glyph left
+   visible gaps under exactly the step that mattered — the active one, which is
+   the tall one. First and last steps clip the rail to the glyph's centre so it
+   starts and stops on a dot rather than in mid-air. */
+.moss-domain-step::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--moss-border-light);
+}
+.moss-domain-step:first-child::before {
+  top: 11px;
+}
+/* An explicit last-step class, never :last-child — the stamp foots the same
+   container, so :last-child is the button and the rail would run past the
+   final dot into empty space. */
+.moss-domain-step--last::before {
+  bottom: auto;
+  height: 11px;
+}
+.moss-domain-step:first-child.moss-domain-step--last::before {
+  display: none;
+}
+.moss-domain-step-glyph {
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.moss-domain-step--done .moss-domain-step-glyph {
+  background: var(--moss-color-accent);
+}
+.moss-domain-step--active .moss-domain-step-glyph {
+  background: var(--moss-color-surface);
+  border: 1.5px solid var(--moss-color-accent);
+}
+/* A not-yet-started step carries no ring: an outline reads as a control, and a
+   column of empty rings was most of the visual noise. */
+.moss-domain-step--waiting .moss-domain-step-glyph {
+  width: 3px;
+  height: 3px;
+  left: 6px;
+  top: 10px;
+  background: var(--moss-border-medium);
+}
+/* An accent ring on the active step reads as "progressing", which is a lie in
+   the warn state — there the step is stuck, not moving. */
+.moss-domain-ledger--warn .moss-domain-step--active .moss-domain-step-glyph {
+  border-color: var(--moss-color-muted);
+}
+/* Explicit placement: the glyph is absolutely positioned and so is no longer a
+   grid item, and auto-placement would drop the label into the 16px rail. */
+.moss-domain-step-label {
+  grid-column: 2;
+  color: var(--moss-color-text-secondary);
+}
+.moss-domain-step--active .moss-domain-step-label {
+  color: var(--moss-color-text);
+}
+.moss-domain-step--waiting .moss-domain-step-label {
+  color: var(--moss-color-muted);
+}
+.moss-domain-step-at {
+  grid-column: 3;
+  font-size: var(--moss-size-2xs);
+  color: var(--moss-color-muted);
+  font-variant-numeric: tabular-nums;
+}
+.moss-domain-step-detail {
+  grid-column: 2 / -1;
+  font-size: var(--moss-size-2xs);
+  color: var(--moss-color-muted);
+  padding-top: 1px;
+}
+
+/* The instruction block — renders any deployer's records. */
+.moss-domain-dns {
+  border: 1px solid var(--moss-border-light);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+  background: var(--moss-color-bg);
+}
+.moss-domain-dns-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--moss-size-xs);
+  color: var(--moss-color-text-secondary);
+  margin-bottom: 2px;
+}
+.moss-domain-dns-auto {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  padding-bottom: 4px;
+}
+.moss-domain-dns-cols,
+.moss-domain-dns-row {
+  display: grid;
+  /* Proportional, not auto: an auto host column lets
+     "_cf-custom-hostname.www" take the width the value needs, and the DCV
+     target then wraps mid-token — unreadable exactly where a typo is
+     unrecoverable. */
+  grid-template-columns: 50px minmax(0, 0.72fr) minmax(0, 1.28fr);
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 1px;
+}
+/* Column headers, in the words the destination screen uses. The single biggest
+   fix for "what is @": the columns now say what they are. */
+.moss-domain-dns-cols {
+  font-size: var(--moss-size-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--moss-color-muted);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-domain-dns-row {
+  font-family: var(--moss-font-mono);
+  font-size: var(--moss-size-xs);
+  padding: 3px 0;
+}
+.moss-domain-dns-type {
+  color: var(--moss-color-text-secondary);
+}
+.moss-domain-dns-name {
+  color: var(--moss-color-text);
+}
+/* CLICK TO COPY, WITHOUT A COPY CONTROL.
+   A "Copy" button per row was five buttons in one small block, each repeating
+   a word the user had to read before they could ignore it. Instead the
+   copyable things LOOK like discrete tokens and the non-copyable things look
+   like prose: a chip is copyable, bare text is not, and that contrast carries
+   the instruction so nothing has to state it. It is legible at a glance rather
+   than only on hover, which matters because a hover-only affordance does not
+   exist on a first look. */
+.moss-domain-chip {
+  font-family: var(--moss-font-mono);
+  font-size: var(--moss-size-xs);
+  text-align: left;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--moss-border-light);
+  background: var(--moss-color-surface);
+  color: var(--moss-color-text);
+  cursor: pointer;
+  /* A long value may now wrap inside its chip. That was unacceptable while it
+     was bare text to transcribe and is harmless once the chip is the control. */
+  overflow-wrap: anywhere;
+  transition:
+    border-color 90ms ease,
+    background 90ms ease;
+}
+.moss-domain-chip:hover {
+  border-color: var(--moss-border-medium);
+  background: var(--moss-color-bg);
+}
+.moss-domain-chip.is-copied {
+  border-color: var(--moss-color-accent);
+  color: var(--moss-color-accent);
+}
+.moss-domain-dns-help {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.moss-domain-dns-note {
+  font-size: var(--moss-size-2xs);
+  color: var(--moss-color-text-secondary);
+  margin-top: 2px;
+}
+.moss-domain-dns-ns {
+  font-family: var(--moss-font-mono);
+  color: var(--moss-color-text);
+}
+.moss-domain-dns-or {
+  font-size: var(--moss-size-2xs);
+  color: var(--moss-color-muted);
+  margin: 2px 0;
+}
+
+.moss-domain-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.moss-domain-action-btn {
+  font: inherit;
+  font-size: var(--moss-size-xs);
+  padding: 4px 12px;
+  border-radius: var(--moss-radius-capsule); /* every button is a capsule */
+  border: 1px solid var(--moss-border-medium);
+  background: transparent;
+  color: var(--moss-color-text);
+  cursor: pointer;
+}
+.moss-domain-action-btn--go {
+  border-color: var(--moss-color-accent);
+  color: var(--moss-color-accent);
+}
+
+/* The opt-out is deliberately the least prominent thing on the row: it is a
+   preference, not an action, so it is never a button. */
+.moss-domain-quiet {
+  font-size: var(--moss-size-xs);
+}
+
+/* Minimize/maximize/close button visuals for the Windows caption. Shared by both
+   webviews that can draw the row: the main shell (its .moss-titlebar) and the
+   editor (its caption row, full-width and document mode), so the two copies
+   cannot drift.
+
+   Position:absolute, right:0/46/92 from whichever containing block each
+   consumer establishes (.moss-titlebar there, the editor's own caption-row
+   wrapper here) — both anchor that block's OWN right edge at the real window
+   edge, so the SAME three offsets tile identically in either webview
+   regardless of the containing block's width. top:0, not vertically centered
+   in the 48px band, so the visible row lines up pixel-for-pixel with the
+   native window layer's invisible Snap Layouts overlay HWND, which is
+   computed from the SAME two tokens. Close sits rightmost (the universal
+   caption convention), maximize and minimize its trailing-adjacent
+   neighbours in that order, matching the overlay's own ordering, which the
+   reserved zone width (--moss-caption-zone-width, tokens.css) assumes. No
+   z-index of their own: each consumer's own positioned ancestor is already
+   the stacking context that floats the row over its content (--z-panel in
+   the main shell; the editor sets its own). Base visibility (display:none →
+   grid) is gated on PLATFORM alone (body.own-titlebar.controls-trailing) —
+   a consumer that also needs a STATE gate (the editor's owns-caption, since
+   split mode leaves this webview drawing nothing) applies that on its own
+   row wrapper, not here. */
+.moss-caption-btn {
+  display: none;
+  position: absolute;
+  top: 0;
+  width: var(--moss-caption-btn-w);
+  height: var(--moss-caption-btn-h);
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--moss-chrome-icon-color);
+  cursor: pointer;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+body.own-titlebar.controls-trailing .moss-caption-btn {
+  display: grid;
+}
+
+.moss-caption-btn--close {
+  right: 0;
+}
+.moss-caption-btn--maximize {
+  right: var(--moss-caption-btn-w);
+}
+.moss-caption-btn--minimize {
+  right: calc(2 * var(--moss-caption-btn-w));
+}
+
+/* Real :hover/:active for minimize and close — nothing covers them, so the
+   webview receives their pointer events directly. Maximize gets the SAME
+   paint from a synthetic class instead (.moss-caption-hovering,
+   utils/fullscreen-class.ts's MAXIMIZE_HOVER_CLASS): once the Snap Layouts
+   overlay HWND wins the hit-test over that one button, WebView2 never
+   receives a real pointer event there at all, only the overlay's forwarded
+   SnapOverlayHover event. There is no pressed-state signal for maximize —
+   the native layer deliberately swallows WM_NCLBUTTONDOWN rather than
+   forwarding it — so it shows hover only, never :active's darker fill;
+   utils/fullscreen-class.ts's module doc explains why that gap is left
+   rather than invented around. */
+.moss-caption-btn:hover,
+.moss-caption-btn.moss-caption-hovering {
+  background: var(--moss-hover-overlay);
+}
+.moss-caption-btn:active {
+  background: var(--moss-active-overlay);
+}
+/* Close alone borrows Windows' own semantics (solid red, white glyph) rather
+   than moss's hover/active tokens, as the launcher's pair does. */
+.moss-caption-btn--close:hover {
+  background: var(--moss-caption-close-hover);
+  color: #fff;
+}
+.moss-caption-btn--close:active {
+  background: var(--moss-caption-close-pressed);
+}
+.moss-caption-btn:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--moss-color-accent);
+}
+
+/* Maximize/restore glyph swap — the same two-elements-one-svg technique as
+   the main shell's device toggle (.moss-device-toggle), toggled by
+   utils/fullscreen-class.ts's data-maximized attribute rather than a
+   pre-paint body flag: this is live per-window state refreshed on mount and
+   on every FullscreenChanged, not a persisted preference. */
+.moss-caption-restore-icon {
+  display: none;
+}
+.moss-caption-btn--maximize[data-maximized="true"] .moss-caption-maximize-icon {
+  display: none;
+}
+.moss-caption-btn--maximize[data-maximized="true"] .moss-caption-restore-icon {
+  display: block;
+}

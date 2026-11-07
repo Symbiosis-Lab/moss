@@ -11,6 +11,8 @@
        rules-only and cannot be loaded without it. -->
   <link rel="stylesheet" href="/__moss-tokens.css">
   <link rel="stylesheet" href="/moss-build-assets/assets/css/site.css">
+  <!-- The selection popover's partial, which a site with selection tools ships after core. -->
+  <link rel="stylesheet" href="/moss-build-assets/assets/css/site/selection.css">
   <style>
     @layer reset, tokens, base, layout, shortcodes, plugins, themes;
     body { margin: 0; }
@@ -57,8 +59,12 @@
   </article>
 </main>
 
+<!-- What a build with `[site].selection_tools` on puts on the theme tag: the
+     popover offers Share and Copy only when the share-card chunk is named. -->
+<script data-share-card="/_moss/js/share-card.js"></script>
+
 <!-- The production modules. `link-preview.ts` is a self-registering IIFE;
-     `selection-actions.ts` exports an init the site's theme bundle calls, so
+     `selection-actions.ts` exports an init the selection bundle calls, so
      the harness calls the same one. Nothing about placement is re-implemented
      here — that is the whole point of serving through vite rather than a static
      server. -->

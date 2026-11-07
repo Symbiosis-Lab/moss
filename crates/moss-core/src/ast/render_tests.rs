@@ -70,8 +70,8 @@ fn renders_resolved_link_internal() {
 
 #[test]
 fn renders_resolved_link_wikilink_carries_class() {
-    // PR7a: wikilink class can come from either the resolved URL kind
-    // (legacy production path) OR the new is_wikilink AST flag.
+    // Wikilink class can come from either the resolved URL kind
+    // OR the is_wikilink AST flag.
     let html = render(vec![Block::Paragraph(vec![Inline::Link {
         url: Url::resolved("../docs/", UrlKind::Wikilink),
         title: None,
@@ -84,8 +84,7 @@ fn renders_resolved_link_wikilink_carries_class() {
 
 #[test]
 fn renders_link_with_is_wikilink_flag_emits_class() {
-    // PR7a: is_wikilink: true on a non-wikilink-kind URL still
-    // produces the wikilink class. Parser sets this for any
+    // is_wikilink: true on a non-wikilink-kind URL still produces the wikilink class. Parser sets this for any
     // pulldown-cmark Tag::Link { link_type: LinkType::WikiLink, .. }.
     let html = render(vec![Block::Paragraph(vec![Inline::Link {
         url: Url::resolved("../docs/", UrlKind::Internal),
@@ -156,8 +155,7 @@ fn renders_ordered_list() {
 #[test]
 fn render_ordered_list_emits_start_attribute_when_non_default() {
     // `3. foo` should produce `<ol start="3">…</ol>`. The attribute
-    // appears immediately after `<ol`, before any `data-source-line`
-    // (Phase 4 followup B contract).
+    // appears immediately after `<ol`, before any `data-source-line`.
     let html = render(vec![Block::List {
         ordered: true,
         start: Some(3),
@@ -234,7 +232,7 @@ fn renders_thematic_break() {
 }
 
 // -----------------------------------------------------------------
-// Phase 4 PR4: Block::Callout render shape
+// Block::Callout render shape
 // -----------------------------------------------------------------
 
 use super::super::node::{CalloutKind, Fold};
@@ -580,7 +578,7 @@ fn round_trips_parse_to_render_for_canonical_doc() {
     // End-to-end: post-resolve markdown → parse → simulate visit
     // (mark every URL Internal) → render → check shape.
     //
-    // Phase 4 PR2: the parser now populates Block::Heading.id with the
+    // The parser populates Block::Heading.id with the
     // Obsidian anchor slug, so the rendered <h1> carries id="title" — but,
     // since a level-1 heading is never a permalink target, no `.moss-heading-anchor`.
     let md = "# Title\n\npara with [link](docs/) and *em*.\n";
@@ -596,7 +594,7 @@ fn round_trips_parse_to_render_for_canonical_doc() {
 }
 
 // -----------------------------------------------------------------
-// Phase 4 PR3 (2026-05-27): Block::Figure render
+// Block::Figure render
 // -----------------------------------------------------------------
 
 #[test]
@@ -990,7 +988,7 @@ fn unresolved_url_in_link_panics_in_debug() {
 }
 
 // -----------------------------------------------------------------
-// 2026-05-28 (Phase 4 source-line wiring): BlockMeta → data-source-line
+// BlockMeta → data-source-line
 // emission.
 // -----------------------------------------------------------------
 
@@ -1113,12 +1111,9 @@ fn list_blockquote_codeblock_table_hr_emit_data_source_line() {
 
 #[test]
 fn list_emits_per_li_data_source_line_when_parser_tracks() {
-    // 2026-05-28 (Phase 4 source-lines followup): `<li>` carries
-    // `data-source-line="N"` when the parser populated
-    // `item_source_lines`. Mirrors the legacy transform_events shape
-    // (commit f91aca8fa, 2026-04-01) that emitted on `<li>` for
-    // proportional scroll-sync interpolation. The outer `<ul>` carries
-    // BlockMeta.source_line separately.
+    // `<li>` carries `data-source-line="N"` when the parser populated
+    // `item_source_lines`, for proportional scroll-sync interpolation. The
+    // outer `<ul>` carries BlockMeta.source_line separately.
     let blocks = vec![Block::List {
         ordered: false,
         start: None,

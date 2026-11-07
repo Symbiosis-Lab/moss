@@ -605,15 +605,22 @@ impl SetaError {
             return SetaError::Challenge { status };
         }
         let message = extract_api_error_message(&body);
-        // One durable diagnostic line per failure, at `warn` so it survives the
-        // release-default `Info` level: with the per-site `log::error!` lines
-        // gone, this is the only seta failure record in pulled "Send logs"
-        // telemetry (the deploy/payment paths don't re-log). The cleaned message
-        // keeps challenge HTML / unbounded bodies out of the log; callers that
-        // need a louder signal still escalate to `error` themselves.
-        log::warn!(target: "seta", "request to {} failed ({}): {}{}", url, status, message, ray_suffix);
+        // One diagnostic line per failure, the only seta failure record in
+        // "Send logs" telemetry, which release builds keep from `info` up: at
+        // `warn`, except the refusal a key gets before its email is verified,
+        // which is expected and which the caller reports, so it is `info`. The
+        // cleaned message keeps challenge HTML and unbounded bodies out of the
+        // log; callers that need a louder signal escalate to `error` themselves.
+        let level = if asks_to_verify_email(status, &message) { log::Level::Info } else { log::Level::Warn };
+        log::log!(target: "seta", level, "request to {} failed ({}): {}{}", url, status, message, ray_suffix);
         SetaError::Api { status, message }
     }
+}
+
+/// Whether seta refused because the folder's key is not yet linked to a
+/// verified email: the refusal `--email` lifts with a sign-in link.
+pub(crate) fn asks_to_verify_email(status: u16, message: &str) -> bool {
+    status == 403 && (message.contains("Email verification required") || message.contains("pubkey not verified"))
 }
 
 /// Auth session status returned by the polling endpoint.

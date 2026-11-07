@@ -1,6 +1,6 @@
 //! Data types and structures for moss publishing system
 //!
-//! Split 2026-08-10 (M5a) into sibling modules along the M6a boundary:
+//! Sibling modules along the crate boundary:
 //! [`content`] holds pure build data a future headless moss-build crate
 //! needs; [`events`] holds frontend-facing payloads; [`runtime`],
 //! [`assets`] and [`services`] hold app machinery.

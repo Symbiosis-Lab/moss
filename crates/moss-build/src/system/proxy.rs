@@ -50,8 +50,9 @@ pub fn proxied_ureq_agent_no_redirects(url: &str, timeout: std::time::Duration) 
 }
 
 /// Shared proxy-resolution setup for both agent constructors above — the
-/// only difference between them is `redirects`.
-fn proxied_agent_builder(
+/// only difference between them is `redirects`. Public to the crate for a
+/// caller that sets further timeouts before building.
+pub(crate) fn proxied_agent_builder(
     url: &str,
     timeout: std::time::Duration,
     redirects: u32,

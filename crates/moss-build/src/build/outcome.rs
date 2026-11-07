@@ -30,8 +30,8 @@
 //! means today. That is a deliberate limitation, not an oversight: making the
 //! compiler enumerate every site would mean rewriting several hundred `?`
 //! across the render pass, and those files move into `crates/moss-build` at
-//! M6a/M6b where `BuildRecord out` is one of the five ports. What this type
-//! buys today is that the *deferred* half can never be produced by accident —
+//! the crate split, where `BuildRecord out` is one of the five ports. What this type
+//! buys is that the *deferred* half can never be produced by accident —
 //! the direction that decides which screen the user sees.
 //!
 //! **Falsifier:** a build that stops on a cloud-unavailable file through a call
@@ -68,7 +68,7 @@
 //! Do not read the `Deferred` path as dead code to delete. Read it as the reason
 //! nobody has to remember this again.
 //!
-//! Deleted when M6b's `ports.rs` draws the real build-outcome seam.
+//! Meant to be replaced when `ports.rs` draws the real build-outcome seam.
 
 use std::fmt;
 use std::path::Path;

@@ -6,7 +6,7 @@
  * The three-link set is short enough that `justify-content` decides where the
  * links sit: the many-link fixture in nav-split-order fills row 2 and cannot
  * show it. Row placement depends on measured widths, so only a real
- * layout engine can tell whether the toggles landed on the links' row.
+ * layout engine can tell which row the toggles landed on.
  *
  * Prereq: `cargo build -p moss-cli` must have produced target/debug/moss-cli.
  *

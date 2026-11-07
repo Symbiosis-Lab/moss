@@ -323,10 +323,9 @@ fn load_comment_data_strict(
 /// unreachable). Calling it from the build's critical path hangs the
 /// whole pipeline.
 ///
-/// The legitimate caller is
-/// [`crate::build::features::sync::spawn_native_process_sync`], which runs
-/// this on a `spawn_blocking` worker as a background task while the build
-/// returns immediately.
+/// The legitimate callers are in [`crate::build::features::sync`]: a
+/// background task the build does not wait for, or, for a build whose process
+/// exits when it returns, a detached thread it waits for under a time limit.
 pub(in crate::build::features) fn process_comments(
     project_path: &str,
     server_url: &str,
@@ -397,11 +396,7 @@ pub(in crate::build::features) fn process_comments(
         );
     }
 
-    let social_dir = MossPaths::new(std::path::Path::new(project_path)).social_dir();
-    // allow:raw_write .moss/data/social, not the build tree
-    std::fs::create_dir_all(&social_dir)
-        .map_err(|e| format!("cannot create {}: {e}", social_dir.display()))?;
-    let path = social_dir.join("comment.json");
+    let path = MossPaths::new(std::path::Path::new(project_path)).social_dir().join("comment.json");
     let new_json = serde_json::to_string_pretty(&data)
         .map_err(|e| format!("serialize comment.json: {e}"))?;
     // Write only on change: the watcher covers .moss/data/, so an
@@ -411,7 +406,9 @@ pub(in crate::build::features) fn process_comments(
         .map(|old| old == new_json)
         .unwrap_or(false);
     if !unchanged {
-        std::fs::write(&path, new_json).map_err(|e| format!("write comment.json: {e}"))?;  // allow:raw_write user state under .moss/data, not regenerable output
+        // Atomic: a render may read the file while a refresh the build stopped
+        // waiting for writes it, and a torn file would fail every later sync.
+        crate::infra::atomic_write::write_atomic(&path, &new_json).map_err(|e| format!("write comment.json: {e}"))?;
     }
     Ok(CommentSyncOutcome { changed: !unchanged })
 }
@@ -997,6 +994,31 @@ mod tests {
     fn sync(tmp: &tempfile::TempDir, server: &str) -> Result<CommentSyncOutcome, CommentSyncError> {
         let articles = vec![("uid1".to_string(), "posts/a".to_string())];
         process_comments(tmp.path().to_str().unwrap(), server, "test-site", &articles)
+    }
+
+    /// A refresh replaces the cache whole: a reader that opened it first (a
+    /// render the build stopped waiting for) still reads the complete old file,
+    /// never a truncated one.
+    #[test]
+    fn test_refresh_never_truncates_the_cache_under_a_reader() {
+        use std::io::Read;
+        let tmp = tmp_dir();
+        let social = MossPaths::new(tmp.path()).social_dir();
+        std::fs::create_dir_all(&social).unwrap();
+        let data = CommentData {
+            schema_version: "1.1.0".to_string(),
+            articles: BTreeMap::from([("uid1".to_string(), ArticleComments { comments: vec![make_comment("5", None)] })]),
+        };
+        let before = serde_json::to_string_pretty(&data).unwrap();
+        let cache = social.join("comment.json");
+        std::fs::write(&cache, &before).unwrap();
+        let mut reader = std::fs::File::open(&cache).unwrap();
+
+        assert!(sync(&tmp, &serve_one_active_comment()).unwrap().changed);
+        let mut seen = String::new();
+        reader.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, before, "the open reader saw the file rewritten in place");
+        assert!(std::fs::read_to_string(&cache).unwrap().contains("from the server"));
     }
 
     /// Old hide marks with no key to sign them: the pass must not refresh the

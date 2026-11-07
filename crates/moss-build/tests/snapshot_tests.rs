@@ -793,7 +793,7 @@ fn place_listing_maps_mark_their_member_places() {
     let markers = |page: &str| -> Vec<String> {
         let html = fs::read_to_string(output.join(page)).unwrap();
         let layer = &html[html.find("data-map-layer=\"marker\"").unwrap_or_else(|| panic!("{page} has no map"))..];
-        let layer = &layer[..layer.find("</g>").unwrap()];
+        let layer = &layer[..layer[1..].find("data-map-layer").unwrap_or(layer.len() - 1)];
         layer
             .match_indices("data-map-marker=\"")
             .map(|(index, _)| layer[index + 17..].split('"').next().unwrap().to_string())

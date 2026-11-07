@@ -130,8 +130,10 @@ plain text are filled by this opening alone, so that an edit made at the very en
 hover preview: the quick brown fox jumps over the lazy dog, again and again, until the count of characters is \
 comfortably past three hundred, and then it keeps going a little further still.";
 
+/// With its uid, as a published page keeps it: a page the build rewrote on every
+/// edit would never be carried, and a carried page is what the control tests.
 fn notes(head: &str, tail: &str) -> String {
-    format!("---\ntitle: Notes\n---\n\n{head}{NOTES_LEAD}\n\n{tail}\n")
+    format!("---\ntitle: Notes\nuid: \"abcd1234\"\n---\n\n{head}{NOTES_LEAD}\n\n{tail}\n")
 }
 
 const POST_A: &str = "---\ntitle: First Post\ndate: 2026-01-10\n---\n\n![pic](images/pic.png)\n\nFirst post body.\n";
@@ -515,6 +517,19 @@ async fn an_unedited_overlap_diverges_nowhere() {
     assert!(o.drift.is_empty(), "two builds of one vault must produce one set of bytes: {:?}", o.drift);
     assert_nothing_diverges(&o);
     assert_every_stage_shipped_entry_is_classified(&o.a);
+}
+
+/// B undoes A's edit. The stage holds A's page while the manifest on disk is
+/// still build 0's, whose entry describes B's source again: B must render the
+/// page rather than carry build 0's entry over A's bytes. It holds as long as
+/// the facade cache describes the last render rather than the last shipped
+/// generation, which is why that cache is saved at render time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_edit_undone_during_an_overlap_diverges_nowhere() {
+    let o = overlap(&Edit { apply: |v| v.write("notes.md", &notes("", "")), trigger: || md_only("notes.md"), on_stage: None }).await;
+
+    assert!(o.drift.contains("notes/index.html"), "B's undo must change the page from A's: {:?}", o.drift);
+    assert_nothing_diverges(&o);
 }
 
 /// Which edit moves which derived file — the fixture's calibration; see

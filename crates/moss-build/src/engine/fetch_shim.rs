@@ -1,4 +1,4 @@
-//! fetch() shim returning a minimal Response/Headers (report 5 §1d). Routes to
+//! fetch() shim returning a minimal Response/Headers. Routes to
 //! do_http_request_full (PUT/HEAD/headers). The async fetch fn uses Func::from(Async(..))
 //! → real JS Promise. json()/text() are also async over the captured body. Headers.get
 //! is case-insensitive (keys stored lowercased).
@@ -101,6 +101,7 @@ async fn host_fetch<'js>(
         "HEAD" => FetchMethod::Head,
         "POST" => FetchMethod::Post { body: body.unwrap_or_default() },
         "PUT" => FetchMethod::Put { body: body.unwrap_or_default() },
+        "DELETE" => FetchMethod::Delete,
         other => return Err(Exception::throw_type(&ctx, &format!("Unsupported method: {other}"))),
     };
     let full = do_http_request_full(url, method, headers, Some(30_000))
@@ -137,6 +138,34 @@ pub(crate) mod tests {
             }
         });
         port
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fetch_sends_a_delete() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = std::thread::spawn(move || {
+            let mut s = listener.incoming().next().unwrap().unwrap();
+            use std::io::Read;
+            let mut buf = [0u8; 1024];
+            let n = s.read(&mut buf).unwrap();
+            let _ = s.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+            String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or_default().to_string()
+        });
+        let local = tokio::task::LocalSet::new();
+        let status: u16 = local.run_until(async move {
+            let rt = AsyncRuntime::new().unwrap();
+            let ctx = AsyncContext::full(&rt).await.unwrap();
+            async_with!(ctx => |ctx| {
+                install_fetch(&ctx).unwrap();
+                let code = format!("(await fetch('http://127.0.0.1:{port}/posts/7', {{ method: 'DELETE' }})).status");
+                let promise: rquickjs::Promise = ctx.eval_promise(code.as_bytes()).unwrap();
+                let envelope: Object = promise.into_future().await.unwrap();
+                envelope.get("value").unwrap()
+            }).await
+        }).await;
+        assert_eq!(status, 204);
+        assert_eq!(seen.join().unwrap(), "DELETE /posts/7 HTTP/1.1");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

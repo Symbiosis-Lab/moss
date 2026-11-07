@@ -283,6 +283,7 @@ function createMockBrowserTracker() {
 	let closeCount = 0;
 	let isOpen = false;
 	return {
+		returnToEditorCount: 0,
 		get openedUrls() {
 			return openedUrls;
 		},
@@ -310,6 +311,7 @@ function createMockBrowserTracker() {
 			htmlContent.length = 0;
 			closeCount = 0;
 			isOpen = false;
+			this.returnToEditorCount = 0;
 		}
 	};
 }
@@ -354,6 +356,9 @@ function createMockDialogTracker() {
 */
 function decodeBase64(b64) {
 	return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+function encodeBase64(bytes) {
+	return btoa(String.fromCharCode(...bytes));
 }
 function extractFilenameFromUrl(url) {
 	try {
@@ -408,6 +413,9 @@ function setupMockTauri(options) {
 	const secretStorage = createMockSecretStorage();
 	const browserTracker = createMockBrowserTracker();
 	const dialogTracker = createMockDialogTracker();
+	/** `<plugin>/<key name>` -> key, so a plugin only ever sees its own keys */
+	const keys = /* @__PURE__ */ new Map();
+	const siteRoot = `${projectPath}/.moss/build.nosync/current`;
 	const eventListeners = /* @__PURE__ */ new Map();
 	/** Register a listener; returns an unlisten function */
 	const listen = async (event, handler) => {
@@ -417,15 +425,14 @@ function setupMockTauri(options) {
 			eventListeners.get(event)?.delete(handler);
 		};
 	};
-	/** Emit an event to all registered listeners */
-	const emit = async (event, payload) => {
-		const handlers = eventListeners.get(event);
-		if (handlers) for (const handler of handlers) handler({ payload });
-	};
-	/** Internal helper: emit to listeners synchronously (used by invoke handlers) */
+	/** Call every listener for an event synchronously */
 	const emitToListeners = (event, payload) => {
 		const handlers = eventListeners.get(event);
 		if (handlers) for (const handler of handlers) handler({ payload });
+	};
+	/** Emit an event to all registered listeners */
+	const emit = async (event, payload) => {
+		emitToListeners(event, payload);
 	};
 	const invoke = async (cmd, args) => {
 		const payload = args;
@@ -640,6 +647,50 @@ function setupMockTauri(options) {
 			case "set_plugin_secret":
 				secretStorage.seed(pluginName, payload?.key, payload?.value);
 				return null;
+			case "read_site_file": {
+				const relativePath = payload?.relativePath;
+				enforceInsideProject(relativePath);
+				const file = filesystem.getFile(`${siteRoot}/${relativePath}`);
+				if (!file) throw new Error(`Failed to read site file '${relativePath}': not found`);
+				return encodeBase64(file.bytes ?? new TextEncoder().encode(file.content));
+			}
+			case "list_site_files_with_sizes": {
+				const prefix = `${siteRoot}/`;
+				return filesystem.listFiles().filter((p) => p.startsWith(prefix)).map((p) => {
+					const file = filesystem.getFile(p);
+					return {
+						path: p.slice(prefix.length),
+						size: (file.bytes ?? new TextEncoder().encode(file.content)).length
+					};
+				});
+			}
+			case "get_plugin_env_var": {
+				const name = payload?.name;
+				return ["MOSS_MATTERS_TEST_PROFILE", "MOSS_MATTERS_DOMAIN"].includes(name) ? options?.envVars?.[name] ?? null : null;
+			}
+			case "key_get_or_create": {
+				const name = payload?.name;
+				const algorithm = payload?.algorithm;
+				if (algorithm !== "ed25519" && algorithm !== "secp256k1-schnorr") throw new Error(`unknown key algorithm '${algorithm}'`);
+				if (!name || /[/\\\0]|\.\./.test(name) || name.length > 128) throw new Error("keystore: InvalidName");
+				const id = `${pluginName}/${name}`;
+				const existing = keys.get(id);
+				if (existing) {
+					if (existing.algorithm !== algorithm) throw new Error("keystore: AlgorithmMismatch");
+					return existing;
+				}
+				const created = {
+					name,
+					algorithm,
+					publicKeyBase64: encodeBase64(crypto.getRandomValues(new Uint8Array(32)))
+				};
+				keys.set(id, created);
+				return created;
+			}
+			case "key_list": return [...keys.entries()].filter(([id]) => id.startsWith(`${pluginName}/`)).map(([, key]) => key);
+			case "return_to_editor":
+				browserTracker.returnToEditorCount++;
+				return null;
 			case "plugin_message": return null;
 			default:
 				console.warn(`Unhandled IPC command: ${cmd}`);
@@ -682,6 +733,7 @@ function setupMockTauri(options) {
 			secretStorage.clear();
 			browserTracker.reset();
 			dialogTracker.reset();
+			keys.clear();
 			eventListeners.clear();
 		}
 	};

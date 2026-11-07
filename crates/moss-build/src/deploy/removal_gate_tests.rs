@@ -10,7 +10,7 @@ use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalRe
 use crate::system::build_records::records;
 
 fn address(path: &str, reason: RemovalReason) -> RemovedAddress {
-    RemovedAddress { path: path.into(), reason, moved_to: None, source: None }
+    RemovedAddress { path: path.into(), reason, moved_to: None, source: None, withdrawn_by: None }
 }
 
 fn moved(path: &str, to: &str, source: &str) -> RemovedAddress {
@@ -19,6 +19,7 @@ fn moved(path: &str, to: &str, source: &str) -> RemovedAddress {
         reason: RemovalReason::Unexplained,
         moved_to: Some(to.into()),
         source: Some(source.into()),
+        withdrawn_by: None,
     }
 }
 
@@ -153,6 +154,7 @@ fn a_moved_hand_made_page_suggests_the_redirect_the_table_matches() {
         reason: RemovalReason::Unexplained,
         moved_to: Some("compare/index.html".into()),
         source: Some("scale-compare.html".into()),
+        withdrawn_by: None,
     }]);
     assert!(text.contains("add \"/scale-compare.html\" = \"/compare/\" under [redirects]"), "{text}");
 }
@@ -272,18 +274,20 @@ fn pending_removals_carry_the_served_address_and_the_cause() {
     seal(
         "/pending-causes",
         vec![
-            RemovedAddress { path: "legacy-feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None },
+            RemovedAddress { path: "legacy-feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None, withdrawn_by: None },
             RemovedAddress {
                 path: "old/index.html".into(),
                 reason: RemovalReason::Unexplained,
                 moved_to: Some("new/index.html".into()),
                 source: Some("moved.md".into()),
+                withdrawn_by: None,
             },
             RemovedAddress {
                 path: "files/a.pdf".into(),
                 reason: RemovalReason::Unexplained,
                 moved_to: None,
                 source: Some("files/a.pdf".into()),
+                withdrawn_by: None,
             },
         ],
     );
@@ -368,6 +372,15 @@ fn files_moved_with_their_folder_print_one_folder_line() {
 fn files_moved_out_of_the_root_keep_their_own_lines() {
     let text = refusal_text(&[moved("a.pdf", "files/a.pdf", "a.pdf"), moved("b.pdf", "files/b.pdf", "b.pdf")]);
     assert!(!text.contains("\"/\" ="), "{text}");
+    assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
+}
+
+/// Files moved up into the folder that held their folder share no folder
+/// line either: it would move a folder into one that contains it.
+#[test]
+fn files_moved_up_into_the_surrounding_folder_keep_their_own_lines() {
+    let text = refusal_text(&[moved("docs/x/a.pdf", "docs/a.pdf", "docs/x/a.pdf"), moved("docs/x/b.pdf", "docs/b.pdf", "docs/x/b.pdf")]);
+    assert!(!text.contains("\"/docs/x/\" = \"/docs/\""), "{text}");
     assert_eq!(text.matches("under [redirects]").count(), 2, "{text}");
 }
 

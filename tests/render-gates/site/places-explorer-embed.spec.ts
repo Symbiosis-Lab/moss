@@ -584,7 +584,7 @@ test.describe("style:map embed", () => {
     await expect.poll(() => new URL(embedFrame.url()).searchParams.get("z")).not.toBe(before);
   });
 
-  test("plain wheel zooms the collapsed embed without scrolling its host page", async ({ page }) => {
+  test("a plain wheel over the collapsed embed scrolls the host page and leaves the map", async ({ page }) => {
     await page.goto("lisbon-overview/", { waitUntil: "domcontentloaded" });
     await waitForSettled(page);
     const viewport = page.frameLocator(IFRAME).locator(".moss-places-viewport");
@@ -592,9 +592,9 @@ test.describe("style:map embed", () => {
     const before = new URL(embedFrame.url()).searchParams.get("z");
     await viewport.hover();
     const scrollBefore = await page.evaluate(() => window.scrollY);
-    await page.mouse.wheel(0, -200);
-    await expect.poll(() => new URL(embedFrame.url()).searchParams.get("z")).not.toBe(before);
-    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    await page.mouse.wheel(0, 200);
+    await expect.poll(() => page.evaluate(() => window.scrollY), "the wheel chains from the iframe to the host page").toBeGreaterThan(scrollBefore);
+    expect(new URL(embedFrame.url()).searchParams.get("z")).toBe(before);
     await expect(page.frameLocator(IFRAME).locator(".moss-places-coop-hint")).toHaveCount(0);
   });
 
@@ -1228,7 +1228,13 @@ test.describe("hydration degrades to the static poster", () => {
     const noJsPage = await browser.newPage({ javaScriptEnabled: false });
     try {
       await noJsPage.goto(url, { waitUntil: "domcontentloaded" });
-      await expect(noJsPage.locator(POSTER)).toHaveAttribute("role", "img");
+      // A static map whose dots link to place pages is a labelled figure of links;
+      // one with no links is a single image. Either way it keeps its name.
+      const poster = noJsPage.locator(POSTER);
+      await expect(poster).toHaveAttribute("aria-label", /\S/);
+      const links = await poster.locator("a[href]").count();
+      if (links > 0) await expect(poster).not.toHaveAttribute("role", "img");
+      else await expect(poster).toHaveAttribute("role", "img");
       await expect(noJsPage.locator(`${POSTER} > svg`)).toHaveCSS("display", "block");
       await expect(noJsPage.locator(IFRAME)).toHaveCount(0);
     } finally {

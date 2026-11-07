@@ -33,7 +33,9 @@ fn import_warning_reaches_stderr_through_the_installed_logger() {
     let html_path = input_dir.path().join("post.html");
     fs::write(&html_path, STRIKINGLY_BLOG_HTML).expect("write fixture html");
 
+    let home = tempfile::tempdir().expect("tempdir for MOSS_HOME");
     let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .env("MOSS_HOME", home.path())
         .arg("import")
         .arg(&html_path)
         .arg(output_dir.path())

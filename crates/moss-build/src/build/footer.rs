@@ -386,22 +386,16 @@ pub fn apply_last_known_good_fallback(
     })
 }
 
-// `render_footer_pages_from_disk` was removed in PR7b.
-//
-// It was a temporary stand-in that read `<folder>/footer.md` on demand,
-// synthesized a `title: ""` line into the frontmatter to suppress the
-// auto-injected article H1, and ran the file through the normal markdown
-// pipeline so `collect_footer_slots_by_language` had a `ParsedDocument` to consume.
-//
-// After PR7b, `footer.md` flows through the same parse pass every other
-// page uses (it's not retain-filtered out of `documents` anymore). Two
-// structural flags drive the right behavior end to end:
+// `footer.md` flows through the same parse pass every other page uses (it is
+// not filtered out of `documents`), so `collect_footer_slots_by_language` has
+// a `ParsedDocument` to consume. Two structural flags drive the right
+// behavior end to end:
 //
 // - `ParsedDocument.slot_only` (set by `is_excluded_from_pages`) tells
 //   the page-emission loop to skip the file, and tells the heading rule
 //   (`moss_core::heading::HeadingInputs.slot_only`) to suppress the
 //   auto-injected H1 — no frontmatter rewriting required.
-// - `pipeline::run` returns `Vec<ParsedDocument>` (PR7b signature change)
+// - `pipeline::run` returns `Vec<ParsedDocument>`
 //   so the caller in `build.rs` hands the typed slice to
 //   `generate_native_slots`, where `collect_footer_slots_by_language` walks it.
 
@@ -721,11 +715,9 @@ mod tests {
         }
     }
 
-    // PR7b: the `render_footer_pages_from_disk` tests were
-    // deleted along with the function. The behavior they covered —
-    // footer.md flows through the markdown pipeline, the auto-injected
+    // Footer.md flows through the markdown pipeline and the auto-injected
     // article H1 is suppressed even when the author writes
-    // `title: "Custom"` — is now exercised by:
+    // `title: "Custom"`. Covered by:
     //
     // - `crates/moss-core/src/heading/state.rs` tests `slot_only_hides_heading_*`
     //   (the heading rule consults `HeadingInputs.slot_only`).
@@ -734,8 +726,7 @@ mod tests {
     //   `ParsedDocument.slot_only` from `is_excluded_from_pages`, so the
     //   pipeline that produces the `documents` slice naturally handles
     //   footer.md correctly. Snapshot tests on real sites (including a
-    //   bilingual one with a zh-hans/footer.md) guard end-to-end
-    //   byte-equivalence with the pre-PR7b output.
+    //   bilingual one with a zh-hans/footer.md) guard the end-to-end output.
 
     #[test]
     fn test_footer_md_via_pipeline_suppresses_h1() {
@@ -775,11 +766,9 @@ mod tests {
 
     #[test]
     fn test_footer_md_via_pipeline_suppresses_h1_even_with_authored_title() {
-        // PR7b shift: an authored `title: "..."` on a slot file still
+        // An authored `title: "..."` on a slot file still
         // populates the chrome label / `doc.title` but does NOT bring
-        // back the auto-injected article-level H1. The old
-        // `render_footer_pages_from_disk` honored an authored title;
-        // the new flow treats slot files as structural and reserves
+        // back the auto-injected article-level H1. The flow treats slot files as structural and reserves
         // article chrome for actual articles. The Custom string can
         // still surface via the frontmatter -> doc.title -> any chrome
         // template that reads it.

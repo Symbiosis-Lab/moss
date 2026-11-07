@@ -64,9 +64,12 @@ GATES_BUILD=(
   grid-mobile-collapse
   collage
   card-cover-ratio
+  card-cover-auto
   lead-listing
+  listing-picture-strip
   grid-card-image-inline-size
   hero-caption
+  hero-links
   hero-from
   hero-pause
   hero-caption-stack
@@ -88,8 +91,12 @@ GATES_BUILD=(
   hls-short-clip
   place-map-tokens
   country-map
+  country-map-interaction
   place-map-align
+  place-map-cut
+  cluster-layer-zoom
   place-map-route
+  place-dot-links
   preview-parity-gate
   touch-targets
   places-explorer-boot

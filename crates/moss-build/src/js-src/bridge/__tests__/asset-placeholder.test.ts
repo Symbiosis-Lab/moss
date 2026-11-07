@@ -13,8 +13,7 @@
  * The invariant every test below exists to protect: PLACE IS REVERSIBLE. The
  * previous version dropped `srcset` and deleted `<picture>`'s `<source>`
  * children outright, which left the preview's URL-keyed asset swap with nothing
- * to match — a pending image stayed a blueprint grid until a manual reload
- * (ticket LOG-8D03-T0528-08-08).
+ * to match — a pending image stayed a blueprint grid until a manual reload.
  */
 
 import { describe, test, expect, beforeEach, vi } from "vitest";
@@ -314,8 +313,7 @@ describe("restore — swaps the real asset back in", () => {
 
   test("decodes percent-encoded non-ASCII URLs before comparing", () => {
     // moss percent-encodes emitted URLs per segment; event paths arrive decoded.
-    // Without decoding, no image on a CJK-named site ever matches — which is
-    // exactly the site LOG-8D03-T0528-08-08 came from.
+    // Without decoding, no image on a CJK-named site ever matches.
     const img = bare("/%E9%97%9C%E6%96%BC/assets/%E9%A0%AD%E5%83%8F.webp");
     fail(img);
     expect(restore("/關於/assets/頭像.webp")).toBe(1);

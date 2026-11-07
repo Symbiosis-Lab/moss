@@ -391,8 +391,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
     let (raw_cells, legacy_dash_line) = split_grid_cells(body);
     let mut fragments = Vec::with_capacity(raw_cells.len());
 
-    // Phase 4 PR4.5 (2026-05-28): cells become Vec<Vec<Block>>. Each raw
-    // cell string is either:
+    // Cells become Vec<Vec<Block>>. Each raw cell string is either:
     //
     // - A "compound-link" cell whose entire content is wrapped in a markdown
     //   link `[inner](url)` and whose `inner` carries block-level content
@@ -458,8 +457,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
 
 /// Parse one grid cell's raw markdown source into a `Vec<Block>`.
 ///
-/// Phase 4 PR4.5 (2026-05-28): detects the compound-link shape first
-/// (`[inner](url)` wrapping the entire trimmed cell content, optionally
+/// Detects the compound-link shape first (`[inner](url)` wrapping the entire trimmed cell content, optionally
 /// followed by blank-line-separated caption paragraphs for an image-link
 /// cell). On match, emits `vec![Block::LinkCard { url, children }, ...]`
 /// where `children` is the inner parsed as blocks and any trailing caption
@@ -482,15 +480,10 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Blo
         // preview (title + favicon + domain). A `LinkCard` cell is final
         // markup that already carries its own `<a class="moss-grid-card">`
         // chrome, so the host leaves it alone and the title row is lost.
-        //
-        // Mirrors the pre-PR4.5 carve-out in
-        // `crate::build::markdown::typed_renderers::render_compound_link_cell`
-        // (the `if !inner.contains('!') && !inner.contains('[') && !inner.contains('\n')`
-        // branch).
         let inner_is_plain_text = !inner_trimmed.contains('!')
             && !inner_trimmed.contains('[')
             && !inner_trimmed.contains('\n');
-        let is_external = url.starts_with("http://") || url.starts_with("https://");
+        let is_external = crate::resolve::ext_kind::is_web_address(&url);
         if inner_is_plain_text && is_external {
             // Re-emit as standard markdown link inside a paragraph so the
             // host's link-preview pass owns the rendering.
@@ -514,8 +507,7 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Blo
         let metas = vec![BlockMeta::default(); blocks.len()];
         return (blocks, metas, diag);
     }
-    // Phase 4 PR4.5 (2026-05-28): bare-URL cell auto-promotion. When the
-    // entire cell content is a single bare URL on its own line (no
+    // Bare-URL cell auto-promotion. When the entire cell content is a single bare URL on its own line (no
     // markdown link syntax), parse it as `[](URL)` so the cell renders as
     // `<p><a href="URL"></a></p>` (an empty-text link inside a paragraph).
     // The host's grid-cell pass (`build/render/grid_cells.rs`) reads this
@@ -523,10 +515,8 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Blo
     // `<span class="link-preview-domain">…</span>` wrapper carrying
     // title/favicon (from cached link metadata).
     //
-    // Matches the pre-PR4.5 `linkify_bare_urls_in_cell` behavior — the
-    // helper turned `https://...` into `[](https://...)` so the downstream
-    // compound-link pass picked it up. PR4.5 ports the linkification to
-    // parse time so the bytes flow through the typed AST.
+    // The linkification happens at parse time so the bytes flow through
+    // the typed AST.
     if let Some(url) = detect_bare_url_cell(raw) {
         let linkified = format!("[]({})", url);
         return fragment_parts(parse_fragment_with_config(&linkified, config));
@@ -551,7 +541,7 @@ fn detect_bare_url_cell(cell_text: &str) -> Option<String> {
     if trimmed.lines().count() > 1 {
         return None;
     }
-    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+    if !crate::resolve::ext_kind::is_web_address(trimmed) {
         return None;
     }
     if trimmed.chars().any(char::is_whitespace) {
@@ -618,7 +608,7 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 
     let bytes = stripped.as_bytes();
 
-    // Phase 1: find the outer closing `]` via bracket-balance scan.
+    // Find the outer closing `]` via bracket-balance scan.
     let mut i: usize = 1;
     let mut depth: usize = 1;
     let mut outer_close: Option<usize> = None;
@@ -671,7 +661,7 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
         return None;
     }
 
-    // Phase 2: find the matching `)` with paren balance.
+    // Find the matching `)` with paren balance.
     let mut j = close_bracket + 2;
     let mut pdepth: usize = 1;
     let mut paren_close: Option<usize> = None;
@@ -697,7 +687,7 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 
     let close_paren = paren_close?;
 
-    // Phase 3: after `)`, either nothing/whitespace (classic shape), or a
+    // After `)`, either nothing/whitespace (classic shape), or a
     // blank-line-separated caption for an image-link cell (see doc comment).
     let tail = stripped.get(close_paren + 1..)?;
     let inner = stripped.get(1..close_bracket)?;
@@ -726,12 +716,12 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
         candidate
     };
 
-    // Phase 4: validate inner content.
+    // Validate inner content.
     if inner.trim().is_empty() {
         return None;
     }
 
-    // Phase 5: reject multiple top-level links (images allowed).
+    // Reject multiple top-level links (images allowed).
     {
         let inner_bytes = inner.as_bytes();
         let mut k: usize = 0;
@@ -1252,6 +1242,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
             items,
             width: attrs.width,
             rows,
+            caption: Vec::new(),
         },
         warnings,
     )

@@ -1,17 +1,10 @@
 //! What a `moss build` says on the terminal, and how many problems it said.
 //!
-//! Two things live here: a `println!` replacement that cannot kill the app when
-//! its output pipe closes, and the per-build count of problems that `--strict`
-//! turns into an exit code. They are one module because the count is only
-//! correct if every problem line goes through the macro that bumps it.
-//!
-//! This sits **inside the build tree on purpose**. It was the CLI half of
-//! `crate::diagnostics`, which also owns the `tauri_plugin_log` sinks and the
-//! Sentry breadcrumb ring — app-side code the build must not name. The macros
-//! below are called 27 times from `build/`, and a `pub(crate)` macro does not
-//! cross a crate boundary, so leaving them there blocked the `moss-build`
-//! extraction twice over.
-//! `crate::diagnostics` keeps the ring and the log targets and nothing else.
+//! A `println!` replacement that cannot kill the process when its output pipe
+//! closes, the panic hook that ends a command quietly when a plain print does,
+//! and the per-build count of problems that `--strict` turns into an exit code.
+//! The count lives here because it is only correct if every problem line goes
+//! through the macro that bumps it.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -30,6 +23,47 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// a writer that always fails.
 pub(crate) fn write_status_line(mut w: impl std::io::Write, args: std::fmt::Arguments<'_>) {
     let _ = writeln!(w, "{args}");
+}
+
+/// The exit status of a command whose output was closed under it: what a shell
+/// reports for a process ended by SIGPIPE (128 + 13).
+pub const CLOSED_OUTPUT_STATUS: i32 = 141;
+
+/// End the process quietly, with [`CLOSED_OUTPUT_STATUS`], when a `println!` or
+/// `eprintln!` finds its output closed (`moss guide | head`), instead of
+/// panicking and reporting a crash.
+///
+/// A panic hook rather than the default SIGPIPE action, because moss writes to
+/// child processes' stdin and that action would kill moss whenever a child
+/// exits without reading. Install it after any reporting hook, so it runs
+/// first. Command-line entry points only: a window must not quit because the
+/// terminal that launched it closed.
+pub fn exit_quietly_on_closed_output() {
+    // Only a closed pipe: any other failed print (a full disk under `> out.json`)
+    // keeps its panic, so the truncated output is not passed off as a clean stop.
+    #[cfg(unix)]
+    const CLOSED_PIPE_ERRORS: &[i32] = &[libc::EPIPE];
+    #[cfg(windows)]
+    const CLOSED_PIPE_ERRORS: &[i32] = &[109, 232]; // ERROR_BROKEN_PIPE, ERROR_NO_DATA
+    #[cfg(not(any(unix, windows)))]
+    const CLOSED_PIPE_ERRORS: &[i32] = &[];
+    let closed_pipe: Vec<String> =
+        CLOSED_PIPE_ERRORS.iter().map(|&code| std::io::Error::from_raw_os_error(code).to_string()).collect();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        // std's own message for a failed `print!`/`eprint!`: "failed printing to <stream>: <error>".
+        let failed_print = message.starts_with("failed printing to stdout: ") || message.starts_with("failed printing to stderr: ");
+        if failed_print && closed_pipe.iter().any(|error| message.ends_with(error.as_str())) {
+            std::process::exit(CLOSED_OUTPUT_STATUS);
+        }
+        previous(info);
+    }));
 }
 
 /// Broken-pipe-safe replacement for `eprintln!` in the CLI build path.

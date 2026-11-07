@@ -3978,65 +3978,6 @@ mod children_field_tests {
         );
     }
 
-    /// A logo written as `./assets/mark.png` in frontmatter is resolved the way
-    /// the homepage's layout resolves it, so its address has no `/./` segment
-    /// and the size lookup finds the file.
-    #[test]
-    fn a_logo_written_with_a_dot_slash_finds_its_size_and_has_no_dot_segment() {
-        let dir = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("assets")).unwrap();
-        image::RgbaImage::new(24, 8).save(dir.path().join("assets/mark.png")).unwrap();
-        let dimensions = image::image_dimensions(dir.path().join("assets/mark.png")).unwrap();
-        let mut project = make_project();
-        project.image_files.push(crate::types::content::MediaMetadata {
-            is_animated: false,
-            path: "assets/mark.png".to_string(),
-            file_type: "png".to_string(),
-            size: 0,
-            modified: None,
-            dimensions: Some(dimensions),
-            dominant_color: None,
-            lqip_data_uri: None,
-        });
-        let mut homepage = make_doc("Test Site", "index.html");
-        homepage.is_root_level = true;
-        homepage.logo = Some("./assets/mark.png".to_string());
-        homepage.html_content = "<p>Welcome.</p>".to_string();
-        let all_docs = vec![homepage.clone()];
-        let layout = make_layout().with_logo(crate::build::render::config::resolve_logo_url("./assets/mark.png"));
-        let html = generate_html(
-            Some(&homepage),
-            &all_docs,
-            &project,
-            &layout,
-            true,
-            None,
-            None,
-            Language::En,
-            None,
-            false,
-            false,
-            None,
-            false,
-            None,
-            None,
-            &std::collections::HashMap::new(),
-            &localhost_url(),
-            true,
-            false,
-            "favicon.svg",
-            None,
-            std::path::Path::new(""),
-        )
-        .expect("generate_html should succeed");
-        assert!(
-            html.contains(
-                r#"<img class="site-logo" src="/assets/mark.png" width="24" height="8" alt="" aria-hidden="true">"#
-            ),
-            "a `./` logo must lose its `/./` and gain its size. Got: {html}"
-        );
-    }
-
     /// The other half of the one rule: `description:` is metadata on every page
     /// kind, so a folder index prints none of it as page text.
     #[test]
@@ -5055,6 +4996,58 @@ mod children_field_tests {
         );
     }
 
+    /// Children routed to the sidebar, by `children_in: sidebar` or by the
+    /// deprecated `sidebar:` field's alias, are not also listed in the body.
+    #[test]
+    fn children_routed_to_the_sidebar_leave_the_body() {
+        let render = |children_in: Option<&str>, from_alias: Option<bool>| -> String {
+            let mut homepage = make_doc("My Site", "index.html");
+            homepage.is_root_level = true;
+            homepage.kind = PageKind::Folder;
+            homepage.children = Some(true);
+            homepage.children_source = Some("[[News]]".to_string());
+            homepage.children_in = children_in.map(str::to_string);
+            homepage.from_sidebar_alias = from_alias;
+            let mut news_index = make_doc("News", "news/index.html");
+            news_index.kind = PageKind::Folder;
+            let mut news_article = make_doc("New Hub", "news/new-hub/index.html");
+            news_article.date = Some("2025-09-18".to_string());
+            let all_docs = vec![homepage.clone(), news_index, news_article];
+            let html = generate_html(
+                Some(&homepage),
+                &all_docs,
+                &make_project(),
+                &make_layout(),
+                true,
+                None,
+                None,
+                Language::En,
+                None,
+                false,
+                false,
+                None,
+                false,
+                None,
+                None,
+                &std::collections::HashMap::new(),
+                &localhost_url(),
+                true,
+                false,
+                "favicon.svg",
+                None,
+                std::path::Path::new(""),
+            )
+            .expect("generate_html should succeed");
+            // The body is the page's article; the sidebar is a sibling before it.
+            let start = html.find("<article class=\"container\"").expect("the page's article");
+            let end = html[start..].find("</main>").map_or(html.len(), |i| start + i);
+            html[start..end].to_string()
+        };
+        assert!(render(None, None).contains("New Hub"), "unrouted children are listed in the body");
+        assert!(!render(Some("sidebar"), None).contains("New Hub"), "children_in: sidebar keeps them out of the body");
+        assert!(!render(None, Some(true)).contains("New Hub"), "the sidebar: alias keeps them out of the body");
+    }
+
     /// An ORDINARY page (not the homepage, not a folder index) carrying
     /// `children: '[[/]]'` + `children_depth: all` should host a whole-site
     /// listing the same way the homepage branch's `children_source` does.
@@ -5465,7 +5458,9 @@ mod children_field_tests {
 
         let all_docs = vec![page.clone()];
         let project = make_project();
-        let layout = make_layout();
+        // The cover reaches the share card only on a site that shares.
+        let mut layout = make_layout();
+        layout.assets.selection_tools = true;
 
         let html = generate_html(
             Some(&page),
@@ -9384,7 +9379,7 @@ mod homepage_translation_tests {
         let zh_html = fs::read_to_string(output_dir.join("zh-hans/index.html"))
             .expect("Should read Chinese translation");
 
-        // After Phase 1 PR-1b, the emitter writes `<html data-moss-html-version="1" lang="...">`.
+        // The emitter writes `<html data-moss-html-version="1" lang="...">`.
         // Match on the lang attribute alone so attribute reordering doesn't break this test.
         assert!(
             en_html.contains(r#"lang="en""#),

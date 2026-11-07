@@ -185,6 +185,9 @@ fn hero_from_feeds_the_share_card_fallback() {
         &[("photos/co.png", "")],
         &["shows/sooner.png", "photos/co.png"],
     );
+    // The share picture is published only to a site that offers Share.
+    site.write(".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\nselection_tools = true\n");
+    site.rebuild();
     let html = site.html("index.html");
     let og = |prop: &str| {
         let at = html.find(&format!("property=\"{prop}\"")).unwrap_or_else(|| panic!("no {prop}"));

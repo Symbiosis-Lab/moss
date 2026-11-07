@@ -214,6 +214,29 @@ const CHILDREN_MEMBERS: &[BuiltinField] = &[
     },
 ];
 
+/// Union members for `syndicate`: `false`, one channel id, or a list of them.
+const SYNDICATE_MEMBERS: &[BuiltinField] = &[
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Array,
+        widget: Widget::TagInput,
+        items_type: Some(FieldType::String),
+        ..FIELD_DEFAULTS
+    },
+];
+
 /// Union members for `children_count`: `false` to hide the count, or the
 /// text to show instead.
 const CHILDREN_COUNT_MEMBERS: &[BuiltinField] = &[
@@ -548,6 +571,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "route",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        score: 79,
+        description: "Draws this page's `location:` places as a route on its place map, in their listed order. No effect on listing maps.",
+        label_key: "chip.route.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "jury",
         // Same union shape as `author`/`editor`.
         field_type: FieldType::OneOf,
@@ -804,6 +837,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "syndicate",
+        field_type: FieldType::OneOf,
+        widget: Widget::TagInput,
+        one_of_members: Some(SYNDICATE_MEMBERS),
+        score: 96,
+        description: "The channels a copy of this page is posted to after it is published, by their ids under [channels.<id>] (bluesky, mastodon). Usually set once for a folder with cascade:. false posts no copy of this page. Each copy's address is then added to syndicated:.",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "map",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,
@@ -819,7 +862,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::Object,
         widget: Widget::CodeEditor,
         score: 95,
-        description: "Marks this page's markdown table as a country map: `by` names the column whose value colours each country (the first column names the country), `levels` lists that column's values lowest first (each a string or `{name, text}` with the advice shown when a row has no extra columns), optional `unrated` is the text shown for a country with no row, and optional `action: {label, link}` adds a link to the panel, with `{country}` in `link` replaced by the URL-encoded country name. The page's `date` is the map's as-of stamp. Embed it elsewhere with `![[page|style:map]]`.",
+        description: "Marks this page's markdown table as a country map: `by` names the column whose value colours each country (the first column names the country), `levels` lists that column's values lowest first (each a string or `{name, text}` with the advice shown when a row has no extra columns), optional `unrated` is the text shown for a country with no row, and optional `action: {label, link}` adds a link to the panel, with `{country}` in `link` replaced by the URL-encoded country name, and `search: false` turns off the search field above the map (on by default; it finds every country by name or major city). The page's `date` is the map's as-of stamp. Embed it elsewhere with `![[page|style:map]]`.",
         label_key: "chip.country_map.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -908,10 +951,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=1, Importance=1 → score=90
         score: 90,
-        description: "Section accent colour (`#rgb` or `#rrggbb`). Only a folder's home page reads it: the colour then applies to that page and every page under the folder, down to a nested folder that sets its own. Pages carry it as `--moss-section-color` on `<body>`, with the folder's name in `data-section`; no default style uses it",
+        description: "Section accent colour (`#rgb` or `#rrggbb`). On a folder's home page the colour applies to that page and every page under the folder, down to a nested folder that sets its own. On an ordinary page it applies to that page alone, over its folder's colour. Pages carry it as `--moss-section-color` on `<body>`, with the folder's name in `data-section` (an ordinary page in no coloured folder: its own name); no default style uses it",
         label: Some("Section colour"),
         group: "This Page",
-        applies_when: Some(&[FOLDER, HOME]),
+        applies_when: Some(&[PAGE, FOLDER, HOME]),
         ..FIELD_DEFAULTS
     },
     BuiltinField {
@@ -1175,6 +1218,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past. Applied before children_limit. Absent = no filter.",
         label: Some("When"),
         label_key: "chip.children_when.label",
+        group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "children_pictures",
+        field_type: FieldType::Integer,
+        widget: Widget::NumberInput,
+        score: 86,
+        description: "On a summary listing, draw up to N of each page's own pictures (2 to 12) as a strip, in place of its one cover: a work feed with a strip of each project's pictures. Absent = one cover.",
+        label: Some("Pictures"),
+        label_key: "chip.children_pictures.label",
         group: "Child Styles",
         applies_when: Some(LISTS_CHILDREN),
         ..FIELD_DEFAULTS

@@ -66,20 +66,30 @@ pub struct HeroDrawnFrom {
     pub source_line: Option<usize>,
 }
 
-/// Find and extract the first top-level Hero shortcode from `doc`.
+/// Extract the page's opening hero: a top-level Hero with nothing but
+/// comments before it.
 ///
-/// Returns `Some(HeroExtraction)` if a Hero was found (and removed from
-/// `doc.blocks`); returns `None` if the document has no Hero at the top
-/// level.
+/// Returns `Some(HeroExtraction)` with the hero removed from `doc.blocks`, or
+/// `None` when the page does not open with a hero. A hero written after other
+/// content stays in the body, where the author put it.
 ///
 /// The Hero is rendered via `hooks.render_shortcode(&mut out, sc)` — the
 /// caller's `RenderHooks` impl decides the exact byte shape (production
 /// uses `PipelineHooks::render_shortcode` with the Hero arm calling
 /// `render_hero_html_typed`).
 pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroExtraction> {
-    let hero_idx = doc.blocks.iter().position(|b| {
-        matches!(b, Block::Shortcode(Shortcode::Hero(_)))
-    })?;
+    let opening = doc.blocks.iter().position(|b| !is_comment(b))
+        .filter(|&i| matches!(doc.blocks[i], Block::Shortcode(Shortcode::Hero(_))));
+    // `header=over` lays the header over the opening hero only, so every hero
+    // left in the body keeps the header band.
+    for (i, block) in doc.blocks.iter_mut().enumerate() {
+        if let Block::Shortcode(Shortcode::Hero(other)) = block {
+            if Some(i) != opening {
+                other.header = None;
+            }
+        }
+    }
+    let hero_idx = opening?;
 
     // Pop the block from the document. Keep `block_meta` in sync — both
     // vecs must remain the same length per the Document invariant
@@ -103,10 +113,7 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
         _ => return None,
     };
 
-    // OG-fallback fields, read directly from the typed AST (post URL
-    // resolution by `resolve_urls`). The plan's Decision 1 calls this out:
-    //   "captures `image_url` from `args.image` (Url::Resolved → href);
-    //    captures `overlay_text` from the existing `args.overlay_text` field"
+    // OG-fallback fields, read from the typed AST after `resolve_urls`.
     let image_url = match &hero_args.image {
         Some(Url::Resolved(r)) => Some(r.href.clone()),
         Some(Url::Unresolved(s)) => {
@@ -123,23 +130,10 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
         None => None,
     };
 
-    // overlay_text: walk the typed overlay first; fall back to the
-    // captured-at-parse-time markdown source if the typed walk yields
-    // empty.
-    //
-    // Plan Decision 1 notes the existing `overlay_text` field is the
-    // one PR4.5 flagged as the TODO(phase4-cleanup) consumed at
-    // extract-at-caller. Today we still also walk the typed Vec<Block>
-    // (production builds overlay_text alongside the typed overlay, so
-    // either source works); when the TODO is closed, only the typed
-    // walk remains.
-    let walked = first_paragraph_plain_text(&hero_args.overlay);
-    let overlay_text = if !walked.trim().is_empty() {
-        Some(walked)
-    } else {
-        let source = crate::resolve::embed_renderer::folder_list::strip_markers(&hero_args.overlay_text);
-        (!source.trim().is_empty()).then_some(source)
-    };
+    // overlay_text is the description chain's feed, so it is always plain
+    // text from the typed overlay, never a slice of its Markdown source.
+    let walked = first_text_plain(&hero_args.overlay);
+    let overlay_text = (!walked.trim().is_empty()).then_some(walked);
 
     // Render via the hooks' Hero arm. Production's `PipelineHooks`
     // dispatches to `render_hero_html_typed` which produces the full
@@ -148,24 +142,9 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     // Hero is hoisted out of the body to the article template's hero slot.
     // The slot IS in the preview DOM and clickable, so we pass source_line
     // so the rendered section carries data-source-range for click-to-source.
-    // `header=over` lays the header over the page's opening hero only. Every
-    // hero left in the body keeps the header band, so the option is dropped
-    // from all of them, and from the extracted one unless it opens the page.
-    for block in doc.blocks.iter_mut() {
-        if let Block::Shortcode(Shortcode::Hero(later)) = block {
-            later.header = None;
-        }
-    }
-    let cleared;
-    let render_target = if hero_idx != 0 && hero_args.header.is_some() {
-        cleared = Shortcode::Hero(HeroShortcode { header: None, ..hero_args.clone() });
-        &cleared
-    } else {
-        hero_shortcode
-    };
-    hooks.render_shortcode(&mut html, render_target, hero_source_line);
+    hooks.render_shortcode(&mut html, hero_shortcode, hero_source_line);
 
-    let drawn_from = match render_target {
+    let drawn_from = match hero_shortcode {
         Shortcode::Hero(args) if args.from.is_some() => {
             Some(HeroDrawnFrom { shortcode: args.clone(), source_line: hero_source_line })
         }
@@ -180,32 +159,24 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     })
 }
 
-/// Walk a typed block sequence and return the first paragraph's plain
-/// text (no markdown formatting). Returns empty string if no paragraph
-/// is found.
+/// Plain text of the first paragraph in a typed block sequence, or, when the
+/// sequence has none, of its first heading (a hero that is only a headline).
+/// Empty when there is neither.
 ///
-/// Mirrors the intent of `crate::build::page::meta::extract_description`
-/// but operates on the typed AST instead of markdown source — the
-/// described follow-up at `HeroShortcode::overlay_text` (TODO
-/// `phase4-cleanup`).
-fn first_paragraph_plain_text(blocks: &[Block]) -> String {
+/// The walk is deliberately SHALLOW — it never descends into a container,
+/// `Block::FootnoteDefinition` included. Endnote prose is not the overlay's
+/// opening line, and a footnote body reached by recursion would land in
+/// `<meta name="description">`.
+fn first_text_plain(blocks: &[Block]) -> String {
+    let mut heading = None;
     for block in blocks {
         match block {
-            Block::Paragraph(inlines) => {
-                return crate::ast::plain_text::inlines_to_plain_text(inlines)
-            }
-            // Skip headings and shortcodes; the description chain wants
-            // first body prose. Lists and other paragraphs follow if the
-            // first hit didn't qualify.
-            //
-            // This walk is deliberately SHALLOW — it never descends into a
-            // container, `Block::FootnoteDefinition` included. Endnote prose
-            // is not the overlay's opening line, and a footnote body reached
-            // by recursion would land in `<meta name="description">`.
-            _ => continue,
+            Block::Paragraph(inlines) => return crate::ast::plain_text::inlines_to_plain_text(inlines),
+            Block::Heading { children, .. } if heading.is_none() => heading = Some(children),
+            _ => {}
         }
     }
-    String::new()
+    heading.map(|c| crate::ast::plain_text::inlines_to_plain_text(c)).unwrap_or_default()
 }
 
 // ── Source parsing: `:::hero` block → HeroShortcode ─────────────────────
@@ -492,9 +463,9 @@ fn is_media_attrs_pipe(pipe: &str) -> bool {
 
 /// Parse a hero overlay's raw markdown source into `Vec<Block>`.
 ///
-/// Phase 4 PR4.5 (2026-05-28): mirrors `parse_cell_to_blocks` for the
-/// grid-cell path but without compound-link detection (an overlay is not
-/// a compound-link surface; that pattern is grid-cell-specific).
+/// Mirrors `parse_cell_to_blocks` for the grid-cell path but without
+/// compound-link detection (an overlay is not a compound-link surface; that
+/// pattern is grid-cell-specific).
 /// Returns an empty vec (and no warnings) when the overlay is empty.
 /// Otherwise returns `(blocks, warnings)` — the fragment `Document`'s
 /// warnings (e.g. a misspelled `:::name` shortcode nested inside the
@@ -794,3 +765,14 @@ pub(crate) fn hero_asset_spans(
 #[cfg(test)]
 #[path = "extract_hero_tests.rs"]
 mod tests;
+
+/// A block that holds only HTML comments, which a reader never sees.
+fn is_comment(block: &Block) -> bool {
+    let Block::Other(html) = block else { return false };
+    let mut rest = html.trim();
+    while let Some(after) = rest.strip_prefix("<!--") {
+        let Some((_, tail)) = after.split_once("-->") else { return false };
+        rest = tail.trim_start();
+    }
+    rest.is_empty()
+}

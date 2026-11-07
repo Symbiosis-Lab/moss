@@ -146,13 +146,6 @@ fn is_loopback_or_link_local(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-/// Maximum redirect hops [`fetch_with_validated_redirects`] will follow —
-/// ureq's own former default (`AgentBuilder::redirects` doc), preserved so a
-/// legitimate multi-hop chain (http→https, then a trailing-slash or
-/// www-prefix canonicalization) keeps working exactly as it did when ureq
-/// followed redirects itself.
-const MAX_REDIRECT_HOPS: u32 = 5;
-
 /// `agent.get(url)`, following redirects by hand so every hop's target is
 /// re-validated by [`refuse_unsafe_scrape_url`] before it is followed —
 /// `agent` must be built with `redirects(0)`
@@ -209,64 +202,17 @@ fn fetch_following_redirects(
     referer: Option<&str>,
     validate: impl Fn(&str) -> Result<(), String>,
 ) -> Result<ureq::Response, ureq::Error> {
-    // 400: a permanent, never-retried refusal (`should_retry_status` only
-    // retries 429/5xx) — a redirect target this function refused, or a
-    // chain that ran past the hop cap, will not look any different on a
-    // retry. `call_with_retry`'s error text is `"{code} {status_text}"`
-    // (it never reads the body), so the detail goes in `status_text`
-    // itself rather than being silently dropped.
-    const REFUSED_STATUS: u16 = 400;
-    // ureq parses the status text back out of a status line, which must be
-    // ASCII with no control characters; a refusal reason is free text, so it
-    // is folded to that first.
-    let refused = |status_text: &str| {
-        let status_text: String = status_text
-            .chars()
-            .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '-' })
-            .collect();
-        ureq::Error::Status(
-            REFUSED_STATUS,
-            ureq::Response::new(REFUSED_STATUS, &status_text, "")
-                .expect("a printable ASCII status line always builds"),
-        )
-    };
-
-    let mut current = start_url.to_string();
-    for _ in 0..=MAX_REDIRECT_HOPS {
-        let mut req = agent.get(&current).set("User-Agent", user_agent);
-        if let Some(accept) = accept {
-            req = req.set("Accept", accept);
-        }
-        if let Some(referer) = referer {
-            req = req.set("Referer", referer);
-        }
-        let response = req.call()?;
-        if !(300..400).contains(&response.status()) {
-            return Ok(response);
-        }
-        let Some(location) = response.header("Location") else {
-            return Ok(response);
-        };
-        let next = match url::Url::parse(&current).and_then(|base| base.join(location)) {
-            Ok(joined) => joined.to_string(),
-            Err(_) => return Ok(response),
-        };
-        // Re-canonicalize the hop the same way the pre-download rewrite
-        // does (see this function's doc comment) — a redirect can land on a
-        // ruled CDN host carrying a query the table never produced. Scoped
-        // to asset downloads: a page fetch (`accept: None`) has no media
-        // URL to canonicalize and must not have one invented for it.
-        let next = if accept.is_some() {
+    // A redirect can land on a ruled CDN host carrying a query the table never
+    // produced, so asset hops are re-canonicalized; a page fetch has no media
+    // URL to canonicalize and must not have one invented for it.
+    let rewrite = |next: String| {
+        if accept.is_some() {
             crate::vault::import::media::original_media_url(&next).unwrap_or(next)
         } else {
             next
-        };
-        if let Err(msg) = validate(&next) {
-            return Err(refused(&format!("redirected to a disallowed URL: {msg}")));
         }
-        current = next;
-    }
-    Err(refused(&format!("too many redirects (> {MAX_REDIRECT_HOPS})")))
+    };
+    crate::system::redirects::get_following_redirects(agent, start_url, user_agent, accept, referer, validate, rewrite)
 }
 
 /// A fetch's final failure, carrying the HTTP status code as DATA when the

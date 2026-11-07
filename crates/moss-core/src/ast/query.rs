@@ -6,10 +6,9 @@
 //!
 //! # Why this module exists
 //!
-//! Several pipeline-level decisions historically scanned rendered HTML
-//! with regex (`first_body_image` in `cover.rs`, etc.). Phase 4
-//! retires those by walking the typed AST instead. Each `find_*` helper
-//! is the typed equivalent of one historical regex.
+//! Pipeline-level decisions that would otherwise scan rendered HTML with
+//! regex (`first_body_image` in `cover.rs`, etc.) walk the typed AST
+//! instead. Each `find_*` helper is the typed equivalent of one such regex.
 
 use super::document::Document;
 use super::node::{Block, Inline};
@@ -667,8 +666,7 @@ mod tests {
 
     #[test]
     fn finds_image_inside_grid_cell() {
-        // PR4.5: Grid cells are typed Vec<Vec<Block>>. The walker must
-        // descend into the inner block sequences.
+        // The walker must descend into the inner block sequences of Grid cells.
         let cell = vec![img_block("grid.png")];
         let doc = Document::from_blocks(vec![Block::Shortcode(Shortcode::Grid(GridShortcode {
             source: Default::default(),

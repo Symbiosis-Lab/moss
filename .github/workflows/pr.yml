@@ -213,6 +213,11 @@ jobs:
       - name: Clippy (workspace, all targets, all features, open crates)
         run: cargo clippy --workspace --all-targets --all-features -p moss-core -p moss-build -p moss-cli
 
+      # Counts byte-index `&str` slices in moss-build and moss-cli against the
+      # ratchet (it runs its own clippy pass; node ships on the runner image).
+      - name: String-slice ratchet
+        run: node scripts/ratchet.mjs slices
+
   # ==========================================================================
   # Lifted verbatim from pr.yml:475-487 ("Rust advisories") — it already runs
   # from repo root with no path assumptions. .cargo/audit.toml here carries
@@ -381,6 +386,11 @@ jobs:
       - name: Ratchet tool tests (accept/tighten --path)
         run: node --test scripts/__tests__/ratchet.test.mjs
 
+      - name: Comments carry no private process labels or ticket ids
+        run: |
+          node --test scripts/__tests__/check-public-comments.test.mjs
+          node scripts/check-public-comments.mjs
+
       - name: Architecture diagrams name only what the code has
         run: node scripts/gen-architecture-diagrams.mjs --check
 
@@ -413,8 +423,9 @@ jobs:
         run: cd packages/moss-blueprint-grid && pnpm run typecheck
 
       # The contract itself is checked against the command table by
-      # `cargo test` (commands::tests::the_contract_matches_the_command_table).
-      - name: Typecheck and test moss-ui (the engine contract)
+      # `cargo test` (commands::tests::the_contract_matches_the_command_table);
+      # the tests here cover the shared UI and the gate that it is fit to publish.
+      - name: Typecheck and test moss-ui (the engine contract and the shared UI)
         run: cd packages/moss-ui && pnpm run typecheck && pnpm run test
 
       - name: Package artifacts are up to date

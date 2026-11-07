@@ -20,12 +20,20 @@ pub(crate) struct Action {
     pub link: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Spec {
     pub by: String,
     pub levels: Vec<Level>,
     pub unrated: Option<String>,
     pub action: Option<Action>,
+    /// The search field above the map; on unless the author sets `search: false`.
+    pub search: bool,
+}
+
+impl Default for Spec {
+    fn default() -> Self {
+        Spec { by: String::new(), levels: Vec::new(), unrated: None, action: None, search: true }
+    }
 }
 
 fn text_of(value: &Value) -> Option<String> {
@@ -68,7 +76,12 @@ pub(crate) fn parse(value: &Value) -> Result<Spec, String> {
         }
         Some(_) => return Err("country_map's `action` is {label, link}".into()),
     };
-    Ok(Spec { by, levels, unrated: get("unrated").and_then(text_of).filter(|s| !s.is_empty()), action })
+    let search = match get("search") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err("country_map's `search` is true or false".into()),
+    };
+    Ok(Spec { by, levels, unrated: get("unrated").and_then(text_of).filter(|s| !s.is_empty()), action, search })
 }
 
 #[cfg(test)]
@@ -90,6 +103,14 @@ mod tests {
         assert_eq!(spec.levels[1].text.as_deref(), Some("Avoid travel."));
         assert_eq!(spec.unrated.as_deref(), Some("Not assessed."));
         assert_eq!(spec.action.unwrap().link, "/ask/?to={country}");
+    }
+
+    #[test]
+    fn search_is_on_unless_turned_off() {
+        assert!(parse_yaml("by: x\nlevels: [a]").unwrap().search);
+        assert!(parse_yaml("by: x\nlevels: [a]\nsearch: true").unwrap().search);
+        assert!(!parse_yaml("by: x\nlevels: [a]\nsearch: false").unwrap().search);
+        assert!(parse_yaml("by: x\nlevels: [a]\nsearch: maybe").unwrap_err().contains("`search`"));
     }
 
     #[test]

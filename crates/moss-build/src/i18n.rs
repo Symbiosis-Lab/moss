@@ -981,7 +981,7 @@ pub fn build_default_language() -> Language {
     BUILD_DEFAULT_LANGUAGE.get().copied().unwrap_or(Language::En)
 }
 
-// ── App-shell language (crossed from `infra::app_config` at M6a) ──────────
+// ── App-shell language ──────────
 // `infra::app_advisory` resolves its localized strings against this cell, so
 // the vocabulary and the live cell live beside it in the crate. Detection
 // (locale probing) stays app-side; unseeded reads default to `En`.

@@ -390,7 +390,7 @@ describe("Messaging Utilities", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // advise() — the plugin advisory path (Step 3 Phase 5 Task 5.3)
+  // advise() — the plugin advisory path
   //
   // A plugin PROPOSES advisories on its task; moss holds the severity gavel
   // (R13) Rust-side. `advise()` accumulates proposals on the handle; the next
@@ -464,7 +464,7 @@ describe("Messaging Utilities", () => {
 
       await task.succeeded("Syndicated · 3 posts");
       // No `advisories` key — serde defaults it Rust-side. This keeps the
-      // pre-Phase-5 wire shape byte-identical for plugins that never advise.
+      // earlier wire shape byte-identical for plugins that never advise.
       expect(mockInvoke).toHaveBeenCalledWith(
         "report_plugin_task_lifecycle_command",
         expect.objectContaining({
@@ -502,7 +502,7 @@ describe("Messaging Utilities", () => {
       await expect(task.succeeded("done")).resolves.toBeUndefined();
     });
 
-    // ── descriptor-driven verb/amount (Step 3 Phase 5, §8 + R13) ──────────
+    // ── descriptor-driven verb/amount ──────────
 
     it("job ref flows into the started lifecycle for descriptor lookup", async () => {
       setMessageContext("matters", "syndicate");

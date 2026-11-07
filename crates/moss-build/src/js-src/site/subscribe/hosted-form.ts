@@ -27,12 +27,12 @@ export function autoHydrate<T extends HTMLElement>(selector: string, hydrate: (e
 /** The preview has no live service behind a form: scripts simulate the send. */
 export const inPreview = (): boolean => document.body.hasAttribute('data-moss-preview');
 
-/** Sets `data-state` on `root` (the form, or the block around it) and mirrors it to the button as `aria-disabled`. */
+/** Sets `data-state` on `root` (the form, or the block around it); the button is `aria-disabled` only while a send is in flight, since on success it resets the form. */
 export function setState(root: HTMLElement, state: FormState, btn?: HTMLButtonElement | null): void {
   root.dataset.state = state;
   const button = btn ?? root.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (!button) return;
-  if (state === 'loading' || state === 'success') button.setAttribute('aria-disabled', 'true');
+  if (state === 'loading') button.setAttribute('aria-disabled', 'true');
   else button.removeAttribute('aria-disabled');
 }
 

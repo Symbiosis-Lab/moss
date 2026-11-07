@@ -110,3 +110,30 @@ fn natural_earth_is_credited_in_a_notice_file_not_on_the_page() {
     assert!(notice.contains("Natural Earth") && notice.contains("public domain"), "{notice}");
     assert!(!notice.contains("GEBCO"), "a country map ships no elevation data");
 }
+
+#[test]
+fn each_country_carries_the_box_the_map_frames_with_outlying_islands_left_out() {
+    let site = built(&fifty());
+    let html = site.html("risk/index.html");
+    let box_of = |slug: &str| -> Vec<f64> {
+        let tag = html.split(&format!("data-slug=\"{slug}\"")).nth(1).unwrap().split('>').next().unwrap();
+        tag.split("data-box=\"").nth(1).unwrap().split('"').next().unwrap().split(' ').map(|n| n.parse().unwrap()).collect()
+    };
+    let chile = box_of("chile");
+    assert_eq!(chile.len(), 4);
+    assert!(chile[2] - chile[0] < 60.0, "Easter Island does not widen Chile's frame: {chile:?}");
+    assert!(chile[3] - chile[1] > 100.0, "the mainland is long: {chile:?}");
+    let japan = box_of("japan");
+    assert!(japan[0] < japan[2] && japan[1] < japan[3]);
+}
+
+#[test]
+fn a_rated_country_carries_its_level_index_for_the_fade_in_delay() {
+    let site = built(&fifty());
+    let html = site.html("risk/index.html");
+    assert_eq!(html.matches("style=\"--i:").count(), 50, "one per rated country, none on unrated land");
+    let tag = |slug: &str| html.split(&format!("data-slug=\"{slug}\"")).nth(1).unwrap().split('>').next().unwrap().to_string();
+    assert!(tag("mexico").contains("data-level=\"1\" style=\"--i:0\""), "{}", tag("mexico"));
+    assert!(tag("japan").contains("style=\"--i:1\""));
+    assert!(!tag("chad").contains("--i:"), "Chad has no row");
+}

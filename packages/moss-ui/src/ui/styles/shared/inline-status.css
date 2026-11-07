@@ -1,0 +1,91 @@
+/* ============================================================================
+   Inline status badge
+   Driven by the editor's inline-status code
+
+   SHARED, not shell-only. That code finds its anchor with a bare
+   `document.querySelector('[data-inline-task-anchor=…]')`, so the badge renders
+   in whichever webview holds the anchor — and the editor holds the `save` one.
+   Any webview that can host an anchor must import this file: the shell's own
+   stylesheet is not loaded in the editor's.
+   ============================================================================ */
+
+/* Stripe-style "Saved · 2s ago" lozenge, anchored adjacent to the surface
+   whose task it reports. */
+.moss-inline-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--moss-color-muted);
+  background: transparent;
+  vertical-align: middle;
+  transition: opacity 400ms ease-out;
+}
+
+.moss-inline-status.is-fading {
+  opacity: 0;
+}
+
+.moss-inline-status__glyph {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  background: transparent;
+  flex: 0 0 auto;
+}
+
+.moss-inline-status.is-running .moss-inline-status__glyph {
+  /* Hollow ring while running — same as awaiting but smaller. */
+  background: transparent;
+}
+
+.moss-inline-status.is-succeeded {
+  color: var(--moss-success);
+}
+
+.moss-inline-status.is-succeeded .moss-inline-status__glyph {
+  background: var(--moss-success);
+  border-color: var(--moss-success);
+}
+
+.moss-inline-status.is-failed {
+  color: var(--moss-error);
+}
+
+.moss-inline-status.is-failed .moss-inline-status__glyph {
+  border-color: var(--moss-error);
+  background: transparent;
+}
+
+.moss-inline-status.is-cancelled,
+.moss-inline-status.is-awaiting {
+  color: var(--moss-color-muted);
+}
+
+/* Fallback anchor container — only used when no kind-specific anchor is
+   registered in the DOM. Hidden by default until first use. */
+.moss-inline-status-fallback {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  pointer-events: none;
+}
+.moss-inline-status-fallback .moss-inline-status {
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-inline-status {
+    transition: none;
+  }
+}

@@ -20,6 +20,11 @@
 //! A theme rule whose selectors match no element of the last build's pages;
 //! see `theme_rules.rs`.
 //!
+//! ## Classes the theme invents
+//!
+//! Class names in the theme's stylesheets that moss does not write, each
+//! with whether the pages use it; see `own_classes.rs`.
+//!
 //! ## Theme selectors keyed on a page address
 //!
 //! A selector such as `body[data-path^="/housing/"]` in a theme stylesheet
@@ -32,7 +37,9 @@ use std::path::{Path, PathBuf};
 use moss_core::ast::shortcode_extract::{extract_shortcodes_with_config, CssRegionSpan};
 use moss_core::ast::ParseConfig;
 
+mod own_classes;
 mod theme_rules;
+pub use own_classes::OwnClass;
 pub use theme_rules::{ThemeRules, UnmatchedRule};
 
 /// A class must sit on at least this many pages before it is reported, unless `--all`.
@@ -68,6 +75,8 @@ pub struct SurfaceReport {
     pub classed_divs: Vec<ClassedDiv>,
     pub theme_rules: ThemeRules,
     pub address_selectors: Vec<AddressSelector>,
+    /// Classes the theme names that moss does not write.
+    pub own_classes: Vec<OwnClass>,
 }
 
 /// Per-class tally while the pages are walked in sorted order.
@@ -192,6 +201,7 @@ pub fn audit(folder: &Path, all: bool) -> SurfaceReport {
         classed_divs: classed_divs(folder, min_pages),
         theme_rules: theme_rules::check(&sheets, &built),
         address_selectors: address_selectors(&sheets),
+        own_classes: own_classes::check(folder, &sheets),
     }
 }
 
@@ -239,11 +249,24 @@ fn to_json(report: &SurfaceReport) -> serde_json::Value {
             serde_json::json!({ "checked": true, "pages": pages, "unmatched": rules })
         }
     };
+    let own_classes: Vec<serde_json::Value> = report
+        .own_classes
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "class": c.class,
+                "pages": c.pages,
+                "example": c.example.as_ref().map(|(path, line)| serde_json::json!({ "path": path, "line": line })),
+                "defined": { "path": c.defined.0, "line": c.defined.1 },
+            })
+        })
+        .collect();
     serde_json::json!({
         "min_pages": report.min_pages,
         "classed_divs": classed,
         "theme_rules": theme_rules,
         "address_selectors": selectors,
+        "theme_own_classes": own_classes,
     })
 }
 
@@ -305,7 +328,10 @@ fn render_text(report: &SurfaceReport) -> String {
     }
     out.push('\n');
 
-    let kinds = usize::from(!report.classed_divs.is_empty()) + usize::from(dead) + usize::from(!report.address_selectors.is_empty());
+    render_own_classes(&report.own_classes, &mut out);
+    out.push('\n');
+
+    let kinds = usize::from(!report.classed_divs.is_empty()) + usize::from(!report.own_classes.is_empty()) + usize::from(dead) + usize::from(!report.address_selectors.is_empty());
     if kinds == 0 {
         out.push_str("Nothing found.\n");
     } else {
@@ -317,6 +343,28 @@ fn render_text(report: &SurfaceReport) -> String {
 
 fn pages_text(n: usize) -> String {
     if n == 1 { "1 page".to_string() } else { format!("{n} pages") }
+}
+
+/// The class-names section.
+fn render_own_classes(classes: &[OwnClass], out: &mut String) {
+    if classes.is_empty() {
+        out.push_str("The theme names no class of its own.\n");
+        return;
+    }
+    out.push_str(&format!(
+        "Classes the theme names that moss does not write ({}) — a theme can style by structure and by moss's own classes instead:\n",
+        classes.len()
+    ));
+    let loc_of = |c: &OwnClass| format!("{}:{}", c.defined.0, c.defined.1);
+    let name_width = classes.iter().map(|c| c.class.chars().count() + 1).max().unwrap_or(0);
+    let loc_width = classes.iter().map(|c| loc_of(c).chars().count()).max().unwrap_or(0);
+    for c in classes {
+        let used = match &c.example {
+            Some((path, line)) => format!("used in pages ({}, e.g. {path}:{line})", pages_text(c.pages)),
+            None => "used nowhere".to_string(),
+        };
+        out.push_str(&format!("  {:<name_width$}  {:<loc_width$}  {used}\n", format!(".{}", c.class), loc_of(c)));
+    }
 }
 
 /// The theme-rules section. Returns whether it found a rule that styles nothing.

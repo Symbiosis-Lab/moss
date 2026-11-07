@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// ratchet.mjs — shrink-only architecture ratchet for this repo. Four rows:
+// ratchet.mjs — shrink-only architecture ratchet for this repo. Six rows:
 //
-//   (a) prod_lines_per_file — files over 800 prod lines (Rust counted
-//                             #[cfg(test)]-aware) need a banded ceiling; any
-//                             file over 1000 additionally needs a written
-//                             disposition in `oversized{}` (same shape as
-//                             row (b)'s, below)
+//   (a) prod_lines_per_file — files over 800 code lines (not blank, not
+//                             comment-only; Rust counted #[cfg(test)]-aware)
+//                             need a banded ceiling; any file over 1000
+//                             additionally needs a written disposition in
+//                             `oversized{}` (same shape as row (b)'s, below).
+//                             A file listed in `data_tables{}` is exempt
+//                             while it stays a table (self-check 2d)
 //   (b) children_per_dir    — direct children per directory (new dirs get a
 //                             <=15 budget; any dir >=30 needs a written
 //                             disposition in `oversized{}`)
@@ -16,6 +18,18 @@
 //                             build excluded), read with `cargo metadata
 //                             --no-deps --offline`. Every crate with one is
 //                             baselined, so a new crate needs an `accept`.
+//   (g) lines_per_function  — production functions over 200 code lines, keyed
+//                             `<path>::<fn name>`, each with a ceiling banded
+//                             to 50; one over 500 needs a written disposition
+//                             in `oversized{}`. A file ceiling invites moving
+//                             code around a long function; this row measures
+//                             the function itself.
+//   (h) string_slices_per_crate — `clippy::string_slice` warnings (byte-index
+//                             slices of a `&str`, which panic off a character
+//                             boundary) in moss-build's and moss-cli's
+//                             production code, keyed by crate. Measured by a
+//                             clippy build, so `check` only validates the
+//                             row's shape; `slices` measures it.
 //
 // Roots: this repo's own `crates/*/src` and `packages/*/src` (rows a/b);
 // mirror_markers never scanned packages.
@@ -27,6 +41,13 @@
 //                                             the ONLY way a baseline grows;
 //                                             prints the Ratchet-Accept trailer(s)
 //                                             the commit message must carry
+//   node scripts/ratchet.mjs slices [--from <clippy-json>] [--tighten] [--accept "<reason>"]
+//                                             run clippy (or read a saved
+//                                             `--message-format=json` file),
+//                                             count `clippy::string_slice` per
+//                                             crate, compare with row (h);
+//                                             --tighten lowers it, --accept
+//                                             raises it and prints the trailers
 //   node scripts/ratchet.mjs verify-accepts <commit-msg-file>
 //                                             commit-msg hook body: every
 //                                             row/key that rose between HEAD's
@@ -47,21 +68,32 @@
 // `/`-separated); `./` and absolute spellings under --root are folded to it.
 //
 // Row (a) values are CEILINGS, not raw counts: always a multiple of 100.
-// `accept`/`tighten` compute it as `ceil(lines / 100) * 100`.
+// `accept`/`tighten` compute it as `ceil(lines / 100) * 100`. Row (g)'s are
+// multiples of 50 (`BANDS`). `--path` for row (g) is the whole key,
+// `<path>::<fn name>`, which the Ratchet-Accept trailer carries unchanged.
 //
 // A banded ceiling only ever says "this file may not grow past here" — it
 // never says anyone looked at a file that is already over 1000 lines and
 // judged the size acceptable. That is what `prod_lines_per_file.oversized{}`
 // (self-check 2c, below) is for: a written, one-line reason per file over
-// 1000 prod lines, the same `{path: reason}` shape row (b) already uses for
-// an oversized directory. A file that crosses 1000 with no entry there is
+// 1000 code lines, the same `{path: reason}` shape row (b) already uses for
+// an oversized directory. Row (g) has the same map for functions over 500
+// code lines, keyed `<path>::<fn name>`. A file that crosses 1000 with no entry there is
 // red; an entry whose file has since dropped to 1000 lines or under is
 // reported stale (self-check 2c also flags this) until it's removed. This is
 // a disposition tier, not a second ceiling — it never bands and it never
-// raises anything by itself; only a hand-edit of `oversized{}` (reviewed like
-// any other baseline change) adds or removes an entry. ARCHITECTURE.md's
-// "Known debt" list is generated from this map (`docs` command, below) so it
-// reports exactly what the baseline says, never a hand-copied snapshot of it.
+// raises anything by itself; a hand-edit of `oversized{}` (reviewed like any
+// other baseline change) adds an entry, and `tighten` removes the entries
+// whose measure fell to the line or under. ARCHITECTURE.md's
+// "Known debt" list is generated from these maps, functions first (`docs`
+// command, below), so it reports exactly what the baseline says, never a
+// hand-copied snapshot of it.
+//
+// A disposition value (any row) is a string, or `{"reason": "...",
+// "waits_on": "<repo-relative path>"}` when it waits on something to exist.
+// `check` is red while that path exists (the wait is over: rewrite the
+// disposition), and red for a string that says "waits on" or "once ... exists"
+// with no `waits_on`, so a wait cannot be stated where nothing verifies it.
 //
 // Baseline: scripts/ratchet-baseline.open.json, next to this script. The
 // reason for a raise lives in the commit message's trailer (see
@@ -88,11 +120,18 @@
 //       reason in the baseline's children_per_dir.oversized{} (NORTH-STAR's
 //       "mandatory split" line) — it is row (b)'s own machinery, not a
 //       separate row.
-//   2c. prod_lines_per_file: any file over 1000 prod lines needs a written
+//   2c. prod_lines_per_file: any file over 1000 code lines needs a written
 //       reason in the baseline's prod_lines_per_file.oversized{}, the same
-//       shape as check 2b. An oversized{} entry whose file has dropped to
-//       1000 lines or under, or no longer exists, is reported stale — fix by
-//       deleting the entry.
+//       shape as check 2b; lines_per_function the same for a function over
+//       500. An oversized{} entry whose measure has dropped to the line or
+//       under, or whose file no longer exists, is reported stale — `tighten`
+//       deletes it.
+//   2d. prod_lines_per_file.data_tables{path: reason}: a listed file is exempt
+//       from row (a) (ceiling and disposition) only while it is still a table
+//       — at most 5 function definitions and at most 2 branch points per 100
+//       code lines (`countBranches`). One that breaks a bound is red and names
+//       which. Logic cannot hide in a table.
+//   2e. a disposition that waits on something names it (`waits_on`, above).
 //   3. row (a) stale-high: a baseline ceiling >=100 above a file's actual
 //      current lines means banding headroom has drifted into unreviewed
 //      slack — fix with `tighten`. A gap under 100 is ordinary banding
@@ -104,8 +143,19 @@
 //      suite's throwaway trees) — nothing to check against.
 //
 // Counting notes:
-//   - Rust prod lines = total lines minus brace-matched `#[cfg(test)]`-attributed
-//     items. Braces counted per line, best-effort (no string-literal parsing).
+//   - Code lines (rows a, g, data tables) exclude blank lines, comment-only
+//     lines (`//`, `///`, `//!`, and lines inside or opening/closing a block
+//     comment with no code left) and, for Rust, brace-matched
+//     `#[cfg(test)]`-attributed items. A line with code and a trailing comment
+//     counts. A small lexer (`stripNonCode`) blanks comments and collapses
+//     string and char literals first, so `/*` in a string opens nothing and
+//     `if` in a string is no branch; it does not know JS regex literals or
+//     nested template substitutions. Best-effort, like the brace counter.
+//   - Function length (row g) brace-matches from the signature: Rust `fn`
+//     items; TS function declarations, methods and arrow functions assigned to
+//     a name with a block body. A nested function counts toward its outer one
+//     and is not listed on its own; a second function of one name in a file is
+//     keyed `name#2`. Closures and callbacks are not functions here.
 //   - mirror_markers is a substring count; comment mentions count. That is a
 //     feature for tripwires (forces a look), not a parser bug.
 //   - children_per_dir ignores dotfiles, __tests__ dirs and *.test.ts files.
@@ -228,22 +278,245 @@ function rustCfgTestRanges(lines) {
   return ranges;
 }
 
-export function countRustProdLines(text) {
-  const lines = text.split('\n');
-  let excluded = 0;
-  for (const [from, to] of rustCfgTestRanges(lines)) excluded += to - from + 1;
-  return Math.max(0, countLines(text) - excluded);
+/**
+ * Source text with comments removed and string/char literals collapsed to
+ * `""` / `''`, one output line per input line (newlines inside a comment or
+ * literal survive; a literal's continuation lines carry a `~` so they still
+ * count as code). Best-effort lexer: Rust raw strings, nested block comments
+ * and lifetimes are handled; JS regex literals and nested template
+ * substitutions are not.
+ */
+function stripNonCode(text, rust) {
+  const n = text.length;
+  const idChar = /[A-Za-z0-9_]/;
+  const rawStr = /b?r(#*)"/y;
+  let out = '';
+  let i = 0;
+  const quoted = (delim) => {
+    let j = i + 1;
+    let nl = '';
+    while (j < n && text[j] !== delim) {
+      if (text[j] === '\\') j++;
+      if (text[j] === '\n') nl += '\n~';
+      j++;
+    }
+    out += delim + nl + delim;
+    i = j + 1;
+  };
+  while (i < n) {
+    const c = text[i];
+    const d = text[i + 1];
+    if (c === '/' && d === '/') {
+      while (i < n && text[i] !== '\n') i++;
+    } else if (c === '/' && d === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (text[i] === '*' && text[i + 1] === '/') { depth--; i += 2; }
+        else if (rust && text[i] === '/' && text[i + 1] === '*') { depth++; i += 2; }
+        else { if (text[i] === '\n') out += '\n'; i++; }
+      }
+      out += ' ';
+    } else if (rust && (c === 'r' || c === 'b') && !(i > 0 && idChar.test(text[i - 1])) && ((rawStr.lastIndex = i), rawStr.test(text))) {
+      const close = `"${'#'.repeat(rawStr.lastIndex - i - (text[i] === 'b' ? 3 : 2))}`;
+      const end = text.indexOf(close, rawStr.lastIndex);
+      const body = text.slice(rawStr.lastIndex, end === -1 ? n : end);
+      out += '""' + '\n~'.repeat(body.split('\n').length - 1);
+      i = end === -1 ? n : end + close.length;
+    } else if (c === '"' || (!rust && (c === "'" || c === '`'))) {
+      quoted(c);
+    } else if (rust && c === "'") {
+      if (d === '\\') {
+        let j = i + 3;
+        while (j < n && text[j] !== "'") j++;
+        out += "''";
+        i = j + 1;
+      } else if (d !== undefined && text[i + 1 + String.fromCodePoint(text.codePointAt(i + 1)).length] === "'") {
+        out += "''";
+        i += 2 + String.fromCodePoint(text.codePointAt(i + 1)).length;
+      } else { out += c; i++; }
+    } else { out += c; i++; }
+  }
+  return out;
 }
 
-/** Production line count for one row-(a)-eligible file, `.rs` or `.ts` alike. */
-function countProdLinesFor(fileAbs) {
+/**
+ * One file's production code, measured once: code lines (not blank, not
+ * comment-only; a line with code and a trailing comment counts; Rust
+ * `#[cfg(test)]` items excluded), the comment- and string-free source that
+ * the function and branch metrics read, and the function list.
+ */
+const analysisCache = new Map();
+function analyzeFile(fileAbs) {
+  if (analysisCache.has(fileAbs)) return analysisCache.get(fileAbs);
+  const rust = fileAbs.endsWith('.rs');
   const text = read(fileAbs);
-  return fileAbs.endsWith('.rs') ? countRustProdLines(text) : countLines(text);
+  const lines = stripNonCode(text, rust).split('\n');
+  if (rust) {
+    for (const [from, to] of rustCfgTestRanges(lines)) for (let k = from; k <= to; k++) lines[k] = '';
+  }
+  const src = lines.join('\n');
+  const codeLines = lines.filter((l) => l.trim() !== '').length;
+  const lineStarts = [];
+  let off = 0;
+  for (const l of lines) { lineStarts.push(off); off += l.length + 1; }
+  const lineOf = (pos) => {
+    let lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= pos) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  };
+  const functions = findFunctions(src, rust).map((f) => {
+    let code = 0;
+    for (let k = lineOf(f.start); k <= lineOf(f.end); k++) if (lines[k].trim() !== '') code++;
+    return { name: f.name, codeLines: code };
+  });
+  const result = { codeLines, functions, fnDefs: countFnDefs(src, rust), branches: countBranches(src, rust) };
+  analysisCache.set(fileAbs, result);
+  return result;
 }
 
-/** `ceil(n / 100) * 100` — row (a)'s banding (ratchet-spec.md §1). */
-function band100(n) {
-  return Math.ceil(n / 100) * 100;
+const RUST_FN_RE = /^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:default[ \t]+)?(?:const[ \t]+)?(?:async[ \t]+)?(?:unsafe[ \t]+)?(?:extern[ \t]+"")?[ \t]*fn[ \t]+(\w+)/gm;
+const TS_FN_RES = [
+  { kind: 'sig', re: /^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]*\*?[ \t]*(\w+)/gm },
+  { kind: 'arrow', re: /^[ \t]*(?:export[ \t]+)?(?:const|let|var)[ \t]+(\w+)/gm },
+  { kind: 'method', re: /^[ \t]+(?:(?:public|private|protected|static|readonly|override|async|get|set)[ \t]+)*\*?[ \t]*(\w+)[ \t]*(?=[(<])/gm },
+];
+const NOT_METHOD = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'return', 'function', 'else', 'do', 'try', 'typeof', 'await', 'new', 'super', 'import', 'delete', 'void', 'yield', 'throw']);
+
+/** Index of the `}` matching the `{` at `open`, or -1. */
+function matchBrace(src, open) {
+  let depth = 0;
+  for (let k = open; k < src.length; k++) {
+    if (src[k] === '{') depth++;
+    else if (src[k] === '}' && --depth === 0) return k;
+  }
+  return -1;
+}
+
+/**
+ * Offset of the `}` closing the function whose name ends at `pos`, or -1
+ * when it has no body. `sig`/`method`: the body is the first `{` outside
+ * parentheses; in TypeScript one that follows `: | & < , ( =>` opens an
+ * object type and is skipped, while in Rust a `where` clause ends in `,`
+ * before the body. A `;` outside parentheses means no body.
+ * `arrow`: the body is the `{` right after the first top-level `=>`.
+ */
+function bodyEnd(src, pos, kind, rust) {
+  let paren = 0;
+  let prev = '';
+  let closedParams = false;
+  for (let k = pos; k < src.length; k++) {
+    const c = src[k];
+    if (kind === 'arrow') {
+      if ('([{'.includes(c)) paren++;
+      else if (')]}'.includes(c)) paren--;
+      else if (c === ';' && paren === 0) return -1;
+      else if (c === '=' && src[k + 1] === '>' && paren === 0) {
+        let j = k + 2;
+        while (/\s/.test(src[j])) j++;
+        return src[j] === '{' ? matchBrace(src, j) : -1;
+      }
+      continue;
+    }
+    if (c === '(' || c === '[') paren++;
+    else if (c === ')' || c === ']') {
+      paren--;
+      if (paren === 0 && kind === 'method' && !closedParams) {
+        closedParams = true;
+        let j = k + 1;
+        while (/\s/.test(src[j])) j++;
+        if (src[j] !== '{' && src[j] !== ':') return -1;
+      }
+    } else if (paren === 0 && c === ';') return -1;
+    else if (paren === 0 && c === '{') {
+      const typeBrace = !rust && (':|&<,('.includes(prev) || (prev === '>' && src[k - 2] === '='));
+      if (!typeBrace) return matchBrace(src, k);
+      const close = matchBrace(src, k);
+      if (close === -1) return -1;
+      k = close;
+      prev = '}';
+      continue;
+    }
+    if (!/\s/.test(c)) prev = c;
+  }
+  return -1;
+}
+
+/** `{name, start, end}` offsets of every function with a body, outermost only. */
+function findFunctions(src, rust) {
+  const found = [];
+  for (const { kind, re } of rust ? [{ kind: 'sig', re: RUST_FN_RE }] : TS_FN_RES) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(src))) {
+      if (kind === 'method' && NOT_METHOD.has(m[1])) continue;
+      const end = bodyEnd(src, re.lastIndex, kind, rust);
+      if (end === -1) continue;
+      found.push({ name: m[1], start: m.index, end });
+      re.lastIndex = Math.max(re.lastIndex, m.index + 1);
+    }
+  }
+  found.sort((a, b) => a.start - b.start);
+  const outer = [];
+  const seen = new Map();
+  for (const f of found) {
+    if (outer.length && f.start <= outer[outer.length - 1].end) continue;
+    const k = (seen.get(f.name) ?? 0) + 1;
+    seen.set(f.name, k);
+    outer.push({ ...f, name: k === 1 ? f.name : `${f.name}#${k}` });
+  }
+  return outer;
+}
+
+/** Function definitions, nested ones too: Rust `fn` items; TS `function`
+ *  declarations and top-level arrow functions bound to a name. */
+function countFnDefs(src, rust) {
+  if (rust) return countMatches(src, /\bfn[ \t]+\w/g);
+  return countMatches(src, /^(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?function\b/gm)
+    + countMatches(src, /^(?:export[ \t]+)?(?:const|let|var)[ \t]+\w+(?:[ \t]*:[^=\n]+)?[ \t]*=[ \t]*(?:async[ \t]*)?(?:\([^)]*\)|\w+)[ \t]*(?::[^=>]+)?=>/gm);
+}
+
+/** Branch points in comment- and string-free source: `if else match for
+ *  while loop case switch && ||`, Rust's `?` operator (no space before it)
+ *  and TS ternaries (`?` that is not `?.`, `??` or `?:`). One definition,
+ *  shared by the data-table homogeneity test. */
+function countBranches(src, rust) {
+  return countMatches(src, /\b(?:if|else|match|for|while|loop|case|switch)\b|&&|\|\|/g)
+    + countMatches(src, rust ? /(?<=[\w)\]>])\?/g : /(?<!\?)\?(?![?.:])/g);
+}
+
+const WAIT_PHRASE_RE = /\bwaits?\s+on\b|\bonce\b[^.]*?\bexists?\b/i;
+const DATA_TABLE_MAX_FNS = 5;
+const DATA_TABLE_MAX_BRANCHES_PER_100 = 2;
+
+/** Production code-line count for one row-(a)-eligible file, `.rs` or `.ts` alike. */
+function countProdLinesFor(fileAbs) {
+  return analyzeFile(fileAbs).codeLines;
+}
+
+/** Rows whose baseline is a banded ceiling, and the band width. */
+const BANDS = { prod_lines_per_file: 100, lines_per_function: 50 };
+
+/** `ceil(n / band) * band` — a banded row's ceiling for a measured count. */
+function bandOf(rowKey, n) {
+  return Math.ceil(n / BANDS[rowKey]) * BANDS[rowKey];
+}
+
+/** The file a baseline key lives in: row (g) keys are `<path>::<fn name>`. */
+function fileOf(key) {
+  return key.split('::')[0];
+}
+
+/** Rows with an `oversized{}` disposition map, and the measure above which a
+ *  disposition is owed. */
+const DISPOSITION_OVER = { prod_lines_per_file: 1000, lines_per_function: 500 };
+
+/** The written reason of a disposition: a string, or `{reason, waits_on}`. */
+function dispositionText(d) {
+  return typeof d === 'string' ? d : d && typeof d.reason === 'string' ? d.reason : undefined;
 }
 
 function countAcross(root, files, regexes, transform) {
@@ -299,25 +572,40 @@ function packagesSrcRoots(root) {
 // row collectors
 // ---------------------------------------------------------------------------
 
+// Every file rows (a) and (g) measure: Rust sources under each crate's src
+// (test siblings excluded) and TS sources under each package's src.
+function prodSourceFiles(root) {
+  const files = [];
+  for (const dir of rustProdRoots(root)) {
+    for (const f of walkFiles(dir)) if (f.endsWith('.rs') && !isRustTestSibling(f)) files.push(f);
+  }
+  for (const dir of packagesSrcRoots(root)) {
+    for (const f of walkFiles(dir)) if (f.endsWith('.ts') && !isExcludedTs(f)) files.push(f);
+  }
+  return files;
+}
+
 const collectors = {
-  // (a) files over 800 prod lines → map {path: prodLines}
-  prod_lines_per_file(root) {
+  // (a) files over 800 code lines → map {path: codeLines}
+  prod_lines_per_file(root, baseline) {
+    const tables = baseline?.rows?.prod_lines_per_file?.data_tables ?? {};
     const map = {};
-    for (const dir of rustProdRoots(root)) {
-      for (const f of walkFiles(dir)) {
-        if (!f.endsWith('.rs') || isRustTestSibling(f)) continue;
-        const n = countProdLinesFor(f);
-        if (n > 800) map[rel(root, f)] = n;
+    for (const f of prodSourceFiles(root)) {
+      const n = countProdLinesFor(f);
+      if (n > 800 && !(rel(root, f) in tables)) map[rel(root, f)] = n;
+    }
+    return { kind: 'map', map, threshold: 800, unit: 'code lines' };
+  },
+
+  // (g) production functions over 200 code lines → map {path::fn: codeLines}
+  lines_per_function(root) {
+    const map = {};
+    for (const f of prodSourceFiles(root)) {
+      for (const fn of analyzeFile(f).functions) {
+        if (fn.codeLines > 200) map[`${rel(root, f)}::${fn.name}`] = fn.codeLines;
       }
     }
-    for (const dir of packagesSrcRoots(root)) {
-      for (const f of walkFiles(dir)) {
-        if (!f.endsWith('.ts') || isExcludedTs(f)) continue;
-        const n = countProdLinesFor(f);
-        if (n > 800) map[rel(root, f)] = n;
-      }
-    }
-    return { kind: 'map', map, threshold: 800, unit: 'prod lines' };
+    return { kind: 'map', map, threshold: 200, unit: 'code lines' };
   },
 
   // (b) direct children per directory → map {dir: count}; new dirs budget <=15
@@ -391,11 +679,13 @@ const ROWS = {
   children_per_dir: { letter: 'b', disposition: 'permanent' },
   mirror_markers: { letter: 'e', disposition: 'permanent' },
   direct_deps_per_crate: { letter: 'f', disposition: 'permanent' },
+  lines_per_function: { letter: 'g', disposition: 'permanent' },
+  string_slices_per_crate: { letter: 'h', disposition: 'permanent' },
 };
 
-export function collectCurrent(root) {
+export function collectCurrent(root, baseline) {
   const out = {};
-  for (const key of Object.keys(ROWS)) out[key] = collectors[key](root);
+  for (const key of Object.keys(ROWS)) if (collectors[key]) out[key] = collectors[key](root, baseline);
   return out;
 }
 
@@ -512,47 +802,58 @@ const KNOWN_DEBT_START = '<!-- ratchet:known-debt:start -->';
 const KNOWN_DEBT_END = '<!-- ratchet:known-debt:end -->';
 
 /**
- * `{path, lines, reason}` for every prod_lines_per_file.oversized{} entry
- * whose file is still actually over 1000 lines right now — sorted largest
- * first, matching the old hand-written list's order. An entry self-check 2c
- * would flag as stale (file shrank, or is gone) is left out here too: the
- * doc block and the self-check must agree on what counts as current debt.
+ * `{path, lines, reason}` for every `oversized{}` entry of `rowKey` whose
+ * measure is still over that row's disposition line right now — sorted
+ * largest first. An entry self-check 2c would flag as stale (shrank, or is
+ * gone) is left out here too: the doc block and the self-check must agree on
+ * what counts as current debt.
  */
-function knownDebtRows(baseline, current) {
-  const disp = baseline.rows?.prod_lines_per_file?.oversized ?? {};
-  const map = current.prod_lines_per_file?.map ?? {};
+function knownDebtRows(baseline, current, rowKey) {
+  const disp = baseline.rows?.[rowKey]?.oversized ?? {};
+  const map = current[rowKey]?.map ?? {};
   const rows = [];
-  for (const [p, reason] of Object.entries(disp)) {
+  for (const [p, d] of Object.entries(disp)) {
     const n = map[p];
-    if (typeof n !== 'number' || n <= 1000) continue;
-    if (typeof reason !== 'string' || !reason.trim()) continue;
+    const reason = dispositionText(d);
+    if (typeof n !== 'number' || n <= DISPOSITION_OVER[rowKey]) continue;
+    if (reason === undefined || !reason.trim()) continue;
     rows.push({ path: p, lines: n, reason: reason.trim() });
   }
   rows.sort((a, b) => b.lines - a.lines);
   return rows;
 }
 
-function renderKnownDebtTable(rows) {
-  const lines = ['| File | Prod lines | Disposition |', '|---|---:|---|'];
+function renderKnownDebtTable(noun, rows) {
+  const lines = [`| ${noun} | Code lines | Disposition |`, '|---|---:|---|'];
   for (const r of rows) lines.push(`| \`${r.path}\` | ${r.lines} | ${r.reason} |`);
   return lines.join('\n');
 }
 
+/** The Known-debt block's body: functions over 500 code lines first, then
+ *  files over 1000, each as its own table (an empty one is left out). */
+function renderKnownDebt(baseline, current) {
+  const parts = [];
+  const fns = knownDebtRows(baseline, current, 'lines_per_function');
+  if (fns.length) parts.push(`Functions over ${DISPOSITION_OVER.lines_per_function} code lines:\n\n${renderKnownDebtTable('Function', fns)}`);
+  const files = knownDebtRows(baseline, current, 'prod_lines_per_file');
+  if (files.length) parts.push(`Files over ${DISPOSITION_OVER.prod_lines_per_file} code lines:\n\n${renderKnownDebtTable('File', files)}`);
+  return parts.join('\n\n');
+}
+
 /**
  * ARCHITECTURE.md's text with the block between KNOWN_DEBT_START/END
- * replaced by a freshly rendered table for `current`'s line counts — or
- * `null` if `doc` doesn't carry both markers (nothing to splice into).
- * Used both to write the file (`docs`) and, unmodified, to detect staleness
- * (self-check 4, `docs --check`): the same render must equal what's on disk.
+ * replaced by a freshly rendered one for `current`'s measures — or `null` if
+ * `doc` doesn't carry both markers (nothing to splice into). Used both to
+ * write the file (`docs`) and, unmodified, to detect staleness (self-check 4,
+ * `docs --check`): the same render must equal what's on disk.
  */
 function renderArchitectureDoc(doc, baseline, current) {
   const startIdx = doc.indexOf(KNOWN_DEBT_START);
   const endIdx = doc.indexOf(KNOWN_DEBT_END);
   if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return null;
-  const table = renderKnownDebtTable(knownDebtRows(baseline, current));
   const before = doc.slice(0, startIdx + KNOWN_DEBT_START.length);
   const after = doc.slice(endIdx);
-  return `${before}\n${table}\n${after}`;
+  return `${before}\n${renderKnownDebt(baseline, current)}\n${after}`;
 }
 
 function cmdDocs(root, { check } = {}) {
@@ -562,8 +863,11 @@ function cmdDocs(root, { check } = {}) {
     return;
   }
   const baseline = loadBaseline();
-  // The block reads only row (a); collecting every row would need cargo here.
-  const current = { prod_lines_per_file: collectors.prod_lines_per_file(root) };
+  // The block reads rows (a) and (g); collecting every row would need cargo here.
+  const current = {
+    prod_lines_per_file: collectors.prod_lines_per_file(root, baseline),
+    lines_per_function: collectors.lines_per_function(root),
+  };
   const doc = read(docPath);
   const rendered = renderArchitectureDoc(doc, baseline, current);
   if (rendered === null) {
@@ -609,9 +913,9 @@ function runSelfChecks(root, baseline, current, violations) {
 
   // 2. stale entries (path no longer on disk) — fail-on-stale.
   for (const [key, row] of Object.entries(baseline.rows ?? {})) {
-    if (!row.armed || typeof row.value !== 'object' || row.value === null) continue;
+    if (!row.armed || !collectors[key] || typeof row.value !== 'object' || row.value === null) continue;
     for (const p of Object.keys(row.value)) {
-      const abs = path.join(root, ...p.split('/'));
+      const abs = path.join(root, ...fileOf(p).split('/'));
       if (!fs.existsSync(abs)) {
         violations.push(`self-check(stale): ${key} baseline entry '${p}' no longer exists on disk — run tighten`);
       }
@@ -626,8 +930,8 @@ function runSelfChecks(root, baseline, current, violations) {
     const disp = cpd.oversized ?? {};
     for (const [dir, n] of Object.entries(current.children_per_dir.map)) {
       if (n < SPLIT_LINE) continue;
-      const reason = disp[dir];
-      if (typeof reason !== 'string' || !reason.trim()) {
+      const reason = dispositionText(disp[dir]);
+      if (reason === undefined || !reason.trim()) {
         violations.push(
           `(b) children_per_dir: '${dir}' has ${n} direct children >= ${SPLIT_LINE} (NORTH-STAR: mandatory split) — split it, or record why not in the baseline's children_per_dir.oversized{}`,
         );
@@ -653,30 +957,75 @@ function runSelfChecks(root, baseline, current, violations) {
   // or the path being raised) — one validator for what counts as a reason,
   // not a second one invented for this tier.
   const pl = baseline.rows?.prod_lines_per_file;
-  if (pl?.armed && current.prod_lines_per_file) {
-    const OVERSIZED_LINE = 1000;
-    const disp = pl.oversized ?? {};
-    for (const [p, n] of Object.entries(current.prod_lines_per_file.map)) {
-      if (n <= OVERSIZED_LINE) continue;
-      const reason = disp[p];
-      if (typeof reason !== 'string' || reasonIsWeak(reason, 'prod_lines_per_file', p)) {
+  for (const [key, over] of Object.entries(DISPOSITION_OVER)) {
+    const row = baseline.rows?.[key];
+    if (!row?.armed || !current[key]) continue;
+    const letter = ROWS[key].letter;
+    const floor = current[key].threshold;
+    const disp = row.oversized ?? {};
+    const dataTables = row.data_tables ?? {};
+    for (const [p, n] of Object.entries(current[key].map)) {
+      if (n <= over) continue;
+      const reason = dispositionText(disp[p]);
+      if (reason === undefined || reasonIsWeak(reason, key, p)) {
         violations.push(
-          `(a) prod_lines_per_file: '${p}' has ${n} prod lines > ${OVERSIZED_LINE} — split it, or record why not (and what would retire it) in the baseline's prod_lines_per_file.oversized{}`,
+          `(${letter}) ${key}: '${p}' has ${n} code lines > ${over} — split it, or record why not (and what would retire it) in the baseline's ${key}.oversized{}`,
         );
       }
     }
     for (const p of Object.keys(disp)) {
-      const n = current.prod_lines_per_file.map[p];
+      const n = current[key].map[p];
       if (n === undefined) {
-        const abs = path.join(root, ...p.split('/'));
+        const gone = !fs.existsSync(path.join(root, ...fileOf(p).split('/')));
+        const why = p in dataTables ? 'listed in data_tables{}, which exempts it' : gone ? 'gone' : `now <= ${floor} code lines (below row (${letter})'s own floor)`;
+        violations.push(`self-check(stale): ${key}.oversized entry '${p}' is ${why} — drop it from oversized{}`);
+      } else if (n <= over) {
         violations.push(
-          `self-check(stale): prod_lines_per_file.oversized entry '${p}' is ${fs.existsSync(abs) ? 'now <= 800 prod lines (below row (a)\'s own floor)' : 'gone'} — drop it from oversized{}`,
-        );
-      } else if (n <= OVERSIZED_LINE) {
-        violations.push(
-          `self-check(stale): prod_lines_per_file.oversized entry '${p}' is down to ${n} prod lines (<= ${OVERSIZED_LINE}) — drop it from oversized{}`,
+          `self-check(stale): ${key}.oversized entry '${p}' is down to ${n} code lines (<= ${over}) — drop it from oversized{}`,
         );
       }
+    }
+  }
+
+  // 2e. a disposition that waits on something names it. `{reason, waits_on}`
+  // carries a repo-relative path; the wait is over once that path exists.
+  // Prose that says it waits without a `waits_on` states a wait nothing checks.
+  for (const [key, row] of Object.entries(baseline.rows ?? {})) {
+    for (const [p, d] of Object.entries(row.oversized ?? {})) {
+      const where = `${key}.oversized entry '${p}'`;
+      const waitsOn = typeof d === 'object' && d !== null ? d.waits_on : undefined;
+      if (waitsOn !== undefined) {
+        if (typeof waitsOn !== 'string' || !waitsOn.trim()) {
+          violations.push(`${where}: waits_on must be a repo-relative path`);
+        } else if (fs.existsSync(path.join(root, ...waitsOn.split('/')))) {
+          violations.push(`${where} waits on '${waitsOn}', which now exists — the wait is over; rewrite the disposition without waits_on`);
+        }
+      } else if (WAIT_PHRASE_RE.test(dispositionText(d) ?? '')) {
+        violations.push(`${where} says it waits on something — state the wait as {"reason": "...", "waits_on": "<repo-relative path>"} so check can verify it, or rewrite it as a plain disposition`);
+      }
+    }
+  }
+
+  // 2d. data tables: a file listed in prod_lines_per_file.data_tables{} is
+  // exempt from row (a)'s ceiling and the 1000-line disposition because its
+  // length measures a vocabulary. The exemption holds only while the file is
+  // still a table: few functions and almost no branches (see DATA_TABLE_*).
+  for (const [p, reason] of Object.entries(pl?.data_tables ?? {})) {
+    const abs = path.join(root, ...p.split('/'));
+    if (!fs.existsSync(abs)) {
+      violations.push(`self-check(stale): prod_lines_per_file.data_tables entry '${p}' no longer exists on disk — drop it from data_tables{}`);
+      continue;
+    }
+    if (typeof reason !== 'string' || reasonIsWeak(reason, 'prod_lines_per_file', p)) {
+      violations.push(`(a) data_tables: '${p}' needs a written reason saying what vocabulary its length measures`);
+    }
+    const m = analyzeFile(abs);
+    const density = (m.branches * 100) / Math.max(m.codeLines, 1);
+    if (m.fnDefs > DATA_TABLE_MAX_FNS) {
+      violations.push(`(a) data_tables: '${p}' defines ${m.fnDefs} functions > ${DATA_TABLE_MAX_FNS}, so it is no longer only a table — move the logic out, or take it off data_tables{} and give it a ceiling`);
+    }
+    if (density > DATA_TABLE_MAX_BRANCHES_PER_100) {
+      violations.push(`(a) data_tables: '${p}' has ${m.branches} branch points in ${m.codeLines} code lines (${density.toFixed(2)} per 100 > ${DATA_TABLE_MAX_BRANCHES_PER_100}), so it holds logic — move the logic out, or take it off data_tables{} and give it a ceiling`);
     }
   }
 
@@ -684,15 +1033,16 @@ function runSelfChecks(root, baseline, current, violations) {
   // is unreviewed slack, not headroom. A gap under 100 is ordinary banding
   // (the ceiling rounds UP to the next hundred); 100 or more means the file
   // shrank since the ceiling was last set and `tighten` is overdue.
-  if (pl?.armed) {
-    for (const [p, ceiling] of Object.entries(pl.value ?? {})) {
+  for (const [key, band] of Object.entries(BANDS)) {
+    const row = baseline.rows?.[key];
+    if (!row?.armed || !current[key]) continue;
+    for (const [p, ceiling] of Object.entries(row.value ?? {})) {
       if (typeof ceiling !== 'number') continue; // self-check 1/bad-baseline territory
-      const abs = path.join(root, ...p.split('/'));
-      if (!fs.existsSync(abs)) continue; // self-check 2 already flags this
-      const lines = countProdLinesFor(abs);
-      if (ceiling - lines >= 100) {
+      if (!fs.existsSync(path.join(root, ...fileOf(p).split('/')))) continue; // self-check 2 already flags this
+      const lines = current[key].map[p] ?? (key === 'prod_lines_per_file' ? countProdLinesFor(path.join(root, ...p.split('/'))) : undefined);
+      if (lines !== undefined && ceiling - lines >= band) {
         violations.push(
-          `self-check(stale-high): prod_lines_per_file '${p}' ceiling ${ceiling} is >=100 above its actual ${lines} lines — run tighten`,
+          `self-check(stale-high): ${key} '${p}' ceiling ${ceiling} is >=${band} above its actual ${lines} lines — run tighten`,
         );
       }
     }
@@ -764,7 +1114,7 @@ function checkRow(key, row, cur, violations) {
 function cmdCheck(root) {
   const baseline = loadBaseline();
   const violations = [];
-  const current = collectCurrent(root);
+  const current = collectCurrent(root, baseline);
   runSelfChecks(root, baseline, current, violations);
 
   console.log(`ratchet check — this tree @ ${root}`);
@@ -776,7 +1126,7 @@ function cmdCheck(root) {
       continue;
     }
     const before = violations.length;
-    const summary = checkRow(key, row, current[key], violations);
+    const summary = key === SLICE_ROW ? checkSliceShape(row, violations) : checkRow(key, row, current[key], violations);
     const mark = violations.length > before ? 'RED' : 'OK ';
     console.log(`  ${mark} (${spec.letter}) ${key.padEnd(24)} ${summary}`);
   }
@@ -791,7 +1141,7 @@ function cmdCheck(root) {
 
 function cmdTighten(root, only = []) {
   const baseline = loadBaseline();
-  const current = collectCurrent(root);
+  const current = collectCurrent(root, baseline);
   const lowered = [];
   const refused = [];
   const wanted = only.length ? new Set(only.map((p) => normalizePathArg(root, p))) : null;
@@ -818,26 +1168,27 @@ function cmdTighten(root, only = []) {
       } else if (cur.total > row.value) {
         refused.push(`${key}: current ${cur.total} > baseline ${row.value} — tighten NEVER raises; fix the code or use 'accept ${key} <reason>'`);
       }
-    } else if (key === 'prod_lines_per_file') {
-      // Row (a) is banded: ceil(lines / 100) * 100, never the raw count
-      // (ratchet-spec.md §1). A file at/under 800 drops out of the row
-      // entirely — it's no longer this row's concern, not merely "tight".
+    } else if (key in BANDS) {
+      // Banded rows store ceil(measure / band) * band, never the raw count
+      // (ratchet-spec.md §1). An entry at/under the row's threshold drops out
+      // of the row entirely — it's no longer this row's concern, not merely
+      // "tight".
       const base = row.value ?? {};
       for (const [p, b] of Object.entries(base)) {
         if (wanted && !wanted.has(p)) continue;
         const n = cur.map[p];
-        const abs = path.join(root, ...p.split('/'));
+        const abs = path.join(root, ...fileOf(p).split('/'));
         if (!fs.existsSync(abs)) {
           lowered.push(`${key}: dropped stale '${p}' (no longer on disk)`);
           delete base[p];
           continue;
         }
         if (n === undefined) {
-          lowered.push(`${key}: dropped '${p}' (now <= 800, at/under the floor)`);
+          lowered.push(`${key}: dropped '${p}' (now <= ${cur.threshold}, at/under the floor, or listed in data_tables)`);
           delete base[p];
           continue;
         }
-        const c = band100(n);
+        const c = bandOf(key, n);
         if (c < b) {
           lowered.push(`${key}: '${p}' ${b} -> ${c}`);
           base[p] = c;
@@ -845,6 +1196,17 @@ function cmdTighten(root, only = []) {
           refused.push(`${key}: '${p}' current ${n} > baseline ${b} — tighten NEVER raises; fix the code or use 'accept ${key} <reason>'`);
         }
         // n <= b and c >= b: already tight to its band — nothing to do.
+      }
+      // A disposition is only owed above DISPOSITION_OVER: once the measure is
+      // at or under that, the entry is stale, so it leaves with the ceiling it
+      // justified.
+      for (const p of Object.keys(row.oversized ?? {})) {
+        if (wanted && !wanted.has(p)) continue;
+        const n = cur.map[p];
+        if (n === undefined || n <= DISPOSITION_OVER[key]) {
+          lowered.push(`${key}: dropped disposition for '${p}' (${n === undefined ? `no longer over ${cur.threshold}` : `down to ${n}`})`);
+          delete row.oversized[p];
+        }
       }
     } else {
       const base = row.value ?? {};
@@ -927,7 +1289,7 @@ function cmdAccept(root, rowKey, reason, only = []) {
   if (!row.armed) { console.error(`row '${rowKey}' is not armed — nothing to accept`); process.exit(1); }
   if (!collectors[rowKey]) { console.error(`row '${rowKey}' has no collector`); process.exit(1); }
 
-  const cur = collectors[rowKey](root);
+  const cur = collectors[rowKey](root, baseline);
 
   if (cur.kind === 'scalar') {
     if (only.length) {
@@ -979,11 +1341,116 @@ function cmdAccept(root, rowKey, reason, only = []) {
   }
   for (const p of named) {
     const n = cur.map[p];
-    base[p] = rowKey === 'prod_lines_per_file' ? band100(n) : n;
+    base[p] = rowKey in BANDS ? bandOf(rowKey, n) : n;
   }
 
   saveBaseline(baseline);
   printTrailers(rowKey, named, reason);
+}
+
+// ---------------------------------------------------------------------------
+// slices — row (h). Needs a clippy build, so `check` never runs it.
+// ---------------------------------------------------------------------------
+
+const SLICE_ROW = 'string_slices_per_crate';
+const SLICE_CRATES = ['moss-build', 'moss-cli'];
+const SLICE_LINT = 'clippy::string_slice';
+// `-A clippy::all` silences every other lint; the restriction lint is outside
+// that group, so `-W` still enables it. `--cap-lints warn` keeps moss-core's
+// own `deny` of the lint from failing the build before moss-build is checked.
+const SLICE_CLIPPY = ['clippy', '-p', 'moss-build', '-p', 'moss-cli', '--lib', '--bins', '--message-format=json', '--', '-A', 'clippy::all', '-W', SLICE_LINT, '--cap-lints', 'warn'];
+
+function checkSliceShape(row, violations) {
+  const v = row.value;
+  const bad = SLICE_CRATES.filter((c) => !Number.isInteger(v?.[c]) || v[c] < 0);
+  for (const c of bad) violations.push(`(h) ${SLICE_ROW}: '${c}' must be a non-negative integer in the baseline`);
+  return bad.length ? `${bad.length} bad entr${bad.length === 1 ? 'y' : 'ies'}` : 'measured by `ratchet.mjs slices`';
+}
+
+/** `{crate: sorted ["file:line:col", ...]}` from clippy's JSON lines: only
+ *  string_slice messages, one entry per distinct primary span (lib and bin
+ *  builds can report the same one twice). The crate comes from the span's path. */
+export function sliceSpans(jsonLines) {
+  const seen = {};
+  for (const line of jsonLines.split('\n')) {
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (msg.reason !== 'compiler-message' || msg.message?.code?.code !== SLICE_LINT) continue;
+    const span = msg.message.spans?.find((s) => s.is_primary);
+    const crate = /(?:^|\/)crates\/([^/]+)\//.exec(span?.file_name ?? '')?.[1];
+    if (!crate) continue;
+    (seen[crate] ??= new Set()).add(`${span.file_name}:${span.line_start}:${span.column_start}`);
+  }
+  return Object.fromEntries(Object.entries(seen).map(([c, set]) => [c, [...set].sort()]));
+}
+
+function measureSlices(root, from) {
+  if (from) return sliceSpans(read(path.resolve(from)));
+  const r = spawnSync('cargo', SLICE_CLIPPY, { cwd: root, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
+  if (r.error || r.status !== 0) {
+    console.error(`RED ${SLICE_ROW}: \`cargo clippy\` failed in ${root}: ${r.error?.message ?? r.stderr.trim().split('\n').slice(-15).join('\n')}`);
+    process.exit(1);
+  }
+  return sliceSpans(r.stdout);
+}
+
+function cmdSlices(root, { from, tighten, accept }) {
+  if (tighten && accept !== undefined) {
+    console.error('--tighten and --accept are opposites; pass one');
+    process.exit(1);
+  }
+  const baseline = loadBaseline();
+  const row = baseline.rows?.[SLICE_ROW];
+  if (!row?.armed) {
+    console.error(`row '${SLICE_ROW}' is missing or not armed in the baseline`);
+    process.exit(1);
+  }
+  if (accept !== undefined && reasonIsWeak(accept, SLICE_ROW)) {
+    console.error(
+      `reason too weak: needs >= ${WEAK_REASON_MIN_LENGTH} characters, and can't be just the row name ` +
+      `or one of ${[...WEAK_REASON_WORDS].join(', ')} — say what changed and why.`,
+    );
+    process.exit(1);
+  }
+  const spans = measureSlices(root, from);
+  const base = row.value ?? {};
+  const over = [];
+  const lowered = [];
+  for (const c of SLICE_CRATES) {
+    const n = spans[c]?.length ?? 0;
+    const b = base[c];
+    if (b === undefined || n > b) over.push(c);
+    else if (n < b) lowered.push(c);
+    const first = (spans[c] ?? []).slice(0, 5).join(', ');
+    console.log(`  ${n > (b ?? 0) ? 'RED' : 'OK '} ${c.padEnd(12)} ${n} string slices (baseline ${b ?? 'none'})${n > (b ?? 0) ? `; first: ${first}` : ''}`);
+  }
+
+  if (accept !== undefined) {
+    if (!over.length) {
+      console.error('nothing to accept: no crate is over its baseline');
+      process.exit(1);
+    }
+    for (const c of over) base[c] = spans[c]?.length ?? 0;
+    row.value = base;
+    saveBaseline(baseline);
+    printTrailers(SLICE_ROW, over, accept);
+    return;
+  }
+  if (tighten) {
+    for (const c of lowered) base[c] = spans[c]?.length ?? 0;
+    if (lowered.length) saveBaseline(baseline);
+    console.log(lowered.length ? `tightened: ${lowered.join(', ')}` : 'baseline already tight — no changes written.');
+    if (over.length) {
+      console.log(`REFUSED to raise ${over.join(', ')} — tighten NEVER raises; fix the code or use 'slices --accept "<reason>"'`);
+      process.exit(1);
+    }
+    return;
+  }
+  if (over.length) {
+    console.log(`\nRED ${SLICE_ROW}: ${over.join(', ')} over baseline — a byte-index slice panics off a character boundary; use \`.get(..)\`, \`char_indices\` or \`split_at_checked\`.`);
+    process.exit(1);
+  }
+  console.log('\nGREEN — string slices within baseline.');
 }
 
 // ---------------------------------------------------------------------------
@@ -1357,6 +1824,9 @@ function main(argv) {
   let root = process.cwd();
   let range;
   let checkOnly = false;
+  let from;
+  let tighten = false;
+  let accept;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--root') root = path.resolve(args[++i]);
     else if (args[i] === '--path') {
@@ -1367,6 +1837,9 @@ function main(argv) {
       only.push(args[++i]);
     } else if (args[i] === '--range') range = args[++i];
     else if (args[i] === '--check') checkOnly = true;
+    else if (args[i] === '--from') from = args[++i];
+    else if (args[i] === '--tighten') tighten = true;
+    else if (args[i] === '--accept') accept = args[++i] ?? '';
     else positional.push(args[i]);
   }
   const cmd = positional[0];
@@ -1377,8 +1850,9 @@ function main(argv) {
     if (range) cmdVerifyAcceptsRange(root, range);
     else cmdVerifyAccepts(root, positional[1]);
   } else if (cmd === 'docs') cmdDocs(root, { check: checkOnly });
+  else if (cmd === 'slices') cmdSlices(root, { from, tighten, accept });
   else {
-    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts|docs> [args] [--path <file>]... [--range <A>..<B>] [--check] [--root <path>]');
+    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts|docs|slices> [args] [--path <file>]... [--range <A>..<B>] [--check] [--root <path>]');
     process.exit(1);
   }
 }

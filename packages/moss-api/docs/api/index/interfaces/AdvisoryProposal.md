@@ -6,7 +6,7 @@ A plugin's PROPOSED advisory (pre-clamp). Mirrors the Rust
 `plugins::types::PluginAdvisory` wire shape exactly so it deserializes
 directly into `PluginTaskLifecycle::Succeeded/Failed { advisories }`. moss
 is the only constructor of a final `Advisory` — a plugin can never hand moss
-one (R13).
+one.
 
 ## Properties
 
@@ -50,7 +50,7 @@ Which axis of the system this advisory is about.
 severity: AdvisorySeverity;
 ```
 
-The severity the plugin REQUESTS. moss clamps it (R13).
+The severity the plugin REQUESTS. moss clamps it.
 
 ***
 

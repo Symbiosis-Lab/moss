@@ -16,6 +16,8 @@ const { baseURL, close } = noArgs ? await resolveBaseURL() : { baseURL: null, cl
 const bases = (noArgs ? [baseURL] : process.argv.slice(2)).map(arg => new URL(arg));
 const engines = await loadPlaywright();
 const engineNames = (process.env.ENGINE || 'chromium,webkit').split(',');
+// How long a playing video gets to climb its ladder: a few segments from a local server.
+const VIDEO_CLIMB_BOUND_MS = 20000;
 
 // Each locale's Get Started section root. Pages inside are discovered by
 // walking moss's own generated series-nav (prev/next), not hardcoded here,
@@ -85,6 +87,20 @@ async function auditPage(page, url) {
     });
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(500);
+    // A ladder opens on the rung its first bandwidth guess affords and climbs
+    // only while playing, so a paused click-to-play video reports that guess
+    // (in WebKit, narrower than its box). Play each muted until its picture
+    // fills its box or the bound runs out; `resize` fires on each rung change.
+    await page.evaluate((bound) => Promise.all([...document.querySelectorAll('article video')].map((video) => new Promise((done) => {
+      const sharp = () => video.videoWidth >= Math.round(video.getBoundingClientRect().width);
+      if (sharp()) return done();
+      const finish = () => { clearTimeout(timer); video.removeEventListener('resize', check); done(); };
+      const check = () => { if (sharp()) finish(); };
+      const timer = setTimeout(finish, bound);
+      video.addEventListener('resize', check);
+      video.muted = true;
+      video.play().catch(() => {});
+    }))), VIDEO_CLIMB_BOUND_MS);
     const media = await page.evaluate(() => {
       const describe = (el) => {
         const rect = el.getBoundingClientRect();

@@ -435,11 +435,26 @@ pub struct DateSortKey<'a> {
     pub is_folder: bool,
     pub label: &'a str,
     pub url_path: &'a str,
+    /// The page's `weight:`; it orders entries that share a date.
+    pub weight: Option<i32>,
+}
+
+/// `weight:` order: lower first, weighted before unweighted, two unweighted equal.
+fn cmp_weight(a: Option<i32>, b: Option<i32>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(aw), Some(bw)) => aw.cmp(&bw),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
 }
 
 /// The one date-axis order. A folder's listing and its series chain both
 /// sort through here, so a reader walking the chain meets the pages in the
 /// order the folder's page lists them.
+///
+/// Entries with one date go by [`cmp_weight`]; without weights the url path
+/// below settles them.
 ///
 /// Newest first when `ascending` is false (the `Date` axis), oldest first
 /// when true (`DateAsc`); dated entries always sort before undated ones,
@@ -452,7 +467,7 @@ pub struct DateSortKey<'a> {
 pub fn cmp_date_axis(a: &DateSortKey<'_>, b: &DateSortKey<'_>, ascending: bool) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a.date, b.date) {
-        (Some(ad), Some(bd)) => if ascending { ad.cmp(bd) } else { bd.cmp(ad) },
+        (Some(ad), Some(bd)) => (if ascending { ad.cmp(bd) } else { bd.cmp(ad) }).then_with(|| cmp_weight(a.weight, b.weight)),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => b.is_folder.cmp(&a.is_folder).then_with(|| cmp_labels(a.label, b.label)),
@@ -472,17 +487,14 @@ where
         is_folder: d.is_folder_index(),
         label: d.label(),
         url_path: d.url_path(),
+        weight: d.weight(),
     };
     let axis_cmp = |a: &&'a D, b: &&'a D| -> std::cmp::Ordering {
         match resolved.axis {
             SortAxis::Date => cmp_date_axis(&date_key(a), &date_key(b), false),
             SortAxis::DateAsc => cmp_date_axis(&date_key(a), &date_key(b), true),
-            SortAxis::Weight => match (a.weight(), b.weight()) {
-                (Some(aw), Some(bw)) => aw.cmp(&bw),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.clean_stem().cmp(b.clean_stem()),
-            },
+            SortAxis::Weight => cmp_weight(a.weight(), b.weight())
+                .then_with(|| if a.weight().is_none() { a.clean_stem().cmp(b.clean_stem()) } else { std::cmp::Ordering::Equal }),
             SortAxis::Title => cmp_labels(a.label(), b.label()),
         }
         // Same settlement on every axis: two pages with one weight or one

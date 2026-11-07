@@ -18,8 +18,8 @@
 //!
 //! The last two are state handoffs rather than events, which is why they are
 //! not a fold onto `BuildReporter`: a reporter that adopted manifests would be
-//! exactly the grab-bag the abort-threshold rule exists to catch. This trait moving ratchet
-//! row (o) is that threshold doing its job — the raise is logged in the
+//! exactly the grab-bag the abort-threshold rule exists to catch. This trait widening the seam
+//! is that threshold doing its job — the raise is logged in the
 //! baseline's `accepts[]` with this module as the reason.
 //!
 //! Implementations: `events::AppAnnouncer` (webviews + `AppState`),

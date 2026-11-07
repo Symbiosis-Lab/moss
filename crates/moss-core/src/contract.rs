@@ -5,7 +5,7 @@
 //! - [`components`]: emitter contract — class names, data attributes, examples
 //!
 //! Consumed by the codegen binary in the desktop app (`generate-artifacts`),
-//! by `moss describe` (Phase 2), and by snapshot tests.
+//! by `moss describe` and by snapshot tests.
 
 pub mod tokens;
 pub mod components;

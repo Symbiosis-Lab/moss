@@ -1387,8 +1387,8 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * future Inline/Narrated/Awaiting renderers) filter on `payload.tone`
  * and `payload.scope` to decide whether to react.
  * 
- * Added in T2 (2026-05-28) — T1 deferred the wire bridge because
- * `PanelTask` contains `Instant`; `PanelTaskWire` strips it. See the
+ * `PanelTask` contains `Instant`, so the wire carries
+ * `PanelTaskWire`, which strips it. See the
  * module docstring in `tasks.rs` for the full rationale.
  */
 { kind: "PanelTaskUpdate"; payload: PanelTaskWire } | 
@@ -1427,15 +1427,15 @@ path: string } } |
  */
 { kind: "OutsideEditKept"; payload: { path: string; version_id: string } } | 
 /**
- * Onboarding T9: ask the app shell (main webview) to open the plugin
+ * Ask the app shell (main webview) to open the plugin
  * catalog filtered to importers. Produced by the editor webview's
  * "Plugin" card; consumed by `app.ts`'s `onMossEvent("OpenPluginsView", …)`
  * listener which opens the settings modal at the `channels` section.
  * 
  * **Routed via `emit_to("main", …)` — NOT broadcast.** Tauri webviews
  * are isolated `Window` instances; a `window.dispatchEvent` from the
- * editor webview never reaches the main webview's listener, so the
- * previous T9 implementation (a `CustomEvent`) silently no-op'd.
+ * editor webview never reaches the main webview's listener, so a
+ * `CustomEvent` would silently no-op.
  * `app.emit_to("main", …)` is the supported cross-webview path.
  * See project memory: "NEVER use `app.emit()` broadcast".
  */
@@ -1488,8 +1488,6 @@ folder_path: string } } |
  * 
  * `project_path` lets the frontend tie the signal to the correct folder
  * and verify it hasn't been superseded by a folder switch.
- * 
- * Design: Phase 4b B3.
  */
 { kind: "MattersNeedsConnection"; payload: { project_path: string } } | 
 /**
@@ -1710,6 +1708,12 @@ is_article: boolean;
  */
 syndicated?: string[]; 
 /**
+ * The channels this article's copies go to, its folder's cascade applied:
+ * what `syndicated` will list once they are sent. `None` when neither the
+ * page nor a folder names any; empty for `syndicate: false`.
+ */
+syndicate?: string[] | null; 
+/**
  * What an author would create to take over this page when moss generates
  * it — a home note for an index-less folder or the root, a claim file
  * for an unclaimed term, a translation for a language home. `None` for
@@ -1813,7 +1817,7 @@ amount: Amount | null;
  */
 elapsed_ms: number | null; 
 /**
- * Parent Job id for sub-jobs (media under Build, Phase 4).
+ * Parent Job id for sub-jobs (media under Build).
  */
 parent: string | null; state: TaskState }
 
@@ -2200,7 +2204,12 @@ moved_to?: string | null;
  * old to name folder files. It is what tells "still in your folder but no
  * longer published" from "no longer produced".
  */
-source?: string | null }
+source?: string | null; 
+/**
+ * The site setting that stopped this generated file, when one did. Such
+ * a removal is `AuthorRemoved`: the owner's act, like deleting a source.
+ */
+withdrawn_by?: WithdrawnBy | null }
 
 export type RenameArgs = { oldPath: VaultPath; newPath: VaultPath }
 
@@ -2742,7 +2751,6 @@ export type TaskState = { state: "running"; fraction: number | null; message: st
  * `action` (Step 3 R3, typed) is the recovery affordance the Awaiting
  * renderer paints next to the directive. `Action::None` is a bare
  * cancel; `InApp`/`Command`/`Link` carry a labelled recovery control.
- * Replaces the legacy stringly `EscapeAction` grammar (deleted Phase 6).
  */
 { state: "awaiting"; directive: string; action: Action } | 
 /**
@@ -3189,6 +3197,24 @@ page: string | null; allowedKinds: ExtKind[] | null }
  * accidental swaps with other string identifiers (site_id, label, etc.).
  */
 export type WindowId = string
+
+/**
+ * A site setting that stops a generated file on purpose.
+ */
+export type WithdrawnBy = 
+/**
+ * AI answers are asked not to use the pages, so there is no `llms.txt`.
+ */
+"ai_answers" | 
+/**
+ * No search or AI switch is set any more, so there is no `tdmrep.json`.
+ */
+"ai_switches" | 
+/**
+ * `[site].selection_tools` is off, so there is no Share and no QR code
+ * for its picture.
+ */
+"selection_tools"
 
 export type WriteEditorFileBinaryArgs = { relativePath: VaultPath; dataBase64: string }
 

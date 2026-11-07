@@ -328,7 +328,8 @@ pub struct ReviewArticleInput {
 ///
 /// **`pub(in crate::build::features)` — do not widen.** Blocking network I/O.
 /// Always go through
-/// [`crate::build::features::sync::spawn_native_process_sync`].
+/// [`crate::build::features::sync::start_background_sync`] or
+/// `refresh_comments_for_exiting_build`.
 pub(in crate::build::features) fn process_reviews(
     project_path: &str,
     articles: &[ReviewArticleInput],
@@ -477,9 +478,9 @@ pub fn render_colophon(
         } else {
             format!("/{}", cover) // allow:served-path-url-construct (user-content cover image path from article frontmatter)
         };
-        // Phase 1 B1 (2026-05-25): adapt the Option<&MediaDimensionLookup>
-        // call to the new AssetSnapshot contract. Empty snapshot when the
-        // caller has no manifest preserves the prior `None` lookup semantics.
+        // Adapt the Option<&MediaDimensionLookup> to the AssetSnapshot
+        // contract. An empty snapshot when the caller has no manifest
+        // means no dimension lookup.
         // BUG 6: the snapshot indexes under the lookup's real `dir_overrides`
         // (uniform with the other FolderCardCover paths), so a colophon cover
         // under an overridden dir (e.g. CJK `图片/` → `image/`) resolves to its

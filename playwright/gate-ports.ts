@@ -67,7 +67,9 @@ const GATE_PORT_KEYS = [
   'grid-mobile-collapse',
   'collage',
   'card-cover-ratio',
+  'card-cover-auto',
   'lead-listing',
+  'listing-picture-strip',
   'grid-card-image-inline-size',
   'hero-caption',
   'content-width-escape',
@@ -82,7 +84,10 @@ const GATE_PORT_KEYS = [
   'iframe-open-url',
   'place-map-tokens',
   'place-map-align',
+  'place-map-cut',
+  'cluster-layer-zoom',
   'country-map',
+  'country-map-interaction',
   'preview-parity-gate:static',
   'preview-parity-gate:preview',
   'header-hit-areas',
@@ -92,6 +97,7 @@ const GATE_PORT_KEYS = [
   'touch-targets:footer-md',
   'touch-targets:footer-fallback',
   'place-map-route',
+  'place-dot-links',
   'places-explorer-boot',
   'places-explorer-camera',
   'places-explorer-ring',
@@ -144,6 +150,8 @@ const GATE_PORT_KEYS = [
   'diagrams',
   'archival-footer',
   'type-defaults',
+  'closing-picture:wordless',
+  'hero-links',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

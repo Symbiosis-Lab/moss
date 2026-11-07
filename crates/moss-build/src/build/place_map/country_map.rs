@@ -14,6 +14,7 @@ pub(crate) mod matching;
 pub(crate) mod projection;
 pub(crate) mod render;
 pub(crate) mod resolve;
+pub(crate) mod search;
 pub(crate) mod shapes;
 pub(crate) mod spec;
 

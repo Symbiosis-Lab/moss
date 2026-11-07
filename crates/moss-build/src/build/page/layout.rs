@@ -35,6 +35,9 @@ pub struct LayoutConfig {
     /// since 2026-08-30, explicit opt-in). Site-level for the same reason as
     /// `math`: the island is chrome, present on every breadcrumbed page or none.
     pub floating_nav: bool,
+    /// What the site asks of search engines and AI; read here for the robots
+    /// meta tag every page carries.
+    pub ai: crate::build::feeds::robots::AiSettings,
     /// `[site].colophon` — whether moss's credit line is emitted (default ON).
     pub colophon: bool,
     /// `[site].credit` — the site's own line before the colophon's mark.
@@ -54,6 +57,8 @@ pub struct LayoutConfig {
     /// Term kinds that asked for a nav-bar entry (`[terms.<key>] nav = true`)
     /// and have a root page, one entry per edition, in config order.
     pub term_nav: Vec<crate::build::terms::TermNavEntry>,
+    /// `[site].me` as ready-to-place `<link rel="me">` tags, or `""`.
+    pub profile_links: String,
 }
 
 impl LayoutConfig {
@@ -81,13 +86,21 @@ impl LayoutConfig {
                 ..SiteAssets::default()
             },
             floating_nav: false,
+            ai: Default::default(),
             colophon: true,
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             lang_tag: "en".to_string(),
             place_maps: None,
             term_nav: Vec::new(),
+            profile_links: String::new(),
         }
+    }
+
+    /// Set the `rel="me"` head links — see [`Self::profile_links`].
+    pub fn with_profile_links(mut self, profile_links: String) -> Self {
+        self.profile_links = profile_links;
+        self
     }
 
     /// Set the term kinds that are nav-bar entries — see [`Self::term_nav`].
@@ -157,6 +170,12 @@ impl LayoutConfig {
     /// Set the site-wide floating-nav preference (`[site].floating_nav`, default false)
     pub fn with_floating_nav(mut self, floating_nav: bool) -> Self {
         self.floating_nav = floating_nav;
+        self
+    }
+
+    /// Set what the site asks of search engines and AI.
+    pub fn with_ai(mut self, ai: crate::build::feeds::robots::AiSettings) -> Self {
+        self.ai = ai;
         self
     }
 

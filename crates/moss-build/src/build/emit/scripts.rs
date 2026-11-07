@@ -5,7 +5,7 @@
 //! line 1020 and an `if gate { BuildContext::…emit(…) }` block near line 2820,
 //! 1,800 lines apart, with the `<script>` tag built in a third file. Adding an
 //! eighth (`share-card`) that way is exactly the "more code in `blocking.rs`"
-//! NORTH-STAR's interception rule forbids.
+//! the `emit/` layout exists to prevent.
 //!
 //! ## What this module owns, and what it does not
 //!
@@ -60,7 +60,8 @@ pub enum Load {
 
 /// One runtime script and the fact that turns it on.
 pub struct SiteScript {
-    /// Basename. Becomes `_moss/js/<name>.<hash>.js`.
+    /// Basename. Becomes `_moss/js/<name>.<hash>.js`, and for a lazy script
+    /// also its pointer's attribute, `data-<name>`, which its reader looks up.
     pub name: &'static str,
     /// Path under this crate for dev hot-reload via [`load_js_asset`].
     pub dev_path: &'static str,
@@ -75,7 +76,7 @@ pub struct SiteScript {
 
 /// Every script moss emits into `_moss/js/`.
 ///
-/// A registration table in the NORTH-STAR pattern-glossary #2 sense; sibling
+/// A registration table; sibling
 /// of `emit::stylesheet::CSS_PARTIALS` and `emit::feature_styles::FEATURE_STYLES`.
 /// Totality test: `scripts_tests::every_embedded_script_has_a_row`.
 pub const SITE_SCRIPTS: &[SiteScript] = &[
@@ -96,6 +97,14 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         dev_path: "src/assets/js/preview.js",
         source: || include_str!("../../assets/js/preview.js"),
         gate: |a| a.link_preview,
+        load: Load::Shell { defer: false },
+    },
+    SiteScript {
+        name: "selection",
+        dev_path: "src/assets/js/selection.js",
+        source: || include_str!("../../assets/js/selection.js"),
+        // Comment on selected text rides the same popover as Share and Copy.
+        gate: |a| a.selection_tools || a.selection_comments,
         load: Load::Shell { defer: false },
     },
     SiteScript {
@@ -173,10 +182,8 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         name: "share-card",
         dev_path: "src/assets/js/share-card/share-card.js",
         source: || include_str!("../../assets/js/share-card/share-card.js"),
-        // Rides theme.js, which is unconditional: `selection-actions.ts` wires
-        // the Share button on every page, so the chunk must be fetchable from
-        // every page. Gating it would mean gating the button.
-        gate: |_| true,
+        // Share is the chunk's only caller.
+        gate: |a| a.selection_tools,
         load: Load::Lazy,
     },
     SiteScript {
@@ -278,6 +285,29 @@ impl ScriptAssets {
             .iter()
             .filter(|(script, _, _)| matches!(script.load, Load::Shell { .. }))
             .map(|(script, _, hash)| tag_for(script, hash, assets, resolver))
+            .collect()
+    }
+
+    /// The lazy-chunk pointers carried by the theme `<script>` tag, one
+    /// `data-<name>` per lazy script whose gate is on.
+    ///
+    /// A lazy chunk is content-hashed, so the source that `import()`s it
+    /// cannot name it and reads the URL off this tag instead (`loadShareCard`
+    /// in `selection-actions.ts`, `hls-boot.ts`). Attributes on an existing
+    /// tag rather than extra `<script>`s: the values are build-global, so they
+    /// do not trip the preview morph-guard's `scriptsDiffer` reload. The gate
+    /// that decides the file decides the attribute, so none names a chunk
+    /// this build did not emit.
+    pub fn lazy_chunk_attrs(&self, assets: &SiteAssets) -> String {
+        self.resolved
+            .iter()
+            .filter(|(script, _, _)| script.load == Load::Lazy && (script.gate)(assets))
+            .map(|(script, _, hash)| {
+                let url = ServedPath::for_runtime_js_hashed(script.name, hash)
+                    .expect("SITE_SCRIPTS names are valid")
+                    .to_relative_url();
+                format!(" data-{}=\"{url}\"", script.name)
+            })
             .collect()
     }
 

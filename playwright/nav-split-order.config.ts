@@ -2,9 +2,9 @@
  * Render gate for the split masthead's row order.
  *
  * Runs tests/render-gates/site/nav-split-order.spec.ts in BOTH chromium and
- * webkit against a scratch site with three nav items, a long site name, and
- * a places root. Row placement depends on measured widths, so only a real
- * layout engine can tell whether the toggles landed on the links' row.
+ * webkit against a scratch site with seven nav items, a long site name, a
+ * places root and a three-crumb breadcrumb page. Row placement depends on measured widths, so only a real
+ * layout engine can tell which row the toggles landed on.
  *
  * Prereq: `cargo build -p moss-cli` must have produced target/debug/moss-cli.
  *

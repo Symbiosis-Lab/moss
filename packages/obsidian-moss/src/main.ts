@@ -6,6 +6,7 @@
 // the CLI bridge: Build/Preview commands that run `moss build` against the
 // vault and show the preview server in a right-leaf iframe pane.
 import { FileSystemAdapter, Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import { shell } from "electron";
 import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -16,12 +17,15 @@ import {
   findMossBinary,
   MOSS_HEALTH_MARKER,
   MOSS_HEALTH_PATH,
+  publishInAppUrl,
   splitFlags,
   type DetectEnv,
 } from "./cli";
 import { frontmatterExtension } from "./cm-frontmatter";
+import { agentFoldersFor, firstBuildMessage, isInICloud } from "./first-build";
+import { FirstBuildModal } from "./first-build-modal";
 import { MossFieldSuggest } from "./field-suggest";
-import { MossPreviewView, MOSS_PREVIEW_VIEW_TYPE } from "./preview-view";
+import { MossPreviewView, MOSS_PREVIEW_VIEW_TYPE, PREVIEW_STOPPED } from "./preview-view";
 import { MossProcess, type SpawnFn } from "./process";
 import { parseDescribeJson, type MossSchema } from "./schema";
 import { DEFAULT_SETTINGS, MossSettingTab, type MossSettings } from "./settings";
@@ -34,6 +38,10 @@ export default class MossPlugin extends Plugin {
   private mossProcess = new MossProcess(spawn as unknown as SpawnFn);
   private statusEl: HTMLElement | null = null;
   private previewUrl: string | null = null;
+  /** True while the running process is a preview server, not a one-off build. */
+  private previewing = false;
+  /** Bumped per preview run, so a stopped run's late exit cannot clear a newer one. */
+  private previewRun = 0;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -44,13 +52,14 @@ export default class MossPlugin extends Plugin {
     this.registerEditorSuggest(new MossFieldSuggest(this, () => this.schema));
 
     // Preview pane.
-    this.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf));
+    // Closing the pane stops its server: nothing else shows it is running.
+    this.registerView(MOSS_PREVIEW_VIEW_TYPE, (leaf) => new MossPreviewView(leaf, () => this.stopPreview(false)));
 
     // CLI bridge.
     this.addCommand({
       id: "build",
       name: "Build site",
-      callback: () => this.runBuild(),
+      callback: () => void this.runBuild(),
     });
     this.addCommand({
       id: "preview",
@@ -60,7 +69,12 @@ export default class MossPlugin extends Plugin {
     this.addCommand({
       id: "stop-preview",
       name: "Stop preview server",
-      callback: () => this.stopPreview(),
+      callback: () => this.stopPreview(true),
+    });
+    this.addCommand({
+      id: "publish-in-app",
+      name: "Publish with the moss app",
+      callback: () => this.publishInApp(),
     });
 
     this.statusEl = this.addStatusBarItem();
@@ -148,7 +162,26 @@ export default class MossPlugin extends Plugin {
   // ------------------------------------------------------------------
   // Build / preview
 
-  private runBuild(): void {
+  /**
+   * True once the owner agrees to a first build, or at once when the vault is
+   * already a moss site. A first build edits notes (it adds `uid:` lines) and
+   * creates folders, so it is never started without saying so.
+   */
+  private async confirmFirstBuild(vault: string): Promise<boolean> {
+    if (await this.app.vault.adapter.exists(".moss")) return true;
+    const notesGainingUid = this.app.vault.getMarkdownFiles().filter((file) => {
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      return fm !== undefined && !("uid" in fm);
+    }).length;
+    const lines = firstBuildMessage({
+      notesGainingUid,
+      agentFolders: agentFoldersFor((p) => fs.existsSync(p), vault, os.homedir(), path.sep),
+      inICloud: isInICloud(vault),
+    });
+    return new Promise((resolve) => new FirstBuildModal(this.app, lines, resolve).open());
+  }
+
+  private async runBuild(): Promise<void> {
     const binary = this.requireBinary();
     const vault = this.vaultPath();
     if (!binary || !vault) return;
@@ -156,6 +189,7 @@ export default class MossPlugin extends Plugin {
       new Notice("moss is already running. Stop the preview server first.");
       return;
     }
+    if (!(await this.confirmFirstBuild(vault))) return;
     this.setStatus("building…");
     new Notice("moss: building site…");
     this.mossProcess.start(binary, buildArgs(vault, { extraFlags: splitFlags(this.settings.extraFlags) }), vault, {
@@ -187,11 +221,14 @@ export default class MossPlugin extends Plugin {
       if (this.previewUrl) view?.setUrl(this.previewUrl);
       return;
     }
+    if (!(await this.confirmFirstBuild(vault))) return;
 
     const view = await this.openPreviewLeaf();
     view?.showMessage("Building site…");
     this.setStatus("building…");
 
+    this.previewing = true;
+    const run = ++this.previewRun;
     let sawUrl = false;
     this.mossProcess.start(
       binary,
@@ -216,9 +253,12 @@ export default class MossPlugin extends Plugin {
           new Notice(`moss: ${count} problem${count === 1 ? "" : "s"} reported — site still generated.`, 8000);
         },
         onExit: (code) => {
+          if (run !== this.previewRun) return;
+          this.previewing = false;
           this.previewUrl = null;
           if (code !== 0 && code !== null) this.setStatus("error");
           else this.setStatus("idle");
+          this.openPreviewView()?.showMessage(PREVIEW_STOPPED);
         },
       },
     );
@@ -243,15 +283,35 @@ export default class MossPlugin extends Plugin {
     }
   }
 
-  private stopPreview(): void {
-    if (!this.mossProcess.running) {
-      new Notice("moss: no preview server running.");
+  /** `announce` is false when the pane closed itself and there is nothing to say. */
+  private stopPreview(announce: boolean): void {
+    if (!this.previewing) {
+      if (announce) new Notice("moss: no preview server running.");
       return;
     }
     this.mossProcess.stop();
+    this.previewing = false;
     this.previewUrl = null;
     this.setStatus("idle");
-    new Notice("moss: preview server stopped.");
+    this.openPreviewView()?.showMessage(PREVIEW_STOPPED);
+    if (announce) new Notice("moss: preview server stopped.");
+  }
+
+  private publishInApp(): void {
+    const vault = this.vaultPath();
+    if (!vault) return;
+    new Notice(
+      "Opening this vault in the moss app, where you publish it. moss publishes every note in the vault except those marked draft: true.",
+      10000,
+    );
+    shell.openExternal(publishInAppUrl(vault)).catch(() => {
+      new Notice("The moss app is not installed. Get it from mosspub.com to publish this vault.", 10000);
+    });
+  }
+
+  private openPreviewView(): MossPreviewView | null {
+    const view = this.app.workspace.getLeavesOfType(MOSS_PREVIEW_VIEW_TYPE)[0]?.view;
+    return view instanceof MossPreviewView ? view : null;
   }
 
   private async openPreviewLeaf(): Promise<MossPreviewView | null> {

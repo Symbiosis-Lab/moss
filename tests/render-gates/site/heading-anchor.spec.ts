@@ -151,4 +151,48 @@ test.describe("heading anchor", () => {
     await heading.hover();
     await expect(anchor).toHaveCSS("opacity", "1");
   });
+
+  test("the mark sits on the baseline of the heading's first line", async ({ page }) => {
+    // A zero-size inline-block's bottom edge is its line's baseline, so a
+    // probe at the start of the heading's text and one inside the permalink
+    // give the two baselines without reading glyph metrics.
+    const baselines = (selector: string) =>
+      page.locator(selector).evaluateAll((headings) =>
+        headings.map((h) => {
+          const probe = () => {
+            const p = document.createElement("span");
+            p.style.cssText = "display:inline-block;width:0;height:0";
+            return p;
+          };
+          const a = h.querySelector(".moss-heading-anchor")!;
+          const text = probe();
+          const mark = probe();
+          h.insertBefore(text, h.firstChild);
+          a.insertBefore(mark, a.firstChild);
+          const out = { text: text.getBoundingClientRect().bottom, mark: mark.getBoundingClientRect().bottom };
+          text.remove();
+          mark.remove();
+          return out;
+        }),
+      );
+
+    // A ruled heading, as a theme draws one: padding and a border above the text.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/page/");
+    await page.addStyleTag({
+      content: "h2{padding-block-start:1.25rem;border-block-start:2px solid #888;line-height:1.4}",
+    });
+    for (const b of await baselines("h2#introduction")) {
+      expect(Math.abs(b.mark - b.text), "ruled h2").toBeLessThanOrEqual(1);
+    }
+
+    // Headings that wrap on a phone: the mark stays on the first line.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/edge/");
+    const wrapped = await baselines("article h2:has(> .moss-heading-anchor)");
+    expect(wrapped.length).toBeGreaterThan(3);
+    for (const b of wrapped) {
+      expect(Math.abs(b.mark - b.text), "wrapped h2").toBeLessThanOrEqual(1);
+    }
+  });
 });

@@ -48,7 +48,7 @@ test("fits a phone without horizontal scroll", async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test("a tap and a list row open the panel; Esc closes it", async ({ page }) => {
+test("a tap and a list row from the keyboard open the panel; Esc closes it", async ({ page }) => {
   await page.goto("/");
   await page.locator('.moss-country[data-slug="japan"]').click();
   const panel = page.locator(".moss-country-panel");
@@ -57,7 +57,9 @@ test("a tap and a list row open the panel; Esc closes it", async ({ page }) => {
   await expect(panel).toContainText("Calm.");
   await page.keyboard.press("Escape");
   await expect(panel).toBeHidden();
-  await page.locator('.moss-country-list a[href="#mexico"]').click();
+  const row = page.locator('.moss-country-list a[href="#mexico"]');
+  await row.focus();
+  await row.press("Enter");
   await expect(panel).toContainText("Take normal precautions.");
   await page.locator('.moss-country[data-slug="chad"]').dispatchEvent("click");
   await expect(panel).toContainText("Not rated");

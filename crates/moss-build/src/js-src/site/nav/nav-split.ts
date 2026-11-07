@@ -1,38 +1,42 @@
 /**
- * nav-split.ts — on a plain-site-name masthead, the nav wraps to a clean two
- * rows: the site name alone on row 1, the links and toggles on row 2.
+ * nav-split.ts — when the masthead runs out of room, the site name (or the
+ * breadcrumb trail) keeps the toggles beside it on row 1 and the links take
+ * row 2 alone.
  *
- * The shipped CSS wraps `.nav-right` (links + toggles, one unit) to row 2 when
- * it can't fit beside `.nav-left`. On breadcrumb pages that is right: the
- * trail fills row 1, and row 2 anchors links at the start edge and toggles at
- * the end edge. But when `.nav-left` is just a short site name, that same
- * wrap leaves row 1 mostly empty and drops the toggle cluster to wherever the
- * last link row ends — chrome appended to a link list it has nothing to do
- * with.
+ * The toggles (search, language, theme) are tools for the whole page, so they
+ * keep the corner the one-row masthead gives them; only the navigation moves.
+ * The shipped CSS cannot do that: it wraps `.nav-right` (links + toggles, one
+ * unit) to row 2 when it can't fit beside `.nav-left`.
  *
- * The wanted two-row order — site name / links + toggles — is a reordering of
- * the one-row sequence (name | links | toggles), and flex wrapping cannot
- * reorder: it places items in sequence and never floats a later sibling back
- * up to an earlier line. So this module measures. When the one-row layout no
- * longer fits, it sets `data-nav-split` on `.nav-content`, and site.css lifts
- * the two groups out of `.nav-right` (`display: contents`) and orders them:
- * the name takes row 1 alone, then the links and the toggles at its end edge
- * share row 2.
+ * The wanted two-row order — name + toggles / links — is a reordering of the
+ * one-row sequence (name | links | toggles), and flex wrapping cannot reorder:
+ * it places items in sequence and never floats a later sibling back up to an
+ * earlier line. So this module measures. When the one-row layout no longer
+ * fits, it sets `data-nav-split` on `.nav-content`, and site.css lifts the two
+ * groups out of `.nav-right` (`display: contents`) and orders them. Focus
+ * order stays the markup's (name, links, toggles), the same at every width.
  *
  * On a phone (up to 48rem), before splitting it tries a tighter single row:
  * `data-nav-compact` draws the outer and toggle gaps in, and the masthead
  * splits only if that still overflows. Wider, a near-fit splits at once.
  *
- * Every measured input — site-name width, per-link widths, toggle-cluster
- * width — is the same in every mode, and the column gaps are re-read after each
- * mode is applied, so the decision cannot oscillate. Sizes are read on the
- * masthead's inline axis; on a vertical page its physical width is its block
- * size, which the split itself changes. Breadcrumb pages and the hamburger range
- * (≤20rem, where the links are an overlay) are left to the shipped CSS
- * untouched. With JS off nothing here runs and the shipped wrap is the
- * fallback, which also leaves the name alone on row 1; a link set that wraps
- * to several lines there holds the toggles at its bottom edge, which is what
- * the split avoids.
+ * In the hamburger range (≤20rem) the links are an overlay and the name stays
+ * beside the menu button and toggles while it reasonably can. A plain name
+ * wraps there (site.css); past two lines, `data-nav-stack` gives it its
+ * one-line width back and the controls go below. A breadcrumb trail is split
+ * beside them while its most-folded form fits, and otherwise keeps the
+ * shipped wrap, with the controls below.
+ *
+ * Every measured input is the same in every mode, so a decision cannot
+ * oscillate: the link and toggle widths are fixed boxes, the column gaps are
+ * re-read after each mode is applied, a breadcrumb trail is measured on a
+ * copy (its live crumbs fold to fit whatever room the split leaves),
+ * and the name's lines are counted with the stack cleared. Sizes are read on
+ * the masthead's inline axis; on a vertical page its physical width is its
+ * block size, which the split itself changes. A theme that keeps `.nav-right`
+ * a box is left to the CSS. With JS off nothing here runs and the shipped
+ * wrap is the fallback: the name alone on row 1, the links and toggles on
+ * row 2.
  */
 
 import { isVertical } from "../writing-mode";
@@ -41,7 +45,7 @@ import { isVertical } from "../writing-mode";
 export interface RowWidths {
   /** The row on offer: `.nav-content`'s content box. */
   container: number;
-  /** The site name at its natural width. */
+  /** The site name, or the whole breadcrumb trail, at its natural width. */
   name: number;
   /** The link set laid on one line: link widths + link gaps. */
   links: number;
@@ -76,10 +80,72 @@ function on(
   teardown.push(() => target.removeEventListener(type, handler, options));
 }
 
-function setMode(el: HTMLElement, mode: "compact" | "split" | null): void {
+function setMode(el: HTMLElement, mode: "compact" | "split" | "stack" | null): void {
   el.removeAttribute("data-nav-split");
   el.removeAttribute("data-nav-compact");
+  el.removeAttribute("data-nav-stack");
   if (mode) el.setAttribute(`data-nav-${mode}`, "");
+}
+
+/**
+ * A breadcrumb trail's extent, read from a max-content copy beside it, out of
+ * flow and invisible, and removed at once. `"natural"`: every crumb, nothing
+ * folded or ellipsised. `"folded"`: the least the fold can leave, which is the
+ * site name, the `…` when there are middles to fold, and the last crumb at its
+ * CSS minimum.
+ */
+export function trailSize(
+  navLeft: HTMLElement,
+  size: (el: HTMLElement) => number,
+  form: "natural" | "folded",
+): number {
+  const copy = navLeft.cloneNode(true) as HTMLElement;
+  const crumbs = [...copy.querySelectorAll<HTMLElement>("[data-trail-crumb]")];
+  const middles = form === "folded" ? crumbs.slice(1, -1) : [];
+  if (middles.length === 0) {
+    copy.querySelectorAll(".moss-breadcrumb-more, [data-trail-more-separator]").forEach((el) => el.remove());
+  }
+  middles.forEach((crumb) => {
+    crumb.nextElementSibling?.remove();
+    crumb.remove();
+  });
+  copy.querySelectorAll("[hidden]").forEach((el) => el.removeAttribute("hidden"));
+  const liveCrumbs = navLeft.querySelectorAll<HTMLElement>("[data-trail-crumb]");
+  const last = crumbs[crumbs.length - 1];
+  if (form === "folded" && last && liveCrumbs.length > 0) {
+    const floor = getComputedStyle(liveCrumbs[liveCrumbs.length - 1]).minInlineSize;
+    last.style.cssText = `flex:none;overflow:hidden;inline-size:${parseFloat(floor) || 0}px`;
+  }
+  copy.setAttribute("aria-hidden", "true");
+  copy.style.cssText = "position:absolute;visibility:hidden;inline-size:max-content;overflow:visible;flex:none";
+  navLeft.after(copy);
+  const extent = size(copy);
+  copy.remove();
+  return extent;
+}
+
+/** How many lines the name's text runs to: rects whose block extents overlap share a line. */
+export function lineCount(extents: Array<[number, number]>): number {
+  let lines = 0;
+  let end = -Infinity;
+  for (const [start, stop] of [...extents].sort((a, b) => a[0] - b[0])) {
+    if (start >= end - 1) {
+      lines += 1;
+      end = stop;
+    } else {
+      end = Math.max(end, stop);
+    }
+  }
+  return lines;
+}
+
+function nameLines(name: HTMLElement, vertical: boolean): number {
+  const range = document.createRange();
+  range.selectNodeContents(name);
+  const extents = [...range.getClientRects()]
+    .filter((r) => (vertical ? r.width : r.height) > 0)
+    .map((r): [number, number] => (vertical ? [r.left, r.right] : [r.top, r.bottom]));
+  return lineCount(extents);
 }
 
 function columnGap(el: Element, fallback: number): number {
@@ -101,29 +167,41 @@ export function initNavSplit(): void {
   const icons = navContent.querySelector<HTMLElement>(".nav-icons");
   const hamburger = navContent.querySelector<HTMLElement>(".mobile-menu-button");
 
-  // Breadcrumb pages keep the shipped layout (the trail owns row 1 — see the
-  // module comment), and a masthead with no link set has nothing to move.
-  if (
-    !navLeft ||
-    !siteName ||
-    !navRight ||
-    !links ||
-    !icons ||
-    links.children.length === 0 ||
-    navLeft.querySelector(".breadcrumb-segment")
-  ) {
+  // A masthead with no link set has nothing to move.
+  if (!navLeft || !siteName || !navRight || !links || !icons || links.children.length === 0) {
     setMode(navContent, null);
     return;
   }
+  const trail = navLeft.querySelector(".breadcrumb-segment") !== null;
 
   function layout(): void {
-    // ≤20rem the links are the hamburger's overlay panel, not a row.
-    if (hamburger && getComputedStyle(hamburger).display !== "none") {
-      setMode(navContent!, null);
-      return;
-    }
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => (vertical ? el.offsetHeight : el.offsetWidth);
+    // A theme that keeps `.nav-right` a box has laid out its own wrap, and
+    // the split's ordering would put the toggles ahead of the links inside it.
+    const split = (): void => {
+      setMode(navContent!, "split");
+      if (getComputedStyle(navRight!).display !== "contents") setMode(navContent!, null);
+    };
+    // ≤20rem the links are the hamburger's overlay panel, not a row: the
+    // menu button stands in for them.
+    if (hamburger && getComputedStyle(hamburger).display !== "none") {
+      setMode(navContent!, null);
+      if (trail) {
+        const beside = oneRowFits({
+          container: vertical ? navContent!.clientHeight : navContent!.clientWidth,
+          name: trailSize(navLeft!, size, "folded"),
+          links: size(hamburger),
+          icons: size(icons!),
+          outerGap: columnGap(navContent!, 0),
+          innerGap: columnGap(navRight!, 0),
+        });
+        if (beside) split();
+      } else if (nameLines(siteName!, vertical) > 2) {
+        setMode(navContent!, "stack");
+      }
+      return;
+    }
     const fitsOneRow = (): boolean => {
       const outerGap = columnGap(navContent!, 0);
       const linkGap = columnGap(links!, 0);
@@ -132,7 +210,7 @@ export function initNavSplit(): void {
       const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
       return oneRowFits({
         container: vertical ? navContent!.clientHeight : navContent!.clientWidth,
-        name: size(siteName!),
+        name: trail ? trailSize(navLeft!, size, "natural") : size(siteName!),
         links: linkWidths.reduce((sum, w) => sum + w, 0) + linkGap * Math.max(0, linkWidths.length - 1),
         icons: size(icons!),
         outerGap,
@@ -146,7 +224,7 @@ export function initNavSplit(): void {
       setMode(navContent!, "compact");
       if (fitsOneRow()) return;
     }
-    setMode(navContent!, "split");
+    split();
   }
 
   // The masthead resizes with the window and with the font arriving; the

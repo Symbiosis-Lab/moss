@@ -76,9 +76,9 @@ pub mod icloud;
 pub mod markdown;
 pub mod media;
 pub mod render;
-// Back-compat shim: video has moved to build::media::video. Remove after Phase 3 generator/ cleanup (Task 11).
+// Back-compat alias for `build::media::video`.
 pub(crate) use media::video;
-// Back-compat shim: image has moved to build::media::image. Remove after Phase 3 generator/ cleanup (Task 11).
+// Back-compat alias for `build::media::image`.
 pub(crate) use media::image;
 pub mod watch;
 pub mod features;
@@ -96,7 +96,6 @@ pub mod ship;
 pub mod terms;
 pub mod place_map;
 pub mod types;
-// New top-level buckets (Task 11 — Phase 3 generator/ redistribution)
 pub mod assets;
 pub mod cache;
 // A file's stat record and the one rule the stat-keyed caches trust it by.
@@ -261,9 +260,8 @@ impl BuildTrigger {
 /// and the closure aliases that travel with them — re-exported at the
 /// historic `crate::build::` spelling its consumers already use.
 ///
-/// The declarations moved into `build/ports/` on 2026-08-27 so ratchet row (o)
-/// can see them; see that module for why the old placement made NORTH-STAR's
-/// abort threshold unfalsifiable.
+/// The declarations live in `build/ports/` so the seam-width ratchet can see
+/// them; see that module for why.
 pub use ports::host::{HostPorts, HostStore, ServerDiff, ServerDiffFuture, ServerFuture};
 
 /// Single configuration struct for all pipeline behavior.
@@ -291,18 +289,19 @@ pub struct PipelineConfig {
     /// flip-flops on disk between those two triggers (the 2026-06-10 email
     /// footer bug).
     pub start_server: bool,
-    /// What the host provides to this build — see [`HostPorts`]. This
-    /// replaced `app: Option<tauri::AppHandle>` (2026-08-27, M6a plan C1).
+    /// What the host provides to this build — see [`HostPorts`].
     pub host: HostPorts,
     /// What triggered this build (watch mode) — see `BuildTrigger`.
     /// Read by `allows_incremental_skip`.
     pub trigger: BuildTrigger,
     /// True when this build is invoked from a process that will exit shortly
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
-    /// callers cannot rely on `spawn_native_process_sync`'s background task
-    /// to populate the link-meta cache — it gets killed before completion.
-    /// When set, the render fetches link metadata for this build's external
-    /// links before it renders them (`build::render::blocking`). Defaults to
+    /// callers cannot rely on a background task to fill the link-meta or
+    /// comment cache — it gets killed before completion. When set, the build
+    /// waits, under time limits, for link metadata (`build::render::blocking`)
+    /// before it renders and for comments
+    /// (`features::sync::refresh_comments_for_exiting_build`) before they are
+    /// read into its pages. Defaults to
     /// `false`; only `start_cli_build` and `build_sync` flip it.
     ///
     /// Note: this is NOT derivable from `progress` or the host ports. The
@@ -1063,26 +1062,25 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // critical path. We spawn them as a background task; their output (written
     // to .moss/data/social/*.json) is read by the NEXT build's enhance phase.
     //
-    // Architectural invariant: `run_pipeline` does no network fetches itself
-    // **except for the link-meta fetch before render (`build::render::blocking`)**, which is gated on
-    // `config.exits_after_build` (CLI / snapshot tests) where there's no
-    // long-lived runtime to host `spawn_native_process_sync`. GUI builds
-    // never fetch inline — the background task handles them async.
-    // If you find yourself wanting to add a NEW network fetch — don't.
-    // Spawn it from `features::sync` so build still returns immediately
+    // Architectural invariant: `run_pipeline` waits on the network only where
+    // `config.exits_after_build` (CLI / snapshot tests) leaves no long-lived
+    // runtime and no next build: the link-meta fetch before render
+    // (`build::render::blocking`) and the comment refresh in the slot resolver
+    // below (it needs this build's article map), both under a time limit. The
+    // refresh runs while the build holds the folder lock, so an app building
+    // the same folder waits on it for up to that limit. GUI builds never
+    // fetch inline — the background task handles them async. If you find yourself wanting to add a NEW network fetch —
+    // don't. Spawn it from `features::sync` so build still returns immediately
     // when the upstream is slow or unreachable.
     //
     // Skipped during SlotsOnly (watch rebuilds) — those run frequently and
     // would otherwise pile up sync tasks. The `features::sync` module also has
     // a per-folder singleflight so even if SlotsOnly's behavior changes, rapid
     // rebuilds don't compound.
-    if !skip_process {
+    if !skip_process && !config.exits_after_build {
         let _trace = PhaseTrace::start("native_process_spawn");
-        let services_config = crate::build::site_config::get_services_config(&folder_path)
-            .unwrap_or_default();
-        crate::build::features::sync::spawn_native_process_sync(
+        crate::build::features::sync::start_background_sync(
             folder_path.clone(),
-            services_config,
             cached_domain_config.clone(),
             // The typed bus, not `config.progress`: this completion event is a
             // frontend signal, and in CLI mode the progress sink prints to
@@ -1142,9 +1140,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // `generate_blocking_content` so pre-finalization native slot collection
     // (`generate_native_slots`) can consult typed feature flags
     // (`features.inline_subscribe`) and reach slot-only files (`footer.md`)
-    // through the same data path the rest of the build uses. Replaces the
-    // pre-PR7b filesystem-scan stand-ins `project_has_inline_subscribe`
-    // and `render_footer_pages_from_disk`.
+    // through the same data path the rest of the build uses.
     //
     // Slots come from moss's own features only — the comment section, the
     // subscribe form, the analytics beacon. A plugin could contribute one
@@ -1152,6 +1148,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // having gone three months with no implementation in any plugin, bundled
     // or WIP.
     let listing_host = (!skip_plugins).then(|| crate::build::emit::listing_style::ListingHost::new(&config.host.plugins, &folder_path));
+    let refresh_comments_first = config.exits_after_build && !skip_process;
     let make_slot_resolver = |folder_path_for_slots: String,
                               cached_domain_config_for_slots: crate::config::deployment::DomainDeploymentConfig,
                               project_structure_for_slots: ProjectStructure|
@@ -1159,6 +1156,14 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         let start_server_for_slots = config.start_server;
         let listing_host = listing_host.clone();
         Box::new(move |pages, site_lang, site_comments| {
+            // The article map this build just wrote names the pages to ask about.
+            if refresh_comments_first {
+                let _refresh_trace = PhaseTrace::start("comment_refresh");
+                crate::build::features::sync::refresh_comments_for_exiting_build(
+                    folder_path_for_slots.clone(),
+                    cached_domain_config_for_slots.clone(),
+                );
+            }
             let _slots_trace = PhaseTrace::start("slot_resolution");
             let mut slots = collect_native_slots_for_documents(
                 &folder_path_for_slots,
@@ -1299,9 +1304,8 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // wait_for_in_flight_work gates on it), awaits await_completion(), writes
     // the SealedManifest to hashes.json, stores it in AppState.current_sealed_manifest,
     // then decrements the counter.
-    // Deploy hard-errors on None (no disk fallback since Stage 0); the
-    // The seal+persist task must populate the slot before Publish is
-    // attempted.
+    // Deploy hard-errors on None (no disk fallback), so the seal+persist task
+    // must populate the slot before Publish is attempted.
 
     let mut media_rerender_owed = false;
     if let Some(handle) = _bg_handle {
@@ -1643,16 +1647,7 @@ pub fn load_article_map_for_features(
                 .and_then(|fm| fm.get("lang"))
                 .and_then(|l| l.as_str())
                 .map(|s| s.to_string()),
-            syndicated: article
-                .get("frontmatter")
-                .and_then(|fm| fm.get("syndicated"))
-                .and_then(|s| s.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            syndicated: crate::build::types::syndicated_urls(article.get("frontmatter").and_then(|fm| fm.get("syndicated"))),
         };
 
         result.insert(uid, info);
@@ -2224,9 +2219,8 @@ pub(crate) fn collect_build_store(
 
     let project_path = mp.project_root().to_string_lossy().to_string();
     // The app resolves the two app-side inputs — the config knob and the
-    // last-deployed pointer — and hands `store_gc` plain data. That is what
-    // keeps the collector tauri-free and mechanically movable into
-    // `crates/moss-build` at M6a.
+    // last-deployed pointer — and hands `store_gc` plain data, which
+    // keeps the collector tauri-free.
     let last_deployed = crate::build::site_config::get_domain_config(&project_path)
         .ok()
         .and_then(|c| c.last_deployed_generation_id);

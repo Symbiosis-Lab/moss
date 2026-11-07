@@ -247,7 +247,7 @@ fn subtitle_line(field: &str, html: &str) -> String {
 }
 
 /// Appends, to each page's card extras, the declared fields with `card = true` that the page has a value for.
-/// Plain text, never a link: a card is already one link. `decls` is in declaration order, which is the drawing order.
+/// Never a link (a text value keeps only inline emphasis): a card is already one link. `decls` is in declaration order, which is the drawing order.
 pub fn set_card_fields(documents: &mut [ParsedDocument], decls: &[FieldDecl], typesetting: Option<&str>) {
     let cards: Vec<&FieldDecl> = decls.iter().filter(|d| d.card).collect();
     if cards.is_empty() {
@@ -258,11 +258,12 @@ pub fn set_card_fields(documents: &mut [ParsedDocument], decls: &[FieldDecl], ty
             .iter()
             .filter_map(|d| {
                 let v = doc.declared.get(&d.name)?;
-                let (name, text) = (html_escape(&d.name), html_escape(&card_text(d, v, doc.lang, typesetting)));
-                // A choice's `data-value` is the slug of its key, as on a placed choice and a term credit; any other value is its own text.
+                let name = html_escape(&d.name);
+                let text = text_html(d, v, doc.lang, typesetting).unwrap_or_else(|| html_escape(&card_text(d, v, doc.lang, typesetting)));
+                // A choice's `data-value` is the slug of its key, as on a placed choice and a term credit; any other value is its own text without markup.
                 let value = match v {
                     TypedValue::Choice { value, .. } => html_escape(&moss_core::terms::term_slug(value)),
-                    _ => text.clone(),
+                    _ => strip_tags(&text),
                 };
                 Some(format!(r#"<span class="moss-card-field" data-field="{name}" data-value="{value}">{text}</span>"#))
             })
@@ -286,10 +287,35 @@ fn card_text(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Opti
     }
 }
 
+/// A text value as inline markup: `*x*`, `_x_`, `**x**` and `` `x` `` become emphasis and code, a link keeps its words and drops its target, the rest is escaped.
+/// The one place a text field's markdown is read, for a card and a placed field alike.
+/// The built-in `title` part of a group stays plain: it is the page's label, not an author's markup.
+fn text_html(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>) -> Option<String> {
+    (matches!(v, TypedValue::Text(_)) && decl.name != "title").then(|| crate::build::page::meta::render_description_html_in_link(&value_text(v, lang, typesetting)))
+}
+
+/// Drops the tags from markup whose text is escaped, so every `<` is a tag's.
+fn strip_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// One value as inline markup.
 fn inline(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> String {
     if let Some(datetime) = datetime_attr(v) {
         return format!("<time datetime=\"{}\">{}</time>", html_escape(&datetime), html_escape(&value_text(v, lang, typesetting)));
+    }
+    if let Some(html) = text_html(decl, v, lang, typesetting) {
+        return html;
     }
     match v {
         TypedValue::Number(n) => format!("<data value=\"{n}\">{}</data>", html_escape(&number_text(n, lang))),

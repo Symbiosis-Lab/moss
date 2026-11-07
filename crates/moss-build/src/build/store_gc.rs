@@ -3,9 +3,9 @@
 //! what a directory holds against its manifest.
 //!
 //! **Pure I/O, no `tauri`, no app-side singletons** — every entry point takes
-//! plain paths and plain data, so this module moves into `crates/moss-build`
+//! plain paths and plain data, so this module stays in `crates/moss-build`
 //! (which owns cache/CAS and lifecycle by charter, and is CI-asserted
-//! tauri-free) unchanged at M6a. Same discipline as `io_utils`, and the reason
+//! tauri-free). Same discipline as `io_utils`, and the reason
 //! the config knob is read by `build::site_config` and passed *in* rather than
 //! looked up here: `config.toml` has one reader by charter.
 //!

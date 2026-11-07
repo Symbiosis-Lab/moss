@@ -150,14 +150,36 @@ pub fn is_raster_picture(path: &str) -> bool {
 /// A page's own first picture as a listing-card source path, or `None`.
 /// Remote, `data:`, vector and video pictures make poor cards, so they are not taken.
 pub fn card_cover_from_page(hero_image_url: Option<&str>, body_cover_path: Option<&str>) -> Option<String> {
-    [hero_image_url, body_cover_path].into_iter().flatten().find_map(|raw| {
-        let (path, _attrs) = moss_core::media::split_pipe(raw);
-        let local = !(path.starts_with("http://") || path.starts_with("https://") || path.starts_with("//") || path.starts_with("data:"));
-        (local && is_raster_picture(path)).then(|| {
-            let decoded = urlencoding::decode(path).map(|d| d.into_owned()).unwrap_or_else(|_| path.to_string());
-            decoded.trim_start_matches('/').to_string()
-        })
+    [hero_image_url, body_cover_path].into_iter().flatten().find_map(card_picture_path)
+}
+
+/// One picture reference as a listing-card source path, or `None` when a card
+/// cannot use it ([`card_cover_from_page`]).
+fn card_picture_path(raw: &str) -> Option<String> {
+    let (path, _attrs) = moss_core::media::split_pipe(raw);
+    let local = !(path.starts_with("http://") || path.starts_with("https://") || path.starts_with("//") || path.starts_with("data:"));
+    (local && is_raster_picture(path)).then(|| {
+        let decoded = urlencoding::decode(path).map(|d| d.into_owned()).unwrap_or_else(|_| path.to_string());
+        decoded.trim_start_matches('/').to_string()
     })
+}
+
+/// The pictures after the listing cover that a strip of `n` draws, in reading
+/// order: the hero picture, then the body's raster pictures, none repeating the
+/// cover or each other. Empty when the page has no listing cover (a page that
+/// opted out with `cover: false` stays out).
+pub fn card_pictures_after_cover(listing_cover: Option<&str>, hero_image_url: Option<&str>, body_images: &[String], n: usize) -> Vec<String> {
+    let Some(cover) = listing_cover else { return Vec::new() };
+    let mut taken = vec![card_picture_path(cover).unwrap_or_else(|| cover.to_string())];
+    for path in hero_image_url.into_iter().chain(body_images.iter().map(String::as_str)).filter_map(card_picture_path) {
+        if taken.len() >= n {
+            break;
+        }
+        if !taken.contains(&path) {
+            taken.push(path);
+        }
+    }
+    taken.split_off(1)
 }
 
 /// Resolve a frontmatter cover string to CoverRef. External http(s) URLs

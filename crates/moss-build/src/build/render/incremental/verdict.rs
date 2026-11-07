@@ -117,6 +117,9 @@ pub enum VerdictBasis {
         /// Pages added because an image they show gained or changed its
         /// dominant colour or LQIP (`listing::image_placeholders`).
         by_image_placeholder: usize,
+        /// Pages unchanged since the last render, which a render after the
+        /// manifest the carry reads from left on the stage.
+        by_unsealed: usize,
     },
 }
 
@@ -177,12 +180,13 @@ impl RenderVerdict {
                 groups,
                 by_dependents,
                 by_image_placeholder,
+                by_unsealed,
             } => log::info!(
                 target: "incremental",
                 "{tracked} tracked pages, {changed} changed ({surface_changed} by surface), \
                  +{by_backlink} by backlink/embed, +{by_listing_group} by listing group \
                  ({groups} groups), +{by_dependents} by surface dependents, \
-                 +{by_image_placeholder} by image placeholder, skipping {}",
+                 +{by_image_placeholder} by image placeholder, +{by_unsealed} not yet sealed, skipping {}",
                 self.skip.len(),
             ),
         }
@@ -204,6 +208,12 @@ pub struct VerdictInputs<'a> {
     pub math: bool,
     /// Term kinds shown in the nav bar — see `LayoutConfig::term_nav`.
     pub term_nav: &'a [crate::build::terms::TermNavEntry],
+    /// This build's render ([`SiteHashes::render_id`]), saved with the cache.
+    ///
+    /// [`SiteHashes::render_id`]: crate::types::content::SiteHashes::render_id
+    pub render_id: Option<&'a str>,
+    /// The render of the manifest a carried page takes its entry from.
+    pub sealed_render_id: Option<&'a str>,
 }
 
 /// Name up to three of the paths behind a full-render cause, sorted so the
@@ -457,6 +467,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         None
     };
 
+    let unsealed = previous.unsealed_pages_since(inputs.sealed_render_id);
     let (skip, basis) = match full_cause {
         Some((cause, witness)) => (HashSet::new(), VerdictBasis::Full(cause, witness)),
         None => {
@@ -581,11 +592,11 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
             let by_image_placeholder = shows_one.len();
             render_set.extend(shows_one);
 
-            let skip: HashSet<String> = current
-                .keys()
-                .filter(|p| !render_set.contains(*p))
-                .cloned()
-                .collect();
+            // A carried page registers `hashes.json`'s entry for bytes the stage
+            // holds, so a page a newer render left there is rendered again.
+            let unchanged: Vec<&String> = current.keys().filter(|p| !render_set.contains(*p)).collect();
+            let skip: HashSet<String> = unchanged.iter().filter(|p| !unsealed.contains(**p)).map(|p| (*p).clone()).collect();
+            let by_unsealed = unchanged.len() - skip.len();
             let basis = VerdictBasis::Incremental {
                 tracked: current.len(),
                 changed: changed.len(),
@@ -595,12 +606,16 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
                 groups: groups.len(),
                 by_dependents,
                 by_image_placeholder,
+                by_unsealed,
             };
             (skip, basis)
         }
     };
 
+    let unsealed: std::collections::BTreeSet<String> =
+        current.keys().filter(|p| unsealed.contains(*p) || !skip.contains(*p)).cloned().collect();
     let new_cache = FacadeCache::from_facades(current)
+        .with_unsealed_pages(inputs.render_id, unsealed)
         .with_asset_versions(inputs.asset_versions.to_string())
         .with_listing_groups(groups.into_map())
         .with_digests(DigestMap::GlobalContributions, contributions)

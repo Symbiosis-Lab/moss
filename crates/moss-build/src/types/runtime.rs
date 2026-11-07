@@ -1,4 +1,4 @@
-//! Live preview/watch/process state — the M6a boundary's "runtime" side.
+//! Live preview/watch/process state — the crate boundary's "runtime" side.
 //!
 //! State the running app owns while a folder is open: preview-server
 //! handles, rebuild and file-watcher coordination, child-process (FFmpeg)

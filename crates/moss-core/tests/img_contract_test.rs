@@ -1,4 +1,4 @@
-//! Phase 2E v5 PR6 — `<img>` contract test, wikilinks half.
+//! `<img>` contract test, wikilinks half.
 //!
 //! Open-half twin of two tests in the desktop app's `img_contract_test.rs`.
 //! That file's `all_parser_new_ext_sites_enable_wikilinks`
@@ -31,7 +31,7 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Phase 3 PR6 — guards every `Parser::new_ext` site in this crate against
+/// Guards every `Parser::new_ext` site in this crate against
 /// forgetting `Options::ENABLE_WIKILINKS`.
 #[test]
 fn all_parser_new_ext_sites_enable_wikilinks() {

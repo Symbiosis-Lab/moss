@@ -1369,24 +1369,8 @@ fn auth_request_body_sends_lang_only_when_valid() {
 
 #[tokio::test]
 async fn a_site_limit_403_through_the_failed_response_path_is_site_limit_reached() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = stream.read(&mut buf).await.unwrap();
-        let body = r#"{"error":"site_limit_reached","limit":2,"contact":"help@example.com"}"#;
-        let resp = format!(
-            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream.write_all(resp.as_bytes()).await.unwrap();
-        stream.shutdown().await.ok();
-    });
-    let client = MossSetaClient::with_url(&format!("http://{}", addr));
-    let err = client
+    let (url, handle) = serve_once(forbidden(r#"{"error":"site_limit_reached","limit":2,"contact":"help@example.com"}"#)).await;
+    let err = MossSetaClient::with_url(&url)
         .request_auth("user@example.com", "pk", "sid", None)
         .await
         .expect_err("a 403 is an error");
@@ -1395,4 +1379,30 @@ async fn a_site_limit_403_through_the_failed_response_path_is_site_limit_reached
         matches!(&err, SetaError::SiteLimitReached { limit: 2, contact: Some(c) } if c == "help@example.com"),
         "{err:?}"
     );
+}
+
+/// A 403 response carrying `body`, for [`serve_once`].
+fn forbidden(body: &str) -> String {
+    format!("HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}", body.len(), body)
+}
+
+/// The refusal a sign-in link lifts is logged at info, so the command line
+/// shows only the "Sent a sign-in link" line and counts no problem; any other
+/// 403 stays a warning. The bodies carry a token of their own: the captured
+/// log is shared by the whole test process.
+#[tokio::test]
+async fn a_refusal_to_verify_the_email_is_no_warning() {
+    use crate::build::cache::tests::logged_count;
+    logged_count(log::Level::Info, "");
+    let (url, handle) = serve_once(forbidden(r#"{"error":"Email verification required (refusal-4b1e)"}"#)).await;
+    let err = MossSetaClient::with_url(&url).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
+    handle.await.unwrap();
+    assert!(matches!(&err, SetaError::Api { status: 403, message } if asks_to_verify_email(403, message)), "{err:?}");
+    assert_eq!(logged_count(log::Level::Warn, "refusal-4b1e"), 0);
+    assert_eq!(logged_count(log::Level::Info, "refusal-4b1e"), 1);
+
+    let (url, handle) = serve_once(forbidden(r#"{"error":"Not the owner of this site (refusal-7c2d)"}"#)).await;
+    MossSetaClient::with_url(&url).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
+    handle.await.unwrap();
+    assert_eq!(logged_count(log::Level::Warn, "refusal-7c2d"), 1);
 }

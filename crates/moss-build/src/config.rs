@@ -41,6 +41,7 @@ pub mod map_layers;
 pub mod migrations;
 pub mod plugin_view;
 pub mod services;
+pub mod site_identity;
 pub mod site_settings;
 
 use toml::Value;
@@ -131,6 +132,16 @@ impl ConfigFile {
             .get("site")
             .and_then(|site| site.get(field))
             .and_then(|v| v.as_str())
+    }
+
+    /// A list-of-strings field under `[site]`, e.g. `me`; one string is a
+    /// list of one. Entries that are not strings are skipped.
+    pub fn site_strings(&self, field: &str) -> Vec<String> {
+        match self.root.get("site").and_then(|site| site.get(field)) {
+            Some(toml::Value::String(one)) => vec![one.clone()],
+            Some(toml::Value::Array(items)) => items.iter().filter_map(|v| v.as_str()).map(str::to_string).collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// A boolean field under `[site]`, e.g. `comments`, `math`.

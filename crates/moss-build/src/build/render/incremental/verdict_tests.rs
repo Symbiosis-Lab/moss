@@ -80,6 +80,8 @@ struct Harness {
     overrides: std::collections::HashMap<String, String>,
     skip: bool,
     globals_salt: bool,
+    render_id: Option<String>,
+    sealed_render_id: Option<String>,
 }
 
 impl Harness {
@@ -95,6 +97,8 @@ impl Harness {
             overrides: std::collections::HashMap::new(),
             skip: true,
             globals_salt: false,
+            render_id: None,
+            sealed_render_id: None,
         }
     }
 
@@ -116,6 +120,8 @@ impl Harness {
                 typesetting: None,
                 math: false,
                 term_nav: &[],
+                render_id: self.render_id.as_deref(),
+                sealed_render_id: self.sealed_render_id.as_deref(),
             },
         )
     }
@@ -132,10 +138,9 @@ fn assert_full(verdict: &RenderVerdict, cause: FullCause) {
 
 // ---- the number this whole design exists to move -------------------------
 
-/// The Stage-0 baseline on `riverbend/河灣`: a no-op save re-renders 114 of
-/// 214 pages, of which every listing host was rendered *by the predicate*, not
-/// by the diff. After Stage 2 the same save must skip every page — hosts
-/// included.
+/// What the gate exists for: a save that changes nothing must skip every
+/// page, listing hosts included. A host rendered *by the predicate* rather
+/// than by the diff would re-render on every save.
 #[test]
 fn a_no_op_rebuild_skips_every_page_including_every_listing_host() {
     let h = Harness::new();
@@ -291,6 +296,44 @@ fn a_body_edit_below_the_lede_renders_one_page_and_no_host() {
             assert_eq!((*changed, *by_listing_group), (1, 0));
         }
         other => panic!("expected an incremental verdict, got {other:?}"),
+    }
+}
+
+/// A carried page registers the entry `hashes.json` holds, and that file is
+/// written when a generation ships, while this cache is written at render time.
+/// A page rendered after the manifest the carry reads from has bytes on the
+/// stage that manifest never hashed, so it renders again until a manifest of
+/// that render, or a later one, is the sealed one.
+#[test]
+fn a_page_rendered_since_the_sealed_manifest_is_not_carried() {
+    let mut h = Harness::new();
+    h.render_id = Some("w".into());
+    h.run(&vault());
+
+    // A renders its edit; its generation has not shipped.
+    let mut edited = vault();
+    edited[2].content = "Alpha lede.\n\nA COMPLETELY DIFFERENT tail.".into();
+    h.render_id = Some("a".into());
+    h.sealed_render_id = Some("w".into());
+    assert!(!h.run(&edited).may_skip("writings/alpha/index.md"));
+
+    // B changes nothing since A, but the manifest is still W's.
+    h.render_id = Some("b".into());
+    let b = h.run(&edited);
+    assert!(!b.may_skip("writings/alpha/index.md"), "the stage holds A's bytes, W's manifest another page's");
+    assert!(b.may_skip("writings/beta/index.md"), "a page no render since W touched is carried");
+    match b.basis() {
+        VerdictBasis::Incremental { changed, by_unsealed, .. } => assert_eq!((*changed, *by_unsealed), (0, 1)),
+        other => panic!("expected an incremental verdict, got {other:?}"),
+    }
+
+    // B's generation ships: its manifest describes the stage again.
+    h.render_id = Some("c".into());
+    h.sealed_render_id = Some("b".into());
+    let c = h.run(&edited);
+    for d in &edited {
+        let src = d.source_path.as_deref().unwrap();
+        assert!(c.may_skip(src), "{src} is carried once its render is sealed");
     }
 }
 
@@ -905,14 +948,14 @@ fn the_not_found_page_is_never_carried_even_when_the_verdict_and_output_allow_it
     let site_url = crate::build::site_url::SiteUrl::parse("https://example.com").unwrap();
     let mut previous = crate::types::content::SiteHashes::default();
     for d in &docs[1..] {
-        let qr = crate::build::media::qr::share_qr_for_page(&d.url_path, d.is_public_page(), &site_url);
+        let qr = crate::build::media::qr::share_qr_for_page(&d.url_path, d.is_public_page(), &site_url, true);
         for out in std::iter::once(d.url_path.clone()).chain(qr.map(|q| q.served_path)) {
             previous.files.insert(out.clone(), "100644:0123456789abcdef".to_string());
             std::fs::create_dir_all(h.output.join(&out).parent().unwrap()).unwrap();
             std::fs::write(h.output.join(&out), "x").unwrap();
         }
     }
-    let proof = |d: &ParsedDocument| CarryProof::for_document(d, &verdict, &previous, &h.output, &site_url);
+    let proof = |d: &ParsedDocument| CarryProof::for_document(d, &verdict, &previous, &h.output, &site_url, true);
 
     assert!(proof(&docs[1]).is_some(), "a plain page with all its outputs is carried");
     assert!(verdict.may_skip_document(&docs[2]), "the verdict alone would carry the not-found page");

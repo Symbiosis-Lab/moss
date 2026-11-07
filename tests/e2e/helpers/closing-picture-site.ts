@@ -191,6 +191,15 @@ export const CLOSING_PICTURE_BUSY_FADE_GATE: ScratchSiteSpec = {
   },
 };
 
+/** The faded pair with no words: the fence holds only the picture and its credit. */
+export const CLOSING_PICTURE_WORDLESS_GATE: ScratchSiteSpec = {
+  name: "closing-picture-wordless-gate",
+  files: {
+    ...CLOSING_PICTURE_FADE_GATE.files,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top caption="${CREDIT}"}\n:::\n`,
+  },
+};
+
 /** The busy pair with `panel=none`: plain ink over the hatching, no panel behind the words or the credit. */
 export const CLOSING_PICTURE_PLAIN_GATE: ScratchSiteSpec = {
   name: "closing-picture-plain-gate",

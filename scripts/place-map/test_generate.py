@@ -31,7 +31,7 @@ class SourceBoundaryTests(unittest.TestCase):
         # OR the schema itself allows, not `members` specifically.
         self.assertTrue(all(source.get("members") or source.get("member") for source in sources))
 
-    def test_country_shapes_have_their_own_two_source_manifest(self):
+    def test_country_shapes_have_their_own_source_manifest(self):
         manifest, digest = generate.load_manifest(generate.COUNTRIES_MANIFEST)
         sources = generate.validate_countries_manifest(manifest)
         self.assertEqual({source["name"] for source in sources}, generate.COUNTRIES_NAMES)

@@ -49,10 +49,12 @@ fn zip(id: &str) -> Vec<u8> {
     buf
 }
 
+/// An id ending in `-preview` is published as a preview plugin.
 fn entry(origin: &str, id: &str) -> String {
     let sha = hex::encode(Sha256::digest(zip(id)));
+    let preview = if id.ends_with("-preview") { r#","preview":true"# } else { "" };
     format!(
-        r#"{{"type":"plugin","id":"{id}","display_name":"{id}","version":"1.2.0","download_url":"{origin}/{id}.zip","sha256":"{sha}"}}"#
+        r#"{{"type":"plugin","id":"{id}","display_name":"{id}","version":"1.2.0","download_url":"{origin}/{id}.zip","sha256":"{sha}"{preview}}}"#
     )
 }
 
@@ -124,6 +126,39 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
     let err = install("beta", &site, &dead).err().expect("no catalog, no install");
     assert!(err.contains("none is cached") && err.contains("127.0.0.1"), "{err}");
     assert!(!site.join(".moss/plugins/beta").exists());
+
+    // A preview plugin, from the registry or shipped in the binary, installs
+    // only once the user has turned on Preview features, and the refusal says how.
+    // Seeded once per process, so this stays in the file's one test.
+    static BUNDLED: include_dir::Dir<'static> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/bundled-plugins");
+    moss_build::plugins::discovery::seed_bundled_set(moss_build::plugins::discovery::BundledSet {
+        names: &["github"],
+        root: &BUNDLED,
+        default_deployer: "",
+    });
+    routes.lock().unwrap().insert("/index.json", index(&origin, 3, &["alpha", "gamma", "delta-preview"]));
+    routes.lock().unwrap().insert("/delta-preview.zip", zip("delta-preview"));
+    for id in ["delta-preview", "github"] {
+        let err = install(id, &site, &origin).err().unwrap_or_else(|| panic!("{id} installed with Preview features off"));
+        assert!(err.contains("Preview features") && err.contains("preview_features"), "{err}");
+        assert!(!site.join(".moss/plugins").join(id).exists(), "{id}");
+    }
+    let config = app_data.join("app-config.json");
+    for off in [r#"{"experimental":{"preview_features":false}}"#, r#"{"experimental":{"preview_features":"true"}}"#, "not json"] {
+        std::fs::write(&config, off).unwrap();
+        assert!(install("delta-preview", &site, &origin).is_err(), "{off} is off");
+    }
+    std::fs::write(&config, r#"{"language":"en","experimental":{"preview_features":true}}"#).unwrap();
+    for id in ["delta-preview", "github"] {
+        install(id, &site, &origin).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert!(site.join(".moss/plugins").join(id).join("manifest.json").exists(), "{id}");
+    }
+
+    // Turning the switch off again refuses no copy already in the site.
+    std::fs::write(&config, r#"{"experimental":{"preview_features":false}}"#).unwrap();
+    for id in ["delta-preview", "github"] {
+        install(id, &site, &origin).unwrap_or_else(|e| panic!("installed {id} refused: {e}"));
+    }
 }
 
 fn walk(dir: &Path) -> Vec<String> {

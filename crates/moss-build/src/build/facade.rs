@@ -1,5 +1,4 @@
-//! Page facade fingerprints and the cross-build diff cache (Stage 4 of the
-//! incremental-build work).
+//! Page facade fingerprints and the cross-build diff cache.
 //!
 //! A "facade" is a content fingerprint over every field of a `ParsedDocument`
 //! another page's render could observe. It is computed from the `Debug`
@@ -19,7 +18,7 @@
 //! content signature (no separate stat-based skip-hashing needed the way
 //! `HashIndex` avoids re-hashing unchanged file bytes).
 //!
-//! The live consumer is the Stage 5b render skip in
+//! The live consumer is the incremental render skip in
 //! `build/render/blocking.rs`, which pairs the two fingerprints here with
 //! rules this module deliberately does NOT encode — see `compute_page_surface`.
 
@@ -108,9 +107,8 @@ pub fn compute_page_facade(doc: &ParsedDocument) -> String {
 ///
 /// The caller is responsible for feeding a value with a DETERMINISTIC `Debug`:
 /// a `HashMap`'s iteration order is per-instance random, so map-shaped inputs
-/// must be converted to `BTreeMap`/sorted `Vec` first. (Stage 5a shipped a bug
-/// of exactly this shape — `ParsedDocument::cascade` was a `HashMap` and 208 of
-/// 216 pages "changed" on a zero-edit rebuild.)
+/// must be converted to `BTreeMap`/sorted `Vec` first, or every page "changes"
+/// on a zero-edit rebuild.
 pub fn debug_hash<T: std::fmt::Debug>(value: &T) -> String {
     hash_str(&format!("{value:?}"))
 }
@@ -152,7 +150,7 @@ fn normalized(doc: &ParsedDocument) -> ParsedDocument {
 ///
 /// The facade answers "does THIS page need re-rendering"; the surface answers
 /// "could this page's change alter some OTHER page's HTML by a route the
-/// dependency graph cannot see" (Stage 5b of the incremental-build work). Only a handful of fields
+/// dependency graph cannot see". Only a handful of fields
 /// are excluded, and the exclusion is written as a blank-out on a clone rather
 /// than a hand-picked include list, so a field added to `ParsedDocument`
 /// lands in the surface by default — the rot direction is "more full
@@ -421,7 +419,7 @@ pub fn moved_surface_fields(previous: &str, current: &str, names: &[String]) -> 
 }
 
 /// Both fingerprints for one page. Stored together so a single cache file
-/// answers both questions the Stage 5b gate asks.
+/// answers both questions the incremental gate asks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageFingerprints {
     pub facade: String,
@@ -468,7 +466,7 @@ pub struct FacadeCache {
     /// (`remove_stale_files` unlinks anything absent from this build's
     /// manifest), so every page's `<link href>`/`<script src>` must be
     /// rewritten — including the pages whose own fingerprints did not move
-    /// and which the Stage 5b skip would otherwise carry forward verbatim.
+    /// and which the incremental skip would otherwise carry forward verbatim.
     /// The result would be a site that has lost its stylesheet everywhere
     /// except the page that happened to be edited.
     ///
@@ -582,6 +580,15 @@ pub struct FacadeCache {
     /// See `nav_globals`'s field docs.
     #[serde(default)]
     home_breadcrumb_globals: std::collections::BTreeMap<String, String>,
+    /// The render that wrote this cache; see [`SiteHashes::render_id`].
+    ///
+    /// [`SiteHashes::render_id`]: crate::types::content::SiteHashes::render_id
+    #[serde(default)]
+    render_id: Option<String>,
+    /// Pages rendered since the render `hashes.json` describes: on the stage,
+    /// their bytes may be ones that manifest never hashed.
+    #[serde(default)]
+    unsealed_pages: std::collections::BTreeSet<String>,
 }
 
 /// Which keys differ between two digest maps — sorted, and including keys
@@ -664,6 +671,8 @@ impl FacadeCache {
             nav_globals: std::collections::BTreeMap::new(),
             home_title_globals: std::collections::BTreeMap::new(),
             home_breadcrumb_globals: std::collections::BTreeMap::new(),
+            render_id: None,
+            unsealed_pages: std::collections::BTreeSet::new(),
         }
     }
 
@@ -734,6 +743,23 @@ impl FacadeCache {
     /// global invalidator — see the `asset_versions` field docs.
     pub fn asset_versions_changed(&self, current: &str) -> bool {
         self.asset_versions != current
+    }
+
+    /// Record the render writing this cache and the pages it leaves on the
+    /// stage that no sealed manifest has hashed yet.
+    pub fn with_unsealed_pages(mut self, render_id: Option<&str>, pages: std::collections::BTreeSet<String>) -> Self {
+        self.render_id = render_id.map(str::to_string);
+        self.unsealed_pages = pages;
+        self
+    }
+
+    /// The pages whose stage bytes the manifest of `sealed_render_id` may not
+    /// describe: none when that manifest is this cache's own render.
+    pub fn unsealed_pages_since(&self, sealed_render_id: Option<&str>) -> std::collections::BTreeSet<String> {
+        if self.render_id.as_deref() == sealed_render_id {
+            return Default::default();
+        }
+        self.unsealed_pages.clone()
     }
 
     /// True when this cache holds nothing — a cold or unreadable cache, which

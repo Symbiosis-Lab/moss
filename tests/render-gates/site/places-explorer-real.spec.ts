@@ -65,15 +65,18 @@ test("dragging map imagery pans without native image drag, and dragging a label 
   await page.locator('.moss-places-control[data-control="zoom-in"]').click();
   await expect(surface).toBeVisible();
 
-  const start = await surface.evaluate((surface) => {
-    surface.addEventListener("dragstart", () => {
+  // The surface is replaced whenever the world is re-rasterised sharper after
+  // a zoom, so nothing here holds it: the world is queried, and the listener
+  // sits on the world, where a drag of either surface bubbles.
+  const start = await world.evaluate((world) => {
+    world.addEventListener("dragstart", () => {
       document.body.dataset.mapImageDragStarted = "true";
     });
-    const world = surface.closest(".moss-places-world")!;
     world.querySelectorAll(".moss-places-rivers, .moss-places-tiles").forEach((layer) => {
       (layer as HTMLElement | SVGElement).style.pointerEvents = "none";
     });
-    const box = surface.closest(".moss-places-viewport")!.getBoundingClientRect();
+    const surface = world.querySelector(".moss-places-world-surface");
+    const box = world.closest(".moss-places-viewport")!.getBoundingClientRect();
     for (let y = box.top + box.height * 0.35; y < box.bottom - 80; y += 40) {
       for (let x = box.left + 40; x < box.right - 40; x += 40) {
         if (document.elementFromPoint(x, y) === surface) return { x, y };

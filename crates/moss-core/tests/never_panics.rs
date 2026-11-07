@@ -182,11 +182,9 @@ proptest! {
 proptest! {
     #![proptest_config(cfg())]
 
-    // Phase 4 PR4 (2026-05-27): `transform_callouts_never_panics` test
-    // removed alongside deletion of `crates/moss-core/src/resolve/callouts.rs`.
-    // Obsidian-callout detection is now part of the typed AST parser
-    // (`crates/moss-core/src/ast/parser.rs`'s Tag::BlockQuote arm); the
-    // existing `parse_never_panics` proptest below already covers it.
+    // Obsidian-callout detection is part of the typed AST parser
+    // (`crates/moss-core/src/ast/parser.rs`'s Tag::BlockQuote arm), covered
+    // by the `parse_never_panics` proptest below.
 
     #[test]
     fn transform_block_refs_never_panics(content in any_str()) {
@@ -250,15 +248,11 @@ proptest! {
     #![proptest_config(cfg())]
 
     #[test]
-    fn csv_table_render_never_panics(content in any_str(), separator in prop::char::any()) {
-        let opts = moss_core::csv_table::CsvTableOptions {
-            separator,
-            has_header: true,
-            caption: None,
-            class: "moss-table".to_string(),
-            data_type: None,
-        };
-        let _ = moss_core::csv_table::render(&content, &opts);
+    fn csv_table_render_never_panics(content in any_str(), separator in prop::char::any(), pothole in any_str()) {
+        let opts = moss_core::csv_table::DataOptions::parse(&pothole);
+        let _ = moss_core::csv_table::render(&content, separator, &opts, ", ");
+        let list = moss_core::csv_table::DataOptions { style: moss_core::csv_table::Style::List, ..opts };
+        let _ = moss_core::csv_table::render(&content, separator, &list, ", ");
     }
 }
 

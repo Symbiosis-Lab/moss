@@ -129,7 +129,7 @@ pub struct ParsedDocument {
     pub weight: Option<i32>,
     /// Analytics configuration for privacy-focused analytics
     pub analytics: Option<crate::build::markdown::AnalyticsConfig>,
-    /// Site logo image path (from homepage frontmatter, rendered in nav)
+    /// The `logo:` as the URL the header asks for (`render::config::logo_src`)
     #[serde(skip)]
     #[specta(skip)]
     pub logo: Option<String>,
@@ -252,6 +252,16 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub author: Vec<String>,
+    /// The channels this page's copies go to: its own `syndicate:`, else the
+    /// nearest folder cascade's. `Some(empty)` is `syndicate: false`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub syndicate: Option<Vec<String>>,
+    /// A post with no title of its own: its `title` and `label` are its
+    /// opening words. See `moss_core::heading::is_untitled_stamp`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub untitled: bool,
     /// Editor names from frontmatter `editor:` — field-agnostic sibling of
     /// `author`, feeding whichever term kind's `fields` names "editor".
     /// Unread until `build::terms::derive_terms` is rewritten over kinds.
@@ -387,6 +397,10 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub has_own_map_embed: bool,
+    /// Country maps whose list this page places itself with `style:levels`, and how.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[specta(skip)]
+    pub country_lists: std::collections::BTreeMap<String, crate::build::folder_embed::ListPlacement>,
     /// URL paths of the pages this page's body embeds list.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     #[specta(skip)]
@@ -448,6 +462,9 @@ pub struct ParsedDocument {
     /// Listing filter: "past" or "upcoming" keeps only the pages whose event
     /// has ended, or has not. Applied before `children_limit`.
     pub children_when: Option<String>,
+    /// Pictures a `summary` row draws as a strip in place of its one cover
+    /// (`children_pictures:`); see `FolderEmbedParams::pictures`.
+    pub children_pictures: Option<u32>,
     /// What this listing's folder cards say they count; absent = the built-in
     /// "N articles" text. Left out of the exported bindings: the listing
     /// reads it, no UI does.
@@ -563,6 +580,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_overlay_text: Option<String>,
+    /// The sources of the page's cited quotations, one per distinct address,
+    /// in page order. Feeds the JSON-LD `citation` list.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub citations: Vec<moss_core::ast::quote_source::QuoteSource>,
     /// Per-page feature-presence flags. See `PageFeatures`.
     #[serde(skip)]
     #[specta(skip)]
@@ -726,7 +748,22 @@ pub fn folder_within(root: &str, folder: &str) -> bool {
     folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// Addresses of a page's copies on other sites, from its frontmatter
+/// `syndicated:` value (a list, or one string).
+pub(crate) fn syndicated_urls(value: Option<&serde_json::Value>) -> Vec<String> {
+    match value {
+        Some(serde_json::Value::Array(items)) => items.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(serde_json::Value::String(one)) => vec![one.clone()],
+        _ => Vec::new(),
+    }
+}
+
 impl ParsedDocument {
+    /// [`syndicated_urls`] of this page.
+    pub fn syndicated_urls(&self) -> Vec<String> {
+        syndicated_urls(self.raw_frontmatter.get("syndicated"))
+    }
+
     /// The text the site's own navigation shows for this page: `nav_label`
     /// when set, else the chrome `label`.
     pub fn nav_text(&self) -> &str {
@@ -931,7 +968,7 @@ pub struct PageFeatures {
 /// from it which runtime `<script>` tags the shell carries. It reaches the
 /// render paths as `LayoutConfig::assets`.
 ///
-/// **Not** the key of the Stage 5b global invalidator. Changing the partial
+/// **Not** the key of the global invalidator. Changing the partial
 /// set changes the stylesheet's content-hashed filename, which every already-
 /// rendered page references — but so does editing `site.css` or `tokens.json`
 /// or upgrading moss. That whole class is keyed on the emitted
@@ -960,6 +997,12 @@ pub struct SiteAssets {
     pub link_preview: bool,
     /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
     pub heading_anchors: bool,
+    /// `[site].selection_tools` — Share and Copy on selected text, the
+    /// share-card chunk and every page's QR code. Defaults OFF.
+    pub selection_tools: bool,
+    /// Comments may be on somewhere, so selected text offers Comment and the
+    /// selection script ships even with `selection_tools` off.
+    pub selection_comments: bool,
     /// `[site].math` — click-to-copy LaTeX on math nodes. Defaults ON.
     pub math: bool,
     /// This build generated at least one media collection page
@@ -1170,6 +1213,14 @@ impl moss_core::sort::SortableLabel for ParsedDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn syndicated_takes_a_list_or_one_address() {
+        let value = |v: serde_json::Value| syndicated_urls(Some(&v));
+        assert_eq!(value(serde_json::json!(["https://a.example/1", 3, "https://b.example/2"])), ["https://a.example/1", "https://b.example/2"]);
+        assert_eq!(value(serde_json::json!("https://a.example/1")), ["https://a.example/1"]);
+        assert!(value(serde_json::json!(true)).is_empty() && syndicated_urls(None).is_empty());
+    }
 
     #[test]
     fn parsed_document_implements_sortable_doc() {

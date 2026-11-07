@@ -1,14 +1,13 @@
 //! Hero rendering + the link-preview helpers shared with
 //! `build::render::grid_cells`.
 //!
-//! Phase 4 PR4.5 (2026-05-28) deleted the Grid-rendering surface from
-//! this file. `Shortcode::Grid::cells` is now `Vec<Vec<Block>>` (parsed
+//! Grid rendering is not done here. `Shortcode::Grid::cells` is `Vec<Vec<Block>>` (parsed
 //! at extract time in `moss_core::ast::shortcode_extract::parse_grid`),
 //! URLs are resolved by `resolve_shortcode_urls` in `pipeline.rs`, and
 //! the AST-level `DefaultHooks::render_shortcode` Grid arm (called via
 //! `PipelineHooks::render_shortcode` delegation) emits production HTML.
 //! Compound-link cells flow through the typed `Block::LinkCard { url,
-//! children }` variant introduced in PR4.5.
+//! children }` variant.
 //!
 //! What remains here:
 //! - [`render_hero_html_typed`] — Hero rendering. Called from the
@@ -156,8 +155,14 @@ pub(crate) fn render_hero_html_typed(
     } else {
         ""
     };
-    // Words laid over the picture (not on a plate, which is never cropped or
-    // covered): the stylesheet's grow-to-fit overlay layout keys on this.
+    // A closing picture measures its picture for the words' ink, and sets its
+    // caption inside the picture as a credit along the foot.
+    let closing = args.classes.split_whitespace().any(|c| c == "moss-hero-closing");
+    // A hero with words lays them over its picture, and a closing picture
+    // lays out the same with none, since its credit and colophon sit on it.
+    let laid_over = closing || !args.overlay.is_empty();
+    // Not on a plate, which is never cropped or covered: the stylesheet's
+    // grow-to-fit overlay layout keys on this.
     let overlay_attr = if is_plate { "" } else { " data-overlay" };
     let source_range_attr = match source_line {
         Some(n) => format!(r#" data-source-range="{}""#, args.source.range_from(n)),
@@ -169,7 +174,7 @@ pub(crate) fn render_hero_html_typed(
         String::new()
     };
     let align_attr = match args.align.as_deref() {
-        Some(v @ ("top" | "end" | "center")) => format!(r#" data-align="{v}""#),
+        Some(v @ ("top" | "end" | "center")) if laid_over => format!(r#" data-align="{v}""#),
         _ => String::new(),
     };
     // `:::hero {header=over}`: the CSS lays the site header over this hero,
@@ -182,15 +187,16 @@ pub(crate) fn render_hero_html_typed(
     // A pale hero photo needs a stronger legibility scrim than a mid-tone or
     // dark one — the same gradient that carries white type over a dusk photo
     // washes out over a watercolour. Classify from the scan-cached dominant
-    // colour so CSS can pick the right ramp. Only heroes carrying overlay text
-    // get the attribute; the scrim is gated on that anyway.
+    // colour so CSS can pick the right ramp. Only heroes laid over their
+    // picture get the attribute: those with words, whose scrim is gated on it,
+    // and a closing picture, whose credit takes the same tone.
     //
     // A multi-slide hero is classified from its primary image alone: the
     // attribute sits on the <section>, so one ramp covers every crossfaded
     // slide. Deliberate — per-slide scrims would need the ::before split into
     // per-slide layers, and a mixed-tone slideshow is rare enough that the
     // first slide is the honest proxy.
-    let raw_hero_color: Option<String> = if args.overlay.is_empty() {
+    let raw_hero_color: Option<String> = if !laid_over {
         None
     } else {
         resolved_image
@@ -292,12 +298,9 @@ pub(crate) fn render_hero_html_typed(
         }
         _ => None,
     };
-    // A closing picture measures its picture for the words' ink, and sets its
-    // caption inside the picture as a credit along the foot.
-    let closing = args.classes.split_whitespace().any(|c| c == "moss-hero-closing");
-    let frame = crate::build::markdown::hero_ink::Frame::new(attrs.position, args.max_height, args.align.as_deref(), args.fade.as_deref() == Some("top"), closing, crate::build::markdown::hero_ink::Words::read(&args.overlay_text, &moss_core::ast::inlines_to_plain_text(&args.caption)));
+    let frame = crate::build::markdown::hero_ink::Frame::of(args, closing);
     let fade_attr = if frame.faded { r#" data-fade="top""# } else { "" };
-    let ink_attrs = match (&resolved_image, is_plate || args.overlay.is_empty()) {
+    let ink_attrs = match (&resolved_image, is_plate || !laid_over) {
         (Some(light), false) if !hero_href_is_video(light) => crate::build::markdown::hero_ink::ink_attributes(
             media_lookup,
             light,
@@ -324,7 +327,7 @@ pub(crate) fn render_hero_html_typed(
         format!(r#"{cover_attr} style="{}""#, section_style.join("; "))
     };
     let panel_attr = if args.panel.as_deref() == Some("none") { r#" data-panel="none""# } else { "" };
-    let overlay_attr = format!("{overlay_attr}{fade_attr}{panel_attr}{ink_attrs}");
+    let overlay_attr = if laid_over { format!("{overlay_attr}{fade_attr}{panel_attr}{ink_attrs}") } else { String::new() };
     let pair_attr = |v: &str| if dark_href.is_some() { format!(" data-hero-variant=\"{v}\"") } else { String::new() };
 
     let img_part = match (&resolved_image, media_lookup) {
@@ -537,25 +540,13 @@ pub(crate) fn render_hero_html_typed(
         )
     };
 
-    if args.overlay.is_empty() {
-        format!(
-            "<section {}{}{}{}{}{}{}{}{}>{}</section>{}",
-            class_attr, slides_attr, width_attr, source_range_attr, mobile_attr,
-            style_attr, plate_attr, caption_attr, header_attr, img_part, caption_html
-        )
+    let content_html = if args.overlay.is_empty() {
+        String::new()
     } else {
-        // Phase 4 PR4.5 (2026-05-28): overlay is now typed `Vec<Block>`.
-        // Render via `moss_core::ast::render::render_blocks` with a
-        // `DefaultHooks::with_snapshot(...)` so inner inline `Inline::Image`
-        // emissions route through synth (production `<picture>` shape).
-        //
-        // The resolver doesn't need threading through here — overlay URLs
-        // were already classified by `resolve_shortcode_urls` in
-        // `pipeline.rs` (which descends into `args.overlay` via
-        // `resolve_urls_in_block`). The renderer reads `Url::Resolved`
-        // directly.
+        // Overlay URLs were already resolved by `resolve_shortcode_urls`, and
+        // the snapshot hooks route inline images through the synthesizer.
         let mut html_content = String::new();
-        let hooks = moss_core::ast::DefaultHooks::without_heading_anchors(media_assets);
+        let hooks = moss_core::ast::DefaultHooks::hero_words(media_assets);
         moss_core::ast::render::render_blocks_with_meta(
             &hooks,
             &mut html_content,
@@ -566,27 +557,11 @@ pub(crate) fn render_hero_html_typed(
         // byte shape (no `>\n<`). Inside text content, embedded newlines
         // are preserved.
         let collapsed = moss_core::ast::hooks::collapse_tag_adjacent_newlines(&html_content);
-        format!(
-            "<section {}{}{}{}{}{}{}{}{}{}{}{}>{}<div class=\"moss-hero-content\"{}>{}</div>{}</section>{}",
-            class_attr,
-            slides_attr,
-            width_attr,
-            source_range_attr,
-            mobile_attr,
-            align_attr,
-            style_attr,
-            tone_attr,
-            plate_attr,
-            caption_attr,
-            header_attr,
-            overlay_attr,
-            img_part,
-            panel_style_attr,
-            collapsed.trim(),
-            credit_html,
-            caption_html
-        )
-    }
+        format!(r#"<div class="moss-hero-content"{panel_style_attr}>{}</div>"#, collapsed.trim())
+    };
+    format!(
+        "<section {class_attr}{slides_attr}{width_attr}{source_range_attr}{mobile_attr}{align_attr}{style_attr}{tone_attr}{plate_attr}{caption_attr}{header_attr}{overlay_attr}>{img_part}{content_html}{credit_html}</section>{caption_html}"
+    )
 }
 
 
@@ -922,7 +897,6 @@ mod tests {
         assert!(html.contains("landing"), "raw class list still passes through: {html}");
     }
 
-    // Phase 4 PR4.5 (2026-05-28): render_grid_html_typed deleted —
     // Grid renders via `PipelineHooks::render_shortcode` → DefaultHooks
     // Grid arm in `crates/moss-core/src/ast/hooks.rs`. Test coverage
     // for the AST-level Grid shape lives in `moss-core` lib tests.
@@ -1012,6 +986,23 @@ mod tests {
             html.contains(r#"id="understanding-climate-extremes""#),
             "hero heading must still carry its id for anchor links; got: {html}"
         );
+    }
+
+    #[test]
+    fn only_a_paragraph_of_links_is_the_heros_row_of_buttons() {
+        use moss_core::ast::{parse, HeroShortcode};
+        let overlay = "[Notes](/notes/) runs on into a sentence.\n\n[Visit](/visit/)\n[Write](/write/)";
+        let mut doc = parse(overlay);
+        moss_core::ast::visit_urls_mut(&mut doc, |u| {
+            if let moss_core::ast::Url::Unresolved(s) = u {
+                *u = moss_core::ast::Url::resolved(s.clone(), moss_core::ast::UrlKind::External);
+            }
+        });
+        let args = HeroShortcode { overlay: doc.blocks, ..Default::default() };
+        let html = render_hero_html_typed(&args, None, None, None, crate::i18n::Language::En);
+        assert_eq!(html.matches(r#"<p class="moss-hero-actions">"#).count(), 1, "{html}");
+        let row = &html[html.find("moss-hero-actions").unwrap()..];
+        assert!(row.contains("Visit") && row.contains("Write") && !row.contains("Notes"), "{html}");
     }
 
     #[test]

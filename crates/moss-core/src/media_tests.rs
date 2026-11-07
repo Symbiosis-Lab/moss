@@ -63,8 +63,8 @@ fn test_align_side_from_keyword() {
 
 #[test]
 fn test_align_side_from_keyword_bare_directional() {
-    // Bare `left` / `right` are accepted because Stage 1 emits them as
-    // the value of an explicit `align=` key (TitleParams), where the
+    // Bare `left` / `right` are accepted as the value of an explicit
+    // `align=` key (TitleParams), where the
     // key disambiguates from Position context. The existing pipe-
     // keyword space-separated parser (`parse_media_attrs`) still tries
     // Position::from_keyword first and never reaches AlignSide for
@@ -685,8 +685,7 @@ fn test_extract_width_from_alias_segment_whitespace_trimmed() {
 #[test]
 fn test_media_attrs_class_names_preserved() {
     // Author-provided class names (not in moss vocabulary) survive on
-    // MediaAttrs; the wikilink Stage 1 translator and downstream Stage 2
-    // dispatcher consume `class_attr()` to compose the final class list.
+    // MediaAttrs; `class_attr()` composes the final class list.
     let attrs = MediaAttrs {
         fit: None,
         position: None,
@@ -705,7 +704,7 @@ fn test_media_attrs_class_names_preserved() {
 #[test]
 fn test_media_attrs_class_names_compose_with_align() {
     // align (typed) and class_names (passthrough) compose into the same
-    // class list. Stage 2 dispatcher recomposes them into the final
+    // class list. `class_attr()` recomposes them into the final
     // `class="moss-image moss-align-left theme-rounded"`.
     let attrs = MediaAttrs {
         fit: None,

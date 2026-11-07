@@ -1,7 +1,6 @@
-//! A site whose places root has no real `places/index.md` — the namespace
-//! root is synthesized by `render/blocking.rs` from the term index, not a
-//! real document — must still get the places-explorer bundle and handshake,
-//! exactly like a site with a real root index does.
+//! A places root, synthesized from the term index when the site has no
+//! `places/index.md` or authored when it has one: the explorer is the page
+//! when it is on, and the root is an ordinary folder page when it is off.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -149,4 +148,63 @@ fn explorer_false_leaves_a_synthetic_root_untouched() {
         !places_html.contains("data-moss-places-explorer"),
         "explorer = false must suppress the handshake on a synthetic root too, got:\n{places_html}"
     );
+    let main = &places_html[places_html.find("<main").expect("page has a <main>")..];
+    let h1 = &main[main.find("<h1").expect("an <h1>")..];
+    assert!(!h1[..h1.find("</h1>").unwrap()].contains("visually-hidden"), "the title shows when there is no explorer:\n{main}");
+    assert!(main.find("<h1") < main.find("moss-place-map"), "the title comes before the map:\n{main}");
+    assert!(main.contains(r#"href="/places/harbor/""#), "the root lists its places:\n{main}");
+}
+
+/// With the explorer off, a places root that is a real page of its own is an
+/// ordinary folder page: its title shows, and its words come before its map.
+#[test]
+fn explorer_false_keeps_an_authored_roots_title_and_puts_its_words_first() {
+    let tmp = std::env::temp_dir().join(format!("moss_places_authored_root_off_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\nexplorer = false\n");
+    write(&tmp, ".moss/places.toml", "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n");
+    write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
+    write(&tmp, "places/index.md", "---\ntitle: Where it happened\n---\n\nThe words about the map.\n");
+    write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nA single place, named through `location:`.\n");
+
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
+    let places_html = read_page(&tmp.join(".moss/build.nosync/staging"), "places/index.html");
+    let main = &places_html[places_html.find("<main").expect("page has a <main>")..];
+    let h1 = &main[main.find("<h1").expect("an <h1>")..];
+    let h1 = &h1[..h1.find("</h1>").unwrap()];
+    assert!(!h1.contains("visually-hidden"), "the title shows when there is no explorer: {h1}");
+    let words = main.find("The words about the map").expect("the page's words");
+    let map = main.find("moss-place-map").expect("the page's map");
+    assert!(words < map, "the words come before the map:\n{main}");
+    assert!(main.contains(r#"href="/places/harbor/""#), "the root lists its places:\n{main}");
+}
+
+/// A root page that already draws the site's map draws it once, even when its
+/// words embed the same map: the embed adds nothing there, with the explorer on
+/// or off.
+#[test]
+fn a_root_that_embeds_its_own_map_draws_it_once() {
+    for explorer in [true, false] {
+        let tmp = std::env::temp_dir().join(format!("moss_places_root_embed_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+        let _cleanup = Cleanup(tmp.clone());
+
+        write(&tmp, ".moss/config.toml", &format!("schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\nexplorer = {explorer}\n"));
+        write(&tmp, ".moss/places.toml", "[\"Harbor\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\n");
+        write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
+        write(&tmp, "places/index.md", "---\ntitle: Where it happened\n---\n\nThe words about the map.\n\n![[/places/|style:map]]\n");
+        write(&tmp, "posts/report.md", "---\ntitle: Report\nlocation: Harbor\n---\n\nA single place, named through `location:`.\n");
+
+        let result = build_sync(&tmp.to_string_lossy());
+        assert!(result.is_ok(), "build failed: {result:?}");
+        let places_html = read_page(&tmp.join(".moss/build.nosync/staging"), "places/index.html");
+        let main = &places_html[places_html.find("<main").expect("page has a <main>")..];
+        assert_eq!(main.matches(r#"class="moss-place-map""#).count(), 1, "explorer = {explorer}: one map:\n{main}");
+        if explorer {
+            assert!(!main.contains("moss-cards"), "the embed draws no listing in the map's place:\n{main}");
+        }
+    }
 }

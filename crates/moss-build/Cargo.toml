@@ -88,6 +88,8 @@ ratex-layout = "=0.1.13"
 ratex-svg = { version = "=0.1.13", features = ["standalone", "embed-fonts"] }
 rayon = "1.11"
 regex = "1.12.2"
+# `crypto.subtle`'s HMAC for plugins.
+ring = "0.17"
 resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
 roxmltree = "0.20"
 scraper = "0.20"

@@ -178,7 +178,7 @@ fn missing_snapshot_returns_none_for_generic_fallback() {
 ///
 /// `MOSS_READYMAG_CORPUS` holds `viewer.html` + `snapshot-{uri}.html` per
 /// page; outputs land in `MOSS_CORPUS_OUT`. Inline assertions pin the
-/// acceptance invariants from the Phase 2 plan; interleave positions are
+/// acceptance invariants; interleave positions are
 /// verified manually against the live site.
 #[test]
 #[ignore = "corpus harness: set MOSS_READYMAG_CORPUS and MOSS_CORPUS_OUT"]

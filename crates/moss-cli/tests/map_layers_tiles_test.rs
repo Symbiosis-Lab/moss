@@ -303,8 +303,9 @@ fn an_exact_place_on_a_plate_gets_a_locator_framed_to_it_with_the_plate_clipped_
     // The ground is the flat land tone and the world's own land and relief are not drawn.
     assert!(figure.contains("data-map-layer=\"ground\"") && figure.contains("data-map-layer=\"land\"/>") && figure.contains("data-map-layer=\"relief\"/>"), "{figure:.800}");
     assert!(figure.contains("aria-live=\"polite\">New York Public Library</p>") || html.contains("aria-live=\"polite\">New York Public Library</p>"), "the credit is in the static figure");
-    // The picture is cut to the figure's size: 2x the locator's 352 px.
-    assert_eq!(jpeg_size(&bytes), (704, 469));
+    // The picture is cut to the figure's size: 2x the locator's 352 px wide,
+    // and as tall as the part of the frame the layer covers.
+    assert_eq!(jpeg_size(&bytes), (704, 490));
 }
 
 #[test]

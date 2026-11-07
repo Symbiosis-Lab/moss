@@ -13,7 +13,7 @@ import type { DeployContext, HookResult } from "@symbiosis-lab/moss-api";
 import { reportProgress } from "@symbiosis-lab/moss-api";
 
 const MyPlugin = {
-  async on_deploy(context: DeployContext): Promise<HookResult> {
+  async deploy(context: DeployContext): Promise<HookResult> {
     await reportProgress("deploying", 0, 100, "Initializing");
     // ... deployment logic
     return { success: true, message: "Deployed successfully" };
@@ -84,7 +84,7 @@ Which axis of the system an advisory is about. Mirrors the Rust
 type AdvisorySeverity = "ShippedDegraded" | "NeedsAction" | "Blocking";
 ```
 
-How serious the plugin proposes an advisory is. moss CLAMPS this (R13): a
+How serious the plugin proposes an advisory is. moss CLAMPS this: a
 `Blocking` proposal with no actionable affordance is demoted to a quiet
 `NeedsAction` hairline dot. Mirrors the Rust `advisory::Severity`.
 
@@ -118,7 +118,7 @@ type PluginHook = "publish" | "deploy" | "syndicate" | "process";
 ```
 
 `PluginHook` mirrors the closed Rust enum in
-the app's plugin types module. The router (T1) cross-products
+moss's plugin types. moss cross-products
 `PluginHook × TriggerContext` to pick a UI surface for the task.
 Plugin authors pick the hook that matches what they're doing; they
 do NOT pick the surface (the router owns that).
@@ -1710,6 +1710,15 @@ Messages that plugins can send to moss
 | [SocialArticleData](interfaces/SocialArticleData.md) | The social data for a single article — currently its comments. |
 | [SocialComment](interfaces/SocialComment.md) | One comment in the .moss/data/social/*.json shared standard. |
 | [SocialDataFile](interfaces/SocialDataFile.md) | A `.moss/data/social/*.json` file: the schema version plus every article's social data, keyed by article path. |
+
+## Copies
+
+| Interface | Description |
+| ------ | ------ |
+| [CopyJob](interfaces/CopyJob.md) | The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or `find_copy` receives, already shaped to the limits its manifest declares under `contributes.channel.syndication`. |
+| [CopyOutcome](interfaces/CopyOutcome.md) | A copy hook's answer, in [HookResult.copy](interfaces/HookResult.md#copy): the copy's id and address; or, with `success: false`, why the network refused; or a hand-off, a copy the author posts by hand (`text` to paste at `open_url`) or a draft on the network for the author to publish (empty `text`, the draft's `id`). |
+| [CopyPart](interfaces/CopyPart.md) | One post of a copy, ready to post: plain text, with every address in it, in order, for networks that mark links up. |
+| [CopyRef](interfaces/CopyRef.md) | A copy's id and address on its network. |
 
 ## Keys
 

@@ -1,7 +1,7 @@
 //! Plugin Registry - Bundled plugins shown in the plugin installer
 //!
 //! This module provides a list of all bundled plugins for the plugin installer UI.
-//! For Phase 1, all plugins come from bundled plugins (embedded in the binary).
+//! For now, all plugins come from bundled plugins (embedded in the binary).
 //! Remote plugins may be added later.
 //!
 //! All bundled plugins appear in the installer (a `preview` manifest
@@ -359,11 +359,10 @@ const EMAIL_ICON_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2
 
 /// One registration row per built-in channel.
 ///
-/// NORTH-STAR pattern 2 (registration table with a totality test beside
-/// it — see test_builtin_channel_table_totality): adding a built-in
+/// Registration table with a totality test beside
+/// it (see test_builtin_channel_table_totality): adding a built-in
 /// channel is adding ONE row here; ids, catalog rows, and icons all
-/// derive from this table. The row-home moves to host_api/registry.rs
-/// at M3; until then this is the single source in this file.
+/// derive from this table.
 struct BuiltinChannel {
     id: &'static str,
     description: &'static str,
@@ -593,8 +592,9 @@ pub fn get_available_channels_with_status(
 /// is called AFTER id-dedup, so exactly one verdict exists per id.
 ///
 /// An installed copy is real state: it stays visible and manageable whatever
-/// its readiness says. Being listed is a presentation choice, not an
-/// entitlement — `install_plugin` deliberately does not consult this. Being *revoked* is not a presentation choice: the
+/// its readiness says. Being listed is presentation, not the gate:
+/// `install_plugin` refuses a preview plugin on its own, so the CLI cannot go
+/// round the catalog. Being *revoked* is not a presentation choice either: the
 /// refusal lives at the loader (`crate::plugins::admission`), and this
 /// only decides whether the row explaining it is on screen.
 pub fn channel_is_listed(channel: &AvailablePlugin, show_preview: bool) -> bool {
@@ -615,6 +615,13 @@ pub fn channel_is_listed(channel: &AvailablePlugin, show_preview: bool) -> bool 
 /// * `Ok(())` on success
 /// * `Err(String)` with error message on failure
 pub fn install_plugin(plugin_id: &str, project_path: &str) -> Result<(), String> {
+    install_plugin_allowing(plugin_id, project_path, crate::infra::app_data::preview_features_on())
+}
+
+/// [`install_plugin`] for a caller that already knows whether the user turned
+/// on Preview features: the app passes the switch its catalog was drawn with,
+/// so a row it shows is never refused when clicked.
+pub fn install_plugin_allowing(plugin_id: &str, project_path: &str, preview_on: bool) -> Result<(), String> {
     // No catalog-row check first. A row is a thing the UI drew; what decides
     // whether an install may proceed is whether the bytes can be got, and the
     // two branches below each answer that for their own origin. Checking the
@@ -642,6 +649,7 @@ pub fn install_plugin(plugin_id: &str, project_path: &str) -> Result<(), String>
     // forgotten.
     let Some(manifest) = crate::plugins::bundled::get_bundled_plugin_info(plugin_id) else {
         let entry = published_entry(plugin_id)?;
+        refuse_preview(plugin_id, entry.preview, preview_on)?;
         return artifact::install_from_registry(&entry, project_path).map(|_| ());
     };
 
@@ -655,9 +663,28 @@ pub fn install_plugin(plugin_id: &str, project_path: &str) -> Result<(), String>
     if let Some(refusal) = enforce::withheld(&manifest, true) {
         return Err(format!("{plugin_id} cannot be installed: {}", refusal.sentence(&manifest)));
     }
+    refuse_preview(plugin_id, manifest.preview, preview_on)?;
 
     // Install from bundled plugins (no download needed)
     install_bundled_plugin(plugin_id, project_path)
+}
+
+/// A plugin its publisher marks `preview` is installed only for a user who
+/// turned on Preview features. The catalog already hides it; this stops a
+/// typed `moss plugin install` from going round the catalog. A copy already
+/// in the folder never reaches here (an install of it returns early), so it
+/// keeps running.
+fn refuse_preview(plugin_id: &str, preview: bool, preview_on: bool) -> Result<(), String> {
+    if !preview || preview_on {
+        return Ok(());
+    }
+    let file = crate::infra::app_data::app_config_path_early()
+        .map_or_else(|| "app-config.json".to_string(), |p| p.display().to_string());
+    Err(format!(
+        "{plugin_id} is a preview plugin and installs only with Preview features on. \
+         In the moss app, turn on Settings > Preview features. \
+         Without the app, add \"experimental\": {{\"preview_features\": true}} to {file}"
+    ))
 }
 
 /// The catalog's current entry for `plugin_id`.
@@ -1323,7 +1350,7 @@ deploy = "other-deployer"
         assert!(ids.contains(&"email"), "email should be a built-in channel");
     }
 
-    /// NORTH-STAR pattern 2: the registration table carries a totality test
+    /// The registration table carries a totality test
     /// beside it. Every surface (rows, ids, icons) derives from
     /// BUILTIN_CHANNELS, and every row fully resolves.
     #[test]

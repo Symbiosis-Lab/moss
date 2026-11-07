@@ -601,28 +601,10 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   border-radius: 50%;
 }
 
-/* ---------------------------------------------------------------------------
-   Controls: the glass zoom capsule and the reset circle.
-
-   Material is a translucent surface tint plus a blur+saturate filter (never
-   applied under prefers-reduced-transparency, which a reduced-transparency
-   reader has already opted into for exactly this reason) and a 0.5px
-   top/bottom rim that reads as a specular highlight/shadow pair, the same
-   recipe a prototype of this map settled on. Each control's own 36px
-   visible circle carries a 44px hit area through an inset `::after`
-   pseudo-element wider than the paint, so the hit area never changes the
-   capsule's own rhythm.
-   --------------------------------------------------------------------------- */
-
+/* The control stack's own look is `map-controls.css`; the explorer puts it top right. */
 .moss-places-controls {
-  position: absolute;
-  z-index: 4;
   inset-block-start: 12px;
   inset-inline-end: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
 }
 
 /* Collapsed embeds keep their zoom and expand controls out of the artwork
@@ -660,123 +642,6 @@ body:not(.immersive-fs-active) figure[data-moss-place-embed]:is(:hover, :focus-w
   }
 }
 
-.moss-places-control,
-.moss-places-capsule,
-.moss-places-chip,
-.moss-places-chip-menu {
-  position: relative;
-  margin: 0;
-  border: 0;
-  background: color-mix(in srgb, var(--moss-color-surface) 72%, transparent);
-  box-shadow:
-    var(--moss-elevation-1),
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.35),
-    inset 0 -0.5px 0 rgba(0, 0, 0, 0.08);
-  color: var(--moss-color-text);
-}
-@media not (prefers-reduced-transparency: reduce) {
-  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    .moss-places-control,
-    .moss-places-capsule,
-    .moss-places-chip,
-    .moss-places-chip-menu {
-      backdrop-filter: blur(16px) saturate(180%);
-      -webkit-backdrop-filter: blur(16px) saturate(180%);
-    }
-  }
-}
-
-.moss-places-control {
-  box-sizing: border-box;
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border-radius: 50%;
-  font: inherit;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-.moss-places-control::before {
-  content: "";
-  font-size: 20px;
-  line-height: 1;
-}
-.moss-places-control[data-control="zoom-in"]::before {
-  content: "+";
-}
-.moss-places-control[data-control="zoom-out"]::before {
-  content: "\2212"; /* minus sign, not a hyphen */
-}
-.moss-places-control[data-control="reset"]::before {
-  width: 13px;
-  height: 13px;
-  border: 1.75px solid currentColor;
-  border-radius: 50%;
-}
-/* The invisible hit area: grows past the painted circle's own edge without
-   changing the capsule's rhythm, and the capsule group below never clips
-   with overflow, so this can safely extend past the visible cell. */
-.moss-places-control::after {
-  content: "";
-  position: absolute;
-  inset: -4px;
-}
-.moss-places-control:disabled {
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-/* The capsule carries the material/radius/shadow; its own two cells are
-   transparent so that background shows through, divided by one hairline.
-   Each cell's own corners inherit the capsule's radius at its two OUTER
-   logical corners only — `border-radius: 0` on a flat cell would paint a
-   square hover/pressed fill poking past the capsule's own rounded ends. */
-.moss-places-capsule {
-  display: flex;
-  flex-direction: column;
-  width: 36px;
-  border-radius: 18px;
-}
-.moss-places-capsule .moss-places-control {
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border-radius: 0;
-}
-.moss-places-capsule .moss-places-control:first-child {
-  border-start-start-radius: inherit;
-  border-start-end-radius: inherit;
-}
-.moss-places-capsule .moss-places-control:last-child {
-  border-end-start-radius: inherit;
-  border-end-end-radius: inherit;
-}
-.moss-places-capsule .moss-places-control + .moss-places-control {
-  border-block-start: 1px solid color-mix(in srgb, var(--moss-color-text) 14%, transparent);
-}
-
-@media (hover: hover) {
-  .moss-places-control:hover {
-    background: color-mix(in srgb, var(--moss-color-surface) 90%, transparent);
-  }
-}
-.moss-places-control:focus-visible {
-  outline: 2px solid var(--moss-color-ui-accent);
-  outline-offset: 2px;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .moss-places-control {
-    transition: background 150ms ease-out, transform 150ms ease-out;
-  }
-  .moss-places-control:active {
-    transform: scale(0.94);
-  }
-}
-
 /* ---------------------------------------------------------------------------
    The breadcrumb scope chip: the map's one hierarchy control, top left —
    the same glass material (above) as the zoom capsule opposite it. Replaces
@@ -805,6 +670,7 @@ body:not(.immersive-fs-active) figure[data-moss-place-embed]:is(:hover, :focus-w
   max-inline-size: calc(100% - 84px);
   padding-inline: 10px;
   padding-block: 7px;
+  border: 0;
   border-radius: 18px;
   font-size: var(--moss-size-xs);
   line-height: 1.2;
@@ -1006,6 +872,7 @@ button.moss-places-chip-crumb {
   max-block-size: 50vh;
   overflow-y: auto;
   padding: 4px;
+  border: 0;
   border-radius: 10px;
 }
 
@@ -1156,16 +1023,6 @@ button.moss-places-chip-crumb {
   align-self: flex-start;
   border-radius: 8px;
   overflow: hidden;
-}
-/* The box above is one fixed size, but `article figure:not(.video-figure) img`
-   (site.css) out-ranks the generic cover rule and gives the image
-   `block-size: auto`, so each image kept its own natural height inside the
-   box. Out-rank it back: the image fills the box and is cropped. */
-.moss-places-cards .moss-card-cover > img,
-.moss-places-cards .moss-card-cover > picture > img {
-  inline-size: 100%;
-  block-size: calc(100% + 1px);
-  object-fit: cover;
 }
 .moss-places-card-select:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
@@ -1346,7 +1203,7 @@ button.moss-places-chip-crumb {
    --------------------------------------------------------------------------- */
 .moss-place-map[data-moss-place-embed] {
   position: relative;
-  aspect-ratio: 3 / 2;
+  aspect-ratio: var(--moss-place-map-ar, 3 / 2);
   overflow: hidden;
   border-radius: 8px;
 }

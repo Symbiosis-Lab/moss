@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-rust-version = "1.80"
+rust-version = "1.89"
 
 [workspace.dependencies]
 moss-core = { path = "crates/moss-core", version = "0.22.0" }

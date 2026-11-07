@@ -15,7 +15,7 @@
  * showing for the same operation.
  */
 
-import type { DeploymentInfo } from "./context.js";
+import type { CopyOutcome, DeploymentInfo } from "./context.js";
 
 /**
  * Outcome notification described by a hook result.
@@ -75,6 +75,8 @@ export interface HookResult {
   deployment?: DeploymentInfo;
   /** Setup verdict (populated by the optional `check_setup` hook) */
   setup?: SetupVerdict | LegacySetupVerdict;
+  /** A copy hook's answer (populated by `publish_copy` and its siblings) */
+  copy?: CopyOutcome | null;
 }
 
 /**

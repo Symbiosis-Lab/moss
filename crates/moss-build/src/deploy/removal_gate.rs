@@ -8,7 +8,8 @@
 //! (`manifest::change_set::removed_addresses`); this module owns what the gate
 //! does with it and how it reads.
 
-use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress};
+use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalReason, RemovedAddress, WithdrawnBy};
+use crate::build::feeds::redirect_table::moves_a_folder;
 use crate::build::served_path::served_address;
 
 /// How many addresses a message names before counting the rest.
@@ -20,6 +21,21 @@ pub(crate) fn cause_line(r: &RemovedAddress) -> String {
     if r.reason == RemovalReason::AuthorRemoved {
         if r.source.is_none() && crate::build::feeds::calendar::is_calendar_file(&r.path) {
             return format!("{at} is gone because no event page says `start:` there any more.");
+        }
+        match r.withdrawn_by {
+            Some(WithdrawnBy::AiAnswers) => {
+                return format!("{at} is gone because the site asks AI assistants not to use its pages.");
+            }
+            Some(WithdrawnBy::AiSwitches) => {
+                return format!("{at} is gone because the site no longer sets its AI switches.");
+            }
+            Some(WithdrawnBy::SelectionTools) => {
+                return format!(
+                    "{at} is gone because the site no longer offers Share on selected text \
+                     (`selection_tools` under [site]), whose pictures carry the page's code."
+                );
+            }
+            None => {}
         }
         return match &r.source {
             Some(src) => format!("{at} is gone because you deleted its source ({src})."),
@@ -85,8 +101,8 @@ fn groups(pending: &[PendingRemoval]) -> Vec<Group<'_>> {
         let (old_dir, new_dir) = (parent(&p.address)?, parent(to)?);
         (last(&p.address) == last(to) && old_dir != new_dir).then(|| (old_dir.to_string(), new_dir.to_string()))
     };
-    // A folder line cannot name the site root, so no such line is suggested.
-    let pair = |p: &PendingRemoval| folder_pair(p).filter(|(old, new)| old != "/" && new != "/");
+    // Only a line that would move a folder is suggested as one.
+    let pair = |p: &PendingRemoval| folder_pair(p).filter(|(old, new)| moves_a_folder(old, new));
     let pairs: Vec<Option<(String, String)>> = pending.iter().map(pair).collect();
     let known: std::collections::BTreeSet<(String, String)> = pairs.iter().flatten().cloned().collect();
     let lift = |mut p: (String, String)| loop {
@@ -224,7 +240,32 @@ mod tests {
             reason: crate::build::manifest::change_set::RemovalReason::AuthorRemoved,
             moved_to: None,
             source: None,
+            withdrawn_by: None,
         };
         assert_eq!(cause_line(&r), "/events/talk/event.ics is gone because no event page says `start:` there any more.");
+    }
+
+    #[test]
+    fn a_file_a_setting_stopped_names_the_setting() {
+        let gone = |path: &str, by| RemovedAddress {
+            path: path.into(),
+            reason: RemovalReason::AuthorRemoved,
+            moved_to: None,
+            source: None,
+            withdrawn_by: Some(by),
+        };
+        assert_eq!(
+            cause_line(&gone("qr/notes/spring.svg", WithdrawnBy::SelectionTools)),
+            "/qr/notes/spring.svg is gone because the site no longer offers Share on selected text \
+             (`selection_tools` under [site]), whose pictures carry the page's code."
+        );
+        assert_eq!(
+            cause_line(&gone("llms.txt", WithdrawnBy::AiAnswers)),
+            "/llms.txt is gone because the site asks AI assistants not to use its pages."
+        );
+        assert_eq!(
+            cause_line(&gone(".well-known/tdmrep.json", WithdrawnBy::AiSwitches)),
+            "/.well-known/tdmrep.json is gone because the site no longer sets its AI switches."
+        );
     }
 }

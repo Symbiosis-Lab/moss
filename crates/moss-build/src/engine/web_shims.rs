@@ -1,6 +1,6 @@
-//! Web globals the github/matters bundles + moss-api SDK touch (report 3 §2):
+//! Web globals the github/matters bundles + moss-api SDK touch:
 //! console, atob/btoa, TextEncoder/TextDecoder, crypto.randomUUID. Plus tokio
-//! timers (Task 6). All sync fns use Func::from (report 1 §1); install on
+//! timers. All sync fns use Func::from; install on
 //! globalThis inside a `with`/`async_with!` closure.
 
 use rquickjs::{Ctx, Result, prelude::Func};
@@ -115,13 +115,128 @@ pub fn install_text_codec(ctx: &Ctx<'_>) -> Result<()> {
     Ok(())
 }
 
-/// crypto.randomUUID.
-pub fn install_crypto(ctx: &Ctx<'_>) -> Result<()> {
+/// crypto.randomUUID, and the part of `crypto.subtle` plugins sign requests
+/// with: `importKey("raw", …)` of an HMAC key and `sign("HMAC", …)`, shaped as
+/// the Web Crypto API is in browsers, Node and Deno, so the same plugin code
+/// runs in moss and under a test runner.
+///
+/// An imported key lives here, in this context's own table, never in
+/// JavaScript: the script holds only the key's index, so nothing a plugin's
+/// code does to its realm (replacing `WeakMap.prototype.get`, say) can read
+/// the key's bytes or let a key sign that was imported only to verify.
+pub fn install_crypto<'js>(ctx: &Ctx<'js>) -> Result<()> {
     let crypto = rquickjs::Object::new(ctx.clone())?;
     crypto.set("randomUUID", Func::from(|| uuid::Uuid::new_v4().to_string()))?;
     ctx.globals().set("crypto", crypto)?;
+    let held: std::rc::Rc<std::cell::RefCell<Vec<(ring::hmac::Key, bool)>>> = Default::default();
+    let table = held.clone();
+    // Answers one number, the key's index times four plus 2 if it may sign and
+    // 1 if it may verify, or null for usages an HMAC key cannot have. A number
+    // and not an object, so no setter a plugin put on a prototype sees or
+    // changes it. The usages are read once, and that one reading decides both
+    // what the key may do and what it shows.
+    let import = rquickjs::Function::new(ctx.clone(), move |ctx: Ctx<'js>, hash: String, raw: rquickjs::TypedArray<'js, u8>, usages: rquickjs::Value<'js>| -> Result<Option<u32>> {
+        let Some((_, algorithm)) = HMAC_HASHES.iter().find(|(name, _)| *name == hash) else {
+            return Err(rquickjs::Exception::throw_type(&ctx, &format!("unsupported hash {hash}")));
+        };
+        // A Proxy does not convert, so its traps never run here.
+        let Ok(usages) = <Vec<String> as rquickjs::FromJs>::from_js(&ctx, usages) else { return Ok(None) };
+        if usages.is_empty() || usages.iter().any(|u| u != "sign" && u != "verify") {
+            return Ok(None);
+        }
+        let signs = usages.iter().any(|u| u == "sign");
+        let verifies = usages.iter().any(|u| u == "verify");
+        let mut table = table.borrow_mut();
+        let id = u32::try_from(table.len()).ok().filter(|_| table.len() < MAX_HMAC_KEYS).and_then(|n| n.checked_mul(4));
+        let Some(id) = id else {
+            return Err(rquickjs::Exception::throw_message(&ctx, &format!("a plugin may hold at most {MAX_HMAC_KEYS} HMAC keys")));
+        };
+        table.push((ring::hmac::Key::new(*algorithm, raw.as_ref()), signs));
+        Ok(Some(id | (u32::from(signs) << 1) | u32::from(verifies)))
+    })?;
+    let sign = rquickjs::Function::new(ctx.clone(), move |ctx: Ctx<'js>, id: u32, data: rquickjs::TypedArray<'js, u8>| -> Result<rquickjs::Value<'js>> {
+        let table = held.borrow();
+        let Some((key, true)) = table.get(id as usize) else { return Ok(rquickjs::Value::new_null(ctx)) };
+        let tag = ring::hmac::sign(key, data.as_ref());
+        Ok(rquickjs::TypedArray::<u8>::new(ctx, tag.as_ref().to_vec())?.into_value())
+    })?;
+    let install: rquickjs::Function = ctx.eval(SUBTLE_JS)?;
+    let hashes: Vec<&str> = HMAC_HASHES.iter().map(|(name, _)| *name).collect();
+    install.call::<_, ()>((import, sign, hashes))?;
     Ok(())
 }
+
+/// Imported keys are never freed while the plugin runs, so their number is
+/// capped to bound the memory one plugin can hold.
+const MAX_HMAC_KEYS: usize = 65_536;
+
+const HMAC_HASHES: [(&str, ring::hmac::Algorithm); 4] = [
+    ("SHA-1", ring::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY),
+    ("SHA-256", ring::hmac::HMAC_SHA256),
+    ("SHA-384", ring::hmac::HMAC_SHA384),
+    ("SHA-512", ring::hmac::HMAC_SHA512),
+];
+
+/// Wraps the host's HMAC in the Web Crypto shapes. A key object shows its
+/// type, algorithm and usages; what it signs and whether it may sign are the
+/// host's, so changing those fields changes nothing. Errors carry the Web
+/// Crypto names on a plain Error, as the runtime has no DOMException.
+const SUBTLE_JS: &str = r#"(importHmac, signHmac, HASHES) => {
+  // Taken now, before any plugin code runs, so replacing them later cannot
+  // redirect which index a key object stands for.
+  const keys = new WeakMap();
+  const { apply } = Reflect;
+  const { get: mapGet, set: mapSet } = WeakMap.prototype;
+  const nameOf = (a) => String(typeof a === "string" ? a : a?.name ?? "").toUpperCase();
+  const error = (name, message) => Object.assign(new Error(message), { name });
+  const bytes = (data) => {
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    throw new TypeError("expected an ArrayBuffer or a view of one");
+  };
+  class CryptoKey {
+    constructor() { throw new TypeError("Illegal constructor"); }
+  }
+  const subtle = {
+  async importKey(format, keyData, algorithm, extractable, usages) {
+      if (format !== "raw" || nameOf(algorithm) !== "HMAC") throw error("NotSupportedError", "moss's crypto.subtle imports raw HMAC keys only");
+      if (algorithm.hash === undefined) throw new TypeError("an HMAC key needs a hash");
+      const hash = HASHES.find((h) => h === nameOf(algorithm.hash));
+      if (!hash) throw error("NotSupportedError", `unsupported hash ${nameOf(algorithm.hash)}`);
+      const usageError = () => error("SyntaxError", "an HMAC key's usages are sign and verify");
+      if (!Array.isArray(usages)) throw usageError();
+      const raw = bytes(keyData);
+      if (!raw.length) throw error("DataError", "an HMAC key cannot be empty");
+      let length = raw.length * 8;
+      if (algorithm.length !== undefined) {
+        // The standard lets a key name a length within its last byte.
+        if (!(algorithm.length > length - 8 && algorithm.length <= length)) throw error("DataError", `length ${algorithm.length} does not fit a ${length}-bit key`);
+        length = algorithm.length;
+      }
+      const held = importHmac(hash, raw, usages);
+      if (typeof held !== "number") throw usageError();
+      const signs = (held & 2) !== 0;
+      const verifies = (held & 1) !== 0;
+      const value = (v) => ({ value: v, enumerable: true });
+      const key = Object.create(CryptoKey.prototype, {
+        type: value("secret"),
+        extractable: value(Boolean(extractable)),
+        algorithm: value({ name: "HMAC", hash: { name: hash }, length }),
+        usages: value(signs && verifies ? ["sign", "verify"] : signs ? ["sign"] : ["verify"]),
+      });
+      apply(mapSet, keys, [key, held >>> 2]);
+      return key;
+    },
+    async sign(algorithm, key, data) {
+      const id = apply(mapGet, keys, [key]);
+      const tag = nameOf(algorithm) === "HMAC" && typeof id === "number" ? signHmac(id, bytes(data)) : null;
+      if (tag === null) throw error("InvalidAccessError", "the key is not an HMAC key that may sign");
+      return tag.buffer;
+    },
+  };
+  Object.defineProperty(globalThis.crypto, "subtle", { value: subtle, enumerable: true });
+  globalThis.CryptoKey = CryptoKey;
+}"#;
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -321,6 +436,150 @@ mod tests {
         .await;
         assert_eq!(b64, "aGVsbG8=");
         assert_eq!(uuid_len, 36);
+    }
+
+    /// Runs `code` (top-level await allowed) with `crypto` installed and returns its completion value.
+    async fn with_crypto(code: &'static str) -> String {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        async_with!(ctx => |ctx| {
+            install_crypto(&ctx).unwrap();
+            install_text_codec(&ctx).unwrap();
+            let promise: rquickjs::Promise = ctx.eval_promise(code.as_bytes()).unwrap();
+            let envelope: rquickjs::Object = promise.into_future().await.unwrap();
+            envelope.get::<_, String>("value").unwrap()
+        })
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subtle_signs_hmac_as_the_rfc_test_vectors_do() {
+        // RFC 2202 and RFC 4231, test case 2 of each.
+        let tags = with_crypto(r#"
+            const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+            const enc = new TextEncoder();
+            // Key and data arrive as views into larger buffers, and the key's buffer is overwritten after import.
+            const tag = async (hash) => {
+                const keyBytes = enc.encode("..Jefe");
+                const key = await crypto.subtle.importKey("raw", keyBytes.subarray(2), { name: "HMAC", hash }, false, ["sign"]);
+                keyBytes.fill(0);
+                return hex(await crypto.subtle.sign("HMAC", key, enc.encode("..what do ya want for nothing?").subarray(2)));
+            };
+            [await tag("SHA-1"), await tag({ name: "SHA-256" })].join(" ")
+        "#).await;
+        assert_eq!(tags, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
+
+    /// Code in the plugin's own realm that replaces the intrinsics the shim
+    /// uses sees no key bytes and cannot make a verify-only key sign.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subtle_keys_survive_a_realm_that_replaces_its_intrinsics() {
+        let out = with_crypto(r#"
+            const seen = [];
+            const { get, set } = WeakMap.prototype;
+            WeakMap.prototype.set = function (k, v) { seen.push(v); return set.call(this, k, v); };
+            WeakMap.prototype.get = function (k) { const v = get.call(this, k); seen.push(v); return typeof v === "object" && v ? { ...v, usages: ["sign"] } : v; };
+            Array.prototype.includes = () => true;
+            const key = await crypto.subtle.importKey("raw", new Uint8Array([7, 7, 7]), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+            const signed = await crypto.subtle.sign("HMAC", key, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            const signer = await crypto.subtle.importKey("raw", new Uint8Array([9]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+            WeakMap.prototype.get = () => 1;
+            const forged = await crypto.subtle.sign("HMAC", {}, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            const tricky = ["verify"];
+            let reads = 0;
+            tricky.some = () => ++reads === 2;
+            const shown = await crypto.subtle.importKey("raw", new Uint8Array([5]), { name: "HMAC", hash: "SHA-256" }, false, tricky);
+            const widened = await crypto.subtle.sign("HMAC", shown, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            Object.defineProperty(Array.prototype, "0", { set() { Object.defineProperty(this, "0", { value: 1, writable: true, enumerable: true, configurable: true }); }, configurable: true });
+            const swapped = await crypto.subtle.importKey("raw", new Uint8Array([3]), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+            delete Array.prototype["0"];
+            const substituted = await crypto.subtle.sign("HMAC", swapped, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+            [signed, seen.length === 0, forged, widened, substituted, shown.usages.join(","), signer.usages.join(",")].join(" ")
+        "#).await;
+        assert_eq!(out, "InvalidAccessError true InvalidAccessError InvalidAccessError InvalidAccessError verify sign");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subtle_keeps_key_bytes_off_the_key_and_refuses_what_it_does_not_do() {
+        let out = with_crypto(r#"
+            const key = await crypto.subtle.importKey("raw", new Uint8Array([1, 2, 3]), { name: "HMAC", hash: "SHA-256" }, true, ["verify"]);
+            const refused = async (f) => { try { await f(); return "accepted"; } catch (e) { return e.name; } };
+            [
+              JSON.stringify(key),
+              key instanceof CryptoKey,
+              await refused(() => crypto.subtle.sign("HMAC", key, new Uint8Array(1))),
+              await refused(() => crypto.subtle.importKey("jwk", {}, { name: "HMAC", hash: "SHA-256" }, false, ["sign"])),
+              await refused(() => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "MD5" }, false, ["sign"])),
+              await refused(() => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-1" }, false, ["encrypt"])),
+              await refused(() => crypto.subtle.importKey("raw", new Uint8Array(0), { name: "HMAC", hash: "SHA-1" }, false, ["sign"])),
+              await refused(() => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-1" }, false, [])),
+              await refused(() => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC" }, false, ["sign"])),
+              await refused(() => crypto.subtle.importKey("raw", new Uint8Array([1, 2, 3]), { name: "HMAC", hash: "SHA-1", length: 16 }, false, ["sign"])),
+              (await crypto.subtle.importKey("raw", new Uint8Array([1, 2, 3]), { name: "hmac", hash: "sha-256", length: 20 }, false, ["sign"])).algorithm.length,
+              await refused(() => crypto.subtle.sign("HMAC", { type: "secret", usages: ["sign"], algorithm: { name: "HMAC", hash: { name: "SHA-1" } } }, new Uint8Array(1))),
+              await refused(async () => { try { key.usages.push("sign"); } catch {} return crypto.subtle.sign("HMAC", key, new Uint8Array(1)); }),
+              await refused(() => crypto.subtle.sign("ECDSA", key, new Uint8Array(1))),
+              await refused(() => new CryptoKey()),
+            ].join(" | ")
+        "#).await;
+        assert_eq!(out, r#"{"type":"secret","extractable":true,"algorithm":{"name":"HMAC","hash":{"name":"SHA-256"},"length":24},"usages":["verify"]} | true | InvalidAccessError | NotSupportedError | NotSupportedError | SyntaxError | DataError | SyntaxError | TypeError | DataError | 20 | InvalidAccessError | InvalidAccessError | InvalidAccessError | TypeError"#);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_plugin_holding_the_most_keys_is_refused_another() {
+        let out = with_crypto(r#"
+            const imp = () => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+            for (let i = 0; i < 65536; i++) await imp();
+            await imp().then(() => "accepted", (e) => `${e.name}: ${e.message}`)
+        "#).await;
+        assert_eq!(out, "Error: a plugin may hold at most 65536 HMAC keys");
+    }
+
+    /// Usages behind a Proxy are refused like any usages that are not a
+    /// plain list, so no trap decides what a key may do.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn usages_behind_a_proxy_are_refused() {
+        let out = with_crypto(r#"
+            const imp = (usages) => crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-256" }, false, usages).then((k) => k.usages.join(","), (e) => e.name);
+            let reads = 0;
+            const flipping = new Proxy(["verify"], { get(t, p) { return p === "0" && ++reads > 1 ? "sign" : t[p]; } });
+            const throwing = new Proxy(["sign"], { get(t, p) { if (p === "length") throw new Error("no"); return t[p]; } });
+            [await imp(flipping), await imp(throwing), reads, await imp(["verify"])].join(" ")
+        "#).await;
+        assert_eq!(out, "SyntaxError SyntaxError 0 verify");
+    }
+
+    /// Each context has its own key table: a key one plugin imported does not
+    /// sign in another's context, and the other's own first key signs with its
+    /// own bytes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn keys_do_not_cross_contexts() {
+        let rt = AsyncRuntime::new().unwrap();
+        let (a, b) = (AsyncContext::full(&rt).await.unwrap(), AsyncContext::full(&rt).await.unwrap());
+        let run = |code: &'static str| code.as_bytes();
+        let held = async_with!(a => |ctx| {
+            install_crypto(&ctx).unwrap();
+            let promise: rquickjs::Promise = ctx.eval_promise(run(r#"globalThis.k = await crypto.subtle.importKey("raw", new Uint8Array([1]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);"#)).unwrap();
+            let _: rquickjs::Value = promise.into_future().await.unwrap();
+            rquickjs::Persistent::save(&ctx, ctx.globals().get::<_, rquickjs::Object>("k").unwrap())
+        })
+        .await;
+        let out: String = async_with!(b => |ctx| {
+            install_crypto(&ctx).unwrap();
+            ctx.globals().set("foreign", held.restore(&ctx).unwrap()).unwrap();
+            let promise: rquickjs::Promise = ctx.eval_promise(run(r#"
+                const hex = (b) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+                const own = await crypto.subtle.importKey("raw", new Uint8Array([2]), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+                const crossed = await crypto.subtle.sign("HMAC", foreign, new Uint8Array(1)).then(() => "signed", (e) => e.name);
+                globalThis.out = [crossed, hex(await crypto.subtle.sign("HMAC", own, new Uint8Array(1)))].join(" ");
+            "#)).unwrap();
+            let _: rquickjs::Value = promise.into_future().await.unwrap();
+            ctx.globals().get("out").unwrap()
+        })
+        .await;
+        let own = ring::hmac::sign(&ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &[2]), &[0]);
+        let hex: String = own.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(out, format!("InvalidAccessError {hex}"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

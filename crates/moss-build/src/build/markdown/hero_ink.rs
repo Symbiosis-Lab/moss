@@ -274,7 +274,7 @@ impl Frame {
     /// The frame of a hero read straight from its fence.
     pub fn of(hero: &moss_core::ast::HeroShortcode, closing: bool) -> Self {
         let position = moss_core::media::parse_media_attrs(&hero.attrs).position;
-        Frame::new(position, hero.max_height, hero.align.as_deref(), hero.fade.as_deref() == Some("top"), closing, Words::read(&hero.overlay_text, &moss_core::ast::plain_text::inlines_to_plain_text(&hero.caption)))
+        Frame::new(position, hero.max_height, hero.align.as_deref(), hero.fade.as_deref() == Some("top"), closing, Words::read(&hero.overlay, &moss_core::ast::plain_text::inlines_to_plain_text(&hero.caption)))
     }
 
     /// The box's height at `width` px in `layout`. A phone's box without the
@@ -964,7 +964,7 @@ pub fn short_cap(hero: &moss_core::ast::HeroShortcode, theme: &TypeTheme) -> Opt
     let width = Layout::Mid.widths().0;
     let px = hero.max_height?.px(width);
     let credit = moss_core::ast::plain_text::inlines_to_plain_text(&hero.caption);
-    let need = if credit.is_empty() { WORDS_PX } else { WORDS_PX + Type::at(width, theme, Column::Default, false).credit(width, Words::read("", &credit).credit).rows(0.0).1 };
+    let need = if credit.is_empty() { WORDS_PX } else { WORDS_PX + Type::at(width, theme, Column::Default, false).credit(width, Words::read(&[], &credit).credit).rows(0.0).1 };
     (px < need).then_some((px, need))
 }
 
@@ -1004,9 +1004,31 @@ pub fn warn_closing_options(doc: &moss_core::ast::Document, closes_page: bool, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::build::media::dimensions::MediaDimensionLookup;
     use crate::types::content::MediaMetadata;
     use image::{DynamicImage, Rgb, RgbImage};
+
+    /// The words of a hero fence's body, as `Words::read` gets them parsed.
+    fn words(md: &str, credit: &str) -> Words {
+        Words::read(&moss_core::ast::parse(md).blocks, credit)
+    }
+
+    #[test]
+    fn the_words_read_a_row_of_links_as_the_renderer_marks_it() {
+        for row in ["[Visit](/v/)", "[[Visit]]", "<https://example.org/>", "[Visit][v]\n\n[v]: /v/", "[Visit](/a_(b))\n[Write](/w/)"] {
+            let w = words(row, "");
+            assert!(w.link_count >= 1 && w.text == 0.0, "{row}: {w:?}");
+        }
+
+        let sentence = words("[Visit](/v/) runs on into a sentence.", "");
+        assert!(sentence.link_count == 0 && sentence.text > 0.0, "{sentence:?}");
+        use moss_core::ast::{Block, ButtonItem, ButtonsShortcode, Shortcode, Url};
+        let item = ButtonItem { text: "Visit".into(), url: Url::Unresolved("/v/".into()) };
+        let row = Block::Shortcode(Shortcode::Buttons(ButtonsShortcode { items: vec![item], ..Default::default() }));
+        let w = Words::read(&[row], "");
+        assert!(w.link_count == 1 && w.text == 0.0, "a :::buttons row is the buttons: {w:?}");
+    }
 
     const PAGE: Page = Page { column: Column::Default, contents: false };
 
@@ -1541,7 +1563,7 @@ mod tests {
         let grid = Ground::from_image(&DynamicImage::ImageRgb8(img));
         let page = Some(BACKGROUNDS.0);
         let credit = |text: &str, layout| {
-            let frame = Frame { words: Words::read("## Words", text), ..closing(Some("top")) };
+            let frame = Frame { words: words("## Words", text), ..closing(Some("top")) };
             credit_ink(&grid.tones(&credit_spot(&frame, 0.5, layout, true, false), None, false), Some(CREDIT_INK.0), page)
         };
         for layout in [Layout::Narrow, Layout::Wide] {
@@ -1566,7 +1588,7 @@ mod tests {
 
     /// A closing frame with these words, uncropped.
     fn saying(overlay: &str) -> Frame {
-        Frame { words: Words::read(overlay, ""), ..closing(Some("top")) }
+        Frame { words: words(overlay, ""), ..closing(Some("top")) }
     }
 
     #[test]
@@ -1648,7 +1670,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let site = std::fs::read_to_string(root.join("tests/e2e/helpers/closing-picture-site.ts")).unwrap();
         let quoted = |name: &str| site.lines().find_map(|l| l.strip_prefix(&format!("export const {name} = \""))?.strip_suffix("\";")).unwrap_or_else(|| panic!("{name}")).to_string();
-        let words = Words::read(&format!("## {}\n\n[{}](https://example.org/new)", quoted("HEADING"), quoted("LINK_TEXT")), "");
+        let words = words(&format!("## {}\n\n[{}](https://example.org/new)", quoted("HEADING"), quoted("LINK_TEXT")), "");
         let theme = TypeTheme::default();
         let mut model = serde_json::Map::new();
         for width in [390.0_f32, 768.0, 1360.0, 2560.0] {
@@ -1748,7 +1770,7 @@ mod tests {
         let (large, small) = (reads(Face { font: 40.0, need: 3.0 }), reads(Face { font: 22.4, need: 4.5 }));
         assert!((large / small - 1.5).abs() < 0.01, "{large} {small}");
         let heading = |font: f32, weight: u16| TypeTheme { heading_size: moss_core::media::MaxHeight::parse(&format!("{font}px")), heading_weight: Some(weight), ..Default::default() };
-        let face = |t: TypeTheme| Type::at(1400.0, &t, Column::Default, false).blocks(&Words::read("## Heading", "")).remove(0).face;
+        let face = |t: TypeTheme| Type::at(1400.0, &t, Column::Default, false).blocks(&words("## Heading", "")).remove(0).face;
         assert_eq!(face(heading(24.0, 480)).need, 3.0);
         assert_eq!(face(heading(23.0, 480)).need, 4.5);
         assert_eq!(face(heading(19.0, 700)).need, 3.0, "18.66px at weight 700 is large");
@@ -1782,7 +1804,7 @@ mod tests {
         }
         // A larger, roomier link button makes a taller links' row.
         let row = |theme: TypeTheme| {
-            let words = Words::read("A heading\n\n[Go](#go)", "");
+            let words = words("A heading\n\n[Go](#go)", "");
             Type::at(1360.0, &theme, Column::Default, false).blocks(&words).last().map(|b| b.rows.1 - b.rows.0).unwrap()
         };
         let big = TypeTheme::of_theme(Some(":root { --moss-hero-link-size: 2rem; --moss-hero-link-padding: 1em; }"));
@@ -1801,7 +1823,7 @@ mod tests {
         }
         // A long credit sets more lines at a larger size, so its area is taller.
         let credit = "A credit line that names the photographer, the archive and the year of the print. ".repeat(3);
-        let height = |theme: TypeTheme| Type::at(1360.0, &theme, Column::Default, false).credit(1360.0, Words::read("", &credit).credit).rows(0.0).1;
+        let height = |theme: TypeTheme| Type::at(1360.0, &theme, Column::Default, false).credit(1360.0, Words::read(&[], &credit).credit).rows(0.0).1;
         assert!(height(size) > height(TypeTheme::default()));
         // The short-cap check measures the credit in the theme's size.
         let hero = moss_core::ast::HeroShortcode { max_height: moss_core::media::MaxHeight::parse("370px"), caption: vec![moss_core::ast::Inline::Text("Credit".into())], ..Default::default() };
@@ -1812,7 +1834,7 @@ mod tests {
 
     #[test]
     fn the_words_gap_token_moves_the_links_row_by_the_gap() {
-        let top = |theme: &TypeTheme, words: &str| Type::at(1360.0, theme, Column::Default, false).blocks(&Words::read(words, "")).last().map(|b| b.rows.0).unwrap();
+        let top = |theme: &TypeTheme, md: &str| Type::at(1360.0, theme, Column::Default, false).blocks(&words(md, "")).last().map(|b| b.rows.0).unwrap();
         let wide = TypeTheme::of_theme(Some(":root { --moss-hero-words-gap: 40px; }"));
         assert!(!wide.resized);
         // Text then links: one gap. A heading straight before the links: the heading's gap and the link's.
@@ -1880,7 +1902,7 @@ mod tests {
 
     #[test]
     fn the_words_start_clamp_8_2vw_24_below_the_top_and_the_heading_sets_at_1_08() {
-        let words = Words::read("## Heading", "");
+        let words = words("## Heading", "");
         for (width, top, font) in [(390.0_f32, 8.0, 22.4), (768.0, 15.36, 28.0), (1024.0, 20.48, 40.0), (1360.0, 24.0, 40.0), (2560.0, 24.0, 40.0)] {
             let block = Type::at(width, &TypeTheme::default(), Column::Default, false).blocks(&words).remove(0);
             assert!((block.rows.0 - top).abs() < 0.01, "{width}: the words start {} px down", block.rows.0);
@@ -1890,7 +1912,7 @@ mod tests {
 
     #[test]
     fn a_cap_on_the_heading_narrows_its_measure_and_a_line_height_moves_its_rows() {
-        let words = Words::read("## A heading long enough to wrap in a narrow cap, but not in the box", "");
+        let words = words("## A heading long enough to wrap in a narrow cap, but not in the box", "");
         let blocks = |css: &str| {
             let theme = TypeTheme::of_theme(Some(css));
             assert!(!theme.resized, "{css}");
@@ -1921,7 +1943,7 @@ mod tests {
         // A dark picture in the light theme: the words take the light ink, with the link, which has its own ground, left out.
         let lookup = lookup_of(&[("dark.png", &banded(GROUND, GROUND, 1.0)), ("mid.png", &banded([120; 3], [120; 3], 1.0))]);
         let words = |picture: &str, text: &str| {
-            let frame = Frame::new(None, None, Some("top"), false, true, Words::read(text, ""));
+            let frame = Frame::new(None, None, Some("top"), false, true, words(text, ""));
             ink_attributes(Some(&lookup), picture, None, InkRequest { frame, ..plain(Some("top"), Backing::Auto, true) })
         };
         let attrs = words("/dark.png", "## Heading\n\n[Go](#go)");
@@ -1944,7 +1966,7 @@ mod tests {
 
     #[test]
     fn a_cap_in_ch_takes_its_rows_from_the_narrow_end_and_its_width_from_the_wide_end() {
-        let words = Words::read("## A heading long enough to wrap in a narrow cap, but not in the box", "");
+        let words = words("## A heading long enough to wrap in a narrow cap, but not in the box", "");
         let theme = TypeTheme::of_theme(Some(".moss-hero-closing h2 { max-inline-size: 15ch; }"));
         assert!(!theme.resized && theme.heading_cap.is_some());
         let at = |t: &TypeTheme| Type::at(1360.0, t, Column::Default, false).blocks(&words).remove(0);
@@ -1979,7 +2001,7 @@ mod tests {
             }
         }
         let lookup = lookup_of(&[("specks.png", &DynamicImage::ImageRgb8(img))]);
-        let frame = Frame { words: Words::read("## Words", "A credit line."), ..closing(Some("top")) };
+        let frame = Frame { words: words("## Words", "A credit line."), ..closing(Some("top")) };
         let credit: Vec<_> = forced_ink_shortfalls(&lookup, ("/specks.png", None), Some("top"), &frame, true).into_iter().filter(|s| s.part == Part::Credit && !s.night).collect();
         assert_eq!(credit.len(), 3, "every layout falls short at its worst spot");
         for s in &credit {

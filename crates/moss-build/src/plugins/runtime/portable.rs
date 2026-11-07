@@ -224,7 +224,7 @@ pub fn get_plugin_env_var_impl(
 }
 
 // ============================================================================
-// PanelTask lifecycle bridge (Phase 2 entry — T8a)
+// PanelTask lifecycle bridge
 // ============================================================================
 //
 // `report_plugin_task_lifecycle` is the Rust entry point for the
@@ -242,14 +242,14 @@ pub fn get_plugin_env_var_impl(
 //    stored handle and applies the matching mutator.
 // 3. Terminal payloads remove the handle from the store after applying.
 //
-// The store is the only stateful piece T8a adds to Layer-2; `TaskHandle`
+// The store is the only stateful piece this bridge adds; `TaskHandle`
 // already owns its `(WindowId, TaskScope)` key so no per-call routing
 // state is needed. Pure-Rust callers continue to use
 // `TaskRegistry::spawn` / `with_progress` directly — this command is the
 // JS bridge only.
 
 /// A plugin job descriptor (`contributes.jobs[id]`) resolved against the
-/// loaded manifest and ALREADY NORMALIZED (Step 3 Phase 5, §8 + R13).
+/// loaded manifest and ALREADY NORMALIZED.
 ///
 /// This is moss's OWN typed verb — `verb` is the output of
 /// [`Verb::normalized`], run in PRODUCTION on the plugin-supplied word at
@@ -272,7 +272,7 @@ pub struct ResolvedJobDescriptor {
 /// reference.
 ///
 /// `descriptors` is the parallel store of resolved `contributes.jobs`
-/// descriptors (Step 3 Phase 5): when a plugin's `startTask` references a job
+/// descriptors: when a plugin's `startTask` references a job
 /// id, the Tauri command resolves the manifest descriptor (running
 /// `Verb::normalized` on the plugin's word — R13), and stashes the typed
 /// `ResolvedJobDescriptor` here keyed by the same `TaskId`. A terminal
@@ -336,7 +336,7 @@ pub enum PluginTaskLifecycle {
         has_progress: bool,
         cancellable: bool,
         /// Optional plugin-local job id referencing `contributes.jobs[id]`
-        /// in the plugin's manifest (Step 3 Phase 5, §8 + R13). When present,
+        /// in the plugin's manifest. When present,
         /// the Tauri command resolves the manifest descriptor (running
         /// `Verb::normalized` on the plugin's word) and stashes the typed
         /// `ResolvedJobDescriptor`; a terminal `Succeeded { amount }` then
@@ -359,8 +359,8 @@ pub enum PluginTaskLifecycle {
     },
     Succeeded {
         receipt: Option<String>,
-        /// Advisories the plugin PROPOSES on success (Step 3 Phase 5, §8 +
-        /// R13). Each is clamped through `clamp_plugin_advisory` (the severity
+        /// Advisories the plugin PROPOSES on success.
+        /// Each is clamped through `clamp_plugin_advisory` (the severity
         /// gavel) and attached to the Job's terminal state via the
         /// `TaskState::done` smart constructor — so an actionable `Blocking`
         /// proposal flips the run to `Failed` (invariant #1), while a
@@ -369,8 +369,8 @@ pub enum PluginTaskLifecycle {
         /// wire-compatible.
         #[serde(default)]
         advisories: Vec<crate::plugins::types::PluginAdvisory>,
-        /// The COUNT a descriptor-driven job reports on success (Step 3 Phase 5,
-        /// §8 + R13). When the run started with a `job` ref AND a stashed
+        /// The COUNT a descriptor-driven job reports on success.
+        /// When the run started with a `job` ref AND a stashed
         /// descriptor exists, moss pairs this count with the descriptor's noun
         /// to stamp `Amount { count, noun }` + the typed `Verb` on the Job — so
         /// moss renders "Syndicated · N posts" from its OWN value objects, not
@@ -383,8 +383,8 @@ pub enum PluginTaskLifecycle {
     Failed {
         error: String,
         recoverable: bool,
-        /// Advisories the plugin PROPOSES on failure (Step 3 Phase 5, §8 +
-        /// R13) — typically the blocking root cause. Clamped through the gavel;
+        /// Advisories the plugin PROPOSES on failure,
+        /// typically the blocking root cause. Clamped through the gavel;
         /// the first surviving advisory becomes the Job's `Failed` root cause
         /// (invariant #3). `#[serde(default)]` keeps legacy `failed()` calls
         /// wire-compatible.
@@ -562,8 +562,7 @@ pub fn report_plugin_task_lifecycle(
                             );
                         }
                         (None, _) => {
-                            // No descriptor (legacy / non-declaring plugins):
-                            // byte-identical to the pre-Phase-5 behavior — a bare
+                            // No descriptor (legacy / non-declaring plugins): a bare
                             // receipt with no advisories is the plain-success
                             // fast path; advisories flow through `done`.
                             if clamped.is_empty() {

@@ -122,12 +122,17 @@ test("the search overlay seam is a neutral hairline, not an accent underline", a
 });
 
 test("a wrapped nav row puts the links at the start edge and the toggles at the end", async ({
-  page,
+  browser,
+  baseURL,
 }) => {
+  // The shipped wrap, with scripts off: the measured split (nav-split.ts)
+  // replaces it whenever scripts run, so this is the no-script fallback and
+  // what a theme that keeps `.nav-right` a box gets.
   // 1024px: a desktop width, comfortably above the 48rem medium-nav breakpoint,
   // so any wrap here is driven by the breadcrumb's measured width and not by a
   // media query. This is the width at which the old ≤32rem-scoped rules failed.
-  await page.setViewportSize({ width: 1024, height: 900 });
+  const context = await browser.newContext({ baseURL, javaScriptEnabled: false, viewport: { width: 1024, height: 900 } });
+  const page = await context.newPage();
   await page.goto(
     "/programmes-and-long-form-reporting/field-notes-from-a-very-long-section-title/",
     { waitUntil: "load" },
@@ -176,6 +181,7 @@ test("a wrapped nav row puts the links at the start edge and the toggles at the 
     b.contentEnd,
     0,
   );
+  await context.close();
 });
 
 test("a theme's own focus ring draws no second box inside the search field", async ({ page }) => {

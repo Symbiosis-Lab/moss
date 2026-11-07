@@ -13,6 +13,9 @@ pub fn run(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("install") {
         return super::install_cli::run(args);
     }
+    if args.first().map(String::as_str) == Some("secret") {
+        return super::secret_cli::run(args);
+    }
     let mut dir = None;
     let mut json = false;
     let mut words = args.iter();

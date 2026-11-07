@@ -279,3 +279,23 @@ fn list_and_grid_cards_carry_the_text_colours_too() {
         assert!(card.contains(&format!("--moss-section-text-dark: {dark}")), "{rel}: {card}");
     }
 }
+
+#[test]
+fn an_ordinary_pages_own_colour_is_its_alone_and_beats_the_folders() {
+    let site = Site::new(&[
+        ("index.md", &page("Home")),
+        ("work/index.md", &folder_home("Work", Some("#a3312a"))),
+        ("work/loud.md", &folder_home("Loud", Some("#faf455"))),
+        ("work/quiet.md", &page("Quiet")),
+        ("notes/entry.md", &folder_home("Entry", Some("#123"))),
+        ("notes/other.md", &page("Other")),
+    ]);
+    let loud = body_tag(&site.html("work/loud/index.html")).to_string();
+    assert!(loud.contains(r#"data-section="work""#) && loud.contains("--moss-section-color: #faf455"), "{loud}");
+    let quiet = body_tag(&site.html("work/quiet/index.html")).to_string();
+    assert!(quiet.contains(r#"data-section="work""#) && quiet.contains("#a3312a") && !quiet.contains("#faf455"), "{quiet}");
+    let entry = body_tag(&site.html("notes/entry/index.html")).to_string();
+    assert!(entry.contains(r#"data-section="entry""#) && entry.contains("--moss-section-color: #123"), "{entry}");
+    let other = body_tag(&site.html("notes/other/index.html")).to_string();
+    assert!(!other.contains("data-section") && !other.contains("--moss-section-color"), "{other}");
+}

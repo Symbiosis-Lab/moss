@@ -57,7 +57,7 @@ pub struct PluginContributes {
     #[serde(default)]
     pub processor: Option<ProcessorContribution>,
 
-    /// Job descriptors a plugin supplies (Step 3 Phase 5, §8 + R13).
+    /// Job descriptors a plugin supplies.
     ///
     /// Parallels `frontmatter`: the plugin declares the MEANING of each Job it
     /// produces (a past-tense `verb` + an amount `noun`); moss normalizes the
@@ -152,6 +152,12 @@ pub struct ChannelContribution {
     /// an already-installed plugin keeps its connection.
     #[serde(default, alias = "requires_login")]
     pub login: bool,
+
+    /// What the network can carry, for a channel that posts one copy per call
+    /// (`publish_copy`, `update_copy`, `delete_copy`). moss plans and shapes
+    /// the copies; such a channel is never called through `syndicate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syndication: Option<crate::syndication::channel::ChannelSpec>,
 
     /// What the user must have arranged before this channel works.
     #[serde(flatten)]

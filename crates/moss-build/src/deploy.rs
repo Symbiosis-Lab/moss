@@ -141,6 +141,14 @@ impl DeployReport {
             DeployReport::DryRun(_) => false,
         }
     }
+
+    /// The address the publish is live at, which every copy links back to.
+    pub fn site_url(&self) -> Option<&str> {
+        match self {
+            DeployReport::Push(PushResult::Success { url, .. }) | DeployReport::Plugin { url, .. } => Some(url),
+            _ => None,
+        }
+    }
 }
 
 impl From<PushResult> for DeployReport {
@@ -1066,9 +1074,9 @@ pub async fn register_moss_host_site(
 /// most, since only the app pre-checks a name with `check_site_id_available`.
 fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) -> String {
     let msg = e.to_string();
-    // Seta returns 403 "pubkey not verified for this email" BEFORE it checks
-    // ACLs, so this is the typical first-publish-of-a-new-folder failure.
-    if msg.contains("pubkey not verified") || msg.contains("verification") {
+    // Seta checks the key's email before its ACLs, so this is the typical
+    // first publish of a new folder.
+    if matches!(&e, crate::seta::client::SetaError::Api { status, message } if crate::seta::client::asks_to_verify_email(*status, message)) {
         return format!(
             "{} This folder's key has not been linked to an email yet. \
              Re-run with `--email <address>` to be sent a sign-in link \

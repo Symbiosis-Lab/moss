@@ -339,13 +339,25 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",
-        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for the cards of a folder listing rather than the cells of a `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
+        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for the cards of a folder listing rather than the cells of a `:::grid`. `auto` gives each picture cover its own shape, uncropped, for a collection of pictures of different shapes; a video or iframe cover needs a ratio. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
     },
     CustomProp {
         name: "--moss-card-cover-fit",
         owner: "moss-card-cover",
         default: "cover",
         description: "`object-fit` for card covers. `contain` for artwork whose edges carry meaning; `cover` stays right for photography.",
+    },
+    CustomProp {
+        name: "--moss-card-pictures-ratio",
+        owner: "moss-card-pictures",
+        default: "5 / 3",
+        description: "Aspect ratio every picture in a summary row's strip (`pictures:N`) is cropped to. `--moss-card-cover-fit` applies to the strip too.",
+    },
+    CustomProp {
+        name: "--moss-card-pictures-gap",
+        owner: "moss-card-pictures",
+        default: "var(--moss-space-xs)",
+        description: "Space between the pictures of a summary row's strip.",
     },
     CustomProp {
         name: "--moss-card-min",
@@ -492,6 +504,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Fill colour of an explorer marker's own dot, its cluster-count badge, and a bloomed ring's legs/dots. `.moss-place-map` already sets this to `var(--moss-color-accent, #2d5a2d)` for the static map's own pins (precision_rank's marker colour); the explorer's own JS-positioned markers read the same property, so recolouring one recolours both.",
     },
     CustomProp {
+        name: "--moss-place-map-ar",
+        owner: "moss-place-map",
+        default: "3 / 2",
+        description: "Aspect ratio of a static place map. moss sets it on a figure drawn over a historical layer (`data-map-cut`), so the figure is cut to the part of the frame the layer covers; read-only for a theme, which sizes the map through its container instead.",
+    },
+    CustomProp {
+        name: "--moss-place-focus",
+        owner: "moss-place-map",
+        default: "#1b4fd8",
+        description: "The ring that shows around a linked dot of a static place map while it has keyboard focus; `.moss/` themes set it to keep 3:1 against their land tones.",
+    },
+    CustomProp {
         name: "--moss-place-marker-casing",
         owner: "moss-places-marker",
         default: "#ffffff",
@@ -531,7 +555,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-section-color",
         owner: "body",
         default: "unset",
-        description: "The accent colour of the section a page sits in, written by moss as an inline style on `<body>` (and on a listing card for such a page, on the card's root element) when a folder's home page declares `color:`; the nearest coloured ancestor folder wins. No moss style reads it, so nothing changes until a theme does: `var(--moss-section-color, var(--moss-color-accent))`. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
+        description: "The accent colour of the section a page sits in, written by moss as an inline style on `<body>` (and on a listing card for such a page, on the card's root element) when a folder's home page declares `color:`; the nearest coloured ancestor folder wins, and an ordinary page's own `color:` replaces it for that page alone. No moss style reads it, so nothing changes until a theme does: `var(--moss-section-color, var(--moss-color-accent))`. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
     },
     CustomProp {
         name: "--moss-section-text",
@@ -711,7 +735,13 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         selector: "body",
         name: "data-section",
         values: &[],
-        description: "The url path segment of the folder whose home page sets `color:` for this page: `work` for every page under `/work/`, the nearest coloured folder when they nest. Absent on pages outside any coloured folder, and on a site-wide colour set by the front page. Scope a section with `body[data-section=\"work\"]` and tint it with `var(--moss-section-color)`, instead of `body[data-path^=\"/work/\"]`, which breaks when the folder is renamed.",
+        description: "The url path segment of the folder whose home page sets `color:` for this page: `work` for every page under `/work/`, the nearest coloured folder when they nest. An ordinary page's own `color:` does not change it; only on a page outside any coloured folder is it the page's own name. Absent on pages with no colour at all, and on a site-wide colour set by the front page. Scope a section with `body[data-section=\"work\"]` and tint it with `var(--moss-section-color)`, instead of `body[data-path^=\"/work/\"]`, which breaks when the folder is renamed.",
+    },
+    ScopeAttr {
+        selector: "blockquote",
+        name: "cite",
+        values: &[],
+        description: "The address of the record a quotation comes from, set when the blockquote's last paragraph begins with an em dash and links to an `http` or `https` address (a grid quote cell takes it from its italic source line). Only the attribute is added: the markup and the source line are as before. Style the cited ones with `blockquote[cite]`.",
     },
     ScopeAttr {
         selector: "html",
