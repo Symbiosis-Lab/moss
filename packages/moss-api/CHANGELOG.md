@@ -13,6 +13,10 @@ release heading.
 
 ## [Unreleased]
 
+### Changed
+
+- `executeBinary`: an absolute `binaryPath` is accepted only where moss itself would find that binary (a PATH directory, a standard install directory such as `/opt/homebrew/bin`, or the path `resolve_git_path` returned); any other path is refused with a message naming the binary. A bare name, looked up on the PATH, works as before.
+
 ## [0.16.0] - 2026-11-07
 
 ### Added

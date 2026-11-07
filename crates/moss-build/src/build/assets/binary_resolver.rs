@@ -66,9 +66,10 @@ const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 /// Finder inherits a minimal PATH that omits the Homebrew and MacPorts
 /// prefixes, so a tool installed there is invisible to the PATH step.
 #[cfg(target_os = "macos")]
-const STANDARD_INSTALL_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
+pub(crate) const STANDARD_INSTALL_DIRS: &[&str] =
+    &["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
 #[cfg(not(target_os = "macos"))]
-const STANDARD_INSTALL_DIRS: &[&str] = &[];
+pub(crate) const STANDARD_INSTALL_DIRS: &[&str] = &[];
 
 // =============================================================================
 // Types

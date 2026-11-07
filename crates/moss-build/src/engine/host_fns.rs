@@ -960,8 +960,9 @@ mod tests {
         assert!(err.contains("does not declare"), "{err}");
     }
 
-    /// A named grant admits exactly its binary, wherever the call's path puts
-    /// it, and nothing else — `execute_binary:git` is not `execute_binary:rm`.
+    /// A named grant admits exactly its binary and nothing else —
+    /// `execute_binary:git` is not `execute_binary:rm`, nor any other file
+    /// that happens to be called `git`.
     #[test]
     fn a_named_binary_grant_admits_only_its_basename() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -975,12 +976,33 @@ mod tests {
             declared: grants.as_ref(),
         };
         assert!(require_binary_grant(&host, "git").is_ok());
-        // The grant names the basename, so a resolved absolute path matches.
-        assert!(require_binary_grant(&host, "/usr/bin/git").is_ok());
+        let planted = tmp.path().join("git");
+        std::fs::write(&planted, "").unwrap();
+        let err = require_binary_grant(&host, planted.to_str().unwrap())
+            .expect_err("a file named git outside where moss looks must refuse");
+        assert!(err.contains("is not the `git` moss runs"), "{err}");
         let err = require_binary_grant(&host, "rm").expect_err("ungranted binary must refuse");
         assert!(err.contains("execute_binary:rm"), "{err}");
         // A path with no basename can match no grant.
         assert!(require_binary_grant(&host, "/").is_err());
+    }
+
+    /// An absolute path to the granted binary where the PATH finds it passes,
+    /// as `/bin/sh` does for a plugin that starts a daemon through it.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_grant_admits_the_binary_on_the_path_by_absolute_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        plugin_with_requires(tmp.path(), "node", Some("execute_binary:sh"));
+        let grants = discovered(tmp.path(), "node").declared_for("node");
+        let host = EngineHost {
+            app: None,
+            state: None,
+            project_path: tmp.path().to_str().unwrap(),
+            plugin: Some("node"),
+            declared: grants.as_ref(),
+        };
+        assert!(require_binary_grant(&host, "/bin/sh").is_ok());
     }
 
     /// The pre-2026-08-30 blanket token still grants every binary — an

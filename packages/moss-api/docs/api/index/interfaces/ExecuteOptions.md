@@ -22,7 +22,11 @@ Arguments to pass to the binary
 binaryPath: string;
 ```
 
-Path to the binary (can be just the name if in PATH)
+The binary to run, named in the manifest's `requires` as
+`execute_binary:<name>`. Pass the bare name to have it looked up on the
+PATH. An absolute path is accepted only where moss itself would find that
+binary: a PATH directory, a standard install directory such as
+`/opt/homebrew/bin`, or the path `resolve_git_path` returned.
 
 ***
 
