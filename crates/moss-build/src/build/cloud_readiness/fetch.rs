@@ -298,7 +298,7 @@ fn cloud_only_files(folder: &Path) -> Listing {
         .map(|r| folder.join(r.rel.trim_end_matches('/')))
         .collect();
     let mut listing = Listing { files: Vec::new(), unlisted: Vec::new() };
-    for entry in walkdir::WalkDir::new(folder).sort_by_file_name().into_iter().filter_entry(|e| !regenerated.iter().any(|p| e.path() == p)) {
+    for entry in walkdir::WalkDir::new(folder).sort_by(crate::build::scan::path_collision::nfc_name_order).into_iter().filter_entry(|e| !regenerated.iter().any(|p| e.path() == p)) {
         match entry {
             Ok(entry) if entry.file_type().is_file() => {
                 let stub_target = icloud::icloud_stub_target(entry.path());

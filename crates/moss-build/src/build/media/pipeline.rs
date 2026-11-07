@@ -1436,7 +1436,9 @@ pub(crate) fn copy_deferred_assets(
     let mut copy = html.copy;
     let mut run = AssetWalkTally { stats: html.stats, ..Default::default() };
     let layer_sources: Vec<_> = crate::config::map_layers::declared_sources(source_root).iter().map(|s| source_root.join(s)).collect();
-    for entry in WalkDir::new(source_root).into_iter()
+    for entry in WalkDir::new(source_root)
+        .sort_by(crate::build::scan::path_collision::nfc_name_order)
+        .into_iter()
         .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources).is_none())
     {
         let entry = match entry {

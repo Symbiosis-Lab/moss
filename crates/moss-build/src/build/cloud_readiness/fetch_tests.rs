@@ -235,3 +235,19 @@ fn files_the_provider_delivers_are_reported_fetched() {
     assert_eq!(code, 0, "{said:?}");
     assert!(out[0].starts_with("Fetched 1 files"), "{out:?}");
 }
+
+/// Files in the cloud are listed, and so fetched and reported, in composed
+/// name order.
+#[test]
+fn cloud_files_are_listed_in_composed_name_order() {
+    let (_tmp, site) = site_in_a_drive_folder();
+    let names = ["e\u{301}clair.md", "f.md"];
+    let _in_cloud: Vec<_> = names
+        .iter()
+        .map(|name| {
+            std::fs::write(site.join(name), "x").unwrap();
+            icloud::pretend::evicted(&site.join(name))
+        })
+        .collect();
+    assert_eq!(cloud_only_files(&site).files, [site.join("f.md"), site.join("e\u{301}clair.md")]);
+}

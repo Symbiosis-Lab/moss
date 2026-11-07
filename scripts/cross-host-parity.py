@@ -9,7 +9,7 @@ segmentation, math, an image, title cards in Latin and Chinese, a place map
 and a video), builds it with a given moss binary, and prints a sorted
 `sha256  path` digest of everything the build published.
 
-    cross-host-parity.py fixture <dir>              write the site (any existing <dir> is refused)
+    cross-host-parity.py fixture <dir> [nfc|nfd]    write the site (any existing <dir> is refused)
     cross-host-parity.py build <moss> <dir> <out>   build <dir>, write its digest to <out>
     cross-host-parity.py compare <a> <b> ...        exit 1 and list the paths that differ
 
@@ -23,6 +23,7 @@ until the build reuses them instead of deriving them again.
 """
 
 import hashlib
+import json
 import os
 import struct
 import subprocess
@@ -53,10 +54,12 @@ def png(width: int, height: int, seed: int) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
-def fixture(root: Path) -> None:
+def fixture(root: Path, form: str = "nfd") -> None:
+    """`form` is how accented file names are written: the same logical site
+    either way, as two sync clients may deliver it."""
     if root.exists():
         sys.exit(f"{root} exists; give a fresh directory")
-    nfd = lambda s: unicodedata.normalize("NFD", s)
+    nfd = lambda s: unicodedata.normalize(form.upper(), s)
     files = {
         # Its own site, even when written inside another site's folder.
         # Places give the site a map: locator tiles beside a page and the
@@ -104,8 +107,15 @@ def published_dir(site: Path) -> Path:
     return current.resolve()
 
 
-def digest(out_dir: Path) -> list[str]:
-    lines = []
+# The parts of the sealed manifest that describe the published site. The rest
+# (render id, capture time, source stats) differ between any two runs.
+MANIFEST_KEYS = ("files", "source_to_output", "page_meta")
+
+
+def digest(out_dir: Path, manifest: Path) -> list[str]:
+    sealed = json.loads(manifest.read_text())
+    canonical = json.dumps({k: sealed.get(k) for k in MANIFEST_KEYS}, sort_keys=True, ensure_ascii=False)
+    lines = [f"{hashlib.sha256(canonical.encode()).hexdigest()}  <manifest:{'+'.join(MANIFEST_KEYS)}>"]
     for path in sorted(out_dir.rglob("*")):
         if path.is_file():
             rel = unicodedata.normalize("NFC", path.relative_to(out_dir).as_posix())
@@ -117,7 +127,7 @@ def build(moss: str, site: Path, out: Path) -> None:
     env = dict(os.environ, SOURCE_DATE_EPOCH=PINNED_EPOCH, HOME=os.environ.get("PARITY_HOME", str(site.parent / "home")))
     Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
     subprocess.run([moss, "build", str(site)], env=env, check=True)
-    out.write_text("\n".join(digest(published_dir(site))) + "\n")
+    out.write_text("\n".join(digest(published_dir(site), site / ".moss" / "build.nosync" / "hashes.json")) + "\n")
 
 
 def kind(path: str) -> str:
@@ -167,7 +177,7 @@ def compare(paths: list[Path]) -> int:
 if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
     if cmd == "fixture":
-        fixture(Path(args[0]))
+        fixture(Path(args[0]), *args[1:])
     elif cmd == "build":
         build(args[0], Path(args[1]), Path(args[2]))
     elif cmd == "compare":

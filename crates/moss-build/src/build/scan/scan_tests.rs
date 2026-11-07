@@ -3013,3 +3013,37 @@ fn svg_dimensions_follow_the_files_own_aspect_ratio() {
     let doctype = write("doctype.svg", "<?xml version=\"1.0\"?><!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\"><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 4 3\"/>");
     assert_eq!(extract_image_dimensions(&doctype), Some((800, 600)));
 }
+
+/// Each folder is walked in composed-name order, whatever order the disk
+/// lists it in and whichever way the names are encoded on it.
+#[test]
+fn a_folder_is_walked_in_composed_name_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let names = ["zeta.md", "e\u{301}clair.md", "alpha.md", "\u{e9}t\u{e9}.md", "mid.md", "b.md", "y.md"];
+    for name in names {
+        fs::write(dir.path().join(name), "# Page\n").unwrap();
+    }
+    let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+    let order: Vec<String> = found.markdown_files.iter().map(|f| {
+        use unicode_normalization::UnicodeNormalization;
+        f.path.nfc().collect()
+    }).collect();
+    let mut sorted = order.clone();
+    sorted.sort();
+    assert_eq!(order, sorted);
+}
+
+/// A folder holding two files whose names differ only by case, or by how an
+/// accented letter is encoded, is refused by the scan every build starts with.
+#[test]
+#[cfg_attr(target_os = "macos", ignore = "an APFS volume cannot hold both names of a pair")]
+fn the_scan_refuses_a_folder_holding_a_colliding_pair() {
+    for (first, second) in [("Photo.png", "photo.png"), ("caf\u{e9}.png", "cafe\u{301}.png")] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
+        fs::write(dir.path().join(first), b"one").unwrap();
+        fs::write(dir.path().join(second), b"two").unwrap();
+        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(refusal.contains("differ only by letter case"), "{refusal}");
+    }
+}

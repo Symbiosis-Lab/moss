@@ -1011,7 +1011,7 @@ fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::sto
     let mut entries = Vec::new();
     let layer_sources: Vec<std::path::PathBuf> =
         crate::config::map_layers::declared_sources(path).iter().map(|s| path.join(s)).collect();
-    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources) {
+    for entry in WalkDir::new(path).sort_by(crate::build::scan::path_collision::nfc_name_order).into_iter().filter_entry(|e| match crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources) {
         None => true,
         Some(LeftOut::LayerSource) => {
             let pages: Vec<String> = WalkDir::new(e.path())
@@ -1611,7 +1611,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         empty_folders,
         storage_folders,
     };
-    crate::build::scan::case_collision::warn_case_colliding_files(&structure);
+    crate::build::scan::path_collision::refuse_colliding_files(&structure).map_err(ScanFailure::Message)?;
     crate::build::template_check::warn_template_problems(Path::new(folder_path));
     Ok(structure)
 }

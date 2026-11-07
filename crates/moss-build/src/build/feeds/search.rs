@@ -403,9 +403,10 @@ pub(crate) struct PageSource {
 ///
 /// **Walk order is output order.** Pagefind numbers pages in the order it
 /// receives them, and those numbers are baked into its index files. The walk
-/// is sorted by file name so the bundle is a function of the pages alone; an
-/// unsorted walk follows the filesystem's directory order, which differs
-/// between filesystems (and, on tmpfs, between runs).
+/// is sorted by composed (NFC) file name so the bundle is a function of the
+/// pages alone; an unsorted or byte-sorted walk follows the filesystem's
+/// directory order or its spelling of accented names, which differ between
+/// machines (and, on tmpfs, between runs).
 ///
 /// A file that fails to read is skipped with a warning rather than failing the
 /// build: one unreadable page should cost its own indexing, not the whole
@@ -419,7 +420,7 @@ pub(crate) struct PageSource {
 /// several times their own CPU in worker wake-ups and contention.
 pub(crate) fn read_pages(site_dir: &Path) -> (Vec<PageSource>, usize) {
     let mut skipped = 0;
-    let walk = walkdir::WalkDir::new(site_dir).sort_by_file_name().into_iter().filter_map(Result::ok);
+    let walk = walkdir::WalkDir::new(site_dir).sort_by(crate::build::scan::path_collision::nfc_name_order).into_iter().filter_map(Result::ok);
     let pages = walk
         .filter(|e| e.file_type().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("html"))
         // The not-found page, at both of its addresses, is not content a

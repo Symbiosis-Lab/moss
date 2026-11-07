@@ -197,12 +197,9 @@ pub fn generate_rss_feed(
         .filter(|doc| !has_external_url(doc))
         .collect();
 
-    // Sort by date descending (newest first)
-    articles.sort_by(|a, b| {
-        let date_a = a.date.as_ref().unwrap();
-        let date_b = b.date.as_ref().unwrap();
-        date_b.cmp(date_a)
-    });
+    // Newest first; a date shared by several articles orders them by address,
+    // never by the order the disk listed their files.
+    articles.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.url_path.cmp(&b.url_path)));
 
     let description = site_description.unwrap_or(site_title);
 
@@ -633,6 +630,19 @@ mod tests {
         // Newest should come first
         assert!(new_pos < mid_pos, "New post should come before mid post");
         assert!(mid_pos < old_pos, "Mid post should come before old post");
+    }
+
+    #[test]
+    fn articles_sharing_a_date_are_ordered_by_address_not_by_input_order() {
+        let day = Some("2025-01-05");
+        let docs = vec![
+            create_test_document("Zeta", day, "zeta/index.html", ""),
+            create_test_document("Alpha", day, "alpha/index.html", ""),
+            create_test_document("Mid", day, "mid/index.html", ""),
+        ];
+        let rss = generate_rss_feed(&docs, "My Blog", "https://example.com", None, None);
+        let at = |t: &str| rss.find(&format!("<title>{t}</title>")).unwrap();
+        assert!(at("Alpha") < at("Mid") && at("Mid") < at("Zeta"), "{rss}");
     }
 
     #[test]

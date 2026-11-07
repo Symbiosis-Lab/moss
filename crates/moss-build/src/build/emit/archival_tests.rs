@@ -92,3 +92,34 @@ fn without_a_closing_picture_the_block_follows_the_footer_end_marker() {
     assert!(placed.contains("Links<div class=\"moss-edition\">"), "{placed}");
     assert!(placed.contains("</head>") && placed.contains("moss:edition"), "{placed}");
 }
+
+/// The source copy, its inventory and the edition id built from it list files
+/// in composed name order, so an accented name spelled either way on disk
+/// lands in the same place.
+#[test]
+fn the_source_copy_lists_files_in_composed_name_order() {
+    let root = tempfile::tempdir().unwrap();
+    let page = |path: &str| crate::types::content::FileInfo { path: path.into(), file_type: "md".into(), size: 1, modified: None };
+    let structure = ProjectStructure {
+        root_path: root.path().to_string_lossy().into_owned(),
+        markdown_files: vec![page("e\u{301}clair.md"), page("f.md")],
+        ..Default::default()
+    };
+    assert_eq!(source_files(&structure), ["f.md", "e\u{301}clair.md"]);
+}
+
+/// A map layer's plates are listed in composed name order.
+#[test]
+fn map_layer_plates_are_listed_in_composed_name_order() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join(".moss")).unwrap();
+    std::fs::write(root.path().join(".moss/config.toml"), "schema_version = 6\n\n[map.layers.atlas]\nkind = \"historical\"\nsource = \"maps/atlas\"\n").unwrap();
+    let plates = root.path().join("maps/atlas");
+    std::fs::create_dir_all(&plates).unwrap();
+    for id in ["e\u{301}clair", "f"] {
+        std::fs::write(plates.join(format!("{id}.region.json")), "{}").unwrap();
+    }
+    let text = layer_sections(root.path());
+    let (f, eclair) = (text.find("- `f`").expect("plate f listed"), text.find("- `e\u{301}clair`").expect("plate éclair listed"));
+    assert!(f < eclair, "{text}");
+}

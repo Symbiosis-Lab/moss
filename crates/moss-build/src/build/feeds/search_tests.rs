@@ -435,3 +435,17 @@ fn a_redirect_stub_is_not_indexed() {
     assert_eq!(index.pages, SITE_PAGES);
     assert_eq!(index.skipped, 0, "leaving the stub out is not a skip");
 }
+
+/// Pages reach Pagefind in composed name order, so an accented name spelled
+/// decomposed on one disk and composed on another gets the same page number.
+#[test]
+fn pages_reach_the_index_in_composed_name_order() {
+    use unicode_normalization::UnicodeNormalization;
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["e\u{301}clair.html", "f.html", "\u{e9}t\u{e9}.html"] {
+        std::fs::write(dir.path().join(name), format!("<html><body><p>{name}</p></body></html>")).unwrap();
+    }
+    let (pages, _) = read_pages(dir.path());
+    let order: Vec<String> = pages.iter().map(|p| p.rel_path.nfc().collect()).collect();
+    assert_eq!(order, ["f.html", "\u{e9}clair.html", "\u{e9}t\u{e9}.html"]);
+}

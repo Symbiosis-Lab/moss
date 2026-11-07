@@ -72,10 +72,10 @@ pub(crate) struct Rendered {
 }
 
 
-/// The files the source copy holds, relative to the site root, sorted. A map
-/// layer's source folder is out of the scanned structure but is source a
-/// rebuilt folder needs, so all its files join the copy here, scans included:
-/// the published site carries a scan only as warped tiles.
+/// The files the source copy holds, relative to the site root, in composed
+/// name order. A map layer's source folder is out of the scanned structure but
+/// is source a rebuilt folder needs, so all its files join the copy here, scans
+/// included: the published site carries a scan only as warped tiles.
 fn source_files(structure: &ProjectStructure) -> Vec<String> {
     let root = Path::new(&structure.root_path);
     let layer_files = crate::config::map_layers::declared_sources(root).into_iter().flat_map(|source| {
@@ -95,7 +95,7 @@ fn source_files(structure: &ProjectStructure) -> Vec<String> {
         .chain(layer_files)
         .filter(|path| !path.split('/').any(|segment| segment == "_moss" || segment == "node_modules"))
         .collect();
-    files.sort_unstable();
+    files.sort_unstable_by(|a, b| crate::build::scan::path_collision::nfc_order(a, b));
     files.dedup();
     files
 }
@@ -231,7 +231,7 @@ fn layer_sections(root: &Path) -> String {
             .filter(|e| e.file_type().is_file() && e.file_name().to_string_lossy().ends_with(".region.json"))
             .map(|e| e.into_path())
             .collect();
-        regions.sort();
+        regions.sort_by(|a, b| crate::build::scan::path_collision::nfc_order(&a.to_string_lossy(), &b.to_string_lossy()));
         for path in regions {
             let id = path.file_name().map(|n| n.to_string_lossy().trim_end_matches(".region.json").to_string()).unwrap_or_default();
             let region: serde_json::Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
