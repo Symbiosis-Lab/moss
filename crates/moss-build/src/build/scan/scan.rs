@@ -417,16 +417,36 @@ fn resolve_content_hash(
 /// before it enriches (and thereby overwrites) a stat-keyed entry with the
 /// dominant color + LQIP it computes — see `run_image_conversion`'s call in
 /// `build/media/image.rs`.
+///
+/// Answers from [`MEDIA_META`] first.
 pub(crate) fn read_cached_meta(
     transform_cache: &TransformCache,
     objects: &ObjectStore,
     content_hash: &str,
 ) -> Option<CachedMediaMeta> {
+    let key = (transform_cache.root().to_path_buf(), content_hash.to_string());
+    if let Some(meta) = MEDIA_META.get(&key) {
+        return Some(meta);
+    }
     let params = serde_json::json!({ "v": MEDIA_META_VERSION });
     let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
     let blob_path = objects.get_path(&meta_oid)?;
     let raw = std::fs::read(blob_path).ok()?;
-    serde_json::from_slice(&raw).ok()
+    let meta: CachedMediaMeta = serde_json::from_slice(&raw).ok()?;
+    remember_meta(key, &meta);
+    Some(meta)
+}
+
+/// Complete media metadata (dominant color present) this process has read or
+/// written, by cache and key, so a watch rescan reads no record for media it
+/// has seen. An answer the background phase has yet to enrich is read again
+/// each time.
+static MEDIA_META: crate::build::cache::KeyedMemo<(std::path::PathBuf, String), CachedMediaMeta> = crate::build::cache::KeyedMemo::new();
+
+fn remember_meta(key: (std::path::PathBuf, String), meta: &CachedMediaMeta) {
+    if meta.dominant_color.is_some() {
+        MEDIA_META.put(key, meta.clone());
+    }
 }
 
 impl From<&MediaMetadata> for CachedMediaMeta {
@@ -451,6 +471,7 @@ pub(crate) fn write_cached_meta(
     source_size: u64,
     meta: &CachedMediaMeta,
 ) {
+    remember_meta((transform_cache.root().to_path_buf(), content_hash.to_string()), meta);
     let json_bytes = match serde_json::to_vec(meta) {
         Ok(b) => b,
         Err(e) => {

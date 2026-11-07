@@ -43,6 +43,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) mod blob_residency;
 mod records;
 mod publication;
+mod process_memo;
+pub(crate) use process_memo::{KeyedMemo, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
 
