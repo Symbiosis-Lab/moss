@@ -37,7 +37,7 @@
 //! render writes `stage_dir`. What happens after the render depends on the
 //! runtime.
 //!
-//! A one-shot build (`moss build`, `moss deploy`, `moss history --save`) keeps
+//! A one-shot build (`moss build`, `moss deploy`) keeps
 //! holding it through its seal and its promotion, and `run_materialize_phase`
 //! (`build/seal_phase.rs`) releases it once `current` has moved. That whole
 //! span reads and deletes from `stage_dir`: the final sweep removes whatever

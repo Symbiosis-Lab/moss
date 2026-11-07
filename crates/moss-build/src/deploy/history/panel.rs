@@ -254,7 +254,7 @@ pub fn list_versions(vault_root: &Path, scope: &str, path: Option<String>) -> Re
             // tree on disk now (the Changed-since/Unchanged groups).
             Some(version_id) => {
                 known_id(&records, &version_id)?;
-                let pages = store.site_version_pages(&version_id, &SourceTree::on_disk(vault_root)?)?;
+                let pages = store.site_version_pages(&version_id, &site_on_disk(vault_root)?)?;
                 Ok(VersionList {
                     changed_since: pages.changed_since,
                     unchanged: pages.unchanged,
@@ -320,7 +320,7 @@ pub(crate) fn restore_version_with(
     if path.is_none() {
         store.site_version(id)?;
     }
-    let current = SourceTree::on_disk(vault_root)?;
+    let current = site_on_disk(vault_root)?;
     let target = current_target(vault_root);
 
     // The backup dedups against the newest record for this target (design
@@ -373,6 +373,12 @@ fn to_restore_report(report: super::RestoreReport, undo_id: Option<String>) -> R
     }
 }
 
+/// [`SourceTree::on_disk`] for the panel, which has no terminal: download
+/// progress goes to the log, and a stall's diagnosis says to try again.
+fn site_on_disk(vault_root: &Path) -> Result<SourceTree, String> {
+    SourceTree::on_disk(vault_root, "try again", &mut |line| log::info!("history: {line}"))
+}
+
 /// Save a version now, outside the publish flow, of the site as the disk
 /// holds it. The editor flushes its pending auto-save first
 /// (`flushEditorSave`); no build is awaited.
@@ -381,7 +387,7 @@ pub fn save_version(vault_root: &Path, label: Option<String>) -> Result<VersionR
         return Err("Publish history is turned off for this site.".to_string());
     }
     let store = HistoryStore::in_vault(vault_root);
-    let tree = SourceTree::on_disk(vault_root)?;
+    let tree = site_on_disk(vault_root)?;
     let target = current_target(vault_root);
 
     let new_id = store.snapshot_manual(vault_root, &tree, &target, label)?;

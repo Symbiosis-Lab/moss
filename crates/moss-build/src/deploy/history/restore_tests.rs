@@ -208,7 +208,7 @@ fn restore_site_preserves_non_page_files_absent_from_the_version() {
         fs::write(vault.join(path), b"keep these bytes").unwrap();
     }
     fs::write(vault.join("new.md"), b"new page").unwrap();
-    let current = SourceTree::on_disk(&vault).unwrap();
+    let current = SourceTree::on_disk(&vault, "run the restore again", &mut |_| {}).unwrap();
     let trash = |root: &Path, path: &str| -> Result<(), String> {
         fs::remove_file(root.join(path)).map_err(|e| e.to_string())
     };

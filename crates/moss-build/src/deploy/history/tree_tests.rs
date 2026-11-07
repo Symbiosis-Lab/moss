@@ -1,11 +1,36 @@
 use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::build::cloud_prefetch::Prefetcher;
+use crate::build::cloud_readiness::fetch::Wait;
+use crate::build::icloud::{self, is_still_in_the_cloud};
+
+/// A provider that delivers nothing, reported after a window short enough for a test.
+fn stalled() -> Wait {
+    let pool = Prefetcher::with_materializer(2, Arc::new(|_| Err(std::io::Error::from_raw_os_error(libc::ETIMEDOUT))), false);
+    Wait::with(pool, is_still_in_the_cloud, Duration::from_millis(200), Duration::from_millis(10))
+}
+
+/// A provider that delivers each file once it is asked for.
+fn delivering() -> Wait {
+    let pool = Prefetcher::with_materializer(2, Arc::new(|path| {
+        icloud::pretend::requested(path);
+        Ok(())
+    }), false);
+    Wait::with(pool, is_still_in_the_cloud, Duration::from_secs(5), Duration::from_millis(10))
+}
+
+fn on_disk(dir: &Path) -> Result<SourceTree, String> {
+    SourceTree::on_disk_with(dir, &stalled, "run `moss history --save` again", &mut |_| {})
+}
 
 #[test]
 fn a_folder_never_built_is_read_and_hashed_from_disk() {
     let dir = tempfile::Builder::new().prefix("moss-tree-test-").tempdir().unwrap();
     std::fs::write(dir.path().join("a.md"), b"hello").unwrap();
 
-    let tree = SourceTree::on_disk(dir.path()).unwrap();
+    let tree = on_disk(dir.path()).unwrap();
 
     assert_eq!(tree.hashes().get("a.md"), Some(&format!("{:x}", Sha256::digest(b"hello"))));
     assert!(tree.generation_id().starts_with("source-"));
@@ -85,7 +110,7 @@ fn a_disk_tree_matches_sealed_sources_except_raw_synchronous_config() {
         }
     }
 
-    assert_eq!(SourceTree::on_disk(dir.path()).unwrap().hashes(), baseline);
+    assert_eq!(on_disk(dir.path()).unwrap().hashes(), baseline);
 }
 
 #[test]
@@ -99,7 +124,7 @@ fn a_disk_tree_tracks_edits_deletions_and_additions_without_a_rebuild() {
     let theme = b"body { color: #333 }\n";
     std::fs::write(dir.path().join(".moss/theme/style.css"), theme).unwrap();
 
-    let hashes = SourceTree::on_disk(dir.path()).unwrap().hashes();
+    let hashes = on_disk(dir.path()).unwrap().hashes();
 
     assert_eq!(hashes.get("about.md"), Some(&format!("{:x}", Sha256::digest(edited))));
     assert!(!hashes.contains_key("posts/one.md"), "deleted source must be absent");
@@ -141,10 +166,10 @@ fn a_disk_tree_hashes_raw_theme_bytes_after_a_build_rewrites_them() {
     let raw = std::fs::read(dir.path().join(key)).unwrap();
     let raw_hash = format!("{:x}", Sha256::digest(&raw));
     assert_ne!(baseline.get(key), Some(&raw_hash), "fixture must exercise CSS rewriting");
-    assert_eq!(SourceTree::on_disk(dir.path()).unwrap().hashes().get(key), Some(&raw_hash));
+    assert_eq!(on_disk(dir.path()).unwrap().hashes().get(key), Some(&raw_hash));
 
     std::fs::remove_file(dir.path().join(key)).unwrap();
-    assert!(!SourceTree::on_disk(dir.path()).unwrap().hashes().contains_key(key));
+    assert!(!on_disk(dir.path()).unwrap().hashes().contains_key(key));
 }
 
 #[test]
@@ -156,7 +181,7 @@ fn a_never_built_disk_tree_includes_synchronous_config_files() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"raw config bytes").unwrap();
     }
-    let hashes = SourceTree::on_disk(dir.path()).unwrap().hashes();
+    let hashes = on_disk(dir.path()).unwrap().hashes();
     for key in keys {
         assert_eq!(hashes.get(*key), Some(&format!("{:x}", Sha256::digest(b"raw config bytes"))));
     }
@@ -168,12 +193,14 @@ fn a_disk_tree_holds_theme_files_added_or_deleted_since_the_build() {
     std::fs::write(dir.path().join(".moss/theme/added.woff2"), b"new font").unwrap();
     std::fs::remove_file(dir.path().join(".moss/theme/font.woff2")).unwrap();
 
-    let hashes = SourceTree::on_disk(dir.path()).unwrap().hashes();
+    let hashes = on_disk(dir.path()).unwrap().hashes();
 
     assert_eq!(hashes.get(".moss/theme/added.woff2"), Some(&format!("{:x}", Sha256::digest(b"new font"))));
     assert!(!hashes.contains_key(".moss/theme/font.woff2"), "a deleted theme file must be absent");
 }
 
+// The real `.name.icloud` stub beside a missing file, which the test below
+// pretends instead of making.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_config_file_evicted_to_the_cloud_keeps_its_recorded_hash() {
@@ -181,7 +208,93 @@ fn a_config_file_evicted_to_the_cloud_keeps_its_recorded_hash() {
     let key = crate::build::manifest::USER_CSS_SOURCE_KEY;
     std::fs::rename(dir.path().join(key), dir.path().join(".moss/theme/.style.css.icloud")).unwrap();
 
-    let hashes = SourceTree::on_disk(dir.path()).unwrap().hashes();
+    let hashes = on_disk(dir.path()).unwrap().hashes();
 
     assert_eq!(hashes.get(key), baseline.get(key), "offline is not deleted");
+}
+
+#[test]
+fn a_config_file_in_the_cloud_keeps_its_recorded_hash_unread() {
+    let (dir, baseline) = built_fixture();
+    let key = crate::build::manifest::USER_CSS_SOURCE_KEY;
+    let _in_cloud = icloud::pretend::evicted(&dir.path().join(key));
+
+    let mut said = Vec::new();
+    let hashes = SourceTree::on_disk_with(dir.path(), &stalled, "run `moss history --save` again", &mut |line| said.push(line.to_string())).unwrap().hashes();
+
+    // Read, it would hash to its raw bytes, which the build recorded rewritten.
+    assert_eq!(hashes.get(key), baseline.get(key));
+    assert_eq!(said, [format!("kept the last built version of {key}: it is still in the cloud")]);
+}
+
+#[test]
+fn a_built_page_in_the_cloud_keeps_its_recorded_hash_and_is_named() {
+    let (dir, baseline) = built_fixture();
+    let _in_cloud = icloud::pretend::evicted(&dir.path().join("about.md"));
+
+    let mut said = Vec::new();
+    let hashes = SourceTree::on_disk_with(dir.path(), &stalled, "run `moss history --save` again", &mut |line| said.push(line.to_string())).unwrap().hashes();
+
+    assert_eq!(hashes.get("about.md"), baseline.get("about.md"));
+    assert!(said.contains(&"kept the last built version of about.md: it is still in the cloud".to_string()), "{said:?}");
+}
+
+// A never-built folder has no recorded hash to fall back on, so a file the
+// tree cannot read must stop it: left out, it would be recorded as deleted.
+#[cfg(unix)]
+#[test]
+fn a_never_built_file_that_cannot_be_read_refuses_the_tree_and_names_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::Builder::new().prefix("moss-tree-test-").tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), b"hello").unwrap();
+    let locked = dir.path().join("b.md");
+    std::fs::write(&locked, b"private").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = on_disk(dir.path());
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let err = result.unwrap_err();
+    assert!(err.contains("b.md"), "{err}");
+}
+
+#[test]
+fn a_never_built_page_in_the_cloud_is_downloaded_before_it_is_hashed() {
+    let dir = tempfile::Builder::new().prefix("moss-tree-test-").tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), b"hello").unwrap();
+    let page = dir.path().join("b.md");
+    std::fs::write(&page, b"arrived").unwrap();
+    let _in_cloud = icloud::pretend::evicted_until_requested(&page);
+
+    let tree = SourceTree::on_disk_with(dir.path(), &delivering, "run `moss history --save` again", &mut |_| {}).unwrap();
+
+    assert_eq!(icloud::pretend::requests_for(&page), 1);
+    assert_eq!(tree.hashes().get("b.md"), Some(&format!("{:x}", Sha256::digest(b"arrived"))));
+}
+
+#[test]
+fn a_never_built_page_the_provider_does_not_deliver_refuses_the_tree_and_names_it() {
+    let dir = tempfile::Builder::new().prefix("moss-tree-test-").tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), b"hello").unwrap();
+    std::fs::write(dir.path().join("b.md"), b"in the cloud").unwrap();
+    let _in_cloud = icloud::pretend::evicted(&dir.path().join("b.md"));
+
+    let err = on_disk(dir.path()).unwrap_err();
+
+    assert!(err.contains("is not delivering 1 of 1 cloud-only files"), "{err}");
+    assert!(err.contains("Still in the cloud: b.md."), "{err}");
+    assert!(err.contains("run `moss history --save` again"), "{err}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_never_built_theme_file_still_in_icloud_refuses_the_tree() {
+    let dir = tempfile::Builder::new().prefix("moss-tree-test-").tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".moss/theme")).unwrap();
+    std::fs::write(dir.path().join("a.md"), b"hello").unwrap();
+    std::fs::write(dir.path().join(".moss/theme/.font.woff2.icloud"), b"stub").unwrap();
+
+    let err = on_disk(dir.path()).unwrap_err();
+
+    assert!(err.contains("Still in the cloud: .moss/theme/font.woff2."), "{err}");
 }

@@ -31,7 +31,7 @@ fn a_provider_that_refuses_every_read_is_reported_with_its_name_and_the_fix() {
     let wait = Wait::with(pool, in_cloud, Duration::from_millis(300), Duration::from_millis(10));
 
     let mut said = Vec::new();
-    let err = bring_local(Path::new(DRIVE_FOLDER), files, &wait, "moss build", &mut |l| said.push(l.to_string()))
+    let err = bring_local(Path::new(DRIVE_FOLDER), files, &wait, "run `moss build` again", &mut |l| said.push(l.to_string()))
         .expect_err("a provider that delivers nothing must not look like success");
 
     assert!(err.starts_with("Google Drive is not delivering 30 of 30 cloud-only files"), "{err}");

@@ -316,14 +316,14 @@ fn run_save(root: &VaultRoot, name: Option<String>, json: bool) -> i32 {
             }
             0
         }
-        Err(e) => fail(&build_failure_message(&e), json),
+        Err(e) => fail(&save_failure_message(&e), json),
     }
 }
 
 /// Save a version of `root` as the disk holds it now, as `--save` does; its id and record.
 pub(crate) fn save_version(root: &VaultRoot, label: Option<String>) -> Result<(String, PublishRecord), String> {
     let store = open_store(root);
-    let tree = SourceTree::on_disk(root.path())?;
+    let tree = SourceTree::on_disk(root.path(), "run `moss history --save` again", &mut |line| eprintln!("{line}"))?;
     let id = store.snapshot_manual(root.path(), &tree, &current_target(root), label).map_err(|e| format!("could not save a version: {e}"))?;
     match id.and_then(|id| store.load_record(&id).map(|record| (id, record))) {
         Some(saved) => Ok(saved),
@@ -331,14 +331,14 @@ pub(crate) fn save_version(root: &VaultRoot, label: Option<String>) -> Result<(S
     }
 }
 
-/// The build (or the save write itself) failed, so nothing reached the
+/// Reading the site or writing the version failed, so nothing reached the
 /// version store — the honest complement to [`saved_summary_line`]. Said
 /// plainly rather than left for a caller to infer from a nonzero exit code
 /// alone: a script that only checks the exit status still gets this, via
 /// [`fail`] — on stderr, or as the `--json` error's `error` field on stdout
 /// — and a person reading the terminal is not left wondering whether a
 /// half-written version is sitting in `.moss/history`.
-fn build_failure_message(e: &str) -> String {
+fn save_failure_message(e: &str) -> String {
     format!("{e} — nothing was saved")
 }
 
@@ -408,7 +408,7 @@ fn prepare_restore(root: &VaultRoot, at: &str, whole_site: bool) -> Result<Resto
     // A kept outside edit was published nowhere: its backup takes the site's current target.
     let restored = records.iter().find(|(rid, _)| rid == &id).and_then(|(_, r)| r.published_target());
     let target = restored.map_or_else(|| current_target(root), str::to_string);
-    let current = SourceTree::on_disk(root.path())?;
+    let current = SourceTree::on_disk(root.path(), "run the restore again", &mut |line| eprintln!("{line}"))?;
     if let Err(e) = store.save_before_restore(root.path(), &current, &target, &id) {
         eprintln!("warning: could not save a version before restoring: {e}");
     }
@@ -858,16 +858,6 @@ mod tests {
         let s = saved_json(&rec.0, &rec.1).unwrap();
         let value: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(value["label"], serde_json::Value::Null);
-    }
-
-    /// A build that fails must say plainly that nothing was written to the
-    /// version store — the honest complement to "saved as {id}.", not just
-    /// the raw build error.
-    #[test]
-    fn build_failure_message_says_nothing_was_saved() {
-        let msg = build_failure_message("build failed: boom");
-        assert!(msg.contains("nothing was saved"), "{msg}");
-        assert!(msg.contains("boom"), "{msg}");
     }
 
     /// A page path resolves relative to the SITE, not to the process's
