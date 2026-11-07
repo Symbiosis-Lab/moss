@@ -611,9 +611,8 @@ async fn handle_debounced_batch(
 
     // PATTERN 6 — INODE+FILE-ID PAIRING via notify-debouncer-full
     // Extract source-relative rename pairs from stitched `Modify(Name(Both))`
-    // events. `path_to_relative_key` canonicalizes both sides; for the `from`
-    // path (now gone) it falls back to the raw path, which the watcher emits
-    // in canonical form on macOS.
+    // events. `path_to_relative_key` canonicalizes both sides; the `from`
+    // path (now gone) is canonicalized through its nearest existing ancestor.
     let rename_pairs = extract_rename_pairs(&actionable, folder_path);
 
     // Log which file(s) triggered the rebuild for easier debugging.

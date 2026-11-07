@@ -790,15 +790,16 @@ pub(crate) fn source_metadata_verdict(
 /// report `/private/var/...` while `folder` was opened as `/var/...` (symlink);
 /// we `canonicalize` both sides before comparing to avoid false negatives.
 ///
-/// If canonicalization fails on either side (e.g. the file has been removed
-/// between the event firing and the gate reading it), we fall back to the raw
-/// paths. If that fallback produces a prefix mismatch, we return `None` and
-/// the gate fails open — `Remove` events never reach this function today
-/// (`should_gate_modify_event` filters them), but keep the behavior in mind
-/// if the gate's scope is widened.
+/// A path that no longer exists (a rename's old name, a deletion, a cloud
+/// placeholder's real name, a file in a renamed folder) is canonicalized
+/// through its nearest existing ancestor, with the missing tail joined back as
+/// written. A path stays raw only when no ancestor exists. If a raw path then
+/// mismatches the folder's prefix, we return `None` and the gate fails open —
+/// `Remove` events never reach this function today (`should_gate_modify_event`
+/// filters them), but keep the behavior in mind if the gate's scope is widened.
 pub fn path_to_relative_key(folder: &Path, abs: &Path) -> Option<String> {
     let folder_canon = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let abs_canon = std::fs::canonicalize(abs).unwrap_or_else(|_| abs.to_path_buf());
+    let abs_canon = canonical_through_missing(abs);
     let rel = abs_canon.strip_prefix(&folder_canon).ok()?;
     let mut parts = Vec::new();
     for comp in rel.components() {
@@ -809,6 +810,26 @@ pub fn path_to_relative_key(folder: &Path, abs: &Path) -> Option<String> {
         }
     }
     Some(parts.join("/"))
+}
+
+/// `abs` canonicalized as far as it exists: the nearest existing ancestor,
+/// canonicalized, with the missing tail joined back. Without it a folder
+/// reached through a symlink never strips from a path that is gone.
+fn canonical_through_missing(abs: &Path) -> std::path::PathBuf {
+    let mut tail = Vec::new();
+    let mut existing = abs;
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(existing) {
+            return tail.iter().rev().fold(canon, |path, name| path.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name);
+                existing = parent;
+            }
+            _ => return abs.to_path_buf(),
+        }
+    }
 }
 
 /// Decide whether a watcher event with the given paths should trigger a rebuild.

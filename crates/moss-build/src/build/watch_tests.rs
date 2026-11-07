@@ -1257,6 +1257,19 @@ fn path_to_relative_key_strips_folder_and_normalizes_slashes() {
     assert_eq!(rel, "posts/a.md");
 }
 
+#[cfg(unix)]
+#[test]
+fn path_to_relative_key_names_a_missing_file_in_a_folder_reached_through_a_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir_all(&real).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert_eq!(path_to_relative_key(&link, &link.join("gone.md")).as_deref(), Some("gone.md"));
+    // A renamed folder's old file paths: no part below the site exists any more.
+    assert_eq!(path_to_relative_key(&link, &link.join("old/notes/page.md")).as_deref(), Some("old/notes/page.md"));
+}
+
 #[test]
 fn path_to_relative_key_returns_none_for_path_outside_folder() {
     let dir = tempfile::tempdir().unwrap();
