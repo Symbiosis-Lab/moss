@@ -23,6 +23,18 @@ function vault(files: Record<string, string>) {
 }
 
 describe("site context through the mobile adapter", () => {
+  it("inlines the sheets style.css imports, where it imports them, once each", async () => {
+    const { theme_css } = await readSiteContext(vault({
+      ".moss/theme/style.css": "/* was: @import \"parts/a.css\"; */\n@import \"parts/a.css\";\n@import url('print.css') print;\n@import url(https://fonts.example/x.css);\n@import \"l.css\" layer(base);\nbody{}",
+      ".moss/theme/parts/a.css": "@import '../b.css';\n@import \"a.css\";\n.a{}",
+      ".moss/theme/b.css": ".b{}",
+      ".moss/theme/print.css": ".p{}",
+      ".moss/theme/unused.css": ".u{}",
+      ".moss/theme/l.css": ".l{}",
+    }));
+    expect(theme_css).toBe("/* was: @import \"parts/a.css\"; */\n.b{}\n\n.a{}\n@media print{.p{}}\n@import url(https://fonts.example/x.css);\n@import \"l.css\" layer(base);\nbody{}");
+  });
+
   it("reads lang, the theme's style.css alone and plugin contributions", async () => {
     const context = await readSiteContext(vault({
       ".moss/config.toml": 'lang = "wrong"\n[site]\nlang = "fr" # language\n[other]\nlang = "de"',

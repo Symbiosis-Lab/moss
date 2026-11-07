@@ -22,6 +22,39 @@ export function siteLanguage(toml: string): string {
   return "en";
 }
 
+// A comment is matched first so an @import written inside one is never followed.
+const IMPORT = /\/\*[\s\S]*?\*\/|@import\s+(?:url\(\s*)?["']?([^"')\s;]+)["']?\s*\)?([^;]*);/g;
+
+/**
+ * The theme's style.css with each relative `@import` replaced by the sheet it
+ * names, to any depth, so the one inline `<style>` of the preview carries what
+ * the build's page gets by following the imports. A sheet is inlined once; an
+ * import's media condition becomes an `@media` block around it; an import in a
+ * layer or behind `supports()` stays as written.
+ */
+async function themeCss(adapter: DataAdapter, path: string, seen = new Set<string>()): Promise<string> {
+  if (seen.has(path) || !await adapter.exists(path)) return "";
+  seen.add(path);
+  const css = await adapter.read(path);
+  const dir = path.slice(0, path.lastIndexOf("/"));
+  let out = "";
+  let last = 0;
+  for (const match of css.matchAll(IMPORT)) {
+    const [, target, condition = ""] = match;
+    const media = condition.trim();
+    if (!target || target.includes("://") || target.startsWith("/") || /^(layer|supports)\b/.test(media)) continue;
+    const parts: string[] = [];
+    for (const part of `${dir}/${target}`.split("/")) {
+      if (part === "..") parts.pop();
+      else if (part && part !== ".") parts.push(part);
+    }
+    const sheet = await themeCss(adapter, parts.join("/"), seen);
+    out += css.slice(last, match.index) + (media && sheet ? `@media ${media}{${sheet}}` : sheet);
+    last = match.index + match[0].length;
+  }
+  return out + css.slice(last);
+}
+
 async function list(adapter: DataAdapter, path: string) {
   return await adapter.exists(path) ? adapter.list(path) : { files: [], folders: [] };
 }
@@ -30,8 +63,7 @@ export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">
   const adapter = vault.adapter;
   const config = await adapter.exists(".moss/config.toml") ? await adapter.read(".moss/config.toml") : "";
   // The build serves only style.css; other sheets reach a page through its @import.
-  const theme = ".moss/theme/style.css";
-  const css = await adapter.exists(theme) ? await adapter.read(theme) : "";
+  const css = await themeCss(adapter, ".moss/theme/style.css");
   const plugins: SitePlugin[] = [];
   const listingStyles = new Set<string>();
   const directory = await list(adapter, ".moss/plugins");
