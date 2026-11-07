@@ -2,10 +2,10 @@
   "name": "@symbiosis-lab/obsidian-moss",
   "version": "0.1.0",
   "private": true,
-  "description": "Obsidian plugin that builds and previews the current vault as a moss website via the moss CLI",
+  "description": "Page diagnostics and previews on Obsidian desktop and mobile, with desktop moss CLI commands",
   "type": "module",
   "scripts": {
-    "build": "node esbuild.config.mjs production",
+    "build": "node scripts/build-wasm.mjs && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

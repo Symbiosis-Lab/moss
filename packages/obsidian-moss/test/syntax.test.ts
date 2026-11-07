@@ -1,14 +1,9 @@
-// The plugin's half of the shared-parser contract: scanner output → CM6
-// decorations. The scanner itself is tested in @symbiosis-lab/moss-syntax;
-// what matters here is that the mapping survives the shapes it really emits
-// (unclosed, nested, nameless, indented) and that names are judged against the
-// generated vocabulary rather than a local list.
 import { describe, expect, it } from "vitest";
 import { shortcodeDecoRanges, shortcodeExtension } from "../src/syntax/cm-shortcode";
 import { KNOWN_SHORTCODES, scanShortcodeBlocks } from "../src/syntax/shortcode-parser";
 
 /** Decorate a document the way the ViewPlugin does, in one step. */
-const decorate = (doc: string) => shortcodeDecoRanges(scanShortcodeBlocks(doc), doc);
+const decorate = (doc: string) => shortcodeDecoRanges(scanShortcodeBlocks(doc));
 
 describe("shortcode vocabulary", () => {
   it("comes from the shared package, not a local list", () => {
@@ -37,13 +32,6 @@ describe("shortcode decorations", () => {
     expect(ranges.some((r) => r.cls === "moss-sc-unclosed")).toBe(false);
   });
 
-  it("underlines a name the catalog does not know", () => {
-    const doc = ":::wat\nx\n:::\n";
-    const ranges = decorate(doc);
-    expect(doc.slice(3, 6)).toBe("wat");
-    expect(ranges).toContainEqual({ from: 3, to: 6, line: false, cls: "moss-sc-unknown" });
-  });
-
   it("steps over indentation when locating the name", () => {
     const doc = "  :::grid\nx\n  :::\n";
     const ranges = decorate(doc);
@@ -54,7 +42,7 @@ describe("shortcode decorations", () => {
     expect(ranges.some((r) => r.cls === "moss-sc-unknown")).toBe(false);
   });
 
-  it("flags an unclosed block without inventing a close fence", () => {
+  it("marks an unclosed block without inventing a close fence", () => {
     const doc = ":::grid\nstill typing\n";
     const blocks = scanShortcodeBlocks(doc);
     expect(blocks).toHaveLength(1);
@@ -62,7 +50,6 @@ describe("shortcode decorations", () => {
 
     const ranges = decorate(doc);
     expect(ranges).toContainEqual({ from: 0, to: 0, line: true, cls: "moss-sc-open" });
-    expect(ranges).toContainEqual({ from: 0, to: 0, line: true, cls: "moss-sc-unclosed" });
     expect(ranges.some((r) => r.cls === "moss-sc-close")).toBe(false);
   });
 
@@ -77,10 +64,9 @@ describe("shortcode decorations", () => {
     expect(open.map((r) => r.from)).toEqual([0, 8]);
   });
 
-  it("one closer for two openers closes the inner block and flags the outer", () => {
+  it("one closer for two openers keeps both open fences", () => {
     const doc = ":::grid\n::::hero\norphan\n:::\n";
     const ranges = decorate(doc);
-    expect(ranges).toContainEqual({ from: 0, to: 0, line: true, cls: "moss-sc-unclosed" });
     expect(ranges).toContainEqual({ from: 8, to: 8, line: true, cls: "moss-sc-open" });
   });
 

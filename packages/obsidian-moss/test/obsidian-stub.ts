@@ -2,7 +2,17 @@
 // Only what the modules under test import at module scope. Behavioural
 // coverage of the real API happens in the wdio e2e, not here.
 export class App {}
-export class Plugin {}
+export class Plugin {
+  app: any;
+  commands: any[] = [];
+  constructor(app: unknown) { this.app = app; }
+  async loadData() { return {}; }
+  registerEditorExtension() {}
+  registerEditorSuggest() {}
+  registerView() {}
+  registerEvent() {}
+  addCommand(command: unknown) { this.commands.push(command); }
+}
 export class PluginSettingTab {
   containerEl: unknown = null;
   constructor(_app: unknown, _plugin: unknown) {}
@@ -21,6 +31,7 @@ export class Setting {
 export class ItemView {
   contentEl: unknown = null;
   constructor(_leaf: unknown) {}
+  registerEvent() {}
 }
 export class WorkspaceLeaf {}
 export class EditorSuggest {
@@ -36,3 +47,8 @@ export class FileSystemAdapter {}
 export class Modal {
   constructor(_app: unknown) {}
 }
+
+export const Platform = { isDesktopApp: false };
+export class Events {}
+export class MarkdownView {}
+export { editorInfoField } from "./editor-info-stub";

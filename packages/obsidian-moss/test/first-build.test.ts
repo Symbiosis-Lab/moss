@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentFoldersFor, firstBuildMessage, isInICloud } from "../src/first-build";
+import { agentFoldersFor, firstBuildMessage, isInICloud } from "../src/desktop/first-build";
 
 describe("firstBuildMessage", () => {
   it("names every change a first build makes, and iCloud", () => {

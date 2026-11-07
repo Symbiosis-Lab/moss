@@ -42,8 +42,7 @@ export function binaryName(platform: string): string {
  * The explicit settings path wins. Then every PATH entry. Then the usual
  * install locations that a GUI-launched Obsidian does not have on PATH —
  * macOS apps launched from Finder inherit launchd's minimal PATH, so
- * Homebrew/npm-global locations must be probed directly (the git/pandoc
- * model the design doc names).
+ * Homebrew/npm-global locations must be probed directly.
  */
 export function candidateBinaryPaths(explicitPath: string, env: DetectEnv): string[] {
   const name = binaryName(env.platform);

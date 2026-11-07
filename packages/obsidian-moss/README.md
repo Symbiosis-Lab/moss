@@ -1,8 +1,12 @@
 # moss for Obsidian
 
-Build and preview the current vault as a website with [moss](https://mosspub.com), without leaving Obsidian. Desktop only. It needs the moss CLI, a separate program the plugin runs; it looks for it on `PATH` and in `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `~/.npm-global/bin`, or you can set its path in the plugin's settings.
+Check and preview notes as [moss](https://mosspub.com) pages on Obsidian desktop and mobile. Diagnostics and page previews run locally using the bundled WebAssembly core, without installing the moss CLI.
+
+On desktop, the plugin can also build and preview the whole site with the moss CLI, and open the vault in the moss app for publishing. It finds the CLI on `PATH` or in common installation folders, or you can set its path in the plugin's settings.
 
 ## Install from source
+
+Building from source requires Rust with the `wasm32-unknown-unknown` target and `wasm-pack`. The build embeds the core in `main.js`; no separate wasm file needs to be installed.
 
 The plugin is not in Obsidian's community plugin directory and has no release yet, so it installs by copying three files into the vault.
 
@@ -18,7 +22,12 @@ Then, in Obsidian, open Settings → Community plugins, turn off Restricted mode
 
 ## What it does
 
-- Underlines frontmatter fields moss does not know and values of the wrong type, explains each field on hover, and completes field names as you type.
+- Marks frontmatter errors, unknown fields, shortcode problems and unresolved note links. Hover explains diagnostics and known fields; completion includes fields contributed by installed plugins.
+- "moss: Preview this page" renders the current editor text in a side pane, updating after edits and file changes. It includes embedded notes, relative images and `.moss/theme/*.css`, in a sandboxed iframe with scripts disabled.
+- The language comes from `[site] lang` in `.moss/config.toml`, defaulting to English. Site context refreshes when vault files or `.moss/` change.
+
+The following commands are available on desktop:
+
 - "moss: Build site" builds the vault into `.moss/`.
 - "moss: Preview site" starts the preview server and shows the site in a side pane; "moss: Stop preview server" or closing the pane stops it.
 - "moss: Publish with the moss app" opens the vault in the moss desktop app, where publishing happens. The plugin itself publishes nothing.
@@ -29,4 +38,12 @@ When you publish from the moss app, every note in the vault becomes a page of th
 
 ## What it touches
 
-The plugin runs the moss CLI as a child process with the vault as its working folder. The CLI writes the built site under the vault's `.moss/` folder, adds a `uid:` line to the frontmatter of each note it builds, and writes guidance for coding agents into `.claude/` and `.cursor/`. The preview pane loads the site from the local preview server the CLI starts on `localhost`. The plugin makes no other network requests and collects nothing.
+Page checking and preview read the vault through Obsidian's Vault API and do not write files. The one-page preview includes page content and CSS; it does not run site scripts or build the site's navigation and listings.
+
+Desktop site commands run the moss CLI as a child process with the vault as its working folder. The CLI writes the built site under `.moss/`, adds a `uid:` line to the frontmatter of each note it builds, and writes guidance for coding agents into `.claude/` and `.cursor/`. The site preview pane loads the CLI's local server. The plugin collects nothing.
+
+## Tests
+
+After building the wasm core, run `pnpm run typecheck` and `npx vitest run`. The unit tests use the real wasm and reject Node and Electron imports when loading the mobile entry.
+
+`pnpm run test:e2e` launches Obsidian with desktop and mobile-emulation capabilities. On headless Linux use `xvfb-run -a pnpm run test:e2e`. Mobile emulation exercises the mobile UI in Electron; the import-isolation unit test covers the absence of Node and Electron APIs.

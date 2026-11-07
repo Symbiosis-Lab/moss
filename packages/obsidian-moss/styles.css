@@ -1,13 +1,18 @@
 /* moss for Obsidian */
 
 /* Frontmatter diagnostics — lint-style underlines, not walls of notices. */
-.moss-fm-unknown {
+.moss-diag-hint {
   text-decoration: underline dotted var(--text-faint);
   text-underline-offset: 3px;
 }
 
-.moss-fm-wrong-type {
+.moss-diag-error {
   text-decoration: underline wavy var(--text-error);
+  text-underline-offset: 3px;
+}
+
+.moss-diag-warning {
+  text-decoration: underline wavy var(--text-warning);
   text-underline-offset: 3px;
 }
 
@@ -59,12 +64,4 @@
 .moss-sc-open,
 .moss-sc-close {
   background: var(--background-secondary);
-}
-
-.moss-sc-unknown {
-  text-decoration: underline wavy var(--text-warning);
-}
-
-.moss-sc-unclosed {
-  border-left: 2px solid var(--text-error);
 }

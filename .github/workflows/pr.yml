@@ -398,6 +398,8 @@ jobs:
       # cargo metadata only reads the manifests: no build, no network. The
       # ratchet's dependency row and the diagram check below both use it.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       # Size, marker and dependency budgets; see the header of scripts/ratchet.mjs.
       - name: Ratchet (architecture size/marker/dependency budget)
@@ -481,6 +483,13 @@ jobs:
 
       - name: Test moss-build site/bridge JS (js-src)
         run: cd crates/moss-build && npx vitest run
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build obsidian-moss wasm core
+        run: cd packages/obsidian-moss && node scripts/build-wasm.mjs
 
       - name: Typecheck obsidian-moss (source + tests)
         run: cd packages/obsidian-moss && pnpm run typecheck
