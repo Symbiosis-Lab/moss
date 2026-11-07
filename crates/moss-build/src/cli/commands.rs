@@ -92,8 +92,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "agents",
-            args: "init",
-            description: "Seed .moss/AGENTS.md with this site's own conventions, for a coding agent to read. moss's own guidance is `moss guide`.",
+            args: "sync | init",
+            description: "`sync` writes the pointer to moss's guidance for the coding agents installed here or in your home folder (.claude/skills/moss/SKILL.md for Claude Code, .cursor/rules/moss.mdc for Cursor); a build never creates these, only keeps them current once written. `init` does the same and seeds .moss/AGENTS.md with this site's own conventions. moss's own guidance is `moss guide`.",
         },
         CliCommandInfo {
             name: "guide",
@@ -299,9 +299,10 @@ fn wrap(text: &str, indent: &str) -> String {
 ///
 /// The sentence is printed ready to paste into a coding agent because that is
 /// the actual first step of the journey: a human tells an agent to use moss.
-/// Everything after it is self-bootstrapping — `moss build` writes the skill
-/// files and prints where they landed (see `sync::guidance_pointer`), so this
-/// one line is the whole handoff.
+/// `moss build` prints where the guidance pointer is (see
+/// `sync::guidance_pointer`), so this one line orients the agent; for Claude
+/// Code or Cursor to find it unprompted in later sessions, the author runs
+/// `moss agents sync` once, since a build never adds their folders to a site.
 fn agent_footer() -> String {
     let cli = crate::cli::agents::sync::bundled_cli_path();
     format!(
@@ -311,9 +312,12 @@ USING MOSS FROM A CODING AGENT:
 
     Build a website from this folder: run {0} build .
 
-    That points your agent at the authoring and theming guide. Afterwards —
-    including after previewing the folder in the moss app, which does the
-    same — say what you want and nothing more:
+    That points your agent at the authoring and theming guide. For Claude
+    Code or Cursor to find it on their own in later sessions, run once:
+
+    {0} agents sync
+
+    After that, say what you want and nothing more:
 
     Restyle this site: warmer palette, serif headings, quiet nav.
 

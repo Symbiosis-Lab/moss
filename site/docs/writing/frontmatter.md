@@ -225,7 +225,7 @@ You can also opt a single child out by setting `series: false` on that article's
 | `cascade` | map | (none) | Push values to all descendant pages |
 | `url` | string | from file path | Custom URL override |
 | `translationKey` | string | (none) | Link files as translations of each other |
-| `uid` | string | auto-generated | Content-addressable ID |
+| `uid` | string | auto-generated | Stable note identity, written at first publish |
 | `layout` | string | auto | Template: `"page"` or `"article"` |
 | `sidebar` | string | (none) | Wikilink to a folder to use as sidebar navigation |
 | `review_of` | string | (none) | URL of the work being reviewed |
@@ -236,7 +236,7 @@ You can also opt a single child out by setting `series: false` on that article's
 
 ### uid
 
-moss stamps `uid` for you; you rarely set it by hand. If you do, quote it. An unquoted `uid: 12345` is parsed as a YAML integer and can be silently dropped. Use `uid: "12345"` instead.
+moss writes `uid` into a page's frontmatter when the page is first published (a build or preview never does); you rarely set it by hand. If you do, quote it. An unquoted `uid: 12345` is parsed as a YAML integer and can be silently dropped. Use `uid: "12345"` instead.
 
 ### Cascade
 

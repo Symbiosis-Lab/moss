@@ -757,3 +757,40 @@ fn the_build_pointer_names_moss_guide() {
     assert!(line.contains("`moss guide`"), "{line}");
     assert!(!line.contains("read "), "must not tell the agent to read the file: {line}");
 }
+
+/// A build is not a request to add an agent's folder to a site: having Claude
+/// Code or Cursor in the project (or the home folder) writes nothing of theirs
+/// until `moss agents sync` asks for it. The neutral pointer inside `.moss/`
+/// still lands.
+#[test]
+fn a_build_creates_no_agent_folder_files() {
+    let (_tmp, project) = make_project();
+    std::fs::create_dir_all(project.join(".claude")).unwrap();
+    std::fs::create_dir_all(project.join(".cursor")).unwrap();
+
+    sync_after_build(&project, true);
+
+    assert!(!project.join(".claude/skills").exists(), "a build wrote Claude Code's skill unasked");
+    assert!(!project.join(".cursor/rules").exists(), "a build wrote Cursor's rule unasked");
+    assert!(project.join(".moss/agents/SKILL.md").is_file());
+}
+
+/// Once asked for, the files stay current: a build refreshes the ones it finds.
+#[test]
+fn a_build_refreshes_the_agent_files_sync_wrote() {
+    let (_tmp, project) = make_project();
+    let home = home_with(&[".claude", ".cursor"]);
+    sync_with_home(&project, Some(home.path()), Path::new("/old/moss")).expect("sync");
+    let skill = project.join(CLAUDE_SKILL);
+    let rule = project.join(CURSOR_RULE);
+    assert!(skill.is_file() && rule.is_file());
+    // An older binary's path that no longer exists is what a refresh replaces.
+    let before = std::fs::read_to_string(&skill).unwrap();
+
+    sync_after_build(&project, true);
+
+    let after = std::fs::read_to_string(&skill).unwrap();
+    assert_ne!(after, before, "the managed skill was not refreshed");
+    assert!(!after.contains("/old/moss"), "{after}");
+    assert!(!std::fs::read_to_string(&rule).unwrap().contains("/old/moss"));
+}

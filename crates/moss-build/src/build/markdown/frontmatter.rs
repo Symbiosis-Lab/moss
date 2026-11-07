@@ -8,7 +8,7 @@
 // from the markdown module. generate_slug and slugify_path_segments are now
 // in moss-core and forwarded via scan::slug.
 pub use crate::build::scan::slug::{
-    generate_slug, generate_uid, insert_uid_into_frontmatter, replace_uid_in_frontmatter,
+    generate_slug, generate_uid,
     resolve_duplicate_slugs_with_lang,
 };
 

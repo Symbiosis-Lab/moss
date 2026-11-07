@@ -1347,7 +1347,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         // the generated contract documentation and the hooks-site contract fixture —
         // a plugin author who believed it was derivable and recomputed it to
         // re-join `.moss/social/*.json` would miss on every single key.
-        description: "Stable note identity: 8 random hex chars minted at first build. NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
+        description: "Stable note identity: 8 random hex chars, written into the page's frontmatter by the publish that first puts it online (a build or preview never writes it). NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
         skip_schema: true, // auto-generated, not user-editable
         ..FIELD_DEFAULTS
     },

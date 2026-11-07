@@ -4423,7 +4423,7 @@
       "name": "uid",
       "type": "string",
       "widget": "text-input",
-      "description": "Stable note identity: 8 random hex chars minted at first build. NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
+      "description": "Stable note identity: 8 random hex chars, written into the page's frontmatter by the publish that first puts it online (a build or preview never writes it). NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
       "group": "",
       "skip_schema": true
     }

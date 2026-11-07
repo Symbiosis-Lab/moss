@@ -51,7 +51,7 @@ use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedA
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
 use super::html::{RenderCtx, render_page, tab_title};
-use super::source_evidence::{flatten_missing_reference_occurrences, FinalSourceRecord};
+use super::source_evidence::{flatten_missing_reference_occurrences, SourceRecord};
 
 /// # Note
 /// The caller is responsible for creating the output directory and managing
@@ -209,7 +209,7 @@ fn synthetic_folder_doc(
 ///
 /// `stat` is the file's stat taken BEFORE `bytes` were read — see
 /// [`stat_then`](crate::build::stat::stat_then), which every caller reads
-/// through — or right after moss wrote them, on the uid write-back path.
+/// through.
 /// `pub(crate)`
 /// rather than file-local: `pipeline.rs`'s places.toml registration is not
 /// inside this file (the gazetteer is read before `generate_blocking_content`
@@ -229,6 +229,7 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
         title: doc.title.clone(),
         date: doc.date.clone(),
         draft: doc.is_draft(),
+        uid: doc.uid.clone(),
     }
 }
 
@@ -639,7 +640,7 @@ pub fn generate_blocking_content_for_build(
 
     // `deferred_paths` travels out of the parallel markdown pass. Missing
     // media stays attached to each document and is flattened after Loop A.
-    let (mut documents, deferred_paths, mut source_records) = {
+    let (mut documents, deferred_paths, source_records) = {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -678,7 +679,7 @@ pub fn generate_blocking_content_for_build(
                     Some(moss_core::slug::normalize_separators(&path.to_string_lossy())),
                 _ => None,
             });
-        let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String, Option<crate::build::stat::FileStat>)>)>> = project_structure
+        let rendered: Vec<Option<(ParsedDocument, Option<(String, Option<crate::build::stat::FileStat>)>)>> = project_structure
             .markdown_files
             .par_iter()
             .map(|file_info| {
@@ -956,7 +957,7 @@ pub fn generate_blocking_content_for_build(
                     // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    Some((doc, Some((source_file_path, content, stat_before_read))))
+                    Some((doc, Some((content, stat_before_read))))
                 },
             )
             .collect();
@@ -979,90 +980,22 @@ pub fn generate_blocking_content_for_build(
                 advisories: vec![],
             });
         }
-        // Collect fresh raw sources with their documents. UID normalization,
-        // evidence and cache identity all happen after this parallel read phase
-        // has ended, so no embed reader can observe a half-written source.
+        // Collect fresh raw sources with their documents. Evidence and cache
+        // identity are taken after this parallel read phase has ended.
         let mut docs = Vec::with_capacity(rendered.len());
         let mut source_records = Vec::new();
         for (doc, source) in rendered.into_iter().flatten() {
             let source = source.zip(doc.source_path.clone());
-            let original_uid = doc.uid.clone();
             if let Some(document_index) = crate::build::scan::slug::admit_unless_reserved_device_output(&mut docs, doc) {
-                let Some(((disk_path, source, stat_before_read), source_path)) = source else {
+                let Some(((source, stat_before_read), source_path)) = source else {
                     continue;
                 };
-                source_records.push(FinalSourceRecord::fresh(
-                    document_index,
-                    source_path,
-                    disk_path,
-                    source,
-                    original_uid,
-                    stat_before_read,
-                ));
+                source_records.push(SourceRecord::fresh(document_index, source_path, source, stat_before_read));
             }
         }
         (docs, deferred_mutex.into_inner().unwrap(), source_records)
     };
 
-    // UID normalization is the final source-owning step. It completes before
-    // source evidence, cache identity, metadata, or any write observes bytes.
-    let reduce_pre_start = std::time::Instant::now();
-    let writes_allowed = services.and_then(|s| s.session.as_ref()).map_or(true, |s| s.source_writes_allowed());
-    for record in &mut source_records {
-        record.mint_missing_uid(&mut documents[record.document_index]);
-    }
-    let source_indices: HashMap<String, usize> = documents
-        .iter()
-        .enumerate()
-        .filter_map(|(index, doc)| doc.source_path.as_ref().map(|path| (path.clone(), index)))
-        .collect();
-    let original_uids: HashMap<String, Option<String>> = documents
-        .iter()
-        .filter_map(|doc| doc.source_path.as_ref().map(|path| (path.clone(), doc.uid.clone())))
-        .collect();
-    let mut resolution = super::uid_dedup::resolve_duplicate_uids_with(
-            &mut documents,
-            source_path_buf,
-            || crate::build::manifest::live_baseline::load(&paths),
-            |src| previous_hashes.sources.contains_key(src),
-            |reassigned_path, new_uid| {
-                let record_index = match source_records
-                    .iter()
-                    .position(|record| record.source_path == reassigned_path)
-                {
-                    Some(index) => index,
-                    None => {
-                        let Some(&document_index) = source_indices.get(reassigned_path) else {
-                            return false;
-                        };
-                        let disk_path = source_path_buf.join(reassigned_path);
-                        let (stat_before_read, source) = crate::build::stat::stat_then(&disk_path, |path| std::fs::read_to_string(path));
-                        let source = match source {
-                            Ok(source) => source,
-                            Err(error) => {
-                                log::info!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
-                                return false;
-                            }
-                        };
-                        let original_uid = original_uids
-                            .get(reassigned_path)
-                            .cloned()
-                            .unwrap_or(None);
-                        source_records.push(FinalSourceRecord::fresh(
-                            document_index,
-                            reassigned_path.to_string(),
-                            disk_path,
-                            source,
-                            original_uid,
-                            stat_before_read,
-                        ));
-                        source_records.len() - 1
-                    }
-                };
-                source_records[record_index].plan_duplicate_uid(new_uid)
-            },
-        );
-    let mut failed_uid_writes = std::collections::HashSet::new();
     let folder_index = crate::build::folder_index::NoFolderIndex;
     let url_index = crate::build::folder_index::NoUrlIndex;
     let reference_context = moss_core::resolve::reference::ReferenceContext {
@@ -1070,50 +1003,41 @@ pub fn generate_blocking_content_for_build(
         folders: &folder_index,
         urls: &url_index,
     };
-    for record in &mut source_records {
-        let written = record.write_final(writes_allowed);
-        if written && record.final_source != record.original_source {
-            input_evidence.owned_rewrite(
-                &record.disk_path,
-                record.original_source.as_bytes(),
-                record.final_source.as_bytes(),
-            );
-        }
-        if !written {
-            if !record.original_bytes_still_on_disk() {
-                input_evidence.read_error(&record.disk_path, "UID normalization could not verify source bytes".into());
-            }
-            failed_uid_writes.insert(record.source_path.clone());
-            documents[record.document_index].uid = record.original_uid.clone();
-        }
+    for record in &source_records {
         let doc = &mut documents[record.document_index];
         doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
             &record.source_path,
-            &record.final_source,
+            &record.source,
             &authored_evidence_parse_config,
             &reference_context,
         );
-        // A failed write may have left the file half-written, so its bytes are
-        // not vouched for: the hash is memoized for this build, not recorded.
-        parse_session.note_source_bytes(
-            &record.source_path,
-            record.final_source.as_bytes(),
-            record.stat().filter(|_| written),
-        );
+        parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
         page_source_hashes.insert(
             record.source_path.clone(),
             record.source_metadata(),
         );
     }
-    resolution.reassignments.retain(|item| !failed_uid_writes.contains(&item.reassigned_path));
-    // A deferral is not shown. `resolve_duplicate_uids` logs it; the author
-    // hears nothing, because a note ID is moss's to manage and every remedy
-    // she could be offered is one moss should have taken itself.
+    if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
+        reporter.report(&event);
+    }
+
+    let missing_references = flatten_missing_reference_occurrences(&documents);
+
+    // The PRE-reduce cache boundary: the passes below fold other documents'
+    // state into a parsed document.
+    parse_session.finish(&documents);
+
+    // Which uid each page is built under: its own, the published one, or a
+    // provisional one. After the snapshot above, so a replayed page never
+    // carries a uid this pass assigned; nothing here writes the author's files.
+    let reduce_pre_start = std::time::Instant::now();
+    let resolution = super::uid_dedup::assign_note_ids(&mut documents, &paths, |src| previous_hashes.sources.contains_key(src));
+    // A deferral is only logged (by `resolve_duplicate_uids`): there is nothing for the author to do.
     if !resolution.reassignments.is_empty() {
         for r in &resolution.reassignments {
             let line = format!(
-                "Duplicate note ID '{}': '{}' keeps it, '{}' was given a new one{}",
+                "Duplicate note ID '{}': '{}' keeps it, '{}' is built under a new one{}",
                 r.uid,
                 r.keeper_path,
                 r.reassigned_path,
@@ -1130,17 +1054,7 @@ pub fn generate_blocking_content_for_build(
             reporter.report(&event);
         }
     }
-    if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
-        reporter.report(&event);
-    }
     log::debug!(target: "timing", "[reduce] uid_dedup: {:?}", reduce_pre_start.elapsed());
-
-    let missing_references = flatten_missing_reference_occurrences(&documents);
-
-    // This remains the PRE-reduce cache boundary. UID normalization is the
-    // one source-owning precondition: it changes raw bytes, whereas later
-    // passes fold other documents' state into a parsed document.
-    parse_session.finish(&documents);
 
     send_progress(
         progress_sender,

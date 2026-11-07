@@ -9,8 +9,7 @@
 //! # The snapshot boundary
 //!
 //! An entry is the `ParsedDocument` **exactly as Loop A's per-file work leaves
-//! it** — after the sequential uid-writeback post-pass, strictly before any
-//! whole-corpus "Reduce" pass (`uid_dedup::resolve_duplicate_uids`,
+//! it**, strictly before any whole-corpus "Reduce" pass (`uid_dedup::assign_note_ids`,
 //! `resolve_duplicate_slugs_with_lang`, `apply_cascade`,
 //! `populate_direct_children_sorts`, `folder_embed::expand_markers_in_documents`,
 //! `email::stamp_inline_subscribe_scopes`, translation-linking). Those passes then run over the assembled vector —
@@ -217,6 +216,13 @@ pub fn reset_for_tests() {
     }
 }
 
+/// Every document the store holds, as the next build would replay it.
+#[cfg(test)]
+pub(crate) fn cached_documents() -> Vec<ParsedDocument> {
+    let store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    store.iter().flat_map(|(_, cache)| cache.entries.values().map(|entry| entry.doc.clone())).collect()
+}
+
 /// Opt a test into owning the process-global parse cache.
 ///
 /// Only the focused parse-cache stories take this guard. Other test builds do
@@ -317,8 +323,7 @@ impl FileHasher {
     /// Memoize the hash of bytes the caller has ALREADY read, without touching
     /// the stat-keyed index.
     ///
-    /// Loop A may mint a `uid:` after parsing. Its caller passes the one final
-    /// source string used for the deferred write, so cache identity and source
+    /// The caller passes the bytes it parsed, so cache identity and source
     /// evidence agree with the bytes the next build reads.
     ///
     /// With the file's `stat` from before those bytes were read (or from the

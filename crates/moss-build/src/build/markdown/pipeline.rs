@@ -1757,8 +1757,8 @@ pub fn process_markdown_file(
         // never sees an `![[...]]` marker. The Loop A call site in
         // `render/blocking.rs` fills this in from `ResolveResult::embed_deps`.
         embed_deps: Vec::new(),
-        // Source evidence is attached by Loop A from this file's final raw
-        // bytes, after any uid write-back. Resolution diagnostics above are
+        // Source evidence is attached by Loop A from this file's raw bytes.
+        // Resolution diagnostics above are
         // still logged here, but they are not physical-source coordinates and
         // must not become publish evidence.
         missing_reference_occurrences: Vec::new(),

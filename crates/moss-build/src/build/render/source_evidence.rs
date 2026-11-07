@@ -3,7 +3,6 @@
 use crate::build::types::ParsedDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::PathBuf;
 
 /// A byte span in a physical markdown source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -81,121 +80,34 @@ pub struct PublishPreflightProjection {
     pub drafts_linked: Vec<DraftLinkOccurrence>,
 }
 
-/// The one owner of a fresh source's bytes between parsing and the cache
-/// snapshot. UID normalization may change `final_source`, but evidence, hash
-/// and disk write always consume that same field after normalization ends.
-pub(super) struct FinalSourceRecord {
+/// A freshly read source's bytes, from parsing to the cache snapshot. Evidence,
+/// hash and stat all describe these same bytes: the build never rewrites them.
+pub(super) struct SourceRecord {
     pub document_index: usize,
     pub source_path: String,
-    pub disk_path: PathBuf,
-    pub original_source: String,
-    pub final_source: String,
-    pub original_uid: Option<String>,
-    /// The file's stat, taken BEFORE `original_source` was read — or right after
-    /// [`write_final`](Self::write_final) wrote `final_source` — so the record
-    /// never pairs a later write's stat with these bytes' hash.
+    pub source: String,
+    /// The file's stat, taken BEFORE `source` was read, so the record never
+    /// pairs a later write's stat with these bytes' hash.
     stat: Option<crate::build::stat::FileStat>,
 }
 
-impl FinalSourceRecord {
+impl SourceRecord {
     pub(super) fn fresh(
         document_index: usize,
         source_path: String,
-        disk_path: PathBuf,
         source: String,
-        original_uid: Option<String>,
         stat_before_read: Option<crate::build::stat::FileStat>,
     ) -> Self {
-        Self {
-            document_index,
-            source_path,
-            disk_path,
-            final_source: source.clone(),
-            original_source: source,
-            original_uid,
-            stat: stat_before_read,
-        }
+        Self { document_index, source_path, source, stat: stat_before_read }
     }
 
-    /// The file's stat from before `final_source` was read, or from the write
-    /// that put it there.
     pub(super) fn stat(&self) -> Option<crate::build::stat::FileStat> {
         self.stat
     }
 
-    /// The manifest's record of `final_source` at the stat it was read (or
-    /// written) at.
+    /// The manifest's record of `source` at the stat it was read at.
     pub(super) fn source_metadata(&self) -> crate::build::types::SourceMetadata {
-        super::blocking::source_metadata(self.stat, self.final_source.as_bytes())
-    }
-
-    /// A denied UID write can still leave a valid read of the original page.
-    /// A changed, absent, or unreadable source cannot make that claim.
-    pub(super) fn original_bytes_still_on_disk(&self) -> bool {
-        std::fs::read(&self.disk_path).is_ok_and(|bytes| bytes == self.original_source.as_bytes())
-    }
-
-    pub(super) fn mint_missing_uid(&mut self, document: &mut ParsedDocument) {
-        if document.uid.is_some() || document.slot_only {
-            return;
-        }
-        let uid = crate::build::markdown::generate_uid(&self.source_path);
-        self.final_source = crate::build::markdown::insert_uid_into_frontmatter(&self.final_source, &uid);
-        document.uid = Some(uid);
-    }
-
-    pub(super) fn plan_duplicate_uid(&mut self, new_uid: &str) -> bool {
-        let updated = crate::build::markdown::replace_uid_in_frontmatter(&self.final_source, new_uid);
-        if updated == self.final_source {
-            return self.final_source.contains(&format!("uid: \"{new_uid}\""));
-        }
-        self.final_source = updated;
-        true
-    }
-
-    /// Persist only the final owned bytes. A failed write restores the exact
-    /// prior source and tells the caller to restore its parsed UID as well.
-    /// `allowed` is false when the folder's session refuses source writes (a
-    /// check run); that is the same outcome as a failed write, so the caller
-    /// takes the same restore path.
-    pub(super) fn write_final(&mut self, allowed: bool) -> bool {
-        if self.final_source == self.original_source {
-            return true;
-        }
-        if !allowed {
-            self.final_source.clone_from(&self.original_source);
-            return false;
-        }
-        // The stat comes from the handle that wrote, so it describes moss's write
-        // and nothing that lands on the path afterwards.
-        let written = (|| {
-            use std::io::Write;
-            // A source can change after the parse pass. Do not overwrite an
-            // author's newer bytes while adding a generated UID. This check
-            // narrows that race; it is not an atomic compare-and-swap.
-            if !self.original_bytes_still_on_disk() {
-                return Err(std::io::Error::other("source changed before UID normalization"));
-            }
-            // allow:raw_write this writes authored markdown, not regenerable build output
-            let mut file = std::fs::File::create(&self.disk_path)?;
-            file.write_all(self.final_source.as_bytes())?;
-            file.metadata()
-        })();
-        match written {
-            Ok(md) => {
-                self.stat = Some(crate::build::stat::FileStat::of(&md));
-                true
-            }
-            Err(error) => {
-                log::info!(
-                    "Failed to write normalized uid into '{}': {}",
-                    self.source_path,
-                    error
-                );
-                self.final_source.clone_from(&self.original_source);
-                false
-            }
-        }
+        super::blocking::source_metadata(self.stat, self.source.as_bytes())
     }
 }
 
@@ -369,123 +281,12 @@ mod tests {
             crate::build::stat::FileStat::stamp_in_the_second_of(path, previous_mtime);
             read
         });
-        let record = FinalSourceRecord::fresh(0, "note.md".to_string(), disk.clone(), source.unwrap(), None, stat_before_read);
+        let record = SourceRecord::fresh(0, "note.md".to_string(), source.unwrap(), stat_before_read);
 
         let now = std::fs::metadata(&disk).unwrap();
         assert_eq!(
             crate::build::watch::source_metadata_verdict(&record.source_metadata(), &now, &disk, None),
             crate::build::watch::SourceVerdict::Changed,
         );
-    }
-
-    /// The uid write-back is moss's own write: the record it leaves has to agree with
-    /// the file as moss left it, or the next look at the file reads moss's write as the
-    /// author's edit.
-    #[test]
-    fn a_uid_writeback_records_the_stat_of_the_bytes_it_wrote() {
-        let source = "---\ntitle: Hé\n---\nbody\n";
-        let temp = tempfile::tempdir().unwrap();
-        let disk = temp.path().join("note.md");
-        std::fs::write(&disk, source).unwrap();
-        let stat_before_read = std::fs::metadata(&disk).ok().map(|md| crate::build::stat::FileStat::of(&md));
-        let mut record = FinalSourceRecord::fresh(0, "note.md".to_string(), disk.clone(), source.to_string(), None, stat_before_read);
-        record.mint_missing_uid(&mut ParsedDocument::default());
-        assert!(record.write_final(true));
-
-        let now = std::fs::metadata(&disk).unwrap();
-        assert_eq!(
-            crate::build::watch::source_metadata_verdict(&record.source_metadata(), &now, &disk, None),
-            crate::build::watch::SourceVerdict::Unchanged { refreshed: None },
-        );
-    }
-
-    #[test]
-    fn uid_writeback_refuses_a_newer_author_edit() {
-        let source = "---\ntitle: Original\n---\nbody\n";
-        let temp = tempfile::tempdir().unwrap();
-        let disk = temp.path().join("note.md");
-        std::fs::write(&disk, source).unwrap();
-        let mut record = FinalSourceRecord::fresh(0, "note.md".into(), disk.clone(), source.into(), None, None);
-        record.mint_missing_uid(&mut ParsedDocument::default());
-        std::fs::write(&disk, "---\ntitle: Newer\n---\nbody\n").unwrap();
-        assert!(!record.write_final(true));
-        assert_eq!(std::fs::read_to_string(&disk).unwrap(), "---\ntitle: Newer\n---\nbody\n");
-    }
-
-    #[test]
-    fn uid_writeback_hands_evidence_the_exact_bytes_it_writes() {
-        let source = "---\ntitle: Hé\n---\n![alt](gone.png)\n";
-        let temp = tempfile::tempdir().unwrap();
-        let disk = temp.path().join("note.md");
-        std::fs::write(&disk, source).unwrap();
-        let mut document = ParsedDocument::default();
-        let mut record = FinalSourceRecord::fresh(
-            0,
-            "note.md".to_string(),
-            disk.clone(),
-            source.to_string(),
-            None,
-            None,
-        );
-        record.mint_missing_uid(&mut document);
-        assert!(record.write_final(true));
-        let written = std::fs::read_to_string(&disk).unwrap();
-        assert_eq!(written, record.final_source);
-        let offset = record.final_source.find("gone.png").expect("reference survives uid insertion");
-        assert!(offset > source.find("gone.png").unwrap(), "uid shifts the physical span");
-
-        let graph = ContentGraphBuilder::new().build();
-        let folders = NoFolderIndex;
-        let urls = NoUrlIndex;
-        let context = ReferenceContext {
-            assets: &graph,
-            folders: &folders,
-            urls: &urls,
-        };
-        let evidence = MissingReferenceOccurrence::from_authored_source(
-            "note.md",
-            &record.final_source,
-            &moss_core::ast::ParseConfig::default(),
-            &context,
-        );
-        assert_eq!(evidence.len(), 1);
-        let revision = format!("{:x}", sha2::Sha256::digest(written.as_bytes()));
-        assert_eq!(evidence[0].source_revision.as_str(), revision);
-        let span = evidence[0].source_span.start_byte as usize..evidence[0].source_span.end_byte as usize;
-        assert_eq!(&written[span], "gone.png");
-    }
-
-    #[test]
-    fn duplicate_uid_reassignment_keeps_evidence_on_its_final_written_bytes() {
-        let source = "---\ntitle: Hé\nuid: old-id\n---\n![alt](gone.png)\n";
-        let temp = tempfile::tempdir().unwrap();
-        let disk = temp.path().join("copy.md");
-        std::fs::write(&disk, source).unwrap();
-        let mut record = FinalSourceRecord::fresh(
-            0,
-            "copy.md".to_string(),
-            disk.clone(),
-            source.to_string(),
-            Some("old-id".to_string()),
-            None,
-        );
-        assert!(record.plan_duplicate_uid("replacement-id"));
-        assert!(record.write_final(true));
-        let written = std::fs::read_to_string(&disk).unwrap();
-
-        let graph = ContentGraphBuilder::new().build();
-        let folders = NoFolderIndex;
-        let urls = NoUrlIndex;
-        let context = ReferenceContext { assets: &graph, folders: &folders, urls: &urls };
-        let evidence = MissingReferenceOccurrence::from_authored_source(
-            "copy.md", &record.final_source, &moss_core::ast::ParseConfig::default(), &context,
-        );
-        assert_eq!(record.final_source, written);
-        assert_eq!(
-            evidence[0].source_revision.as_str(),
-            format!("{:x}", sha2::Sha256::digest(written.as_bytes()))
-        );
-        let span = evidence[0].source_span.start_byte as usize..evidence[0].source_span.end_byte as usize;
-        assert_eq!(&written[span], "gone.png");
     }
 }

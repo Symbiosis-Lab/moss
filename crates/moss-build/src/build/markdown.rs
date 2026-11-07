@@ -24,8 +24,6 @@ pub use frontmatter::{
     // slug/uid re-exports forwarded from frontmatter (originally from generator::slug)
     generate_slug,
     generate_uid,
-    insert_uid_into_frontmatter,
-    replace_uid_in_frontmatter,
     resolve_duplicate_slugs_with_lang,
 };
 

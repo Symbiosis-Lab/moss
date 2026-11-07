@@ -12,9 +12,14 @@
 //!
 //! | target | when | why there |
 //! |---|---|---|
-//! | `.claude/skills/moss/SKILL.md` | `.claude/` here or in `$HOME` | Claude Code's native project-skill mechanism: auto-discovered, loaded on demand rather than burning context every turn |
-//! | `.cursor/rules/moss.mdc` | `.cursor/` here or in `$HOME` | Cursor's native mechanism |
+//! | `.claude/skills/moss/SKILL.md` | asked for, with `.claude/` here or in `$HOME` | Claude Code's native project-skill mechanism: auto-discovered, loaded on demand rather than burning context every turn |
+//! | `.cursor/rules/moss.mdc` | asked for, with `.cursor/` here or in `$HOME` | Cursor's native mechanism |
 //! | `.moss/agents/SKILL.md` | always | for tools with no config directory of their own to write into; lives in moss's own directory, not the author's, so there is no footprint question to gate |
+//!
+//! "Asked for" is `moss agents sync` or `moss agents init`. A build never
+//! creates `.claude/` or `.cursor/` files: having those tools installed is not
+//! a request to put their folders in a site, and a site folder is often synced
+//! to every device. Once asked, a build keeps the files it finds current.
 //!
 //! ## What goes in them: a pointer, not the prose
 //!
@@ -110,16 +115,14 @@ fn stamp_for(rest: &str) -> String {
     )
 }
 
-/// When [`sync_project`] should run. Documented here rather than at each call
-/// site so the whole policy is visible in one place.
+/// When [`sync_after_build`] refreshes the guidance. Documented here rather than
+/// at each call site so the whole policy is visible in one place.
 ///
 /// - **Any full build** — one gate in `build::run_pipeline`, on
-///   `BuildTrigger::Full`. That single condition already covers every trigger
-///   worth having: opening a folder in the GUI builds it (so "I installed
-///   Cursor since I last opened this folder" is caught), and `moss build` /
-///   `moss preview` cover headless use, where there is no open event at all.
-///   It has a pleasing property too — a coding agent's own first `moss`
-///   command in a folder writes the guidance for its next turn.
+///   `BuildTrigger::Full`: opening a folder in the GUI builds it, and
+///   `moss build` / `moss preview` cover headless use. It writes
+///   `.moss/agents/SKILL.md` and refreshes the agent files already there; it
+///   creates none (see the module header).
 /// **Not** on watch rebuilds as a rule: they fire on every save. But
 /// `rebuild_pending` — any save that lands while a rebuild is in flight, which
 /// is ordinary during editing — passes `BuildTrigger::Full`, so in practice a
@@ -499,7 +502,7 @@ fn console_front_door(exe: &Path) -> Option<PathBuf> {
 /// Cursor's `.mdc` is not offered — Cursor loads its rules itself, so naming
 /// the file would tell that agent to read something it already has.
 pub fn guidance_pointer(project: &Path) -> Option<PathBuf> {
-    [".claude/skills/moss/SKILL.md", ".moss/agents/SKILL.md"]
+    [CLAUDE_SKILL, ".moss/agents/SKILL.md"]
         .iter()
         .map(|rel| project.join(rel))
         .find(|p| p.is_file())
@@ -527,7 +530,7 @@ pub fn print_guidance_pointer(project: &Path) {
     }
 }
 
-/// The build pipeline's entry into [`sync_project`] — see [`SYNC_TRIGGERS`].
+/// The build pipeline's refresh of the guidance — see [`SYNC_TRIGGERS`].
 ///
 /// Takes `is_full_build` rather than reading the trigger itself so the policy
 /// lives beside the constant that documents it, and so this is testable
@@ -540,12 +543,18 @@ pub fn sync_after_build(project: &Path, is_full_build: bool) {
     if !is_full_build {
         return;
     }
-    if let Err(e) = sync_project(project, &bundled_cli_path()) {
+    let present = (project.join(CLAUDE_SKILL).is_file(), project.join(CURSOR_RULE).is_file());
+    if let Err(e) = sync_targets(project, present, &bundled_cli_path()) {
         log::info!(target: "build", "agent guidance sync skipped: {e}");
     }
 }
 
-/// Bring `project`'s agent guidance up to date.
+/// The files that mark an agent's guidance as asked for in a project.
+const CLAUDE_SKILL: &str = ".claude/skills/moss/SKILL.md";
+const CURSOR_RULE: &str = ".cursor/rules/moss.mdc";
+
+/// Write `project`'s agent guidance for every agent installed here or in
+/// `$HOME` — the explicit request (`moss agents sync`).
 ///
 /// `cli` is the absolute path to a moss binary — see [`bundled_cli_path`]. It
 /// is interpolated into what agents read, so it must be a path that works when
@@ -569,6 +578,12 @@ pub fn sync_project(project: &Path, cli: &Path) -> Result<SyncReport, String> {
 /// outright when it moves. Threading it through costs one argument and makes
 /// the ambient read happen in exactly one place.
 fn sync_with_home(project: &Path, home: Option<&Path>, cli: &Path) -> Result<SyncReport, String> {
+    sync_targets(project, detected(project, home), cli)
+}
+
+/// Write the neutral guidance, and Claude Code's and Cursor's where
+/// `(has_claude, has_cursor)` says so.
+fn sync_targets(project: &Path, (has_claude, has_cursor): (bool, bool), cli: &Path) -> Result<SyncReport, String> {
     let mut report = SyncReport::default();
     if !project.join(".moss").is_dir() {
         // Not a moss project. Nothing has been established here to describe.
@@ -581,8 +596,6 @@ fn sync_with_home(project: &Path, home: Option<&Path>, cli: &Path) -> Result<Syn
     let real_root = project
         .canonicalize()
         .map_err(|e| format!("resolve {}: {e}", project.display()))?;
-
-    let (has_claude, has_cursor) = detected(project, home);
 
     let mut record = |path: &Path, outcome: Option<bool>| {
         // `/`-separated on every platform — these are display strings, and

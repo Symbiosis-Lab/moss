@@ -468,7 +468,7 @@ pub struct FrontMatter {
     /// renders it when one would otherwise show. No effect elsewhere.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub map: Option<bool>,
-    /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published
+    /// Durable page identity: 8 RANDOM hex chars, never derivable, written by the first publish and never changed once published
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub uid: Option<String>,
     /// Typesetting direction: "horizontal" (default) or "vertical"

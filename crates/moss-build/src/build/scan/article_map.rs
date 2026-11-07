@@ -93,7 +93,7 @@ pub struct ArticleInfo {
     #[serde(default)]
     pub tags: Vec<String>,
 
-    /// Stable note identity: 8 random hex chars minted once and stored in frontmatter — NOT derived from the path, and unrecoverable once lost.
+    /// Stable note identity: 8 random hex chars, stored in frontmatter by the publish that first puts the page online — NOT derived from the path, and unrecoverable once lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
 

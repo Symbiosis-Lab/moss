@@ -198,8 +198,8 @@ fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
     if !(args.apply && report.writable()) {
         return Ok(report);
     }
-    // Saving a version builds the site, and a build stamps `uid:` into a page
-    // that has none, so the change is planned again from the files it left.
+    // Planned again after the save, so the plan is checked against the files
+    // the version just recorded.
     let root = VaultRoot::resolve(folder);
     let label = match (&args.lift, &args.import_sources) {
         (Some(class), _) => format!("Before moss migrate --lift .{class}"),

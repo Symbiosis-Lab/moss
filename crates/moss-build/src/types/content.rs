@@ -562,6 +562,10 @@ pub struct PageMeta {
     /// `draft: true`: built and previewed, never published.
     #[serde(default)]
     pub draft: bool,
+    /// The note ID the page was built under, which the publish that puts it
+    /// online stamps into its frontmatter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
 }
 
 impl SiteHashes {

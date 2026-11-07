@@ -1,10 +1,35 @@
-//! Duplicate-uid resolution.
+//! Which note ID (`uid`) each page is built under, and duplicate-uid
+//! resolution, without writing to the author's files.
+//!
+//! ## The uid a page is built under
+//!
+//! A uid is the join key for things outside the folder (below). None of those
+//! exist until the page is published, so a build never writes a uid into a
+//! source file. The publish that first puts a page online writes the uid it was
+//! built under into the page's frontmatter (`deploy::landed`), creating the
+//! block if the note has none, and from then on the uid travels with the file
+//! through renames. Until then a page is built under, in order:
+//!
+//! 1. the `uid:` in its own frontmatter;
+//! 2. the uid the publish record says was live from this source path, unless
+//!    another page's frontmatter now carries it, which is how a published page
+//!    whose stamp did not land keeps its uid;
+//! 3. a provisional uid from this machine's ledger, minted on first sight and
+//!    kept per source path, so every preview of a page carries the same key
+//!    and the build a publish uploads already holds the uid it will stamp.
+//!
+//! The ledger is device-local (`.moss/build.nosync/`): a provisional uid is
+//! never live anywhere, so two machines disagreeing about one costs nothing,
+//! and losing the file only means the next build mints new ones. Two devices
+//! that each publish a never-published page first do disagree about a live
+//! uid, and the second publish moves the page's thread to its own.
 //!
 //! ## Why a uid is not a disposable identifier
 //!
 //! `uid` is 8 random hex characters minted once by
-//! [`generate_uid`](crate::build::markdown::generate_uid) and written back into
-//! the note's frontmatter. It is **random, not derived** — the path argument is
+//! [`generate_uid`](crate::build::markdown::generate_uid) and written into the
+//! note's frontmatter when the note is first published (above). It is
+//! **random, not derived** — the path argument is
 //! ignored — so a uid that gets rewritten is gone: nothing can recompute it.
 //!
 //! It is also the join key for three things that live outside the vault and
@@ -64,7 +89,7 @@
 //!
 //! And when the snapshot cannot be READ at all — the provider is withholding
 //! it, or it is corrupt — the pass defers: no keeper election, no reassignment,
-//! no frontmatter write, and an advisory saying so. The heuristic is not a
+//! and an advisory saying so. The heuristic is not a
 //! safe floor here. On a synced vault it is reversed, so the case where moss
 //! knows least is exactly the case where it was most likely to rewrite the
 //! published note's uid.
@@ -76,8 +101,146 @@
 use crate::build::manifest::live_baseline::{Baseline, Unreadable};
 use crate::build::types::ParsedDocument;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+/// This machine's provisional uids, by source path.
+///
+/// Every build of a folder in this process shares one copy, so two builds that
+/// overlap (a save landing mid-build) agree on a page's uid rather than each
+/// minting its own; a process starts from the file.
+pub(crate) struct ProvisionalUids {
+    path: PathBuf,
+    shared: std::sync::Arc<std::sync::Mutex<BTreeMap<String, String>>>,
+}
+
+fn ledgers() -> &'static std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<BTreeMap<String, String>>>>> {
+    static LEDGERS: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<BTreeMap<String, String>>>>>,
+    > = std::sync::OnceLock::new();
+    LEDGERS.get_or_init(Default::default)
+}
+
+impl ProvisionalUids {
+    pub(crate) fn load(path: PathBuf) -> Self {
+        let mut all = ledgers().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let shared = all
+            .entry(path.clone())
+            .or_insert_with(|| {
+                // allow:raw_read regenerable per-machine state under `.moss/build.nosync/`
+                let on_disk: BTreeMap<String, String> = std::fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                    .unwrap_or_default();
+                std::sync::Arc::new(std::sync::Mutex::new(on_disk))
+            })
+            .clone();
+        Self { path, shared }
+    }
+
+    /// The provisional uid for `source_path`, minting one if it has none or
+    /// if the one it has is `taken` by another page; `true` when minted.
+    pub(crate) fn uid_for(&mut self, source_path: &str, taken: impl Fn(&str) -> bool) -> (String, bool) {
+        let mut by_source = self.shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(uid) = by_source.get(source_path).filter(|uid| !taken(uid)) {
+            return (uid.clone(), false);
+        }
+        let uid = loop {
+            let candidate = crate::build::markdown::generate_uid(source_path);
+            if !taken(&candidate) {
+                break candidate;
+            }
+        };
+        by_source.insert(source_path.to_string(), uid.clone());
+        (uid, true)
+    }
+
+    /// Forget sources whose file is gone from `root`, and write the ledger if
+    /// it changed. Pruned by the folder rather than by this build's pages, so
+    /// an overlapping build cannot drop a page the other one just gave a uid.
+    /// Best-effort: a failed write costs new provisional uids in a later
+    /// process, never this one.
+    pub(crate) fn save(self, root: &std::path::Path) {
+        let mut by_source = self.shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        by_source.retain(|source, _| root.join(source).exists());
+        // allow:raw_read regenerable per-machine state under `.moss/build.nosync/`
+        let on_disk: Option<BTreeMap<String, String>> =
+            std::fs::read(&self.path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        if on_disk.as_ref() == Some(&*by_source) || (on_disk.is_none() && by_source.is_empty()) {
+            return;
+        }
+        let written = serde_json::to_string_pretty(&*by_source)
+            .map_err(|e| e.to_string())
+            .and_then(|json| crate::infra::atomic_write::write_atomic(&self.path, &json));
+        if let Err(e) = written {
+            log::info!("could not record provisional note IDs: {e}");
+        }
+    }
+}
+
+/// Give every page that has no uid the one it is built under (see the module
+/// header), keeping `taken` as the set of every uid in use.
+///
+/// `published` yields the publish record's `source path → uid` and is called
+/// only when some page lacks a uid.
+pub(crate) fn assign_missing(
+    documents: &mut [ParsedDocument],
+    provisional: &mut ProvisionalUids,
+    taken: &mut HashSet<String>,
+    published: impl FnOnce() -> HashMap<String, String>,
+) {
+    let needs = |doc: &ParsedDocument| doc.uid.is_none() && !doc.slot_only && doc.source_path.is_some();
+    if !documents.iter().any(needs) {
+        return;
+    }
+    let published = published();
+    for doc in documents.iter_mut().filter(|doc| needs(doc)) {
+        let Some(source) = doc.source_path.as_deref() else { continue };
+        let uid = match published.get(source).filter(|uid| !taken.contains(*uid)) {
+            Some(uid) => uid.clone(),
+            None => provisional.uid_for(source, |uid| taken.contains(uid)).0,
+        };
+        taken.insert(uid.clone());
+        doc.uid = Some(uid);
+    }
+}
+
+/// Give every page the uid it is built under and resolve duplicates. Writes no
+/// source file, only this machine's ledger of provisional uids.
+pub(crate) fn assign_note_ids(
+    documents: &mut [ParsedDocument],
+    paths: &crate::moss_paths::MossPaths,
+    built_before: impl Fn(&str) -> bool,
+) -> UidResolution {
+    let root = paths.project_root();
+    let mut provisional = ProvisionalUids::load(paths.provisional_uids());
+    let baseline = std::cell::OnceCell::new();
+    let deployed = || baseline.get_or_init(|| crate::build::manifest::live_baseline::load(paths));
+    let mut taken: HashSet<String> = documents.iter().filter_map(|doc| doc.uid.clone()).collect();
+    assign_missing(documents, &mut provisional, &mut taken, || published_uids(deployed()));
+    let resolution = resolve_duplicate_uids(documents, root, deployed, built_before, |path| {
+        let (uid, minted) = provisional.uid_for(path, |uid| taken.contains(uid));
+        taken.insert(uid.clone());
+        (uid, minted)
+    });
+    provisional.save(root);
+    resolution
+}
+
+/// The publish record's `source path → uid`, empty when nothing is published
+/// or the record cannot be read.
+fn published_uids(baseline: &Baseline) -> HashMap<String, String> {
+    match baseline {
+        Baseline::Present(live) => live.entries.iter().map(|entry| (entry.source_path.clone(), entry.uid.clone())).collect(),
+        _ => HashMap::new(),
+    }
+}
+
+/// Drop this process's copy of a ledger, as a new process would start.
+#[cfg(test)]
+pub(crate) fn forget_in_process(path: &std::path::Path) {
+    ledgers().lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(path);
+}
 
 /// How strongly the deployed snapshot ties a contender to the contested uid.
 ///
@@ -127,7 +290,8 @@ pub struct UidReassignment {
     pub keeper_path: String,
     /// Source path of the file that was given a new uid.
     pub reassigned_path: String,
-    /// The fresh uid written into the reassigned file's frontmatter.
+    /// The fresh uid the reassigned file is built under, and stamped into its
+    /// frontmatter when it is published.
     pub new_uid: String,
     /// True when the deployed snapshot records this uid as LIVE but the
     /// exact-path join did not identify the published file among the
@@ -211,7 +375,8 @@ pub struct DeferredCollision {
 /// What one build's duplicate-uid pass did — and, when it did nothing, why.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UidResolution {
-    /// Collisions that were resolved: who kept the uid, who was given a new one.
+    /// Collisions resolved by minting a new uid this build: who kept the uid,
+    /// who was given a new one.
     pub reassignments: Vec<UidReassignment>,
     /// Contested uids left alone because the record of what is live could not
     /// be read. Empty in every ordinary build.
@@ -226,8 +391,9 @@ pub struct UidResolution {
 
 /// Resolve every duplicate uid across `documents`.
 ///
-/// Mutates the losers' `uid` in place and rewrites their frontmatter under
-/// `source_root`. The keeper is chosen by [`pick_uid_keeper`].
+/// Mutates the losers' `uid` in place, to the one `mint` gives for their source
+/// path with whether it is new; the author's files are not touched (a publish
+/// stamps the new uid). The keeper is chosen by [`pick_uid_keeper`].
 ///
 /// `load_deployed` yields the record of what is live
 /// ([`crate::build::manifest::live_baseline::load`]) and is called **only when a
@@ -236,9 +402,9 @@ pub struct UidResolution {
 ///
 /// ## An unreadable record defers the whole pass
 ///
-/// Not "falls back to the heuristic" — **defers**. Reassignment writes a fresh
-/// uid into a source file's frontmatter, and a uid is random, minted once, and
-/// the join key for live comment threads and signed moderation events: there is
+/// Not "falls back to the heuristic" — **defers**. A reassigned page is
+/// published under its fresh uid, and a uid is random, minted once, and the
+/// join key for live comment threads and signed moderation events: there is
 /// no undo. The fallback the code used to take in this case (frontmatter `date`,
 /// then file birth time) is not merely uninformative on a synced vault, it is
 /// systematically *reversed* — the copy carries the original's date and gets a
@@ -254,37 +420,13 @@ pub struct UidResolution {
 /// group where every file is already known still defers.
 ///
 /// Deferring costs one build's collision handling and self-heals: the next
-/// build retries, which is already this module's model for a write that failed.
-///
-/// Frontmatter write-back is best-effort: a source file that cannot be read or
-/// written must not fail the build, and the next build retries.
-pub fn resolve_duplicate_uids(
+/// build retries.
+pub(crate) fn resolve_duplicate_uids<'a>(
     documents: &mut [ParsedDocument],
     source_root: &Path,
-    load_deployed: impl FnOnce() -> Baseline,
+    load_deployed: impl FnOnce() -> &'a Baseline,
     built_before: impl Fn(&str) -> bool,
-) -> UidResolution {
-    resolve_duplicate_uids_with(
-        documents,
-        source_root,
-        load_deployed,
-        built_before,
-        |reassigned_path, new_uid| {
-            persist_reassigned_uid(&source_root.join(reassigned_path), reassigned_path, new_uid)
-        },
-    )
-}
-
-/// Choose and apply duplicate-UID reassignment through the caller's single
-/// source-owner. The renderer supplies an in-memory final-source record here;
-/// the legacy wrapper above retains the direct-write API used by focused unit
-/// tests.
-pub(crate) fn resolve_duplicate_uids_with(
-    documents: &mut [ParsedDocument],
-    source_root: &Path,
-    load_deployed: impl FnOnce() -> Baseline,
-    built_before: impl Fn(&str) -> bool,
-    mut persist: impl FnMut(&str, &str) -> bool,
+    mut mint: impl FnMut(&str) -> (String, bool),
 ) -> UidResolution {
     // BTreeMap, not HashMap: collision groups are processed in a stable uid
     // order so a multi-collision build produces the same result every run.
@@ -302,11 +444,11 @@ pub(crate) fn resolve_duplicate_uids_with(
     // `Unreadable` is not an answer about what is live; it is the absence of
     // one. Kept separately from `published` so the group loop can tell "nothing
     // is published under this uid" from "moss cannot see what is published".
-    let unreadable = match &baseline {
+    let unreadable = match baseline {
         Baseline::Unreadable(why) => Some(*why),
         _ => None,
     };
-    let published = match &baseline {
+    let published = match baseline {
         Baseline::Present(projection) => projection.paths_by_uid(),
         // Absent is a real answer — nothing has ever been published, so no
         // contender can own a live thread and the heuristic is all there is.
@@ -436,11 +578,12 @@ pub(crate) fn resolve_duplicate_uids_with(
             let Some(reassigned_path) = contenders.get(pos).map(|c| c.source_path.clone()) else {
                 continue;
             };
-            let new_uid = crate::build::markdown::generate_uid(&reassigned_path);
-            if !persist(&reassigned_path, &new_uid) {
+            let (new_uid, minted) = mint(&reassigned_path);
+            documents[idx].uid = Some(new_uid.clone());
+            // Built under the same new uid until a publish stamps it: told once.
+            if !minted {
                 continue;
             }
-            documents[idx].uid = Some(new_uid.clone());
             reassignments.push(UidReassignment {
                 uid: uid.clone(),
                 keeper_path: keeper_path.clone(),
@@ -466,48 +609,6 @@ pub(crate) fn resolve_duplicate_uids_with(
         reassignments,
         deferred_because: unreadable.filter(|_| !deferred.is_empty()),
         deferred,
-    }
-}
-
-/// Writes `new_uid` into the file's frontmatter, returning whether the file on
-/// disk is now known to carry it.
-///
-/// The return value gates the in-memory reassignment. A uid the build believes
-/// it assigned but never persisted is worse than no reassignment at all: the
-/// next build reads the old uid and collides again, while this build has
-/// already emitted — and signed — moderation events against a uid no source
-/// file claims. So an unreadable or unwritable file leaves the document on its
-/// original uid and the collision advisory unreported for that file.
-fn persist_reassigned_uid(file_path: &Path, display_path: &str, new_uid: &str) -> bool {
-    let content = match crate::build::cloud_readiness::read_to_string_with_materialize_wait(
-        file_path,
-        crate::build::cloud_readiness::MATERIALIZE_DEADLINE,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            log::info!("Cannot read '{}' to reassign its uid: {}", display_path, e);
-            return false;
-        }
-    };
-
-    let updated = crate::build::markdown::replace_uid_in_frontmatter(&content, new_uid);
-    if updated == content {
-        // Either the file already carries this uid — nothing to write — or it
-        // has no `uid:` line for the replacement to land on, in which case the
-        // reassignment silently did not happen.
-        return content.contains(&format!("uid: \"{new_uid}\""));
-    }
-
-    match std::fs::write(file_path, &updated) {  // allow:raw_write the user's own markdown source — 'unreadable is not absent' applies unqualified
-        Ok(()) => true,
-        Err(e) => {
-            log::info!(
-                "Failed to write reassigned uid into '{}': {}",
-                display_path,
-                e
-            );
-            false
-        }
     }
 }
 

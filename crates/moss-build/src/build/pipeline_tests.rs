@@ -245,6 +245,30 @@ fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
     crate::build::parse_cache::reset_for_tests();
 }
 
+/// The parse cache replays a page as its file reads, so the uid a build gives a
+/// page with none, or a duplicate, is decided afresh from the next build's
+/// whole page set and the publish record.
+#[test]
+fn the_parse_cache_never_holds_a_uid_the_build_assigned() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nA").unwrap();
+    fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopy").unwrap();
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+
+    build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
+        .expect("build");
+    let cached = crate::build::parse_cache::cached_documents();
+    crate::build::parse_cache::reset_for_tests();
+    assert_eq!(cached.len(), 3, "{cached:?}");
+    for doc in &cached {
+        let in_file = doc.raw_frontmatter.get("uid").and_then(|uid| uid.as_str());
+        assert_eq!(doc.uid.as_deref(), in_file, "{:?} is cached under a uid its file does not hold", doc.source_path);
+    }
+}
+
 #[test]
 fn reserved_output_sources_never_receive_final_source_records() {
     let (dir, _cleanup) = create_test_dir();
@@ -276,11 +300,11 @@ fn reserved_output_before_normal_source_keeps_evidence_with_the_normal_document(
         vec![("index.md", "gone.png")],
     );
     assert!(!fs::read_to_string(dir.join("con.md")).unwrap().contains("uid:"));
-    assert!(fs::read_to_string(dir.join("index.md")).unwrap().contains("uid:"));
+    assert!(!fs::read_to_string(dir.join("index.md")).unwrap().contains("uid:"), "a build writes no uid");
 }
 
 #[test]
-fn duplicate_uid_normalization_keeps_cacheable_missing_reference_evidence() {
+fn a_duplicate_uid_keeps_cacheable_missing_reference_evidence_and_both_files() {
     let _cache_store = crate::build::parse_cache::store_lock_for_tests();
     crate::build::parse_cache::reset_for_tests();
     let (dir, _cleanup) = create_test_dir();
@@ -299,13 +323,12 @@ fn duplicate_uid_normalization_keeps_cacheable_missing_reference_evidence() {
     assert_eq!(first.len(), 2);
     let a = fs::read_to_string(dir.join("a.md")).unwrap();
     let b = fs::read_to_string(dir.join("b.md")).unwrap();
-    let uid = |source: &str| source.lines().find(|line| line.starts_with("uid:")).unwrap().to_string();
-    assert_ne!(uid(&a), uid(&b), "one duplicate UID must be reassigned in its final source");
+    assert!(a.contains("uid: duplicate") && b.contains("uid: duplicate"), "a build rewrites neither duplicate");
 
     let (_, warm) = build_test_full_with_gates(
         dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
     )
-    .expect("cache replay after uid normalization");
+    .expect("cache replay after duplicate-uid resolution");
     assert_eq!(warm, first);
     assert!(crate::build::parse_cache::last_stats().is_some_and(|stats| stats.hits >= 2));
     crate::build::parse_cache::reset_for_tests();
@@ -6203,7 +6226,7 @@ fn a_present_read_error_retains_html_and_blocks_the_exact_seal() {
 
 #[cfg(unix)]
 #[test]
-fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
+fn a_read_only_page_keeps_its_consumed_read_evidence() {
     use std::os::unix::fs::PermissionsExt;
     let (dir, _cleanup) = create_test_dir();
     let page = dir.join("index.md");
@@ -6213,32 +6236,180 @@ fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
     fs::set_permissions(&page, fs::Permissions::from_mode(0o644)).unwrap();
     let (_, keys, unresolved, sealed) = result.unwrap();
     assert!(keys.iter().any(|key| key == "index.html"));
-    assert!(unresolved.is_empty(), "a denied optional UID write did not change source bytes: {unresolved:?}");
+    assert!(unresolved.is_empty(), "a read-only page is still a complete read: {unresolved:?}");
     assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_ok());
 }
 
+/// A build reads the author's notes and never writes them: not a `uid:` line,
+/// not into a draft, not into a note with no frontmatter. Each page is still
+/// built under a uid, and the same one on every build.
 #[test]
-fn a_build_under_a_denied_source_write_session_leaves_every_source_byte_identical() {
-    let index = "---\ntitle: Home\n---\nHi";
-    let note = "---\ntitle: Note\n---\nShared text";
-
+fn a_build_leaves_every_source_byte_identical_and_keeps_each_pages_uid_stable() {
+    let sources = [
+        ("index.md", "---\ntitle: Home\n---\nHi"),
+        ("note.md", "---\ntitle: Note\n---\nShared text"),
+        ("draft.md", "---\ntitle: Draft\ndraft: true\n---\nWIP"),
+        ("plain.md", "No frontmatter at all."),
+    ];
     let (dir, _cleanup) = create_test_dir();
-    fs::write(dir.join("index.md"), index).unwrap();
-    fs::write(dir.join("note.md"), note).unwrap();
-    let session = crate::system::folder_session::FolderSession::new(dir.clone());
-    let _denied = session.deny_source_writes();
+    for (name, text) in sources {
+        fs::write(dir.join(name), text).unwrap();
+    }
     let folder_path = dir.to_str().unwrap();
-    let (_, keys, _, _) = build_test_with_focus(folder_path, scan_folder(folder_path).unwrap(), None, Some(session), None, None).unwrap();
-    assert!(keys.iter().any(|key| key == "index.html"));
-    assert_eq!(fs::read_to_string(dir.join("index.md")).unwrap(), index);
-    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), note);
+    let uids = || {
+        let map: crate::build::scan::article_map::ArticleMap = serde_json::from_slice(
+            &fs::read(crate::moss_paths::MossPaths::new(&dir).article_map()).unwrap(),
+        )
+        .unwrap();
+        let mut uids: Vec<(String, Option<String>)> =
+            map.articles.into_values().map(|a| (a.source_path, a.uid)).collect();
+        uids.sort();
+        uids
+    };
 
-    let (control, _control_cleanup) = create_test_dir();
-    fs::write(control.join("index.md"), index).unwrap();
-    fs::write(control.join("note.md"), note).unwrap();
-    build_test_promoted_or_withheld(control.to_str().unwrap()).unwrap();
-    assert!(fs::read_to_string(control.join("index.md")).unwrap().contains("uid:"));
-    assert!(fs::read_to_string(control.join("note.md")).unwrap().contains("uid:"));
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    for (name, text) in sources {
+        assert_eq!(fs::read_to_string(dir.join(name)).unwrap(), text, "{name} was written by a build");
+    }
+    let first = uids();
+    assert_eq!(first.len(), 3, "{first:?}");
+    assert!(first.iter().all(|(_, uid)| uid.is_some()), "every page is built under a uid: {first:?}");
+
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    assert_eq!(uids(), first, "a page's uid must not change between builds");
+}
+
+/// The first publish is where a page's uid is written: into the frontmatter of
+/// each page that went live, a new block for a note with none, and nowhere
+/// else. The record holds the stamped bytes, so the next build reads nothing as
+/// edited. A page renamed afterwards keeps the uid (it moved with the file) and
+/// its old address forwards to the new.
+#[test]
+fn the_first_publish_stamps_live_pages_and_a_later_rename_keeps_the_uid() {
+    let draft = "---\ntitle: Draft\ndraft: true\n---\nWIP";
+    let plain = "No frontmatter at all.";
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nShared text").unwrap();
+    fs::write(dir.join("draft.md"), draft).unwrap();
+    fs::write(dir.join("plain.md"), plain).unwrap();
+    let folder_path = dir.to_str().unwrap();
+    let built_uid = |source: &str| -> Option<String> {
+        let map: crate::build::scan::article_map::ArticleMap = serde_json::from_slice(
+            &fs::read(crate::moss_paths::MossPaths::new(&dir).article_map()).unwrap(),
+        )
+        .unwrap();
+        map.articles.into_values().find(|a| a.source_path == source)?.uid
+    };
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let note_uid = built_uid("note.md").expect("note.md is built under a uid");
+    let plain_uid = built_uid("plain.md").expect("plain.md is built under a uid");
+    publish(&dir, &sealed);
+
+    let file_uid = |name: &str| crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join(name)).unwrap()).uid;
+    assert_eq!(file_uid("note.md"), Some(note_uid.clone()), "the live page carries the uid it was published under");
+    assert!(file_uid("index.md").is_some(), "a published folder page is stamped too");
+    assert_eq!(fs::read_to_string(dir.join("draft.md")).unwrap(), draft, "a draft is never published, so never stamped");
+    assert_eq!(file_uid("plain.md"), Some(plain_uid), "a note with no frontmatter gets a block holding its uid");
+    assert!(fs::read_to_string(dir.join("plain.md")).unwrap().ends_with(plain), "and keeps its text");
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let record = crate::build::manifest::published_record::load_for(&crate::moss_paths::MossPaths::new(&dir), Some("moss:site-1"));
+    let changes = crate::build::manifest::change_set::classify(record.as_ref(), &rebuilt);
+    assert!(changes.classified);
+    assert_eq!(changes.edited, 0, "the stamp is not an edit: {changes:?}");
+
+    fs::rename(dir.join("note.md"), dir.join("moved.md")).unwrap();
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    assert_eq!(built_uid("moved.md"), Some(note_uid), "the uid moved with the file");
+    let stub = fs::read_to_string(dir.join(".moss/build.nosync/current/note/index.html")).unwrap();
+    assert!(stub.contains("moved"), "the old address forwards to the renamed page: {stub}");
+}
+
+/// Land `sealed` as a publish to `moss:site-1`.
+fn publish(dir: &Path, sealed: &crate::build::manifest::SealedManifest) {
+    let history_dir = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
+    tokio::runtime::Runtime::new().unwrap().block_on(crate::deploy::landed::record_landed(
+        dir,
+        sealed,
+        "moss:site-1",
+        &crate::deploy::one_shot::HeadlessDeployPorts,
+        &history,
+    ));
+}
+
+/// A duplicated note carries the original's uid; the copy is built under a new
+/// one, and the publish that puts it online replaces the copied uid in its file.
+#[test]
+fn a_duplicate_is_published_under_its_own_uid_and_its_file_follows() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nOriginal").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish(&dir, &sealed);
+    fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopied").unwrap();
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish(&dir, &sealed);
+
+    let file_uid = |name: &str| crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join(name)).unwrap()).uid;
+    assert_eq!(file_uid("a.md").as_deref(), Some("aaaa1111"), "the published original keeps its uid");
+    let copy = file_uid("copy.md").expect("the copy keeps a uid");
+    assert_ne!(copy, "aaaa1111", "the copy's file now holds the uid it was published under");
+}
+
+/// An edit made between the build and its publish was not published: the
+/// file is left unstamped and the record keeps the published bytes' hash, so
+/// the next change set still reads the page as edited.
+#[test]
+fn an_edit_made_before_the_publish_lands_is_still_an_edit_after_the_stamp() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText, edited").unwrap();
+
+    publish(&dir, &sealed);
+    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), "---\ntitle: Note\n---\nText, edited");
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    let record = crate::build::manifest::published_record::load_for(&crate::moss_paths::MossPaths::new(&dir), Some("moss:site-1"));
+    let changes = crate::build::manifest::change_set::classify(record.as_ref(), &rebuilt);
+    assert_eq!(changes.edited, 1, "{changes:?}");
+}
+
+/// A note saved with Windows line endings is the bytes the build hashed, so its
+/// first publish stamps it like any other.
+#[test]
+fn a_note_with_windows_line_endings_is_stamped() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\r\ntitle: Note\r\n---\r\nText\r\n").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    publish(&dir, &sealed);
+
+    let note = fs::read_to_string(dir.join("note.md")).unwrap();
+    assert!(crate::build::markdown::parse_typed_frontmatter(&note).uid.is_some(), "{note:?}");
+    assert!(note.ends_with("---\r\nText\r\n"), "{note:?}");
+}
+
+/// A uid the author wrote between the build and its publish is newer than the
+/// one the build saw, and the publish leaves it alone.
+#[test]
+fn a_publish_never_overwrites_a_uid_written_since_its_build() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    let edited = "---\ntitle: Note\nuid: \"bbbb2222\"\n---\nText";
+    fs::write(dir.join("note.md"), edited).unwrap();
+
+    publish(&dir, &sealed);
+
+    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), edited);
 }
 
 #[cfg(target_os = "macos")]

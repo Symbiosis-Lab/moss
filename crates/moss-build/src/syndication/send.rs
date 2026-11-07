@@ -130,10 +130,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     let by_uid: HashMap<String, &ArticleInfo> = articles
         .articles
         .values()
-        .filter_map(|a| {
-            let uid = a.frontmatter.get("uid").and_then(|u| u.as_str()).map(str::to_string).or_else(|| a.uid.clone())?;
-            Some((uid, a))
-        })
+        .filter_map(|a| Some((a.uid.clone()?, a)))
         .collect();
 
     // Post by post, each post's channels in the order its `syndicate:` names them.

@@ -58,7 +58,7 @@ impl Before {
     pub fn plan(self, folder: &Path, live: &ArticleMap) -> Vec<Planned> {
         let plans = self.decide(folder, live);
         let records = Records::in_vault(&MossPaths::new(folder));
-        let planned = plan::apply(folder, plans, &records, self.site_url.as_deref());
+        let planned = plan::apply(plans, &records, self.site_url.as_deref());
         for p in &planned {
             if let plan::Action::Skip { reason } = &p.action {
                 log::info!(target: "syndication", "{} — no copy on {}: {reason}", p.source_path, p.channel);
