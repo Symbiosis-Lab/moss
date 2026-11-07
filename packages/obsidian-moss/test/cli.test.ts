@@ -175,8 +175,8 @@ describe("binary detection", () => {
 
 describe("publishInAppUrl", () => {
   it("percent-encodes the whole folder path into the moss app's deep link", () => {
-    expect(publishInAppUrl("/Users/me/My Vault/在場")).toBe(
-      "moss://deploy?path=%2FUsers%2Fme%2FMy%20Vault%2F%E5%9C%A8%E5%A0%B4",
+    expect(publishInAppUrl("/Users/me/My Vault/潮汐")).toBe(
+      "moss://deploy?path=%2FUsers%2Fme%2FMy%20Vault%2F%E6%BD%AE%E6%B1%90",
     );
   });
 
