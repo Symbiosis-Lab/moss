@@ -14,6 +14,7 @@ pub struct SpaDefaults<'a> {
     pub raster_favicons: Option<&'a str>,
     pub theme_color_light: Option<&'a str>,
     pub theme_color_dark: Option<&'a str>,
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
 }
 
 /// Owned variant of `SpaDefaults` for stashing on `BackgroundContext` until the
@@ -32,6 +33,7 @@ pub struct SpaDefaultsOwned {
     pub raster_favicons: Option<String>,
     pub theme_color_light: Option<String>,
     pub theme_color_dark: Option<String>,
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// Site host used to derive a per-folder canonical URL at injection time.
     /// e.g. `"www.example.com"`. None when the site has no configured domain.
     pub site_host: Option<String>,
@@ -54,6 +56,7 @@ impl SpaDefaultsOwned {
             raster_favicons: self.raster_favicons.as_deref(),
             theme_color_light: self.theme_color_light.as_deref(),
             theme_color_dark: self.theme_color_dark.as_deref(),
+            color_scheme: self.color_scheme,
         }
     }
 
@@ -67,6 +70,7 @@ impl SpaDefaultsOwned {
             || self.theme_color_light.is_some()
             || self.theme_color_dark.is_some()
             || self.site_host.is_some()
+            || self.color_scheme.fixed().is_some()
     }
 }
 
@@ -125,23 +129,14 @@ pub fn inject_defaults(html: &str, defaults: &SpaDefaults) -> Result<String, Str
         }
     }
     if !present.has_meta("theme-color") {
-        if let Some(c) = defaults.theme_color_light {
-            additions.push_str(&format!(
-                r#"<meta name="theme-color" content="{}" media="(prefers-color-scheme: light)">"#,
-                moss_core::media::html_escape_attr(c)
-            ));
-            additions.push('\n');
-        }
-        if let Some(c) = defaults.theme_color_dark {
-            additions.push_str(&format!(
-                r#"<meta name="theme-color" content="{}" media="(prefers-color-scheme: dark)">"#,
-                moss_core::media::html_escape_attr(c)
-            ));
+        let tags = defaults.color_scheme.theme_color_meta(defaults.theme_color_light, defaults.theme_color_dark);
+        if !tags.is_empty() {
+            additions.push_str(&tags);
             additions.push('\n');
         }
     }
 
-    if additions.is_empty() {
+    if !present.has_head || (additions.is_empty() && defaults.color_scheme.fixed().is_none()) {
         return Ok(html.to_string());
     }
 
@@ -149,10 +144,25 @@ pub fn inject_defaults(html: &str, defaults: &SpaDefaults) -> Result<String, Str
     let additions_clone = additions.clone();
     let mut rewriter = HtmlRewriter::new(
         Settings {
-            element_content_handlers: vec![element!("head", |el| {
-                el.append(&additions_clone, ContentType::Html);
-                Ok(())
-            })],
+            element_content_handlers: vec![
+                element!("html", |el| {
+                    if let Some(scheme) = defaults.color_scheme.fixed() {
+                        // Explicit author attributes and inline color-scheme declarations win over site defaults.
+                        for attr in ["data-moss-color-scheme", "data-theme"] {
+                            if !el.has_attribute(attr) { el.set_attribute(attr, scheme)?; }
+                        }
+                        let style = el.get_attribute("style").unwrap_or_default();
+                        if !style.split(';').any(|decl| decl.split_once(':').is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("color-scheme"))) {
+                            el.set_attribute("style", &format!("{style};color-scheme: {scheme}"))?;
+                        }
+                    }
+                    Ok(())
+                }),
+                element!("head", |el| {
+                    el.append(&additions_clone, ContentType::Html);
+                    Ok(())
+                }),
+            ],
             ..Settings::default()
         },
         |c: &[u8]| output.extend_from_slice(c),
@@ -164,6 +174,7 @@ pub fn inject_defaults(html: &str, defaults: &SpaDefaults) -> Result<String, Str
 
 #[derive(Default)]
 struct PresentTags {
+    has_head: bool,
     meta_names: Vec<String>,
     meta_properties: Vec<String>,
     link_rels: Vec<String>,
@@ -192,6 +203,10 @@ fn scan_present_tags(html: &str) -> PresentTags {
     let mut rewriter = HtmlRewriter::new(
         Settings {
             element_content_handlers: vec![
+                element!("head", |_| {
+                    result.borrow_mut().has_head = true;
+                    Ok(())
+                }),
                 element!("meta", |el| {
                     let mut r = result.borrow_mut();
                     if let Some(n) = el.get_attribute("name") { r.meta_names.push(n); }
@@ -228,7 +243,44 @@ mod tests {
             raster_favicons: Some(r#"<link rel="icon" href="/favicon-32.png">"#),
             theme_color_light: Some("#fff"),
             theme_color_dark: Some("#000"),
+            color_scheme: Default::default(),
         }
+    }
+
+    #[test]
+    fn fixed_scheme_injects_root_policy_and_meta_together() {
+        use crate::build::page::color_scheme::ColorScheme;
+        for (scheme, color) in [(ColorScheme::Light, "#fff"), (ColorScheme::Dark, "#000")] {
+            let defaults = SpaDefaults { color_scheme: scheme, ..defaults() };
+            let out = inject_defaults(r#"<html style="margin: 0"><head></head><body></body></html>"#, &defaults).unwrap();
+            let fixed = scheme.fixed().unwrap();
+            assert!(out.contains(&format!(r#"data-theme="{fixed}""#)));
+            assert!(out.contains(&format!(r#"data-moss-color-scheme="{fixed}""#)));
+            assert!(out.contains(&format!("margin: 0;color-scheme: {fixed}")));
+            assert!(out.contains(&format!(r#"<meta name="theme-color" content="{color}">"#)));
+            assert!(!out.contains("prefers-color-scheme"));
+            assert!(!out.contains("localStorage"));
+            assert_eq!(inject_defaults(&out, &defaults).unwrap(), out);
+        }
+    }
+
+    #[test]
+    fn fixed_scheme_preserves_author_attributes_and_meta() {
+        let owned = SpaDefaultsOwned { color_scheme: crate::build::page::color_scheme::ColorScheme::Light, ..Default::default() };
+        let defaults = owned.as_borrowed(None);
+        let html = r#"<html data-theme="dark" data-moss-color-scheme="dark" style="color-scheme: dark; margin: 0"><head><meta name="theme-color" content="black"></head><body></body></html>"#;
+        assert_eq!(inject_defaults(html, &defaults).unwrap(), html);
+    }
+
+    #[test]
+    fn root_policy_is_injected_even_without_missing_metadata() {
+        let owned = SpaDefaultsOwned { color_scheme: crate::build::page::color_scheme::ColorScheme::Dark, ..Default::default() };
+        assert!(owned.has_anything());
+        let out = inject_defaults("<html><head></head></html>", &owned.as_borrowed(None)).unwrap();
+        assert!(out.contains(r#"data-theme="dark""#));
+        assert!(out.contains("color-scheme: dark"));
+        let headless = "<html><body></body></html>";
+        assert_eq!(inject_defaults(headless, &owned.as_borrowed(None)).unwrap(), headless);
     }
 
     #[test]

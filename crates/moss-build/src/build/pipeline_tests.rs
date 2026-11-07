@@ -3926,7 +3926,7 @@ fn test_video_served_path_derivation_with_overrides() {
 #[test]
 fn test_notebook_processing_noop_when_empty() {
     let outputs = run_notebook_processing(None, &[], "/test", Path::new("/test/output"), None,
-        &crate::build::cloud_ledger::InputEvidence::new(Path::new("/test")), None);
+        &crate::build::cloud_ledger::InputEvidence::new(Path::new("/test")), None, Default::default());
     assert!(outputs.is_empty(), "No notebooks = no outputs");
 }
 
@@ -3950,7 +3950,7 @@ fn test_notebook_processing_copies_ipynb_and_generates_viewer() {
     }];
 
     let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &output, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source), None));
+        &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default()));
 
     assert!(
         output.join("test.ipynb").exists(),
@@ -3996,7 +3996,7 @@ fn test_data_files_copied_to_jupyter_files() {
     }];
 
     let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None,
-        &crate::build::cloud_ledger::InputEvidence::new(&source), None));
+        &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default()));
 
     // Data file should be in jupyter/files/ (fallback path without JupyterLite)
     // Note: without JupyterLite assets, the function takes the fallback path
@@ -4020,7 +4020,7 @@ fn skipped_notebook_copy_stays_unresolved_after_a_later_manifest_read() {
         size: content.len() as u64, modified: None,
     }];
     let evidence = crate::build::cloud_ledger::InputEvidence::new(&source);
-    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence, None));
+    let outputs = without_jupyterlite_assets(|| run_notebook_processing(None, &files, &source.to_string_lossy(), &staging, None, &evidence, None, Default::default()));
     assert!(!receipt_paths(&outputs).contains(&"analysis.ipynb".to_string()));
     assert_eq!(evidence.unresolved_structural(), ["analysis.ipynb"]);
     assert!(read_notebook_sibling(&notebook, &evidence).is_some());
@@ -4067,7 +4067,7 @@ fn test_notebook_processing_cancel_flag_returns_early() {
     let cancel = AtomicBool::new(true);
     let outputs =
         run_notebook_processing(None, &files, &source.to_string_lossy(), &output, Some(&cancel),
-            &crate::build::cloud_ledger::InputEvidence::new(&source), None);
+            &crate::build::cloud_ledger::InputEvidence::new(&source), None, Default::default());
 
     assert!(
         outputs.is_empty(),

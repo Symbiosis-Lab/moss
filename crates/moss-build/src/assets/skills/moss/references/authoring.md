@@ -102,6 +102,8 @@ wrong, not the specificity.
 
 ## Dark mode
 
+For a light-only design, set `color_scheme = "light"` under `[site]` in `.moss/config.toml`. moss fixes the page and browser colour scheme to light, ignores saved and OS dark preferences, and omits only the theme toggle; search and language controls stay. `"dark"` fixes the dark palette the same way. The default, `"auto"`, keeps the reader's choice. Keep dark CSS under `:root[data-theme="dark"]`, never an OS media query.
+
 moss sets `data-theme="dark"` on `<html>` **before the first paint** (via an
 inline script), so the browser never shows a flash of the wrong theme. One dark
 block covers both the manual toggle and the system preference.

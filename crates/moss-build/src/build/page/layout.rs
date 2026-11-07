@@ -46,6 +46,8 @@ pub struct LayoutConfig {
     pub header: crate::build::components::nav::HeaderMode,
     /// `[site].header_scroll` — resolved. See `crate::build::components::nav::HeaderScroll`.
     pub header_scroll: crate::build::components::nav::HeaderScroll,
+    /// `[site].color_scheme` — automatic reader choice or a fixed palette.
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
@@ -90,6 +92,7 @@ impl LayoutConfig {
             floating_nav: false,
             ai: Default::default(),
             colophon: true,
+            color_scheme: Default::default(),
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             header_scroll: crate::build::components::nav::HeaderScroll::Static,
@@ -191,6 +194,11 @@ impl LayoutConfig {
     /// Set the site's own credit line (`[site].credit`).
     pub fn with_colophon_credit(mut self, credit: Option<crate::build::render::credits::ColophonCredit>) -> Self {
         self.colophon_credit = credit;
+        self
+    }
+
+    pub fn with_color_scheme(mut self, color_scheme: crate::build::page::color_scheme::ColorScheme) -> Self {
+        self.color_scheme = color_scheme;
         self
     }
 

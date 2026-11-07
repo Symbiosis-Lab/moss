@@ -89,7 +89,7 @@ impl PageChromeContext<'_, '_> {
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
-        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
+        ).with_color_scheme(self.layout.color_scheme).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
             .with_asset_snapshot(self.media_lookup.asset_snapshot());
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
@@ -172,6 +172,7 @@ impl PageChromeContext<'_, '_> {
             navigation: nav.generate_navigation(),
             has_header: self.layout.header != crate::build::components::nav::HeaderMode::None,
             colophon: self.layout.colophon,
+            color_scheme: self.layout.color_scheme,
             colophon_credit: self.layout.colophon_credit.clone(),
             nav_island: if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
             footer: Some(nav.generate_footer(self.show_rss_in_footer)),

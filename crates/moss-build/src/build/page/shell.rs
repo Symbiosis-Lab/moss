@@ -147,6 +147,8 @@ pub struct ShellVars {
     pub has_header: bool,
     /// Whether moss's colophon is emitted (`[site].colophon`, default true).
     pub colophon: bool,
+    /// `[site].color_scheme` — automatic reader choice or a fixed palette.
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// The site's own line before the mark (`[site].credit`); `None` leaves
     /// the colophon as moss writes it.
     pub colophon_credit: Option<crate::build::render::credits::ColophonCredit>,
@@ -314,6 +316,22 @@ impl ShellVars {
     }
 }
 
+/// Embedded background tokens are shared by page chrome and injected SPA defaults.
+pub(crate) fn theme_bg_colors() -> &'static (String, String) {
+    static THEME_BG: std::sync::LazyLock<(String, String)> = std::sync::LazyLock::new(|| {
+        use moss_core::contract::tokens::{bg_colors, load_tokens};
+        let t = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {}", e));
+        let (l, d) = bg_colors(&t);
+        (l.to_owned(), d.to_owned())
+    });
+    &THEME_BG
+}
+
+pub(crate) fn theme_color_meta(color_scheme: crate::build::page::color_scheme::ColorScheme) -> String {
+    let (light, dark) = theme_bg_colors();
+    color_scheme.theme_color_meta(Some(light), Some(dark))
+}
+
 /// Shell processor for centralized template variable replacement
 pub struct ShellProcessor {
     registry: ShellRegistry,
@@ -343,22 +361,15 @@ impl ShellProcessor {
             self.registry.get_shell(shell_type)
         };
         let template = SHELL_TEMPLATE.replace("{main_content}", fragment);
+        // Fixed pages already carry their palette on <html>.
+        let template = if vars.color_scheme.fixed().is_some() {
+            let (before, script) = template.split_once("    <script>").expect("shell pre-paint script");
+            let (_, after) = script.split_once("</script>\n").expect("shell pre-paint script end");
+            format!("{before}{after}")
+        } else { template };
 
         // Preview flag for the chrome post-passes; read before the map takes `body_attrs`.
         let is_preview = vars.body_attrs.contains("data-moss-preview");
-
-        // Theme color meta tags — derived from the --moss-color-bg token in tokens.json.
-        // Note: these reflect the static token bg value baked into tokens.json.
-        // Author background overrides (via .moss/theme/style.css) are applied at
-        // toggle-time by theme.js JS sync, NOT tracked here at build time.
-        // tokens.json is compiled in, so it is parsed once per process, not per page.
-        static THEME_BG: std::sync::LazyLock<(String, String)> = std::sync::LazyLock::new(|| {
-            use moss_core::contract::tokens::{bg_colors, load_tokens};
-            let t = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {}", e));
-            let (l, d) = bg_colors(&t);
-            (l.to_owned(), d.to_owned())
-        });
-        let (bg_light, bg_dark) = THEME_BG.clone();
 
         // main_class_attr: expands to ` class="X"` when non-empty, empty string otherwise
         let main_class_attr =
@@ -457,8 +468,8 @@ impl ShellProcessor {
             ("hreflang_links", vars.hreflang_links.unwrap_or_default()),
             ("twitter_tags", vars.twitter_tags.unwrap_or_default()),
             ("apple_touch_icon", vars.apple_touch_icon.unwrap_or_default()),
-            ("theme_color_light", bg_light),
-            ("theme_color_dark", bg_dark),
+            ("color_scheme_attrs", vars.color_scheme.html_attrs()),
+            ("theme_color_meta", theme_color_meta(vars.color_scheme).replace('\n', "\n    ")),
             ("schema_json_ld", vars.schema_json_ld.unwrap_or_default()),
             // User CSS link (placed after default stylesheet in <head>)
             ("user_css_link", vars.user_css_link.unwrap_or_default()),

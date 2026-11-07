@@ -2,7 +2,7 @@
 
 Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
 
-Use this when an existing website should become a moss site that looks better than the original. It is not a faithful port (that is `moss guide importing`) and not a new site from nothing (`moss guide example`). The result has two halves, and both are the deliverable:
+Use this when an existing website should become a moss site that looks better than the original. It is not a faithful port (that is `moss guide importing`) and not a new site from nothing (`moss guide example`). A brief that asks for the owner's own design to carry over ("follow her design", "keep the look", "she is a designer") is a faithful port even when it says "redesign": the original, measured, is the target, and a vision, a prototype or a dark mode the original lacks is a deviation the owner has to ask for. The result has two halves, and both are the deliverable:
 
 - **The vision.** The site as it should look: the original's own aesthetic direction, pushed further, with today's best practice underneath it.
 - **The authoring surface.** A folder the owner can keep editing without a developer. Pages are plain markdown named for what they are, sections are folders, facts are frontmatter, and every visual decision lives in `.moss/theme/`.
@@ -119,7 +119,7 @@ Stop when the vision is reached or every remaining gap sits in the last row. Che
 
 - `moss build --strict` passes. `moss list --json` holds every imported page except deliberate removals, and every old address still resolves or redirects.
 - Review a build of the committed tree, not of a working folder: copy it from version control into a fresh folder and build that. Anything untracked in the folder (a draft, a stray file) is in your build and not in the next person's.
-- Check contrast in three modes, light, dark by the system setting and dark by the site's own toggle, on every page, with zero failures below WCAG AA. A page checked in one dark mode can fail in the other.
+- Check contrast in three modes, light, dark by the system setting and dark by the site's own toggle, on every page, with zero failures below WCAG AA. A page checked in one dark mode can fail in the other. A site with a fixed `color_scheme` has one mode; a dark mode is something the design has, not something the check implies, so a site whose original has none gets none unless the owner asks.
 - Check every page at 1440, 1024, 768, 390 and 360 px in chromium and webkit for text that meets other text and for sideways scroll. A desktop rule that places a paragraph in a grid column can outrank the phone reset and run a heading into it, which a check of scroll and broken images does not see. Look yourself at one laptop width between 1024 and 1280, where side-by-side columns are narrowest before they stack.
 - Read the home page and one item page element by element, defaults included, and name the audience row each serves (step 4). An element with no row is removed before handover.
 - Measure the frame on every kind of page, not only the designed ones: the space under the header, whether a title shows, and the favicon.

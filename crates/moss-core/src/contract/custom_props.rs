@@ -805,9 +805,15 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
     },
     ScopeAttr {
         selector: "html",
+        name: "data-moss-color-scheme",
+        values: &["light", "dark"],
+        description: "The site's fixed `[site].color_scheme`. Absent in auto mode. Fixed pages omit the theme toggle and ignore the reader's stored theme, OS preference and preview shell theme.",
+    },
+    ScopeAttr {
+        selector: "html",
         name: "data-theme",
         values: &["light", "dark"],
-        description: "The resolved colour scheme, set on `<html>` before the first paint by an inline script, from the reader's stored choice or their OS preference. So `[data-theme=\"dark\"]` alone is sufficient for dark-mode rules — do not also write an `@media (prefers-color-scheme: dark)` block, which ignores the toggle and will disagree with it.",
+        description: "The resolved colour scheme, set on `<html>` before the first paint by an inline script, from `[site].color_scheme` when fixed to `light` or `dark`, otherwise from the reader's stored choice or their OS preference. So `[data-theme=\"dark\"]` alone is sufficient for dark-mode rules — do not also write an `@media (prefers-color-scheme: dark)` block, which ignores the toggle and will disagree with it.",
     },
     ScopeAttr {
         selector: "article > [data-width]",

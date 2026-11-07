@@ -54,6 +54,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "Show moss's one-line colophon as the footer's last line; false leaves it out of every page.",
         },
         SiteSettingInfo {
+            name: "color_scheme",
+            r#type: "string",
+            default: Some("auto"),
+            description: "Colour scheme: \"auto\" follows the reader's saved choice or OS preference; \"light\" and \"dark\" fix the palette and omit the theme toggle, keeping search and language controls.",
+        },
+        SiteSettingInfo {
             name: "comments",
             r#type: "bool",
             default: None,

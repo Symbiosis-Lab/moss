@@ -128,6 +128,7 @@ document.addEventListener("moss-morph-patched", syncMobileMenuToViewport);
  * so site-level scripts can react to theme changes (e.g., exit custom modes).
  */
 function toggleTheme(): void {
+  if (document.documentElement.hasAttribute("data-moss-color-scheme")) return;
   const previous = document.documentElement.getAttribute("data-theme");
   const next = previous === "dark" ? "light" : "dark";
 

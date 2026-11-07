@@ -1711,6 +1711,7 @@ fn maybe_inject_spa_cached_hit_matches_miss_output_byte_for_byte() {
         raster_favicons: None,
         theme_color_light: None,
         theme_color_dark: None,
+        color_scheme: Default::default(),
     };
 
     // Miss: target starts as the raw source (mirrors link_to's pre-injection
@@ -1772,6 +1773,7 @@ fn maybe_inject_spa_cached_no_op_result_is_cached_too() {
         raster_favicons: None,
         theme_color_light: None,
         theme_color_dark: None,
+        color_scheme: Default::default(),
     };
 
     let target = tmp.path().join("t.html");

@@ -327,6 +327,8 @@ pub fn generate_media_page(
     search_js_tag: &str,
     // The site's `<meta name="robots">` tag, from its search and AI switches.
     robots_tag: Option<&str>,
+    color_scheme_attrs: &str,
+    theme_meta: &str,
 ) -> String {
     let robots = robots_tag.map(|t| format!("\n  {t}")).unwrap_or_default();
     let (page_title, _page_slug) = match media_type {
@@ -343,11 +345,12 @@ pub fn generate_media_page(
 
     format!(
         r##"<!DOCTYPE html>
-<html data-moss-html-version="1" lang="{html_lang}">
+<html data-moss-html-version="1" lang="{html_lang}"{color_scheme_attrs}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">{robots}
   <title>{page_title} - {site_name}</title>
+  {theme_meta}
   <link rel="stylesheet" href="{css_path}">
 </head>
 <body>
@@ -397,6 +400,21 @@ mod tests {
     // ===========================================
     // MediaType and MediaItem tests
     // ===========================================
+
+    #[test]
+    fn media_page_keeps_the_resolved_theme_head() {
+        use crate::build::page::{color_scheme::ColorScheme, shell::theme_color_meta};
+        for scheme in [ColorScheme::Auto, ColorScheme::Light, ColorScheme::Dark] {
+            let attrs = scheme.html_attrs();
+            let meta = theme_color_meta(scheme);
+            let html = generate_media_page(&MediaType::Photography, &[], "Site", "", "/style.css",
+                crate::i18n::Language::En, "en", None, "/theme.js", "", None, "", None, &attrs, &meta);
+            assert!(html.contains(&format!(r#"lang="en"{attrs}>"#)));
+            assert!(html.contains(&meta));
+            assert!(!html.contains("localStorage"));
+            assert_eq!(html.matches("name=\"theme-color\"").count(), if scheme == ColorScheme::Auto { 2 } else { 1 });
+        }
+    }
 
     #[test]
     fn test_media_type_equality() {
@@ -671,7 +689,9 @@ mod tests {
             "",
             None,
             "",
-            None
+            None,
+            "",
+            "",
         );
 
         // Check page structure
@@ -707,7 +727,7 @@ mod tests {
             article_url: "posts/video.html".to_string(),
         }];
 
-        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "", None);
+        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "", None, "", "");
 
         assert!(html.contains("<title>Videos - My Site</title>"));
         assert!(html.contains("<h1>Videos</h1>"));
@@ -729,7 +749,7 @@ mod tests {
             article_url: "posts/video.html".to_string(),
         }];
 
-        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, "fr", None, "/_moss/js/theme.testabcd.js", "", None, "", None);
+        let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, "fr", None, "/_moss/js/theme.testabcd.js", "", None, "", None, "", "");
 
         assert!(html.contains(r#"lang="fr""#), "{html}");
         assert!(!html.contains(r#"lang="en""#), "{html}");
@@ -745,7 +765,7 @@ mod tests {
             article_url: "posts/code.html".to_string(),
         }];
 
-        let html = generate_media_page(&MediaType::Interactive, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "", None);
+        let html = generate_media_page(&MediaType::Interactive, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "", None, "", "");
 
         assert!(html.contains("<title>Experiments - My Site</title>"));
         assert!(html.contains("<h1>Experiments</h1>"));
@@ -842,7 +862,9 @@ mod tests {
             "",
             None,
             "",
-            None
+            None,
+            "",
+            "",
         );
         assert!(html.contains(r#"src="/_moss/js/theme.def456.js""#), "theme.js src must be root-relative hashed");
         assert!(!html.contains("../"), "media page must not use ../ relative paths");
@@ -870,7 +892,9 @@ mod tests {
             "",
             None,
             "\n    <script src=\"/_moss/js/search.abc123.js\" defer></script>",
-            None
+            None,
+            "",
+            "",
         );
         assert!(
             html.contains(r#"src="/_moss/js/search.abc123.js""#),
@@ -900,7 +924,9 @@ mod tests {
             "",
             Some("/_moss/js/fullscreen.ghi.js"),
             "",
-            None
+            None,
+            "",
+            "",
         );
         assert!(html_with.contains(r#"src="/_moss/js/fullscreen.ghi.js""#));
 
@@ -917,7 +943,9 @@ mod tests {
             "",
             None,
             "",
-            None
+            None,
+            "",
+            "",
         );
         assert!(!html_without.contains("fullscreen"), "fullscreen script must not appear when js_fullscreen_path is None");
     }

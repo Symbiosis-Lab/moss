@@ -112,6 +112,8 @@ pub struct SiteConfig {
     pub header: crate::build::components::nav::HeaderMode,
     /// `[site].header_scroll` — resolved (`HeaderScroll::from_config`).
     pub header_scroll: crate::build::components::nav::HeaderScroll,
+    /// `[site].color_scheme` — automatic reader choice or a fixed palette.
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// CLI `--site-url` override. When set, `resolve_site_url` will use this
     /// value instead of deriving the URL from `.moss/state.toml`. `None` means
     /// "derive from deployment state as usual". Consumed by Task 2.5.
@@ -205,6 +207,7 @@ impl Default for SiteConfig {
             selection_tools: false,
             selection_comments: false,
             colophon: true,
+            color_scheme: Default::default(),
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             header_scroll: crate::build::components::nav::HeaderScroll::Static,
