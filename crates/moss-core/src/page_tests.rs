@@ -334,6 +334,14 @@ fn canonical_field_spans_use_simplified_fields_and_ignore_nested_yaml() {
     assert_eq!(spans.iter().map(|s| (s.key.as_str(), &colons[s.from..s.to])).collect::<Vec<_>>(),
         vec![("foo", "foo"), ("foo:bar", "foo:bar"), ("url", "url")]);
     assert!(field_spans("---\n{title: Flow}\n---\n").is_empty(), "a flow mapping has no key lines");
+    let quoted = "---\nfoo: 1\n\"foo: bar\": x\n'it''s': y\n\"a\\\"b\": z\n---\n";
+    let spans = field_spans(quoted);
+    assert_eq!(spans.iter().map(|s| (s.key.as_str(), &quoted[s.from..s.to])).collect::<Vec<_>>(),
+        vec![("foo", "foo"), ("foo: bar", "\"foo: bar\""), ("it's", "'it''s'"), ("a\"b", "\"a\\\"b\"")]);
+    let indented = "---\n  title: Indented\n  tags:\n    - a\n  draft: true\n---\n";
+    let spans = field_spans(indented);
+    assert_eq!(spans.iter().map(|s| (s.key.as_str(), &indented[s.from..s.to], s.line)).collect::<Vec<_>>(),
+        vec![("title", "title", 2), ("tags", "tags", 3), ("draft", "draft", 5)]);
     assert!(field_spans("---\ntitle: incomplete").is_empty());
     assert!(field_spans("# Body").is_empty());
 }

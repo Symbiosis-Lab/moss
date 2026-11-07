@@ -742,21 +742,31 @@ fn scalar_len(tail: &str) -> Option<usize> {
     }
 }
 
-/// The top-level entries of the YAML text at `content[fields]`. A line
-/// indented, starting with `- `, or blank between value lines belongs to the
-/// entry above it; a run of comments at the margin belongs to the key right
-/// below it.
+/// The top-level entries of the YAML text at `content[fields]`. The margin is
+/// the least indent of a key line, so a uniformly indented block reads like
+/// one at column 0. A line indented past the margin, starting with `- `, or
+/// blank between value lines belongs to the entry above it; a run of comments
+/// at the margin belongs to the key right below it.
 fn entries(content: &str, fields: Range<usize>) -> Vec<Entry> {
+    #[allow(clippy::string_slice)]
+    // `fields` is a line-boundary range from the splitter.
+    let block = &content[fields.clone()];
+    let indent = |line: &str| line.len() - line.trim_start_matches(' ').len();
+    let margin = block.lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+        .map(indent).min().unwrap_or(0);
     let mut out: Vec<Entry> = Vec::new();
     let mut comment_from: Option<usize> = None;
     let mut offset = fields.start;
-    #[allow(clippy::string_slice)]
-    // `fields` is a line-boundary range from the splitter.
-    for raw in content[fields].split_inclusive('\n') {
+    for raw in block.split_inclusive('\n') {
         let start = offset;
         offset += raw.len();
         let line = raw.trim_end_matches(['\n', '\r']);
-        if line.starts_with([' ', '\t']) || line == "-" || line.starts_with("- ") {
+        let at = indent(line).min(margin);
+        #[allow(clippy::string_slice)]
+        // `at` counts ASCII spaces.
+        let rest = &line[at..];
+        if indent(line) > margin || rest.starts_with('\t') || rest == "-" || rest.starts_with("- ") {
             if let Some(entry) = out.last_mut() {
                 entry.lines.end = offset;
                 entry.value = None;
@@ -764,32 +774,64 @@ fn entries(content: &str, fields: Range<usize>) -> Vec<Entry> {
             comment_from = None;
             continue;
         }
-        if line.starts_with('#') {
+        if rest.starts_with('#') {
             comment_from.get_or_insert(start);
             continue;
         }
-        let Some(colon) = line.find(": ").or_else(|| line.ends_with(':').then(|| line.len() - 1)) else {
+        let Some((key, written, colon)) = key_of(rest) else {
             comment_from = None;
             continue;
         };
         #[allow(clippy::string_slice)]
-        // ASCII ':' and ' ' found by `find`; a key line has no indent.
-        let written = line[..colon].trim_end();
-        let key = written.trim_matches(['"', '\'']).to_string();
-        #[allow(clippy::string_slice)]
-        let after = &line[colon + 1..];
+        // `colon` is an ASCII ':' found by `key_of`.
+        let after = &rest[colon + 1..];
         let value_from = colon + 1 + (after.len() - after.trim_start().len());
         #[allow(clippy::string_slice)]
-        let len = scalar_len(&line[value_from..]);
+        let len = scalar_len(&rest[value_from..]);
+        let base = start + at;
         out.push(Entry {
             key,
-            key_span: start..start + written.len(),
+            key_span: base..base + written,
             comment_from: comment_from.take().unwrap_or(start),
             lines: start..offset,
-            value: len.map(|len| start + value_from..start + value_from + len),
+            value: len.map(|len| base + value_from..base + value_from + len),
         });
     }
     out
+}
+
+/// A key line's decoded key, the byte length of the key as written and the
+/// index of its `:`. A quoted key may itself hold `: `; a plain key ends at
+/// the first `: ` or a trailing `:`.
+fn key_of(line: &str) -> Option<(String, usize, usize)> {
+    let quote = line.chars().next().filter(|c| *c == '"' || *c == '\'');
+    let (key, written) = match quote {
+        Some(q) => {
+            let len = scan_quoted(line, q)?;
+            #[allow(clippy::string_slice)]
+            // `scan_quoted` ends on the ASCII closing quote.
+            let raw = &line[..len];
+            let key = match q {
+                '"' => unescape_double(raw),
+                _ => raw.get(1..len - 1).unwrap_or_default().replace("\'\'", "\'"),
+            };
+            (key, len)
+        }
+        None => {
+            let colon = line.find(": ").or_else(|| line.ends_with(':').then(|| line.len() - 1))?;
+            #[allow(clippy::string_slice)]
+            // ASCII ':' found by `find`.
+            let written = line[..colon].trim_end();
+            (written.to_string(), written.len())
+        }
+    };
+    #[allow(clippy::string_slice)]
+    // `written` ends on a char boundary: a quote or the end of trimmed text.
+    let tail = &line[written..];
+    let colon = written + tail.len() - tail.trim_start_matches(' ').len();
+    let after = line.get(colon + 1..)?;
+    (line.get(colon..colon + 1) == Some(":") && (after.is_empty() || after.starts_with([' ', '\t'])))
+        .then_some((key, written, colon))
 }
 
 /// Each top-level frontmatter key and its byte range as written, in source

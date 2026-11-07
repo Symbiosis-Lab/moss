@@ -865,3 +865,10 @@ fn get_present_treats_blank_as_absent() {
         assert!(get_present(&fm, key).is_none(), "{key}");
     }
 }
+
+#[test]
+fn edit_fields_finds_a_quoted_key_that_holds_colon_space() {
+    let content = "---\nfoo: 1\n\"foo: bar\": x\n---\nBody";
+    let out = edit_fields(content, &[FieldEdit::Set { key: "foo: bar".into(), value: "y".into() }]).unwrap();
+    assert_eq!(out, "---\nfoo: 1\n\"foo: bar\": y\n---\nBody");
+}
