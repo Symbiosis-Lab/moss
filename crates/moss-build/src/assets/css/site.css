@@ -7283,10 +7283,15 @@ article a:where(:not(.moss-btn)):focus {
 
 /* Video thumbnail overlay — fades out during playback. It overshoots the
  * box by 1px, which `overflow: hidden` clips, because WebKit can leave a
- * hairline of the video showing under a fractional-height thumb. */
+ * hairline of the video showing under a fractional-height thumb. Inside an
+ * <article>, `article img` would give it a prose margin that pushes it off
+ * the video, so it resets margin, border and radius itself. */
 .cover-thumb {
   position: absolute;
   inset: 0 0 -1px 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
   width: 100%;
   height: calc(100% + 1px);
   object-fit: cover;
