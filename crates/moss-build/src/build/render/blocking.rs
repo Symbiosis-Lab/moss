@@ -741,6 +741,7 @@ pub fn generate_blocking_content_for_build(
                         crate::build::cloud_readiness::read_page_source(path, &deferred_mutex, &input_evidence)
                     });
                     let content = content?;
+                    if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
                     // RESOLVE phase: transform Obsidian syntax (wikilinks, embeds,
@@ -1114,6 +1115,7 @@ pub fn generate_blocking_content_for_build(
         // a warm content-only rebuild once Loop A is a cache hit.
         let reduce_start = std::time::Instant::now();
         url_collisions = resolve_duplicate_slugs_with_lang(&mut documents, site_lang);
+        crate::build::scan::slug::refuse_collisions(&url_collisions)?;
         // Sync permalink with updated url_path (dedup may have changed it)
         for doc in &mut documents {
             doc.permalink = format!("/{}", doc.url_path); // allow:served-path-url-construct (page permalink synced after slug dedup, stored in ParsedDocument)
@@ -1637,7 +1639,7 @@ pub fn generate_blocking_content_for_build(
     // A term card reads its members' pictures and dates, so it is set once
     // every pseudo-folder document exists.
     crate::build::terms::set_term_cards(&mut documents, &term_index);
-    super::build_shared::report_verbatim_collisions(&documents, project_structure, &dir_overrides);
+    super::build_shared::refuse_verbatim_collisions(&documents, project_structure, &dir_overrides)?;
     super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places

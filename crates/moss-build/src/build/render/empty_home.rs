@@ -15,8 +15,7 @@
 //!
 //! The render pipeline uses the equivalent `documents.is_empty()` check at
 //! the call site in `blocking.rs` after markdown processing has populated
-//! the docs vector. The two predicates are equivalent because every
-//! markdown file scanned becomes a `ParsedDocument`.
+//! the docs vector. Empty sources are skipped before they become documents.
 //!
 //! ## Output
 //!
@@ -66,6 +65,27 @@ pub fn synthesize_empty_homepage(
         is_root_level: true,
         ..Default::default()
     }
+}
+
+/// Empty placeholders must be skipped before UID stamping makes them nonempty.
+fn is_empty_source(content: &str) -> bool {
+    let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
+        return content.trim().is_empty();
+    };
+    if !content.get(span.body..).unwrap_or(content).trim().is_empty() {
+        return false;
+    }
+    let fields = content.get(span.fields).unwrap_or(content);
+    fields.trim().is_empty() || matches!(
+        serde_yaml::from_str::<serde_yaml::Value>(fields),
+        Ok(serde_yaml::Value::Mapping(map)) if map.is_empty()
+    )
+}
+
+pub(super) fn skip_empty_source(content: &str, path: &str) -> bool {
+    let empty = is_empty_source(content);
+    if empty { crate::build::cli_output::log_note!("Skipping empty page: {path}"); }
+    empty
 }
 
 #[cfg(test)]

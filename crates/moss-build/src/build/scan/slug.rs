@@ -316,18 +316,7 @@ pub fn resolve_duplicate_slugs_with_lang(
         }
     }
 
-    let reported = root_causes(found);
-    // The author's copy of this goes on the `url` chip, where the field she
-    // has to change is; this is for the support read of an uploaded log,
-    // which is how the 河灣·週刊 report was diagnosed at all.
-    for c in &reported {
-        log::warn!(
-            target: "build",
-            "`{}` and `{}` both publish to /{} — keeping `{}` there and moving the other to /{}. Two files with one name, or folders carrying the same `url:` (a folder copied in Finder keeps the original's), do this.",
-            c.keeper, c.loser, c.wanted, c.keeper, c.moved_to,
-        );
-    }
-    reported
+    root_causes(found)
 }
 
 /// The directory part of a source path (`a/b/c.md` → `a/b`, `c.md` → ``).
@@ -362,6 +351,14 @@ fn root_causes(found: Vec<(UrlCollision, Option<String>)>) -> Vec<UrlCollision> 
         })
         .map(|(_, (c, _))| c.clone())
         .collect()
+}
+
+pub(crate) fn refuse_collisions(collisions: &[UrlCollision]) -> Result<(), String> {
+    if collisions.is_empty() { return Ok(()); }
+    let lines: Vec<String> = collisions.iter().map(|c| {
+        format!("{} and {} both publish to /{}", c.keeper, c.loser, c.wanted)
+    }).collect();
+    Err(format!("Duplicate output URLs:\n{}\nGive each page a unique URL or filename.", lines.join("\n")))
 }
 
 #[cfg(test)]

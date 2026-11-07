@@ -466,19 +466,9 @@ mod tests {
 
     // ── resolve_url_for_file_inner tests ──────────────────────────────────────
 
-    /// Systematic-debugging verification for the "preview doesn't navigate to
-    /// a brand-new page" bug report: a newly created file via the editor's
-    /// `create_files` command is written completely empty (0 bytes, no
-    /// frontmatter — see `editor::commands::create_files`). This test runs the
-    /// REAL build pipeline (not a hand-constructed ArticleMap, unlike the
-    /// other tests in this module) over a project containing exactly such a
-    /// file, then asks `resolve_url_for_file_inner` — the same function the
-    /// `resolveUrlForFile` Tauri command calls — whether the file resolves to
-    /// a URL. If this fails, a 0-byte markdown file is being silently
-    /// excluded from the article/page map and the preview-follower retry loop
-    /// would spin forever waiting for a URL that will never arrive.
+    /// An empty placeholder has no built address until the author adds content.
     #[test]
-    fn newly_created_empty_markdown_file_resolves_after_build() {
+    fn newly_created_empty_markdown_file_has_no_built_url() {
         // NOTE: uses a `prefix("moss")` TempDir rather than the module's
         // `repo_temp()` helper. `repo_temp()` relies on `TempDir::new_in`'s
         // default `.tmp`-prefixed name, which is fine for the other tests in
@@ -533,10 +523,8 @@ mod tests {
         let resolved =
             resolve_url_for_file_inner(new_file_name, folder_path, &served(folder_path)).unwrap();
         assert!(
-            resolved.is_some(),
-            "a content-less (0-byte) newly-created markdown file must still \
-             resolve to a URL after a build completes — got None, meaning it \
-             was excluded from the article/page map entirely"
+            resolved.is_none(),
+            "an empty placeholder must have no published URL: {resolved:?}"
         );
     }
 
@@ -546,7 +534,7 @@ mod tests {
             let project = repo_temp();
             let folder_path = project.path().join("garden");
             fs::create_dir_all(&folder_path).unwrap();
-            fs::write(folder_path.join("garden.md"), "").unwrap();
+            fs::write(folder_path.join("garden.md"), "# Garden\n").unwrap();
             fs::write(
                 folder_path.join("Other.md"),
                 "---\ndate: 2026-01-01\nurl: garden\n---\n# Other\n",

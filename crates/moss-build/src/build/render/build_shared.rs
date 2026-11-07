@@ -240,33 +240,36 @@ impl FolderIndexPlan {
     }
 }
 
-/// Report each page whose address is also the output path of a source `.html`
-/// file. The asset copy serves the page and drops the file, so one of them is
-/// lost: a build problem, not a quiet override.
+/// Refuse colliding HTML outputs before the asset copy drops either source.
 ///
 /// A file named exactly in `[build].passthrough` replaces its page by the
 /// author's own declaration and is not reported.
-pub(super) fn report_verbatim_collisions(
+pub(super) fn refuse_verbatim_collisions(
     documents: &[ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &HashMap<String, String>,
-) {
+) -> Result<(), String> {
     let (html_files, passthrough_roots) = (&project.html_files, &project.passthrough_roots);
-    let sources: HashMap<String, &str> = html_files
-        .iter()
-        .filter(|f| !passthrough_roots.contains(&f.path))
-        .map(|f| (crate::build::scan::page_map::resolve_path_with_overrides(&f.path, dir_overrides), f.path.as_str()))
-        .collect();
+    let mut sources = HashMap::new();
+    let mut collisions = Vec::new();
+    for file in html_files.iter().filter(|f| !passthrough_roots.contains(&f.path)) {
+        let output = crate::build::scan::page_map::resolve_path_with_overrides(&file.path, dir_overrides);
+        if let Some(previous) = sources.insert(output.clone(), file.path.as_str()) {
+            collisions.push(format!("`{previous}` and `{}` both publish to {}", file.path,
+                crate::build::served_path::served_address(&output)));
+        }
+    }
     for doc in documents.iter().filter(|d| !d.slot_only) {
         let Some(&file) = sources.get(&doc.url_path) else { continue };
         let page = match &doc.source_path {
             Some(source) => format!("`{source}`"),
             None => "a generated folder page".to_string(),
         };
-        crate::build::cli_output::log_warn_problem!(
-            "{page} and `{file}` are both published at {}: the page is served and the file is lost",
-            crate::build::served_path::served_address(&doc.url_path)
-        );
+        collisions.push(format!("{page} and `{file}` both publish to {}",
+            crate::build::served_path::served_address(&doc.url_path)));
+    }
+    if collisions.is_empty() { Ok(()) } else {
+        Err(format!("Duplicate output URLs:\n{}\nGive each source a unique address.", collisions.join("\n")))
     }
 }
 

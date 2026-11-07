@@ -111,6 +111,8 @@ pub struct DeployFlags {
     /// would go offline for a reason other than the author removing them. It
     /// accepts exactly the set this build found, nothing standing.
     pub accept_removals: bool,
+    /// Accept a rollback identified by source timestamps or published hashes.
+    pub accept_stale_content: bool,
     /// `--dry-run`: build as a deploy would, say what it would do, send
     /// nothing and record nothing.
     pub dry_run: bool,
@@ -158,6 +160,7 @@ impl DeployArgs {
                 "--allow-plugins" => flags.allow_plugins = true,
                 "--overwrite-newer" => flags.overwrite_newer = true,
                 "--accept-removals" => flags.accept_removals = true,
+                "--accept-stale-content" => flags.accept_stale_content = true,
                 "--dry-run" => flags.dry_run = true,
                 "--json" => flags.json = true,
                 a if a.starts_with("--retry-copies=") => {
@@ -179,6 +182,9 @@ impl DeployArgs {
         }
         if flags.json && !flags.dry_run {
             return Err("error: --json goes with --dry-run; a deploy itself prints the published address".to_string());
+        }
+        if flags.dry_run && flags.accept_stale_content {
+            return Err("error: --dry-run cannot accept stale content; drop --accept-stale-content to inspect the refusal".into());
         }
         if flags.dry_run && flags.accept_removals {
             return Err(
@@ -368,6 +374,7 @@ async fn send(
                 crate::deploy::push::PublishOverrides {
                     overwrite_newer: flags.overwrite_newer,
                     accept_removals: flags.accept_removals,
+                    accept_stale_content: flags.accept_stale_content,
                 },
                 sink,
             )
@@ -383,7 +390,11 @@ async fn send(
                 folder,
                 host_ports,
                 plugins,
-                flags.accept_removals,
+                crate::deploy::push::PublishOverrides {
+                    accept_removals: flags.accept_removals,
+                    accept_stale_content: flags.accept_stale_content,
+                    ..Default::default()
+                },
                 sink,
             )
             .await
@@ -612,6 +623,13 @@ mod removal_flag_tests {
         assert!(dry.dry_run && !dry.accept_removals);
         let plain = parse(&["site"]).unwrap().flags;
         assert!(!plain.dry_run && !plain.accept_removals);
+    }
+
+    #[test]
+    fn stale_content_acceptance_is_explicit_and_not_a_dry_run() {
+        assert!(!parse(&["site"]).unwrap().flags.accept_stale_content);
+        assert!(parse(&["site", "--accept-stale-content"]).unwrap().flags.accept_stale_content);
+        assert!(parse(&["site", "--dry-run", "--accept-stale-content"]).is_err());
     }
 
     #[test]
@@ -1009,7 +1027,7 @@ mod dry_run_tests {
                 fx.dir.path(),
                 &crate::cli::host::cli_host_ports,
                 crate::build::PluginMode::Skip,
-                accept,
+                crate::deploy::push::PublishOverrides { accept_removals: accept, ..Default::default() },
                 &sink,
             )
         };
@@ -1018,6 +1036,34 @@ mod dry_run_tests {
 
         let past = run(true).await;
         assert!(!matches!(&past, Err(e) if e.contains("legacy-feed.xml")), "accepted, so not the gate: {past:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stale_content_is_reported_by_dry_run_and_accepted_on_the_plugin_route() {
+        let fx = Fixture::new(false);
+        let dir = &fx.dir;
+        let history = dir.path().join(".moss/history/publishes");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("2026-01-01.json"), serde_json::json!({
+            "version": 1, "published_at": "2026-01-01T00:00:00Z", "target": "moss:dry-test",
+            "generation_id": "previous", "entries": {
+                "index.md": {"mode": "100644", "hash": "previous", "source_mtime": [4000000000u64, 0]}
+            }
+        }).to_string()).unwrap();
+        let flags = DeployFlags { dry_run: true, ..Default::default() };
+        let report = dispatch(dir.path(), &DeployRoute::Hosted, &crate::cli::host::cli_host_ports,
+            crate::build::PluginMode::Skip, &flags, &printing()).await.unwrap();
+        let DeployReport::DryRun(dry) = report else { panic!("expected dry run") };
+        assert_eq!(dry.refusal.unwrap().kind, crate::deploy::RefusalKind::StaleContent);
+        let sink = crate::deploy::progress::silent();
+        let run = |accept| crate::deploy::plugin_push::run_plugin_deploy(
+            dir.path(), &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip,
+            crate::deploy::push::PublishOverrides { accept_stale_content: accept, ..Default::default() }, &sink,
+        );
+        let error = run(false).await.unwrap_err();
+        assert!(error.contains("--accept-stale-content"), "{error}");
+        let result = run(true).await;
+        assert!(matches!(result, Ok(crate::plugins::types::DeployResult::NoPlugin { .. })), "{result:?}");
     }
 
     fn report_code(report: DeployReport) -> i32 {

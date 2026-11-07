@@ -1,4 +1,4 @@
-//! The publish gate's fourth rule, and the words every surface uses for it.
+//! Publish guards for lost addresses and older source content.
 //!
 //! An address a published site has served is a promise: links and
 //! subscriptions to it live outside the site. A publish that would stop
@@ -227,6 +227,49 @@ pub(crate) fn prebuilt_refusal(paths: &[String]) -> String {
 pub(crate) fn refusal_for(folder_path: &str) -> Option<String> {
     let pending = crate::system::build_records::records().pending_removals(folder_path);
     (!pending.is_empty()).then(|| refusal_text(&pending))
+}
+
+/// Compare only sources this generation publishes, against actual publishes to its target.
+pub(crate) fn stale_content(
+    folder: &std::path::Path,
+    sealed: &crate::build::manifest::SealedManifest,
+) -> std::collections::BTreeMap<String, String> {
+    use super::history::{HistoryStore, Trigger};
+    let records = HistoryStore::in_vault(folder).list_records();
+    let target = crate::build::manifest::backfill::publish_target(&crate::moss_paths::MossPaths::new(folder));
+    let publishes: Vec<_> = records.iter().map(|(_, r)| r)
+        .filter(|r| r.trigger == Trigger::Publish && target.as_ref().is_none_or(|t| &r.target == t)).collect();
+    let mut stale = std::collections::BTreeMap::new();
+    let Some(latest) = publishes.last() else { return stale };
+    for (src, hash) in crate::build::manifest::change_set::page_source_hashes(sealed) {
+        let Some(previous) = latest.entries.get(&src) else { continue };
+        if previous.hash == hash { continue; }
+        let mtime = sealed.sources().get(&src).and_then(|m| m.mtime_nanos.map(|n| (m.mtime, n)));
+        let older_time = mtime.zip(previous.source_mtime).is_some_and(|(now, before)| now < before);
+        let older_hash = publishes.iter().any(|r| r.target == latest.target
+            && r.entries.get(&src).is_some_and(|e| e.hash == hash));
+        if older_time || older_hash {
+            // Acceptance expires when either side of the proposed rollback changes.
+            stale.insert(src, format!("{}:{}", previous.hash, hash));
+        }
+    }
+    stale
+}
+
+fn stale_refusal_text(pages: &[String]) -> Option<String> {
+    if pages.is_empty() { return None; }
+    Some(format!(
+        "Nothing published — these pages would roll back to older source content:\n{}\nRestore the current files and rebuild. \
+         If this is a deliberate revert, accept it with `moss deploy --accept-stale-content`.",
+        pages.iter().map(|p| format!("  {p}")).collect::<Vec<_>>().join("\n"),
+    ))
+}
+
+pub(crate) fn refuse_stale_generation(folder: &std::path::Path, sealed: &crate::build::manifest::SealedManifest) -> Result<(), String> {
+    let pending = crate::system::build_records::records().unaccepted_stale_content(
+        &folder.to_string_lossy(), stale_content(folder, sealed),
+    );
+    stale_refusal_text(&pending).map_or(Ok(()), Err)
 }
 
 #[cfg(test)]

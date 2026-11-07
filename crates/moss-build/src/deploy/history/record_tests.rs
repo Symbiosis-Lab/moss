@@ -59,7 +59,7 @@ fn oversize_files_are_recorded_by_hash_only() {
 
     assert_eq!(
         out["video.mp4"],
-        Entry { mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(big) }
+        Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(big) }
     );
     assert_eq!(
         count_blob_files_for_tests(store.root()),
@@ -363,7 +363,7 @@ fn a_v1_record_without_the_new_fields_still_parses() {
 #[test]
 fn a_record_with_the_new_fields_round_trips() {
     let mut entries = BTreeMap::new();
-    entries.insert("a.md".to_string(), Entry { mode: MODE_FILE.to_string(), hash: "h-a".to_string(), size: Some(3) });
+    entries.insert("a.md".to_string(), Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: "h-a".to_string(), size: Some(3) });
     let record = PublishRecord {
         version: 1,
         published_at: "2026-01-01T00:00:00Z".to_string(),

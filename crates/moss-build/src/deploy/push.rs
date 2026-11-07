@@ -76,6 +76,7 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
 pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
+    super::removal_gate::refuse_stale_generation(cx.folder_path, sealed)?;
     crate::deploy::refuse_publish(&cx.folder_path.to_string_lossy())?;
     crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path)?;
     crate::deploy::refuse_unresolved_inputs(sealed)?;
@@ -703,9 +704,9 @@ async fn push_site_inner_impl(
 }
 
 
-/// The two refusals a terminal publish can be told to go past. Named fields,
-/// because two adjacent booleans compile silently when swapped and the two
-/// mean opposite things for a live site.
+/// The refusals a terminal publish can be told to go past. Named fields,
+/// because adjacent booleans compile silently when swapped and each means
+/// something different for a live site.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PublishOverrides {
     /// `--overwrite-newer`: publish over a live site another copy published
@@ -714,6 +715,21 @@ pub struct PublishOverrides {
     /// `--accept-removals`: accept losing exactly the addresses the build
     /// found going offline unasked.
     pub accept_removals: bool,
+    /// `--accept-stale-content`: accept exactly the pages this build found
+    /// rolling back to older source content.
+    pub accept_stale_content: bool,
+}
+
+impl PublishOverrides {
+    /// Called between the build and the gates that read its verdicts.
+    pub(crate) fn accept(&self, folder: &Path, sealed: Option<&SealedManifest>) {
+        let records = crate::system::build_records::records();
+        let key = folder.to_string_lossy();
+        if self.accept_removals { records.accept_all_pending_removals(&key); }
+        if let (true, Some(sealed)) = (self.accept_stale_content, sealed) {
+            records.accept_stale_content(&key, super::removal_gate::stale_content(folder, sealed));
+        }
+    }
 }
 
 /// One moss-hosted publish, from a folder to a result — the build included.
@@ -777,9 +793,7 @@ pub async fn run_hosted_deploy(
 
     // Only after the build: the verdict this reads is the build's own, and
     // asking before it would refuse on the previous run's answer or on none.
-    if overrides.accept_removals {
-        crate::system::build_records::records().accept_all_pending_removals(&folder_str);
-    }
+    overrides.accept(folder, taken.as_ref());
     crate::deploy::refuse_publish(&folder_str)?;
 
     let sealed = super::one_shot::require_sealed(taken)?;
@@ -1369,7 +1383,7 @@ mod tests {
 
     /// `run_hosted_deploy` exactly as `moss deploy` calls it, minus plugins.
     async fn cli_deploy(folder: &Path, overwrite_newer: bool) -> Result<PushResult, String> {
-        cli_deploy_accepting(folder, PublishOverrides { overwrite_newer, accept_removals: false }).await
+        cli_deploy_accepting(folder, PublishOverrides { overwrite_newer, ..Default::default() }).await
     }
 
     async fn cli_deploy_accepting(folder: &Path, overrides: PublishOverrides) -> Result<PushResult, String> {
@@ -1555,6 +1569,33 @@ mod tests {
         let result = with_seta_url(addr, cli_deploy_accepting(folder.path(), PublishOverrides { accept_removals: true, ..Default::default() })).await;
 
         assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)] // The server URL is process-global.
+    async fn stale_content_requires_acceptance_on_the_hosted_route() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let history = folder.path().join(".moss/history/publishes");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("2026-01-01.json"), serde_json::json!({
+            "version": 1, "published_at": "2026-01-01T00:00:00Z", "target": "moss:behind-test",
+            "generation_id": "previous", "entries": {
+                "index.md": {"mode": "100644", "hash": "previous", "source_mtime": [4000000000u64, 0]}
+            }
+        }).to_string()).unwrap();
+        let addr = mock_seta_sequence(vec![
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"live"}"#),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ]).await;
+        let error = with_seta_url(addr, cli_deploy(folder.path(), false)).await.unwrap_err();
+        assert!(error.contains("index.md") && error.contains("--accept-stale-content"), "{error}");
+        let result = with_seta_url(addr, cli_deploy_accepting(folder.path(), PublishOverrides {
+            accept_stale_content: true, ..Default::default()
+        })).await;
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "{result:?}");
     }
 
     /// `--overwrite-newer` publishes over it: the build runs and the push

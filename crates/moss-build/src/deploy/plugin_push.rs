@@ -99,7 +99,7 @@ pub async fn run_plugin_deploy(
     folder: &Path,
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     plugins: crate::build::PluginMode,
-    accept_removals: bool,
+    overrides: super::push::PublishOverrides,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<DeployResult, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -136,10 +136,7 @@ pub async fn run_plugin_deploy(
     // the absence is a promotion failure and not a missing description.
     let sealed = super::one_shot::build_and_seal(&root, host, plugins).await?;
 
-    // Between the build that found the removals and the gate that reads them.
-    if accept_removals {
-        crate::system::build_records::records().accept_all_pending_removals(&folder_str);
-    }
+    overrides.accept(folder, sealed.as_ref());
 
     let ports = super::one_shot::HeadlessDeployPorts;
     run_plugin_deploy_inner(&PluginDeployContext {
@@ -235,6 +232,7 @@ pub async fn run_plugin_deploy_inner(
     // manifest there is no generation to check `current` against, and
     // `current` on this path is the PREVIOUS build's tree.
     let sealed = super::one_shot::require_sealed(cx.sealed)?;
+    super::removal_gate::refuse_stale_generation(cx.folder, sealed)?;
     crate::deploy::refuse_foreign_inputs(sealed, cx.folder)?;
     crate::deploy::refuse_unresolved_inputs(sealed)?;
 

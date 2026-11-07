@@ -359,6 +359,7 @@ pub enum RefusalKind {
     LinksInFlight,
     PendingDerivations,
     Removals,
+    StaleContent,
     NoEnvironment,
     ForeignInputs,
 }

@@ -103,7 +103,7 @@ fn restore_page_names_the_reason_when_the_content_was_not_kept() {
     let mut entries = BTreeMap::new();
     entries.insert(
         "huge.mp4".to_string(),
-        Entry { mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
+        Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
     );
     let id = write_record_directly(&history_root, "2026-01-01T00:00:00Z", "gen-1", entries);
 
@@ -254,10 +254,10 @@ fn restore_site_reports_a_failure_without_stopping_the_rest() {
 
     let edit_hash = hash_of(b"original body");
     let mut entries = BTreeMap::new();
-    entries.insert("edit.md".to_string(), Entry { mode: MODE_FILE.to_string(), hash: edit_hash.clone(), size: Some(13) });
+    entries.insert("edit.md".to_string(), Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: edit_hash.clone(), size: Some(13) });
     entries.insert(
         "huge.mp4".to_string(),
-        Entry { mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
+        Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
     );
     // Store the one blob that IS kept, matching edit.md's hash exactly.
     let object_store = store::object_store(&history_root);

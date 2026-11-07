@@ -357,6 +357,7 @@ pub async fn run_dry_run(
     let refusal = match &local.no_environment {
         Some(text) => Some(Refusal::new(crate::deploy::RefusalKind::NoEnvironment, text.clone())),
         None => crate::deploy::publish_refusal(&folder_str)
+            .or_else(|| crate::deploy::removal_gate::refuse_stale_generation(folder, &sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::StaleContent, t)))
             .or_else(|| crate::deploy::refuse_foreign_inputs(&sealed, folder).err().map(|t| Refusal::new(crate::deploy::RefusalKind::ForeignInputs, t)))
             .or_else(|| crate::deploy::refuse_unresolved_inputs(&sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::UnresolvedInputs, t))),
     };

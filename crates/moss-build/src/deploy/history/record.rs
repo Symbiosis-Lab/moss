@@ -90,6 +90,9 @@ impl PublishRecord {
 /// manifest's own tags ([`MODE_FILE`], [`MODE_SYMLINK`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Entry {
+    /// The source timestamp paired with the manifest hash, never the publish time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_mtime: Option<(u64, u32)>,
     pub mode: String,
     pub hash: String,
     /// Absent for a symlink. For a regular file, absent only means this
@@ -225,7 +228,7 @@ pub(crate) fn snapshot_displaced(root: &Path, path: &str, bytes: &[u8]) -> Resul
     let mut entries = BTreeMap::new();
     entries.insert(
         path.to_string(),
-        Entry { mode: MODE_FILE.to_string(), hash: hash.clone(), size: Some(bytes.len() as u64) },
+        Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: hash.clone(), size: Some(bytes.len() as u64) },
     );
     let record = PublishRecord {
         version: 1,
@@ -262,6 +265,10 @@ pub(crate) fn build_entries(
     for (src, meta) in tree.sources() {
         record_one(vault_root, store, src, &meta.hash, Some(meta.size), is_evicted, &mut out);
     }
+    for (src, entry) in &mut out {
+        entry.source_mtime = tree.sources().get(src)
+            .and_then(|m| m.mtime_nanos.map(|n| (m.mtime, n)));
+    }
     out
 }
 
@@ -297,7 +304,7 @@ pub(crate) fn record_one(
                 if let Err(e) = store.store_bytes(target_str.as_bytes(), crate::build::cache::RecordMode::Wait) {
                     log::debug!("history: could not store the symlink blob for {src}: {e}");
                 }
-                out.insert(src.to_string(), Entry { mode: MODE_SYMLINK.to_string(), hash, size: None });
+                out.insert(src.to_string(), Entry { source_mtime: None, mode: MODE_SYMLINK.to_string(), hash, size: None });
                 return;
             }
         }
@@ -328,7 +335,7 @@ pub(crate) fn record_one(
     }
     out.insert(
         src.to_string(),
-        Entry { mode: MODE_FILE.to_string(), hash: manifest_hash.to_string(), size: manifest_size },
+        Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: manifest_hash.to_string(), size: manifest_size },
     );
 }
 

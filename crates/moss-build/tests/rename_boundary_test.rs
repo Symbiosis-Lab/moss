@@ -495,10 +495,9 @@ fn a_published_address_follows_a_folder_with_a_translated_home() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// A page renamed onto a name whose address a folder already holds is served
-/// at the numbered address the build gives it, and the link carries that.
+/// A distinct filename keeps a renamed page beside a folder independently reachable.
 #[test]
-fn a_published_address_follows_a_page_numbered_beside_a_folder_of_its_name() {
+fn a_published_address_follows_a_page_renamed_beside_a_folder() {
     let root = ref_tmp_project("address-numbered");
     w(&root, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
     w(&root, "index.md", "# Home\n\n[a](/about/)\n");
@@ -508,7 +507,7 @@ fn a_published_address_follows_a_page_numbered_beside_a_folder_of_its_name() {
     moss_build::editor::ref_scan::rename_entry_with_refs_core(
         root.clone(),
         &root.join("about.md").to_string_lossy(),
-        &root.join("docs.md").to_string_lossy(),
+        &root.join("docs-2.md").to_string_lossy(),
     )
     .expect("rename with refs");
 

@@ -124,6 +124,9 @@ pub struct BuildRecords {
     /// acceptance could straddle a seal and accept an address the seal had
     /// just stopped reporting.
     removals: FolderSlot<FolderRemovals>,
+    /// Rollbacks `--accept-stale-content` accepted, keyed by page with the
+    /// published and proposed hashes, so changed bytes need accepting again.
+    accepted_stale: FolderSlot<BTreeMap<String, String>>,
     /// `(old, served)` output paths the last seal kept answering — see
     /// `feeds::kept_addresses`.
     kept: FolderSlot<Vec<(String, String)>>,
@@ -263,6 +266,15 @@ impl BuildRecords {
             r.accepted.extend(taken);
             ignored
         })
+    }
+
+    pub(crate) fn accept_stale_content(&self, folder: &str, stale: BTreeMap<String, String>) {
+        self.accepted_stale.update(Self::key(folder), |accepted| *accepted = stale);
+    }
+
+    pub(crate) fn unaccepted_stale_content(&self, folder: &str, stale: BTreeMap<String, String>) -> Vec<String> {
+        let accepted = self.accepted_stale.get(&Self::key(folder)).unwrap_or_default();
+        stale.into_iter().filter(|(path, pair)| accepted.get(path) != Some(pair)).map(|(path, _)| path).collect()
     }
 
     /// The removals that would refuse a publish of `folder_path` now.
