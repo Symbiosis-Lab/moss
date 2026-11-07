@@ -169,6 +169,10 @@ pub struct BundleReceipt {
     pub pages: usize,
     /// `(path within the bundle, xxh3 content hash)`.
     pub files: Vec<(String, String)>,
+    /// [`search::corpus_key`] of the staged pages a lane-less build indexed;
+    /// `None` on a bundle the lane indexed from a generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged: Option<String>,
 }
 
 impl BundleReceipt {
@@ -249,6 +253,7 @@ fn publish_bundle(
     _holding: &Holding,
     index_dir: &Path,
     want: PageSet,
+    staged: Option<&str>,
     produced: &search::SearchIndex,
 ) -> Result<BundleReceipt, String> {
     if produced.skipped > 0 || produced.pages < want.pages {
@@ -270,6 +275,7 @@ fn publish_bundle(
         fp: fp.hex(),
         pages: produced.pages,
         files: Vec::with_capacity(files.len()),
+        staged: staged.map(str::to_string),
     };
     for file in files {
         let dest = dir.join(&file.rel_path);
@@ -362,8 +368,8 @@ pub fn enabled_for(mp: &MossPaths) -> bool {
 pub enum Freshness {
     /// A seal will hand the frozen generation to the lane. Adopt the receipt.
     Lane,
-    /// Nothing will index after this build. Index now, every time — which is
-    /// what the earlier worker did on this path anyway.
+    /// Nothing will index after this build. Index the staged pages now, unless
+    /// the bundle held from the last such build was indexed from the same ones.
     Now,
 }
 
@@ -400,11 +406,10 @@ pub fn adopt_into(
     // holding directory this call is reading, nor have its brand-new receipt
     // deleted by the divergence branch below.
     with_holding(&index_dir, |h| {
-        let receipt = match freshness {
-            Freshness::Lane => read_receipt(&index_dir),
-            Freshness::Now => None,
-        };
-        let Some(receipt) = receipt else {
+        if freshness == Freshness::Now {
+            return index_staging(h, &index_dir, stage_dir, pending);
+        }
+        let Some(receipt) = read_receipt(&index_dir) else {
             // Nothing to adopt. Registering nothing here would let this build's
             // own sweep delete a bundle that no *future* build is scheduled to
             // rebuild — under the old ticket scheme a newer worker was queued
@@ -418,21 +423,7 @@ pub fn adopt_into(
             // the manifest this call is registering into. The receipt is
             // stamped `UNKNOWN` so the lane re-indexes the real,
             // ship-transformed generation as soon as it is frozen.
-            return match index_now(h, &index_dir, stage_dir, PageSet::UNKNOWN) {
-                Ok(receipt) => match lay_and_register(h, &index_dir, &receipt, stage_dir, pending) {
-                    Some(0) => Adoption::Empty,
-                    Some(n) => Adoption::Indexed(n),
-                    None => Adoption::Diverged,
-                },
-                Err(e) => {
-                    // Transient (a page that will not parse, a full disk, a
-                    // tree half of which could not be read). No receipt is
-                    // written, so the next build retries — the same disposition
-                    // the old worker had for a failed index.
-                    log::info!(target: "search", "search index not generated: {}", e);
-                    Adoption::Diverged
-                }
-            };
+            return lay_indexed(h, &index_dir, stage_dir, pending, index_now(h, &index_dir, stage_dir, PageSet::UNKNOWN));
         };
 
         if receipt.files.is_empty() {
@@ -457,6 +448,54 @@ pub fn adopt_into(
             }
         }
     })
+}
+
+/// What a lane-less build ([`Freshness::Now`]) does with search: serve the
+/// bundle it holds when [`search::corpus_key`] says that bundle was indexed from
+/// exactly the pages staging holds now, and index them otherwise. A bundle the
+/// lane indexed carries no key, so it is never taken for one.
+fn index_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Adoption {
+    let _phase = crate::build::phase::PhaseTrace::start("search_index");
+    let t_read = std::time::Instant::now();
+    let (pages, unreadable) = search::read_pages(stage_dir);
+    let key = search::corpus_key(&pages);
+    let held = read_receipt(index_dir).filter(|receipt| unreadable == 0 && receipt.staged.as_deref() == Some(key.as_str()));
+    if let Some(receipt) = held {
+        if receipt.files.is_empty() {
+            return Adoption::Empty;
+        }
+        if let Some(n) = lay_and_register(h, index_dir, &receipt, stage_dir, pending) {
+            crate::build::phase::record_count("search_bundle_reused", 1);
+            return Adoption::Adopted(n);
+        }
+    }
+    let published = search::index_pages(pages, unreadable, t_read, &|| false)
+        .and_then(|produced| publish_bundle(h, index_dir, PageSet::UNKNOWN, Some(&key), &produced.unwrap_or_default()));
+    lay_indexed(h, index_dir, stage_dir, pending, published)
+}
+
+/// Lay a bundle this build just indexed and register it.
+fn lay_indexed(
+    h: &Holding,
+    index_dir: &Path,
+    stage_dir: &Path,
+    pending: &mut PendingManifest,
+    published: Result<BundleReceipt, String>,
+) -> Adoption {
+    match published {
+        Ok(receipt) => match lay_and_register(h, index_dir, &receipt, stage_dir, pending) {
+            Some(0) => Adoption::Empty,
+            Some(n) => Adoption::Indexed(n),
+            None => Adoption::Diverged,
+        },
+        Err(e) => {
+            // Transient (a page that will not parse, a full disk, a tree half
+            // of which could not be read). No receipt is written, so the next
+            // build retries.
+            log::info!(target: "search", "search index not generated: {}", e);
+            Adoption::Diverged
+        }
+    }
 }
 
 /// Delete `receipt.json` only while it still names the bundle that diverged.
@@ -532,7 +571,7 @@ fn index_now(
     want: PageSet,
 ) -> Result<BundleReceipt, String> {
     let produced = search::build_search_index(index_from)?;
-    publish_bundle(holding, index_dir, want, &produced)
+    publish_bundle(holding, index_dir, want, None, &produced)
 }
 
 // ---------------------------------------------------------------------------
@@ -687,7 +726,7 @@ async fn index_one(req: &LaneRequest, watcher: tokio::sync::watch::Receiver<Lane
         search::build_search_index_cancellable(&for_worker.gen_dir, &cancelled).and_then(
             |produced| match produced {
                 Some(produced) => with_holding(&for_worker.index_dir, |h| {
-                    publish_bundle(h, &for_worker.index_dir, wanted, &produced)
+                    publish_bundle(h, &for_worker.index_dir, wanted, None, &produced)
                 })
                 .map(Some),
                 None => Ok(None),
