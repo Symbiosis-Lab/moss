@@ -114,6 +114,8 @@ impl IdentityService {
                 log::warn!(
                     "Signing key file not found. Regenerating identity for this project."
                 );
+                // `save` retires the old key before writing this one, so its
+                // comment moderation stays in force.
                 let new_identity = Identity::generate()?;
                 new_identity.save(&self.project_path)?;
                 self.cached = Some(new_identity);
@@ -541,6 +543,19 @@ mod tests {
 
         let identity = service.get_or_create().unwrap();
         assert!(identity.has_signing_key_loaded());
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_retired_is_not_replaced() {
+        let dir = tempdir().unwrap();
+        let mut service = IdentityService::new(dir.path());
+        let original = service.get_or_create().unwrap().pubkey.clone();
+        std::fs::remove_file(crate::identity::keypair::key_file_path(dir.path())).unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss/identity/previous-keys.jsonl")).unwrap();
+        service.clear_cache();
+
+        assert!(service.ensure_signing_key().is_err(), "no new key without the old one recorded");
+        assert_eq!(crate::identity::Identity::read_pubkey(dir.path()), Some(original), "public.json still names the old key");
     }
 }
 

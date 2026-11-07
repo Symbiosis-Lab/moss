@@ -146,3 +146,20 @@ fn listing_never_rewrites_an_old_format_identity() {
     assert_eq!(run_in(&d, &["list"]), 0);
     assert_eq!(snapshot(&id_dir), before, "list wrote to .moss/identity");
 }
+
+#[test]
+fn adopt_key_brings_back_the_hides_of_a_key_lost_with_its_identity_folder() {
+    let d = site();
+    let old = with_key(&d);
+    assert_eq!(run_in(&d, &["hide", "1"]), 0);
+    // The whole of .moss/identity is lost and a new key made, so nothing remembers the old key.
+    std::fs::remove_dir_all(d.path().join(".moss/identity")).unwrap();
+    with_key(&d);
+    let hidden = || collect(d.path().to_str().unwrap()).0.iter().any(|r| r.id == "1" && r.hidden);
+    assert!(!hidden(), "the old key's hide no longer applies");
+
+    assert_eq!(run_in(&d, &["adopt-key", &old]), 0);
+    assert!(hidden(), "adopted, the hide applies again");
+    assert_ne!(run_in(&d, &["adopt-key", &old]), 0, "a trusted key is refused");
+    assert_ne!(run_in(&d, &["adopt-key"]), 0, "a key is required");
+}

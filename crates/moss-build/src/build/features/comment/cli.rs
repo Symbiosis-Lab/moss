@@ -21,11 +21,14 @@ fn usage() -> &'static str {
   moss comments list [<folder>] [--json]
   moss comments hide [<folder>] <id>... [--source <name>] [--json]
   moss comments unhide [<folder>] <id>... [--source <name>] [--json]
+  moss comments adopt-key [<folder>] <pubkey> [--json]
 
 list shows every comment, newest first, and marks the hidden ones; it needs no build.
 hide and unhide change what the next publish shows: nothing is erased, and `unhide` reverses `hide`.
 Hiding needs the site's own signing key (.moss/identity) and never creates one.
 <id> is a comment id from `list`; pass --source when the same id exists under two sources.
+adopt-key keeps the hides of this site's earlier key in force after its key was replaced along with
+.moss/identity/public.json; `list` names such a key.
 <folder> is a site's folder (one already containing .moss); with no folder, the site containing the current directory."
 }
 
@@ -109,7 +112,7 @@ fn collect(project_path: &str) -> (Vec<Row>, bool) {
     let all = load_all_social_comments(project_path, MATTERS_DOMAIN_FALLBACK);
     let events = load_mod_events(project_path);
     // Read-only: `Identity::load` would migrate an old-format identity in place.
-    let pubkey = crate::identity::keypair::Identity::read_pubkey(Path::new(project_path));
+    let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(Path::new(project_path));
     let articles = crate::build::load_article_map_for_features(
         &MossPaths::new(Path::new(project_path)).article_map(),
     );
@@ -119,14 +122,13 @@ fn collect(project_path: &str) -> (Vec<Row>, bool) {
     let mut rows = Vec::new();
     let mut unresolved = false;
     for (uid, comments) in &all {
-        let moderated = pubkey.as_deref().filter(|_| !events.is_empty());
-        let (visible, direct): (Option<HashSet<(&str, &str)>>, HashSet<(&str, &str)>) = match moderated {
-            Some(pk) => {
-                let (shown, direct) = resolve_detailed(comments, &events, pk);
+        let (visible, direct): (Option<HashSet<(&str, &str)>>, HashSet<(&str, &str)>) =
+            if !owners.is_empty() && !events.is_empty() {
+                let (shown, direct) = resolve_detailed(comments, &events, &owners);
                 (Some(shown.iter().map(|c| (c.source.as_str(), c.id.as_str())).collect()), direct)
-            }
-            None => (None, HashSet::new()),
-        };
+            } else {
+                (None, HashSet::new())
+            };
         let article = by_uid.get(uid.as_str());
         unresolved |= article.is_none();
         for c in comments {
@@ -252,7 +254,7 @@ pub fn run(args: &[String]) -> i32 {
         println!("{}", usage());
         return 0;
     }
-    if !matches!(action.as_str(), "list" | "hide" | "unhide") {
+    if !matches!(action.as_str(), "list" | "hide" | "unhide" | "adopt-key") {
         eprintln!("error: unknown comments subcommand '{action}'\n{}", usage());
         return 1;
     }
@@ -287,6 +289,20 @@ pub fn run(args: &[String]) -> i32 {
         }
         return run_list(project_path, parsed.json);
     }
+    if action == "adopt-key" {
+        let [pubkey] = parsed.ids.as_slice() else {
+            return fail("`moss comments adopt-key` takes one public key", parsed.json);
+        };
+        if let Err(e) = super::moderation::adopt_key(project_path, pubkey, &site_of(project_path)) {
+            return fail(&e, parsed.json);
+        }
+        if parsed.json {
+            println!("{}", serde_json::json!({ "adopted": pubkey }));
+        } else {
+            println!("Moderation signed by {pubkey} applies again from the next publish.");
+        }
+        return 0;
+    }
     if parsed.ids.is_empty() {
         return fail(
             &format!("`moss comments {action}` needs at least one comment id; `moss comments list` shows them"),
@@ -296,7 +312,23 @@ pub fn run(args: &[String]) -> i32 {
     run_moderate(project_path, action == "hide", &parsed)
 }
 
+/// The site value moderation events carry for this folder.
+fn site_of(project_path: &str) -> String {
+    let site_id = crate::build::site_config::get_domain_config(project_path)
+        .ok()
+        .and_then(|c| c.site_id);
+    site_value(site_id.as_deref()).to_string()
+}
+
 fn run_list(project_path: &str, json: bool) -> i32 {
+    let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(Path::new(project_path));
+    if !owners.is_empty() {
+        for key in super::moderation::untrusted_signers(&load_mod_events(project_path), &owners) {
+            eprintln!(
+                "Moderation signed by {key} does not apply: it is not one of this folder's keys. If it was this site's earlier key, run `moss comments adopt-key {project_path} {key}`; a new key also has to be signed in again (`moss deploy {project_path} --email <address>`)."
+            );
+        }
+    }
     let (rows, unresolved) = collect(project_path);
     if json {
         let list: Vec<_> = rows.iter().map(Row::to_json).collect();
@@ -373,13 +405,10 @@ fn run_moderate(project_path: &str, hide: bool, parsed: &Parsed) -> i32 {
         }
     }
 
-    let site_id = crate::build::site_config::get_domain_config(project_path)
-        .ok()
-        .and_then(|c| c.site_id);
-    let site = site_value(site_id.as_deref());
+    let site = site_of(project_path);
     let mut changed: Vec<(&Row, u64)> = Vec::new();
     for row in targets {
-        match append_owner_event(project_path, kind, &row.source, &row.id, &row.page_uid, site) {
+        match append_owner_event(project_path, kind, &row.source, &row.id, &row.page_uid, &site) {
             Ok(seq) => changed.push((row, seq)),
             Err(e) => return fail(&e, parsed.json),
         }

@@ -18,6 +18,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [Syndication: one contract for posting copies to other networks](syndication/README.md) | In progress |
 | [Country maps: colour whole countries from a table](country-maps/README.md) | In progress |
 | [A position ruler for a row along an ordered axis](position-ruler/README.md) | Proposed |
+| [Comment moderation that survives a new site key](moderation-key-continuity/README.md) | In progress |
 
 ## Status
 

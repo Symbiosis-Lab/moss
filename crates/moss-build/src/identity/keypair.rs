@@ -119,6 +119,65 @@ pub(crate) fn load_key_from_file(path: &Path) -> Result<Vec<u8>, IdentityError> 
 }
 
 // ---------------------------------------------------------------------------
+// Retired keys
+// ---------------------------------------------------------------------------
+
+/// A key the folder signed with before its current one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviousKey {
+    pub pubkey: String,
+    /// When it stopped being the folder's key, in unix seconds (for an adopted
+    /// key, its last signed event). For people reading the file; trust does not
+    /// depend on it.
+    pub until: u64,
+}
+
+/// `.moss/identity/previous-keys.jsonl`: one line per retired key, append-only.
+/// Its own file rather than a field of `public.json`, because every writer of
+/// `public.json`, older moss versions included, rebuilds it from a fixed set of
+/// fields and would silently drop one it does not know.
+fn previous_keys_path(project_path: &Path) -> PathBuf {
+    project_path.join(".moss").join("identity").join("previous-keys.jsonl")
+}
+
+/// The keys this folder retired, oldest first. A torn last line is skipped.
+pub fn read_previous_keys(project_path: &Path) -> Vec<PreviousKey> {
+    let Ok(contents) = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+        &previous_keys_path(project_path),
+        crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+    ) else {
+        return Vec::new();
+    };
+    contents.lines().filter_map(|line| serde_json::from_str(line).ok()).collect()
+}
+
+/// Record `pubkey` as retired, flushed before returning, so comment moderation
+/// it signed stays in force. Called before a new key is written: a crash in
+/// between lists a key that is still current, which trusts nothing new.
+pub fn retire_key(project_path: &Path, pubkey: &str, until: u64) -> Result<(), IdentityError> {
+    let path = previous_keys_path(project_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| IdentityError::DirectoryCreation)?;
+    }
+    // A line torn by an earlier crash has no newline; start a fresh line so it
+    // stays its own (skipped) line instead of swallowing this one.
+    // Read through cloud_readiness: a synced placeholder is fetched before the
+    // append, never appended to unread.
+    let torn = crate::build::cloud_readiness::read_with_materialize_wait(&path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
+        .ok()
+        .is_some_and(|b| b.last().is_some_and(|&c| c != b'\n'));
+    let line = format!(
+        "{}{}\n",
+        if torn { "\n" } else { "" },
+        serde_json::to_string(&PreviousKey { pubkey: pubkey.to_string(), until })?
+    );
+    // allow:raw_write .moss/identity/ is user-owned key material, not regenerable output
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).map_err(IdentityError::FileWrite)?;
+    file.write_all(line.as_bytes()).map_err(IdentityError::FileWrite)?;
+    file.sync_all().map_err(IdentityError::FileWrite)
+}
+
+// ---------------------------------------------------------------------------
 // Identity types
 // ---------------------------------------------------------------------------
 
@@ -384,10 +443,28 @@ impl Identity {
 
     /// Save identity to `.moss/identity/public.json` and `.moss/identity/secret-key`.
     ///
+    /// When `public.json` already names a different key, that key is retired
+    /// first (`retire_key`), so comment moderation it signed stays in force
+    /// whichever path replaces it (regeneration, an import); a failure to
+    /// record it fails the save before anything is replaced.
+    ///
     /// Always writes v3 format:
     /// - `public.json`: metadata only (version, pubkey, email)
     /// - `secret-key`: hex-encoded private key (64 chars, 0600 permissions)
     pub fn save(&self, project_path: &Path) -> Result<(), IdentityError> {
+        self.save_within(project_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
+    }
+
+    /// [`save`](Self::save), waiting up to `deadline` for an evicted
+    /// `public.json` to come back before deciding which key it replaces.
+    fn save_within(&self, project_path: &Path, deadline: std::time::Duration) -> Result<(), IdentityError> {
+        if let Some(replaced) = Self::pubkey_on_disk(project_path, deadline)?.filter(|k| *k != self.pubkey) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            retire_key(project_path, &replaced, now)?;
+        }
         self.save_public(project_path)?;
 
         // Write the key file if we have the signing key in memory
@@ -397,6 +474,20 @@ impl Identity {
         }
 
         Ok(())
+    }
+
+    /// The key `public.json` names now. `None` only when the file is truly
+    /// absent: one still in the cloud after `deadline` is an error, so a save
+    /// never overwrites a key it could not see and so could not retire.
+    fn pubkey_on_disk(project_path: &Path, deadline: std::time::Duration) -> Result<Option<String>, IdentityError> {
+        let path = Self::identity_path(project_path);
+        match crate::build::cloud_readiness::read_to_string_with_materialize_wait(&path, deadline) {
+            Ok(contents) => Ok(serde_json::from_str::<serde_json::Value>(&contents)
+                .ok()
+                .and_then(|raw| raw.get("pubkey")?.as_str().map(str::to_string))),
+            Err(err) if crate::build::icloud::is_definitely_absent(&path, &err) => Ok(None),
+            Err(err) => Err(IdentityError::Read(err)),
+        }
     }
 
     /// Write `public.json` alone (version, pubkey, email), replacing it in one
@@ -519,6 +610,14 @@ impl Identity {
             self.signing_key = Some(signing_key);
         }
         Ok(self.signing_key.as_ref().unwrap())
+    }
+
+    /// The keys whose comment moderation this folder honours: the current one
+    /// and every key it retired (`previous-keys.jsonl`), read without touching
+    /// anything on disk. Empty when there is no readable identity.
+    pub fn read_trusted_pubkeys(project_path: &Path) -> Vec<String> {
+        let Some(current) = Self::read_pubkey(project_path) else { return Vec::new() };
+        std::iter::once(current).chain(read_previous_keys(project_path).into_iter().map(|k| k.pubkey)).collect()
     }
 
     /// Link an email address to this identity.
@@ -992,4 +1091,53 @@ mod tests {
         assert_eq!(loaded.email, Some("user@example.com".to_string()));
         assert_eq!(loaded.version, 3);
     }
+
+    #[test]
+    fn retired_keys_survive_a_save_of_public_json_and_skip_a_torn_line() {
+        let dir = tempdir().unwrap();
+        let identity = Identity::generate().unwrap();
+        identity.save(dir.path()).unwrap();
+        retire_key(dir.path(), "aa", 1).unwrap();
+        retire_key(dir.path(), "bb", 2).unwrap();
+        let mut file = std::fs::OpenOptions::new().append(true).open(previous_keys_path(dir.path())).unwrap();
+        file.write_all(b"{\"pubkey\":\"cc\",\"unt").unwrap();
+        retire_key(dir.path(), "dd", 3).unwrap();
+
+        let mut reloaded = Identity::load(dir.path()).unwrap();
+        reloaded.link_email("owner@example.com".into());
+        reloaded.save(dir.path()).unwrap();
+
+        assert_eq!(Identity::read_trusted_pubkeys(dir.path()), vec![identity.pubkey.clone(), "aa".into(), "bb".into(), "dd".into()]);
+    }
+
+    #[test]
+    fn saving_a_different_key_retires_the_one_it_replaces_and_the_same_key_nothing() {
+        let dir = tempdir().unwrap();
+        let first = Identity::generate().unwrap();
+        first.save(dir.path()).unwrap();
+        first.save(dir.path()).unwrap();
+        assert!(read_previous_keys(dir.path()).is_empty(), "saving the same key retires nothing");
+
+        let imported = Identity::import(&first.export_private_key().unwrap()).unwrap();
+        imported.save(dir.path()).unwrap();
+        assert!(read_previous_keys(dir.path()).is_empty(), "importing the same key retires nothing");
+
+        let second = Identity::generate().unwrap();
+        second.save(dir.path()).unwrap();
+        assert_eq!(Identity::read_trusted_pubkeys(dir.path()), vec![second.pubkey.clone(), first.pubkey.clone()]);
+    }
+
+    #[test]
+    fn a_save_over_an_identity_still_in_the_cloud_is_refused_rather_than_retiring_nothing() {
+        let dir = tempdir().unwrap();
+        let id_dir = dir.path().join(".moss").join("identity");
+        fs::create_dir_all(&id_dir).unwrap();
+        fs::write(id_dir.join(".public.json.icloud"), b"stub").unwrap();
+
+        let err = Identity::generate().unwrap().save_within(dir.path(), std::time::Duration::from_millis(20));
+
+        assert!(err.is_err(), "a key it cannot see is not overwritten");
+        assert!(!id_dir.join("public.json").exists(), "nothing written");
+    }
+
 }
