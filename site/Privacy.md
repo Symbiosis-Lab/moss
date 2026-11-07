@@ -14,7 +14,18 @@ This is an early policy. moss is in active development, and we'll keep refining 
 
 Your folder and everything in it stays on your own device, including the website moss builds from it. Data only leaves your computer when you choose to publish; at that point moss uploads the site and its content to the server or platform you picked.
 
-You can host the static site moss builds anywhere you like. When you do, moss's servers collect nothing about you (apart from [crash reports](#crash-reports)).
+You can host the static site moss builds anywhere you like. When you do, moss's servers collect nothing about you, apart from [crash reports](#crash-reports) and the downloads listed below.
+
+## What the app does by default
+
+- **Your folder and the app's log stay on your computer.** The log records what moss did, so we can find bugs; it leaves your computer only when you press [Send Logs](#support-logs).
+- **Crash reports are on.** You can turn them off in **moss → Settings → Crash reporting**. [More below](#crash-reports).
+- **Updates are checked and downloaded.** When moss starts, it asks GitHub, where moss is published, whether there is a newer version, and downloads it in the background so it is ready to install. It installs only when you say so.
+- **The plugin list is refreshed.** When moss starts, it downloads the list of plugins, and any it must block, from symbiosis-lab.org.
+- **Link cards fetch the page they show.** When your site shows a link as a card, moss fetches that page's title and picture from the linked site.
+- **No usage tracking.** The app does not record or send which features you use, or how often.
+
+These downloads carry only what any download does: your IP address and the moss version.
 
 ## Your account
 
@@ -56,6 +67,9 @@ If you use **"Send Logs"** to report a problem, moss uploads your recent app log
 
 ![[send logs.mp4|loop|100%|Send logs manually]]
 
+## If we look after your site
+
+If you ask us to maintain your site, we can agree with you that moss sends that site's activity log to us while the site is open in moss, on any computer, so we see problems as they happen. We set this up in your site's folder ourselves; the app has no setting for it, and nobody else's moss does it. The log is scrubbed the same way as Send Logs and deleted after 30 days. Tell us any time and we stop it and delete what we hold.
 
 ## Where your data is processed
 
@@ -63,7 +77,7 @@ Our server is in the **United States**, and some of the services we rely on (Str
 
 ## How long we keep things
 
-Crash reports: 90 days. Support logs: 30 days. Your account, payment, and subscriber records are kept while your account or site is active. You can contact us to remove your data sooner.
+Crash reports: 90 days. Support logs, and the activity logs of sites we look after: 30 days. Your account, payment, and subscriber records are kept while your account or site is active. You can contact us to remove your data sooner.
 
 ## Your choices and rights
 
@@ -77,4 +91,4 @@ Questions, or want your data deleted? Email us at **hi@symbiosis-lab.org**.
 
 moss is early, and this policy will grow with it. We'll update this page when our practices change.
 
-*Last updated: 2026‑07‑19.*
+*Last updated: 2026‑11‑07.*
