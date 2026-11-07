@@ -44,6 +44,7 @@ pub mod services;
 pub mod site_identity;
 pub mod site_settings;
 
+use moss_core::page::site_config::{ConfigValue, CoreConfig};
 use toml::Value;
 
 /// The parsed contents of one `.moss/config.toml`.
@@ -63,6 +64,8 @@ use toml::Value;
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
     root: toml::Table,
+    core: CoreConfig,
+    warnings: Vec<String>,
     /// Keys of the tables whose written order matters, in the order the file
     /// writes them, by dotted path (`terms`, `fields.kind.of`). `root` reads
     /// tables back sorted by key, so this is the only record of that order.
@@ -93,7 +96,8 @@ impl ConfigFile {
         if let Err(e) = crate::config::migrations::migrate_to_current(&mut table) {
             log::info!(target: "config", "in-memory config migration failed, reading raw values: {e}");
         }
-        Ok(Self { root: table, key_orders: written_key_orders(text) })
+        let (core, warnings) = CoreConfig::from_value(&core_table(&table));
+        Ok(Self { root: table, core, warnings, key_orders: written_key_orders(text) })
     }
 
     /// The config of a project that has none — every lookup answers `None`.
@@ -105,6 +109,8 @@ impl ConfigFile {
     pub fn empty() -> Self {
         Self {
             root: toml::Table::new(),
+            core: Default::default(),
+            warnings: Vec::new(),
             key_orders: Default::default(),
         }
     }
@@ -126,7 +132,18 @@ impl ConfigFile {
         self.root.get("min_moss_version").and_then(|v| v.as_str())
     }
 
-    /// A string field under `[site]`, e.g. `lang`, `typesetting`.
+    /// Values of the wrong type under `[site] lang` and `[terms]`, one sentence
+    /// each; the build reports them once, at its report point.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// `[site] lang` as written, read by the same typed reader every host uses.
+    pub fn site_lang(&self) -> Option<&str> {
+        self.core.site_lang()
+    }
+
+    /// A string field under `[site]`, e.g. `typesetting`.
     pub fn site_str(&self, field: &str) -> Option<&str> {
         self.root
             .get("site")
@@ -247,84 +264,9 @@ impl ConfigFile {
         Some(cursor)
     }
 
-    /// Every `[terms.<key>]` table, plus a built-in `RawKind` for each of
-    /// `authors`/`tags` that NO declared table already used — the one
-    /// unified config read `build::terms::term_kinds` turns into
-    /// `TermKind`s. Raw here: `fields` is not yet checked against the
-    /// built-in schema, and `title` is not yet resolved — both happen exactly
-    /// once, in `term_kinds`, not here.
-    ///
-    /// A declared `[terms.authors]` or `[terms.tags]` table IS that kind —
-    /// its own `fields` and `title` win outright, not just its own
-    /// declared fields layered on top of the built-in default. Reading the
-    /// sub-tables first and skipping the matching built-in is what makes
-    /// that true: the old order (built-ins unconditionally, then every
-    /// declared table appended) produced two `RawKind`s sharing one key
-    /// whenever an author declared `[terms.tags]` or `[terms.authors]`,
-    /// which `term_kinds` had no way to reconcile — `roots_in_use` and
-    /// `synthetic_folder_keys` would seed the same pseudo-folder twice, and
-    /// `members_by_field` would double-count every member.
-    ///
-    /// A `[terms.<key>]` table with no `fields` array is skipped with a
-    /// diagnostic — a kind that names no fields would derive nothing anyway,
-    /// and is more likely a typo (`field = [...]`) than an intentional
-    /// no-op.
-    pub fn terms_kinds(&self) -> Vec<RawKind> {
-        let mut declared: Vec<RawKind> = Vec::new();
-        if let Some(terms) = self.root.get("terms").and_then(|v| v.as_table()) {
-            for (key, value) in terms {
-                // The legacy `author`/`tags` booleans live in this same
-                // table but are not sub-tables, so `as_table()` already
-                // excludes them here — no separate key check needed.
-                let Some(table) = value.as_table() else { continue };
-                let Some(fields) = table.get("fields").and_then(|v| v.as_array()) else {
-                    crate::build::cli_output::log_warn_problem!(
-                        "[terms.{key}] has no `fields` array; skipping"
-                    );
-                    continue;
-                };
-                let fields: Vec<String> =
-                    fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-                let titles = table.get("title").and_then(Self::choice_labels).unwrap_or_default();
-                let counts = match table.get("count") {
-                    None => Vec::new(),
-                    Some(value) => Self::count_labels(value).unwrap_or_else(|| {
-                        crate::build::cli_output::log_warn_problem!(
-                            "[terms.{key}] count must be text, a table of text per language, or false; ignoring it"
-                        );
-                        Vec::new()
-                    }),
-                };
-                let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
-                let explorer = table.get("explorer").and_then(|v| v.as_bool());
-                let line = table.get("line").and_then(|v| v.as_bool());
-                let cards = table.get("cards").cloned();
-                declared.push(RawKind { key: key.clone(), fields, titles, counts, kind_type, explorer, line, cards });
-            }
-        }
-        let declared_keys: std::collections::HashSet<&str> =
-            declared.iter().map(|k| k.key.as_str()).collect();
-
-        let mut kinds = Vec::with_capacity(declared.len() + 2);
-        for (ns, field) in crate::build::terms::BUILTIN_DEFAULT_FIELDS {
-            if declared_keys.contains(ns) {
-                continue;
-            }
-            kinds.push(RawKind {
-                key: ns.to_string(),
-                fields: if self.legacy_terms_flag(field).unwrap_or(true) {
-                    vec![field.to_string()]
-                } else {
-                    Vec::new()
-                },
-                titles: Vec::new(),
-                counts: Vec::new(),
-                kind_type: None,
-                explorer: None, line: None, cards: None,
-            });
-        }
-        kinds.extend(declared);
-        kinds
+    /// Every declared term kind, plus the built-ins no table replaced.
+    pub fn terms_kinds(&self) -> Vec<moss_core::terms::config::RawKind> {
+        self.core.terms_kinds()
     }
 
     /// The kinds whose `[terms.<key>]` block says `nav = true`, in the order
@@ -332,16 +274,8 @@ impl ConfigFile {
     /// Whether a kind has a root page to link is decided later, from the terms
     /// the site actually has (`TermIndex::nav_entries`).
     pub fn terms_nav(&self) -> Vec<(String, Option<i32>)> {
-        let Some(terms) = self.root.get("terms").and_then(|v| v.as_table()) else { return Vec::new() };
-        let mut nav: Vec<(usize, String, Option<i32>)> = terms
-            .iter()
-            .filter_map(|(key, value)| {
-                let table = value.as_table()?;
-                table.get("nav")?.as_bool().filter(|on| *on)?;
-                let order = self.written_position("terms", key);
-                let weight = table.get("weight").and_then(|v| v.as_integer()).and_then(|w| i32::try_from(w).ok());
-                Some((order, key.clone(), weight))
-            })
+        let mut nav: Vec<_> = self.core.terms_nav().into_iter()
+            .map(|(key, weight)| (self.written_position("terms", &key), key, weight))
             .collect();
         nav.sort();
         nav.into_iter().map(|(_, key, weight)| (key, weight)).collect()
@@ -396,29 +330,6 @@ impl ConfigFile {
                 problems.push(format!("[{table}] `{key}` must be a list of strings; ignoring it"));
                 Vec::new()
             }
-        }
-    }
-
-    /// A term kind's `count` as `(language tag, text)` pairs; `false` is the
-    /// empty text under `en`, which every language falls back to.
-    fn count_labels(count: &Value) -> Option<Vec<(String, String)>> {
-        match count {
-            Value::Boolean(false) => Some(vec![("en".to_string(), String::new())]),
-            other => Self::choice_labels(other),
-        }
-    }
-
-    /// One choice's label: a string for every language, or a table of
-    /// `language tag = label`. `None` when the value is neither, or a table
-    /// holds a non-string.
-    fn choice_labels(label: &Value) -> Option<Vec<(String, String)>> {
-        match label {
-            Value::String(s) => Some(vec![("en".to_string(), s.clone())]),
-            Value::Table(by_lang) => by_lang
-                .iter()
-                .map(|(lang, l)| l.as_str().map(|l| (lang.clone(), l.to_string())))
-                .collect(),
-            _ => None,
         }
     }
 
@@ -502,7 +413,7 @@ impl ConfigFile {
                     written.sort_by_key(|(v, _)| self.written_position(&path, v));
                     written
                         .into_iter()
-                        .filter_map(|(v, label)| match Self::choice_labels(label) {
+                        .filter_map(|(v, label)| match core_value(label).labels() {
                             Some(labels) => Some(Choice { value: v.clone(), labels }),
                             None => {
                                 problems.push(format!(
@@ -642,66 +553,33 @@ impl ConfigFile {
     fn declared_labels(sub: &toml::Table, key: &str, name: &str, problems: &mut Vec<String>) -> Vec<(String, String)> {
         match sub.get(key) {
             None => Vec::new(),
-            Some(v) => Self::choice_labels(v).unwrap_or_else(|| {
+            Some(v) => core_value(v).labels().unwrap_or_else(|| {
                 problems.push(format!("[fields.{name}] `{key}` must be a string or a table of language labels; ignoring it"));
                 Vec::new()
             }),
         }
     }
-
-    /// A boolean field under `[terms]`, e.g. `author`, `tags`: the legacy,
-    /// pre-kinds toggle `terms_kinds` folds into the two built-ins' `fields`.
-    /// `None` means the key is absent, which is not the same as `false` —
-    /// `terms_kinds` supplies the default (on). Private: nothing outside
-    /// `terms_kinds` reads a raw per-field `[terms]` boolean any more.
-    fn legacy_terms_flag(&self, field: &str) -> Option<bool> {
-        self.root
-            .get("terms")
-            .and_then(|terms| terms.get(field))
-            .and_then(|v| v.as_bool())
-    }
 }
 
-/// One `[terms.<key>]` table before `build::terms::term_kinds` filters its
-/// `fields` and resolves its `title` into a `TermKind`. See
-/// [`ConfigFile::terms_kinds`].
-#[derive(Debug, Clone)]
-pub struct RawKind {
-    /// URL namespace / pseudo-folder prefix (`authors`, `tags`, or a
-    /// declared key like `people`).
-    pub key: String,
-    /// Frontmatter field names as configured, not yet checked by
-    /// `build::terms::term_kinds`.
-    pub fields: Vec<String>,
-    /// The table's `title`, a string or a table of `language tag = title`, as
-    /// `(language tag, title)` pairs. Empty for the two built-ins (their title
-    /// comes from `i18n::term_root_title`) and for a declared kind that didn't
-    /// set one (its title is its key).
-    pub titles: Vec<(String, String)>,
-    /// The table's `count`, in the same `(language tag, text)` shape as
-    /// `titles`: the wording of a term's card count, with `{n}` for the number
-    /// and the first `|` splitting the singular form. `count = false` is the
-    /// empty text, which hides the count. Empty when the key is absent and for
-    /// the two built-ins.
-    pub counts: Vec<(String, String)>,
-    /// The declared `type = "..."` key, unvalidated — `"place"` is the only
-    /// value `build::terms::term_kinds` recognizes today; anything else is a
-    /// diagnostic there, not here. `None` for the two built-ins and for a
-    /// declared kind that didn't set one.
-    pub kind_type: Option<String>,
-    /// `[terms.<key>] explorer`, unvalidated and not yet gated on
-    /// `kind_type`: `term_kinds` reads this only for the place-typed kind
-    /// and drops it for every other one, the same way `type` itself is only
-    /// ever meaningful there. `None` for the two built-ins and for a
-    /// declared kind that didn't set the key.
-    pub explorer: Option<bool>,
-    /// `[terms.<key>] line`, unvalidated and gated on `kind_type` the same
-    /// way as `explorer`: `term_kinds` keeps it only for the place-typed kind.
-    pub line: Option<bool>,
-    /// `[terms.<key>] cards`, unvalidated: the raw TOML value, so that
-    /// `build::terms::term_kinds` is the one place that reports a value that
-    /// is not a bool. `None` when the key is absent and for the two built-ins.
-    pub cards: Option<toml::Value>,
+/// The parsed config in core's value shape: the desktop reads `lang` and
+/// `[terms]` through core's typed reader without re-parsing the text with
+/// core's narrower TOML parser. Converted by hand, not through serde: `toml`'s
+/// `Value` hands a datetime to a deserializer as a string, so `lang = 1979-05-27`
+/// would read as a language instead of a value to warn about.
+fn core_table(table: &toml::Table) -> ConfigValue {
+    ConfigValue::Table(table.iter().map(|(key, value)| (key.clone(), core_value(value))).collect())
+}
+
+fn core_value(value: &Value) -> ConfigValue {
+    match value {
+        Value::String(text) => ConfigValue::Text(text.clone()),
+        Value::Integer(number) => ConfigValue::Integer(*number),
+        Value::Float(number) => ConfigValue::Float(*number),
+        Value::Boolean(on) => ConfigValue::Bool(*on),
+        Value::Datetime(_) => ConfigValue::Datetime,
+        Value::Array(items) => ConfigValue::Array(items.iter().map(core_value).collect()),
+        Value::Table(table) => core_table(table),
+    }
 }
 
 /// The written key order of `[terms]`, of `[fields]`, and of each `[fields.<name>]` table's

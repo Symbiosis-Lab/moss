@@ -175,7 +175,7 @@ fn site_language(root: &VaultRoot, pairs: &[(&str, &str)]) -> Language {
     let root_str = root.path().to_string_lossy();
     let declared = crate::build::site_config::read_project_config(&root_str).ok();
     let code = crate::i18n::detect::resolve_site_default_lang_with(
-        declared.as_ref().and_then(|c| c.site_str("lang")),
+        declared.as_ref().and_then(|c| c.site_lang()),
         homepage_now,
         &pages_now,
         &root_str,

@@ -324,16 +324,7 @@ fn term_claim_of(doc: &ParsedDocument, field: &str) -> Option<moss_core::terms::
     }
 }
 
-/// The frontmatter key a page claims this field's term page with. `<field>_page`,
-/// except `tags` (`tag_page`) and `location` (`place_page`). Anything that writes
-/// a claim goes through here, not by concatenating the suffix.
-pub fn claim_field_key(field: &str) -> String {
-    match field {
-        "tags" => "tag_page".to_string(),
-        "location" => "place_page".to_string(),
-        other => format!("{other}_page"),
-    }
-}
+pub use moss_core::terms::claim_field_key;
 
 /// Maps read a page's places from `location`. A place-typed kind fed by other
 /// fields (`fields = ["place"]`) mirrors their names there, so every map,

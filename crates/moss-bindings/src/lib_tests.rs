@@ -140,3 +140,27 @@ fn field_spans_cross_the_json_boundary_as_byte_offsets() {
         {"key": "nav", "line": 2, "from": 13, "to": 16}
     ]));
 }
+
+#[test]
+fn sources_json_round_trip_into_a_site() {
+    let result = crate::site_bundle(r#"{
+        "files":["post.md","index.md"],
+        "texts":{"index.md":"---\nlang: fr\n---\nHome"},
+        "config_toml":"[terms.people]\nfields = ['editor']",
+        "plugins":[{"folder":"untrusted","manifest_json":"{}","entry_present":false,
+            "admission":{"status":"refused","sentence":"host refused"}}],
+        "future_field":true
+    }"#).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["bundle"]["lang"], "fr");
+    assert_eq!(result["bundle"]["declared_name_lists"], serde_json::json!(["author", "tags", "editor"]));
+    assert!(result["warnings"][0].as_str().unwrap().contains("host refused"));
+    let site = crate::Site::from_json(&result["bundle"].to_string()).unwrap();
+    assert!(site.preview("post.md", "# Article", "").contains("lang=\\\"fr\\\""));
+    assert_eq!(crate::home_file(r#"["post.md","index.md"]"#).unwrap(), r#""index.md""#);
+    assert_eq!(crate::home_file("[]").unwrap(), "null");
+    assert!(crate::site_bundle("{").is_err());
+    assert!(crate::home_file("{}").is_err());
+    assert_eq!(crate::site_text_paths(r#"["z.MD","child/index.md","index.md","photo.jpg"]"#).unwrap(), r#"["index.md","z.MD"]"#);
+    assert!(crate::site_text_paths("{}").is_err());
+}

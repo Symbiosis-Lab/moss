@@ -48,7 +48,7 @@ The author edits a folder; `moss-build` watches it, builds it and serves the res
 
 | Crate | What it's for | What it must never depend on |
 |---|---|---|
-| `moss-core` | pure Rust: source-folder editing policy, markdown parsing, frontmatter typing, schema validation, wikilink/embed resolution, the design-token and HTML-class contract | filesystem I/O, network I/O, any async runtime |
+| `moss-core` | pure Rust: source-folder editing policy, markdown parsing, frontmatter typing, schema validation, wikilink/embed resolution, site-config interpretation (`[site] lang`, `[terms]`, the page-facing plugin manifest fields), the design-token and HTML-class contract | filesystem I/O, network I/O, any async runtime |
 | `moss-bindings` | the JSON boundary moss-core's page and source-edit APIs cross into WebAssembly and Swift | moss-build, any I/O |
 | `moss-build` | everything that runs without a window: the build pipeline (scan → render → emit), the preview server, the publish path, the plugin engine, the HTTP client for the hosting service | any GUI toolkit, direct or transitive (no Tauri, no wry, no webview) |
 | `moss-cli` | the `moss` binary | anything beyond `moss-build` — it links `moss-build` only, never `moss-core` directly |

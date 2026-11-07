@@ -444,12 +444,7 @@ pub fn declared_lang_in_file(
         return None;
     }
     let content = std::fs::read_to_string(path).ok()?;
-    let declared = crate::build::scan::article_map::parse_frontmatter(&content)
-        .get("lang")?
-        .as_str()?
-        .trim()
-        .to_string();
-    moss_core::home::is_known_language_code(&declared).then_some(declared)
+    moss_core::page::site_sources::declared_lang_in_text(&content)
 }
 
 /// The tag for a page that declares nothing of its own but sits in a folder

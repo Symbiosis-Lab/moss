@@ -269,3 +269,13 @@ fn a_term_kind_count_is_worded_per_language_and_falls_back_to_english() {
     let english = card_text(&site.html("boroughs/index.html"), "Manhattan");
     assert!(english.contains("3 photographs"), "{english}");
 }
+
+#[test]
+fn a_malformed_kind_value_is_reported_once_per_build() {
+    let site = site::Site::with_config(
+        "\n[terms.boroughs]\nfields = [\"borough\"]\ncards = \"yes\"\n",
+        &[("index.md", "---\ntitle: Home\n---\n\nHello.\n"), ("notes/a.md", "---\ntitle: A\nborough: [Hackney]\n---\n\nText.\n")],
+    );
+    let reported: Vec<_> = site.logged.iter().filter(|l| l.contains("[terms.boroughs] cards must be true or false")).collect();
+    assert_eq!(reported.len(), 1, "{:?}", site.logged);
+}

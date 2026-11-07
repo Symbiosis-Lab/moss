@@ -32,7 +32,7 @@ pub fn compose_schema(
             fields: plugin.manifest.contributes.as_ref().and_then(|c| c.frontmatter.as_ref()).map(|fm| &fm.fields),
         })
         .collect();
-    let plan = crate::plugins::contributions::listing_style::ListingStylePlan::from_plugins(plugins);
+    let plan = crate::plugins::contributions::listing_style::listing_style_plan(plugins);
     let styles: Vec<String> = plan.ids().map(str::to_string).collect();
     let (schema, ignored) = moss_core::schema::compose_schema(declared_name_lists, &contributions, &styles);
     for message in ignored {

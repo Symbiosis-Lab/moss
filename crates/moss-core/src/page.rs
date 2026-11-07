@@ -1,5 +1,11 @@
 //! Check and render a page from host-supplied site values, without a build.
 
+pub mod site_sources;
+pub mod plugin_source;
+pub mod site_config;
+pub mod listing_style;
+pub use site_sources::{site_bundle, site_text_paths, home_file, SiteSources, PluginSource, Admission};
+
 use crate::ast::{self, DefaultHooks, ParseConfig};
 use crate::content_graph::ContentGraph;
 use crate::frontmatter;
@@ -45,10 +51,9 @@ impl SiteBundle {
     /// The inputs a check or render takes, composing the schema if the bundle has none.
     pub fn inputs(self) -> SiteInputs {
         let schema = self.schema.unwrap_or_else(|| {
-            let mut plugins: Vec<_> = self.plugins.iter()
+            let plugins: Vec<_> = self.plugins.iter()
                 .map(|p| crate::schema::PluginSchema { name: &p.name, fields: Some(&p.fields) })
                 .collect();
-            plugins.sort_by(|a, b| a.name.cmp(b.name));
             crate::schema::compose_schema(&self.declared_name_lists, &plugins, &self.listing_styles).0
         });
         SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang }

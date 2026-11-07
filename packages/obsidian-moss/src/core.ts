@@ -1,5 +1,5 @@
 import type { FieldSpan } from "@symbiosis-lab/moss-ui";
-import { initSync, MossSite, fieldSpans } from "../wasm/moss_bindings";
+import { initSync, MossSite, fieldSpans, siteBundle, siteTextPaths as textPaths } from "../wasm/moss_bindings";
 import bytes from "../wasm/moss_bindings_bg.wasm";
 
 let initialized = false;
@@ -20,4 +20,9 @@ export function editorFieldSpans(text: string) {
   return spans.map((span) => ({ ...span, from: offset(span.from), to: offset(span.to) }));
 }
 
-export { MossSite, fieldSpans };
+/** The vault paths whose texts the site bundle reads; no other text is needed. */
+export function siteTextPaths(files: string[]): string[] {
+  return JSON.parse(textPaths(JSON.stringify(files)));
+}
+
+export { MossSite, fieldSpans, siteBundle };

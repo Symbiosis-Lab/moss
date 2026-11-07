@@ -23,6 +23,21 @@ const tests = {
       site.free();
     }
   },
+  siteBundle() {
+    const { bundle } = json(wasm.siteBundle('{"files":["index.md"],"config_toml":"[site]\\nlang = \\"de\\""}'));
+    assert.equal(bundle.lang, 'de');
+    assert.throws(() => wasm.siteBundle('[]'));
+  },
+  homeFile() {
+    assert.equal(json(wasm.homeFile('["post.md","index.md"]')), 'index.md');
+    assert.equal(json(wasm.homeFile('[]')), null);
+  },
+  siteTextPaths() {
+    assert.deepEqual(json(wasm.siteTextPaths('["z.MD","child/index.md","index.md","photo.jpg"]')), ['index.md', 'z.MD']);
+  },
+  fieldSpans() {
+    assert.equal(json(wasm.fieldSpans('---\ntitle: Example\n---\n'))[0].key, 'title');
+  },
   builtinSchemaJson() {
     assert.equal(json(wasm.builtinSchemaJson()).frontmatter.fields.title.type, 'string');
   },

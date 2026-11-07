@@ -1,25 +1,14 @@
 import type { DataAdapter, Vault } from "obsidian";
 import type { SitePlugin } from "./schema";
+import { initializeCore, siteBundle, siteTextPaths } from "./core";
 
 export interface SiteContext {
   files: string[];
   lang: string;
+  declared_name_lists: string[];
   theme_css: string;
   plugins: SitePlugin[];
   listing_styles: string[];
-}
-
-// Site configuration parsing belongs in moss-core.
-export function siteLanguage(toml: string): string {
-  let inSite = false;
-  for (const line of toml.split(/\r?\n/)) {
-    const section = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
-    if (section) inSite = section[1].trim() === "site";
-    if (!inSite) continue;
-    const lang = /^\s*lang\s*=\s*(?:"([^"\\]+)"|'([^']+)')\s*(?:#.*)?$/.exec(line);
-    if (lang) return lang[1] ?? lang[2];
-  }
-  return "en";
 }
 
 // A comment is matched first so an @import written inside one is never followed.
@@ -64,24 +53,29 @@ export async function readSiteContext(vault: Pick<Vault, "adapter" | "getFiles">
   const config = await adapter.exists(".moss/config.toml") ? await adapter.read(".moss/config.toml") : "";
   // The build serves only style.css; other sheets reach a page through its @import.
   const css = await themeCss(adapter, ".moss/theme/style.css");
-  const plugins: SitePlugin[] = [];
-  const listingStyles = new Set<string>();
+  const files = vault.getFiles().map((file) => file.path);
+  initializeCore();
+  const texts: Record<string, string> = {};
+  for (const path of siteTextPaths(files)) texts[path] = await adapter.read(path);
+  const plugins = [];
   const directory = await list(adapter, ".moss/plugins");
-  for (const folder of directory.folders.sort()) {
+  for (const folder of directory.folders) {
     const path = `${folder}/manifest.json`;
     if (!await adapter.exists(path)) continue;
+    const manifest_json = await adapter.read(path);
+    // Only locate the entry's bytes; core reads and validates contributions.
+    let entry: unknown;
     try {
-      const manifest = JSON.parse(await adapter.read(path));
-      plugins.push({ name: manifest.name ?? folder.split("/").pop(), fields: manifest.contributes?.frontmatter?.fields ?? {} });
-      for (const style of Object.keys(manifest.contributes?.listing_styles ?? {})) listingStyles.add(style);
-    } catch (error) {
-      console.warn(`[moss] Cannot read ${path}`, error);
-    }
+      entry = JSON.parse(manifest_json).entry;
+    } catch { /* Core reports malformed manifests along with the other warnings. */ }
+    const entry_present = typeof entry === "string" && await adapter.exists(`${folder}/${entry}`);
+    plugins.push({ folder: folder.split("/").pop() ?? folder, manifest_json, entry_present, admission: { status: "admitted" } });
   }
-  return {
-    files: vault.getFiles().map((file) => file.path).sort(),
-    lang: siteLanguage(config), theme_css: css, plugins, listing_styles: [...listingStyles],
-  };
+  const result: { bundle: SiteContext; warnings: string[] } = JSON.parse(siteBundle(JSON.stringify({
+    files, texts, config_toml: config, plugins, theme_style_css: css,
+  })));
+  for (const warning of result.warnings) console.warn(`[moss] ${warning}`);
+  return result.bundle;
 }
 
 export function vaultBaseHref(adapter: Pick<DataAdapter, "getResourcePath">, filePath: string): string {

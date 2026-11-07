@@ -76,3 +76,18 @@ pub fn bootstrap_source_path(project_path: Option<String>, source: Option<String
 pub fn field_spans(text: &str) -> String {
     crate::field_spans(text)
 }
+
+#[wasm_bindgen(js_name = siteBundle)]
+pub fn site_bundle(sources_json: &str) -> Result<String, JsValue> {
+    crate::site_bundle(sources_json).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = homeFile)]
+pub fn home_file(files_json: &str) -> Result<String, JsValue> {
+    crate::home_file(files_json).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = siteTextPaths)]
+pub fn site_text_paths(files_json: &str) -> Result<String, JsValue> {
+    crate::site_text_paths(files_json).map_err(|e| JsValue::from_str(&e))
+}

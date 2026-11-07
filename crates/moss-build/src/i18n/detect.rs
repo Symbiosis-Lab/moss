@@ -483,24 +483,11 @@ pub(crate) fn resolve_site_default_lang_with(
     root_path: &str,
     is_evicted: &dyn Fn(&std::path::Path) -> bool,
 ) -> String {
-    // Trimmed AND lowercased, because the consumers compare this code as a
-    // string: `Language::from_code` and `is_known_language_code` both fold
-    // case, so ` zh-hant ` and `ZH-Hant` sail through validation and then ride
-    // verbatim into site-languages.json, where the Matters plugin's
-    // `startsWith("zh")` fails on a live post. Whitespace was that bug once
-    // already; case is the same bug with a different keystroke.
-    if let Some(code) =
-        explicit.map(str::trim).filter(|c| moss_core::home::is_known_language_code(c))
-    {
-        return code.to_lowercase();
-    }
-    if let Some(code) = homepage_frontmatter_lang(homepage_file, root_path, is_evicted) {
-        return code.to_lowercase();
-    }
-    detect_project_language(markdown_files, root_path, is_evicted)
-        .unwrap_or(Language::En)
-        .code()
-        .to_string()
+    moss_core::page::site_sources::resolve_site_default_lang(
+        explicit,
+        || homepage_frontmatter_lang(homepage_file, root_path, is_evicted),
+        || detect_project_language(markdown_files, root_path, is_evicted).map(|lang| lang.code().to_string()),
+    )
 }
 
 /// A `lang:` declared in the homepage's frontmatter — an authoring statement,

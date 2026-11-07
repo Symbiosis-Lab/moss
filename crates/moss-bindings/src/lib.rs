@@ -3,6 +3,7 @@
 use moss_core::page::{self, SiteBundle, SiteInputs};
 use moss_core::schema;
 use moss_core::validation::{Diagnostic, EditorDiagnostic};
+use serde::Serialize;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -71,6 +72,26 @@ pub fn builtin_schema_json() -> String {
 #[cfg_attr(feature = "ffi", uniffi::export)]
 pub fn field_spans(text: &str) -> String {
     serde_json::to_string(&page::field_spans(text)).expect("field spans are JSON-compatible")
+}
+
+/// Assemble a site bundle and its warnings from host-read source bytes.
+pub fn site_bundle(sources_json: &str) -> Result<String, String> {
+    let sources = serde_json::from_str(sources_json).map_err(|e| e.to_string())?;
+    let (bundle, warnings) = page::site_bundle(sources);
+    serde_json::to_string(&serde_json::json!({ "bundle": bundle, "warnings": warnings }))
+        .map_err(|e| e.to_string())
+}
+
+/// A JSON string or null, elected from a JSON array of site-relative paths.
+pub fn home_file(files_json: &str) -> Result<String, String> {
+    let files: Vec<String> = serde_json::from_str(files_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&page::home_file(&files)).map_err(|e| e.to_string())
+}
+
+/// The paths whose texts `site_bundle` reads, from a JSON array of site-relative paths.
+pub fn site_text_paths(files_json: &str) -> Result<String, String> {
+    let files: Vec<String> = serde_json::from_str(files_json).map_err(|e| e.to_string())?;
+    serde_json::to_string(&page::site_text_paths(&files)).map_err(|e| e.to_string())
 }
 
 fn diagnostics(items: Vec<Diagnostic>) -> Vec<EditorDiagnostic> {

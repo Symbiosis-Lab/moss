@@ -20,7 +20,7 @@ use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
 use crate::build::folder_embed::members::{in_listing_order, is_folder_home, listing_members, own_dir};
 use crate::build::types::ParsedDocument;
-use crate::plugins::contributions::listing_style::{is_builtin_style, ListingStylePlan};
+use crate::plugins::contributions::listing_style::{is_builtin_style, listing_style_plan, ListingStylePlan};
 use crate::plugins::manager::listing::{
     ChoiceRecord, FieldDeclarationRecord, HeadEntry, ListingContext, ListingResult, ListingWarning, PageRecord,
     TranslationRecord, LISTING_MODEL,
@@ -61,7 +61,7 @@ impl ListingHost {
     /// `None` when the plugin layer cannot start (the process hook reports that).
     fn load(&self) -> Option<Loaded> {
         let manager = self.plugins.get_or_create(&self.folder).ok()?;
-        let plan = ListingStylePlan::from_plugins(&manager.plugins());
+        let plan = listing_style_plan(&manager.plugins());
         for conflict in &plan.conflicts {
             crate::build::cli_output::log_warn_problem!("{conflict}");
         }

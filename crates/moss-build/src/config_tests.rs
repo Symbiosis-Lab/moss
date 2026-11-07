@@ -41,7 +41,7 @@ value = \"zh-hans\"
 fn reads_every_shape_out_of_a_hand_written_config() {
     let config = ConfigFile::parse(HAND_WRITTEN).unwrap();
 
-    assert_eq!(config.site_str("lang"), Some("zh-hans"));
+    assert_eq!(config.site_lang(), Some("zh-hans"));
     assert_eq!(config.site_str("content_width"), Some("wide"));
     assert_eq!(config.site_bool("search"), Some(true));
     assert_eq!(config.site_bool("math"), Some(false));
@@ -70,7 +70,7 @@ fn an_absent_key_reads_as_absent_not_as_false() {
 #[test]
 fn an_empty_config_answers_none_to_everything() {
     let config = ConfigFile::empty();
-    assert_eq!(config.site_str("lang"), None);
+    assert_eq!(config.site_lang(), None);
     assert_eq!(config.site_bool("comments"), None);
     assert_eq!(config.environment(), None);
     assert!(config.build_passthrough().is_empty());
@@ -352,4 +352,75 @@ fn field_decls_url_text_is_per_language_and_only_a_url_takes_it() {
     assert_eq!(decls[0].text_for("fr"), Some("View the item"));
     assert!(decls[1].text.is_empty());
     assert!(problems.iter().any(|p| p.contains("[fields.year] has `text`")), "{problems:?}");
+}
+
+#[test]
+fn core_config_shapes_match_build_and_preserve_written_navigation_order() {
+    for text in [
+        "site = { lang = 'de' }\nterms = { zebra = { fields = ['jury'], nav = true, weight = -2 }, people = { fields = ['editor'], nav = true, title = { de = 'Leute' }, count = false, cards = true } }",
+        "site.lang = 'de'\nterms.zebra.fields = ['jury']\nterms.zebra.nav = true\nterms.zebra.weight = -2\nterms.people.fields = ['editor']\nterms.people.nav = true\nterms.people.title.de = 'Leute'\nterms.people.count = false\nterms.people.cards = true",
+        "[site]\nlang = 'de'\n[terms.zebra]\nfields = ['jury']\nnav = true\nweight = -2\n[terms.people]\nfields = ['editor']\nnav = true\ncount = false\ncards = true\n[terms.people.title]\nde = 'Leute'\n[[plugins]]\nname = 'first'\n[[plugins]]\nname = 'second'",
+    ] {
+        let cfg = ConfigFile::parse(text).unwrap();
+        let (bundle, warnings) = moss_core::page::site_bundle(moss_core::page::SiteSources {
+            config_toml: Some(text.into()), ..Default::default()
+        });
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(cfg.site_lang(), Some(bundle.lang.as_str()));
+        assert_eq!(crate::build::terms::declared_name_list_fields(&cfg), bundle.declared_name_lists);
+        assert_eq!(cfg.terms_nav(), [("zebra".into(), Some(-2)), ("people".into(), None)]);
+        let kinds = crate::build::terms::term_kinds(&cfg, "de");
+        let people = kinds.iter().find(|k| k.key == "people").unwrap();
+        assert_eq!(people.title, "Leute");
+        assert_eq!(people.counts, [("en".into(), String::new())]);
+        assert!(people.cards);
+    }
+}
+
+#[test]
+fn toml_1_syntax_core_cannot_parse_still_reads_lang_and_terms_on_the_desktop() {
+    // A TOML 1.0 mixed array with a local time: valid in the build's parser,
+    // unsupported in basic-toml, which a host without the build parses with.
+    let text = "site.lang = 'de'\nsite.math = false\nhost_values = ['text', 07:32:00]\nterms.people.fields = ['editor']";
+    let cfg = ConfigFile::parse(text).unwrap();
+    assert!(cfg.warnings().is_empty(), "{:?}", cfg.warnings());
+    assert_eq!(cfg.site_lang(), Some("de"));
+    assert_eq!(cfg.site_bool("math"), Some(false));
+    assert!(cfg.section(&["host_values"]).unwrap().as_array().unwrap()[1].is_datetime());
+    assert_eq!(crate::build::terms::declared_name_list_fields(&cfg), ["author", "tags", "editor"]);
+    let (bundle, warnings) = moss_core::page::site_bundle(moss_core::page::SiteSources {
+        config_toml: Some(text.into()), ..Default::default()
+    });
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("config.toml with basic-toml"));
+    assert!(warnings[0].contains("invalid number at line 3"));
+    assert_eq!(bundle.lang, "en");
+}
+
+#[test]
+fn a_datetime_is_neither_text_nor_a_language_table() {
+    let cfg = ConfigFile::parse("site.lang = 1979-05-27\nterms.people = { fields = ['editor'], title = 1979-05-27, count = 07:32:00 }").unwrap();
+    assert_eq!(cfg.site_lang(), None);
+    let people = cfg.terms_kinds().into_iter().find(|k| k.key == "people").unwrap();
+    assert!(people.titles.is_empty() && people.counts.is_empty());
+    assert_eq!(cfg.warnings(), [
+        "[site] lang must be text; ignoring it",
+        "[terms.people] title must be text or a table of text per language; ignoring it",
+        "[terms.people] count must be text, a table of text per language, or false; ignoring it",
+    ]);
+}
+
+#[test]
+fn invalid_kind_values_keep_other_kinds_and_are_stored_not_logged() {
+    let _ = crate::build::cli_output::take_cli_problems();
+    let cfg = ConfigFile::parse("site.lang = 'de'\nterms.broken.fields = 'editor'\nterms.people = { fields = ['editor'], count = true, cards = 'yes' }\nterms.venues.fields = ['location']").unwrap();
+    assert_eq!(cfg.warnings().len(), 3, "fields, count and cards: {:?}", cfg.warnings());
+    assert_eq!(cfg.site_lang(), Some("de"));
+    let kinds = crate::build::terms::term_kinds(&cfg, "de");
+    assert_eq!(crate::build::cli_output::take_cli_problems(), 0, "the build reports them once, at its report point");
+    assert_eq!(kinds.iter().map(|k| k.key.as_str()).collect::<Vec<_>>(), ["authors", "tags", "people", "venues"]);
+    assert_eq!(kinds[2].fields, ["editor"]);
+    assert!(kinds[2].counts.is_empty());
+    assert!(!kinds[2].cards);
+    assert_eq!(kinds[3].fields, ["location"]);
 }

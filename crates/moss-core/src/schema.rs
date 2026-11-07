@@ -346,8 +346,12 @@ pub fn compose_schema(
             fields.entry(name.clone()).or_insert_with(|| author.clone());
         }
     }
+    let mut plugins: Vec<_> = plugins.iter().collect();
+    plugins.sort_by(|a, b| a.name.cmp(b.name));
     for plugin in plugins {
-        for (name, def) in plugin.fields.into_iter().flatten() {
+        let mut contributed: Vec<_> = plugin.fields.into_iter().flatten().collect();
+        contributed.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, def) in contributed {
             if fields.contains_key(name) {
                 ignored.push(format!("Plugin '{}' tried to redefine field '{}', ignoring", plugin.name, name));
                 continue;

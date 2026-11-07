@@ -1308,7 +1308,7 @@ fn build_inner(
     // `site_comments` just below too) — two ladders that could drift is how
     // this presented before, as English email chrome on a Chinese site.
     let site_lang = crate::i18n::detect::resolve_site_default_lang(
-        site_str("lang").as_deref(),
+        cfg.as_ref().and_then(|c| c.site_lang()),
         project_structure.homepage_file.as_deref(),
         &project_structure.markdown_files,
         &project_structure.root_path,
@@ -1325,7 +1325,7 @@ fn build_inner(
         &site_lang,
     );
     let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
-    for problem in &field_problems {
+    for problem in cfg.as_ref().map(|c| c.warnings()).unwrap_or_default().iter().chain(&field_problems) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
     for note in cfg.as_ref().map(|c| c.unknown_site_keys()).unwrap_or_default() {
