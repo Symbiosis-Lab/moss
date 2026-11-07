@@ -313,7 +313,7 @@ pub fn emit_redirect_table(
     // this folder in this process emitted from is the whole gate. Carrying
     // stub paths forward, rather than skipping them outright, is not optional:
     // `seal`'s mark-and-sweep and `remove_stale_html` both delete any
-    // `index.html` this build did not register. Copies are not gated: their
+    // HTML page this build did not register. Copies are not gated: their
     // bytes follow their target, which this signature does not see.
     let stubs: BTreeMap<String, String> = planned
         .iter()

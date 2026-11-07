@@ -613,8 +613,6 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
 
     std::fs::create_dir_all(stage.join("old-page")).unwrap();
     std::fs::write(stage.join("old-page/index.html"), "<html>old</html>").unwrap();
-    let blocking_keys: std::collections::HashSet<String> =
-        std::iter::once("index.html".to_string()).collect();
 
     let _record = lifecycle::lock_for(&mp);
     std::fs::create_dir_all(mp.generation_dir("g1")).unwrap();
@@ -638,7 +636,7 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
 
     let permit = lifecycle::park_for_rebuild(&mp, false, Default::default()).expect("a caught-up lifecycle permits the sweep");
     assert_eq!(*site_dir_cell.read().unwrap(), mp.current_ptr(), "and parks the server off staging first");
-    remove_stale_html(&stage, &blocking_keys, &std::collections::HashSet::new(), &permit);
+    remove_stale_html(&stage, &["old-page/index.html".to_string()], &Default::default(), &permit);
 
     // Only the next render moves the server back onto `stage`.
     lifecycle::show_render(&mp, true);

@@ -51,10 +51,8 @@
 //! rate-limited. So the lane indexes the moment [`request`] hands it a
 //! generation, and preview search lags the vault by roughly the seal's own
 //! debounce (`build::debounce::IDLE`/`MAX_DEFER`) plus `index_time`. Nothing
-//! else consumes the index, so nothing else observes the lag.
-//! [`settle_for_publish`] is the publish path's sync point, so a deploy never
-//! ships a stale index (it forces the seal's own pending debounce first, then
-//! finds this already caught up — see `build.rs`'s `settle`).
+//! else consumes the lane directly. For publishing an existing preview, see
+//! [`settle_for_publish`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -341,11 +339,8 @@ pub enum Adoption {
     Empty,
 }
 
-/// The search gate: `[site].search`, re-read from a `.moss` path because the
-/// seal tail and the deploy pre-flight both need it long after the
-/// `SiteConfig` that resolved it was consumed (off the critical path, so the
-/// read costs nothing). The toggle alone decides — search graduated out of
-/// `experimental.preview_features` 2026-08-31.
+/// Re-read `[site].search` for the seal tail or a host's publish preflight,
+/// after the build's resolved `SiteConfig` has been consumed.
 pub fn enabled_for(mp: &MossPaths) -> bool {
     let Some(project_root) = mp.root().parent() else {
         return false;
@@ -764,8 +759,9 @@ async fn index_one(req: &LaneRequest, watcher: tokio::sync::watch::Receiver<Lane
 /// published a receipt for this exact page set, which is what makes this a
 /// no-cost check on an idle vault.
 ///
-/// This is the rule that "the publish path calls `settle()`": the staleness budget
-/// the lane buys for the edit loop is explicitly not extended to deploy.
+/// For hosts publishing an existing preview generation: settle pending
+/// materialization first, then rebuild if this returns `true`. CLI deploys
+/// already build with `Freshness::Now` and do not need this extra index pass.
 pub fn settle_for_publish(mp: &MossPaths, enabled: bool) -> bool {
     if !enabled {
         return false;

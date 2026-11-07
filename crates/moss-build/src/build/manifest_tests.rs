@@ -623,7 +623,7 @@ fn pending_manifest_new_clears_source_to_output_carry_forward() {
         .insert("media/x.jpg".into(), SourceMetadata::default());
 
     let pending = PendingManifest::new(carry);
-    let (sealed, _) = pending.as_parts_clone();
+    let sealed = pending.hashes_clone();
 
     assert!(
         sealed.source_to_output.is_empty(),
@@ -654,7 +654,7 @@ fn register_source_mapping_populates_after_clear() {
         &crate::build::served_path::ServedPath::from_source("index.html").unwrap(),
     );
 
-    let (sealed, _) = pending.as_parts_clone();
+    let sealed = pending.hashes_clone();
     assert_eq!(
         sealed.source_to_output.len(),
         2,

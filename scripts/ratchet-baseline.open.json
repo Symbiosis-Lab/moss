@@ -30,7 +30,7 @@
         "crates/moss-build/src/build/folder_embed.rs": "Three resolution branches (content folder, static-index folder, missing) share one marker-parsing frontend; retires by extracting that shared parsing into its own file first, which none of the three branches currently need enough to justify.",
         "crates/moss-build/src/build/markdown/pipeline.rs": "The sole markdown-to-HTML entry point, process_markdown_file (one long function whose phases are already numbered), plus URL classification and prettification. It shrinks by giving each phase its own result instead of locals shared across the function; moving URL handling to another file would only relocate it.",
         "crates/moss-build/src/build/media/image.rs": "The image half of media conversion: WebP encode, EXIF, resize, CAS store, dispatched on threads under a megapixel budget. It shares output registration and the coherence summary with video through output_emit; its dispatch, concurrency and state model differ on purpose, so no further shared skeleton is planned.",
-        "crates/moss-build/src/build/media/pipeline.rs": "Asset copy, cleanup and sync for the background phase, deliberately the only place that writes the stage or seals cleanup bookkeeping per its own module doc. copy_deferred_assets (about 390 code lines) is most of it: one walk applies the sized-raster, CAS and source-metadata fast paths and prunes stale entries. It needs an explicit walk result (found keys, carried-forward entries, counters) before the passes can split.",
+        "crates/moss-build/src/build/media/pipeline.rs": "Asset staging and cleanup share this module. Source HTML staging returns typed output and source records before readiness; the deferred walk reuses its caches and entry writer, then prunes its live asset records. The remaining decomposition is between asset placement and permitted stale-file cleanup, which have separate callers and bookkeeping.",
         "crates/moss-build/src/build/media/video.rs": "The video half of media conversion, grown by a long tail of individually necessary fixes (poster repair, HLS ladder capping and healing, CAS-oid threading): a 2-permit semaphore with superseding runs. It shares output registration and the coherence summary with image through output_emit; its dispatch, concurrency and state model differ on purpose, so no further shared skeleton is planned.",
         "crates/moss-build/src/build/page/meta.rs": "Open Graph/Twitter/Schema.org JSON-LD tag builders sit alongside the larger markdown-to-plain-text excerpt extractor (first_paragraph_excerpt, non_prose_view, strip_markdown_inline) that page descriptions are derived from, plus hreflang and HTML/JSON escaping helpers; retires by moving the excerpt-extraction half — the larger of the two — into its own file, which nothing here currently plans.",
         "crates/moss-build/src/build/pipeline.rs": "The run()/build() entry point for every build path (CLI, GUI, preview, watch), covering the blocking and background phases end to end. Most of it is build_inner, whose decomposition is written in the lines_per_function disposition; the file shrinks as that function does.",
@@ -71,7 +71,7 @@
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",
-        "crates/moss-build/src/build": "Pipeline phases still share state through the long functions listed in lines_per_function (build_inner, generate_blocking_content_for_build, copy_deferred_assets); moving files before those functions are decomposed would move them twice, so the directory splits after the functions do.",
+        "crates/moss-build/src/build": "Pipeline phases still share state through the long functions listed in lines_per_function (build_inner, generate_blocking_content_for_build); moving files before those functions are decomposed would move them twice, so the directory splits after the functions do.",
         "crates/moss-build/src": "The crate root holds one module per family (build/, engine/, editor/, ops/, plugins/, config/ and the rest), named the way the code that links this crate names them, so its child count tracks how many families there are, not disorganization; a new family gets a directory, not more root files."
       }
     },
@@ -104,7 +104,6 @@
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
         "crates/moss-build/src/build/media/image.rs::run_image_conversion": 400,
         "crates/moss-build/src/build/media/image.rs::dispatch_image_conversions_at": 250,
-        "crates/moss-build/src/build/media/pipeline.rs::copy_deferred_assets": 400,
         "crates/moss-build/src/build/media/video.rs::convert_single_video": 250,
         "crates/moss-build/src/build/media/video.rs::run_video_conversion": 350,
         "crates/moss-build/src/build/parse_cache.rs::begin": 250,

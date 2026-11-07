@@ -228,6 +228,10 @@ pub fn require_sealed<T>(sealed: Option<T>) -> Result<T, String> {
 }
 
 #[cfg(test)]
+#[path = "search_tests.rs"]
+mod search_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

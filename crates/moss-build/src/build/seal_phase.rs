@@ -39,8 +39,8 @@
 //! syndication/plugin read of `read_site_file` (which resolves under
 //! `current_ptr()`; see `plugins/project_files.rs`'s own note on why it does
 //! not need a separate fix — it runs behind the same publish gate `settle`
-//! already covers). `search_lane::settle_for_publish` remains the search
-//! index's own sync point and is unaffected here — deploy calls both.
+//! already covers). The search bundle's publish synchronization is documented
+//! on [`search_lane::settle_for_publish`](super::feeds::search_lane::settle_for_publish).
 //!
 //! Ending a folder session drops its lane: `FolderSession::shutdown` calls
 //! [`evict`]. A caller that ends a session settles it first (the desktop

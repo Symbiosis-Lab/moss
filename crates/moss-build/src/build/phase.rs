@@ -125,6 +125,7 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     ("media_prelude", 5_000),
     ("video_handling", 30_000),
     ("background_asset_copy", 10_000),
+    ("stage_source_html", 10_000),
     ("search_index", 10_000),
     ("seal_wait", 10_000),
     ("seal_persist", 10_000),

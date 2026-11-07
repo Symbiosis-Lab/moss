@@ -6906,7 +6906,7 @@ mod video_path_mapping_integration_tests {
         assert!(result.is_ok(), "Build should succeed: {:?}", result);
 
         // Acceptance criterion: no .placeholder.svg in the manifest
-        let (site_hashes, _) = pending.as_parts_clone();
+        let site_hashes = pending.hashes_clone();
         let placeholder_keys: Vec<&str> = site_hashes
             .files
             .keys()

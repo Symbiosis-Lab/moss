@@ -285,8 +285,7 @@ fn a_page_re_registered_after_the_slot_pass_loses_the_passes_oid() {
     let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
     // The render phase registered it: this build owns the page.
     pending.register(&page, b"<html>rendered</html>", HashBucket::Files);
-    let mut site_result = empty_site_result();
-    apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, &mut site_result, None)
+    apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None)
         .expect("slot pass");
 
     pending.register_hashed(&page, "0123456789abcdef", HashBucket::Files);
@@ -294,16 +293,8 @@ fn a_page_re_registered_after_the_slot_pass_loses_the_passes_oid() {
     assert_eq!(pending.seal().staged_oid("page.html"), None);
 }
 
-/// The pipeline compares `site_result.hashes` with the previous build's manifest
-/// to decide whether anything changed, and hands a copy to the watcher. It holds
-/// the render phase's entries, which are the hashes of the pages BEFORE injection;
-/// the pass has to bring them to the entries it gave the manifest, or every page
-/// that injection rewrites reads as changed against a manifest that recorded the
-/// injected bytes. No other test looks at `site_result` after the pass, which is
-/// how dropping that update went unnoticed by the whole suite.
-///
-/// Twice: once with a store that takes the blob, once with one that cannot, since
-/// the page without an oid takes its own branch of the receipt loop.
+/// The pipeline snapshots the manifest after injection, including when CAS
+/// storage fails and shipping must read the stage instead.
 #[test]
 fn the_slot_pass_brings_the_change_detection_hashes_to_the_manifests_entries() {
     use crate::build::manifest::{HashBucket, PendingManifest};
@@ -328,11 +319,12 @@ fn the_slot_pass_brings_the_change_detection_hashes_to_the_manifests_entries() {
         // What `generate_blocking_content` leaves in `SiteResult`: the manifest as
         // the render phase saw it.
         let mut site_result = empty_site_result();
-        site_result.hashes = pending.as_parts_clone().0;
+        site_result.hashes = pending.hashes_clone();
         let render_phase_entry = site_result.hashes.files["page.html"].clone();
 
-        apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, &mut site_result, None)
+        apply_to_stage_and_manifest(&paths, &stage, &ResolvedSlots::empty(), &mut pending, None)
             .expect("slot pass");
+        site_result.hashes = pending.hashes_clone();
 
         let final_entry = entry_for("page.html", &std::fs::read(stage.join("page.html")).unwrap());
         assert_ne!(render_phase_entry, final_entry, "fixture: injection changed the page's bytes");

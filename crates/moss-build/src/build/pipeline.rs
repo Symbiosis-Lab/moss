@@ -1605,29 +1605,25 @@ fn build_inner(
         &stage_dir,
         &resolved_slots,
         &mut pending,
-        &mut site_result,
         carry_verification,
     )?;
 
-    // Store plugin + builder fingerprints so they persist to hashes.json.
-    // Set on site_result.hashes (used for change detection below) and on
-    // `pending`, whose seal is the sole writer of hashes.json.
-    log::debug!(target: "timing", "[build] staging: pre_builder_fingerprint: {:?}", build_start.elapsed());
-    let current_builder_fingerprint = cache_keys.builder.clone();
-    log::debug!(target: "timing", "[build] staging: builder_fingerprint: {:?}", build_start.elapsed());
-    site_result.hashes.builder_fingerprint = Some(current_builder_fingerprint.clone());
-    // Propagate the fingerprint to `pending` so the SealedManifest produced
-    // by the seal+persist side task carries it. The old legacy
-    // on-disk write at `media/pipeline.rs` serialized `&site_hashes` directly
-    // (which had the fingerprint); now the only writer is the seal task, so
-    // it must reach `pending` before it sealed.
-    pending.set_builder_fingerprint(Some(current_builder_fingerprint.clone()));
+    let staged_html = crate::build::media::pipeline::stage_source_html(
+        &background_ctx, &project_structure.html_files, &pending,
+        progress_sender.unwrap_or(crate::build::ports::reporter::discarding()),
+        services.and_then(|s| s.assets.clone()),
+    );
+    staged_html.apply_to(&mut pending);
+
+    pending.set_builder_fingerprint(Some(cache_keys.builder.clone()));
+    // Include every synchronous output and the builder fingerprint in change detection.
+    site_result.hashes = pending.hashes_clone();
 
     // Step 4: Compare hashes to detect changes
     // For first builds (site_has_content == false), always proceed with copy.
     // For rebuilds, check modified/new/deleted files and the builder fingerprint.
     let builder_changed = match &previous_hashes.builder_fingerprint {
-        Some(prev) => *prev != current_builder_fingerprint,
+        Some(prev) => *prev != cache_keys.builder,
         None => true,
     };
     // Clone the in-memory content hashes for the watcher's refresh decision.
@@ -1637,13 +1633,14 @@ fn build_inner(
     // AppState::last_content_hashes.
     let content_hashes_for_watch = site_result.hashes.clone();
     let missing_references_for_publish = site_result.missing_references.clone();
-    let new_hashes = &site_result.hashes;
     let (changed, new, deleted) = (
-        new_hashes.get_changed_files(&previous_hashes),
-        new_hashes.get_new_files(&previous_hashes),
-        new_hashes.get_deleted_files(&previous_hashes),
+        site_result.hashes.get_changed_files(&previous_hashes),
+        site_result.hashes.get_new_files(&previous_hashes),
+        site_result.hashes.get_deleted_files(&previous_hashes),
     );
-    let has_output_changes = !current_ptr_exists || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
+    let (html_deleted, stale_html) = crate::build::media::pipeline::html_deletions(
+        &previous_hashes, &pending, project_structure, folder_path, &background_ctx.dir_overrides, &crate::system::build_records::records().late_redirects(folder_path));
+    let has_output_changes = html_deleted || !current_ptr_exists || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
 
     log::debug!(target: "timing", "[build] staging: hash_compare (changed={}): {:?}", has_output_changes, build_start.elapsed());
     if has_output_changes && current_ptr_exists {
@@ -1767,27 +1764,9 @@ fn build_inner(
     let announce: Option<std::path::PathBuf>;
     crate::build::phase::record_value("served_staging", usize::from(publishable));
     if has_output_changes {
-
-        // Step 4b: Remove stale HTML pages from deleted source folders.
-        //
-        // Runs unconditionally, including when this build deferred a page.
-        // Each deferred page's published output is reinstated in `blocking_keys`
-        // by `PendingManifest::carry_forward_deferred_page` (see the render
-        // pass), so it is protected by name rather than by skipping the sweep.
-        // `pending.notebook_outputs()` carries background-phase JupyterLite
-        // assets (jupyter/**/index.html) forward from the previous build, so
-        // stale-html cleanup here doesn't delete them before
-        // `run_notebook_processing` below re-registers them.
-        //
-        // An `index.html` in the folder is copied to staging by the asset walk,
-        // which runs after search has indexed staging: removed here, it would be
-        // missing from that index and from the preview until the copy lands.
         if let Some(permit) = sweep_permit.as_ref() {
-            let mut keep = background_ctx.blocking_keys.clone();
-            keep.extend(project_structure.html_files.iter().map(|f| crate::build::render::resolve_path_with_overrides(&f.path, &background_ctx.dir_overrides)));
-            remove_stale_html(&stage_dir, &keep, pending.notebook_outputs(), permit);
+            remove_stale_html(&stage_dir, &stale_html, pending.blocking_keys(), permit);
         }
-        // gen_dir is immutable post-materialize — stale-html cleanup runs on staging only.
 
         // Step 5: show this render — unless this build could not read its own
         // sources. Showing it is the moment the user sees this build's output,
@@ -1833,10 +1812,6 @@ fn build_inner(
     if let Some(seq) = render_seq {
         crate::build::phase::record_value("render", seq as usize);
     }
-
-    // Step 6c: no search worker. Pagefind is generation-free — cost
-    // scales with corpus, not delta — so it runs on its own lane, adopted below.
-    let search_enabled = background_ctx.search_enabled;
 
     // === BACKGROUND PHASE (spawn, don't block) ===
     // Background work runs after preview opens.
@@ -1893,7 +1868,7 @@ fn build_inner(
     // Mark-and-sweep — skipping it deletes `_moss/pagefind/*` off the live site.
     let search_paths = MossPaths::new(std::path::Path::new(folder_path));
     let adoption = crate::build::feeds::search_lane::adopt_into(
-        &search_paths, &stage_dir, &mut pending, search_enabled, search_freshness);
+        &search_paths, &stage_dir, &mut pending, background_ctx.search_enabled, search_freshness);
     log::debug!(target: "search", "search bundle: {:?}", adoption);
 
     // Places explorer world/tile base-map SVGs; see that module's doc for
@@ -2101,6 +2076,7 @@ fn build_inner(
                         .unwrap_or(crate::build::ports::reporter::discarding());
                     let stats = crate::build::media::pipeline::copy_deferred_assets(
                         &ctx_for_assets,
+                        staged_html,
                         reporter_for_assets,
                         tx_assets,
                         asset_registry_for_assets,

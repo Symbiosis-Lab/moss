@@ -1524,12 +1524,12 @@ pub fn scan_folder_with_dedup_emit_with_error(
         // would rewrite filenames the app's HTML/CSS/JS already reference).
         // copy_deferred_assets still copies them verbatim via its own WalkDir.
         //
-        // We deliberately DO NOT filter `html_files`: its only consumer is the
-        // folder-embed iframe lookup (folder_embed.rs), so keeping a passthrough
-        // `index.html` here lets `![[my-app]]` embed the app as an iframe. The
-        // blocking phase never reads `html_files`, and SPA meta-injection is
-        // guarded separately by `passthrough_roots` in copy_deferred_assets, so
-        // retaining these entries causes no rewriting.
+        // We deliberately DO NOT filter `html_files`: the folder-embed iframe
+        // lookup (folder_embed.rs) reads it, so keeping a passthrough
+        // `index.html` here lets `![[my-app]]` embed the app as an iframe, and
+        // source HTML staging copies every entry verbatim. SPA meta-injection is
+        // guarded separately by `passthrough_roots`, so retaining these entries
+        // causes no rewriting.
         //
         // We also DO NOT filter `markdown_files` / `notebook_files`. The
         // motivating case (a JS/HTML/CSS/image SPA) ships neither, and

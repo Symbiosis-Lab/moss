@@ -2532,8 +2532,6 @@ pub fn generate_blocking_content_for_build(
     );
 
     // Generate index.html - either use homepage document or generate auto-index
-    // NOTE: This runs BEFORE blocking_keys snapshot so index.html is included
-    // in the blocking-phase key set and won't be deleted by stale cleanup.
     //
     // Empty-folder onboarding:
     // a synthetic homepage was pushed into `documents` earlier — just after
@@ -3127,11 +3125,7 @@ pub fn generate_blocking_content_for_build(
         }
     }
 
-    // Decompose pending into (SiteHashes, blocking_keys) for BackgroundContext and SiteResult.
-    // `as_parts_clone` clones because `pending` is `&mut` (not owned); the owning
-    // form that would let the pipeline caller skip the clone never gained a caller
-    // and was removed, so this is the only decomposition.
-    let (site_hashes, blocking_keys) = pending.as_parts_clone();
+    let site_hashes = pending.hashes_clone();
 
     // `hashes.json` is NOT written here. The seal+persist task in `build.rs`
     // is the sole writer — it runs after deferred phases (image, video,
@@ -3379,7 +3373,6 @@ pub fn generate_blocking_content_for_build(
         previous_hashes: previous_hashes.clone(),
         start_time: std::time::Instant::now(),
         dir_overrides,
-        blocking_keys,
         spa_defaults,
         passthrough_roots: project_structure.passthrough_roots.clone(),
         search_enabled: layout_config.assets.search,

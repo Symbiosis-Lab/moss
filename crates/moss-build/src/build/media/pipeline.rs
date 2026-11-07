@@ -25,7 +25,7 @@
 
 use crate::moss_paths::MossPaths;
 use crate::types::{content::SiteHashes, services::BackgroundContext};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use tokio::sync::mpsc;
@@ -491,53 +491,69 @@ fn maybe_inject_spa_cached(
     Ok(returned)
 }
 
-/// Remove generated HTML pages (index*.html) whose address is in neither `keep`
-/// nor `notebook_outputs`.
-///
-/// Runs on staging in the blocking phase, just before the preview is pointed at this render,
-/// so it stops serving pages whose source was deleted. Only `index*.html` names are
-/// considered, so an embed like `sketch.html` is never touched; a source file that is itself
-/// named `index.html` is kept only if `keep` holds its address.
-///
-/// Staging is served, so this needs a `lifecycle::SweepPermit`.
-pub(crate) fn remove_stale_html(
-    dir: &Path,
-    keep: &std::collections::HashSet<String>,
-    notebook_outputs: &std::collections::HashSet<String>,
-    _permit: &crate::build::lifecycle::SweepPermit,
-) {
-    use walkdir::WalkDir;
-    let mut removed = 0u32;
-    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() {
-            continue;
+fn is_html_path(key: &str) -> bool {
+    let ext = Path::new(key).extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
+}
+
+/// Previous HTML outputs no writer has claimed before search reads staging.
+/// Theme assets are deferred; notebooks, carried pages and `spared` addresses
+/// (sources in the cloud, forwarding pages the seal writes again) keep theirs,
+/// and so does a preserved symlink, which the deferred walk registers after
+/// this sweep.
+pub(crate) fn stale_html_keys(previous: &SiteHashes, keep: &HashSet<String>, notebook_outputs: &HashSet<String>, spared: &HashSet<String>) -> Vec<String> {
+    previous.files.iter().filter(|(key, entry)| {
+        is_html_path(key) && !key.starts_with("_moss/theme/")
+            && crate::types::content::parse_entry(entry).0 != crate::types::content::MODE_SYMLINK
+            && !keep.contains(*key) && !notebook_outputs.contains(*key) && !spared.contains(*key)
+    }).map(|(key, _)| key.clone()).collect()
+}
+
+/// Whether an authored HTML page the previous build copied has lost its
+/// source, and the previous HTML outputs the sweep removes. The manifest
+/// carries every previous output until seal, so the hash compare cannot see
+/// the deletion; outputs with no source of their own, like forwarding pages,
+/// never count as one. A source in the cloud is offline, not deleted. An
+/// address an authored page held is never spared as a forwarding page: its
+/// staged bytes are the deleted text, which search would index.
+pub(crate) fn html_deletions(
+    previous: &SiteHashes,
+    pending: &crate::build::manifest::PendingManifest,
+    structure: &crate::types::content::ProjectStructure,
+    folder_path: &str,
+    dir_overrides: &HashMap<String, String>,
+    late: &crate::build::feeds::kept_addresses::LateRedirects,
+) -> (bool, Vec<String>) {
+    let held: HashSet<String> = structure.evicted_paths.iter()
+        .filter_map(|path| path.strip_prefix(folder_path).ok())
+        .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+        .collect();
+    let current: HashSet<&str> = structure.html_files.iter().map(|file| file.path.as_str()).collect();
+    let deleted = previous.sources.keys().any(|key| is_html_path(key) && !key.starts_with(".moss/")
+        && !current.contains(key.as_str()) && !held.contains(key));
+    let address = |rel: &String| crate::build::render::resolve_path_with_overrides(rel, dir_overrides);
+    let authored: HashSet<String> = previous.sources.keys().filter(|key| is_html_path(key)).map(address).collect();
+    let forwarded = crate::build::feeds::kept_addresses::moved_folder_files(&late.folder_moves, pending.blocking_keys())
+        .into_iter().map(|(old, _)| old).chain(late.copies.iter().map(|copy| copy.from.clone()));
+    let spared: HashSet<String> = held.iter().map(address).chain(forwarded.filter(|key| !authored.contains(key))).collect();
+    (deleted, stale_html_keys(previous, pending.blocking_keys(), pending.notebook_outputs(), &spared))
+}
+
+/// Remove exactly the deleted HTML outputs before search reads staging. A key
+/// that differs from a `live` one only in case is kept when both name the same
+/// file, as after a case-only rename on a case-insensitive disk.
+pub(crate) fn remove_stale_html(dir: &Path, deleted: &[String], live: &HashSet<String>, _permit: &crate::build::lifecycle::SweepPermit) {
+    let disk = |key: &str| crate::build::served_path::ServedPath::from_cached(key).ok().map(|path| path.to_disk(dir));
+    let folded: HashMap<String, &String> = live.iter().map(|key| (key.to_lowercase(), key)).collect();
+    for key in deleted {
+        let Some(path) = disk(key) else { continue; };
+        let renamed = folded.get(&key.to_lowercase()).and_then(|live| disk(live))
+            .is_some_and(|live| same_file::is_same_file(&path, live).unwrap_or(false));
+        if renamed { continue; }
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => log::warn!("[stale-html] Cannot remove {}: {}", key, e),
+            _ => {}
         }
-        let filename = match entry.path().file_name().and_then(|n| n.to_str()) {
-            Some(f) => f,
-            None => continue,
-        };
-        // Only target generated pages: index.html, index-2.html, etc.
-        // Source HTML assets (interactive embeds) use other names.
-        if !filename.starts_with("index") || !filename.ends_with(".html") {
-            continue;
-        }
-        if let Ok(rel) = entry.path().strip_prefix(dir) {
-            // Normalize `\`→`/`: keys are compared against `/`-form sets.
-            let key = moss_core::slug::normalize_separators(&rel.to_string_lossy());
-            // notebook_outputs covers background-phase JupyterLite assets
-            // (jupyter/{lab,tree,doc,...}/index.html) carried forward from
-            // the previous build — they'd otherwise match the generated-
-            // page pattern and be deleted before notebook processing
-            // re-registers them.
-            if !keep.contains(&key) && !notebook_outputs.contains(&key) {
-                let _ = fs::remove_file(entry.path());
-                log::debug!("[stale-html] Removed: {}", key);
-                removed += 1;
-            }
-        }
-    }
-    if removed > 0 {
-        log::info!("[stale-html] Removed {} stale page(s) from {}", removed, dir.display());
     }
 }
 
@@ -981,9 +997,7 @@ fn record_blob(
     staged_oids.insert(out_path.as_str().to_string(), staged_oid.to_string());
 }
 
-/// What one `copy_deferred_assets` walk accumulates. `stats` also carries the
-/// per-item counts: preserved symlinks and aliases are counted because their
-/// per-item log line is DEBUG, so without them the summary reports nothing.
+/// Live output and source keys plus placement counters for an asset pass.
 #[derive(Default)]
 struct AssetWalkTally {
     stats: AssetPipelineRunStats,
@@ -994,13 +1008,7 @@ struct AssetWalkTally {
     /// `site_hashes.sources`; without it deleted or renamed sources stay in the
     /// metadata cache and `hashes.json` grows without bound.
     live_source_keys: std::collections::HashSet<String>,
-    /// Symlinks preserved from source to output (also Finder Aliases resolved
-    /// to symlinks), so `remove_stale_symlinks` can prune entries removed
-    /// between builds.
-    ///
-    /// INVARIANT: this one set drives stale cleanup of both the staging and
-    /// the shipped directory because the symlink branch dual-writes the same
-    /// rel_paths. Populating the two asymmetrically may prune a live symlink.
+    /// Symlinks preserved from source to output, including resolved Finder aliases.
     ///
     /// Real symlinks are not entered into the two sets above: they have no
     /// content hash and are not in the object-store cache. A Finder alias is a
@@ -1014,113 +1022,421 @@ struct AssetWalkTally {
     staged_oids: HashMap<String, String>,
 }
 
-/// After all assets are placed, stale cleanup runs to remove output files that
-/// no longer have a corresponding source.
-///
-/// Asset registrations go out over `tx` as `EmitMessage { bucket: Files }`; the
-/// coordinator owns the manifest and this function never writes `hashes.json`.
-/// It reads `ctx.previous_hashes` for the entries it may carry forward and
-/// `ctx.blocking_keys` to know which `.html` paths a rendered page already
-/// claims — it does NOT hold a copy of this build's manifest.
-/// AssetRegistry passed in so audio/PDF/static assets are registered
-/// as Ready once they are copied to the output. The registry key is the mapped
-/// output-relative path (e.g. `audio/talk.mp3`, `docs/paper.pdf`), matching the
-/// URL the preview server normalises from the browser's request.
-/// `None` disables registration (headless mode, tests that don't need it).
+impl AssetWalkTally {
+    fn prune(&self, hashes: &mut SiteHashes) {
+        hashes.files.retain(|key, _| self.live_asset_keys.contains(key) || self.live_symlinks.contains(key));
+        hashes.sources.retain(|key, _| self.live_source_keys.contains(key));
+    }
+}
+
+/// Caches and path decisions shared by source HTML and the deferred asset walk.
+struct AssetCopy {
+    object_store: crate::build::cache::ObjectStore,
+    manifest_hash_memo: crate::build::media::manifest_hash_memo::ManifestHashMemo,
+    staged: crate::build::lifecycle::cas_heal::StagedLinks,
+    transforms: crate::build::cache::TransformCache,
+    image_config: crate::build::media::image::ImageCompressionConfig,
+    canonical_source_root: std::path::PathBuf,
+    converter_bases: std::collections::HashSet<std::path::PathBuf>,
+    html_paths: std::collections::HashSet<std::path::PathBuf>,
+    prev_hashes_mtime_secs: u64,
+}
+
+impl AssetCopy {
+    fn new(ctx: &BackgroundContext, html_files: &[crate::types::content::FileInfo]) -> Self {
+        let paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
+        let source_root = Path::new(&ctx.source_path);
+        Self {
+            object_store: crate::build::cache::ObjectStore::for_site(&paths),
+            manifest_hash_memo: crate::build::media::manifest_hash_memo::ManifestHashMemo::load(&paths.cache_manifest_hash_memo()),
+            staged: crate::build::lifecycle::cas_heal::StagedLinks::load(&paths, "assets", &ctx.staging_dir),
+            transforms: crate::build::cache::TransformCache::for_site(&paths),
+            image_config: crate::build::media::image::ImageCompressionConfig::default(),
+            canonical_source_root: source_root.canonicalize().unwrap_or_else(|e| {
+                log::info!("[background-assets] canonicalize source_root failed: {e}; symlinks will not be preserved");
+                source_root.to_path_buf()
+            }),
+            converter_bases: ctx.image_items.iter().filter(|item| item.owns_source_base()).map(|item| item.source_path.clone()).collect(),
+            html_paths: html_files.iter().map(|file| source_root.join(&file.path)).collect(),
+            prev_hashes_mtime_secs: std::fs::metadata(paths.hashes()).ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs()).unwrap_or(0),
+        }
+    }
+
+    fn handles_source_html(&self, path: &Path) -> bool {
+        let target = crate::build::icloud::icloud_stub_target(path);
+        self.html_paths.contains(target.as_deref().unwrap_or(path))
+    }
+}
+
+/// Outputs and source records produced before preview readiness and search,
+/// with the caches the deferred walk goes on to reuse.
+pub(crate) struct StagedHtml {
+    pub files: HashMap<String, String>,
+    pub sources: HashMap<String, crate::build::types::SourceMetadata>,
+    pub oids: HashMap<String, String>,
+    stats: AssetPipelineRunStats,
+    copy: AssetCopy,
+}
+
+/// Manifest registrations for walked files, with the oid of each staged copy.
+fn file_registrations<'a>(files: &'a HashMap<String, String>, oids: &'a HashMap<String, String>) -> impl Iterator<Item = EmitMessage> + 'a {
+    files.iter().map(|(path, entry)| EmitMessage::File {
+        rel_path: path.clone(),
+        hash: entry.strip_prefix("100644:").unwrap_or(entry).to_string(),
+        bucket: HashBucket::Files,
+        oid: oids.get(path).cloned(),
+    })
+}
+
+impl StagedHtml {
+    pub(crate) fn registrations(&self) -> impl Iterator<Item = EmitMessage> + '_ {
+        file_registrations(&self.files, &self.oids)
+    }
+
+    pub(crate) fn apply_to(&self, pending: &mut crate::build::manifest::PendingManifest) {
+        for message in self.registrations() {
+            if let EmitMessage::File { rel_path, hash, bucket, oid } = message {
+                pending.apply_message(rel_path, &hash, bucket, oid);
+            }
+        }
+    }
+}
+
+pub(crate) fn stage_source_html(
+    ctx: &BackgroundContext,
+    html_files: &[crate::types::content::FileInfo],
+    pending: &crate::build::manifest::PendingManifest,
+    reporter: &dyn crate::build::ports::reporter::BuildReporter,
+    asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
+) -> StagedHtml {
+    let _phase = crate::build::phase::PhaseTrace::start("stage_source_html");
+    let mut copy = AssetCopy::new(ctx, html_files);
+    let mut site_hashes = SiteHashes::default();
+    let mut run = AssetWalkTally::default();
+    for file in html_files {
+        let address = crate::build::render::resolve_path_with_overrides(&file.path, &ctx.dir_overrides);
+        if pending.blocking_keys().contains(&address) && !ctx.passthrough_roots.contains(&file.path) {
+            continue;
+        }
+        if let Some(entry) = ctx.previous_hashes.files.get(&address) {
+            site_hashes.files.insert(address, entry.clone());
+        }
+        if let Some(entry) = ctx.previous_hashes.sources.get(&file.path) {
+            site_hashes.sources.insert(file.path.clone(), entry.clone());
+        }
+        let path = Path::new(&ctx.source_path).join(&file.path);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) => copy_asset_entry(ctx, &mut copy, &path, meta.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref()),
+            Err(e) => log::info!("[background-assets] Cannot stat {}: {e}", path.display()),
+        }
+    }
+    run.prune(&mut site_hashes);
+    StagedHtml { files: site_hashes.files, sources: site_hashes.sources, oids: run.staged_oids, stats: run.stats, copy }
+}
+
+fn copy_asset_entry(
+    ctx: &BackgroundContext,
+    copy: &mut AssetCopy,
+    file_path: &Path,
+    file_type: std::fs::FileType,
+    site_hashes: &mut SiteHashes,
+    run: &mut AssetWalkTally,
+    reporter: &dyn crate::build::ports::reporter::BuildReporter,
+    asset_registry: Option<&crate::types::assets::AssetRegistry>,
+) {
+    use crate::build::render::resolve_path_with_overrides;
+    let AssetCopy { object_store, manifest_hash_memo, staged, transforms, image_config,
+        canonical_source_root, converter_bases, prev_hashes_mtime_secs, .. } = copy;
+    let prev_hashes_mtime_secs = *prev_hashes_mtime_secs;
+    let source_root = Path::new(&ctx.source_path);
+    let output_dir = &ctx.staging_dir;
+    let prev_sources = &ctx.previous_hashes.sources;
+    let markdown_exts = moss_core::page_kind::PAGE_EXTENSIONS;
+    let video_exts = ["mov", "mp4", "webm", "avi", "mkv", "m4v"];
+    // Symlink branch: preserve the symlink in the output instead of
+    // copying bytes. Must run before the `is_file()` filter — symlinks
+    // (whether to dirs or files) report `is_file() == false` under the
+    // walker's default `follow_links(false)`.
+    if file_type.is_symlink() {
+        use crate::build::media::symlink::handle_symlink_entry;
+        let outcome = handle_symlink_entry(
+            file_path,
+            source_root,
+            canonical_source_root,
+            output_dir,
+        );
+        if preserve_link(&outcome, site_hashes, &mut run.live_symlinks, "symlink") {
+            run.stats.preserved_symlinks += 1;
+        } else {
+            run.stats.skipped_symlinks += 1;
+        }
+        return;
+    }
+
+    // Alias branch (macOS only): regular files that are Finder Bookmark
+    // Aliases get resolved and written as POSIX symlinks in the output,
+    // identical to how the symlink branch handles real symlinks.
+    // Note: `ship_phase` (staging→site) sees the output as a real symlink and
+    // handles it via its own symlink branch — no alias branch needed there.
+    #[cfg(target_os = "macos")]
+    if file_type.is_file() {
+        use crate::build::media::symlink::handle_alias_entry;
+        if let Some(outcome) = handle_alias_entry(
+            file_path,
+            source_root,
+            canonical_source_root,
+            output_dir,
+        ) {
+            // Count any non-Preserved alias outcome (escape/broken/
+            // processable/absolute/unresolvable) as a skipped symlink.
+            if preserve_link(&outcome, site_hashes, &mut run.live_symlinks, "alias") {
+                run.stats.preserved_aliases += 1;
+            } else {
+                run.stats.skipped_symlinks += 1;
+            }
+            let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel),
+                prev_hashes_mtime_secs, object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses);
+            register_alias_source(file_path, source_root, site_hashes, &mut run.live_source_keys, blob);
+            return;
+        }
+        // Only genuine non-alias files fall through to byte copying.
+    }
+
+    if !file_type.is_file() {
+        return;
+    }
+
+    // Normalize `\`→`/`: relative_path feeds `/`-form comparisons (blocking
+    // keys, prev-source asset cache, live-source prune map) — un-normalized
+    // Windows backslashes miss every match (re-hash/re-copy + duplicate-copy).
+    let relative_path = match file_path.strip_prefix(source_root) {
+        Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
+        Err(_) => return,
+    };
+
+    // Pre-Sonoma eviction (macOS 12–13, still a supported minimum) replaces
+    // the asset with a hidden `.name.icloud` placeholder, so the real
+    // filename never appears in this walk at all. Left alone that reads as
+    // "the user deleted this photo": the key is missing from
+    // `live_asset_keys`, `AssetWalkTally::prune` drops its manifest entry,
+    // and `remove_stale_files` deletes the published file. Claiming the key
+    // the stub stands for is what keeps the previous build's output alive
+    // until the download lands — the asset-side counterpart of what
+    // `scan.rs` does for pages via `evicted_paths`.
+    if let Some(real) = crate::build::icloud::icloud_stub_target(file_path) {
+        if let Ok(rel) = real.strip_prefix(source_root) {
+            let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+            run.live_asset_keys.insert(resolve_path_with_overrides(&rel, &ctx.dir_overrides));
+            run.live_source_keys.insert(rel.clone());
+            crate::build::cloud_readiness::request_download(&real);
+            log::debug!("[background-assets] Holding {} — still in the cloud (pre-Sonoma stub)", rel);
+        }
+        return;
+    }
+
+    // Skip OS / VCS metadata that should never reach a live site
+    // (.DS_Store, .gitignore, Finder's `Icon\r`, …). The directory
+    // exclusion rule in classify::is_excluded_dir_name only handles
+    // dot-prefixed dirs; this catches the file-level cases.
+    if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
+        if crate::build::scan::classify::is_os_metadata_file(file_name) {
+            return;
+        }
+    }
+
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    // Skip files handled by other phases.
+    // Notebooks (.ipynb) are handled by run_notebook_processing in build.rs.
+    if markdown_exts.contains(&ext.as_str()) || matches!(ext.as_str(), "pages" | "docx" | "doc" | "ipynb") {
+        return;
+    }
+
+    // The video worker owns videos outside configured passthrough roots.
+    let configured_passthrough = crate::build::scan::classify::is_in_passthrough(
+        &relative_path,
+        &ctx.passthrough_roots,
+    );
+    if video_exts.contains(&ext.as_str()) && !configured_passthrough {
+        return;
+    }
+
+    // Skip root style.css / script.js — the canonical theme location is
+    // .moss/theme/; a root-level file is not served, and
+    // check_misplaced_theme_files() warns authors about the misplacement.
+    // This must be the same predicate the sweep's drift walk uses
+    // (`drift_eligible` in build_shell::watch::sweep) — see
+    // is_ignored_root_theme_file's doc comment.
+    if crate::build::render::is_ignored_root_theme_file(&relative_path) {
+        return;
+    }
+
+    // The encoder plan is the authority for base ownership. A later stat
+    // failure or cloud transition must never give this path a second writer.
+    if converter_bases.contains(Path::new(&relative_path)) {
+        return;
+    }
+
+    // Map asset path through dir_overrides so assets land at their
+    // page-tree path (e.g., "交互/sketch.html" → "interactive/sketch.html")
+    let mapped_path = resolve_path_with_overrides(&relative_path, &ctx.dir_overrides);
+
+    // Claim before any deferred read: cloud-only sources still exist.
+    run.live_asset_keys.insert(mapped_path.clone());
+    // Also record the *source-relative* path for `sources` map pruning
+    // below. Sources is keyed by source path (pre-mapping), unlike
+    // `files` which is keyed by output path (post-mapping).
+    run.live_source_keys.insert(relative_path.clone());
+
+    match source_blob(file_path, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
+        object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses)
+    {
+        Ok(None) => return,
+        Ok(Some((oid, src_stat))) => {
+            // Raster originals retain their format at the optimized size.
+            // Unsupported or unavailable inputs use the verbatim CAS blob;
+            // warm transform records can be reused without reading the source.
+            let link_oid = if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+                crate::build::media::fallback_raster::sized_raster_oid_for_original(
+                    file_path,
+                    &oid,
+                    object_store,
+                    transforms,
+                    image_config,
+                    crate::build::media::fallback_raster::SIZED_JPEG_QUALITY,
+                    Some((staged, &output_dir.join(&mapped_path))),
+                )
+                .unwrap_or_else(|| oid.clone())
+            } else {
+                oid.clone()
+            };
+
+            let target = output_dir.join(&mapped_path);
+            let placement =
+                BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext, local: (link_oid == oid).then_some(file_path) };
+            if !place_blob(object_store, staged, placement, reporter, &mut run.stats) {
+                return;
+            }
+
+            // Register audio/PDF/static assets as Ready so the
+            // editor hover-preview can resolve them. Only register non-image,
+            // non-video assets here — images are registered in the blocking
+            // phase via set_pending (and set_ready'd by run_image_conversion).
+            // Videos are also registered in the blocking phase. The registry
+            // key matches the URL the preview server normalises: no leading
+            // slash, output-relative (e.g. "audio/talk.mp3", "docs/paper.pdf").
+            if let Some(ref registry) = asset_registry {
+                if !is_image_extension(&ext) && !video_exts.contains(&ext.as_str()) {
+                    registry.set_ready(mapped_path.clone());
+                }
+            }
+
+            // Inject defaults only into bundled SPA indexes outside passthrough
+            // roots, preserving author metadata. Track the post-injection CAS
+            // object so deployment reads the same bytes as staging.
+            let mut spa_post_oid: Option<String> = None;
+            if !configured_passthrough
+                && matches!(ext.as_str(), "html" | "htm")
+                && is_bundled_spa_index_path(&mapped_path)
+            {
+                if let Some(ref defaults) = ctx.spa_defaults {
+                    let canonical_url_for_folder = derive_canonical_url(defaults, &mapped_path);
+                    let borrowed = defaults.as_borrowed(canonical_url_for_folder.as_deref());
+                    match maybe_inject_spa_cached(
+                        &target,
+                        &borrowed,
+                        &oid,
+                        src_stat.size,
+                        object_store,
+                        transforms,
+                    ) {
+                        Ok(Some((_, new_oid))) => {
+                            spa_post_oid = Some(new_oid);
+                        }
+                        Ok(None) => {} // no-op (nothing to inject)
+                        Err(e) => {
+                            // Fail open — leave the file alone, don't break the build.
+                            log::info!(
+                                "[background-assets] SPA inject failed for {}: {}",
+                                mapped_path, e
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Record the source-metadata entry (keyed by source-relative
+            // path, not output path) so the next build's check_source_cache
+            // can short-circuit. Always write — even on cache hit — so
+            // the entry stays present after every build.
+            site_hashes.sources.insert(
+                relative_path.clone(),
+                crate::build::types::SourceMetadata::from_stat(oid.clone(), src_stat),
+            );
+            match crate::build::served_path::ServedPath::from_source(&mapped_path) {
+                Ok(out_path) => {
+                    // The CAS object actually backing `target`'s bytes: the
+                    // post-injection object when SPA injection changed
+                    // them, otherwise the object `link_to` placed there
+                    // (`link_oid`) — `apply_transform`/`transform_for` are
+                    // pure and path-only, so a later CAS read reproduces
+                    // exactly what reading `target` now would.
+                    let staged_oid = spa_post_oid.unwrap_or(link_oid);
+                    let hash = OutputHash {
+                        memo_key: &staged_oid,
+                        target: &target,
+                        fallback_oid: &oid,
+                        log_context: "output",
+                    };
+                    record_blob(manifest_hash_memo, site_hashes, &mut run.staged_oids, hash, &out_path, &staged_oid);
+                    run.stats.copied += 1;
+                }
+                Err(e) => {
+                    log::warn!("[background-assets] Skipping file with invalid path '{}': {}", mapped_path, e);
+                    run.stats.skipped += 1;
+                }
+            }
+        }
+        Err(e) => {
+            log::info!("[background-assets] Failed to store {}: {}", relative_path, e);
+            // Fallback: direct copy without CAS
+            let target = output_dir.join(&mapped_path);
+            if let Err(copy_err) = crate::build::io_utils::copy_output(file_path, &target) {
+                log::error!(
+                    "[background-assets] Direct copy also failed for {}: {}",
+                    relative_path, copy_err
+                );
+            }
+            run.stats.skipped += 1;
+        }
+    }
+}
+
+/// Walk remaining assets, then replace the source cache with both steps' live records.
 pub(crate) fn copy_deferred_assets(
     ctx: &BackgroundContext,
+    html: StagedHtml,
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
     tx: mpsc::Sender<EmitMessage>,
     asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
 ) -> AssetPipelineRunStats {
-    use crate::build::cache::ObjectStore;
-    use crate::build::render::resolve_path_with_overrides;
     use walkdir::WalkDir;
-
     let _phase = crate::build::phase::PhaseTrace::start("background_asset_copy");
-    let deferred_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-    let object_store = ObjectStore::for_site(&deferred_paths);
-    // See TODO(perf) at both call sites below: a CAS blob's bytes are a pure
-    // function of its oid, so the xxh3 manifest hash of a just-linked output
-    // file needs no staleness rule — only a cache keyed by oid.
-    let manifest_hash_memo =
-        crate::build::media::manifest_hash_memo::ManifestHashMemo::load(&deferred_paths.cache_manifest_hash_memo());
-    let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(&deferred_paths, "assets", &ctx.staging_dir);
-    // Sized-raster-original support (plan 2026-07-06): raster originals
-    // (jpg/jpeg/png) are deployed as a sized/optimized raster at the SAME output
-    // path instead of the full-resolution source, so no full-res original is
-    // ever shipped. The output keeps the source format (JPEG stays JPEG, PNG
-    // stays a transparency-preserving PNG). It is content-addressed and cached
-    // (keyed by source hash + config) via this TransformCache, mirroring the
-    // WebP pass.
-    let transforms = crate::build::cache::TransformCache::for_site(&deferred_paths);
-    let image_config = crate::build::media::image::ImageCompressionConfig::default();
-    let converter_bases: std::collections::HashSet<&Path> = ctx.image_items.iter()
-        .filter(|item| item.owns_source_base())
-        .map(|item| item.source_path.as_path())
-        .collect();
-    // Seeded from the PREVIOUS build's manifest, not from this build's.
-    //
-    // This walk owns exactly one slice of the manifest: static assets. It reads
-    // the previous entries so an asset whose source is still on disk but was not
-    // re-hashed this build (an iCloud stub, an evicted file) keeps its published
-    // hash, and so anything the walk no longer finds is pruned below. Everything
-    // else — rendered pages, OG cards, notebook outputs, image and video
-    // variants — belongs to the `PendingManifest` the coordinator holds, which
-    // already has this build's entries. Re-emitting those from a snapshot taken
-    // at the end of the render phase is what forced three hand-written syncs to
-    // keep the snapshot current, and would now overwrite a live entry with a
-    // stale hash.
-    let mut site_hashes = ctx.previous_hashes.clone();
     let source_root = Path::new(&ctx.source_path);
     let output_dir = &ctx.staging_dir;
-
-    // Source-metadata fast-path: reuse a previously-computed `oid` when the
-    // source file's (size, mtime) matches what we recorded last build. Avoids
-    // re-reading + re-hashing every asset on every deploy. Persisted across
-    // runs in `SiteHashes::sources` (key = source-relative path).
-    //
-    // Racy-mtime safety (Git's trick — see RACY_MTIME_EPSILON below): any
-    // entry whose mtime is within EPSILON of the previous hashes.json write
-    // time is treated as suspect and re-hashed. The previous hashes file is
-    // written atomically AFTER the source files were last stat'd, so any
-    // in-place edit within the timer-resolution window will be caught.
-    let prev_sources = &ctx.previous_hashes.sources;
-    let prev_hashes_mtime_secs: u64 = std::fs::metadata(deferred_paths.hashes())
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    // Markdown extensions that were handled in the blocking phase
-    let markdown_exts = moss_core::page_kind::PAGE_EXTENSIONS;
-    // Video extensions — large files (≥100MB) handled by FFmpeg pipeline,
-    // small files copied as regular assets (see size check below)
-    let video_exts = ["mov", "mp4", "webm", "avi", "mkv", "m4v"];
-    // HTML extensions — also generated in blocking phase
-    let html_exts = ["html", "htm"];
-    // Document types processed in blocking phase (rendered to HTML)
-    let doc_exts = ["pages", "docx", "doc"];
-
-    let mut run = AssetWalkTally::default();
-
-    // Canonical source root, computed once for the containment check
-    // inside `handle_symlink_entry`. Matches against canonical paths only.
-    let canonical_source_root = match source_root.canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            log::info!("[background-assets] canonicalize source_root failed: {}; symlinks will not be preserved", e);
-            source_root.to_path_buf()
-        }
-    };
-
-    let layer_sources: Vec<std::path::PathBuf> =
-        crate::config::map_layers::declared_sources(source_root).iter().map(|s| source_root.join(s)).collect();
-    for entry in WalkDir::new(source_root)
-        .into_iter()
-        // What the scan reads: never a nested site, an excluded folder, a
-        // layer source or the root agent instructions.
+    let deferred_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
+    let mut site_hashes = ctx.previous_hashes.clone();
+    let mut copy = html.copy;
+    let mut run = AssetWalkTally { stats: html.stats, ..Default::default() };
+    let layer_sources: Vec<_> = crate::config::map_layers::declared_sources(source_root).iter().map(|s| source_root.join(s)).collect();
+    for entry in WalkDir::new(source_root).into_iter()
         .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources).is_none())
     {
         let entry = match entry {
@@ -1130,339 +1446,16 @@ pub(crate) fn copy_deferred_assets(
                 continue;
             }
         };
-
-        // Symlink branch: preserve the symlink in the output instead of
-        // copying bytes. Must run before the `is_file()` filter — symlinks
-        // (whether to dirs or files) report `is_file() == false` under the
-        // walker's default `follow_links(false)`.
-        if entry.file_type().is_symlink() {
-            use crate::build::media::symlink::handle_symlink_entry;
-            let outcome = handle_symlink_entry(
-                entry.path(),
-                source_root,
-                &canonical_source_root,
-                output_dir,
-            );
-            if preserve_link(&outcome, &mut site_hashes, &mut run.live_symlinks, "symlink") {
-                run.stats.preserved_symlinks += 1;
-            } else {
-                run.stats.skipped_symlinks += 1;
-            }
-            continue;
-        }
-
-        // Alias branch (macOS only): regular files that are Finder Bookmark
-        // Aliases get resolved and written as POSIX symlinks in the output,
-        // identical to how the symlink branch handles real symlinks.
-        // Note: `ship_phase` (staging→site) sees the output as a real symlink and
-        // handles it via its own symlink branch — no alias branch needed there.
-        #[cfg(target_os = "macos")]
-        if entry.file_type().is_file() {
-            use crate::build::media::symlink::handle_alias_entry;
-            if let Some(outcome) = handle_alias_entry(
-                entry.path(),
-                source_root,
-                &canonical_source_root,
-                output_dir,
-            ) {
-                // Count any non-Preserved alias outcome (escape/broken/
-                // processable/absolute/unresolvable) as a skipped symlink.
-                if preserve_link(&outcome, &mut site_hashes, &mut run.live_symlinks, "alias") {
-                    run.stats.preserved_aliases += 1;
-                } else {
-                    run.stats.skipped_symlinks += 1;
-                }
-                let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel),
-                    prev_hashes_mtime_secs, &object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses);
-                register_alias_source(entry.path(), source_root, &mut site_hashes, &mut run.live_source_keys, blob);
-                continue;
-            }
-            // handle_alias_entry returns None ONLY for a genuine non-alias
-            // file — fall through to regular-file handling. A bookmark whose
-            // target won't resolve now returns Some(SkippedUnresolvable) (and
-            // `continue`s above), so an unresolvable alias is never copied as
-            // a raw blob here. See media/symlink.rs handle_alias_entry.
-        }
-
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let file_path = entry.path();
-        // Normalize `\`→`/`: relative_path feeds `/`-form comparisons (blocking
-        // keys, prev-source asset cache, live-source prune map) — un-normalized
-        // Windows backslashes miss every match (re-hash/re-copy + duplicate-copy).
-        let relative_path = match file_path.strip_prefix(source_root) {
-            Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
-            Err(_) => continue,
-        };
-
-        // Pre-Sonoma eviction (macOS 12–13, still a supported minimum) replaces
-        // the asset with a hidden `.name.icloud` placeholder, so the real
-        // filename never appears in this walk at all. Left alone that reads as
-        // "the user deleted this photo": the key is missing from
-        // `live_asset_keys`, `stale_carried_forward` drops its manifest entry,
-        // and `remove_stale_files` deletes the published file. Claiming the key
-        // the stub stands for is what keeps the previous build's output alive
-        // until the download lands — the asset-side counterpart of what
-        // `scan.rs` does for pages via `evicted_paths`.
-        if let Some(real) = crate::build::icloud::icloud_stub_target(file_path) {
-            if let Ok(rel) = real.strip_prefix(source_root) {
-                let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
-                run.live_asset_keys.insert(resolve_path_with_overrides(&rel, &ctx.dir_overrides));
-                run.live_source_keys.insert(rel.clone());
-                crate::build::cloud_readiness::request_download(&real);
-                log::debug!("[background-assets] Holding {} — still in the cloud (pre-Sonoma stub)", rel);
-            }
-            continue;
-        }
-
-        // Skip OS / VCS metadata that should never reach a live site
-        // (.DS_Store, .gitignore, Finder's `Icon\r`, …). The directory
-        // exclusion rule in classify::is_excluded_dir_name only handles
-        // dot-prefixed dirs; this catches the file-level cases.
-        if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
-            if crate::build::scan::classify::is_os_metadata_file(file_name) {
-                continue;
-            }
-        }
-
-        let ext = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        // Skip files handled by other phases.
-        // Notebooks (.ipynb) are handled by run_notebook_processing in build.rs.
-        if markdown_exts.contains(&ext.as_str()) || doc_exts.contains(&ext.as_str()) || ext == "ipynb" {
-            continue;
-        }
-
-        // Videos outside passthrough roots are the video worker's alone. A
-        // passthrough subtree deliberately opts out of that worker, so this
-        // loop must copy its video verbatim or the asset disappears. This used
-        // to be a size
-        // test that had to agree with a differently-spelled size test in
-        // `collect_videos_for_conversion`, and on a sub-threshold .mov the two
-        // disagreed: the worker transcoded it AND this loop copied the
-        // original, so the site shipped both. One owner cannot disagree with
-        // itself.
-        let configured_passthrough = crate::build::scan::classify::is_in_passthrough(
-            &relative_path,
-            &ctx.passthrough_roots,
-        );
-        if video_exts.contains(&ext.as_str()) && !configured_passthrough {
-            continue;
-        }
-
-        // HTML files: skip if the blocking phase generated this path (e.g., index.html
-        // pages built from .md files). Source HTML files (interactive embeds, p5.js
-        // sketches) must fall through and be copied as assets.
-        //
-        // CRITICAL: blocking_keys must only contain keys freshly generated by the
-        // blocking phase (via `BuildContext::emit*` in render/blocking.rs). If it
-        // also contains carry-forward entries from previous_hashes, source .html
-        // files will be incorrectly skipped here, causing 404s on iframe covers.
-        // See render/blocking.rs blocking_keys declaration for the full explanation.
-        if html_exts.contains(&ext.as_str()) {
-            if ctx.blocking_keys.contains(&relative_path) && !ctx.passthrough_roots.contains(&relative_path) {
-                continue;
-            }
-            // Fall through — copy as asset
-        }
-
-        // Skip root style.css / script.js — the canonical theme location is
-        // .moss/theme/; a root-level file is not served, and
-        // check_misplaced_theme_files() warns authors about the misplacement.
-        // This must be the same predicate the sweep's drift walk uses
-        // (`drift_eligible` in build_shell::watch::sweep) — see
-        // is_ignored_root_theme_file's doc comment.
-        if crate::build::render::is_ignored_root_theme_file(&relative_path) {
-            continue;
-        }
-
-        // The encoder plan is the authority for base ownership. A later stat
-        // failure or cloud transition must never give this path a second writer.
-        if converter_bases.contains(Path::new(&relative_path)) {
-            continue;
-        }
-
-        // Map asset path through dir_overrides so assets land at their
-        // page-tree path (e.g., "交互/sketch.html" → "interactive/sketch.html")
-        let mapped_path = resolve_path_with_overrides(&relative_path, &ctx.dir_overrides);
-
-        // Claim before any deferred read: cloud-only sources still exist.
-        run.live_asset_keys.insert(mapped_path.clone());
-        // Also record the *source-relative* path for `sources` map pruning
-        // below. Sources is keyed by source path (pre-mapping), unlike
-        // `files` which is keyed by output path (post-mapping).
-        run.live_source_keys.insert(relative_path.clone());
-
-        match source_blob(file_path, prev_sources.get(&relative_path), prev_hashes_mtime_secs,
-            &object_store, &mut run.stats.cache_hits, &mut run.stats.cache_misses)
-        {
-            Ok(None) => continue,
-            Ok(Some((oid, src_stat))) => {
-                // Deploy a SIZED/optimized raster for raster originals
-                // (jpg/jpeg/png decodable stills) instead of the full-resolution
-                // source. The output stays in the SOURCE's own format — jpg/jpeg
-                // → sized JPEG, png → sized PNG with alpha PRESERVED (so a
-                // transparent logo/diagram/icon keeps its transparency and the
-                // bytes at a `.png` path are a real PNG). Every downstream
-                // reference (content <picture> <img> fallback,
-                // og:image/twitter:image, newsletter EmailBody images,
-                // site-logo, hero) uses this same output path, so none of them
-                // ship a full-res original. Non-raster, animated, CMYK, or
-                // non-decodable files fall back to a verbatim copy
-                // (link_oid == oid). The sized output is content-addressed and
-                // cached by source hash, so unchanged images are not re-encoded
-                // on incremental builds. The manifest hash below is computed from
-                // the OUTPUT file, so it correctly reflects the sized bytes.
-                // A source still in the cloud is safe to hand over: a warm OID
-                // means the bytes are already in the CAS, and
-                // `sized_raster_oid_for_original` answers from its cache before
-                // it touches the source. On a miss it checks for eviction
-                // itself, records the absence, and returns `None`, so the
-                // verbatim CAS blob is linked until the file lands.
-                let link_oid = if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
-                    crate::build::media::fallback_raster::sized_raster_oid_for_original(
-                        file_path,
-                        &oid,
-                        &object_store,
-                        &transforms,
-                        &image_config,
-                        crate::build::media::fallback_raster::SIZED_JPEG_QUALITY,
-                        Some((&mut staged, &output_dir.join(&mapped_path))),
-                    )
-                    .unwrap_or_else(|| oid.clone())
-                } else {
-                    oid.clone()
-                };
-
-                let target = output_dir.join(&mapped_path);
-                let placement =
-                    BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext, local: (link_oid == oid).then_some(file_path) };
-                if !place_blob(&object_store, &mut staged, placement, reporter, &mut run.stats) {
-                    continue;
-                }
-
-                // Register audio/PDF/static assets as Ready so the
-                // editor hover-preview can resolve them. Only register non-image,
-                // non-video assets here — images are registered in the blocking
-                // phase via set_pending (and set_ready'd by run_image_conversion).
-                // Videos are also registered in the blocking phase. The registry
-                // key matches the URL the preview server normalises: no leading
-                // slash, output-relative (e.g. "audio/talk.mp3", "docs/paper.pdf").
-                if let Some(ref registry) = asset_registry {
-                    if !is_image_extension(&ext) && !video_exts.contains(&ext.as_str()) {
-                        registry.set_ready(mapped_path.clone());
-                    }
-                }
-
-                // Bundled-SPA `<head>` injection (link-preview defaults).
-                // After the source HTML has been linked into the output, post-
-                // process bundled-SPA `index.html` files (e.g. a Vite app at
-                // `cities-heat-map/index.html`) to inject site-level meta
-                // defaults. The injector preserves anything the SPA author
-                // already set, so it's safe to run unconditionally on these.
-                //
-                // Restricted to subfolder `index.html` files (root `index.html`
-                // is moss-rendered, never a passthrough) — guarantees we never
-                // double-tag a moss-templated page.
-                //
-                // Replaces the hardlink with a fresh file containing the
-                // injected content. The `files` hash entry is updated to the
-                // post-injection content hash so deploy diffing matches what's
-                // on disk.
-                let in_passthrough = crate::build::scan::classify::is_in_passthrough(
-                    &relative_path,
-                    &ctx.passthrough_roots,
-                );
-                // The CAS object actually backing `target`'s bytes AFTER SPA
-                // injection, when injection changed them. `link_oid` (below)
-                // names the PRE-injection object `link_to` placed at `target`
-                // moments ago; injection then overwrites those bytes in place
-                // with a freshly-minted object, so `link_oid` alone would name
-                // the wrong blob for `staged_oids` — see
-                // `maybe_inject_spa_cached`'s doc comment.
-                let mut spa_post_oid: Option<String> = None;
-                if !in_passthrough
-                    && html_exts.contains(&ext.as_str())
-                    && is_bundled_spa_index_path(&mapped_path)
-                {
-                    if let Some(ref defaults) = ctx.spa_defaults {
-                        let canonical_url_for_folder = derive_canonical_url(defaults, &mapped_path);
-                        let borrowed = defaults.as_borrowed(canonical_url_for_folder.as_deref());
-                        match maybe_inject_spa_cached(
-                            &target,
-                            &borrowed,
-                            &oid,
-                            src_stat.size,
-                            &object_store,
-                            &transforms,
-                        ) {
-                            Ok(Some((_, new_oid))) => {
-                                spa_post_oid = Some(new_oid);
-                            }
-                            Ok(None) => {} // no-op (nothing to inject)
-                            Err(e) => {
-                                // Fail open — leave the file alone, don't break the build.
-                                log::info!(
-                                    "[background-assets] SPA inject failed for {}: {}",
-                                    mapped_path, e
-                                );
-                            }
-                        }
-                    }
-                }
-
-                // Record the source-metadata entry (keyed by source-relative
-                // path, not output path) so the next build's check_source_cache
-                // can short-circuit. Always write — even on cache hit — so
-                // the entry stays present after every build.
-                site_hashes.sources.insert(
-                    relative_path.clone(),
-                    crate::build::types::SourceMetadata::from_stat(oid.clone(), src_stat),
-                );
-                match crate::build::served_path::ServedPath::from_source(&mapped_path) {
-                    Ok(out_path) => {
-                        // The CAS object actually backing `target`'s bytes: the
-                        // post-injection object when SPA injection changed
-                        // them, otherwise the object `link_to` placed there
-                        // (`link_oid`) — `apply_transform`/`transform_for` are
-                        // pure and path-only, so a later CAS read reproduces
-                        // exactly what reading `target` now would.
-                        let staged_oid = spa_post_oid.clone().unwrap_or_else(|| link_oid.clone());
-                        let hash = OutputHash {
-                            memo_key: &staged_oid,
-                            target: &target,
-                            fallback_oid: &oid,
-                            log_context: "output",
-                        };
-                        record_blob(&manifest_hash_memo, &mut site_hashes, &mut run.staged_oids, hash, &out_path, &staged_oid);
-                        run.stats.copied += 1;
-                    }
-                    Err(e) => {
-                        log::warn!("[background-assets] Skipping file with invalid path '{}': {}", mapped_path, e);
-                        run.stats.skipped += 1;
-                    }
-                }
-            }
-            Err(e) => {
-                log::info!("[background-assets] Failed to store {}: {}", relative_path, e);
-                // Fallback: direct copy without CAS
-                let target = output_dir.join(&mapped_path);
-                if let Err(copy_err) = crate::build::io_utils::copy_output(file_path, &target) {
-                    log::error!(
-                        "[background-assets] Direct copy also failed for {}: {}",
-                        relative_path, copy_err
-                    );
-                }
-                run.stats.skipped += 1;
-            }
-        }
+        if copy.handles_source_html(entry.path()) { continue; }
+        copy_asset_entry(ctx, &mut copy, entry.path(), entry.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref());
     }
+    let AssetCopy { object_store, manifest_hash_memo, mut staged, prev_hashes_mtime_secs, .. } = copy;
+    let prev_sources = &ctx.previous_hashes.sources;
+    let emit = |msg| {
+        if let Err(e) = tx.blocking_send(msg) {
+            log::info!("[background-assets] Failed to send to coordinator: {e}");
+        }
+    };
 
     // Copy .moss/theme/ to output (verbatim mirror: textures, fonts, video
     // overlays, plus any user subfolders). .moss/ is excluded from the main
@@ -1494,9 +1487,6 @@ pub(crate) fn copy_deferred_assets(
             // All other files, including any user-named custom.css/custom.js,
             // mirror through verbatim under _moss/theme/.
             if relative_path == "style.css" || relative_path == "script.js" {
-                // Every build, unconditionally, for exactly these two files —
-                // not actionable by anyone reading the log, so DEBUG not WARN
-                // (measured ~170 lines/session in a real upload, 2026-09-15).
                 log::debug!(
                     "[background-assets] Skipping .moss/theme/{} — handled by blocking phase",
                     relative_path
@@ -1555,125 +1545,28 @@ pub(crate) fn copy_deferred_assets(
         }
     }
 
-    // Drop the previous build's entries for assets this walk did not find.
-    //
-    // The seed is the previous manifest, so anything left in it that the walk
-    // did not claim has no source file behind it any more and must not be
-    // re-emitted — otherwise mark-and-sweep at seal keeps a key whose file is
-    // gone and deploy trips on it.
-    //
-    // Only two things count as claimed, and neither has to do with rendering:
-    // an asset the walk found (`live_asset_keys` — inserted BEFORE the read, so
-    // an evicted file still counts), and a symlink the symlink/alias branches
-    // recreated (`live_symlinks`; symlinks carry no content hash so they never
-    // enter `live_asset_keys` — dropping them is the `cities-heat-map` 404).
-    //
-    // Rendered pages, OG cards and notebook outputs used to need explicit
-    // keep-clauses here because the seed contained them. It no longer does:
-    // they are the coordinator's, registered there by this build.
-    let stale_carried_forward: Vec<String> = site_hashes
-        .files
-        .iter()
-        .filter(|(key, _)| {
-            !run.live_asset_keys.contains(*key) && !run.live_symlinks.contains(*key)
-        })
-        .map(|(key, _)| key.clone())
-        .collect();
-    for key in &stale_carried_forward {
-        site_hashes.files.remove(key);
-        log::trace!("[background-assets] Removed stale hash: {}", key);
-    }
-
-    // Prune the source-metadata cache against the same source-relative key
-    // set used during the walk. Without this, `sources` accumulates entries
-    // for every file ever touched by the project — e.g. a renamed image
-    // leaves both old and new paths in `hashes.json` indefinitely.
-    let stale_sources: Vec<String> = site_hashes
-        .sources
-        .keys()
-        .filter(|k| !run.live_source_keys.contains(*k))
-        .cloned()
-        .collect();
-    for key in &stale_sources {
-        site_hashes.sources.remove(key);
-    }
-    // One line for the whole prune, not one per entry — a rename/restructure
-    // or a first full-cache build could otherwise log ~1300 lines in a
-    // single "Send Logs" upload for information no individual key adds over
-    // the count (2026-09-15).
-    if !stale_sources.is_empty() {
-        log::debug!(
-            "[background-assets] Removed {} stale source-cache entr{}",
-            stale_sources.len(),
-            if stale_sources.len() == 1 { "y" } else { "ies" }
-        );
-    }
-
-    // All background workers (image, video, assets) send their
-    // registrations via the coordinator channel, so `video_outputs`,
-    // `image_outputs`, and `notebook_outputs` accumulate in the
-    // coordinator's PendingManifest — not on disk. The legacy on-disk merge
-    // that ran through `tx.is_none()` has been removed.
+    // Only live source assets and preserved links may re-register prior entries.
+    // Rendered pages and media-worker outputs belong to the coordinator.
+    run.prune(&mut site_hashes);
 
     // Stale files, dirs and symlinks leave staging only through the build's
     // permitted sweep (`pipeline::sweep_staging`), never from this worker.
 
-    // Send all accumulated file entries to the coordinator (or write to disk
-    // in legacy mode). The coordinator merges these with image/video/notebook
-    // registrations from the concurrent workers and seals the manifest.
-    // Send each file entry to the coordinator. `site_hashes.files` contains:
-    //   - carry-forward entries from previous builds (still present, minus
-    //     the stale-carried-forward ones pruned above)
-    //   - new entries added during this walk (from asset files found in source)
-    // The coordinator accumulates these on top of render-phase emits.
-    //
-    // **Load-bearing invariant for mark-and-sweep at `PendingManifest::seal`:**
-    // this loop MUST re-emit every entry in `site_hashes.files`, regardless of
-    // whether it changed since the previous build. `PendingManifest::seal`
-    // prunes the output buckets to retain only entries that were registered
-    // via `register*` / `apply_message` during this build (the `touched` mark
-    // set). An optimisation here that sends only newly-added entries would
-    // silently delete carry-forward static assets (CSS, JS, fonts, raw
-    // images, source HTML) from the deploy manifest — they would no longer
-    // be `touched` at seal time, would be pruned from the output buckets,
-    // and stale-file cleanup would then delete them from the sealed generation dir.
-    //
-    // We send ALL entries (not just newly added ones) so the coordinator's
-    // PendingManifest has the full picture including carry-forwards. The
-    // coordinator started from the render-phase pending which already has
-    // render-phase entries; sending carry-forwards here may result in
-    // duplicates (same key, same hash) which is idempotent (HashMap insert
-    // with same key just overwrites with same value).
-    for (rel_path, hash_entry) in &site_hashes.files {
-        let msg = EmitMessage::File {
-            rel_path: rel_path.clone(),
-            hash: hash_entry.strip_prefix("100644:").unwrap_or(hash_entry).to_string(),
-            bucket: HashBucket::Files,
-            oid: run.staged_oids.get(rel_path).cloned(),
-        };
-        if let Err(e) = tx.blocking_send(msg) {
-            log::info!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);
-        }
+    // Re-register every live asset, including unchanged carry-forwards:
+    // the manifest's mark-and-sweep keeps only paths touched this build.
+    for msg in file_registrations(&site_hashes.files, &run.staged_oids) {
+        emit(msg);
     }
     log::debug!(
         "[background-assets] Sent {} file entries to coordinator",
         site_hashes.files.len()
     );
 
-    // Propagate this build's source-cache (inserts from cache misses, deletes
-    // from the live-set prune above) to the coordinator. Without this,
-    // `PendingManifest::inner.sources` would remain the previous build's
-    // carry-forward and the next build's `prev_sources` (loaded from the
-    // sealed `hashes.json`) would be two builds stale, defeating the
-    // change-detection cache.
-    //
-    // `mem::take` (vs. `clone`) moves the ~40KB sources map into the message
-    // — `site_hashes` is dropped at the end of this function and has no
-    // further reads after this send, so no copy is needed.
+    // The remaining pass includes the HTML source cache handed over by the
+    // early pass, so this replacement covers both phases and prunes deletions.
+    site_hashes.sources.extend(html.sources);
     let sources_payload = std::mem::take(&mut site_hashes.sources);
-    if let Err(e) = tx.blocking_send(EmitMessage::SourcesReplace(sources_payload)) {
-        log::info!("[background-assets] Failed to send sources to coordinator: {}", e);
-    }
+    emit(EmitMessage::SourcesReplace(sources_payload));
 
     staged.save();
     // Persist the oid→xxh3 memo once per build (not once per asset — see
@@ -1695,4 +1588,4 @@ pub(crate) fn copy_deferred_assets(
 
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
-mod tests;
+pub(crate) mod tests;

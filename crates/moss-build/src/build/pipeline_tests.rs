@@ -1,5 +1,6 @@
+use super::super::media::pipeline::tests::copy_deferred_assets;
 use super::super::media::pipeline::{
-    compute_expected_dirs, copy_deferred_assets, is_image_extension,
+    compute_expected_dirs, is_image_extension,
     remove_stale_dirs, remove_stale_files, stage_copy, stage_write,
 };
 use super::super::video::{compute_video_item_fingerprint, run_video_conversion};
@@ -2538,7 +2539,6 @@ fn test_is_image_extension_rejects_non_images() {
 
 #[test]
 fn test_copy_deferred_assets_accepts_event_sink() {
-    use std::collections::HashSet;
 
     let temp_dir =
         std::env::temp_dir().join(format!("moss_test_asset_ready_{}", std::process::id()));
@@ -2556,7 +2556,6 @@ fn test_copy_deferred_assets_accepts_event_sink() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output,
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2570,7 +2569,6 @@ fn test_copy_deferred_assets_accepts_event_sink() {
 
 #[test]
 fn test_copy_deferred_assets_copies_source_html_files() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -2590,15 +2588,10 @@ fn test_copy_deferred_assets_copies_source_html_files() {
     fs::create_dir_all(&output).unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-    blocking_keys.insert("interactive/my-article/index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2622,7 +2615,7 @@ fn test_copy_deferred_assets_copies_source_html_files() {
 }
 
 #[test]
-fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
+fn renamed_folder_rendered_page_takes_precedence_over_authored_html() {
     use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
@@ -2634,30 +2627,34 @@ fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
     fs::create_dir_all(&interactive).unwrap();
     fs::write(interactive.join("sketch.html"), "<html>sketch</html>").unwrap();
 
-    fs::create_dir_all(&output).unwrap();
+    fs::create_dir_all(output.join("renamed")).unwrap();
+    fs::write(output.join("renamed/sketch.html"), "<html>rendered page</html>").unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
-    blocking_keys.insert("interactive/sketch.html".to_string());
+    blocking_keys.insert("renamed/sketch.html".to_string());
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
+        dir_overrides: [("interactive".to_string(), "renamed".to_string())].into(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
     {
         let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
-        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for key in blocking_keys {
+            pending.apply_message(key, "rendered", crate::build::manifest::HashBucket::Files, None);
+        }
+        crate::build::media::pipeline::tests::stage_and_copy_assets(&ctx, &mut pending,
+            crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    assert!(
-        !output.join("interactive/sketch.html").exists(),
-        "Source HTML is skipped when blocking_keys is polluted (bug behavior)"
-    );
+    assert_eq!(fs::read_to_string(output.join("renamed/sketch.html")).unwrap(),
+        "<html>rendered page</html>", "The rendered address owns the page after folder renaming");
 }
 
 #[test]
@@ -2678,13 +2675,18 @@ fn configured_passthrough_html_replaces_generated_page() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::from(["index.html".to_string()]),
         passthrough_roots: HashSet::from(["index.html".to_string()]),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
+    let blocking_keys = HashSet::from(["index.html".to_string()]);
     let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
-    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for key in blocking_keys {
+        pending.apply_message(key, "rendered", crate::build::manifest::HashBucket::Files, None);
+    }
+    crate::build::media::pipeline::tests::stage_and_copy_assets(&ctx, &mut pending,
+        crate::build::ports::reporter::discarding(), tx, None);
 
     assert_eq!(fs::read_to_string(output.join("index.html")).unwrap(), "<html>custom home</html>");
 }
@@ -2722,7 +2724,6 @@ fn configured_passthrough_directory_copies_video_verbatim() {
 
 #[test]
 fn test_stale_directory_removed_after_article_deletion() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let output = temp.path().join("output");
@@ -2743,14 +2744,10 @@ fn test_stale_directory_removed_after_article_deletion() {
         "hash123".to_string(),
     );
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("articles/active-article/index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2782,7 +2779,6 @@ fn test_stale_directory_removed_after_article_deletion() {
 
 #[test]
 fn test_stale_directory_with_stale_files_removed() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let output = temp.path().join("output");
@@ -2798,14 +2794,10 @@ fn test_stale_directory_with_stale_files_removed() {
     let mut site_hashes = SiteHashes::new();
     site_hashes.insert("index.html".to_string(), "hash".to_string());
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2829,7 +2821,6 @@ fn test_stale_directory_with_stale_files_removed() {
 
 #[test]
 fn test_video_output_directories_preserved() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let output = temp.path().join("output");
@@ -2851,14 +2842,10 @@ fn test_video_output_directories_preserved() {
     let hashes_json = serde_json::to_string_pretty(&site_hashes).unwrap();
     fs::write(moss.join("build.nosync").join("hashes.json"), &hashes_json).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3189,13 +3176,7 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
     );
 }
 
-/// `remove_stale_html` also needs notebook_outputs protection because
-/// JupyterLite's SPA shell produces dozens of `index.html` files under
-/// `jupyter/{lab,tree,doc,repl,consoles,edit,notebooks}/...` — all
-/// matching the generated-page pattern this function targets.
-///
-/// These live in `notebook_outputs`, not `blocking_keys` (background-phase
-/// emission), so the function must accept a second preserve-set.
+/// Notebook-owned HTML is protected while its deferred processing runs.
 #[test]
 fn test_remove_stale_html_preserves_notebook_outputs() {
     use std::collections::HashSet;
@@ -3223,7 +3204,10 @@ fn test_remove_stale_html_preserves_notebook_outputs() {
     notebook_outputs.insert("jupyter/lab/index.html".to_string());
     notebook_outputs.insert("jupyter/tree/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &notebook_outputs, &crate::build::lifecycle::permit_for_test());
+    let mut previous = SiteHashes::default();
+    previous.files.extend(["index.html", "jupyter/lab/index.html", "jupyter/tree/index.html", "jupyter/stale-section/index.html"].map(|key| (key.to_string(), "hash".to_string())));
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &notebook_outputs, &HashSet::new());
+    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "home kept");
     assert!(
@@ -3299,7 +3283,6 @@ fn test_compute_expected_dirs_includes_qr_directory() {
 
 #[test]
 fn test_copy_deferred_assets_cleans_staging_dir() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let staging = temp.path().join("site-stage");
@@ -3317,14 +3300,10 @@ fn test_copy_deferred_assets_cleans_staging_dir() {
     let mut site_hashes = SiteHashes::new();
     site_hashes.insert("index.html".to_string(), "hash1".to_string());
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3367,7 +3346,10 @@ fn test_remove_stale_html_deletes_orphaned_index_pages() {
     blocking_keys.insert("index.html".to_string());
     blocking_keys.insert("文字/article/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    let mut previous = SiteHashes::default();
+    previous.files.extend(["index.html", "文字/article/index.html", "视频/old-video/index.html", "index-2.html"].map(|key| (key.to_string(), "hash".to_string())));
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
+    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "current index.html kept");
     assert!(
@@ -3402,11 +3384,72 @@ fn test_remove_stale_html_preserves_non_html_files() {
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    let mut previous = SiteHashes::default();
+    previous.files.extend(["index.html", "style.css", "photo.jpg"].map(|key| (key.to_string(), "hash".to_string())));
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
+    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists());
     assert!(dir.join("style.css").exists(), "CSS preserved");
     assert!(dir.join("photo.jpg").exists(), "image preserved");
+}
+
+#[test]
+fn stale_html_keys_spares_a_preserved_symlink() {
+    use std::collections::HashSet;
+    let mut previous = SiteHashes::default();
+    previous.files.insert("link.html".to_string(), crate::types::content::symlink_entry("guide.html"));
+    previous.files.insert("gone.html".to_string(), "100644:hash".to_string());
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &HashSet::new(), &HashSet::new(), &HashSet::new());
+    assert_eq!(deleted, vec!["gone.html".to_string()], "the deferred walk registers symlinks after the sweep");
+}
+
+#[test]
+fn html_deletions_spares_the_pages_the_seal_forwards_again() {
+    use crate::build::feeds::{kept_addresses::{KeptCopy, LateRedirects}, redirect_table::FolderMove};
+    let folder = TempDir::new().unwrap();
+    let folder_path = folder.path().to_string_lossy().to_string();
+    let copy = |from: &str| KeptCopy { from: from.into(), to: "new.html".into(), raw: "new.html".into() };
+    let late = LateRedirects {
+        copies: vec![copy("old.html"), copy("retired.html")],
+        folder_moves: vec![FolderMove { from: "old/".into(), to: "guide/".into(), old_served: false }],
+    };
+    let mut previous = SiteHashes::default();
+    for key in ["old/extra.html", "old/orphan.html", "old/authored.html", "old.html", "retired.html", "gone.html"] {
+        previous.files.insert(key.to_string(), "100644:hash".to_string());
+    }
+    // Pages the author deleted had source records; forwarding pages never do.
+    // A source path is not its address: `Old/` is served as `old/`.
+    for key in ["Old/authored.html", "retired.html"] {
+        previous.sources.insert(key.to_string(), Default::default());
+    }
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for key in ["guide/extra.html", "guide/authored.html"] {
+        pending.apply_message(key.to_string(), "rendered", crate::build::manifest::HashBucket::Files, None);
+    }
+    let (_, mut stale) = crate::build::media::pipeline::html_deletions(&previous, &pending,
+        &crate::types::content::ProjectStructure::default(), &folder_path, &Default::default(), &late);
+    stale.sort();
+    assert_eq!(stale, ["gone.html", "old/authored.html", "old/orphan.html", "retired.html"],
+        "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes");
+}
+
+#[test]
+fn remove_stale_html_keeps_a_case_only_rename_and_removes_a_distinct_file() {
+    use std::collections::HashSet;
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path();
+    fs::write(dir.join("guide.html"), "renamed page").unwrap();
+    let live = HashSet::from(["guide.html".to_string()]);
+    let insensitive = dir.join("GUIDE.html").exists();
+    if !insensitive {
+        fs::write(dir.join("Guide.html"), "deleted page").unwrap();
+    }
+    remove_stale_html(dir, &["Guide.html".to_string()], &live, &crate::build::lifecycle::permit_for_test());
+    assert_eq!(fs::read_to_string(dir.join("guide.html")).unwrap(), "renamed page");
+    if !insensitive {
+        assert!(!dir.join("Guide.html").exists(), "a distinct file that differs only in case is still deleted");
+    }
 }
 
 #[test]
@@ -3606,7 +3649,6 @@ fn test_has_output_changes_true_without_carry_forward() {
 #[test]
 fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
     use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3633,7 +3675,6 @@ fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         dir_overrides,
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -3664,7 +3705,6 @@ fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
 #[test]
 fn test_copy_deferred_assets_maps_nested_dir_overrides() {
     use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3686,7 +3726,6 @@ fn test_copy_deferred_assets_maps_nested_dir_overrides() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         dir_overrides,
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -3708,8 +3747,6 @@ fn test_copy_deferred_assets_maps_nested_dir_overrides() {
 
 #[test]
 fn test_copy_deferred_assets_no_overrides_unchanged() {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3726,7 +3763,6 @@ fn test_copy_deferred_assets_no_overrides_unchanged() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3743,8 +3779,6 @@ fn test_copy_deferred_assets_no_overrides_unchanged() {
 
 #[test]
 fn test_copy_deferred_assets_skips_root_style_css() {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3759,8 +3793,6 @@ fn test_copy_deferred_assets_skips_root_style_css() {
     fs::write(output.join("style.css"), default_css).unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("style.css".to_string());
     let mut site_hashes = SiteHashes::default();
     site_hashes.insert("style.css".to_string(), "css_hash".to_string());
 
@@ -3768,7 +3800,6 @@ fn test_copy_deferred_assets_skips_root_style_css() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3787,8 +3818,6 @@ fn test_copy_deferred_assets_skips_root_style_css() {
 
 #[test]
 fn test_copy_deferred_assets_skips_root_script_js() {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3803,8 +3832,6 @@ fn test_copy_deferred_assets_skips_root_script_js() {
     fs::write(output.join("script.js"), default_script).unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("script.js".to_string());
     let mut site_hashes = SiteHashes::default();
     site_hashes.insert("script.js".to_string(), "js_hash".to_string());
 
@@ -3812,7 +3839,6 @@ fn test_copy_deferred_assets_skips_root_script_js() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4523,7 +4549,6 @@ fn test_user_js_root_ignored() {
 
 #[test]
 fn test_moss_assets_copied_to_output() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4541,7 +4566,6 @@ fn test_moss_assets_copied_to_output() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4562,7 +4586,6 @@ fn test_moss_assets_copied_to_output() {
 
 #[test]
 fn test_moss_assets_nested_directories() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4583,7 +4606,6 @@ fn test_moss_assets_nested_directories() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4609,7 +4631,6 @@ fn test_moss_assets_nested_directories() {
 /// picked up because the pipeline only walked `.moss/assets/` (now `.moss/theme/`).
 #[test]
 fn test_theme_video_overlay_copied_to_output() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4628,7 +4649,6 @@ fn test_theme_video_overlay_copied_to_output() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4654,7 +4674,6 @@ fn test_theme_video_overlay_copied_to_output() {
 /// but copies all other assets through verbatim under _moss/theme/.
 #[test]
 fn test_theme_walk_skips_entry_files_copies_rest() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4674,7 +4693,6 @@ fn test_theme_walk_skips_entry_files_copies_rest() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -5074,9 +5092,7 @@ fn test_image_compression_pipeline_end_to_end() {
 /// build's `load_previous_hashes` reads it back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn copy_deferred_assets_warm_cache_zero_misses() {
-    use crate::build::media::pipeline::copy_deferred_assets;
     use crate::build::coordinator::test_utils;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -5101,7 +5117,6 @@ async fn copy_deferred_assets_warm_cache_zero_misses() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss.clone(),
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 

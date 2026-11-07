@@ -81,8 +81,8 @@ fn a_shadowed_index_md_still_maps_to_the_address_its_document_owns() {
     }
 }
 
-/// The asset copy lays the documents down after the search index has read
-/// staging, so a build whose output changed must not sweep them out first.
+/// Authored documents are staged before search; a changed build must keep
+/// them through the stale-page sweep.
 #[test]
 fn a_changed_build_still_indexes_the_documents_the_last_build_laid_down() {
     let site = Site::with_config(&format!("search = true\n{CONFIG}"), &[

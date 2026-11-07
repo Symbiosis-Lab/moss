@@ -400,7 +400,7 @@ impl PendingManifest {
     ///
     /// A cloud-evicted page emits nothing, so it never reaches
     /// `register_with_hash` and the mark-and-sweep reads it as deleted — at
-    /// which point three separate passes remove it: `stale_carried_forward`
+    /// which point three separate passes remove it: `AssetWalkTally::prune`
     /// drops the hash, `seal` prunes the bucket, and `remove_stale_files`
     /// unlinks the file. The page 404s, and because `sealed.files()` is what
     /// deploy uploads, **publishing while a page is offline un-publishes it.**
@@ -634,19 +634,10 @@ impl PendingManifest {
         self.inner.site_url.as_deref()
     }
 
-    /// Clone the accumulated state into legacy parts without consuming `self`.
-    ///
-    /// A `pub(crate)` escape hatch for the blocking phase: after all Pattern A
-    /// emits have routed through `BuildContext::emit`, `generate_blocking_content`
-    /// needs the accumulated state back as `(SiteHashes, HashSet<String>)` for
-    /// `SiteResult` and `BackgroundContext::blocking_keys`. It
-    /// clones because `pending` is `&mut` there, not owned, and the hatch is
-    /// deliberately narrow — `inner` and `blocking_keys` stay private.
-    /// Superseded by `seal()` once every background phase routes through
-    /// `BuildContext`.
-    pub(crate) fn as_parts_clone(&self) -> (SiteHashes, HashSet<String>) {
-        (self.inner.clone(), self.blocking_keys.clone())
-    }
+    /// Snapshot the accumulated hashes before the background phase seals them.
+    pub(crate) fn hashes_clone(&self) -> SiteHashes { self.inner.clone() }
+
+    pub(crate) fn blocking_keys(&self) -> &HashSet<String> { &self.blocking_keys }
 
     /// Read-only access to the accumulated `files` map — this build's
     /// registrations AND, until `seal` sweeps them, every entry the previous
@@ -768,8 +759,8 @@ impl PendingManifest {
     /// Attach, not register, and the refusal is the point. The slot pass walks
     /// every `.html` under `stage_dir`, and the stage keeps what the previous
     /// build left there: `sweep_staging` spares anything the previous manifest
-    /// listed, and `remove_stale_html` runs AFTER the pass and deletes only
-    /// `index*.html`. Registering a stale page would mark it `touched`, keep it
+    /// listed, and `remove_stale_html` runs AFTER the pass, and only when the
+    /// output changed. Registering a stale page would mark it `touched`, keep it
     /// through `seal`, and — because a live CAS blob counts as present to
     /// `drop_absent_outputs` — ship a deleted page from the CAS for good.
     ///
