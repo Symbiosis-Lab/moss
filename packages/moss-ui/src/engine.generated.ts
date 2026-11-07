@@ -978,6 +978,11 @@ file_kinds?: ExtKind[] | null;
 applies_when?: AppliesWhen[] | null }
 
 /**
+ * A top-level frontmatter key, with one-based line and UTF-8 byte offsets.
+ */
+export type FieldSpan = { key: string; line: number; from: number; to: number }
+
+/**
  * Supported field types.
  */
 export type FieldType = "string" | "boolean" | "integer" | "number" | "array" | "object" | 
@@ -1692,6 +1697,16 @@ title: string }
  * `en/`).
  */
 export type PagePosition = "page" | "folder" | "home"
+
+/**
+ * A one-page preview as hosts receive it: a full document, its title and the
+ * renderer's diagnostics. Page checks come from [`check_page`].
+ */
+export type PagePreview = { 
+/**
+ * [`content_hash`] of the text this render came from.
+ */
+revision: string; html: string; title: string; diagnostics: EditorDiagnostic[] }
 
 /**
  * Result of resolving a preview URL to its source file and page type.

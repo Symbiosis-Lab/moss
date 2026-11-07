@@ -2893,7 +2893,6 @@ name = "moss-bindings"
 version = "0.1.0"
 dependencies = [
  "moss-core",
- "serde",
  "serde_json",
  "uniffi",
  "wasm-bindgen",

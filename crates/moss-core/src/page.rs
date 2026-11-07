@@ -125,11 +125,24 @@ fn check_frontmatter(text: &str, site: &SiteInputs) -> Vec<Diagnostic> {
 
 /// A top-level frontmatter key, with one-based line and UTF-8 byte offsets.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct FieldSpan {
     pub key: String,
     pub line: usize,
     pub from: usize,
     pub to: usize,
+}
+
+/// A one-page preview as hosts receive it: a full document, its title and the
+/// renderer's diagnostics. Page checks come from [`check_page`].
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct PagePreview {
+    /// [`content_hash`] of the text this render came from.
+    pub revision: String,
+    pub html: String,
+    pub title: String,
+    pub diagnostics: Vec<crate::validation::EditorDiagnostic>,
 }
 
 /// The top-level frontmatter keys the parser read, where they are written.

@@ -705,6 +705,9 @@ fn render_contract() -> String {
         crate::deploy::progress::DeployProgress::reference(&mut types, &[]);
         crate::advisory::AppOp::reference(&mut types, &[]);
         crate::i18n::AppLanguage::reference(&mut types, &[]);
+        // Hosts without the engine get these from moss-core's page bindings.
+        moss_core::page::PagePreview::reference(&mut types, &[]);
+        moss_core::page::FieldSpan::reference(&mut types, &[]);
     }
     let ts = Typescript::default().bigint(BigIntExportBehavior::Number).remove_default_header();
     let render = |dt: &specta::DataType| {

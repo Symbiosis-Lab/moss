@@ -1,4 +1,4 @@
-import type { EditorDiagnostic } from "@symbiosis-lab/moss-ui";
+import type { FieldSpan } from "@symbiosis-lab/moss-ui";
 import { initSync, MossSite, fieldSpans } from "../wasm/moss_bindings";
 import bytes from "../wasm/moss_bindings_bg.wasm";
 
@@ -9,22 +9,15 @@ export function initializeCore(): void {
   initialized = true;
 }
 
-export type { EditorDiagnostic } from "@symbiosis-lab/moss-ui";
+export type { EditorDiagnostic, PagePreview } from "@symbiosis-lab/moss-ui";
 
 /** Convert the core's UTF-8 key spans to CodeMirror's UTF-16 coordinates. */
 export function editorFieldSpans(text: string) {
-  const spans: { key: string; line: number; from: number; to: number }[] = JSON.parse(fieldSpans(text));
+  const spans: FieldSpan[] = JSON.parse(fieldSpans(text));
   const bytes = new TextEncoder().encode(text);
   const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   const offset = (byte: number) => decoder.decode(bytes.subarray(0, byte)).length;
   return spans.map((span) => ({ ...span, from: offset(span.from), to: offset(span.to) }));
-}
-
-export interface PagePreview {
-  revision: string;
-  html: string;
-  title: string;
-  diagnostics: EditorDiagnostic[];
 }
 
 export { MossSite, fieldSpans };

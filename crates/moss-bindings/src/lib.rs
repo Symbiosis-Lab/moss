@@ -3,7 +3,6 @@
 use moss_core::page::{self, SiteBundle, SiteInputs};
 use moss_core::schema;
 use moss_core::validation::{Diagnostic, EditorDiagnostic};
-use serde::Serialize;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -54,7 +53,7 @@ impl Site {
     pub fn preview(&self, path: &str, text: &str, base_href: &str) -> String {
         let page = page::render_page(path, text, &self.inputs);
         let html = page::preview_document(&page, &self.inputs.lang, &self.css, base_href);
-        serde_json::to_string(&Preview {
+        serde_json::to_string(&page::PagePreview {
             revision: page::content_hash(text.as_bytes()),
             html,
             title: page.title,
@@ -72,15 +71,6 @@ pub fn builtin_schema_json() -> String {
 #[cfg_attr(feature = "ffi", uniffi::export)]
 pub fn field_spans(text: &str) -> String {
     serde_json::to_string(&page::field_spans(text)).expect("field spans are JSON-compatible")
-}
-
-#[derive(Serialize)]
-struct Preview {
-    /// [`page::content_hash`] of the text this render came from.
-    revision: String,
-    html: String,
-    title: String,
-    diagnostics: Vec<EditorDiagnostic>,
 }
 
 fn diagnostics(items: Vec<Diagnostic>) -> Vec<EditorDiagnostic> {
