@@ -28,6 +28,11 @@ impl Site {
         Ok(Self { inputs: bundle.inputs(), css })
     }
 
+    /// The effective schema used by this site's checks.
+    pub fn schema_json(&self) -> String {
+        serde_json::to_string(&self.inputs.schema).expect("schema is JSON-compatible")
+    }
+
     /// Replace all notes; invalid input keeps the old map.
     pub fn set_notes(&mut self, notes_json: &str) -> Result<(), String> {
         self.inputs.notes = serde_json::from_str(notes_json).map_err(|e| e.to_string())?;
@@ -61,6 +66,12 @@ impl Site {
 #[cfg_attr(feature = "ffi", uniffi::export)]
 pub fn builtin_schema_json() -> String {
     serde_json::to_string(&schema::builtin_schema()).expect("built-in schema is JSON-compatible")
+}
+
+/// Canonical frontmatter key spans in UTF-8 byte coordinates.
+#[cfg_attr(feature = "ffi", uniffi::export)]
+pub fn field_spans(text: &str) -> String {
+    serde_json::to_string(&page::field_spans(text)).expect("field spans are JSON-compatible")
 }
 
 #[derive(Serialize)]

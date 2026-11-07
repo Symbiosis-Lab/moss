@@ -45,9 +45,10 @@ impl SiteBundle {
     /// The inputs a check or render takes, composing the schema if the bundle has none.
     pub fn inputs(self) -> SiteInputs {
         let schema = self.schema.unwrap_or_else(|| {
-            let plugins: Vec<_> = self.plugins.iter()
+            let mut plugins: Vec<_> = self.plugins.iter()
                 .map(|p| crate::schema::PluginSchema { name: &p.name, fields: Some(&p.fields) })
                 .collect();
+            plugins.sort_by(|a, b| a.name.cmp(b.name));
             crate::schema::compose_schema(&self.declared_name_lists, &plugins, &self.listing_styles).0
         });
         SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang }
@@ -113,36 +114,53 @@ fn check_frontmatter(text: &str, site: &SiteInputs) -> Vec<Diagnostic> {
         parsed.frontmatter
     };
     let mut diagnostics = validation::validate_frontmatter(&fields, &site.schema);
-    if let Some(span) = span {
-        let block = text.get(span.fields.clone()).unwrap_or_default();
-        let offset = line_at(text, span.fields.start) - 1;
-        for item in &mut diagnostics {
-            if let Some(key) = item.path.as_deref().filter(|key| fields.contains_key(*key)) {
-                item.line = field_line(block, key).map(|line| offset + line);
-            }
+    let spans = field_spans(text);
+    for item in &mut diagnostics {
+        if let Some(field) = spans.iter().find(|field| Some(field.key.as_str()) == item.path.as_deref()) {
+            item.line = Some(field.line);
         }
     }
     diagnostics
 }
 
-fn field_line(block: &str, key: &str) -> Option<usize> {
+/// A top-level frontmatter key, with one-based line and UTF-8 byte offsets.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct FieldSpan {
+    pub key: String,
+    pub line: usize,
+    pub from: usize,
+    pub to: usize,
+}
+
+/// Locate keys recognized by the canonical parser in either frontmatter dialect.
+pub fn field_spans(text: &str) -> Vec<FieldSpan> {
+    let Some(span) = frontmatter::frontmatter_span(text) else { return Vec::new() };
+    let fields = frontmatter::frontmatter_map(text);
+    let block = text.get(span.fields.clone()).unwrap_or_default();
     let indent = block.lines()
         .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
         .map(|line| line.len() - line.trim_start().len())
-        .min()?;
-    block.lines().enumerate().find_map(|(index, line)| {
-        if line.len() - line.trim_start().len() != indent {
-            return None;
+        .min().unwrap_or(0);
+    let mut offset = span.fields.start;
+    let first_line = line_at(text, offset);
+    let mut spans = Vec::new();
+    for (index, line) in block.split_inclusive('\n').enumerate() {
+        let leading = line.len() - line.trim_start().len();
+        if span.kind == frontmatter::FrontmatterKind::Simplified || leading == indent {
+            let key = line.match_indices(':').filter_map(|(colon, _)| line.get(..colon))
+                .chain(std::iter::once(line)).find_map(|candidate| {
+                    let candidate = candidate.trim();
+                    let decoded = serde_yaml::from_str::<String>(candidate).ok();
+                    let key = decoded.as_deref().unwrap_or(candidate);
+                    fields.contains_key(key).then(|| (key.to_string(), candidate.len()))
+                });
+            if let Some((key, length)) = key {
+                spans.push(FieldSpan { key, line: first_line + index, from: offset + leading, to: offset + leading + length });
+            }
         }
-        if line.trim() == key {
-            return Some(index + 1);
-        }
-        line.match_indices(':').find_map(|(colon, _)| {
-            let candidate = line.get(..colon)?.trim();
-            let decoded = serde_yaml::from_str::<String>(candidate).ok();
-            (candidate == key || decoded.as_deref() == Some(key)).then_some(index + 1)
-        })
-    })
+        offset += line.len();
+    }
+    spans
 }
 
 /// Each top-level shortcode block is parsed on its own, so the parser's
@@ -283,6 +301,16 @@ pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> Rendered
         &mut doc, &crate::asset_snapshot::AssetSnapshot::new(), Some(&graph), source_path,
         parse_config().implicit_figure, &|target| page_url(target, source_path, &graph),
     );
+    // Graph resolution pins assets and rooted links before the host mapper runs.
+    // A preview's base is the site root, so those URLs must also use that base.
+    ast::visit_urls_mut(&mut doc, |url| {
+        if let ast::Url::Resolved(url) = url {
+            if url.href.starts_with('/') && !url.href.starts_with("//") {
+                url.href = url.href.trim_start_matches('/').to_string();
+                if url.href.is_empty() { url.href = "./".into(); }
+            }
+        }
+    });
     diagnostics.extend(resolved.diagnostics.into_iter().chain(resolution.diagnostics).map(|d| {
         // `path` names a frontmatter field in every diagnostic; the message names the reference.
         Diagnostic { severity: Severity::Warning, message: d.message, path: None, line: None, column: None }

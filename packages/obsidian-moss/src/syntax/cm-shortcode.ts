@@ -13,31 +13,25 @@ import {
 
 interface DecoRange {
   from: number;
-  to: number;
-  line: boolean;
   cls: string;
 }
 
 export function shortcodeDecoRanges(blocks: ShortcodeBlock[]): DecoRange[] {
   const out: DecoRange[] = [];
   const walk = (block: ShortcodeBlock) => {
-    out.push({ from: block.from, to: block.from, line: true, cls: "moss-sc-open" });
+    out.push({ from: block.from, cls: "moss-sc-open" });
     if (block.closeFrom !== null) {
-      out.push({ from: block.closeFrom, to: block.closeFrom, line: true, cls: "moss-sc-close" });
+      out.push({ from: block.closeFrom, cls: "moss-sc-close" });
     }
     block.children.forEach(walk);
   };
   blocks.forEach(walk);
-  return out.sort((a, b) => a.from - b.from || Number(b.line) - Number(a.line));
+  return out.sort((a, b) => a.from - b.from);
 }
 
 function toDecorationSet(ranges: DecoRange[]): DecorationSet {
   return Decoration.set(
-    ranges.map((r) =>
-      r.line
-        ? Decoration.line({ class: r.cls }).range(r.from)
-        : Decoration.mark({ class: r.cls }).range(r.from, r.to),
-    ),
+    ranges.map((r) => Decoration.line({ class: r.cls }).range(r.from)),
     true,
   );
 }

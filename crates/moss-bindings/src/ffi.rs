@@ -38,6 +38,10 @@ impl MossSite {
         Ok(Arc::new(Self { inner: Mutex::new(site) }))
     }
 
+    pub fn schema_json(&self) -> String {
+        self.site().schema_json()
+    }
+
     pub fn check(&self, path: String, text: String) -> String {
         self.site().check(&path, &text)
     }

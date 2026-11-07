@@ -22,14 +22,12 @@ describe("shortcode vocabulary", () => {
 });
 
 describe("shortcode decorations", () => {
-  it("marks the fences of a closed, known block and flags nothing", () => {
+  it("marks the fences of a closed block", () => {
     const doc = ":::grid {cols=2}\ncell\n:::\n";
     const ranges = decorate(doc);
-    expect(ranges).toContainEqual({ from: 0, to: 0, line: true, cls: "moss-sc-open" });
+    expect(ranges).toContainEqual({ from: 0, cls: "moss-sc-open" });
     expect(doc.slice(22, 25)).toBe(":::");
-    expect(ranges).toContainEqual({ from: 22, to: 22, line: true, cls: "moss-sc-close" });
-    expect(ranges.some((r) => r.cls === "moss-sc-unknown")).toBe(false);
-    expect(ranges.some((r) => r.cls === "moss-sc-unclosed")).toBe(false);
+    expect(ranges).toContainEqual({ from: 22, cls: "moss-sc-close" });
   });
 
   it("steps over indentation when locating the name", () => {
@@ -38,8 +36,7 @@ describe("shortcode decorations", () => {
     expect(doc.slice(5, 9)).toBe("grid");
     // `grid` is known, so the offset is proved by the close fence landing at
     // the indented line's START, not its colons.
-    expect(ranges).toContainEqual({ from: 12, to: 12, line: true, cls: "moss-sc-close" });
-    expect(ranges.some((r) => r.cls === "moss-sc-unknown")).toBe(false);
+    expect(ranges).toContainEqual({ from: 12, cls: "moss-sc-close" });
   });
 
   it("marks an unclosed block without inventing a close fence", () => {
@@ -49,7 +46,7 @@ describe("shortcode decorations", () => {
     expect(blocks[0].closeFrom).toBeNull();
 
     const ranges = decorate(doc);
-    expect(ranges).toContainEqual({ from: 0, to: 0, line: true, cls: "moss-sc-open" });
+    expect(ranges).toContainEqual({ from: 0, cls: "moss-sc-open" });
     expect(ranges.some((r) => r.cls === "moss-sc-close")).toBe(false);
   });
 
@@ -67,20 +64,14 @@ describe("shortcode decorations", () => {
   it("one closer for two openers keeps both open fences", () => {
     const doc = ":::grid\n::::hero\norphan\n:::\n";
     const ranges = decorate(doc);
-    expect(ranges).toContainEqual({ from: 8, to: 8, line: true, cls: "moss-sc-open" });
-  });
-
-  it("judges nothing on a nameless fence", () => {
-    const doc = ":::{cols=2}\nx\n:::\n";
-    expect(scanShortcodeBlocks(doc)[0].name).toBe("");
-    expect(decorate(doc).some((r) => r.cls === "moss-sc-unknown")).toBe(false);
+    expect(ranges).toContainEqual({ from: 8, cls: "moss-sc-open" });
   });
 
   it("finds nothing in prose", () => {
     expect(decorate("just some text\nwith :: colons\n")).toEqual([]);
   });
 
-  it("emits ranges in document order, line decorations first", () => {
+  it("emits ranges in document order", () => {
     const ranges = decorate(":::wat\nx\n:::\n");
     const froms = ranges.map((r) => r.from);
     expect([...froms].sort((a, b) => a - b)).toEqual(froms);

@@ -16,12 +16,15 @@ fn composes_optional_site_and_plugin_fields_once() {
     let mut site = Site::from_json(&json!({
         "files": [], "lang": "en",
         "declared_name_lists": ["performers"],
-        "plugins": [{"name": "example", "fields": {"custom_flag": {"type": "boolean"}}}],
+        "plugins": [
+            {"name": "z-last", "fields": {"custom_flag": {"type": "string"}}},
+            {"name": "example", "fields": {"custom_flag": {"type": "boolean"}}}
+        ],
         "listing_styles": ["board"]
     }).to_string()).unwrap();
     let text = "---\ntitle: Example\nperformers: Example\ncustom_flag: true\nchildren_style: board\n---\nBody";
     assert_eq!(json_value(&site.check("a.md", text)), json!([]));
-    assert_eq!(site.inputs.schema.frontmatter.fields["custom_flag"].source.as_deref(), Some("example"));
+    assert_eq!(json_value(&site.schema_json())["frontmatter"]["fields"]["custom_flag"]["source"], "example");
     site.set_notes("{}").unwrap();
     assert_eq!(json_value(&site.check("a.md", text)), json!([]));
     let invalid = json_value(&site.check("a.md", "---\ntitle: Example\ncustom_flag: [bad]\n---"));
@@ -40,8 +43,9 @@ fn explicit_schema_takes_precedence_over_composition() {
         "plugins": [{"name": "example", "fields": {"custom_flag": {"type": "string"}}}]
     }).to_string()).unwrap();
     assert_eq!(json_value(&site.check("a.md", "---\ncustom_flag: true\n---")), json!([]));
-    assert_eq!(site.inputs.schema.generator, "example");
-    assert!(!site.inputs.schema.frontmatter.fields.contains_key("title"));
+    let schema: ContentSchema = serde_json::from_str(&site.schema_json()).unwrap();
+    assert_eq!(schema.generator, "example");
+    assert!(!schema.frontmatter.fields.contains_key("title"));
 }
 
 #[test]
@@ -126,4 +130,13 @@ fn malformed_json_and_wrong_types_are_errors_without_panics() {
     for text in ["", "{", "null", "[]", r#"{"b.md":false}"#] {
         assert!(site.set_notes(text).is_err(), "{text}");
     }
+}
+
+#[test]
+fn field_spans_cross_the_json_boundary_as_byte_offsets() {
+    let text = "title: café\nnav\n---\nBody";
+    assert_eq!(json_value(&field_spans(text)), json!([
+        {"key": "title", "line": 1, "from": 0, "to": 5},
+        {"key": "nav", "line": 2, "from": 13, "to": 16}
+    ]));
 }

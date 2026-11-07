@@ -1,6 +1,10 @@
+import type { ContentSchema } from "@symbiosis-lab/moss-ui";
+import { initializeCore, MossSite } from "../src/core";
 import type { DataAdapter, Vault } from "obsidian";
 import { describe, expect, it } from "vitest";
 import { readSiteContext, siteLanguage, vaultBaseHref } from "../src/site-context";
+
+initializeCore();
 
 function vault(files: Record<string, string>) {
   const adapter = {
@@ -24,11 +28,19 @@ describe("site context through the mobile adapter", () => {
       ".moss/config.toml": 'lang = "wrong"\n[site]\nlang = "fr" # language\n[other]\nlang = "de"',
       ".moss/theme/z.css": "last", ".moss/theme/a.css": "first", ".moss/theme/ignored.txt": "ignored",
       ".moss/plugins/b/manifest.json": JSON.stringify({ name: "b", contributes: { listing_styles: { board: {} } } }),
-      ".moss/plugins/a/manifest.json": JSON.stringify({ name: "a", contributes: { frontmatter: { fields: { rating: { type: "integer" } } }, listing_styles: { cards: {} } } }),
+      ".moss/plugins/a/manifest.json": JSON.stringify({ name: "a", contributes: { frontmatter: { fields: { review_score: { type: "integer" } } }, listing_styles: { cards: {} } } }),
     }));
+    const site = new MossSite(JSON.stringify(context));
+    const schema: ContentSchema = JSON.parse(site.schemaJson());
+    expect(schema.frontmatter.fields.review_score).toMatchObject({ type: "integer", source: "a" });
+    expect(schema.frontmatter.fields.children_style.enum_values).toEqual(expect.arrayContaining(["cards", "board"]));
+    const preview = JSON.parse(site.preview("note.md", "# Test", ""));
+    expect(preview.html).toContain('lang="fr"');
+    expect(preview.html).toContain("first\nlast");
+    site.free();
     expect(context).toEqual({
       files: ["images/pic.png", "note.md"], lang: "fr", theme_css: "first\nlast",
-      plugins: [{ name: "a", fields: { rating: { type: "integer" } } }, { name: "b", fields: {} }],
+      plugins: [{ name: "a", fields: { review_score: { type: "integer" } } }, { name: "b", fields: {} }],
       listing_styles: ["cards", "board"],
     });
   });

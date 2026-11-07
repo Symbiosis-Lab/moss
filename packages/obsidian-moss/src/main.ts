@@ -3,7 +3,7 @@ import { contextChanged, frontmatterExtension } from "./cm-frontmatter";
 import { initializeCore, MossSite } from "./core";
 import { MossFieldSuggest } from "./field-suggest";
 import { PagePreviewView, PAGE_PREVIEW_VIEW_TYPE } from "./page-preview-view";
-import { composedSchema, type MossSchema } from "./schema";
+import { siteSchema, type MossSchema } from "./schema";
 import { DEFAULT_SETTINGS, type MossSettings } from "./settings";
 import { readSiteContext } from "./site-context";
 import { shortcodeExtension } from "./syntax/cm-shortcode";
@@ -22,7 +22,7 @@ export default class MossPlugin extends Plugin {
     this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) ?? {}) };
     initializeCore();
     this.site = new MossSite(JSON.stringify({ files: [], lang: "en" }));
-    this.schema = composedSchema();
+    this.schema = siteSchema(this.site);
     await this.rebuildContext();
     if (this.disposed) return;
     this.registerEditorExtension([
@@ -65,7 +65,7 @@ export default class MossPlugin extends Plugin {
       const site = new MossSite(JSON.stringify(context));
       this.site.free();
       this.site = site;
-      this.schema = composedSchema(context.plugins, context.listing_styles);
+      this.schema = siteSchema(site);
       this.app.workspace.iterateAllLeaves((leaf) => {
         if (leaf.view instanceof MarkdownView) {
           // Obsidian exposes the CM view on Editor at runtime, outside its public types.

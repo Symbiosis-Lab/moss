@@ -13,6 +13,11 @@ impl MossSite {
         Site::from_json(site_json).map(Self).map_err(|e| JsValue::from_str(&e))
     }
 
+    #[wasm_bindgen(js_name = schemaJson)]
+    pub fn schema_json(&self) -> String {
+        self.0.schema_json()
+    }
+
     pub fn check(&self, path: &str, text: &str) -> String {
         self.0.check(path, text)
     }
@@ -65,4 +70,9 @@ pub fn compute_heading_state(file_path: &str, frontmatter_json: &str, body: &str
 #[wasm_bindgen(js_name = bootstrapSourcePath)]
 pub fn bootstrap_source_path(project_path: Option<String>, source: Option<String>) -> Result<String, JsValue> {
     crate::bootstrap_source_path(project_path.as_deref(), source.as_deref()).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = fieldSpans)]
+pub fn field_spans(text: &str) -> String {
+    crate::field_spans(text)
 }

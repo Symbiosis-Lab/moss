@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
 import { initializeCore, MossSite, type PagePreview } from "../src/core";
 import type MossPlugin from "../src/main";
+import { vaultBaseHref } from "../src/site-context";
 import { PagePreviewView } from "../src/page-preview-view";
 
 initializeCore();
@@ -96,4 +97,21 @@ it("keeps the editor source when the pane takes focus and follows file changes",
   expect(f.iframe.srcdoc).toContain("Another file");
   await f.view.onClose();
   f.site.free();
+});
+
+it.each([
+  "capacitor://localhost/_capacitor_file_/var/mobile/Example/Vault/",
+  "app://abc123/Users/x/Vault/",
+])("resolves nested preview images against the vault resource base %s", (root) => {
+  const adapter = { getResourcePath: (path: string) => `${root}${path}?1700000000` };
+  const base = vaultBaseHref(adapter, "notes/a.md");
+  const site = new MossSite(JSON.stringify({ files: ["notes/a.md", "images/pic.png"], lang: "en" }));
+  const preview: PagePreview = JSON.parse(site.preview("notes/a.md", "![pic](../images/pic.png) ![[images/pic.png]]", base));
+  const documentBase = /<base href="([^"]+)"/.exec(preview.html)![1];
+  const sources = [...preview.html.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)].map((match) => match[1]);
+  expect(sources).toHaveLength(2);
+  for (const src of sources) {
+    expect(new URL(src, documentBase).href).toBe(adapter.getResourcePath("images/pic.png").split("?")[0]);
+  }
+  site.free();
 });

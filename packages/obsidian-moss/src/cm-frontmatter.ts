@@ -10,7 +10,7 @@ import {
 import { StateEffect, Text, type Extension } from "@codemirror/state";
 import { editorInfoField } from "obsidian";
 import type { EditorDiagnostic, MossSite } from "./core";
-import { parseFrontmatterBlock } from "./frontmatter";
+import { editorFieldSpans } from "./core";
 import type { MossSchema } from "./schema";
 
 export type SchemaProvider = () => MossSchema;
@@ -19,14 +19,14 @@ export const contextChanged = StateEffect.define<void>();
 
 export function diagnosticRanges(text: string, diagnostics: EditorDiagnostic[]) {
   const doc = Text.of(text.split("\n"));
-  const fields = parseFrontmatterBlock(text)?.fields ?? [];
+  const fields = editorFieldSpans(text);
   return diagnostics.map((diagnostic) => {
-    const field = fields.find((field) => field.name === diagnostic.path);
+    const field = fields.find((field) => field.key === diagnostic.path);
     const line = doc.line(Math.max(1, Math.min(doc.lines, diagnostic.line ?? 1)));
     return {
       diagnostic,
-      from: field?.keyFrom ?? line.from,
-      to: field?.keyTo ?? line.to,
+      from: field?.from ?? line.from,
+      to: field?.to ?? line.to,
       line: !field,
       cls: `moss-diag-${diagnostic.severity === 1 ? "error" : diagnostic.severity === 2 ? "warning" : "hint"}`,
     };
@@ -74,25 +74,25 @@ export function fieldInfoText(schema: MossSchema, name: string): string | null {
 function buildHover(getSchema: SchemaProvider, getSite: SiteProvider) {
   return hoverTooltip((view, pos): Tooltip | null => {
     const doc = view.state.doc.toString();
-    const block = parseFrontmatterBlock(doc);
+    const fields = editorFieldSpans(doc);
     const diags = diagnosticRanges(doc, check(view, getSite()));
     // A diagnostic under the pointer wins over the plain field explanation.
     const hit = diags.find((d) => pos >= d.from && pos <= d.to);
-    const field = block?.fields.find(
-      (f) => (pos >= f.keyFrom && pos <= f.keyTo) || (pos >= f.valueFrom && pos <= f.valueTo),
+    const field = fields.find(
+      (f) => pos >= f.from && pos <= view.state.doc.line(f.line).to,
     );
     if (!hit && !field) return null;
 
     const lines: string[] = [];
     if (hit) lines.push(hit.diagnostic.message);
     if (field) {
-      const info = fieldInfoText(getSchema(), field.name);
+      const info = fieldInfoText(getSchema(), field.key);
       if (info) lines.push(info);
     }
     if (lines.length === 0) return null;
 
-    const from = hit ? hit.from : field!.keyFrom;
-    const to = hit ? hit.to : field!.keyTo;
+    const from = hit ? hit.from : field!.from;
+    const to = hit ? hit.to : field!.to;
     return {
       pos: from,
       end: to,
@@ -126,8 +126,7 @@ export interface FieldCompletion {
  * CM6 `autocompletion()`, which would race Obsidian's own suggest system.
  */
 export function fieldCompletions(schema: MossSchema, doc: string, prefix: string): FieldCompletion[] {
-  const block = parseFrontmatterBlock(doc);
-  const present = new Set(block?.fields.map((f) => f.name) ?? []);
+  const present = new Set(editorFieldSpans(doc).map((f) => f.key));
   const out: FieldCompletion[] = [];
   const p = prefix.toLowerCase();
   for (const spec of schema.fields.values()) {

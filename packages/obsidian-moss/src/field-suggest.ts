@@ -13,7 +13,7 @@ import {
   TFile,
 } from "obsidian";
 import { fieldCompletions, type FieldCompletion, type SchemaProvider } from "./cm-frontmatter";
-import { parseFrontmatterBlock } from "./frontmatter";
+import { editorFieldSpans } from "./core";
 import type MossPlugin from "./main";
 
 export class MossFieldSuggest extends EditorSuggest<FieldCompletion> {
@@ -26,15 +26,14 @@ export class MossFieldSuggest extends EditorSuggest<FieldCompletion> {
 
   onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
     const doc = editor.getValue();
-    const block = parseFrontmatterBlock(doc);
-    if (!block) return null;
-    // Cursor must sit inside the frontmatter block, on a key prefix at the
-    // start of a line.
-    const offset = editor.posToOffset(cursor);
-    if (offset < block.contentFrom || offset > block.contentTo) return null;
     const before = editor.getLine(cursor.line).slice(0, cursor.ch);
     const m = /^([A-Za-z_-]+)$/.exec(before);
     if (!m) return null;
+    // Complete the partial key so the core can decide whether it is frontmatter.
+    const offset = editor.posToOffset(cursor);
+    const lineEnd = offset + editor.getLine(cursor.line).length - cursor.ch;
+    const candidate = doc.slice(0, offset) + ": null" + doc.slice(lineEnd);
+    if (!editorFieldSpans(candidate).some((field) => field.line === cursor.line + 1 && field.key === m[1])) return null;
     return {
       start: { line: cursor.line, ch: 0 },
       end: cursor,
@@ -43,7 +42,12 @@ export class MossFieldSuggest extends EditorSuggest<FieldCompletion> {
   }
 
   getSuggestions(context: EditorSuggestContext): FieldCompletion[] {
-    return fieldCompletions(this.getSchema(), context.editor.getValue(), context.query);
+    const editor = context.editor;
+    const doc = editor.getValue();
+    const from = editor.posToOffset(context.start);
+    const to = from + editor.getLine(context.start.line).length;
+    // Omit the incomplete line while asking the core which keys already exist.
+    return fieldCompletions(this.getSchema(), doc.slice(0, from) + doc.slice(to), context.query);
   }
 
   renderSuggestion(item: FieldCompletion, el: HTMLElement): void {

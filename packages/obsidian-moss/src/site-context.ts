@@ -9,6 +9,7 @@ export interface SiteContext {
   listing_styles: string[];
 }
 
+// Site configuration parsing belongs in moss-core.
 export function siteLanguage(toml: string): string {
   let inSite = false;
   for (const line of toml.split(/\r?\n/)) {

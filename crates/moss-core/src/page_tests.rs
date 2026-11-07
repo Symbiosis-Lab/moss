@@ -126,9 +126,9 @@ fn markdown_targets_resolve_from_the_source_folder() {
 fn images_use_site_relative_paths() {
     let inputs = site(&["img/x.jpg"]);
     let page = render_page("a.md", "![](img/x.jpg)", &inputs);
-    assert!(page.body_html.contains("src=\"/img/x.jpg\""), "{}", page.body_html);
+    assert!(page.body_html.contains("src=\"img/x.jpg\""), "{}", page.body_html);
     let nested = render_page("notes/a.md", "![](../img/x.jpg)", &inputs);
-    assert!(nested.body_html.contains("src=\"/img/x.jpg\""), "{}", nested.body_html);
+    assert!(nested.body_html.contains("src=\"img/x.jpg\""), "{}", nested.body_html);
 }
 
 #[test]
@@ -196,6 +196,7 @@ proptest! {
     fn page_functions_never_panic(text in any::<String>(), source in any::<String>(), files in prop::collection::vec(any::<String>(), 0..5)) {
         let mut inputs = site(&[]);
         inputs.files = files;
+        let _ = field_spans(&text);
         let _ = check_page(&source, &text, &inputs);
         let _ = render_page(&source, &text, &inputs);
     }
@@ -292,4 +293,42 @@ fn a_site_bundle_round_trips_ignores_unknown_fields_and_composes_a_missing_schem
     let inputs = again.inputs();
     assert_eq!(inputs.schema.frontmatter.fields["stars_given"].source.as_deref(), Some("stars"));
     assert!(check_page("a.md", "---\ntitle: A\nstars_given: 3\n---\n", &inputs).is_empty());
+}
+
+#[test]
+fn nested_preview_pages_and_assets_use_the_site_base() {
+    let inputs = site(&["notes/a.md", "notes/b.md", "images/pic.png"]);
+    let page = render_page("notes/a.md", "![pic](../images/pic.png) ![[images/pic.png]] [B](b.md) [Root](/notes/b/) [Asset](/images/pic.png)", &inputs);
+    assert_eq!(page.body_html.matches("src=\"images/pic.png\"").count(), 2, "{}", page.body_html);
+    assert_eq!(page.body_html.matches("href=\"notes/b/\"").count(), 2, "{}", page.body_html);
+    assert!(page.body_html.contains("href=\"images/pic.png\""), "{}", page.body_html);
+    let external = render_page("notes/a.md", "![pic](//example.com/pic.png) [Web](https://example.com/) [Part](#part)", &inputs);
+    assert!(external.body_html.contains("src=\"//example.com/pic.png\""));
+    assert!(external.body_html.contains("href=\"https://example.com/\""));
+    assert!(external.body_html.contains("href=\"#part\""));
+}
+
+#[test]
+fn canonical_field_spans_keep_quoted_keys_and_byte_coordinates() {
+    let text = "\u{feff}---\r\ntitle: café 🌿\r\n\"draft\": wrong\r\n'custom:key': value\r\n---\r\nBody";
+    let spans = field_spans(text);
+    assert_eq!(spans.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), vec!["title", "draft", "custom:key"]);
+    for (span, spelling, line) in [(&spans[1], "\"draft\"", 3), (&spans[2], "'custom:key'", 4)] {
+        assert_eq!(text.get(span.from..span.to), Some(spelling));
+        assert_eq!(span.line, line);
+    }
+    assert!(check_page("a.md", text, &site(&[])).iter().any(|d| d.path.as_deref() == Some("draft") && d.line == Some(3)));
+}
+
+#[test]
+fn canonical_field_spans_use_simplified_fields_and_ignore_nested_yaml() {
+    let text = "title: café\nnav\ndraft: wrong\n---\nBody";
+    let spans = field_spans(text);
+    assert_eq!(spans.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), vec!["title", "nav", "draft"]);
+    assert_eq!(text.get(spans[1].from..spans[1].to), Some("nav"));
+    assert_eq!(spans[2].line, 3);
+    let yaml = "---\n# comment\ncascade:\n  draft: true\ntitle: Example\n---";
+    assert_eq!(field_spans(yaml).iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), vec!["cascade", "title"]);
+    assert!(field_spans("---\ntitle: incomplete").is_empty());
+    assert!(field_spans("# Body").is_empty());
 }

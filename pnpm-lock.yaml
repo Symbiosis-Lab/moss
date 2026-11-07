@@ -164,6 +164,9 @@ importers:
       '@symbiosis-lab/moss-syntax':
         specifier: workspace:*
         version: link:../moss-syntax
+      '@symbiosis-lab/moss-ui':
+        specifier: workspace:*
+        version: link:../moss-ui
     devDependencies:
       '@codemirror/state':
         specifier: ^6.5.4

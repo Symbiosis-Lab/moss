@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@symbiosis-lab/moss-syntax": "workspace:*"
+    "@symbiosis-lab/moss-syntax": "workspace:*",
+    "@symbiosis-lab/moss-ui": "workspace:*"
   },
   "devDependencies": {
     "@codemirror/state": "^6.5.4",
