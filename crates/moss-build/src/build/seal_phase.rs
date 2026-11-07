@@ -198,6 +198,7 @@ pub(crate) fn evict(folder: &Path) {
 /// used to short-circuit on `owns_shared`/`mat_ok` and now read `req.verdict`
 /// (already final) plus the `Promotion` this phase itself computes.
 async fn run_materialize_phase(req: PendingSeal) {
+    let promote_trace = crate::build::phase::PhaseTrace::start("seal_promote");
     let PendingSeal {
         sealed,
         verdict,
@@ -334,6 +335,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         (sealed, promotion)
     })
     .await;
+    drop(promote_trace);
     let (mut sealed, promotion) = match blocking_result {
         Ok(pair) => pair,
         Err(e) => {

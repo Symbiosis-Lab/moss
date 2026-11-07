@@ -156,6 +156,7 @@ pub(crate) async fn build_and_describe(
     plugins: crate::build::PluginMode,
     accept_removals: bool,
 ) -> Result<(Option<SealedManifest>, Option<crate::build::manifest::change_set::ChangeSet>), String> {
+    let _phase = crate::build::phase::PhaseTrace::start("build");
     let captured = capture_accepting(&mut host, accept_removals);
     let message = crate::build::run_pipeline(crate::build::PipelineConfig {
         root: root.clone(),
@@ -180,6 +181,8 @@ pub(crate) async fn build_and_describe(
     crate::build::cli_output::finish_cli_build(&message, root.as_str(), false).await;
     let taken = captured.sealed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     let change_set = captured.change_set.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    if let Some(set) = &change_set { super::profile::pages(set); }
+    if let Some(sealed) = &taken { super::profile::count("manifest_files", sealed.files().len() as u64); }
     Ok((taken, change_set))
 }
 
@@ -219,6 +222,7 @@ pub async fn build_sealed_now(
 /// different things about the same empty slot.
 pub fn require_sealed<T>(sealed: Option<T>) -> Result<T, String> {
     sealed.ok_or_else(|| {
+        super::profile::refusal("unsealed");
         "Deploy artifacts are not sealed yet. Rebuild the folder and retry publishing.".to_string()
     })
 }

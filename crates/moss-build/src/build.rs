@@ -685,6 +685,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         if result.is_ok() { "ok" } else { "error" },
         &config.trigger,
     );
+    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, &config);
     result
 }
 
@@ -1222,16 +1223,16 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // here and nowhere else convenient — reading them back out of
     // `run_pipeline`'s `Result<String, String>` after the fact isn't
     // possible, so they're recorded at the point they're computed instead.
-    crate::build::phase::record_count("pages", build_documents.len());
+    crate::build::phase::record_value("pages", build_documents.len());
     if !cancelled {
         // "Skipped" is every document that only fills a slot (a `partial: true`
         // file, `footer.md`): it has no page of its own, so it is not a page.
         let skipped = build_documents.iter().filter(|d| d.slot_only).count();
         crate::build::cli_output::note_built(build_documents.len() - skipped, skipped);
     }
-    crate::build::phase::record_count("missing_references", missing_references.len());
-    crate::build::phase::record_count("cancelled", cancelled as usize);
-    crate::build::phase::record_count("publishable", publishable as usize);
+    crate::build::phase::record_value("missing_references", missing_references.len());
+    crate::build::phase::record_value("cancelled", cancelled as usize);
+    crate::build::phase::record_value("publishable", publishable as usize);
 
     // Stash the build's IN-MEMORY content hashes (keyed by folder) so the file
     // watcher's `do_rebuild_and_notify` decides the live-preview refresh from
@@ -1959,6 +1960,7 @@ async fn advertise_sealed(
     // returned `PendingSeal` for the materialize phase to read or drop.
     guards: SealGuards,
 ) -> Option<crate::build::seal_phase::PendingSeal> {
+    let _phase = crate::build::phase::PhaseTrace::start("seal_persist");
     let sealed_at = std::time::Instant::now();
     // A caller hand-off never yields: its caller reads `current` next.
     let yields = guards.handoff == Handoff::Lane;

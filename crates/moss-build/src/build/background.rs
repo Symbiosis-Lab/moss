@@ -358,6 +358,7 @@ impl BackgroundHandle {
     pub(crate) async fn await_completion(
         mut self,
     ) -> Result<(SealedManifest, Option<crate::build::lifecycle::CacheWriteLease>), BuildError> {
+        let _phase = crate::build::phase::PhaseTrace::start("seal_wait");
         // Join workers first. If any returns Err or panics, propagate.
         //
         // On the error path we return WITHOUT calling `terminate_succeeded`, so
@@ -376,6 +377,7 @@ impl BackgroundHandle {
         // dropped — i.e. once all conversions have finished and lazily minted the
         // parent. So await the seal BEFORE terminalizing.
         let sealed = self.coordinator_join.await?;
+        crate::build::phase::record_count("files_sealed", sealed.all_files().len());
         // Now every media worker (including detached GUI conversions) is done →
         // emit the build's terminal receipts from this SINGLE post-join point.
         // Runs for EVERY build regardless of which worker finished last, or
@@ -389,6 +391,14 @@ impl BackgroundHandle {
         crate::build::cache::report_hash_index_activity();
         Ok((sealed, self.cache_lease.take()))
     }
+}
+
+pub(crate) fn spawn_traced_worker<F>(workers: &mut tokio::task::JoinSet<Result<(), BuildError>>, body: F)
+where
+    F: FnOnce() -> Result<(), BuildError> + Send + 'static,
+{
+    let body = crate::build::phase::inherit_blocking(body);
+    workers.spawn(async move { tokio::task::spawn_blocking(body).await.map_err(BuildError::from)? });
 }
 
 // ---------------------------------------------------------------------------

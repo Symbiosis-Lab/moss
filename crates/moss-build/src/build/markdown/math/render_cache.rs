@@ -110,6 +110,7 @@ fn disk_cache_store_in(cache: &crate::build::cache::TransformCache, key: &str, v
         record.transforms.insert(
             RENDER_CACHE_TRANSFORM.to_string(),
             crate::build::cache::TransformEntry {
+                validation: None,
                 oid: blob_oid,
                 size: bytes.len() as u64,
                 params,

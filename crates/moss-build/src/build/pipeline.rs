@@ -1149,7 +1149,7 @@ fn build_inner(
         cache_lease.is_some(),
         services.map(|s| s.cancellation.protected_outputs()).unwrap_or_default(),
     );
-    crate::build::phase::record_count("parked_current", usize::from(sweep_permit.is_some()));
+    crate::build::phase::record_value("parked_current", usize::from(sweep_permit.is_some()));
     let current_ptr_exists = paths.current_ptr().exists();
 
     // Step 1: Load previous hashes BEFORE building
@@ -1667,6 +1667,7 @@ fn build_inner(
 
     log::debug!(target: "timing", "[build] staging: hash_compare (changed={}): {:?}", has_output_changes, build_start.elapsed());
 
+    crate::build::phase::record_value("output_unchanged", usize::from(!has_output_changes));
     let is_empty = project_structure.total_files == 0;
 
     // The gate, decided and emitted BEFORE the "complete" progress event.
@@ -1777,7 +1778,7 @@ fn build_inner(
 
     let render_seq: Option<u64>;
     let announce: Option<std::path::PathBuf>;
-    crate::build::phase::record_count("served_staging", usize::from(publishable));
+    crate::build::phase::record_value("served_staging", usize::from(publishable));
     if has_output_changes {
 
         // Step 4b: Remove stale HTML pages from deleted source folders.
@@ -1837,7 +1838,7 @@ fn build_inner(
         emit_initial_build_complete(services, announce.as_deref());
     }
     if let Some(seq) = render_seq {
-        crate::build::phase::record_count("render", seq as usize);
+        crate::build::phase::record_value("render", seq as usize);
     }
 
     // Step 6c: no search worker. Pagefind is generation-free — cost
@@ -2052,16 +2053,14 @@ fn build_inner(
         let session_for_derive = services.and_then(|s| s.session.clone());
 
         let register_workers = |tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
-                                workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
+                            workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
             if !og_requests.is_empty() {
                 let tx_cards = tx.clone();
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        crate::build::page::og_card::deferred::render_requests(
-                            og_requests, &og_output, tx_cards,
-                            || og_session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
-                        )
-                    }).await.map_err(crate::build::background::BuildError::from)?
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    crate::build::page::og_card::deferred::render_requests(
+                        og_requests, &og_output, tx_cards,
+                        || og_session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+                    )
                 });
             }
             // Worker 1: Image conversion.
@@ -2072,16 +2071,13 @@ fn build_inner(
             if !image_items_empty {
                 let ctx_for_image = background_ctx.clone();
                 let tx_image = tx.clone();
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        dispatch_image_conversions(
-                            svc_arc_for_image.as_deref(),
-                            &ctx_for_image,
-                            Some(tx_image),
-                        );
-                    })
-                    .await
-                    .map_err(crate::build::background::BuildError::from)
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    dispatch_image_conversions(
+                        svc_arc_for_image.as_deref(),
+                        &ctx_for_image,
+                        Some(tx_image),
+                    );
+                    Ok(())
                 });
             }
 
@@ -2089,16 +2085,13 @@ fn build_inner(
             // Same dispatch pattern as image: internally spawns or runs sync.
             if !video_items_empty {
                 let tx_video = tx.clone();
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        dispatch_video_conversions(
-                            svc_arc_for_video.as_deref(),
-                            background_ctx,
-                            Some(tx_video),
-                        );
-                    })
-                    .await
-                    .map_err(crate::build::background::BuildError::from)
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    dispatch_video_conversions(
+                        svc_arc_for_video.as_deref(),
+                        background_ctx,
+                        Some(tx_video),
+                    );
+                    Ok(())
                 });
             }
 
@@ -2109,36 +2102,31 @@ fn build_inner(
                 if let Some(ref s) = session_for_assets {
                     s.begin_ui_bound();
                 }
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        let reporter_for_assets = reporter_for_assets
-                            .as_deref()
-                            .unwrap_or(crate::build::ports::reporter::discarding());
-                        let stats = crate::build::media::pipeline::copy_deferred_assets(
-                            &ctx_for_assets,
-                            reporter_for_assets,
-                            tx_assets,
-                            asset_registry_for_assets,
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    let reporter_for_assets = reporter_for_assets
+                        .as_deref()
+                        .unwrap_or(crate::build::ports::reporter::discarding());
+                    let stats = crate::build::media::pipeline::copy_deferred_assets(
+                        &ctx_for_assets,
+                        reporter_for_assets,
+                        tx_assets,
+                        asset_registry_for_assets,
+                    );
+                    // Publish the skipped-symlink count so the video worker
+                    // (which emits BuildComplete) can include it in the event.
+                    if let Some(counter) = skipped_symlinks_for_assets {
+                        counter.fetch_add(
+                            stats.skipped_symlinks,
+                            std::sync::atomic::Ordering::Relaxed,
                         );
-                        // Publish the skipped-symlink count so the video worker
-                        // (which emits BuildComplete) can include it in the event.
-                        if let Some(counter) = skipped_symlinks_for_assets {
-                            counter.fetch_add(
-                                stats.skipped_symlinks,
-                                std::sync::atomic::Ordering::Relaxed,
-                            );
-                        }
-                        // Task 2.2: emit a BackgroundProgress advisory when symlinks
-                        // were skipped — surfaces on the L1 hairline dot WITHOUT a toast.
-                        if let Some(ev) = crate::build::progress::make_symlink_skip_advisory(stats.skipped_symlinks) {
-                            reporter_for_assets.report(&ev);
-                        }
-                        if let Some(s) = session_for_assets {
-                            s.end_ui_bound();
-                        }
-                    })
-                    .await
-                    .map_err(crate::build::background::BuildError::from)
+                    }
+                    if let Some(ev) = crate::build::progress::make_symlink_skip_advisory(stats.skipped_symlinks) {
+                        reporter_for_assets.report(&ev);
+                    }
+                    if let Some(s) = session_for_assets {
+                        s.end_ui_bound();
+                    }
+                    Ok(())
                 });
             }
             // Derived text (adopt mode only, so a watcher is registered to

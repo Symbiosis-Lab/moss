@@ -83,7 +83,7 @@ pub fn report_for(result: &DeployResult) -> Result<DeployReport, String> {
             .message
             .clone()
             .unwrap_or_else(|| crate::infra::app_advisory::t("publish_failed"))),
-        DeployResult::NoPlugin { message } => Err(message.clone()),
+        DeployResult::NoPlugin { message } => { super::profile::refusal("missing_plugin"); Err(message.clone()) },
     }
 }
 
@@ -232,10 +232,10 @@ pub async fn run_plugin_deploy_inner(
     // manifest there is no generation to check `current` against, and
     // `current` on this path is the PREVIOUS build's tree.
     let sealed = super::one_shot::require_sealed(cx.sealed)?;
-    super::removal_gate::refuse_output_collisions(sealed)?;
-    super::removal_gate::refuse_stale_generation(cx.folder, sealed)?;
-    crate::deploy::refuse_foreign_inputs(sealed, cx.folder)?;
-    crate::deploy::refuse_unresolved_inputs(sealed)?;
+    super::profile::gate("output_collisions", super::removal_gate::refuse_output_collisions(sealed))?;
+    super::profile::gate("stale_generation", super::removal_gate::refuse_stale_generation(cx.folder, sealed))?;
+    super::profile::gate("foreign_inputs", crate::deploy::refuse_foreign_inputs(sealed, cx.folder))?;
+    super::profile::gate("unresolved_inputs", crate::deploy::refuse_unresolved_inputs(sealed))?;
 
     // Force any pending seal to materialize NOW, before the check below reads
     // `current_generation_id()`. The seal's own materialize phase is
@@ -264,12 +264,15 @@ pub async fn run_plugin_deploy_inner(
         0,
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
+    let manifest_phase = crate::build::phase::PhaseTrace::start("manifest");
     let context = match build_deploy_context(&folder_str, &output_dir) {
         Ok(c) => c,
         Err(e) => {
             return Ok(deploy_failed(e, crate::infra::app_advisory::t("deploy_err_config")))
         }
     };
+
+    drop(manifest_phase);
 
     // GitHub Pages on a project repo serves the site from a subpath, where
     // moss's absolute paths (`/style.css`, `/article/`) 404.
@@ -278,6 +281,7 @@ pub async fn run_plugin_deploy_inner(
         context.domain.as_deref(),
         get_git_origin(&folder_str).ok().as_deref(),
     ) {
+        super::profile::refusal("subpath_hosting");
         return Ok(deploy_failed(
             "Cannot deploy to a project repository on GitHub Pages without a custom domain. \
              moss uses absolute paths that break on subpath hosting. Set up a custom domain \
@@ -303,7 +307,11 @@ pub async fn run_plugin_deploy_inner(
     // moss window left open would bounce the stack mid-upload. The lease is a
     // file now, so this one line covers the route that could not reach it.
     onionpress_publish_lease(&folder_str);
-    let result = match manager.execute_deploy(&context).await {
+    let publish_phase = crate::build::phase::PhaseTrace::start("publish");
+    let executed = manager.execute_deploy(&context).await;
+    drop(publish_phase);
+    let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
+    let result = match executed {
         Ok(Some(hook_result)) => {
             if hook_result.success {
                 if let Some(deployment) = &hook_result.deployment {

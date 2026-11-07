@@ -282,7 +282,8 @@ fn is_executable(_path: &std::path::Path) -> bool {
 /// probe: it waits indefinitely by design and its needs are answered by a
 /// person choosing an action, so it belongs to the modal, not to this path.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
-    refusal(needs_from_store(folder_path)?.as_ref())
+    let _phase = crate::build::phase::PhaseTrace::start("local_checks");
+    super::profile::gate("plugin_setup", refusal(needs_from_store(folder_path)?.as_ref()))
 }
 
 /// [`refuse_publish`]'s verdict, separated from reading the app-global store.

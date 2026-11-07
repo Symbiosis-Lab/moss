@@ -37,6 +37,7 @@ use std::path::{Path, PathBuf};
 /// `120000:<target>` entries. Static-site outputs rarely contain symlinks;
 /// preserving them adds complexity for no observable benefit.
 pub fn build_manifest_from_dir(dir: &Path) -> Result<HashMap<String, String>, String> {
+    let _phase = crate::build::phase::PhaseTrace::start("manifest");
     if !dir.exists() {
         return Err(format!(
             "prebuilt directory does not exist: {}",
@@ -132,6 +133,7 @@ pub async fn push_prebuilt(
     accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
+    super::profile::record(project_folder, "prebuilt", false, async {
     // Under the same stall watchdog as the interactive publish. This path had
     // NO outer bound at all, so `moss deploy --prebuilt` against a wedged
     // socket hung forever with no error; it now fails after
@@ -150,6 +152,7 @@ pub async fn push_prebuilt(
         "prebuilt deploy",
     )
     .await
+    }).await
 }
 
 /// The last publish record an upload is measured against, and the public
@@ -205,6 +208,7 @@ async fn push_prebuilt_inner(
 
     // 1. Hash the directory into a manifest.
     let mut manifest = build_manifest_from_dir(prebuilt_dir)?;
+    super::profile::count("manifest_files", manifest.len() as u64);
     log::info!(
         "deploy(prebuilt): hashed {} files from {}",
         manifest.len(),
@@ -212,7 +216,8 @@ async fn push_prebuilt_inner(
     );
 
     if !accept_removals {
-        refuse_removed_addresses(project_folder, site_id, &manifest)?;
+        let _phase = crate::build::phase::PhaseTrace::start("local_checks");
+        super::profile::gate("removals", refuse_removed_addresses(project_folder, site_id, &manifest))?;
     }
 
     // Compute the generation_id early so it's available for both the
@@ -240,6 +245,7 @@ async fn push_prebuilt_inner(
     //     skip the whole sync/upload/commit cycle. Any Err or Ok(None) from
     //     get_live_generation (404 = old server, network error, site never
     //     deployed) falls through to the normal path for back-compat.
+    let probe_phase = crate::build::phase::PhaseTrace::start("live_generation");
     if let Ok(Some(live_gen)) = client.get_live_generation(site_id).await {
         if live_gen == generation_id {
             log::info!(
@@ -254,6 +260,7 @@ async fn push_prebuilt_inner(
             });
         }
     }
+    drop(probe_phase);
 
     // 2. Sync manifest with seta — get back the diff of what to upload/remove.
     sink.stage(
@@ -262,10 +269,7 @@ async fn push_prebuilt_inner(
         0,
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
-    let diff = client
-        .sync_manifest(site_id, &manifest, &generation_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let diff = super::profile::sync(client.sync_manifest(site_id, &manifest, &generation_id)).await?;
 
     if !diff.needs_commit() {
         // Complete comes from `with_publish_guard` on the way out.
@@ -419,10 +423,8 @@ async fn push_prebuilt_inner(
         &crate::infra::app_advisory::t("making_changes_live"),
     );
     // generation_id was computed above after building the manifest.
-    let commit_result = client
-        .commit_sync(site_id, &manifest, &generation_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let commit_result = super::profile::commit(client.commit_sync(site_id, &manifest, &generation_id)).await?;
+    let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Skew detection: the server echoes its now-live generation_id.
     // If it differs from what we just published, two deploys may have raced
@@ -506,6 +508,7 @@ pub async fn run_prebuilt_deploy(
     accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
+    super::profile::record(folder, "prebuilt", false, async {
     let Some((site_id, identity)) =
         crate::deploy::resolve_publish_inputs(folder, requested_site_id, overwrite_newer, sink).await?
     else {
@@ -513,4 +516,5 @@ pub async fn run_prebuilt_deploy(
     };
 
     push_prebuilt(folder, dir, &site_id, &identity, accept_removals, sink).await
+    }).await
 }

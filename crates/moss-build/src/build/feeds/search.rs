@@ -544,11 +544,14 @@ pub fn build_search_index_cancellable(
     site_dir: &Path,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<SearchIndex>, String> {
+    let _phase = crate::build::phase::PhaseTrace::start("search_index");
     INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let t_segment = std::time::Instant::now();
     let (pages, skipped, resegmented) = segment_pages(site_dir);
     let readable = pages.len();
+    crate::build::phase::record_count("search_pages", readable);
+    crate::build::phase::record_count("search_resegmented", resegmented);
     let segment_ms = t_segment.elapsed().as_millis();
     if cancelled() {
         return Ok(None);

@@ -2336,6 +2336,7 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
         services
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
+                mp4_from: crate::build::media::video::Mp4From::Nothing,
                 error: None,
                 thumb_linked: false,
                 mp4_oid: None,
@@ -2351,6 +2352,7 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
         services
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
+                mp4_from: crate::build::media::video::Mp4From::Nothing,
                 error: None,
                 thumb_linked: false,
                 mp4_oid: None,

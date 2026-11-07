@@ -448,6 +448,7 @@ fn write_slot_inject_record(
         }
     };
     let entry = crate::build::cache::TransformEntry {
+        validation: None,
         oid: record_oid,
         size: json_bytes.len() as u64,
         params: params.clone(),
@@ -662,6 +663,8 @@ pub(crate) fn inject_slots_into_directory_cached(
         receipts.push(SlotInjectionReceipt { page_path, manifest_hash, content_oid });
     }
 
+    crate::build::phase::record_count("slot_html_scanned", scanned);
+    crate::build::phase::record_count("slot_html_rewritten", rewritten);
     store_failures.report();
     let total = t_pass.elapsed();
     log::info!(

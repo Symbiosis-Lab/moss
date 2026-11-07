@@ -332,6 +332,7 @@ pub(crate) fn encode_rungs(
             record.transforms.insert(
                 kind,
                 TransformEntry {
+                    validation: None,
                     oid: oid.clone(),
                     size: webp_bytes.len() as u64,
                     params: params.clone(),

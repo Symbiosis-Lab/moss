@@ -1903,6 +1903,8 @@ pub fn generate_blocking_content_for_build(
         // threads is sound. Errors surface in `documents` order in the registration pass below, so
         // the first error propagated is identical to the sequential loop's.
         let render_total = to_render.len();
+        crate::build::phase::record_count("pages_rendered", render_total);
+        crate::build::phase::record_count("pages_carried", to_carry.len());
         let rendered_atomic = AtomicUsize::new(0);
         // Open question: how much of this span is per-PAGE work
         // (which a narrower render set reclaims) vs per-BUILD prelude above

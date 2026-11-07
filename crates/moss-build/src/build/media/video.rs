@@ -184,6 +184,35 @@ fn thumbnail_blob_is_valid(path: &Path) -> bool {
     }
 }
 
+/// Bump when the MP4, thumbnail or poster acceptance rules change.
+const VALIDATOR_VERSION: u32 = 1;
+
+fn validation_matches(entry: &crate::build::cache::TransformEntry, size: u64, version: u32) -> bool {
+    size > 0 && entry.validation.as_ref().is_some_and(|v| v.version >= version && v.size == size)
+}
+
+/// Only resident, integrity-checked CAS bytes reach the semantic validator.
+/// Persist after success, without stamping a concurrently replaced entry.
+fn validate_cached_blob(
+    transforms: &crate::build::cache::TransformCache,
+    source_oid: &str,
+    kind: &str,
+    entry: &crate::build::cache::TransformEntry,
+    validate: impl FnOnce(&Path) -> bool,
+) -> bool {
+    let Some(path) = transforms.objects().get_path(&entry.oid) else { return false };
+    let Ok(meta) = fs::metadata(&path) else { return false };
+    if validation_matches(entry, meta.len(), VALIDATOR_VERSION) { return true; }
+    crate::build::phase::record_count("video_blobs_validated", 1);
+    if !validate(&path) { return false; }
+    let _ = transforms.merge(source_oid, 0, crate::build::cache::RecordMode::Wait, |record| {
+        if let Some(current) = record.transforms.get_mut(kind).filter(|e| e.oid == entry.oid && e.params == entry.params) {
+            current.validation = Some(crate::build::cache::BlobValidation { version: VALIDATOR_VERSION, size: meta.len() });
+        }
+    });
+    true
+}
+
 /// Generate a fresh still (the thumbnail, or a hero's poster), store it in the
 /// CAS, and link it into staging. `generate` writes the JPEG to the temp path
 /// it is given; `kind` ("thumb" or "poster") names that temp file and the log
@@ -268,15 +297,15 @@ fn produce_hero_poster(
     filename: &str,
     registry: Option<&crate::types::runtime::ChildProcessRegistry>,
     cancel_flag: Option<&std::sync::atomic::AtomicBool>,
+    record: Option<&crate::build::cache::TransformRecord>,
 ) -> Result<Option<String>, String> {
     use crate::build::cache::TransformEntry;
     let params = poster_params();
-    let cached = transforms.find_cached_output(source_oid, "video/poster", &params, crate::build::cache::RecordMode::Wait);
-    if let Some(oid) = cached {
-        let valid = objects.get_path(&oid).is_some_and(|p| thumbnail_blob_is_valid(&p));
-        if valid {
-            match objects.link_to(&oid, output_poster) {
-                Ok(()) => return Ok(Some(oid)),
+    let cached = record.and_then(|r| transforms.usable_entry(r, "video/poster", &params));
+    if let Some(entry) = cached {
+        if validate_cached_blob(transforms, source_oid, "video/poster", &entry, thumbnail_blob_is_valid) {
+            match objects.link_to(&entry.oid, output_poster) {
+                Ok(()) => return Ok(Some(entry.oid)),
                 Err(e) => log::warn!("Failed to link cached poster to output: {}", e),
             }
         }
@@ -299,7 +328,7 @@ fn produce_hero_poster(
             transforms,
             source_oid,
             source_file,
-            [("video/poster".to_string(), TransformEntry { oid: oid.clone(), size, params })],
+            [("video/poster".to_string(), TransformEntry { validation: None, oid: oid.clone(), size, params })],
         );
     }
     Ok(oid.filter(|_| linked))
@@ -329,6 +358,7 @@ const HLS_PROGRESS_SHARE: f64 = 0.7;
 /// the mutable stage path a concurrent build can rewrite.
 #[derive(Clone, Debug)]
 pub struct VideoConversionOutcome {
+    pub(crate) mp4_from: Mp4From,
     /// Set when conversion failed. Carried inside the outcome so singleflight
     /// waiters receive the error message rather than an opaque sentinel.
     pub(crate) error: Option<String>,
@@ -359,11 +389,17 @@ pub struct VideoConversionOutcome {
     pub(crate) hls_entries: Vec<(String, String)>,
 }
 
+/// Where an outcome's MP4 came from: this run's encode, the transform cache,
+/// or neither (the source shipped as it is, or the conversion failed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mp4From { Encoded, Cache, Nothing }
+
 impl VideoConversionOutcome {
     /// A failed conversion: nothing staged, so no oids. The caller discards the
     /// rest of the outcome for the `shipped_original` fallback.
     fn failed(error: impl Into<String>) -> Self {
         Self {
+            mp4_from: Mp4From::Nothing,
             error: Some(error.into()),
             thumb_linked: false,
             mp4_oid: None,
@@ -471,21 +507,22 @@ pub(crate) fn convert_single_video(
     }
 
     // Step 1: Check transform cache for both MP4 and thumbnail
-    let cached_mp4 = transforms.find_cached_output(source_oid, "video/mp4", mp4_params, crate::build::cache::RecordMode::Wait);
-    let cached_thumb = transforms.find_cached_output(source_oid, "video/thumbnail", thumb_params, crate::build::cache::RecordMode::Wait);
+    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait);
+    let cached_mp4 = record.as_ref().and_then(|r| transforms.usable_entry(r, "video/mp4", mp4_params));
+    let cached_thumb = record.as_ref().and_then(|r| transforms.usable_entry(r, "video/thumbnail", thumb_params));
 
     // Hoisted above Step 2 as well as Step 4: the thumbnail-only self-heal
     // branch needs it to record a fresh thumbnail entry exactly the way a
     // full conversion's Step 4 already does, for the same TransformEntry
-    // shape either way.
-    let stored_entry = |oid: &String, params: &serde_json::Value| TransformEntry {
-        oid: oid.clone(),
-        size: objects
-            .get_path(oid)
-            .and_then(|p| fs::metadata(p).ok())
-            .map(|m| m.len())
-            .unwrap_or(0),
-        params: params.clone(),
+    // shape either way. `validated` stamps bytes this call already probed.
+    let stored_entry = |oid: &String, params: &serde_json::Value, validated: bool| {
+        let size = objects.get_path(oid).and_then(|p| fs::metadata(p).ok()).map_or(0, |m| m.len());
+        TransformEntry {
+            validation: validated.then_some(crate::build::cache::BlobValidation { version: VALIDATOR_VERSION, size }),
+            oid: oid.clone(),
+            size,
+            params: params.clone(),
+        }
     };
 
     // The hero's poster, before the MP4's cache check for the same reason as
@@ -494,6 +531,7 @@ pub(crate) fn convert_single_video(
     let output_poster = staging_dir.join(moss_core::asset_paths::to_poster(relative_mp4));
     let hero_poster_oid = match produce_hero_poster(
         ffmpeg, source_file, source_oid, &output_poster, temp_dir, objects, transforms, filename, registry, cancel_flag,
+        record.as_ref(),
     ) {
         Ok(oid) => oid,
         Err(_) => {
@@ -502,19 +540,19 @@ pub(crate) fn convert_single_video(
     };
 
     // Step 2: On cache hit, validate and link.
-    if let Some(ref mp4_oid) = cached_mp4 {
-        // Self-healing: validate the cached MP4 blob via ffprobe, and fully
-        // decode the cached thumbnail blob (`thumbnail_blob_is_valid`). A thumbnail written
-        // before a fix to `generate_thumbnail` (nothing in `thumb_params`
-        // names the encoder's own seek/pixel-format logic) would otherwise
-        // stay a broken cache hit forever.
-        let mp4_valid = objects
-            .get_path(mp4_oid)
-            .is_some_and(|p| ffmpeg.validate_encoded_video(&p).unwrap_or(false));
-        let thumb_valid = cached_thumb
-            .as_ref()
-            .and_then(|oid| objects.get_path(oid))
-            .is_some_and(|p| thumbnail_blob_is_valid(&p));
+    if let Some(ref mp4_entry) = cached_mp4 {
+        let mp4_oid = &mp4_entry.oid;
+        // Self-healing: a cached MP4 is probed and a cached thumbnail fully
+        // decoded once per blob, then trusted while its size and the stamped
+        // validator version hold. A thumbnail written before a fix to
+        // `generate_thumbnail` (nothing in `thumb_params` names the encoder's
+        // own seek/pixel-format logic) would otherwise stay a broken cache hit
+        // forever; bump `VALIDATOR_VERSION` with such a fix.
+        let mp4_valid = validate_cached_blob(transforms, source_oid, "video/mp4", mp4_entry,
+            |p| ffmpeg.validate_encoded_video(p).unwrap_or(false));
+        let thumb_valid = cached_thumb.as_ref().is_some_and(|entry|
+            validate_cached_blob(transforms, source_oid, "video/thumbnail", entry, thumbnail_blob_is_valid));
+        let cached_thumb = cached_thumb.as_ref().map(|entry| entry.oid.clone());
 
         if mp4_valid && thumb_valid {
             log::debug!("Cache hit for {} (content-addressed)", filename);
@@ -537,6 +575,7 @@ pub(crate) fn convert_single_video(
                 return VideoConversionOutcome::failed(format!("could not stage {}: {}", filename, e));
             }
             return VideoConversionOutcome {
+                mp4_from: Mp4From::Cache,
                 error: None,
                 thumb_linked,
                 mp4_oid: Some(mp4_oid.clone()),
@@ -578,11 +617,12 @@ pub(crate) fn convert_single_video(
                     transforms,
                     source_oid,
                     source_file,
-                    [("video/thumbnail".to_string(), stored_entry(oid, thumb_params))],
+                    [("video/thumbnail".to_string(), stored_entry(oid, thumb_params, false))],
                 );
             }
 
             return VideoConversionOutcome {
+                mp4_from: Mp4From::Cache,
                 error: None,
                 thumb_linked,
                 mp4_oid: Some(mp4_oid.clone()),
@@ -680,10 +720,10 @@ pub(crate) fn convert_single_video(
     let entries: Vec<_> = [
         mp4_oid_result
             .as_ref()
-            .map(|oid| ("video/mp4".to_string(), stored_entry(oid, mp4_params))),
+            .map(|oid| ("video/mp4".to_string(), stored_entry(oid, mp4_params, !kept_original))),
         thumb_oid_result
             .as_ref()
-            .map(|oid| ("video/thumbnail".to_string(), stored_entry(oid, thumb_params))),
+            .map(|oid| ("video/thumbnail".to_string(), stored_entry(oid, thumb_params, false))),
     ]
     .into_iter()
     .flatten()
@@ -693,6 +733,7 @@ pub(crate) fn convert_single_video(
     }
 
     VideoConversionOutcome {
+        mp4_from: if kept_original { Mp4From::Nothing } else { Mp4From::Encoded },
         error: None,
         thumb_linked,
         mp4_oid: mp4_oid_result,
@@ -955,8 +996,6 @@ fn record_deliveries(
 /// included — that exit used to carry its own copy of four of these five steps
 /// and skip the census, leaving the originals it copied unclaimed by any
 /// manifest bucket. `converted_count` gates the media Job — videos this run actually re-encoded.
-/// `videos_processed` is the terminal receipt — videos the encoder reached at
-/// all, which is every one of them unless FFmpeg was missing entirely.
 fn finish_run(
     services: &BuildServices,
     ctx: &BackgroundContext,
@@ -965,7 +1004,6 @@ fn finish_run(
     objects: &crate::build::cache::ObjectStore,
     advisories: Vec<Advisory>,
     converted_count: u32,
-    videos_processed: u32,
 ) {
     let total = ctx.video_items.len() as u32;
     emit_video_outputs_via_channel(Path::new(&ctx.source_path), tx, produced_video_paths, &ctx.staging_dir, objects, services.assets.as_deref());
@@ -1007,7 +1045,7 @@ fn finish_run(
     // that type's doc for why a worker that may not run cannot own a receipt.
     services
         .videos_converted
-        .store(videos_processed, std::sync::atomic::Ordering::Relaxed);
+        .store(converted_count, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// How one conversion run ended: how many items put bytes on disk, and how many
@@ -1019,6 +1057,11 @@ pub(crate) struct RunEnd {
 }
 
 impl RunEnd {
+    /// The outcome a detached run's profile record carries.
+    pub(crate) fn outcome(&self) -> &'static str {
+        if self.abandoned > 0 { "abandoned" } else { "ok" }
+    }
+
     /// `video run #<e> ended: <d> delivered, <a> abandoned — rebuild requested: yes|no`
     pub(crate) fn log(self, epoch: u64, rebuild_requested: bool) {
         log::info!(
@@ -1051,6 +1094,7 @@ pub(crate) fn run_video_conversion(
     epoch: u64,
     tx: Option<mpsc::Sender<EmitMessage>>,
 ) -> RunEnd {
+    let _phase = crate::build::phase::PhaseTrace::start("video_handling");
     use crate::build::media::ffmpeg::FFmpegManager;
     // Uses centralized asset_paths for consistent path derivation
     use moss_core::asset_paths;
@@ -1447,6 +1491,9 @@ pub(crate) fn run_video_conversion(
                 .map(|m| m.len())
                 .filter(|len| *len > cap_bytes);
 
+            if outcome.mp4_from == Mp4From::Cache {
+                crate::build::phase::record_count("videos_cache_hit", 1);
+            }
             ItemStep::Handled {
                 delivered,
                 advisories: over_cap
@@ -1465,9 +1512,7 @@ pub(crate) fn run_video_conversion(
                     ))
                     .into_iter()
                     .collect(),
-                // Successful conversion (either by us or shared from another task)
-                // — real work, so it counts toward the media-Job gate (FIX 1b).
-                encoded: true,
+                encoded: outcome.mp4_from == Mp4From::Encoded && !was_shared,
             }
         };
 
@@ -1484,6 +1529,7 @@ pub(crate) fn run_video_conversion(
                 advisories.extend(item_advisories);
                 if encoded {
                     converted_count += 1;
+                    crate::build::phase::record_count("videos_converted", 1);
                 }
                 services.end_ui_bound();
             }
@@ -1501,7 +1547,7 @@ pub(crate) fn run_video_conversion(
                 if matches!(abandoned, ItemStep::Cancelled) {
                     services
                         .videos_converted
-                        .store(index as u32, std::sync::atomic::Ordering::Relaxed);
+                        .store(converted_count, std::sync::atomic::Ordering::Relaxed);
                 }
                 end.abandoned = total as usize - index;
                 return end;
@@ -1531,9 +1577,6 @@ pub(crate) fn run_video_conversion(
         &objects,
         advisories,
         converted_count,
-        // The receipt counts videos the encoder reached; with no FFmpeg it
-        // reached none, however many originals were shipped.
-        if ffmpeg.is_some() { total } else { 0 },
     );
     end
 }
@@ -2076,6 +2119,7 @@ pub(crate) fn dispatch_video_conversions(
                 skip_paths.iter().map(|(p, _)| p).chain(carry_forward_paths.iter().map(|(p, _)| p)),
             );
 
+            crate::build::phase::record_count("videos_cache_hit", carried + healed);
             log::info!(
                 "video dispatch: {} items — {} carried, {} healed from CAS, {} joined running encode, \
                  {} unverified, {} queued{}",
@@ -2192,9 +2236,11 @@ pub(crate) fn dispatch_video_conversions(
                 let encode_lease = crate::build::lifecycle::detached_cache_lease(&MossPaths::from_moss_dir(
                     background_ctx.moss_dir.clone(),
                 ));
+                crate::build::phase::record_value("videos_detached", total as usize);
+                let profile = MossPaths::from_moss_dir(background_ctx.moss_dir.clone()).profile();
                 spawner.spawn_blocking(Box::new(move || {
                     let _encode_lease = encode_lease;
-                    let end = run_video_conversion(&services_arc, &background_ctx, epoch, None);
+                    let end = crate::build::phase::run_detached(profile, || run_video_conversion(&services_arc, &background_ctx, epoch, None), RunEnd::outcome);
                     // Only a run that put bytes on disk has anything for a
                     // rebuild to register. A superseded or cancelled one asking
                     // anyway is what kept the storm going: its rebuild found
@@ -2207,9 +2253,9 @@ pub(crate) fn dispatch_video_conversions(
                     }
                 }));
             } else {
-                spawner.spawn_blocking(Box::new(move || {
+                spawner.spawn_blocking(Box::new(crate::build::phase::inherit_blocking(move || {
                     run_video_conversion(&services_arc, &background_ctx, epoch, tx).log(epoch, false);
-                }));
+                })));
             }
         } else {
             // Headless mode: run synchronously with epoch=0
@@ -2356,6 +2402,7 @@ pub(crate) mod tests {
             ObjectStore::new(dir.path().join("objects")),
         );
         let entry = |tag: &str| TransformEntry {
+            validation: None,
             oid: format!("oid-{tag}"),
             size: 1,
             params: serde_json::json!({}),
@@ -2425,7 +2472,7 @@ pub(crate) mod tests {
             source_size: 0,
             transforms: [(
                 "video/mp4".to_string(),
-                TransformEntry { oid: "oid-mp4".to_string(), size: 1, params: serde_json::json!({}) },
+                TransformEntry { validation: None, oid: "oid-mp4".to_string(), size: 1, params: serde_json::json!({}) },
             )]
             .into_iter()
             .collect(),
@@ -2721,9 +2768,9 @@ pub(crate) mod tests {
         };
         let (tx, rx) = test_utils::build_test_coordinator();
         let svc_for_dispatch = svc.clone();
-        tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || {
             dispatch_video_conversions(Some(&svc_for_dispatch), ctx, Some(tx));
-        })
+        }))
         .await
         .unwrap();
         let sealed = tokio::time::timeout(
@@ -2739,6 +2786,38 @@ pub(crate) mod tests {
             crate::ops::watch::worker::deregister(&folder, &worker);
         }
         (sealed, spawner)
+    }
+
+    /// An encode the build does not wait for finishes after the build's record
+    /// is written, so it writes a record of its own; the build's says how many
+    /// it left running.
+    #[tokio::test]
+    async fn a_detached_encode_writes_its_own_profile_record() {
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        let moss_dir = tmp.path().join(".moss");
+        std::fs::create_dir_all(vault.join("videos")).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(vault.join("videos/new.mov"), b"never encoded").unwrap();
+        let mut svc = BuildServices::headless();
+        let ((_, spawner), collector) = crate::build::phase::with_collector(
+            dispatch_with_controlled_spawner(&mut svc, &vault, &staging, &moss_dir, vec!["videos/new.mov".into()]),
+        )
+        .await;
+        assert_eq!(spawner.captured_count(), 1);
+        // Off the build's task, as the real spawner runs it.
+        std::thread::spawn(move || spawner.run_captured()).join().unwrap();
+
+        let build = collector.lock().unwrap();
+        assert!(build.counts.contains(&("videos_detached", 1)), "{:?}", build.counts);
+        assert!(!build.phases.iter().any(|p| p.name == "video_handling"), "the encode's time is not the build's");
+        let profile = std::fs::read_to_string(MossPaths::from_moss_dir(moss_dir).profile()).unwrap();
+        let records: Vec<serde_json::Value> = profile.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(records.len(), 1, "{profile}");
+        assert_eq!(records[0]["kind"], "video_encode");
+        assert!(records[0]["phases"].as_array().unwrap().iter().any(|p| p["name"] == "video_handling"), "{profile}");
+        assert!(records[0]["counts"]["videos_converted"].is_number(), "{profile}");
     }
 
     /// Put `item`'s source in the vault and its encode in the object store, as
@@ -2771,6 +2850,7 @@ pub(crate) mod tests {
         let transforms = TransformCache::for_site(&paths);
         let source_oid = ObjectStore::hash_file(&source).unwrap();
         let entry = |bytes: &[u8], params: serde_json::Value| TransformEntry {
+            validation: None,
             oid: objects.store_bytes(bytes, crate::build::cache::RecordMode::Request).unwrap(),
             size: bytes.len() as u64,
             params,
@@ -2860,6 +2940,7 @@ pub(crate) mod tests {
             record.transforms.insert(
                 format!("video/hls/{name}"),
                 TransformEntry {
+                    validation: None,
                     oid: objects.store_bytes(bytes.as_bytes(), crate::build::cache::RecordMode::Request).unwrap(),
                     size: bytes.len() as u64,
                     params: params.clone(),
@@ -2936,6 +3017,7 @@ pub(crate) mod tests {
             record.transforms.insert(
                 format!("video/hls/{name}"),
                 TransformEntry {
+                    validation: None,
                     oid: objects.store_bytes(bytes.as_bytes(), crate::build::cache::RecordMode::Request).unwrap(),
                     size: bytes.len() as u64,
                     params: params.clone(),
@@ -4578,11 +4660,11 @@ pub(crate) mod tests {
                     transforms: std::collections::HashMap::from([
                         (
                             "video/mp4".to_string(),
-                            TransformEntry { oid: mp4_oid, size: 1, params: mp4_params.clone() },
+                            TransformEntry { validation: None, oid: mp4_oid, size: 1, params: mp4_params.clone() },
                         ),
                         (
                             "video/thumbnail".to_string(),
-                            TransformEntry { oid: thumb_oid, size: 1, params: thumb_params.clone() },
+                            TransformEntry { validation: None, oid: thumb_oid, size: 1, params: thumb_params.clone() },
                         ),
                     ]),
                 }, crate::build::cache::RecordMode::Request)
@@ -4712,7 +4794,7 @@ pub(crate) mod tests {
                 transforms: std::collections::HashMap::from([
                     (
                         "video/mp4".to_string(),
-                        TransformEntry { oid: mp4_oid, size: 1, params: mp4_params.clone() },
+                        TransformEntry { validation: None, oid: mp4_oid, size: 1, params: mp4_params.clone() },
                     ),
                 ]),
             }, crate::build::cache::RecordMode::Request)
@@ -4816,8 +4898,8 @@ pub(crate) mod tests {
             source_oid: "oid-clip".to_string(),
             source_size: std::fs::metadata(&source).unwrap().len(),
             transforms: [
-                Some(("video/mp4".to_string(), TransformEntry { oid: mp4_oid.clone(), size: 1, params: mp4_params.clone() })),
-                Some(("video/thumbnail".to_string(), TransformEntry { oid: thumb_oid.clone(), size: 1, params: thumb_params.clone() })),
+                Some(("video/mp4".to_string(), TransformEntry { validation: None, oid: mp4_oid.clone(), size: 1, params: mp4_params.clone() })),
+                Some(("video/thumbnail".to_string(), TransformEntry { validation: None, oid: thumb_oid.clone(), size: 1, params: thumb_params.clone() })),
                 extra,
             ]
             .into_iter()
@@ -5160,5 +5242,26 @@ pub(crate) mod tests {
                 key
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn validation_marker_requires_at_least_this_version_and_the_size() {
+        let mut entry = crate::build::cache::TransformEntry {
+            oid: "blob".into(), size: 12, params: serde_json::Value::Null, validation: None,
+        };
+        assert!(!validation_matches(&entry, 12, VALIDATOR_VERSION));
+        entry.validation = Some(crate::build::cache::BlobValidation { version: VALIDATOR_VERSION, size: 12 });
+        assert!(validation_matches(&entry, 12, VALIDATOR_VERSION));
+        assert!(!validation_matches(&entry, 12, VALIDATOR_VERSION + 1));
+        assert!(!validation_matches(&entry, 11, VALIDATOR_VERSION));
+        assert!(!validation_matches(&entry, 0, VALIDATOR_VERSION));
+        // A stamp from a newer, stricter validator holds for an older build sharing the folder.
+        entry.validation = Some(crate::build::cache::BlobValidation { version: VALIDATOR_VERSION + 1, size: 12 });
+        assert!(validation_matches(&entry, 12, VALIDATOR_VERSION));
     }
 }

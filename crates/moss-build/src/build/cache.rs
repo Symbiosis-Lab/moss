@@ -612,6 +612,9 @@ pub struct TransformRecord {
 /// A single transform output within a [`TransformRecord`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransformEntry {
+    /// Successful semantic validation of this immutable blob, independent of encode parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<BlobValidation>,
     /// SHA-256 OID of the output blob.
     pub oid: String,
     /// Size of the output blob in bytes.
@@ -620,6 +623,13 @@ pub struct TransformEntry {
     /// Stored as opaque JSON so any transform can define its own config
     /// shape.
     pub params: serde_json::Value,
+}
+
+/// A validator revision and the size of the blob it accepted.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct BlobValidation {
+    pub version: u32,
+    pub size: u64,
 }
 
 /// Transform cache — records what transforms produced what outputs.
@@ -760,9 +770,17 @@ impl TransformCache {
         current_params: &serde_json::Value,
         mode: RecordMode,
     ) -> Option<TransformEntry> {
-        // 1. Record exists?
-        let record = self.get_with(source_oid, mode)?;
+        self.usable_entry(&self.get_with(source_oid, mode)?, transform, current_params)
+    }
 
+    /// [`find_cached_entry`](Self::find_cached_entry) against a record the
+    /// caller already loaded, so several transforms of one source cost one read.
+    pub fn usable_entry(
+        &self,
+        record: &TransformRecord,
+        transform: &str,
+        current_params: &serde_json::Value,
+    ) -> Option<TransformEntry> {
         // 2. Transform entry exists?
         let entry = record.transforms.get(transform)?;
 
@@ -1165,6 +1183,8 @@ fn count_hit<T>(hit: Option<T>) -> Option<T> {
 /// Print, at `info`, what the index did since the last call, and start over.
 pub fn report_hash_index_activity() {
     let (hits, rehashed) = (HITS.swap(0, Ordering::Relaxed), REHASHED.swap(0, Ordering::Relaxed));
+    crate::build::phase::record_count("hash_index_hits_process", hits as usize);
+    crate::build::phase::record_count("hash_index_rehashed_process", rehashed as usize);
     let line = format!("[cache] hash-index: {hits} hits, {rehashed} rehashed");
     #[cfg(test)]
     LAST_LINE.with(|last| *last.borrow_mut() = Some(line.clone()));

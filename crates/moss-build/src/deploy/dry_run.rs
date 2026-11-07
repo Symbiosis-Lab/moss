@@ -289,6 +289,7 @@ async fn check_locally(
     if matches!(route, DeployRoute::Plugin { .. }) {
         return Ok(Local { would_register: None, would_create_key: false, needs_verification: false, no_environment: None });
     }
+    let _phase = crate::build::phase::PhaseTrace::start("local_checks");
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
     let mut no_environment = None;
     let would_register = match config.site_id {
@@ -398,6 +399,7 @@ pub async fn run_prebuilt_dry_run(
     let route = DeployRoute::Prebuilt { dir: dir.to_path_buf() };
     let local = check_locally(folder, &route, requested_site_id).await?;
     if let Some(text) = local.no_environment {
+        super::profile::refusal("no_environment");
         return Err(text);
     }
     let folder_str = folder.to_string_lossy().to_string();
@@ -409,6 +411,7 @@ pub async fn run_prebuilt_dry_run(
     };
 
     let manifest = super::prebuilt::build_manifest_from_dir(dir)?;
+    super::profile::count("manifest_files", manifest.len() as u64);
     let (transfer, refusal) = match super::prebuilt::removed_against_last_publish(folder, &site_id, &manifest) {
         Some((baseline, removed)) => {
             let refusal = (!accept_removals && !removed.is_empty())

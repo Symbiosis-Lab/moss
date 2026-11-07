@@ -53,6 +53,9 @@ pub(crate) struct AssetPipelineRunStats {
     pub preserved_symlinks: u32,
     /// Number of macOS Finder Aliases resolved and written as symlinks.
     pub preserved_aliases: u32,
+    /// Outputs a stat proved already in place, and outputs linked from the CAS.
+    pub held: u32,
+    pub linked: u32,
 }
 
 /// The one-line-per-run asset summary. Split out from the `log::info!` call so
@@ -389,6 +392,7 @@ fn write_spa_inject_record(
         }
     };
     let entry = crate::build::cache::TransformEntry {
+        validation: None,
         oid: record_oid,
         size: json_bytes.len() as u64,
         params: params.clone(),
@@ -769,8 +773,11 @@ fn source_blob(
         .as_ref()
         .map(crate::build::stat::FileStat::of)
         .unwrap_or(crate::build::stat::FileStat::whole_second(0, 0));
-    if let Some(oid) = check_source_cache(cached, stat.size, stat.mtime, previous_write)
-        .filter(|oid| object_store.get_path(oid).is_some())
+    // A source stat identifies the desired blob; placement verifies or restores
+    // its staged copy. Reading the CAS here would rehash every warm asset.
+    if let Some(oid) = cached.filter(|entry| entry.stat().vouches_for(&stat, Some(previous_write)))
+        .map(|entry| entry.hash.clone())
+        .or_else(|| check_source_cache(cached.filter(|e| e.mtime_nanos.is_none()), stat.size, stat.mtime, previous_write))
     {
         *cache_hits += 1;
         return Ok(Some((oid, stat)));
@@ -910,10 +917,12 @@ fn place_blob(
     staged: &mut crate::build::lifecycle::cas_heal::StagedLinks,
     placement: BlobPlacement,
     reporter: &dyn crate::build::ports::reporter::BuildReporter,
+    stats: &mut AssetPipelineRunStats,
 ) -> bool {
     use crate::build::lifecycle::cas_heal::Placement;
     match staged.link(object_store, placement.link_oid, placement.target, placement.local) {
-        Placement::Held | Placement::Linked => {}
+        Placement::Held => stats.held += 1,
+        Placement::Linked => stats.linked += 1,
         Placement::Unverified(e) => {
             log::info!("[background-assets] Not linking over unverifiable {}: {}", placement.log_label, e);
             return false;
@@ -1027,6 +1036,7 @@ pub(crate) fn copy_deferred_assets(
     use crate::build::render::resolve_path_with_overrides;
     use walkdir::WalkDir;
 
+    let _phase = crate::build::phase::PhaseTrace::start("background_asset_copy");
     let deferred_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
     let object_store = ObjectStore::for_site(&deferred_paths);
     // See TODO(perf) at both call sites below: a CAS blob's bytes are a pure
@@ -1322,6 +1332,7 @@ pub(crate) fn copy_deferred_assets(
                         &transforms,
                         &image_config,
                         crate::build::media::fallback_raster::SIZED_JPEG_QUALITY,
+                        Some((&mut staged, &output_dir.join(&mapped_path))),
                     )
                     .unwrap_or_else(|| oid.clone())
                 } else {
@@ -1331,7 +1342,7 @@ pub(crate) fn copy_deferred_assets(
                 let target = output_dir.join(&mapped_path);
                 let placement =
                     BlobPlacement { link_oid: &link_oid, target: &target, log_label: &mapped_path, report_path: &mapped_path, ext: &ext, local: (link_oid == oid).then_some(file_path) };
-                if !place_blob(&object_store, &mut staged, placement, reporter) {
+                if !place_blob(&object_store, &mut staged, placement, reporter, &mut run.stats) {
                     continue;
                 }
 
@@ -1525,7 +1536,7 @@ pub(crate) fn copy_deferred_assets(
                     let log_label = format!(".moss/theme/{}", relative_path);
                     let placement =
                         BlobPlacement { link_oid: &oid, target: &target, log_label: &log_label, report_path: out_path.as_str(), ext: &moss_ext, local: Some(file_path) };
-                    if !place_blob(&object_store, &mut staged, placement, reporter) {
+                    if !place_blob(&object_store, &mut staged, placement, reporter, &mut run.stats) {
                         continue;
                     }
                     site_hashes.sources.insert(source_key,
@@ -1672,6 +1683,11 @@ pub(crate) fn copy_deferred_assets(
     }
     manifest_hash_memo.log_summary();
 
+    crate::build::phase::record_count("background_assets_copied", run.stats.copied as usize);
+    crate::build::phase::record_count("background_assets_hits", run.stats.cache_hits as usize);
+    crate::build::phase::record_count("background_assets_misses", run.stats.cache_misses as usize);
+    crate::build::phase::record_count("background_assets_stat_only", run.stats.held as usize);
+    crate::build::phase::record_count("background_assets_linked", run.stats.linked as usize);
     log::info!("{}", format_asset_run_summary(&run.stats));
     run.stats
 }

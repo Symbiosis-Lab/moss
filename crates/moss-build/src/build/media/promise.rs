@@ -218,6 +218,7 @@ where
     Fut: std::future::Future<Output = Result<PassOutcome, String>>,
 {
     let first_pass = Pass::first(plugins);
+    crate::build::phase::begin_pass();
     let first = run(first_pass).await?;
     if !first.owed {
         return Ok((first, false));
@@ -225,6 +226,7 @@ where
     log::info!("media settled after the first render; rendering the pages once more");
     let second = {
         let _quiet = crate::build::cli_output::quiet();
+        crate::build::phase::begin_pass();
         run(first_pass.second()).await
     };
     match second {

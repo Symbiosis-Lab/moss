@@ -469,6 +469,7 @@ pub(crate) fn write_cached_meta(
 
     let params = serde_json::json!({ "v": MEDIA_META_VERSION });
     let new_entry = TransformEntry {
+        validation: None,
         oid: meta_oid,
         size: json_bytes.len() as u64,
         params,

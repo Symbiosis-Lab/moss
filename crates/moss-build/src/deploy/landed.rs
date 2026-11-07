@@ -252,7 +252,8 @@ async fn record_what_is_live(
     let tree = crate::deploy::history::SourceTree::from_sealed(sealed);
     let target_owned = target.to_string();
     let history_owned = history.clone();
-    let written = tokio::task::spawn_blocking(move || {
+    let written = tokio::task::spawn_blocking(crate::build::phase::inherit_blocking(move || {
+        let _phase = crate::build::phase::PhaseTrace::start("history_snapshot");
         let outcome = published_record::save(&MossPaths::new(&root), &record);
         // Best-effort and independent of the write above: a publish-history
         // failure must never suppress the rename baseline, and vice versa.
@@ -260,7 +261,7 @@ async fn record_what_is_live(
             log::warn!("deploy: could not snapshot publish history: {e}");
         }
         outcome
-    })
+    }))
     .await;
     match written {
         Ok(Ok(())) => {}

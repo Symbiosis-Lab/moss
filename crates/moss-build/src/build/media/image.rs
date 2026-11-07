@@ -52,7 +52,7 @@ use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 use crate::build::coordinator::EmitMessage;
-use crate::build::lifecycle::cas_heal::{rematerialize_with_oid, HealOutcome, StagedLinks};
+use crate::build::lifecycle::cas_heal::{rematerialize_with_record, HealOutcome, StagedLinks};
 use crate::build::manifest::HashBucket;
 use crate::advisory::{Action, Advisory, Scope, Severity};
 use crate::build::progress::{format_progress_message, PipelineEvent};
@@ -561,6 +561,7 @@ pub(crate) fn should_skip(
                     record.transforms.insert(
                         FORMAT_PROBE_TRANSFORM.to_string(),
                         crate::build::cache::TransformEntry {
+                            validation: None,
                             oid: blob_oid,
                             size: json_bytes.len() as u64,
                             params,
@@ -1315,6 +1316,7 @@ pub(crate) fn convert_single_image(
         record.transforms.insert(
             "image/webp".to_string(),
             TransformEntry {
+                validation: None,
                 oid: oid.clone(),
                 size: encoded_len,
                 params: params.clone(),
@@ -2413,38 +2415,33 @@ static IMAGE_OUTPUTS: super::output_emit::OutputKind = super::output_emit::Outpu
 
 /// The shared second half of a disk-origin skip candidate's per-key check —
 /// base webp and each ladder rung alike. A suppressed (unreferenced, per the
-/// last ship-time scan) key never ships either way, so a bare presence check
-/// is enough; anything else is tied to `rematerialize_with_oid`'s own
-/// verdict, never an independent presence check — a file already sitting at
-/// `staging_path` proves nothing on its own (see that function's doc:
-/// staging carries content forward between builds).
-///
-/// Presence uses `metadata(..).is_ok_and(|m| m.len() > 0)`, not `.exists()`:
-/// a cloud-evicted or otherwise dataless stub still passes `.exists()`, and
-/// treating a 0-byte stub as present would register it as this generation's
-/// shipped output.
+/// last ship-time scan) key never ships either way. Every other key needs
+/// matching encode parameters and a staged receipt for that exact blob.
+/// Missing, changed or evicted staged files use the validated CAS recovery
+/// path. Presence alone never establishes the identity of staged bytes.
 fn heal_and_verify_variant(
     heal_objects: &crate::build::cache::ObjectStore,
-    heal_transforms: &crate::build::cache::TransformCache,
+    record: Option<&crate::build::cache::TransformRecord>,
     heal_params: &serde_json::Value,
     staged: &mut StagedLinks,
     staging_path: &Path,
     transform: &str,
-    source_oid: &str,
     suppressed: bool,
     healed_count: &mut usize,
 ) -> (bool, Option<String>) {
     if suppressed {
-        (std::fs::metadata(staging_path).is_ok_and(|m| m.len() > 0), None)
-    } else {
-        match rematerialize_with_oid(heal_objects, heal_transforms, heal_params, staged, staging_path, transform, source_oid) {
-            HealOutcome::Healed { oid } => {
-                *healed_count += 1;
-                (true, Some(oid))
-            }
-            HealOutcome::AlreadyPresent { oid } => (true, oid),
-            HealOutcome::NotCached | HealOutcome::Unverified(_) => (false, None),
+        return (crate::build::io_utils::output_present(staging_path), None);
+    }
+    match rematerialize_with_record(heal_objects, record, heal_params, staged, staging_path, transform) {
+        HealOutcome::Healed { oid } => {
+            *healed_count += 1;
+            (true, Some(oid))
         }
+        HealOutcome::AlreadyPresent { oid } => {
+            crate::build::phase::record_count("image_variants_stat_only", 1);
+            (true, oid)
+        }
+        HealOutcome::NotCached | HealOutcome::Unverified(_) => (false, None),
     }
 }
 
@@ -2509,6 +2506,7 @@ pub(crate) fn dispatch_image_conversions_at(
     tx: Option<mpsc::Sender<EmitMessage>>,
     clock: &redispatch_note::Clock,
 ) {
+    let prelude = crate::build::phase::PhaseTrace::start("media_prelude");
     if ctx.image_items.is_empty() {
         return;
     }
@@ -2600,14 +2598,17 @@ pub(crate) fn dispatch_image_conversions_at(
             // costs nothing but the stat `fingerprint` already took.
             let disk_source_oid = fingerprint
                 .as_ref()
-                .and_then(|fp| heal_index.lookup(&rel_source, &fp.stat))
-                .map(str::to_string);
+                .and_then(|fp| heal_index.lookup(&rel_source, &fp.stat));
+            let transform_record = disk_source_oid.as_deref().and_then(|oid| {
+                crate::build::phase::record_count("image_transform_records_loaded", 1);
+                heal_transforms.get_with(oid, crate::build::cache::RecordMode::Wait)
+            });
 
             // A disk-index hit is only proof of the SOURCE's current content —
             // never proof that whatever is sitting at `staging_path` was encoded
             // from it. Staging carries content forward between builds, so a
             // just-changed source can still find its PREVIOUS build's output
-            // physically present. `rematerialize_with_oid` accounts for exactly
+            // physically present. `heal_and_verify_variant` accounts for exactly
             // this: it never trusts presence alone, always re-verifying the
             // exact oid against the transform cache and relinking unless its
             // own record of the last link still vouches for the file — so a
@@ -2630,37 +2631,31 @@ pub(crate) fn dispatch_image_conversions_at(
             // "image variants"; registering it with no oid at all reopened
             // that gap the moment this path started reaching content
             // nothing had previously proven present.
-            let (outputs_present, verified_webp_oid) = if let Some(source_oid) = disk_source_oid.as_deref() {
-                heal_and_verify_variant(
-                    &heal_objects,
-                    &heal_transforms,
-                    &heal_params,
-                    &mut staged,
-                    &staging_path,
-                    "image/webp",
-                    source_oid,
-                    false, // a suppressed base never gets here — see the `continue` above
-                    &mut healed_count,
-                )
-            } else {
-                (false, None)
-            };
+            let (outputs_present, verified_webp_oid) = heal_and_verify_variant(
+                &heal_objects,
+                transform_record.as_ref(),
+                &heal_params,
+                &mut staged,
+                &staging_path,
+                "image/webp",
+                false, // a suppressed base never gets here — see the `continue` above
+                &mut healed_count,
+            );
 
             // The promised rungs are part of "unchanged and present": one that is neither on
             // disk nor healable from the store sends the image to the worker, which reuses the
             // cached base and encodes only the cold rungs. Suppressed rungs never count.
             let rung_verdicts: Vec<(String, bool, Option<String>)> = match disk_source_oid.as_deref() {
-                Some(source_oid) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_collisions)
+                Some(_) if outputs_present => promised_rungs(item, &mapped, &ctx.rung_collisions)
                     .into_iter()
                     .map(|(rung, rung_rel)| {
                         let (present, oid) = heal_and_verify_variant(
                             &heal_objects,
-                            &heal_transforms,
+                            transform_record.as_ref(),
                             &heal_params,
                             &mut staged,
                             &ctx.staging_dir.join(&rung_rel),
                             &format!("image/webp-w{}", rung),
-                            source_oid,
                             heal_suppressed.contains(&rung_rel),
                             &mut healed_count,
                         );
@@ -2764,6 +2759,9 @@ pub(crate) fn dispatch_image_conversions_at(
             );
         }
 
+        crate::build::phase::record_count("images_unchanged", total_items - to_dispatch.len() - joined);
+        crate::build::phase::record_count("images_dispatched", to_dispatch.len());
+        drop(prelude);
         let joined_note = if joined > 0 { format!(", {joined} joined a conversion already running") } else { String::new() };
         if to_dispatch.is_empty() {
             log::info!(
@@ -2875,10 +2873,10 @@ pub(crate) fn dispatch_image_conversions_at(
             });
             log::info!("Spawning background image conversion for {} images", total);
             let clock = clock.clone();
-            spawner.spawn_blocking(Box::new(move || {
+            spawner.spawn_blocking(Box::new(crate::build::phase::inherit_blocking(move || {
                 let cancelled = run_image_conversion(&services_arc, &run_ctx);
                 redispatch_note::settle(&run_ctx.moss_dir, &run_ctx.staging_dir, &redispatched, clock(), cancelled);
-            }));
+            })));
         } else {
             log::info!("Running headless image conversion for {} images", total);
             let cancelled = run_image_conversion(svc, &run_ctx);

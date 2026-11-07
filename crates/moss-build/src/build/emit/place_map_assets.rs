@@ -399,6 +399,7 @@ pub fn emit_with_layers(
                     record.transforms.insert(
                         name.clone(),
                         TransformEntry {
+                            validation: None,
                             oid,
                             size: bytes.len() as u64,
                             params: serde_json::json!({ "generator_version": GENERATOR_VERSION, "xxh3": xxh3 }),

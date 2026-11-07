@@ -16,6 +16,7 @@
 //! session state. A terminal publish has neither. So the Tauri commands, that
 //! resolution, and the build-liveness listener stayed.
 
+pub(crate) mod profile;
 pub mod dry_run;
 pub(crate) mod removal_gate;
 pub mod freeze;
@@ -337,7 +338,11 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 
 /// [`publish_refusal`] as text, for the callers that only stop.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
-    publish_refusal(folder_path).map_or(Ok(()), |r| Err(r.text))
+    let _phase = crate::build::phase::PhaseTrace::start("local_checks");
+    publish_refusal(folder_path).map_or(Ok(()), |r| {
+        profile::refused(r.kind);
+        Err(r.text)
+    })
 }
 
 /// A refused publish: which rule refused it and the text a person reads.
@@ -618,7 +623,7 @@ pub async fn refuse_stale_copy(
     let client = crate::seta::client::MossSetaClient::for_environment(identity, &environment);
     let Ok(live) = client.live_generation(site_id).await else { return Ok(()) };
     match stale_copy_refusal(&record, &live) {
-        Some(refusal) => Err(refusal),
+        Some(refusal) => { profile::refusal("stale_copy"); Err(refusal) },
         None => Ok(()),
     }
 }
@@ -732,6 +737,7 @@ pub async fn resolve_publish_inputs(
     overwrite_newer: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<Option<(String, crate::identity::Identity)>, String> {
+    let _phase = crate::build::phase::PhaseTrace::start("resolve_inputs");
     let folder_str = folder.to_string_lossy().to_string();
     // NOT `unwrap_or_default()`: this read is what decides whether to register,
     // and an unparsable `state.toml` defaults to `site_id: None` — "this folder
@@ -1051,6 +1057,7 @@ pub async fn register_moss_host_site(
     let result = match client.register_site(site_id).await {
         Ok(r) => r,
         Err(crate::seta::client::SetaError::SiteLimitReached { limit, contact }) => {
+            profile::refusal("site_limit");
             return Err(site_limit_message(limit, contact.as_deref()));
         }
         Err(e) => return Err(register_failure_message(site_id, e)),
@@ -1075,6 +1082,7 @@ pub async fn register_moss_host_site(
 /// get them — which the app half never had, and the CLI `--site-id` half needs
 /// most, since only the app pre-checks a name with `check_site_id_available`.
 fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) -> String {
+    profile::seta_error(&e);
     let msg = e.to_string();
     // Seta checks the key's email before its ACLs, so this is the typical
     // first publish of a new folder.

@@ -579,6 +579,7 @@ fn link_members(
         entries.push((
             transform_name(name),
             TransformEntry {
+                validation: None,
                 oid: oid.clone(),
                 size,
                 params: params.clone(),

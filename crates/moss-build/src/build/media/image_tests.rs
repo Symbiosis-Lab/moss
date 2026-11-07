@@ -1,6 +1,6 @@
 use super::*;
 use crate::build::media::output_emit::summarize_coherence_violations;
-use crate::build::lifecycle::cas_heal::rematerialize;
+use crate::build::lifecycle::cas_heal::{rematerialize, rematerialize_with_record, HealOutcome};
 use crate::types::assets::{AssetRegistry, AssetState};
 use crate::types::content::{MediaMetadata, SiteHashes};
 use image::{DynamicImage, ImageBuffer, Rgb};
@@ -1332,6 +1332,7 @@ fn convert_single_image_ignores_legacy_sentinel_and_writes_webp() {
     record.transforms.insert(
         "image/webp".to_string(),
         TransformEntry {
+            validation: None,
             oid: String::new(),
             size: 0,
             params: serde_json::Value::Null,
@@ -1798,6 +1799,7 @@ fn should_skip_ignores_legacy_sentinel() {
     record.transforms.insert(
         "image/webp".to_string(),
         TransformEntry {
+            validation: None,
             oid: String::new(),
             size: 0,
             params: serde_json::Value::Null,
@@ -2224,6 +2226,7 @@ fn a_stale_pre_fix_format_probe_entry_is_not_reused_after_the_version_bump() {
         transforms: std::collections::HashMap::from([(
             FORMAT_PROBE_TRANSFORM.to_string(),
             crate::build::cache::TransformEntry {
+                validation: None,
                 oid: blob_oid,
                 size: json_bytes.len() as u64,
                 params: old_params,
@@ -2314,7 +2317,7 @@ fn prime_disk_hash_index(moss_dir: &Path, rel_path: &str, fingerprint: &ImageFin
 
 /// Populate a REAL, verifiable transform-cache entry for `source_oid`: store
 /// `webp_bytes` in the object store and record it under `transform` with
-/// `params`. Since `rematerialize_with_oid` never trusts a staged file's
+/// `params`. Since `rematerialize_with_record` never trusts a staged file's
 /// mere presence (it always re-verifies against the transform cache before
 /// linking — see its doc), a skip-candidate fixture needs this alongside
 /// `prime_disk_hash_index`, not the hash index alone. Callers that stage
@@ -2337,7 +2340,7 @@ fn prime_cached_transform(
     });
     record.transforms.insert(
         transform.to_string(),
-        crate::build::cache::TransformEntry { oid: blob_oid.clone(), size: webp_bytes.len() as u64, params: params.clone() },
+        crate::build::cache::TransformEntry { validation: None, oid: blob_oid.clone(), size: webp_bytes.len() as u64, params: params.clone() },
     );
     transforms.put(&record, crate::build::cache::RecordMode::Request).expect("test transform-cache put");
     blob_oid
@@ -3209,7 +3212,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         // Distinct dimensions per image: `make_big_jpeg`'s pixels are a pure
         // function of (w, h), so three same-size calls would share one
         // content oid — a real collision now that the transform cache is
-        // actually consulted (see `rematerialize_with_oid`'s doc), where it
+        // actually consulted (see `rematerialize_with_record`'s doc), where it
         // used to be masked by the presence-first shortcut this file's fix
         // removed.
         make_big_jpeg(&path, 400 + i as u32, 300);
@@ -3229,7 +3232,7 @@ async fn a_new_image_only_dispatches_the_new_one_others_survive_seal_and_stale_s
         let fp = compute_image_item_fingerprint(&root.to_string_lossy(), &item.source_path, &cfg)
             .expect("source exists and is stat-able");
         prime_disk_hash_index(&moss_dir, &item.source_path.to_string_lossy(), &fp, &item.source_oid);
-        // `rematerialize_with_oid` never trusts the sentinel's mere presence
+        // `rematerialize_with_record` never trusts the sentinel's mere presence
         // (see its doc) — it always re-verifies against the transform cache,
         // so the fixture needs a real cached record too. Its blob IS the
         // sentinel, so the verified relink is a same-bytes no-op and the
@@ -3403,7 +3406,7 @@ async fn a_skip_carried_images_advisory_rides_the_terminal_ticks_full_set() {
         .expect("source exists and is stat-able");
     let broken_oid = crate::build::cache::ObjectStore::hash_file(&root.join(broken_name)).unwrap();
     prime_disk_hash_index(&moss_dir, broken_name, &broken_fp, &broken_oid);
-    // Fixture for `rematerialize_with_oid`'s always-verify relink (see its
+    // Fixture for `rematerialize_with_record`'s always-verify relink (see its
     // doc) — a real cached record whose blob IS the sentinel, so the
     // verified relink is a same-bytes no-op.
     prime_cached_transform(&heal_objects, &heal_transforms, &broken_oid, "image/webp", &params, b"SENTINEL");
@@ -4425,6 +4428,7 @@ fn sized_raster_oid_reuses_transform_cache() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("first sizing must succeed");
 
@@ -4439,6 +4443,7 @@ fn sized_raster_oid_reuses_transform_cache() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("second call must be a cache hit (no source read, no re-encode)");
 
@@ -4464,7 +4469,7 @@ fn concurrent_sized_raster_calls_share_one_encode() {
     let source_oid = objects.store_file(&src, crate::build::cache::RecordMode::Request).unwrap();
     let cfg = ImageCompressionConfig::default();
     let encodes = || TEST_HOOK_ENCODED_SOURCES.lock().unwrap().iter().filter(|p| **p == src).count();
-    let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY);
+    let size = || sized_raster_oid_for_original(&src, &source_oid, &objects, &transforms, &cfg, SIZED_JPEG_QUALITY, None);
 
     let walks = 6;
     let barrier = std::sync::Barrier::new(walks);
@@ -4529,6 +4534,7 @@ fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("must return Some (verbatim source oid)");
     assert_eq!(
@@ -4546,6 +4552,7 @@ fn sized_raster_oid_keeps_source_when_reencode_not_smaller() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("cache hit must return the cached verbatim decision");
     assert_eq!(out2, source_oid);
@@ -4609,6 +4616,7 @@ fn sized_raster_oid_shrinks_an_opaque_photographic_png() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("photographic png must size");
 
@@ -4737,6 +4745,7 @@ fn sized_raster_oid_keeps_png_verbatim_when_palette_cannot_beat_it() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("must return Some (verbatim source oid)");
     assert_eq!(
@@ -4779,6 +4788,7 @@ fn sized_raster_oid_caps_the_fallback_at_fallback_max_edge() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("must size");
     let bytes = fs::read(objects.get_path(&oid).expect("blob must exist")).unwrap();
@@ -4814,7 +4824,8 @@ fn sized_raster_oid_none_for_non_decodable() {
             &objects,
             &transforms,
             &cfg,
-            SIZED_JPEG_QUALITY
+            SIZED_JPEG_QUALITY,
+            None,
         )
         .is_none(),
         "a non-decodable raster must yield None so the caller keeps the verbatim original"
@@ -4847,6 +4858,7 @@ fn sized_raster_oid_png_stores_transparent_png() {
         &transforms,
         &cfg,
         SIZED_JPEG_QUALITY,
+        None,
     )
     .expect("png sizing must succeed");
     let blob = objects.get_path(&oid).expect("blob must exist in CAS");
@@ -4941,7 +4953,7 @@ fn rematerialize_relinks_orphaned_staged_webp() {
     );
 }
 
-/// `rematerialize_with_oid` — the disk-origin skip decision's own heal call —
+/// `rematerialize_with_record` — the disk-origin skip decision's own heal call —
 /// must never trust a staged file's mere presence: staging carries content
 /// forward between builds, so a source whose bytes changed since the last
 /// encode can still find that EARLIER build's output physically sitting at
@@ -4952,11 +4964,11 @@ fn rematerialize_relinks_orphaned_staged_webp() {
 /// only when the caller already confirmed the source is unchanged; a bare
 /// stat-index hit proves no such thing).
 ///
-/// Ablate by reverting `rematerialize_with_oid` to check presence first (the
+/// Ablate by reverting `rematerialize_with_record` to check presence first (the
 /// way `rematerialize` still does) and this goes red: the staged bytes stay
 /// the decoy's.
 #[test]
-fn rematerialize_with_oid_overwrites_a_stale_staged_file_never_trusts_its_mere_presence() {
+fn rematerialize_with_record_overwrites_a_stale_staged_file_never_trusts_its_mere_presence() {
     let h = harness();
     let src = h._tmp.path().join("photo.jpg");
     make_big_jpeg(&src, 400, 300);
@@ -4992,7 +5004,7 @@ fn rematerialize_with_oid_overwrites_a_stale_staged_file_never_trusts_its_mere_p
 
     let params = cfg.to_params();
     let mut links = staged_links(&h);
-    let outcome = rematerialize_with_oid(&h.objects, &h.transforms, &params, &mut links, &staged, "image/webp", &source_oid);
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(&source_oid, crate::build::cache::RecordMode::Wait).as_ref(), &params, &mut links, &staged, "image/webp");
     assert!(matches!(outcome, HealOutcome::Healed { .. }), "must relink over the stale file, got {:?}", outcome);
     assert_eq!(
         fs::read(&staged).unwrap(),
@@ -5029,7 +5041,7 @@ fn photo_staged_and_recorded(h: &TestHarness) -> (PathBuf, String, serde_json::V
 /// Heal `staged` the way the next build would, and say whether it relinked.
 fn next_build_relinks(h: &TestHarness, staged: &Path, source_oid: &str, params: &serde_json::Value) -> bool {
     let mut links = staged_links(h);
-    let outcome = rematerialize_with_oid(&h.objects, &h.transforms, params, &mut links, staged, "image/webp", source_oid);
+    let outcome = rematerialize_with_record(&h.objects, h.transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait).as_ref(), params, &mut links, staged, "image/webp");
     links.save();
     matches!(outcome, HealOutcome::Healed { .. })
 }
@@ -5409,12 +5421,11 @@ fn heal_and_verify_variant_never_registers_a_zero_byte_suppressed_rung_as_presen
     let mut healed_count = 0usize;
     let (present, oid) = heal_and_verify_variant(
         &h.objects,
-        &h.transforms,
+        None,
         &serde_json::json!({}),
         &mut staged_links(&h),
         &staged,
         "image/webp-w800",
-        "irrelevant-oid-for-a-suppressed-check",
         true,
         &mut healed_count,
     );
@@ -5863,7 +5874,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
     let fp = compute_image_item_fingerprint(&ctx.source_path, &item.source_path, &cfg)
         .expect("source exists and is stat-able");
     prime_disk_hash_index(&moss_dir, &item.source_path.to_string_lossy(), &fp, &item.source_oid);
-    // Fixture for `rematerialize_with_oid`'s always-verify relink (see its
+    // Fixture for `rematerialize_with_record`'s always-verify relink (see its
     // doc) — a real cached record whose blob IS "kept-bytes", so the
     // verified relink is a same-bytes no-op and the premise assertion below
     // (the skip path, not a real re-encode) still holds.
@@ -5915,7 +5926,7 @@ async fn skip_path_carry_forward_registers_the_verified_cas_oid_not_a_stale_or_f
 ///
 /// Ablate by reverting `dispatch_image_conversions`'s `outputs_present` to
 /// an independent `std::fs::metadata` presence check (its shape before this
-/// fix — see `rematerialize_with_oid`'s doc for the other half) and this
+/// fix — see `rematerialize_with_record`'s doc for the other half) and this
 /// goes red: the stale bytes are shipped as the skip-carried output instead
 /// of a real re-encode landing.
 #[test]
@@ -6508,7 +6519,7 @@ impl RewriteVault {
     /// One rebuild of the image side, as the desktop app runs it, with the manifest it
     /// registered read back. Every entry — carried forward or freshly delivered — now
     /// carries the real, verified CAS oid backing its bytes (`staged_oid`); see
-    /// `rematerialize_with_oid`'s doc for why a skip-carried entry may never register
+    /// `rematerialize_with_record`'s doc for why a skip-carried entry may never register
     /// with no oid at all.
     async fn sealed_rebuild(&self, names: &[&str]) -> crate::build::manifest::SealedManifest {
         self.sealed_rebuild_with_dispatched(names).await.0
@@ -6623,7 +6634,7 @@ async fn a_source_changed_under_a_worker_that_left_is_encoded_by_the_next_build(
 /// The other half: a worker that delivers vouches for its source, so the next build
 /// carries the variant forward instead of dispatching it again — registered with the
 /// SAME verified CAS oid the first build's worker minted, recovered from the transform
-/// cache rather than a fresh encode (see `rematerialize_with_oid`'s doc for why this
+/// cache rather than a fresh encode (see `rematerialize_with_record`'s doc for why this
 /// must be a real oid, not `None`: `ship_phase`'s overlap protection for image variants
 /// depends on it).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -6690,7 +6701,7 @@ async fn a_warm_rebuild_over_unchanged_images_relinks_no_staged_variant() {
 /// bytes in), so they mint the SAME CAS oid either way — oid equality alone cannot
 /// tell "skipped" from "redundantly re-encoded to an identical result". An unchanged
 /// image's carried-forward registration does still keep that real, verified oid rather
-/// than `None` (see `rematerialize_with_oid`'s doc for why), which the assertions below
+/// than `None` (see `rematerialize_with_record`'s doc for why), which the assertions below
 /// also check, but that is the overlap-safety property, not this one.
 ///
 /// Ablate by reverting `dispatch_image_conversions`'s disk-origin lookup
@@ -6991,7 +7002,7 @@ async fn the_worker_takes_the_hash_the_index_holds_for_an_unchanged_file_instead
 /// transform-cache record when it returns — identity comes from content and stat, not
 /// from continuous membership in the active set. So an image that left and came back
 /// byte for byte is carried forward exactly like one that never left, registered with
-/// the SAME verified CAS oid every time (never `None`: see `rematerialize_with_oid`'s
+/// the SAME verified CAS oid every time (never `None`: see `rematerialize_with_record`'s
 /// doc for why a skip-carried image variant must keep a real, checkable oid); only a
 /// real content change forces a re-encode (covered by the `a_source_changed_under_a_
 /// worker_that_left_*` family above).

@@ -114,7 +114,7 @@ pub struct DeployFlags {
     /// Accept a rollback identified by source timestamps or published hashes.
     pub accept_stale_content: bool,
     /// `--dry-run`: build as a deploy would, say what it would do, send
-    /// nothing and record nothing.
+    /// nothing and write no publish state. Performance telemetry is still recorded.
     pub dry_run: bool,
     /// `--json`, with `--dry-run`: print the dry run as JSON, every list in
     /// full, for a script or an agent.
@@ -188,7 +188,7 @@ impl DeployArgs {
         }
         if flags.dry_run && flags.accept_removals {
             return Err(
-                "error: --dry-run records nothing, so it cannot accept removals. Drop --accept-removals to see \
+                "error: --dry-run records no publish state, so it cannot accept removals. Drop --accept-removals to see \
                  what would be refused, or drop --dry-run to publish."
                     .to_string(),
             );
@@ -290,13 +290,16 @@ pub fn publish(
     };
 
     let sink = printing();
-    let report = runtime.block_on(dispatch(folder, route, host_ports, crate::build::PluginMode::Blocking, flags, &sink));
+    runtime.block_on(crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
+    let report = dispatch(folder, route, host_ports, crate::build::PluginMode::Blocking, flags, &sink).await;
     // After the publish has returned: a copy that fails never fails it.
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
-        runtime.block_on(crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, &print));
+        let _phase = crate::build::phase::PhaseTrace::start("after_publish");
+        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, &print).await;
     }
     report
+    }))
 }
 
 /// What `moss deploy` does once its process-wide setup is done: describe the
@@ -311,6 +314,7 @@ async fn dispatch(
     flags: &DeployFlags,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
+    crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
     // Before the route's own send: a dry run is the same build with
     // everything after the gate left out, so it never reaches the match.
     if flags.dry_run {
@@ -336,6 +340,7 @@ async fn dispatch(
         || send(folder, route, host_ports, plugins, flags, sink),
     )
     .await
+    }).await
 }
 
 /// The route's own send, once.
@@ -347,6 +352,7 @@ async fn send(
     flags: &DeployFlags,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
+    crate::deploy::profile::begin_attempt();
     match route {
         DeployRoute::Prebuilt { dir } => {
             crate::deploy::prebuilt::run_prebuilt_deploy(
@@ -666,7 +672,7 @@ mod removal_flag_tests {
     #[test]
     fn a_dry_run_cannot_accept_removals() {
         let err = parse(&["site", "--dry-run", "--accept-removals"]).unwrap_err();
-        assert!(err.starts_with("error: --dry-run records nothing"), "{err}");
+        assert!(err.starts_with("error: --dry-run records no publish state"), "{err}");
     }
 }
 
@@ -1133,4 +1139,63 @@ mod email_wiring_tests {
         assert_eq!(seta.count("POST /auth/request"), 0);
         assert!(err.contains("--email <address>"), "{err}");
     }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn deploy_profile_prebuilt_dry_run_is_one_record() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+        let site = dir.path().join("output");
+        std::fs::create_dir(&site).unwrap();
+        std::fs::write(site.join("index.html"), "<p>private-page</p>").unwrap();
+        let route = DeployRoute::Prebuilt { dir: site };
+        let result = dispatch(dir.path(), &route, &crate::cli::host::cli_host_ports,
+            crate::build::PluginMode::Skip, &DeployFlags { dry_run: true, ..Default::default() },
+            &crate::deploy::progress::silent()).await;
+        assert!(matches!(result, Ok(DeployReport::DryRun(_))), "{result:?}");
+        let text = std::fs::read_to_string(crate::moss_paths::MossPaths::new(dir.path()).profile()).unwrap();
+        assert_eq!(text.lines().count(), 1);
+        let row: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(row["kind"], "deploy");
+        assert_eq!(row["outcome"], "ok");
+        assert_eq!(row["target"], "prebuilt");
+        assert_eq!(row["dry_run"], true);
+        assert_eq!(row["counts"]["manifest_files"], 1);
+        assert_eq!(row["counts"]["body_requests"], 0);
+        assert!(!text.contains("private-page"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deploy_profile_build_and_plugin_dry_runs_reference_the_build() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        for route in [DeployRoute::Hosted, DeployRoute::Plugin { id: "fixture".into() }] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir(dir.path().join(".moss")).unwrap();
+            std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+            std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\nuid: dry-home\n---\n\nHello.\n").unwrap();
+            let result = dispatch(dir.path(), &route, &crate::cli::host::cli_host_ports,
+                crate::build::PluginMode::Skip, &DeployFlags { dry_run: true, ..Default::default() },
+                &crate::deploy::progress::silent()).await;
+            let Ok(DeployReport::DryRun(dry)) = result else { panic!("{result:?}") };
+            let text = std::fs::read_to_string(crate::moss_paths::MossPaths::new(dir.path()).profile()).unwrap();
+            let rows: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+            let deploys: Vec<_> = rows.iter().filter(|r| r["kind"] == "deploy").collect();
+            assert_eq!(deploys.len(), 1);
+            let row = deploys[0];
+            assert_eq!(row["target"], crate::deploy::profile::target(&route));
+            assert_eq!(row["dry_run"], true);
+            assert_eq!(row["counts"]["pages_added"], dry.change_set.added);
+            assert_eq!(row["counts"]["pages_edited"], dry.change_set.edited);
+            assert_eq!(row["counts"]["pages_deleted"], dry.change_set.deleted);
+            assert_eq!(row["counts"]["pages_restyled"], dry.change_set.restyled);
+            assert!(rows.iter().any(|b| b["kind"] == "build" && b["started_at"] == row["build_started_at"]));
+        }
+    }
+
 }

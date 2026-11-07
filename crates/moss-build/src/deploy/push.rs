@@ -76,11 +76,14 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
 pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
-    super::removal_gate::refuse_output_collisions(sealed)?;
-    super::removal_gate::refuse_stale_generation(cx.folder_path, sealed)?;
+    super::profile::record(cx.folder_path, "seta", false, async {
+    super::profile::gate("output_collisions", super::removal_gate::refuse_output_collisions(sealed))?;
+    super::profile::gate("stale_generation", super::removal_gate::refuse_stale_generation(cx.folder_path, sealed))?;
     crate::deploy::refuse_publish(&cx.folder_path.to_string_lossy())?;
-    crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path)?;
-    crate::deploy::refuse_unresolved_inputs(sealed)?;
+    let checks = crate::build::phase::PhaseTrace::start("local_checks");
+    super::profile::gate("foreign_inputs", crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path))?;
+    super::profile::gate("unresolved_inputs", crate::deploy::refuse_unresolved_inputs(sealed))?;
+    drop(checks);
     let full = uuid::Uuid::new_v4().simple().to_string();
     let deploy_id = full.get(..8).unwrap_or(&full);
     let site_id = cx.site_id;
@@ -101,6 +104,7 @@ pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> R
         deploy_status_label(&result)
     );
     result
+    }).await
 }
 
 /// Credit bytes the server confirmed — the upload phase's only proof that the
@@ -144,7 +148,10 @@ async fn push_site_inner_impl(
     // are now emitted during generate_blocking_content (Gap #3 fix) so the seal
     // covers them and the generation-id is stable. No post-seal mutation of the
     // generation directory.
+    let manifest_phase = crate::build::phase::PhaseTrace::start("manifest");
     let mut manifest = sealed.files().into_owned();
+    super::profile::count("manifest_files", manifest.len() as u64);
+    drop(manifest_phase);
 
     let site_id = site_id.to_string();
 
@@ -163,6 +170,7 @@ async fn push_site_inner_impl(
     // about to deploy, skip the whole sync/upload/commit cycle. Any Err or
     // Ok(None) from get_live_generation (404 = old server, network error, site
     // never deployed) falls through to the normal path for back-compat.
+    let probe_phase = crate::build::phase::PhaseTrace::start("live_generation");
     if let Ok(Some(live_gen)) = client.get_live_generation(&site_id).await {
         if live_gen == sealed.generation_id() {
             log::info!(
@@ -180,11 +188,9 @@ async fn push_site_inner_impl(
             });
         }
     }
+    drop(probe_phase);
 
-    let diff = client
-        .sync_manifest(&site_id, &manifest, sealed.generation_id())
-        .await
-        .map_err(|e| e.to_string())?;
+    let diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {
         let url = view_site_url(&folder_path_str, &site_id, environment);
@@ -215,11 +221,13 @@ async fn push_site_inner_impl(
     // server reports `server_total`, judges against the TRUE live file count
     // (2026-07-22: an OG-card rotation from a home-page rename false-blocked
     // a healthy publish).
-    mass_remove::check_mass_removal_for_diff(
+    let checks = crate::build::phase::PhaseTrace::start("local_checks");
+    super::profile::gate("mass_removal", mass_remove::check_mass_removal_for_diff(
         manifest.len(),
         &diff,
         std::env::var("MOSS_DEPLOY_ALLOW_MASS_REMOVE").is_ok(),
-    )?;
+    ))?;
+    drop(checks);
 
     // 8. Upload needed files
     let total = diff.need.len() as u32;
@@ -531,10 +539,8 @@ async fn push_site_inner_impl(
         sealed.generation_id(),
         manifest.len()
     );
-    let commit_result = client
-        .commit_sync(&site_id, &manifest, sealed.generation_id())
-        .await
-        .map_err(|e| e.to_string())?;
+    let commit_result = super::profile::commit(client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
+    let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Record what just went live, so the NEXT publish can say what it will
     // change instead of showing a flat file count.
@@ -772,6 +778,7 @@ pub async fn run_hosted_deploy(
     overrides: PublishOverrides,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<PushResult, String> {
+    super::profile::record(folder, "seta", false, async {
     let folder_str = folder.to_string_lossy().to_string();
 
     // Before the build, not after: a folder with no site cannot publish however
@@ -811,6 +818,7 @@ pub async fn run_hosted_deploy(
         events_lock: &events_lock,
     };
     push_site_inner(&sealed, &cx).await
+    }).await
 }
 
 #[cfg(test)]
@@ -1833,6 +1841,7 @@ mod tests {
         )
         .await;
         assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");
+        assert_profile_upload_count(folder.path());
     }
 
     /// The same, through moss's own build route (`push_site_inner`). Ablated
@@ -1872,5 +1881,19 @@ mod tests {
         };
         let result = with_seta_url(addr, push_site_inner(&sealed, &cx)).await;
         assert!(matches!(result, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {result:?}");
+        assert_profile_upload_count(dir.path());
     }
+
+    fn assert_profile_upload_count(folder: &Path) {
+        let text = std::fs::read_to_string(MossPaths::new(folder).profile()).unwrap();
+        let records: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(records.len(), 1, "one profile per deploy, including nested drivers");
+        assert_eq!(records[0]["kind"], "deploy");
+        let counts = &records[0]["counts"];
+        assert_eq!(counts["files_uploaded"], 1);
+        assert_eq!(counts["files_needed"], 1);
+        assert!(counts["files_needed"].as_u64().unwrap() <= counts["manifest_files"].as_u64().unwrap());
+        assert_eq!(counts["server_files_updated"], 1039, "server site total stays separate");
+    }
+
 }
