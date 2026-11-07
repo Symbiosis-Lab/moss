@@ -182,7 +182,16 @@ fn now() -> String {
 }
 
 /// Held while one run sends a site's copies; see [`Records::turn`].
-pub struct SendTurn(#[allow(dead_code)] std::fs::File);
+pub struct SendTurn(std::fs::File);
+
+/// Unlocked explicitly rather than by closing the file: the kernel keeps the
+/// lock while any copy of the descriptor is open, and a child this process
+/// forks meanwhile holds one until it execs.
+impl Drop for SendTurn {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
 
 /// The records of one site.
 pub struct Records {
@@ -289,6 +298,20 @@ fn read(path: &Path) -> Option<CopyRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A child forked while the turn is held (an encoder, a plugin host)
+    /// carries a copy of its descriptor until it execs, and the kernel keeps
+    /// the lock while any copy is open.
+    #[test]
+    fn a_released_turn_is_free_while_a_copy_of_its_descriptor_is_still_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let records = Records::at(dir.path().join("copies"));
+        let turn = records.turn().expect("the turn is free");
+        let inherited = turn.0.try_clone().unwrap();
+        drop(turn);
+        assert!(records.turn().is_some(), "the run that let go of the turn still holds it through the copy");
+        drop(inherited);
+    }
 
     #[test]
     fn each_state_says_what_a_send_does_next() {
