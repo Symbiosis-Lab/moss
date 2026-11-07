@@ -54,14 +54,29 @@ pub(crate) static MOSS_HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::
 pub(crate) fn with_moss_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
     let _guard = MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let prior = std::env::var_os("MOSS_HOME");
-    let tmp = tempfile::tempdir().unwrap();
-    std::env::set_var("MOSS_HOME", tmp.path());
-    let result = f(tmp.path());
+    let home = scratch_moss_home();
+    std::env::set_var("MOSS_HOME", &home);
+    let result = f(&home);
     match prior {
         Some(v) => std::env::set_var("MOSS_HOME", v),
         None => std::env::remove_var("MOSS_HOME"),
     }
     result
+}
+
+/// A fresh directory for a test to point `MOSS_HOME` at, beside this process's
+/// scratch home and never deleted while the process runs. The variable is
+/// process-wide, so a build in a parallel test that holds no lock can read the
+/// override just before it is restored and open its folder lock there
+/// afterwards; deleting the directory under that open failed the other test
+/// with "Invalid argument".
+#[cfg(test)]
+pub(crate) fn scratch_moss_home() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = default_home().unwrap().with_file_name(format!("override-{n}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 /// Runs the closure with `MOSS_HOME` unset under [`MOSS_HOME_TEST_LOCK`], for
@@ -94,6 +109,12 @@ mod tests {
     #[test]
     fn moss_home_honours_the_env_var_override() {
         with_moss_home(|tmp| assert_eq!(moss_home().unwrap(), tmp));
+    }
+
+    #[test]
+    fn an_overridden_home_outlives_the_override() {
+        let home = with_moss_home(|home| home.to_path_buf());
+        assert!(home.is_dir(), "a parallel build may still be opening its lock under {home:?}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

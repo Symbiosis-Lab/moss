@@ -565,8 +565,8 @@ pub async fn request_yield(folder: &Path) -> Result<YieldOutcome, String> {
 mod tests {
     use super::*;
 
-    fn moss_home_dir() -> tempfile::TempDir {
-        tempfile::tempdir().expect("tempdir for MOSS_HOME")
+    fn moss_home_dir() -> std::path::PathBuf {
+        crate::infra::home::scratch_moss_home()
     }
 
     /// Serializes the handful of tests here that set `MOSS_HOME` — the same
@@ -583,7 +583,7 @@ mod tests {
     async fn wait_for_owner_to_appear_gives_up_and_returns_none_within_the_timeout() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the unclaimed folder");
 
         let timeout = std::time::Duration::from_millis(300);
@@ -603,7 +603,7 @@ mod tests {
     fn acquire_writes_a_record_that_round_trips_through_the_atomic_writer() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let owned = acquire(folder.path(), HostKind::Cli, "9.9.9".to_string(), "http://127.0.0.1:1234".to_string())
@@ -636,7 +636,7 @@ mod tests {
     fn a_second_acquire_in_the_same_process_succeeds_and_keeps_the_first_record() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let first =
@@ -669,7 +669,7 @@ mod tests {
     fn acquire_is_refused_by_a_lock_held_outside_this_process_registry() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
 
@@ -709,7 +709,7 @@ mod tests {
     async fn find_live_owner_is_none_when_the_health_body_names_a_different_folder() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
 
