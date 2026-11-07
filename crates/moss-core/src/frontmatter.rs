@@ -811,11 +811,8 @@ fn key_of(line: &str) -> Option<(String, usize, usize)> {
             #[allow(clippy::string_slice)]
             // `scan_quoted` ends on the ASCII closing quote.
             let raw = &line[..len];
-            let key = match q {
-                '"' => unescape_double(raw),
-                _ => raw.get(1..len - 1).unwrap_or_default().replace("\'\'", "\'"),
-            };
-            (key, len)
+            // YAML's own decoding, so escapes mean what the parser reads.
+            (serde_yaml::from_str::<String>(raw).ok()?, len)
         }
         None => {
             let colon = line.find(": ").or_else(|| line.ends_with(':').then(|| line.len() - 1))?;

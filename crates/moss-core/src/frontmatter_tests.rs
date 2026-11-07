@@ -872,3 +872,10 @@ fn edit_fields_finds_a_quoted_key_that_holds_colon_space() {
     let out = edit_fields(content, &[FieldEdit::Set { key: "foo: bar".into(), value: "y".into() }]).unwrap();
     assert_eq!(out, "---\nfoo: 1\n\"foo: bar\": y\n---\nBody");
 }
+
+#[test]
+fn edit_fields_decodes_a_quoted_key_as_yaml_does() {
+    let content = "---\nu0066oo: 1\n\"\\u0066oo\": 2\n---\n";
+    let out = edit_fields(content, &[FieldEdit::Set { key: "foo".into(), value: 3.into() }]).unwrap();
+    assert_eq!(out, "---\nu0066oo: 1\n\"\\u0066oo\": 3\n---\n");
+}
