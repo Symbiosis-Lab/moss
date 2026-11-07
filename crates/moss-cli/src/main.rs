@@ -112,6 +112,8 @@ fn main() {
     // what every registry request carries as `User-Agent`; moss-build panics
     // on an unseeded read rather than guess.
     moss_build::system::seed_app_version(env!("CARGO_PKG_VERSION"));
+    // A sign-in link's page tells this binary from the app.
+    moss_build::system::seed_app_name("moss command line");
     // `moss-cli <subcommand> --help` from the same table the app binary reads,
     // so the two cannot describe a command differently. Before this, `guide
     // --help` reached `guide`, which rejects unknown flags — the app exited 0

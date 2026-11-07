@@ -1,8 +1,7 @@
 //! HTTPS cert provisioning and custom domain linking for moss-seta.
-//!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 
 use super::client::{MossSetaClient, SetaError};
+use reqwest::Method;
 
 impl MossSetaClient {
     /// Link a custom domain to a moss-hosted site.
@@ -16,17 +15,8 @@ impl MossSetaClient {
         site_id: &str,
         domain: &str,
     ) -> Result<(), SetaError> {
-        let path = format!("/api/sites/{}/domains", site_id);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "POST {} site_id={} domain={}", url, site_id, domain);
-
-        let response = self.client
-            .post(&url)
-            .header("Authorization", auth_header)
-            .json(&serde_json::json!({ "domain": domain }))
-            .send()
-            .await?;
+        let path = format!("/api/sites/{}/domains", urlencoding::encode(site_id));
+        let response = self.signed_json(Method::POST, &path, &serde_json::json!({ "domain": domain }))?.send().await?;
 
         let status = response.status().as_u16();
         log::debug!(target: "seta", "Response status: {}", status);
@@ -34,12 +24,7 @@ impl MossSetaClient {
         if matches!(status, 200 | 201) {
             return Ok(());
         }
-        // A 409 means the domain is claimed by another site. It used to build
-        // its own `SetaError::Api` from `response.text()`, which meant the one
-        // message a user actually reads here (orchestrator surfaces it as a
-        // cross-site conflict) was an uncapped raw body, with no cf-ray logged
-        // and no challenge classification. The status is all this arm needs;
-        // `from_failed_response` owns turning the response into an error.
+        // A 409: the domain is claimed by another site.
         if status == 409 {
             log::warn!(target: "seta", "Custom domain {} is already claimed by another site (409)", domain);
         }

@@ -118,7 +118,6 @@
         "crates/moss-build/src/engine/host_fns.rs::dispatch_command_core": 300,
         "crates/moss-build/src/ops/serve/router.rs::start_server": 350,
         "crates/moss-build/src/ops/watch/sweep/tick.rs::run": 400,
-        "crates/moss-build/src/seta/chunked_upload.rs::upload_file_chunked": 250,
         "crates/moss-build/src/vault/import/scrape/run.rs::scrape_to_folder": 350,
         "crates/moss-core/src/ast/hooks.rs::render_shortcode": 350,
         "crates/moss-core/src/ast/parser.rs::parse_block_with_tag": 300,
