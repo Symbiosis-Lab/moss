@@ -1031,11 +1031,17 @@ pub fn generate_blocking_content_for_build(
     // state into a parsed document.
     parse_session.finish(&documents);
 
-    // Which uid each page is built under: its own, the published one, or a
-    // provisional one. After the snapshot above, so a replayed page never
-    // carries a uid this pass assigned; nothing here writes the author's files.
+    // Which uid each page is built under: its own, the published one, or one
+    // derived from its path and bytes. After the snapshot above, so a replayed
+    // page never carries a uid this pass assigned; nothing here writes the
+    // author's files.
     let reduce_pre_start = std::time::Instant::now();
-    let resolution = super::uid_dedup::assign_note_ids(&mut documents, &paths, |src| previous_hashes.sources.contains_key(src));
+    let resolution = super::uid_dedup::assign_note_ids(
+        &mut documents,
+        &paths,
+        |src, uid| previous_hashes.built_under(src, uid),
+        |src| page_source_hashes.get(src).map(|meta| meta.hash.clone()),
+    );
     // A deferral is only logged (by `resolve_duplicate_uids`): there is nothing for the author to do.
     if !resolution.reassignments.is_empty() {
         for r in &resolution.reassignments {

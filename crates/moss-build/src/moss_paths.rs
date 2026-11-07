@@ -660,13 +660,6 @@ impl MossPaths {
         self.build_dir().join("article-map.json")
     }
 
-    /// `.moss/build.nosync/provisional-uids.json` — the note IDs this machine
-    /// builds unpublished pages under, by source path. See
-    /// `build::render::uid_dedup`.
-    pub fn provisional_uids(&self) -> PathBuf {
-        self.build_dir().join("provisional-uids.json")
-    }
-
     /// `.moss/build.nosync/profile.jsonl` — build performance metrics.
     ///
     /// One JSON line per build with step-level timing data.

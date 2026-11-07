@@ -14,23 +14,15 @@
 //! 2. the uid the publish record says was live from this source path, unless
 //!    another page's frontmatter now carries it, which is how a published page
 //!    whose stamp did not land keeps its uid;
-//! 3. a provisional uid from this machine's ledger, minted on first sight and
-//!    kept per source path, so every preview of a page carries the same key
-//!    and the build a publish uploads already holds the uid it will stamp.
-//!
-//! The ledger is device-local (`.moss/build.nosync/`): a provisional uid is
-//! never live anywhere, so two machines disagreeing about one costs nothing,
-//! and losing the file only means the next build mints new ones. Two devices
-//! that each publish a never-published page first do disagree about a live
-//! uid, and the second publish moves the page's thread to its own.
+//! 3. the uid derived from its composed path and the hash of its bytes
+//!    ([`generate_uid`](crate::build::markdown::generate_uid)), so every
+//!    machine holding those bytes builds the page under the same key.
 //!
 //! ## Why a uid is not a disposable identifier
 //!
-//! `uid` is 8 random hex characters minted once by
-//! [`generate_uid`](crate::build::markdown::generate_uid) and written into the
-//! note's frontmatter when the note is first published (above). It is
-//! **random, not derived** — the path argument is
-//! ignored — so a uid that gets rewritten is gone: nothing can recompute it.
+//! Once published, the uid is in the note and stays when the note moves or
+//! changes, so it can no longer be recomputed from the note: a uid that gets
+//! rewritten is gone.
 //!
 //! It is also the join key for three things that live outside the vault and
 //! cannot be repaired from here:
@@ -42,19 +34,14 @@
 //! - Deployed redirect stubs, which join last-deploy to current build by uid
 //!   (`build::feeds::redirects::detect_renames`).
 //!
-//! ## Why the old rule was unsafe
+//! ## Why the date cannot decide
 //!
 //! Two files share a uid on the most ordinary Obsidian action there is:
 //! duplicating a note. The copy carries the original's frontmatter, uid and
-//! all. One of them has to be reassigned.
-//!
-//! The rule used to be "earlier frontmatter `date` keeps it, tie-broken by
-//! earlier file birth time". **iCloud Drive and Obsidian Sync reset both.**
-//! btime is rewritten on every device that receives the file, and the copy
-//! carries the original's `date` verbatim — so on a synced vault the copy can
-//! look strictly older on both signals, and moss would rewrite the uid of the
-//! *published* note, orphaning its comments server-side and invalidating its
-//! moderation history. It reported this only through `log::warn!`.
+//! all, so one of them has to be reassigned. The copy also carries the
+//! original's `date` verbatim, so the date cannot tell them apart, and picking
+//! wrong rewrites the uid of the *published* note, orphaning its comments
+//! server-side and invalidating its moderation history.
 //!
 //! ## The rule now
 //!
@@ -66,7 +53,7 @@
 //! that change the path between deploys (folder move, case-only rename) — a
 //! landed publish is the record's only writer, so any such action would
 //! otherwise silently void the signal. Only when the record has no opinion —
-//! neither file published, or both under one uid — does the date/btime
+//! neither file published, or both under one uid — does the date/path
 //! heuristic decide, and only when the record could be READ at all.
 //!
 //! ## Picking a keeper and reporting the risk are separate questions
@@ -78,9 +65,8 @@
 //! been renamed while a duplicate kept its old name, in which case the match
 //! lands on the copy. The two histories leave identical evidence here.
 //!
-//! So the fallback decides the keeper (it beats the timestamp heuristic, which
-//! on a synced vault is systematically wrong rather than merely uninformative)
-//! but never clears [`UidReassignment::live_thread_at_risk`]. That flag asks
+//! So the fallback decides the keeper (it beats the date/path heuristic, which
+//! cannot tell a copy from its original) but never clears [`UidReassignment::live_thread_at_risk`]. That flag asks
 //! "was the published file *proven*?", not "did we manage to pick someone?" —
 //! and the inferred case is precisely the one where the keeper may be the copy,
 //! so it is the case the author most needs told. Whenever the snapshot shows
@@ -101,93 +87,19 @@
 use crate::build::manifest::live_baseline::{Baseline, Unreadable};
 use crate::build::types::ParsedDocument;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
-/// This machine's provisional uids, by source path.
-///
-/// Every build of a folder in this process shares one copy, so two builds that
-/// overlap (a save landing mid-build) agree on a page's uid rather than each
-/// minting its own; a process starts from the file.
-pub(crate) struct ProvisionalUids {
-    path: PathBuf,
-    shared: std::sync::Arc<std::sync::Mutex<BTreeMap<String, String>>>,
-}
-
-fn ledgers() -> &'static std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<BTreeMap<String, String>>>>> {
-    static LEDGERS: std::sync::OnceLock<
-        std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<BTreeMap<String, String>>>>>,
-    > = std::sync::OnceLock::new();
-    LEDGERS.get_or_init(Default::default)
-}
-
-impl ProvisionalUids {
-    pub(crate) fn load(path: PathBuf) -> Self {
-        let mut all = ledgers().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let shared = all
-            .entry(path.clone())
-            .or_insert_with(|| {
-                // allow:raw_read regenerable per-machine state under `.moss/build.nosync/`
-                let on_disk: BTreeMap<String, String> = std::fs::read(&path)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                    .unwrap_or_default();
-                std::sync::Arc::new(std::sync::Mutex::new(on_disk))
-            })
-            .clone();
-        Self { path, shared }
-    }
-
-    /// The provisional uid for `source_path`, minting one if it has none or
-    /// if the one it has is `taken` by another page; `true` when minted.
-    pub(crate) fn uid_for(&mut self, source_path: &str, taken: impl Fn(&str) -> bool) -> (String, bool) {
-        let mut by_source = self.shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(uid) = by_source.get(source_path).filter(|uid| !taken(uid)) {
-            return (uid.clone(), false);
-        }
-        let uid = loop {
-            let candidate = crate::build::markdown::generate_uid(source_path);
-            if !taken(&candidate) {
-                break candidate;
-            }
-        };
-        by_source.insert(source_path.to_string(), uid.clone());
-        (uid, true)
-    }
-
-    /// Forget sources whose file is gone from `root`, and write the ledger if
-    /// it changed. Pruned by the folder rather than by this build's pages, so
-    /// an overlapping build cannot drop a page the other one just gave a uid.
-    /// Best-effort: a failed write costs new provisional uids in a later
-    /// process, never this one.
-    pub(crate) fn save(self, root: &std::path::Path) {
-        let mut by_source = self.shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        by_source.retain(|source, _| root.join(source).exists());
-        // allow:raw_read regenerable per-machine state under `.moss/build.nosync/`
-        let on_disk: Option<BTreeMap<String, String>> =
-            std::fs::read(&self.path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        if on_disk.as_ref() == Some(&*by_source) || (on_disk.is_none() && by_source.is_empty()) {
-            return;
-        }
-        let written = serde_json::to_string_pretty(&*by_source)
-            .map_err(|e| e.to_string())
-            .and_then(|json| crate::infra::atomic_write::write_atomic(&self.path, &json));
-        if let Err(e) = written {
-            log::info!("could not record provisional note IDs: {e}");
-        }
-    }
-}
+use std::path::Path;
 
 /// Give every page that has no uid the one it is built under (see the module
 /// header), keeping `taken` as the set of every uid in use.
 ///
 /// `published` yields the publish record's `source path → uid` and is called
-/// only when some page lacks a uid.
+/// only when some page lacks a uid; `source_hash` is the hash of the bytes the
+/// page was built from.
 pub(crate) fn assign_missing(
     documents: &mut [ParsedDocument],
-    provisional: &mut ProvisionalUids,
     taken: &mut HashSet<String>,
     published: impl FnOnce() -> HashMap<String, String>,
+    source_hash: impl Fn(&str) -> Option<String>,
 ) {
     let needs = |doc: &ParsedDocument| doc.uid.is_none() && !doc.slot_only && doc.source_path.is_some();
     if !documents.iter().any(needs) {
@@ -198,33 +110,35 @@ pub(crate) fn assign_missing(
         let Some(source) = doc.source_path.as_deref() else { continue };
         let uid = match published.get(source).filter(|uid| !taken.contains(*uid)) {
             Some(uid) => uid.clone(),
-            None => provisional.uid_for(source, |uid| taken.contains(uid)).0,
+            None => {
+                // Every page with a source path here came from Loop A, read or
+                // replayed, and both record the hash of its bytes (a replay is
+                // validated against it). So the hash is always there; without it
+                // two machines could derive different uids.
+                let hash = source_hash(source);
+                debug_assert!(hash.is_some(), "no source hash for {source}");
+                crate::build::markdown::generate_uid(source, hash.as_deref().unwrap_or(""))
+            }
         };
         taken.insert(uid.clone());
         doc.uid = Some(uid);
     }
 }
 
-/// Give every page the uid it is built under and resolve duplicates. Writes no
-/// source file, only this machine's ledger of provisional uids.
+/// Give every page the uid it is built under and resolve duplicates, in
+/// memory. `built_under(path, uid)` answers whether the previous build may
+/// have served that source path under that uid.
 pub(crate) fn assign_note_ids(
     documents: &mut [ParsedDocument],
     paths: &crate::moss_paths::MossPaths,
-    built_before: impl Fn(&str) -> bool,
+    built_under: impl Fn(&str, &str) -> bool,
+    source_hash: impl Fn(&str) -> Option<String>,
 ) -> UidResolution {
-    let root = paths.project_root();
-    let mut provisional = ProvisionalUids::load(paths.provisional_uids());
     let baseline = std::cell::OnceCell::new();
     let deployed = || baseline.get_or_init(|| crate::build::manifest::live_baseline::load(paths));
     let mut taken: HashSet<String> = documents.iter().filter_map(|doc| doc.uid.clone()).collect();
-    assign_missing(documents, &mut provisional, &mut taken, || published_uids(deployed()));
-    let resolution = resolve_duplicate_uids(documents, root, deployed, built_before, |path| {
-        let (uid, minted) = provisional.uid_for(path, |uid| taken.contains(uid));
-        taken.insert(uid.clone());
-        (uid, minted)
-    });
-    provisional.save(root);
-    resolution
+    assign_missing(documents, &mut taken, || published_uids(deployed()), source_hash);
+    resolve_duplicate_uids(documents, deployed, built_under)
 }
 
 /// The publish record's `source path → uid`, empty when nothing is published
@@ -234,12 +148,6 @@ fn published_uids(baseline: &Baseline) -> HashMap<String, String> {
         Baseline::Present(live) => live.entries.iter().map(|entry| (entry.source_path.clone(), entry.uid.clone())).collect(),
         _ => HashMap::new(),
     }
-}
-
-/// Drop this process's copy of a ledger, as a new process would start.
-#[cfg(test)]
-pub(crate) fn forget_in_process(path: &std::path::Path) {
-    ledgers().lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(path);
 }
 
 /// How strongly the deployed snapshot ties a contender to the contested uid.
@@ -272,9 +180,6 @@ pub struct UidContender {
     pub source_path: String,
     /// Frontmatter `date`, if the note declares one.
     pub date: Option<String>,
-    /// Filesystem birth time, if the platform reports one. Unreliable on
-    /// synced vaults — see the module docs.
-    pub birth_time: Option<SystemTime>,
     /// How the last-deployed article-map ties this file to the contested uid —
     /// i.e. how strongly it claims this is the page whose comment thread and
     /// signed moderation events are live.
@@ -296,7 +201,7 @@ pub struct UidReassignment {
     /// True when the deployed snapshot records this uid as LIVE but the
     /// exact-path join did not identify the published file among the
     /// contenders — so the keeper was chosen by the basename inference or by
-    /// the date/btime heuristic, and the live comment thread may follow the
+    /// the date/path heuristic, and the live comment thread may follow the
     /// wrong file. The advisory must say so.
     ///
     /// A successful basename fallback does **not** clear this: it picks a
@@ -314,20 +219,17 @@ pub struct UidReassignment {
 /// 1. **Proven published identity** — exactly one contender recorded in the
 ///    deployed article-map under this uid at that exact path. That file owns
 ///    the live comment thread and the signed moderation history, and neither
-///    can be moved, so it keeps the uid no matter what the timestamps say.
+///    can be moved, so it keeps the uid no matter what the dates say.
 /// 2. **Inferred published identity** — exactly one contender matching the
 ///    deployed *basename* when the deployed path itself is gone. Weaker
 ///    evidence (see [`PublishedIdentity::Inferred`]), but still strictly better
-///    than the timestamp heuristic, which on a synced vault is not merely
-///    uninformative but systematically wrong: the copy carries the original's
-///    `date` and gets a fresh btime on every device that receives it, so it
-///    tends to look *older* than the original on both signals.
+///    than the date, which a copy carries verbatim from its original.
 /// 3. Earlier frontmatter `date` (missing date sorts last).
-/// 4. Earlier file birth time.
-/// 5. Lexicographically smaller source path — so the outcome does not depend
-///    on filesystem scan order.
+/// 4. Smaller composed (NFC) source path — so the outcome depends on neither
+///    the order the disk lists files nor how it encodes their names. Never a
+///    file's creation time, which each device that syncs the file resets.
 ///
-/// Steps 3–5 only ever run when the snapshot has no opinion at all. An empty
+/// Steps 3–4 only ever run when the snapshot has no opinion at all. An empty
 /// slice returns 0; callers must not index with it.
 pub fn pick_uid_keeper(contenders: &[UidContender]) -> usize {
     // 1–2. Published identity — but only when it is unambiguous. Exactly one
@@ -349,15 +251,14 @@ pub fn pick_uid_keeper(contenders: &[UidContender]) -> usize {
         }
     }
 
-    // 3–5. The snapshot could not identify anyone; order by the local signals.
+    // 3–4. The snapshot could not identify anyone; order by the source.
     let mut order: Vec<usize> = (0..contenders.len()).collect();
     order.sort_by(|&a, &b| {
         let date_a = contenders[a].date.as_deref().unwrap_or("9999");
         let date_b = contenders[b].date.as_deref().unwrap_or("9999");
         date_a
             .cmp(date_b)
-            .then_with(|| contenders[a].birth_time.cmp(&contenders[b].birth_time))
-            .then_with(|| contenders[a].source_path.cmp(&contenders[b].source_path))
+            .then_with(|| crate::build::scan::path_collision::nfc_order(&contenders[a].source_path, &contenders[b].source_path))
     });
     order.first().copied().unwrap_or(0)
 }
@@ -391,9 +292,9 @@ pub struct UidResolution {
 
 /// Resolve every duplicate uid across `documents`.
 ///
-/// Mutates the losers' `uid` in place, to the one `mint` gives for their source
-/// path with whether it is new; the author's files are not touched (a publish
-/// stamps the new uid). The keeper is chosen by [`pick_uid_keeper`].
+/// Mutates the losers' `uid` in place, to one derived from their source path
+/// and the contested uid; the author's files are not touched (a publish stamps
+/// the new uid). The keeper is chosen by [`pick_uid_keeper`].
 ///
 /// `load_deployed` yields the record of what is live
 /// ([`crate::build::manifest::live_baseline::load`]) and is called **only when a
@@ -403,30 +304,26 @@ pub struct UidResolution {
 /// ## An unreadable record defers the whole pass
 ///
 /// Not "falls back to the heuristic" — **defers**. A reassigned page is
-/// published under its fresh uid, and a uid is random, minted once, and the
-/// join key for live comment threads and signed moderation events: there is
-/// no undo. The fallback the code used to take in this case (frontmatter `date`,
-/// then file birth time) is not merely uninformative on a synced vault, it is
-/// systematically *reversed* — the copy carries the original's date and gets a
-/// fresh btime on every device that receives it — so an unreadable record made
-/// moss most likely to rewrite the uid of the published note.
+/// published under its new uid, and a published uid is the join key for live
+/// comment threads and signed moderation events: there is no undo. The
+/// date/path heuristic cannot tell a copy from its original (the copy carries
+/// the original's date), so without the record it could publish the copy
+/// under the published note's uid.
 ///
-/// It defers less than it used to. `built_before` answers whether a source path
-/// was in the previous build's manifest, and a path this install has never
-/// built has never been rendered, let alone published — so its uid can be
-/// re-minted with no record at all. Duplicating a note produces exactly one
-/// unknown path beside one known one, which is why the ordinary case now
-/// resolves silently even while the record is unreadable (2026-08-30). Only a
-/// group where every file is already known still defers.
+/// `built_under(path, uid)` answers whether the previous build may have served
+/// that source path under that uid. A path no build has served under the
+/// contested uid cannot have been published under it, so it can be given a
+/// new uid with no record at all. Duplicating a note produces exactly one such
+/// path beside one that holds the uid, which is why the ordinary case resolves
+/// even while the record is unreadable. Only a group with no single holder
+/// defers.
 ///
 /// Deferring costs one build's collision handling and self-heals: the next
 /// build retries.
 pub(crate) fn resolve_duplicate_uids<'a>(
     documents: &mut [ParsedDocument],
-    source_root: &Path,
     load_deployed: impl FnOnce() -> &'a Baseline,
-    built_before: impl Fn(&str) -> bool,
-    mut mint: impl FnMut(&str) -> (String, bool),
+    built_under: impl Fn(&str, &str) -> bool,
 ) -> UidResolution {
     // BTreeMap, not HashMap: collision groups are processed in a stable uid
     // order so a multi-collision build produces the same result every run.
@@ -465,9 +362,6 @@ pub(crate) fn resolve_duplicate_uids<'a>(
             .iter()
             .map(|&i| {
                 let source_path = documents[i].source_path.clone().unwrap_or_default();
-                let birth_time = std::fs::metadata(source_root.join(&source_path))
-                    .ok()
-                    .and_then(|m| m.created().ok());
                 UidContender {
                     published: if live.is_some_and(|paths| paths.contains(&source_path)) {
                         PublishedIdentity::Exact
@@ -475,7 +369,6 @@ pub(crate) fn resolve_duplicate_uids<'a>(
                         PublishedIdentity::No
                     },
                     date: documents[i].date.clone(),
-                    birth_time,
                     source_path,
                 }
             })
@@ -536,23 +429,22 @@ pub(crate) fn resolve_duplicate_uids<'a>(
             ),
             // No record to read, so the question "which of these is published?"
             // has no evidence — but "which of these could NOT be published?"
-            // still does, and it is enough. A source path this install has
-            // never built has never been rendered, let alone deployed, so
-            // re-minting its uid cannot orphan a comment thread. That is the
+            // still does, and it is enough. A source path the previous build
+            // never served under this uid cannot have been deployed under it,
+            // so giving it another cannot orphan a comment thread. That is the
             // whole safety argument, and it holds without any timestamp: the
             // signal is moss's own build manifest, not file metadata that
             // iCloud and Obsidian Sync rewrite.
             //
             // Duplicating a note — the action that causes essentially every
-            // collision — produces exactly this shape: one path moss knows and
-            // one it has never seen. When the shape is anything else (all of
-            // them known, none of them known) there is no safe re-mint, and
-            // the group defers as before.
+            // collision — produces exactly this shape: one path built under
+            // the uid and one that never was. Any other shape has no safe
+            // reassignment, and the group defers.
             Some(_) => {
                 let known: Vec<usize> = contenders
                     .iter()
                     .enumerate()
-                    .filter(|(_, c)| built_before(&c.source_path))
+                    .filter(|(_, c)| built_under(&c.source_path, &uid))
                     .map(|(i, _)| i)
                     .collect();
                 match known[..] {
@@ -578,10 +470,16 @@ pub(crate) fn resolve_duplicate_uids<'a>(
             let Some(reassigned_path) = contenders.get(pos).map(|c| c.source_path.clone()) else {
                 continue;
             };
-            let (new_uid, minted) = mint(&reassigned_path);
+            // Derived from the path and the contested uid, skipping any uid a
+            // page already carries, so every machine reassigns the same one.
+            let in_use = |candidate: &str| documents.iter().any(|d| d.uid.as_deref() == Some(candidate));
+            let new_uid = (0u32..)
+                .map(|attempt| crate::build::markdown::generate_uid(&reassigned_path, &format!("{uid}\0{attempt}")))
+                .find(|candidate| !in_use(candidate))
+                .expect("an unused uid within 2^32 attempts");
             documents[idx].uid = Some(new_uid.clone());
             // Built under the same new uid until a publish stamps it: told once.
-            if !minted {
+            if built_under(&reassigned_path, &new_uid) {
                 continue;
             }
             reassignments.push(UidReassignment {
@@ -599,7 +497,7 @@ pub(crate) fn resolve_duplicate_uids<'a>(
         // log ring, Send Logs and `moss build --strict`'s problem count.
         crate::build::cli_output::log_warn_problem!(
             "{} duplicate note ID(s) left unresolved: {} — and every file carrying \
-             them was already known to a previous build, so none could be re-minted \
+             them may have been served under it, so none could be given another \
              without risking a published note's ID.",
             deferred.len(),
             why.describe()

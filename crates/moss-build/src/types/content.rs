@@ -582,6 +582,16 @@ impl SiteHashes {
         Self::default()
     }
 
+    /// Whether this build may have served `source` under `uid`. A manifest
+    /// that predates per-page uids answers yes for every page it built, since
+    /// it cannot rule the uid out.
+    pub fn built_under(&self, source: &str, uid: &str) -> bool {
+        match self.page_meta.get(source) {
+            Some(meta) => meta.uid.as_deref().map_or(true, |built| built == uid),
+            None => self.sources.contains_key(source),
+        }
+    }
+
     /// Insert a file hash
     pub fn insert(&mut self, path: String, hash: String) {
         self.files.insert(path, hash);

@@ -2021,7 +2021,7 @@
       "name": "uid",
       "type": "string",
       "widget": "text-input",
-      "description": "Stable note identity: 8 random hex chars, written into the page's frontmatter by the publish that first puts it online (a build or preview never writes it). NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
+      "description": "Stable note identity: 8 hex chars derived from the page's path and bytes, the same on every machine, and written into the page's frontmatter by the publish that first puts it online (a build or preview never writes it). Once written it stays when the page moves or changes, so it cannot be recomputed from the current path or content, and is unrecoverable once lost (auto-generated)",
       "group": "",
       "skip_schema": true
     },

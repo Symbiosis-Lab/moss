@@ -9,6 +9,7 @@
 use super::*;
 use crate::build::manifest::live_baseline::{Baseline, LiveBaseline, LiveEntry, Unreadable};
 use crate::build::types::ParsedDocument;
+use std::collections::HashMap;
 
 /// Build a `ParsedDocument` carrying only the fields the resolver reads.
 fn doc(source_path: &str, uid: &str, date: Option<&str>) -> ParsedDocument {
@@ -49,16 +50,20 @@ fn resolve(
     resolve_fresh(documents, root, load, |_| true).reassignments
 }
 
-/// The resolver with a fresh random uid for every reassigned file.
+/// The resolver, with `built_before` saying which paths the previous build
+/// served under the contested uid.
 fn resolve_fresh(
     documents: &mut [ParsedDocument],
-    root: &std::path::Path,
+    _root: &std::path::Path,
     load: impl FnOnce() -> Baseline,
     built_before: impl Fn(&str) -> bool,
 ) -> UidResolution {
+    // The previous build served each such path under the uid it carries now.
+    let served: HashMap<String, Option<String>> =
+        documents.iter().filter_map(|d| Some((d.source_path.clone()?, d.uid.clone()))).collect();
     let baseline = std::cell::OnceCell::new();
-    resolve_duplicate_uids(documents, root, || baseline.get_or_init(load), built_before, |path| {
-        (crate::build::markdown::generate_uid(path), true)
+    resolve_duplicate_uids(documents, || baseline.get_or_init(load), |path, uid| {
+        built_before(path) && served.get(path).is_some_and(|u| u.as_deref() == Some(uid))
     })
 }
 
@@ -91,29 +96,25 @@ fn tempdir() -> tempfile::TempDir {
 
 #[test]
 fn published_file_keeps_uid_against_an_older_looking_duplicate() {
-    // The regression. iCloud / Obsidian Sync reset btime, and duplicating a
-    // note copies the original's `date` — so the copy can look strictly
-    // "older" on both signals the old heuristic used. Published identity must
-    // override both, or the ORIGINAL's uid gets rewritten and its comment
-    // thread is orphaned server-side.
+    // The copy looks older by date. Published identity must override it, or
+    // the ORIGINAL's uid gets rewritten and its comment thread is orphaned
+    // server-side.
     let contenders = vec![
         UidContender {
             source_path: "posts/copy.md".to_string(),
             date: Some("2020-01-01".to_string()),
-            birth_time: Some(std::time::UNIX_EPOCH),
             published: PublishedIdentity::No,
         },
         UidContender {
             source_path: "posts/original.md".to_string(),
             date: Some("2026-07-01".to_string()),
-            birth_time: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(999_999)),
             published: PublishedIdentity::Exact,
         },
     ];
     assert_eq!(
         pick_uid_keeper(&contenders),
         1,
-        "the published file must keep the uid regardless of date/btime"
+        "the published file must keep the uid regardless of date"
     );
 }
 
@@ -125,13 +126,11 @@ fn falls_back_to_date_when_nothing_is_published() {
         UidContender {
             source_path: "posts/b.md".to_string(),
             date: Some("2026-07-01".to_string()),
-            birth_time: None,
             published: PublishedIdentity::No,
         },
         UidContender {
             source_path: "posts/a.md".to_string(),
             date: Some("2020-01-01".to_string()),
-            birth_time: None,
             published: PublishedIdentity::No,
         },
     ];
@@ -146,36 +145,32 @@ fn falls_back_when_both_files_are_published_under_one_uid() {
         UidContender {
             source_path: "posts/b.md".to_string(),
             date: Some("2026-07-01".to_string()),
-            birth_time: None,
             published: PublishedIdentity::Exact,
         },
         UidContender {
             source_path: "posts/a.md".to_string(),
             date: Some("2020-01-01".to_string()),
-            birth_time: None,
             published: PublishedIdentity::Exact,
         },
     ];
     assert_eq!(pick_uid_keeper(&contenders), 1, "earlier date wins");
 }
 
+/// A file's creation time is not part of the source a sync client carries
+/// (each device that receives the file gives it a new one), so a date tie is
+/// broken by the composed path, the same on every machine.
 #[test]
-fn birth_time_breaks_a_date_tie() {
-    let contenders = vec![
-        UidContender {
-            source_path: "posts/b.md".to_string(),
-            date: Some("2026-07-01".to_string()),
-            birth_time: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(100)),
-            published: PublishedIdentity::No,
-        },
-        UidContender {
-            source_path: "posts/a.md".to_string(),
-            date: Some("2026-07-01".to_string()),
-            birth_time: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(10)),
-            published: PublishedIdentity::No,
-        },
-    ];
-    assert_eq!(pick_uid_keeper(&contenders), 1);
+fn a_date_tie_is_broken_by_the_composed_path() {
+    let contender = |path: &str| UidContender {
+        source_path: path.to_string(),
+        date: Some("2026-07-01".to_string()),
+        published: PublishedIdentity::No,
+    };
+    assert_eq!(pick_uid_keeper(&[contender("posts/b.md"), contender("posts/a.md")]), 1);
+    // Composed, `é.md` sorts before `éx.md`; by raw bytes the decomposed
+    // `e` + accent would sort first.
+    assert_eq!(pick_uid_keeper(&[contender("posts/\u{e9}.md"), contender("posts/e\u{301}x.md")]), 0);
+    assert_eq!(pick_uid_keeper(&[contender("posts/e\u{301}x.md"), contender("posts/\u{e9}.md")]), 1);
 }
 
 #[test]
@@ -184,13 +179,11 @@ fn source_path_breaks_a_total_tie_so_the_outcome_is_deterministic() {
         UidContender {
             source_path: "posts/z.md".to_string(),
             date: None,
-            birth_time: None,
             published: PublishedIdentity::No,
         },
         UidContender {
             source_path: "posts/a.md".to_string(),
             date: None,
-            birth_time: None,
             published: PublishedIdentity::No,
         },
     ];
@@ -330,18 +323,15 @@ fn renamed_original_keeps_the_uid_via_basename_when_the_deployed_path_is_stale()
     // The snapshot joins by exact source path, but a deploy is the ONLY
     // writer of the snapshot — so the most ordinary Obsidian sequence
     // (deploy, move the note to another folder, then duplicate it) leaves
-    // every contender exact-unmatched while the uid IS live. On a synced
-    // vault the copy carries the original's date verbatim and btime is
-    // reset, and on a full tie the lexicographic tiebreak picks the copy
-    // ('a 1.md' < 'a.md': space < dot) — rewriting the PUBLISHED note's
-    // uid and orphaning its comment thread. The basename fallback
-    // re-attaches published identity across the move.
+    // every contender exact-unmatched while the uid IS live. The copy
+    // carries the original's date verbatim, and on that tie the path
+    // tiebreak picks the copy ('a 1.md' < 'a.md': space < dot) — rewriting
+    // the PUBLISHED note's uid and orphaning its comment thread. The
+    // basename fallback re-attaches published identity across the move.
     let tmp = tempdir();
     let root = tmp.path();
-    // The copy is written FIRST: on a synced vault btime is rewritten per
-    // device, so the copy can carry the older birth time. Every heuristic
-    // signal then points at the copy — only published identity saves the
-    // original.
+    // Every heuristic signal points at the copy; only published identity
+    // saves the original.
     write_note(root, "essays/a 1.md", "aabbccdd", "2026-07-01");
     write_note(root, "essays/a.md", "aabbccdd", "2026-07-01");
 
@@ -402,8 +392,8 @@ fn a_basename_decoy_does_not_get_to_claim_the_published_file_is_safe() {
     assert_eq!(reassignments.len(), 1);
     assert_eq!(
         reassignments[0].keeper_path, "drafts/a.md",
-        "the basename match still picks the keeper — it beats the timestamp \
-         heuristic, which on a synced vault is systematically wrong"
+        "the basename match still picks the keeper — it beats the date/path \
+         heuristic, which cannot tell a copy from its original"
     );
     assert!(
         reassignments[0].live_thread_at_risk,
@@ -582,14 +572,14 @@ fn a_corrupt_record_defers_the_same_way_a_withheld_one_does() {
 
 /// End to end, through a REAL record on disk: `record_landed`'s shape
 /// (`triples` populated, no join) resolves a collision by published identity,
-/// never falling to the date/birth-time heuristic that would rewrite the
+/// never falling to the date/path heuristic that would rewrite the
 /// published note's uid.
 #[test]
 fn a_record_with_triples_resolves_the_collision_without_the_heuristic() {
     let tmp = tempdir();
     let root = tmp.path();
     // Heuristic signals point at the WRONG file: the copy carries the
-    // original's date verbatim and would win a date/birth-time tiebreak.
+    // original's date verbatim and would win the date/path tiebreak.
     write_note(root, "posts/copy.md", "aabbccdd", "2020-01-01");
     write_note(root, "posts/original.md", "aabbccdd", "2020-01-01");
 
@@ -756,9 +746,13 @@ mod built_under {
         }
     }
 
-    fn assign(documents: &mut [ParsedDocument], provisional: &mut ProvisionalUids, published: impl FnOnce() -> HashMap<String, String>) {
+    fn hash(source: &str) -> Option<String> {
+        Some(format!("hash of {source}"))
+    }
+
+    fn assign(documents: &mut [ParsedDocument], published: impl FnOnce() -> HashMap<String, String>) {
         let mut taken: HashSet<String> = documents.iter().filter_map(|doc| doc.uid.clone()).collect();
-        assign_missing(documents, provisional, &mut taken, published);
+        assign_missing(documents, &mut taken, published, hash);
     }
 
     fn uids(documents: &[ParsedDocument]) -> Vec<Option<&str>> {
@@ -767,10 +761,8 @@ mod built_under {
 
     #[test]
     fn a_page_keeps_its_own_uid_and_the_record_never_loads_when_none_is_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
         let mut documents = vec![doc("a.md", Some("aaaa1111"))];
-        assign(&mut documents, &mut provisional, || panic!("the record is read only when a page lacks a uid"));
+        assign(&mut documents, || panic!("the record is read only when a page lacks a uid"));
         assert_eq!(uids(&documents), [Some("aaaa1111")]);
     }
 
@@ -778,10 +770,8 @@ mod built_under {
     /// and must be built under it on any machine.
     #[test]
     fn a_page_without_a_uid_is_built_under_the_one_published_from_its_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
         let mut documents = vec![doc("plain.md", None)];
-        assign(&mut documents, &mut provisional, || {
+        assign(&mut documents, || {
             [("plain.md".to_string(), "bbbb2222".to_string())].into()
         });
         assert_eq!(uids(&documents), [Some("bbbb2222")]);
@@ -792,75 +782,31 @@ mod built_under {
     /// would hand it the published page's comment thread.
     #[test]
     fn a_published_uid_another_page_now_carries_is_not_reused_at_the_old_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
         let mut documents = vec![doc("renamed.md", Some("cccc3333")), doc("old.md", None)];
-        assign(&mut documents, &mut provisional, || {
+        assign(&mut documents, || {
             [("old.md".to_string(), "cccc3333".to_string())].into()
         });
         assert_eq!(documents[0].uid.as_deref(), Some("cccc3333"));
         assert!(documents[1].uid.as_deref().is_some_and(|uid| uid != "cccc3333"), "{:?}", uids(&documents));
     }
 
+    /// Two machines, or two builds in flight at once, give a new page one uid.
     #[test]
-    fn a_provisional_uid_survives_a_new_process_and_is_forgotten_with_its_page() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        std::fs::write(root.join("a.md"), "a").unwrap();
-        std::fs::write(root.join("b.md"), "b").unwrap();
-        let ledger = root.join("ids.json");
-
-        let mut provisional = ProvisionalUids::load(ledger.clone());
-        let mut documents = vec![doc("a.md", None), doc("b.md", None)];
-        assign(&mut documents, &mut provisional, HashMap::new);
-        provisional.save(root);
-        let first = uids(&documents).into_iter().map(|uid| uid.unwrap().to_string()).collect::<Vec<_>>();
-        assert_ne!(first[0], first[1]);
-
-        forget_in_process(&ledger);
-        let mut provisional = ProvisionalUids::load(ledger.clone());
-        let mut again = vec![doc("a.md", None), doc("b.md", None)];
-        assign(&mut again, &mut provisional, HashMap::new);
-        assert_eq!(uids(&again), [Some(first[0].as_str()), Some(first[1].as_str())]);
-        std::fs::remove_file(root.join("b.md")).unwrap();
-        provisional.save(root);
-
-        let saved: BTreeMap<String, String> = serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
-        assert_eq!(saved.keys().collect::<Vec<_>>(), ["a.md"], "b.md is gone, so its provisional uid is too");
-    }
-
-    /// Two builds in flight at once (a save landing mid-build) must agree on a new
-    /// page's uid, or their outputs differ.
-    #[test]
-    fn overlapping_builds_give_a_new_page_one_uid() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ledger = tmp.path().join("ids.json");
-        let mut first = ProvisionalUids::load(ledger.clone());
-        let mut second = ProvisionalUids::load(ledger);
-        let mut a = vec![doc("new.md", None)];
+    fn a_new_page_is_built_under_the_uid_its_path_and_bytes_give() {
+        let mut a = vec![doc("new.md", None), doc("other.md", None)];
         let mut b = vec![doc("new.md", None)];
-        assign(&mut a, &mut first, HashMap::new);
-        assign(&mut b, &mut second, HashMap::new);
-        assert_eq!(uids(&a), uids(&b));
-    }
-
-    #[test]
-    fn a_provisional_uid_another_page_has_taken_is_replaced() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ledger = tmp.path().join("ids.json");
-        std::fs::write(&ledger, r#"{"new.md": "dddd4444"}"#).unwrap();
-        let mut provisional = ProvisionalUids::load(ledger);
-        let mut documents = vec![doc("other.md", Some("dddd4444")), doc("new.md", None)];
-        assign(&mut documents, &mut provisional, HashMap::new);
-        assert!(documents[1].uid.as_deref().is_some_and(|uid| uid != "dddd4444"));
+        assign(&mut a, HashMap::new);
+        assign(&mut b, HashMap::new);
+        let derived = crate::build::markdown::generate_uid("new.md", "hash of new.md");
+        assert_eq!(uids(&a)[0], Some(derived.as_str()));
+        assert_eq!(uids(&b), [Some(derived.as_str())]);
+        assert_ne!(uids(&a)[1], uids(&a)[0]);
     }
 
     #[test]
     fn a_slot_file_is_given_no_uid() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
         let mut documents = vec![ParsedDocument { slot_only: true, ..doc("footer.md", None) }];
-        assign(&mut documents, &mut provisional, HashMap::new);
+        assign(&mut documents, HashMap::new);
         assert_eq!(uids(&documents), [None]);
     }
 
@@ -876,9 +822,11 @@ mod built_under {
         let notes = || vec![doc("a.md", Some("aaaa1111")), doc("b.md", Some("aaaa1111"))];
 
         let mut first = notes();
-        assert_eq!(assign_note_ids(&mut first, &paths, |_| false).reassignments.len(), 1);
+        assert_eq!(assign_note_ids(&mut first, &paths, |_, _| false, hash).reassignments.len(), 1);
+        let copy_uid = first[1].uid.clone().unwrap();
         let mut second = notes();
-        assert!(assign_note_ids(&mut second, &paths, |_| true).reassignments.is_empty());
+        let built_under = |src: &str, uid: &str| src == "a.md" || (src == "b.md" && uid == copy_uid);
+        assert!(assign_note_ids(&mut second, &paths, built_under, hash).reassignments.is_empty());
         assert_eq!(uids(&first), uids(&second), "both builds give the copy one uid");
     }
 }
