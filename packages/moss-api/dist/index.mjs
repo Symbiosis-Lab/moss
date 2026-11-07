@@ -1365,14 +1365,18 @@ async function downloadAsset(url, targetDir, options = {}) {
 * Allows plugins to execute external binaries (git, npm, etc.)
 * in a controlled environment.
 *
-* Working directory is auto-detected from the runtime context
-* (always the project root).
+* The working directory is the project root unless `workingDir` names
+* another inside the project, or a deploy hook's `site_dir`.
 */
+/** A POSIX root, a Windows drive (`C:\` or `C:/`) or a UNC path. */
+function isAbsolute(path) {
+	return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(path);
+}
 /**
 * Execute an external binary
 *
-* Working directory is auto-detected from the runtime context
-* (always the project root).
+* The working directory is the project root unless `workingDir` names
+* another inside the project, or a deploy hook's `site_dir`.
 *
 * @param options - Execution options including binary path and args
 * @returns Execution result with stdout, stderr, and exit code
@@ -1409,7 +1413,7 @@ async function downloadAsset(url, targetDir, options = {}) {
 async function executeBinary(options) {
 	const ctx = getInternalContext();
 	const { binaryPath, args, timeoutMs = 6e4, env, stdin, workingDir, onStderr } = options;
-	const resolvedWorkingDir = workingDir ? `${ctx.project_path}/${workingDir}` : ctx.project_path;
+	const resolvedWorkingDir = !workingDir ? ctx.project_path : isAbsolute(workingDir) ? workingDir : `${ctx.project_path}/${workingDir}`;
 	const streamId = onStderr ? crypto.randomUUID() : void 0;
 	let unlisten;
 	if (onStderr && streamId) unlisten = await onEvent("binary-output", (payload) => {

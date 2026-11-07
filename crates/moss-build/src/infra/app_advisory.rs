@@ -143,6 +143,7 @@ advisory_strings! {
     preparing_to_publish => { en: "Preparing to publish…", zh_hans: "正在准备发布……", zh_hant: "正在準備發佈……", de: "Veröffentlichung wird vorbereitet …" },
     rebuilding_site => { en: "Rebuilding your site…", zh_hans: "正在重新构建网站……", zh_hant: "正在重新建置網站……", de: "Deine Website wird neu erstellt …" },
     sending_site => { en: "Sending your site…", zh_hans: "正在发送网站……", zh_hant: "正在傳送網站……", de: "Deine Website wird gesendet …" },
+    waiting_for_other_publish => { en: "Waiting for another publish of this folder…", zh_hans: "正在等待此文件夹的另一次发布完成……", zh_hant: "正在等待此資料夾的另一次發佈完成……", de: "Warte auf eine andere Veröffentlichung dieses Ordners …" },
     registering_site => { en: "Registering site…", zh_hans: "正在注册网站……", zh_hant: "正在註冊網站……", de: "Website wird registriert …" },
     uploading => { en: "Uploading {name}", zh_hans: "正在上传 {name}", zh_hant: "正在上傳 {name}", de: "{name} wird hochgeladen" },
     rechecking => { en: "Rechecking...", zh_hans: "重新检查……", zh_hant: "重新檢查……", de: "Wird erneut geprüft …" },

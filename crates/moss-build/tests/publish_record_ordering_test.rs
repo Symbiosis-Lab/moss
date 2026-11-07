@@ -104,6 +104,12 @@ fn the_plugin_path_records_after_the_plugin_reported_success() {
          are live that never shipped, so the next publish reports nothing to publish while real \
          changes sit unshipped."
     );
+    let pinned = body.find("pin_generation(").expect(
+        "`run_plugin_deploy_inner` must pin the generation it copies for the plugin: the copy can \
+         wait behind another publish while builds retire old generations.",
+    );
+    let copied = body.find("DeployScratch::create(").expect("the plugin publishes from its own copy");
+    assert!(pinned < copied, "the generation is pinned before the copy starts");
     assert!(
         fn_body(&src, "record_landing").contains("record_landed("),
         "`record_landing` must delegate to `landed::record_landed`, or the ordering asserted \

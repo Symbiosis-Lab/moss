@@ -452,17 +452,26 @@ mod process_context_trigger_tests {
 
 
 /// Context for deploy capability (publishing to hosting platforms)
-///
-/// Note: Path fields (project_path, moss_dir, output_dir) are intentionally omitted.
-/// Plugins access files through SDK functions (readSiteFile, readProjectFile, etc.)
-/// which resolve paths via the runtime's internal context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeployContext {
     /// Project structure information
     pub project_info: ProjectInfo,
 
-    /// List of files to deploy (relative to output_dir)
+    /// The files to deploy, relative to `site_dir`.
     pub site_files: Vec<String>,
+
+    /// Absolute path of a directory holding exactly `site_files`, read-only,
+    /// made for this hook call and removed when it returns. A deploy hook
+    /// reads the site here, never through `readSiteFile`, whose tree the next
+    /// build can advance mid-publish.
+    #[serde(default)]
+    pub site_dir: String,
+
+    /// Absolute path, beside `site_dir`, that the hook may pass to git as
+    /// `GIT_INDEX_FILE` to stage `site_dir` without touching the project's
+    /// own index. Not created; removed with `site_dir`.
+    #[serde(default)]
+    pub index_file: String,
 
     /// Plugin configuration from .moss/config.toml
     #[serde(default)]

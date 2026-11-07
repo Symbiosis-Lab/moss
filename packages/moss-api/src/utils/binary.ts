@@ -4,8 +4,8 @@
  * Allows plugins to execute external binaries (git, npm, etc.)
  * in a controlled environment.
  *
- * Working directory is auto-detected from the runtime context
- * (always the project root).
+ * The working directory is the project root unless `workingDir` names
+ * another inside the project, or a deploy hook's `site_dir`.
  */
 
 import { getTauriCore } from "./tauri.js";
@@ -34,13 +34,20 @@ export interface ExecuteOptions {
   /** Timeout in milliseconds (default: 60000) */
   timeoutMs?: number;
   /**
-   * Environment variables to add. Only `GIT_TERMINAL_PROMPT` and
-   * `COPYFILE_DISABLE` are accepted; any other name refuses the call.
+   * Environment variables to add. Only `GIT_TERMINAL_PROMPT`,
+   * `COPYFILE_DISABLE` and `GIT_INDEX_FILE` are accepted; any other name
+   * refuses the call. `GIT_INDEX_FILE` must be a deploy hook's
+   * `context.index_file`.
    */
   env?: Record<string, string>;
   /** Data to pass to stdin (useful for commands like `git credential fill`) */
   stdin?: string;
-  /** Working directory relative to project root (default: project root itself) */
+  /**
+   * Working directory: relative to the project root, or absolute, such as a
+   * deploy hook's `context.site_dir` (default: the project root). moss refuses
+   * one outside the project, or inside its `.moss/` folder other than
+   * `site_dir`.
+   */
   workingDir?: string;
   /**
    * Callback for real-time stderr output. When provided, stderr lines are
@@ -87,11 +94,16 @@ interface BinaryOutputEvent {
 // Functions
 // ============================================================================
 
+/** A POSIX root, a Windows drive (`C:\` or `C:/`) or a UNC path. */
+function isAbsolute(path: string): boolean {
+  return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(path);
+}
+
 /**
  * Execute an external binary
  *
- * Working directory is auto-detected from the runtime context
- * (always the project root).
+ * The working directory is the project root unless `workingDir` names
+ * another inside the project, or a deploy hook's `site_dir`.
  *
  * @param options - Execution options including binary path and args
  * @returns Execution result with stdout, stderr, and exit code
@@ -131,9 +143,11 @@ export async function executeBinary(
   const ctx = getInternalContext();
   const { binaryPath, args, timeoutMs = 60000, env, stdin, workingDir, onStderr } = options;
 
-  const resolvedWorkingDir = workingDir
-    ? `${ctx.project_path}/${workingDir}`
-    : ctx.project_path;
+  const resolvedWorkingDir = !workingDir
+    ? ctx.project_path
+    : isAbsolute(workingDir)
+      ? workingDir
+      : `${ctx.project_path}/${workingDir}`;
 
   // When onStderr is provided, set up real-time stderr streaming
   const streamId = onStderr ? crypto.randomUUID() : undefined;

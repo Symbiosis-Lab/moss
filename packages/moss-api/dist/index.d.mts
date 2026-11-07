@@ -433,7 +433,24 @@ interface ProcessContext extends BaseContext {
  * @category Hook contexts
  */
 interface DeployContext extends BaseContext {
+  /** The files to deploy, relative to `site_dir`. */
   site_files: string[];
+  /**
+   * Absolute path of a read-only directory holding exactly `site_files`,
+   * made for this hook call and removed when it returns. Read the site here
+   * (pass it as `executeBinary`'s `workingDir`, or to `tar -C`), not through
+   * `readSiteFile`, whose tree the next build can advance mid-publish.
+   * Set from moss 0.15.20: a plugin that reads it declares
+   * `min_moss_version` "0.15.20", and should stop if it is missing rather
+   * than fall back to the project folder.
+   */
+  site_dir?: string;
+  /**
+   * Absolute path beside `site_dir` to pass to git as `GIT_INDEX_FILE`, so
+   * staging `site_dir` leaves the project's own index alone. Not created
+   * until git writes it; removed with `site_dir`. Set from moss 0.15.20.
+   */
+  index_file?: string;
   /** Custom domain from .moss/config.toml [deployment] section (if configured) */
   domain?: string;
 }
@@ -1987,8 +2004,8 @@ declare function downloadAsset(url: string, targetDir: string, options?: Downloa
  * Allows plugins to execute external binaries (git, npm, etc.)
  * in a controlled environment.
  *
- * Working directory is auto-detected from the runtime context
- * (always the project root).
+ * The working directory is the project root unless `workingDir` names
+ * another inside the project, or a deploy hook's `site_dir`.
  */
 /**
  * Options for executing a binary
@@ -2008,13 +2025,20 @@ interface ExecuteOptions {
   /** Timeout in milliseconds (default: 60000) */
   timeoutMs?: number;
   /**
-   * Environment variables to add. Only `GIT_TERMINAL_PROMPT` and
-   * `COPYFILE_DISABLE` are accepted; any other name refuses the call.
+   * Environment variables to add. Only `GIT_TERMINAL_PROMPT`,
+   * `COPYFILE_DISABLE` and `GIT_INDEX_FILE` are accepted; any other name
+   * refuses the call. `GIT_INDEX_FILE` must be a deploy hook's
+   * `context.index_file`.
    */
   env?: Record<string, string>;
   /** Data to pass to stdin (useful for commands like `git credential fill`) */
   stdin?: string;
-  /** Working directory relative to project root (default: project root itself) */
+  /**
+   * Working directory: relative to the project root, or absolute, such as a
+   * deploy hook's `context.site_dir` (default: the project root). moss refuses
+   * one outside the project, or inside its `.moss/` folder other than
+   * `site_dir`.
+   */
   workingDir?: string;
   /**
    * Callback for real-time stderr output. When provided, stderr lines are
@@ -2041,8 +2065,8 @@ interface ExecuteResult {
 /**
  * Execute an external binary
  *
- * Working directory is auto-detected from the runtime context
- * (always the project root).
+ * The working directory is the project root unless `workingDir` names
+ * another inside the project, or a deploy hook's `site_dir`.
  *
  * @param options - Execution options including binary path and args
  * @returns Execution result with stdout, stderr, and exit code

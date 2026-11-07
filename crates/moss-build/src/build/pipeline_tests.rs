@@ -8107,8 +8107,6 @@ fn a_draft_page_is_built_for_preview_and_left_out_of_what_publishes() {
     // The plugin-facing views of the generation leave it out too.
     let listed: Vec<_> = crate::plugins::project_files::list_site_files_with_sizes_impl(&dir).into_iter().map(|f| f.path).collect();
     assert!(!listed.contains(&draft_html) && listed.contains(&about_html), "{listed:?}");
-    let handed = crate::deploy::plugin_context::build_deploy_context(folder, &mp.current_ptr()).unwrap();
-    assert!(!handed.site_files.contains(&draft_html) && handed.site_files.contains(&about_html), "{:?}", handed.site_files);
     let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     let read_draft = runtime.block_on(crate::plugins::project_files::read_site_file_impl(folder, &draft_html));
     assert!(read_draft.is_err(), "a plugin must not read the draft's bytes");

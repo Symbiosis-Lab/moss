@@ -567,15 +567,30 @@ mod fetch_full_tests {
 /// The only environment variables a plugin may add for a binary it runs. Any
 /// other, `PATH` and `HOME` among them, can change which program runs or what
 /// it loads and executes, so the call is refused rather than the variable
-/// dropped.
-pub const PLUGIN_ENV_ALLOWED: &[&str] = &["GIT_TERMINAL_PROMPT", "COPYFILE_DISABLE"];
+/// dropped. `GIT_INDEX_FILE` is further held to the deploy scratch directory
+/// (see [`validate_binary_request`]), since git writes the file it names.
+pub const PLUGIN_ENV_ALLOWED: &[&str] = &["GIT_TERMINAL_PROMPT", "COPYFILE_DISABLE", GIT_INDEX_FILE];
 
-/// Request validation for a plugin's binary execution.
+const GIT_INDEX_FILE: &str = "GIT_INDEX_FILE";
+
+/// Request validation for a plugin's binary execution in `project`, returning
+/// the directory it runs in: `working_dir` joined onto the project (an
+/// absolute one replaces it), or the project itself.
+///
+/// That directory must resolve inside the project and outside its `.moss/`,
+/// or inside the deploy scratch directory, where a deploy hook's `site_dir`
+/// is; `GIT_INDEX_FILE` must be an absolute path inside the scratch
+/// directory. One publish of a folder runs at a time, so the scratch
+/// directory holds only the calling hook's copy. A granted binary can still
+/// reach other paths through its own arguments: this keeps what moss asks for
+/// on the plugin's behalf inside the folder; it does not sandbox the binary.
 pub fn validate_binary_request(
+    project: &Path,
     binary_path: &str,
     working_dir: &Option<String>,
     env_vars: &Option<HashMap<String, String>>,
-) -> Result<(), String> {
+) -> Result<std::path::PathBuf, String> {
+    use crate::vault::fs::resolves_inside;
     if binary_path.is_empty() {
         return Err("Binary path cannot be empty".to_string());
     }
@@ -590,22 +605,43 @@ pub fn validate_binary_request(
             PLUGIN_ENV_ALLOWED.join(", ")
         ));
     }
-    if let Some(dir) = working_dir {
-        if dir.is_empty() {
-            return Err("Working directory cannot be empty string".to_string());
-        }
-        if !Path::new(dir).exists() {
-            return Err(format!("Working directory does not exist: {}", dir));
+    let scratch = crate::moss_paths::MossPaths::new(project).deploy_scratch_dir();
+    if let Some(index) = env_vars.as_ref().and_then(|vars| vars.get(GIT_INDEX_FILE)) {
+        // Absolute only: git would resolve a relative one against the
+        // binary's working directory, not the directory checked here.
+        let index = Path::new(index);
+        if !index.is_absolute() || !resolves_inside(&scratch, index) {
+            return Err(format!(
+                "'execute_binary' refused: {GIT_INDEX_FILE} must be an absolute path inside {}",
+                scratch.display()
+            ));
         }
     }
-    Ok(())
+    let dir = match working_dir.as_deref() {
+        Some("") => return Err("Working directory cannot be empty string".to_string()),
+        Some(dir) => project.join(dir),
+        None => project.to_path_buf(),
+    };
+    if !dir.is_dir() {
+        return Err(format!("Working directory does not exist: {}", dir.display()));
+    }
+    let in_project = resolves_inside(project, &dir) && !resolves_inside(&project.join(".moss"), &dir);
+    if !in_project && !resolves_inside(&scratch, &dir) {
+        return Err(format!(
+            "'execute_binary' refused: the working directory {} is outside the project, \
+             or inside its .moss folder",
+            dir.display()
+        ));
+    }
+    Ok(dir)
 }
 
-/// The only entry for running a plugin's binary: validation, timeout and
-/// blocking execution. The QuickJS engine's `execute_binary` arm calls it;
-/// every other caller goes through it too, so the checks in
-/// [`validate_binary_request`] cannot be skipped.
+/// The only entry for running a plugin's binary: validation, then the run,
+/// bounded by `timeout_ms` (300 s by default). The QuickJS engine's
+/// `execute_binary` arm calls it; every other caller goes through it too, so
+/// the checks in [`validate_binary_request`] cannot be skipped.
 pub async fn execute_binary_blocking_impl(
+    project: &Path,
     binary_path: String,
     args: Vec<String>,
     working_dir: Option<String>,
@@ -613,80 +649,42 @@ pub async fn execute_binary_blocking_impl(
     timeout_ms: Option<u64>,
     stdin_data: Option<String>,
 ) -> Result<BinaryExecutionResult, String> {
-    validate_binary_request(&binary_path, &working_dir, &env_vars)?;
-    let timeout_duration =
-        std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000));
-    match tokio::time::timeout(
-        timeout_duration,
-        execute_binary_blocking(&binary_path, &args, &working_dir, env_vars, stdin_data),
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(_) => Err(format!(
-            "Binary execution timed out after {} ms",
-            timeout_duration.as_millis()
-        )),
-    }
-}
-
-/// The spawn itself, unvalidated: call [`execute_binary_blocking_impl`].
-pub(crate) async fn execute_binary_blocking(
-    binary_path: &str,
-    args: &[String],
-    working_dir: &Option<String>,
-    env_vars: Option<HashMap<String, String>>,
-    stdin_data: Option<String>,
-) -> Result<BinaryExecutionResult, String> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    let mut cmd = Command::new(binary_path);
-    cmd.args(args);
-
-    if let Some(dir) = working_dir {
-        cmd.current_dir(Path::new(dir));
-    }
-    if let Some(vars) = env_vars {
-        for (key, value) in vars {
-            cmd.env(key, value);
-        }
-    }
-    if stdin_data.is_some() {
-        cmd.stdin(Stdio::piped());
-    }
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let binary_path_owned = binary_path.to_string();
-
+    let dir = validate_binary_request(project, &binary_path, &working_dir, &env_vars)?;
+    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000));
     tokio::task::spawn_blocking(move || {
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn binary '{}': {}", binary_path_owned, e))?;
-
-        if let Some(data) = stdin_data {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(data.as_bytes())
-                    .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-            }
-        }
-
-        let output = child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to wait for binary '{}': {}", binary_path_owned, e))?;
-
-        let exit_code = output.status.code().unwrap_or(-1);
-        Ok(BinaryExecutionResult {
-            exit_code,
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            success: output.status.success(),
-        })
+        run_binary(&binary_path, &args, &dir, env_vars.unwrap_or_default(), stdin_data, timeout)
     })
     .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e| format!("Task join error: {e}"))?
+}
+
+/// The run itself, unvalidated: call [`execute_binary_blocking_impl`]. A
+/// binary still running at `timeout` is stopped with everything it started,
+/// so nothing it spawned keeps running in its working directory (which can
+/// be a deploy hook's copy of the site).
+fn run_binary(
+    binary_path: &str,
+    args: &[String],
+    dir: &Path,
+    env_vars: HashMap<String, String>,
+    stdin_data: Option<String>,
+    timeout: std::time::Duration,
+) -> Result<BinaryExecutionResult, String> {
+    let mut cmd = std::process::Command::new(binary_path);
+    cmd.args(args).current_dir(dir).envs(env_vars);
+    let output = crate::system::bounded_command::run_bounded_feeding(
+        &mut cmd,
+        stdin_data.map(String::into_bytes),
+        timeout,
+        &format!("'{binary_path}'"),
+        || {},
+    )?;
+    Ok(BinaryExecutionResult {
+        exit_code: output.status.code().unwrap_or(-1),
+        success: output.status.success(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
 }
 
 
@@ -807,15 +805,17 @@ mod tests {
 
 #[cfg(test)]
 mod execute_binary_tests {
-    //! Moved beside their subject when `execute_binary_blocking` crossed
-    //! into moss-build: these exercise the
-    //! process-spawning core, not the app-side streaming adapter.
-    use super::execute_binary_blocking;
+    //! The one entry for a plugin's binary: its checks and the run.
+    use super::execute_binary_blocking_impl;
     use crate::plugins::runtime::portable::BinaryExecutionResult;
     use std::collections::HashMap;
+    use std::path::Path;
 
-    // Binary Execution Tests
-    // ============================================================================
+    /// Run `binary` in the current directory through the one entry.
+    async fn run(binary: &str, args: &[&str], env: Option<HashMap<String, String>>, stdin: Option<&str>) -> Result<BinaryExecutionResult, String> {
+        let args = args.iter().map(|a| a.to_string()).collect();
+        execute_binary_blocking_impl(Path::new("."), binary.into(), args, None, env, None, stdin.map(str::to_string)).await
+    }
 
     #[test]
     fn test_binary_execution_result_serialization() {
@@ -834,43 +834,37 @@ mod execute_binary_tests {
 
     #[tokio::test]
     async fn test_execute_binary_empty_path() {
-        let result = execute_binary_blocking("", &vec![], &None, None, None).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Failed to spawn"));
+        let result = execute_binary_blocking_impl(Path::new("."), "".into(), vec![], None, None, None, None).await;
+        assert!(result.unwrap_err().contains("cannot be empty"));
     }
 
     #[tokio::test]
     async fn test_execute_binary_nonexistent_working_dir() {
-        let result = execute_binary_blocking(
-            "echo",
-            &vec!["hello".to_string()],
-            &Some("/nonexistent/path/that/does/not/exist".to_string()),
+        let result = execute_binary_blocking_impl(
+            Path::new("."),
+            "echo".into(),
+            vec!["hello".into()],
+            Some("/nonexistent/path/that/does/not/exist".into()),
+            None,
             None,
             None,
         )
         .await;
-        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
     }
 
     #[tokio::test]
     async fn test_execute_binary_empty_working_dir_string() {
-        let result = execute_binary_blocking(
-            "echo",
-            &vec!["hello".to_string()],
-            &Some("".to_string()),
-            None,
-            None,
-        )
-        .await;
-        assert!(result.is_err());
+        let result =
+            execute_binary_blocking_impl(Path::new("."), "echo".into(), vec![], Some("".into()), None, None, None).await;
+        assert!(result.unwrap_err().contains("empty string"));
     }
 
     #[tokio::test]
     async fn test_execute_binary_echo_success() {
         #[cfg(unix)]
         {
-            let result =
-                execute_binary_blocking("echo", &vec!["hello".to_string()], &None, None, None).await;
+            let result = run("echo", &["hello"], None, None).await;
             assert!(result.is_ok());
             let output = result.unwrap();
             assert!(output.success);
@@ -886,14 +880,14 @@ mod execute_binary_tests {
             let mut env_vars = HashMap::new();
             env_vars.insert("TEST_VAR".to_string(), "test_value".to_string());
 
-            let result = execute_binary_blocking(
+            let result = super::run_binary(
                 "sh",
-                &vec!["-c".to_string(), "echo $TEST_VAR".to_string()],
-                &None,
-                Some(env_vars),
+                &["-c".to_string(), "echo $TEST_VAR".to_string()],
+                Path::new("."),
+                env_vars,
                 None,
-            )
-            .await;
+                std::time::Duration::from_secs(10),
+            );
 
             assert!(result.is_ok());
             let output = result.unwrap();
@@ -902,12 +896,37 @@ mod execute_binary_tests {
         }
     }
 
+    /// A binary that outlived its timeout, or anything it started, would keep
+    /// running in its working directory, which can be a deploy hook's copy of
+    /// the site.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_binary_that_times_out_is_stopped() {
+        use super::execute_binary_blocking_impl;
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("late");
+        let err = execute_binary_blocking_impl(
+            tmp.path(),
+            "sh".into(),
+            vec!["-c".into(), format!("(sleep 1; echo late > '{}') & wait", marker.display())],
+            None,
+            None,
+            Some(200),
+            None,
+        )
+        .await
+        .expect_err("the call times out");
+        assert!(err.contains("timed out"), "{err}");
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert!(!marker.exists(), "the timed-out binary kept running");
+    }
+
     #[tokio::test]
     async fn a_plugin_sets_only_the_allowed_environment() {
         use super::execute_binary_blocking_impl;
         for key in ["PATH", "HOME", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "GIT_SSH_COMMAND", "BASH_ENV"] {
             let env = HashMap::from([(key.to_string(), "x".to_string())]);
-            let err = execute_binary_blocking_impl("true".into(), vec![], None, Some(env), None, None)
+            let err = execute_binary_blocking_impl(Path::new("."), "true".into(), vec![], None, Some(env), None, None)
                 .await
                 .expect_err("an environment variable outside the allowlist must refuse");
             assert!(err.contains(&format!("'{key}'")), "{err}");
@@ -916,6 +935,7 @@ mod execute_binary_tests {
         {
             let env = HashMap::from([("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())]);
             let out = execute_binary_blocking_impl(
+                Path::new("."),
                 "sh".into(),
                 vec!["-c".into(), "echo $GIT_TERMINAL_PROMPT".into()],
                 None,
@@ -929,18 +949,65 @@ mod execute_binary_tests {
         }
     }
 
+    /// A project with a deploy in progress: its scratch directory exists.
+    fn project_with_scratch() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("site");
+        let scratch = crate::moss_paths::MossPaths::new(&project).deploy_scratch_dir();
+        std::fs::create_dir_all(scratch.join("g1-1")).unwrap();
+        std::fs::create_dir_all(project.join(".moss/plugins/other")).unwrap();
+        std::fs::create_dir_all(project.join("posts")).unwrap();
+        (tmp, project, scratch)
+    }
+
+    fn check(project: &Path, dir: Option<&Path>, index: Option<&Path>) -> Result<(), String> {
+        let env = index.map(|i| HashMap::from([("GIT_INDEX_FILE".to_string(), i.to_string_lossy().into_owned())]));
+        super::validate_binary_request(project, "git", &dir.map(|d| d.to_string_lossy().into_owned()), &env).map(|_| ())
+    }
+
+    #[test]
+    fn a_working_directory_stays_in_the_project_or_the_deploy_copy() {
+        let (tmp, project, scratch) = project_with_scratch();
+        assert!(check(&project, Some(&project), None).is_ok());
+        assert!(check(&project, Some(&project.join("posts")), None).is_ok());
+        assert!(check(&project, Some(&scratch.join("g1-1")), None).is_ok(), "a deploy hook's site_dir");
+        for outside in [std::env::temp_dir(), tmp.path().to_path_buf(), project.join(".moss/plugins/other")] {
+            let err = check(&project, Some(&outside), None).expect_err("must refuse");
+            assert!(err.contains("working directory"), "{err}");
+        }
+        assert!(check(&project, Some(&project.join("posts/../..")), None).is_err(), "resolved, not spelled");
+        assert!(check(&project, Some(&scratch.join("g1-1/../g1-1")), None).is_err(), "no `..` at all");
+        assert!(check(&project, Some(Path::new("posts")), None).is_ok(), "relative to the project");
+
+        let runs_in = |dir: Option<String>| {
+            super::validate_binary_request(&project, "git", &dir, &None).unwrap()
+        };
+        assert_eq!(runs_in(None), project, "no working directory is the project, never moss's own");
+        assert_eq!(runs_in(Some("posts".into())), project.join("posts"));
+    }
+
+    #[test]
+    fn git_index_file_may_only_name_a_file_in_the_deploy_scratch_directory() {
+        let (tmp, project, scratch) = project_with_scratch();
+        assert!(check(&project, None, Some(&scratch.join("g1-1.index"))).is_ok(), "not created yet is fine");
+        for elsewhere in [
+            tmp.path().join("x.index"),
+            project.join(".git/index"),
+            project.join(".moss/plugins/other/index"),
+            scratch.join("../x.index"),
+            scratch.join("g1-1/missing/../../../x.index"),
+            Path::new("g1-1.index").to_path_buf(),
+        ] {
+            let err = check(&project, None, Some(&elsewhere)).expect_err("must refuse");
+            assert!(err.contains("GIT_INDEX_FILE"), "{elsewhere:?}: {err}");
+        }
+    }
+
     #[tokio::test]
     async fn test_execute_binary_nonzero_exit() {
         #[cfg(unix)]
         {
-            let result = execute_binary_blocking(
-                "sh",
-                &vec!["-c".to_string(), "exit 42".to_string()],
-                &None,
-                None,
-                None,
-            )
-            .await;
+            let result = run("sh", &["-c", "exit 42"], None, None).await;
             assert!(result.is_ok());
             let output = result.unwrap();
             assert!(!output.success);
@@ -950,30 +1017,15 @@ mod execute_binary_tests {
 
     #[tokio::test]
     async fn test_execute_binary_nonexistent_binary() {
-        let result = execute_binary_blocking(
-            "/nonexistent/binary/that/does/not/exist",
-            &vec![],
-            &None,
-            None,
-            None,
-        )
-        .await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Failed to spawn"));
+        let result = run("/nonexistent/binary/that/does/not/exist", &[], None, None).await;
+        assert!(result.unwrap_err().contains("failed to run"));
     }
 
     #[tokio::test]
     async fn test_execute_binary_with_stdin() {
         #[cfg(unix)]
         {
-            let result = execute_binary_blocking(
-                "cat",
-                &vec![],
-                &None,
-                None,
-                Some("hello from stdin".to_string()),
-            )
-            .await;
+            let result = run("cat", &[], None, Some("hello from stdin")).await;
             assert!(result.is_ok());
             let output = result.unwrap();
             assert!(output.success);
@@ -986,14 +1038,7 @@ mod execute_binary_tests {
     async fn test_execute_binary_stdin_multiline() {
         #[cfg(unix)]
         {
-            let result = execute_binary_blocking(
-                "wc",
-                &vec!["-l".to_string()],
-                &None,
-                None,
-                Some("line1\nline2\nline3\n".to_string()),
-            )
-            .await;
+            let result = run("wc", &["-l"], None, Some("line1\nline2\nline3\n")).await;
             assert!(result.is_ok());
             let output = result.unwrap();
             assert!(output.success);

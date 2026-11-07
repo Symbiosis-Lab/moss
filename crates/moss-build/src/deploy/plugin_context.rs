@@ -1,15 +1,14 @@
 //! The window-free half of the plugin deploy route: the context a deploy hook
-//! receives, and the one guard that can refuse a publish before it runs.
-//!
-//! These bodies drove `deploy_site` from the app's own preview-commands module
-//! until 2026-09-09 and never touched Tauri; they moved here so the headless
-//! `moss deploy` can build the same context the app does (track P, slice P1).
+//! receives, the copy of the site it publishes from, and the one guard that
+//! can refuse a publish before it runs. Shared by the app and `moss deploy`.
 
 use crate::plugins::types::{
     DeployContext, DeployResult, HookResult, ProjectInfo, Toast, ToastOutcome,
 };
+use crate::moss_paths::MossPaths;
 use std::collections::HashMap;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// A deploy that failed before the plugin ran: `message` for the log, `title`
 /// for the user.
@@ -27,58 +26,34 @@ pub(crate) fn deploy_failed(message: String, title: String) -> DeployResult {
     }
 }
 
-/// Build DeployContext for plugin execution
-///
-/// Note: Path fields (project_path, moss_dir, output_dir) are intentionally omitted.
-/// Plugins access files through SDK functions (readSiteFile, readProjectFile, etc.)
-/// which resolve paths via the runtime's internal context.
-pub(crate) fn build_deploy_context(
-    folder_path: &str,
-    output_dir: &Path,
-) -> Result<DeployContext, String> {
-    // The directory also holds the pages built for preview only; a plugin
-    // uploads what it is told about.
-    let withheld = crate::build::manifest::publish_view::withheld_in_current(&crate::moss_paths::MossPaths::new(Path::new(folder_path)));
-    let site_files = list_site_files(output_dir, &withheld)?;
-
-    // Read custom domain from config (non-fatal — deploy proceeds without domain)
-    let domain = crate::build::site_config::get_domain_config(folder_path)
+/// The custom domain the folder's config names, if any.
+pub(crate) fn deploy_domain(folder_path: &str) -> Option<String> {
+    crate::build::site_config::get_domain_config(folder_path)
         .ok()
         .and_then(|c| c.domain)
-        .filter(|d| !d.is_empty());
+        .filter(|d| !d.is_empty())
+}
 
-    Ok(DeployContext {
+/// The deploy hook's context, for a copy of the site already made.
+pub(crate) fn build_deploy_context(
+    folder_path: &str,
+    scratch: &DeployScratch,
+    domain: Option<String>,
+) -> DeployContext {
+    DeployContext {
         project_info: ProjectInfo {
-            total_files: site_files.len(),
+            total_files: scratch.site_files.len(),
             homepage_file: None,
             folder_name: crate::vault_root::VaultRoot::resolve(folder_path).name_opt().map(str::to_string),
             site_name: None,
             lang: "en".into(),
         },
-        site_files,
+        site_files: scratch.site_files.clone(),
+        site_dir: scratch.site_dir.to_string_lossy().into_owned(),
+        index_file: scratch.index_file.to_string_lossy().into_owned(),
         config: HashMap::new(), // filled per-plugin in plugins::manager::hook_context
         domain,
-    })
-}
-
-/// List files in the site directory
-fn list_site_files(dir: &Path, withheld: &std::collections::BTreeSet<String>) -> Result<Vec<String>, String> {
-    let mut files = Vec::new();
-    if dir.exists() {
-        for entry in walkdir::WalkDir::new(dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-        {
-            if let Ok(rel) = entry.path().strip_prefix(dir) {
-                let rel = rel.to_string_lossy().to_string();
-                if !withheld.contains(&rel) {
-                    files.push(rel);
-                }
-            }
-        }
     }
-    Ok(files)
 }
 
 /// Read the git origin remote URL from .git/config.
@@ -151,6 +126,106 @@ fn is_non_root_github_pages(origin: &str) -> bool {
         Some(name) if !name.is_empty() => !name.ends_with(".github.io"),
         _ => false,
     }
+}
+
+/// The directory a deploy hook publishes from: exactly the files this publish
+/// ships, copied (a reflink where the filesystem has them) out of the sealed
+/// generation, read-only, and removed on drop. A hook reads this rather than
+/// `current`, which also holds the pages built for preview only and which
+/// the next build can advance mid-publish.
+///
+/// Made under the folder's `deploy` lock, held until drop, so one publish of
+/// a folder runs at a time and everything already in
+/// `.moss/build.nosync/deploy/` when the lock is taken was left by one that
+/// crashed. Lock order: the deploy lock is never taken while the build lock
+/// is held (a build takes it only inside a render or a promotion, and nothing
+/// a build runs takes the deploy lock), so a publish waiting here cannot
+/// deadlock against a build. That directory holds:
+/// - `<generation>/`: the site.
+/// - `<generation>.index`: a path the hook may hand git as `GIT_INDEX_FILE`.
+pub(crate) struct DeployScratch {
+    site_files: Vec<String>,
+    site_dir: PathBuf,
+    index_file: PathBuf,
+    // Declared last: fields drop after `Drop::drop`, so the copy is gone
+    // before the next publish can take the lock.
+    _lock: crate::infra::folder_lock::Held,
+}
+
+impl DeployScratch {
+    /// Blocking: waits for another publish of `folder` to finish (calling
+    /// `on_wait` first if it has to), then copies `site_files` out of
+    /// `generation`, unless `cancelled` was raised meanwhile.
+    pub(crate) fn create(
+        folder: &Path,
+        generation: &str,
+        site_files: Vec<String>,
+        on_wait: impl FnOnce(),
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Self, String> {
+        let lock = crate::infra::folder_lock::acquire_named_noting_wait(folder, "deploy", on_wait)?;
+        if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the publish was cancelled".to_string());
+        }
+        let mp = MossPaths::new(folder);
+        let from = mp.generation_dir(generation);
+        if !from.is_dir() {
+            // Another process's build retired it while this one waited.
+            return Err("this site was rebuilt while waiting for another publish; publish again".to_string());
+        }
+        let root = mp.deploy_scratch_dir();
+        remove_tree(&root).map_err(|e| format!("could not clear {} for the deploy plugin: {e}", root.display()))?;
+        let scratch = Self {
+            site_dir: root.join(generation),
+            index_file: root.join(format!("{generation}.index")),
+            site_files,
+            _lock: lock,
+        };
+        let copy = || -> io::Result<()> {
+            std::fs::create_dir_all(&root)?;
+            std::fs::create_dir(&scratch.site_dir)?;
+            for rel in &scratch.site_files {
+                let to = scratch.site_dir.join(rel);
+                crate::build::io_utils::copy_output(&from.join(rel), &to)?;
+                set_readonly(&to, true)?;
+            }
+            Ok(())
+        };
+        copy().map_err(|e| format!("could not copy the site for the deploy plugin: {e}"))?;
+        Ok(scratch)
+    }
+}
+
+impl Drop for DeployScratch {
+    fn drop(&mut self) {
+        if let Some(root) = self.site_dir.parent() {
+            if let Err(e) = remove_tree(root) {
+                log::warn!("could not remove the deploy copy at {}: {e}", root.display());
+            }
+        }
+    }
+}
+
+fn set_readonly(path: &Path, readonly: bool) -> io::Result<()> {
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_readonly(readonly);
+    std::fs::set_permissions(path, perms)
+}
+
+/// `remove_dir_all`, after making the files writable again: Windows refuses
+/// to delete a read-only file. A directory that is not there is removed.
+fn remove_tree(dir: &Path) -> io::Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    if cfg!(windows) {
+        for entry in walkdir::WalkDir::new(dir).into_iter().flatten() {
+            if entry.file_type().is_file() {
+                let _ = set_readonly(entry.path(), false);
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir)
 }
 
 #[cfg(test)]

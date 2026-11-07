@@ -13,10 +13,19 @@ release heading.
 
 ## [Unreleased]
 
+### Added
+
+- `DeployContext.site_dir`: an absolute path to a read-only directory holding exactly `site_files`, made for one deploy hook call and removed when it returns; `DeployContext.index_file`: a path beside it for `GIT_INDEX_FILE`. Both need moss 0.15.20.
+
 ### Changed
 
 - `executeBinary`: an absolute `binaryPath` is accepted only where moss itself would find that binary (a PATH directory, a standard install directory such as `/opt/homebrew/bin`, or the path `resolve_git_path` returned); any other path is refused with a message naming the binary. A bare name, looked up on the PATH, works as before.
-- `executeBinary`: `env` accepts only `GIT_TERMINAL_PROMPT` and `COPYFILE_DISABLE`; a call that sets any other variable is refused with a message naming it.
+- `executeBinary`: `env` accepts only `GIT_TERMINAL_PROMPT`, `COPYFILE_DISABLE` and `GIT_INDEX_FILE`; a call that sets any other variable is refused with a message naming it. `GIT_INDEX_FILE` must name a file inside the deploy scratch directory, such as `DeployContext.index_file`.
+- `executeBinary`: an absolute `workingDir` is sent as is instead of being joined onto the project path. moss refuses a working directory outside the project, or inside its `.moss/` folder other than a deploy hook's `site_dir`.
+
+### Migration
+
+- A deploy plugin that read the built site from `.moss/` (through `readFile`, a hard-coded path, or `executeBinary` with a working directory there) reads `context.site_dir` instead, and declares `min_moss_version` 0.15.20.
 
 ## [0.16.0] - 2026-11-07
 

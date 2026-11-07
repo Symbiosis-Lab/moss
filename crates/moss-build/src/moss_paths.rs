@@ -394,6 +394,13 @@ impl MossPaths {
         self.build_dir().join("cache")
     }
 
+    /// `.moss/build.nosync/deploy/` — the per-call copies a deploy hook
+    /// publishes from, and the only place a plugin's binary may point
+    /// `GIT_INDEX_FILE` or a working directory inside `.moss/`.
+    pub fn deploy_scratch_dir(&self) -> PathBuf {
+        self.build_dir().join("deploy")
+    }
+
     /// `.moss/cache/objects/` — hashed file blobs.
     /// The optional shared cache, `.moss/cache/`, synced with the folder.
     /// A plain join, not the held handle — the store is never marked, so a

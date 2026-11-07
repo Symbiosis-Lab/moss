@@ -111,24 +111,20 @@ fn a_generation_that_was_not_promoted_refuses_rather_than_shipping_the_old_one()
     std::fs::create_dir_all(mp.generation_dir(sealed.generation_id())).expect("sealed generation");
     mp.set_current_ptr("0000000000000000").expect("promote the stale one");
 
-    let err = site_dir_for_plugin(&mp, &sealed).expect_err("must refuse");
+    let err = require_promoted(&mp, &sealed).expect_err("must refuse");
     assert!(err.contains(sealed.generation_id()), "the refusal names what was sealed: {err}");
 
     // And the same call once `current` catches up.
     mp.set_current_ptr(sealed.generation_id()).expect("promote the sealed one");
-    assert_eq!(
-        site_dir_for_plugin(&mp, &sealed).expect("must allow"),
-        mp.current_ptr(),
-        "the plugin is handed the path it reads bytes through, not the stage"
-    );
+    require_promoted(&mp, &sealed).expect("must allow");
 }
 
 /// A sealless publish is refused, and this is the case the e2e above cannot
 /// see: when promotion is withheld, `current` and the file list BOTH come from
 /// the previous generation, so every end-to-end assertion still passes while
 /// the wrong tree ships. Driven through the whole inner body rather than
-/// through `site_dir_for_plugin`, because the bug was that the body returned
-/// early before reaching the check.
+/// through `require_promoted`, because the body must not return before it
+/// reaches the check.
 ///
 /// A folder that closes mid-build (`PipelineRunOutput::publishable == false`)
 /// is how a real build lands here: promotion is withheld

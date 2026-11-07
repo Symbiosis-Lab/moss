@@ -526,7 +526,7 @@ async fn dispatch_command_core(
             // webview-only (see `parse_execute_binary_args`), so this seam
             // takes the blocking half of the headless split directly.
             let r = crate::plugins::runtime::download::execute_binary_blocking_impl(
-                p.binary_path, p.args, p.working_dir, p.env_vars,
+                std::path::Path::new(host.project_path), p.binary_path, p.args, p.working_dir, p.env_vars,
                 p.timeout_ms, p.stdin_data).await?;
             reply_json(&r)
         }

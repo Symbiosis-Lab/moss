@@ -142,6 +142,13 @@ pub fn acquire(folder: &Path) -> Result<Held, String> {
 /// appended, which must never wait on a build that holds the build lock for
 /// minutes).
 pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
+    acquire_named_noting_wait(folder, name, || {})
+}
+
+/// [`acquire_named`] that calls `on_wait` once, before blocking, when another
+/// process or thread holds the lock, so a caller can tell its user why
+/// nothing is happening.
+pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce()) -> Result<Held, String> {
     let path = lock_path_named(folder, name)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -167,6 +174,7 @@ pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
             } else {
                 log::info!("waiting for another moss process holding the {name} lock on this folder");
             }
+            on_wait();
             let waited = std::time::Instant::now();
             file.lock_exclusive().map_err(|e| format!("lock {}: {e}", path.display()))?;
             log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());

@@ -1466,7 +1466,7 @@ mod tests {
     }
 
     /// Which generation `current` points at — via the marker `set_current_ptr`
-    /// writes, the same source `site_dir_for_plugin` reads, rather than a
+    /// writes, the same source `require_promoted` reads, rather than a
     /// `which.txt` planted in each generation dir just for this test.
     fn served_generation(mp: &crate::moss_paths::MossPaths) -> String {
         mp.current_generation_id().unwrap()

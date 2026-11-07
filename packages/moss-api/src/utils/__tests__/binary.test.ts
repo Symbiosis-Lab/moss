@@ -194,6 +194,21 @@ describe("Binary Execution Utilities", () => {
     });
   });
 
+  describe("workingDir", () => {
+    beforeEach(() => {
+      mockInvoke.mockResolvedValue({ success: true, exit_code: 0, stdout: "", stderr: "" });
+    });
+
+    it.each([
+      ["a path relative to the project", "posts", "/path/to/project/posts"],
+      ["an absolute POSIX path, as is", "/path/to/project/.moss/build.nosync/deploy/g-1", "/path/to/project/.moss/build.nosync/deploy/g-1"],
+      ["an absolute Windows path, as is", "C:\\site\\.moss\\build.nosync\\deploy\\g-1", "C:\\site\\.moss\\build.nosync\\deploy\\g-1"],
+    ])("sends %s", async (_label, workingDir, sent) => {
+      await executeBinary({ binaryPath: "tar", args: [], workingDir });
+      expect(mockInvoke).toHaveBeenCalledWith("execute_binary", expect.objectContaining({ workingDir: sent }));
+    });
+  });
+
   describe("context isolation", () => {
     it("uses project path from context for different projects", async () => {
       mockWindow.__MOSS_INTERNAL_CONTEXT__ = {
