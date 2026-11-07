@@ -3627,7 +3627,14 @@ async fn a_save_that_keeps_an_outside_edit_announces_it_on_the_event_stream() {
     .unwrap();
     let version = saved["displaced"].as_str().unwrap_or_else(|| panic!("the save must name the kept version: {saved}")).to_string();
 
-    let record = tokio::task::spawn_blocking(move || read_one_sse_record(reader)).await.unwrap().expect("one SSE record");
+    // The bus is the process's: another test's build can publish on it first.
+    let record = tokio::task::spawn_blocking(move || {
+        let mut reader = reader;
+        std::iter::from_fn(|| read_one_sse_record(&mut reader)).take(64).find(|record| record.contains("\"OutsideEditKept\""))
+    })
+    .await
+    .unwrap()
+    .expect("an OutsideEditKept record");
     let json: serde_json::Value = serde_json::from_str(record.trim_start_matches("data:").trim()).unwrap();
     assert_eq!(json["payload"]["kind"], "OutsideEditKept");
     assert_eq!(json["payload"]["payload"]["version_id"], version.as_str());
