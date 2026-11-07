@@ -132,35 +132,13 @@ pub struct FieldSpan {
     pub to: usize,
 }
 
-/// Locate keys recognized by the canonical parser in either frontmatter dialect.
+/// The top-level frontmatter keys the parser read, where they are written.
 pub fn field_spans(text: &str) -> Vec<FieldSpan> {
-    let Some(span) = frontmatter::frontmatter_span(text) else { return Vec::new() };
     let fields = frontmatter::frontmatter_map(text);
-    let block = text.get(span.fields.clone()).unwrap_or_default();
-    let indent = block.lines()
-        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
-        .map(|line| line.len() - line.trim_start().len())
-        .min().unwrap_or(0);
-    let mut offset = span.fields.start;
-    let first_line = line_at(text, offset);
-    let mut spans = Vec::new();
-    for (index, line) in block.split_inclusive('\n').enumerate() {
-        let leading = line.len() - line.trim_start().len();
-        if span.kind == frontmatter::FrontmatterKind::Simplified || leading == indent {
-            let key = line.match_indices(':').filter_map(|(colon, _)| line.get(..colon))
-                .chain(std::iter::once(line)).find_map(|candidate| {
-                    let candidate = candidate.trim();
-                    let decoded = serde_yaml::from_str::<String>(candidate).ok();
-                    let key = decoded.as_deref().unwrap_or(candidate);
-                    fields.contains_key(key).then(|| (key.to_string(), candidate.len()))
-                });
-            if let Some((key, length)) = key {
-                spans.push(FieldSpan { key, line: first_line + index, from: offset + leading, to: offset + leading + length });
-            }
-        }
-        offset += line.len();
-    }
-    spans
+    frontmatter::key_spans(text).into_iter()
+        .filter(|(key, _)| fields.contains_key(key))
+        .map(|(key, range)| FieldSpan { key, line: line_at(text, range.start), from: range.start, to: range.end })
+        .collect()
 }
 
 /// Each top-level shortcode block is parsed on its own, so the parser's

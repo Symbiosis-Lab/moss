@@ -329,6 +329,11 @@ fn canonical_field_spans_use_simplified_fields_and_ignore_nested_yaml() {
     assert_eq!(spans[2].line, 3);
     let yaml = "---\n# comment\ncascade:\n  draft: true\ntitle: Example\n---";
     assert_eq!(field_spans(yaml).iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), vec!["cascade", "title"]);
+    let colons = "---\nfoo:bar: x\nurl: https://example.com/a:b\n---\n";
+    let spans = field_spans(colons);
+    assert_eq!(spans.iter().map(|s| (s.key.as_str(), &colons[s.from..s.to])).collect::<Vec<_>>(),
+        vec![("foo:bar", "foo:bar"), ("url", "url")]);
+    assert!(field_spans("---\n{title: Flow}\n---\n").is_empty(), "a flow mapping has no key lines");
     assert!(field_spans("---\ntitle: incomplete").is_empty());
     assert!(field_spans("# Body").is_empty());
 }

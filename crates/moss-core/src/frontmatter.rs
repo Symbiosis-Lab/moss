@@ -201,6 +201,7 @@ pub fn frontmatter_map(content: &str) -> HashMap<String, serde_yaml::Value> {
             crate::frontmatter_typed::simplified_field_pairs(content)
                 .into_iter()
                 .map(|(key, value)| {
+                    let key = key.to_string();
                     let value = match value {
                         None => serde_yaml::Value::Bool(true),
                         Some(raw) => match serde_yaml::from_str(raw) {
@@ -719,6 +720,8 @@ impl FieldEdit {
 /// A top-level entry of a YAML block: its key and the lines it spans.
 struct Entry {
     key: String,
+    /// The key as written, quotes included.
+    key_span: Range<usize>,
     /// Start of the comment lines directly above the key line, or of the key line.
     comment_from: usize,
     /// From the key line's start to the end of its last value line, terminator included.
@@ -770,8 +773,9 @@ fn entries(content: &str, fields: Range<usize>) -> Vec<Entry> {
             continue;
         };
         #[allow(clippy::string_slice)]
-        // ASCII ':' and ' ' found by `find`.
-        let key = line[..colon].trim().trim_matches(['"', '\'']).to_string();
+        // ASCII ':' and ' ' found by `find`; a key line has no indent.
+        let written = line[..colon].trim_end();
+        let key = written.trim_matches(['"', '\'']).to_string();
         #[allow(clippy::string_slice)]
         let after = &line[colon + 1..];
         let value_from = colon + 1 + (after.len() - after.trim_start().len());
@@ -779,12 +783,29 @@ fn entries(content: &str, fields: Range<usize>) -> Vec<Entry> {
         let len = scalar_len(&line[value_from..]);
         out.push(Entry {
             key,
+            key_span: start..start + written.len(),
             comment_from: comment_from.take().unwrap_or(start),
             lines: start..offset,
             value: len.map(|len| start + value_from..start + value_from + len),
         });
     }
     out
+}
+
+/// Each top-level frontmatter key and its byte range as written, in source
+/// order, from the scanners that edit (YAML) and parse (simplified) those
+/// keys. A flow mapping (`{a: 1}`) has no top-level key lines, so no spans.
+pub fn key_spans(content: &str) -> Vec<(String, Range<usize>)> {
+    match frontmatter_span(content) {
+        Some(span) if span.kind == FrontmatterKind::Yaml => entries(content, span.fields)
+            .into_iter().map(|e| (e.key, e.key_span)).collect(),
+        Some(_) => crate::frontmatter_typed::simplified_field_pairs(content).into_iter().map(|(key, _)| {
+            // `key` is a subslice of `content`.
+            let from = key.as_ptr() as usize - content.as_ptr() as usize;
+            (key.to_string(), from..from + key.len())
+        }).collect(),
+        None => Vec::new(),
+    }
 }
 
 /// Whether two values are the same field value. Numbers compare by value,
