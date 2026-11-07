@@ -24,6 +24,7 @@ const gateSite = (name: string, mode: "hide" | "sticky"): ScratchSiteSpec => ({
     "index.md": `---
 title: Harbour Notes
 uid: "hsg00001"
+breadcrumb: true
 ---
 
 [Jump to salt](#${TARGET_ID})
@@ -50,7 +51,13 @@ listed: false
 Cover words
 :::
 
-${paragraphs(14)}
+## Nets
+
+${paragraphs(7)}
+
+## Tides
+
+${paragraphs(7)}
 `,
     "Ledger.md": `---
 title: Ledger
