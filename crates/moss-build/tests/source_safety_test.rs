@@ -1,4 +1,4 @@
-//! Empty source files and ambiguous output addresses must not become pages.
+//! Empty files are skipped; ambiguous output addresses render with diagnostics.
 
 #[path = "support/site.rs"]
 mod site;
@@ -44,9 +44,9 @@ fn collision(files: &[(&str, &str)], first: &str, second: &str, url: &str) {
     for (path, content) in files {
         site.write(path, content);
     }
-    let error = site::build_sync(&site.root.to_string_lossy(), BuildTrigger::Full)
-        .expect_err("duplicate output URLs must stop the build");
-    assert!(error.contains(first) && error.contains(second) && error.contains(url), "{error}");
+    let warnings = site::build_sync(&site.root.to_string_lossy(), BuildTrigger::Full)
+        .expect("collisions must still render").join("\n");
+    assert!(warnings.contains(first) && warnings.contains(second) && warnings.contains(url), "{warnings}");
 }
 
 #[test]
@@ -78,34 +78,34 @@ fn language_prefixes_and_non_page_slots_are_not_collisions() {
 }
 
 #[test]
-fn a_content_edit_cannot_introduce_a_url_collision() {
+fn a_content_edit_reports_a_url_collision() {
     let site = Site::new(&[("index.md", "Welcome."), ("one.md", "One."), ("two.md", "Two.")]);
     site.write("two.md", "---\nurl: one\n---\nTwo.");
-    let error = site::build_sync(&site.root.to_string_lossy(), BuildTrigger::ContentOnly(vec![site.root.join("two.md")]))
-        .expect_err("an incremental URL collision must stop the build");
-    assert!(error.contains("one.md") && error.contains("two.md") && error.contains("/one/"), "{error}");
+    let warnings = site::build_sync(&site.root.to_string_lossy(), BuildTrigger::ContentOnly(vec![site.root.join("two.md")]))
+        .expect("incremental collisions must still render").join("\n");
+    assert!(warnings.contains("one.md") && warnings.contains("two.md") && warnings.contains("/one/"), "{warnings}");
 }
 
 #[test]
-fn an_explicit_url_cannot_take_a_siblings_inferred_url() {
+fn an_explicit_url_reports_a_collision_with_a_siblings_inferred_url() {
     collision(&[("awards/other.md", "---\nurl: comics\n---\nOne."), ("awards/comics.md", "Two.")],
         "awards/other.md", "awards/comics.md", "/awards/comics/");
 }
 
 #[test]
-fn a_markdown_page_and_an_html_source_cannot_share_an_output() {
+fn a_markdown_page_and_an_html_source_report_a_collision() {
     collision(&[("docs.md", "Documentation."), ("docs/index.html", "<p>Static documentation.</p>")],
         "docs.md", "docs/index.html", "/docs/");
 }
 
 #[test]
-fn a_page_and_a_folder_index_cannot_share_an_output() {
+fn a_page_and_a_folder_index_report_a_collision() {
     collision(&[("docs.md", "Documentation."), ("docs/index.md", "Folder documentation.")],
         "docs.md", "docs/index.md", "/docs/");
 }
 
 #[test]
-fn html_sources_in_equivalent_slug_directories_cannot_share_an_output() {
+fn html_sources_in_equivalent_slug_directories_report_a_collision() {
     collision(&[("My Docs/index.html", "<p>First.</p>"), ("my-docs/index.html", "<p>Second.</p>")],
         "My Docs/index.html", "my-docs/index.html", "/my-docs/");
 }

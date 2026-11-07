@@ -1101,8 +1101,8 @@ pub fn generate_blocking_content_for_build(
     // `site_lang` was computed eagerly before the markdown loop (above) so that
     // per-document language resolution and slug deduplication agree on the same
     // site default. Reuse it here.
-    // Out here because the article map, written far below, carries these to the editor's `url` chip.
-    let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
+    // Out here because the article map, written far below, carries these to editor validation.
+    let url_collisions;
     // Reverse map (slug folder-key → original on-disk leaf name) so every
     // auto-generated folder-index TITLE/H1 preserves the author's directory
     // casing ("Writings") even though the URL slug is lowercased ("writings").
@@ -1115,7 +1115,7 @@ pub fn generate_blocking_content_for_build(
         // a warm content-only rebuild once Loop A is a cache hit.
         let reduce_start = std::time::Instant::now();
         url_collisions = resolve_duplicate_slugs_with_lang(&mut documents, site_lang);
-        crate::build::scan::slug::refuse_collisions(&url_collisions)?;
+        pending.record_output_collisions(crate::build::scan::slug::collision_messages(&url_collisions));
         // Sync permalink with updated url_path (dedup may have changed it)
         for doc in &mut documents {
             doc.permalink = format!("/{}", doc.url_path); // allow:served-path-url-construct (page permalink synced after slug dedup, stored in ParsedDocument)
@@ -1639,7 +1639,7 @@ pub fn generate_blocking_content_for_build(
     // A term card reads its members' pictures and dates, so it is set once
     // every pseudo-folder document exists.
     crate::build::terms::set_term_cards(&mut documents, &term_index);
-    super::build_shared::refuse_verbatim_collisions(&documents, project_structure, &dir_overrides)?;
+    pending.record_output_collisions(super::build_shared::verbatim_collisions(&documents, project_structure, &dir_overrides));
     super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places

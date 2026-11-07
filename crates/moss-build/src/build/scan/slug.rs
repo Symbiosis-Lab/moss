@@ -95,7 +95,7 @@ pub fn generate_uid(_relative_path: &str) -> String {
 /// The repair is always an edit to the **loser's** `url:` — the keeper is
 /// named only so the author can see which pair is in conflict. Produced by
 /// [`resolve_duplicate_slugs_with_lang`] and reported at the frontmatter
-/// field, not in the log.
+/// field and as a build problem.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct UrlCollision {
     /// Source path of the file whose `url:` must change.
@@ -353,12 +353,10 @@ fn root_causes(found: Vec<(UrlCollision, Option<String>)>) -> Vec<UrlCollision> 
         .collect()
 }
 
-pub(crate) fn refuse_collisions(collisions: &[UrlCollision]) -> Result<(), String> {
-    if collisions.is_empty() { return Ok(()); }
-    let lines: Vec<String> = collisions.iter().map(|c| {
-        format!("{} and {} both publish to /{}", c.keeper, c.loser, c.wanted)
-    }).collect();
-    Err(format!("Duplicate output URLs:\n{}\nGive each page a unique URL or filename.", lines.join("\n")))
+pub(crate) fn collision_messages(collisions: &[UrlCollision]) -> Vec<String> {
+    collisions.iter().map(|c| {
+        format!("{} and {} both publish to /{}. Give each source a unique address.", c.keeper, c.loser, c.wanted)
+    }).collect()
 }
 
 #[cfg(test)]

@@ -360,6 +360,7 @@ pub enum RefusalKind {
     PendingDerivations,
     Removals,
     StaleContent,
+    OutputCollision,
     NoEnvironment,
     ForeignInputs,
 }

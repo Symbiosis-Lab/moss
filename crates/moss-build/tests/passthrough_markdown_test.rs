@@ -77,8 +77,9 @@ fn build(config_extra: &str, files: &[(&str, &str)]) -> Site {
 }
 
 fn collision(config_extra: &str, files: &[(&str, &str)], parts: &[&str]) {
-    let error = try_build(config_extra, files).err().expect("duplicate URLs must stop the build");
-    assert!(parts.iter().all(|p| error.contains(p)), "{error}");
+    let site = build(config_extra, files);
+    assert!(site.warned(parts), "{:?}", site.warnings);
+    assert!(site.problems > 0, "collisions must count for --strict");
 }
 
 fn try_build(config_extra: &str, files: &[(&str, &str)]) -> Result<Site, String> {
@@ -160,7 +161,7 @@ fn a_marked_home_inside_the_app_does_not_take_the_folder_address_either() {
 }
 
 #[test]
-fn a_page_and_a_nested_app_page_at_one_address_are_refused() {
+fn a_page_and_a_nested_app_page_report_a_collision() {
     collision("", &[
         ("index.md", "Welcome."),
         ("app/index.html", APP),
@@ -170,7 +171,7 @@ fn a_page_and_a_nested_app_page_at_one_address_are_refused() {
 }
 
 #[test]
-fn a_sibling_page_cannot_take_the_app_address() {
+fn a_sibling_page_reports_a_collision_with_the_app_address() {
     for config in ["", "\n[build]\npassthrough = [\"app\"]\n"] {
         collision(config, &[
             ("index.md", "Welcome."),
@@ -181,7 +182,7 @@ fn a_sibling_page_cannot_take_the_app_address() {
 }
 
 #[test]
-fn a_page_and_a_loose_html_file_at_one_address_are_refused() {
+fn a_page_and_a_loose_html_file_report_a_collision() {
     collision("", &[("index.md", "Welcome."), ("index.html", "<!doctype html><p>loose</p>")],
         &["index.md", "index.html", "/"]);
 }

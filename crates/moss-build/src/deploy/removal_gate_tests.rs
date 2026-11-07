@@ -481,13 +481,52 @@ fn stale_content_first_publish_new_pages_and_legacy_records_have_no_timestamp_op
 fn stale_content_ignores_manual_saves_and_other_publish_targets() {
     let dir = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::in_vault(dir.path());
-    history.snapshot_manual(dir.path(), &source_version("manual", Some((900, 0))), "moss:example", None).unwrap();
+    history.snapshot_manual(dir.path(), &crate::deploy::history::tree::SourceTree::from_sealed(&source_version("manual", Some((900, 0)))), "moss:example", None).unwrap();
     assert!(check_version(dir.path(), "first", Some((1, 0))).is_ok());
     publish_version(dir.path(), "latest", Some((100, 0)), 1);
     assert!(check_version(dir.path(), "manual", Some((101, 0))).is_ok());
-    history.snapshot(dir.path(), &source_version("other", Some((900, 0))), "moss:other", "2026-01-02T00:00:00Z").unwrap();
+    history.snapshot(dir.path(), &crate::deploy::history::tree::SourceTree::from_sealed(&source_version("other", Some((900, 0)))), "moss:other", "2026-01-02T00:00:00Z").unwrap();
     crate::vault::deployment_state::save_domain_config(dir.path().to_str().unwrap(), &crate::config::deployment::DomainDeploymentConfig {
         site_id: Some("example".into()), ..Default::default()
     }).unwrap();
     assert!(check_version(dir.path(), "other", Some((101, 0))).is_ok());
+}
+
+async fn collision_push(plugin: bool) {
+    use crate::build::manifest::PendingManifest;
+    use crate::deploy::{plugin_push, push};
+    let folder = tempfile::tempdir().unwrap();
+    let sink = crate::deploy::progress::silent();
+    let ports = crate::deploy::one_shot::HeadlessDeployPorts;
+    let managers = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
+    let identity = crate::identity::Identity::generate().unwrap();
+    let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    let messages = vec![
+        "one.md and two.md both publish to /shared/. Give each source a unique address.".into(),
+        "`docs.md` and `docs/index.html` both publish to /docs/. Give each source a unique address.".into(),
+    ];
+    let mut pending = PendingManifest::new(Default::default());
+    pending.record_output_collisions(messages.clone());
+    let sealed = pending.seal();
+    let error = if plugin {
+        plugin_push::run_plugin_deploy_inner(&plugin_push::PluginDeployContext {
+            folder: folder.path(), sealed: Some(&sealed), managers: &managers, sink: &sink, ports: &ports,
+        }).await.unwrap_err()
+    } else {
+        push::push_site_inner(&sealed, &push::PushContext {
+            folder_path: folder.path(), identity: &identity, site_id: "collision-test",
+            sink: &sink, ports: &ports, events_lock: &events_lock,
+        }).await.unwrap_err()
+    };
+    assert_eq!(error, messages.join("\n"));
+}
+
+#[tokio::test]
+async fn output_collisions_refuse_hosted_push() {
+    collision_push(false).await;
+}
+
+#[tokio::test]
+async fn output_collisions_refuse_plugin_push() {
+    collision_push(true).await;
 }

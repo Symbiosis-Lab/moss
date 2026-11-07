@@ -396,6 +396,9 @@ pub struct SiteResult {
 /// Persisted to `.moss/hashes.json` after each build.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SiteHashes {
+    /// Collision diagnostics from this render, sealed with its output hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_collisions: Vec<String>,
     /// Map of output path to mode-tagged content hash.
     ///
     /// Wire format:

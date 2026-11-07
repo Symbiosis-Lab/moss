@@ -293,6 +293,13 @@ pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
 }
 
 impl PendingManifest {
+    pub(crate) fn record_output_collisions(&mut self, messages: Vec<String>) {
+        for message in &messages {
+            crate::build::cli_output::log_warn_problem!("{}", message);
+        }
+        self.inner.output_collisions.extend(messages);
+    }
+
     /// Create a new pending manifest seeded with the previous build's hashes.
     ///
     /// Pass [`SiteHashes::default()`] for first builds.
@@ -318,6 +325,7 @@ impl PendingManifest {
     /// instead.
     pub fn new(carry_forward: SiteHashes) -> Self {
         let mut inner = carry_forward;
+        inner.output_collisions.clear();
         // git's "smudge". A source entry this build does not re-read is carried
         // under the new, later clock below, which would vouch for it as if it
         // had been read after that clock started. For a real sub-second mtime

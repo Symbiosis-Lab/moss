@@ -240,22 +240,22 @@ impl FolderIndexPlan {
     }
 }
 
-/// Refuse colliding HTML outputs before the asset copy drops either source.
+/// Find colliding HTML outputs before the asset copy drops either source.
 ///
 /// A file named exactly in `[build].passthrough` replaces its page by the
 /// author's own declaration and is not reported.
-pub(super) fn refuse_verbatim_collisions(
+pub(super) fn verbatim_collisions(
     documents: &[ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &HashMap<String, String>,
-) -> Result<(), String> {
+) -> Vec<String> {
     let (html_files, passthrough_roots) = (&project.html_files, &project.passthrough_roots);
     let mut sources = HashMap::new();
     let mut collisions = Vec::new();
     for file in html_files.iter().filter(|f| !passthrough_roots.contains(&f.path)) {
         let output = crate::build::scan::page_map::resolve_path_with_overrides(&file.path, dir_overrides);
         if let Some(previous) = sources.insert(output.clone(), file.path.as_str()) {
-            collisions.push(format!("`{previous}` and `{}` both publish to {}", file.path,
+            collisions.push(format!("`{previous}` and `{}` both publish to {}. Give each source a unique address.", file.path,
                 crate::build::served_path::served_address(&output)));
         }
     }
@@ -265,12 +265,10 @@ pub(super) fn refuse_verbatim_collisions(
             Some(source) => format!("`{source}`"),
             None => "a generated folder page".to_string(),
         };
-        collisions.push(format!("{page} and `{file}` both publish to {}",
+        collisions.push(format!("{page} and `{file}` both publish to {}. Give each source a unique address.",
             crate::build::served_path::served_address(&doc.url_path)));
     }
-    if collisions.is_empty() { Ok(()) } else {
-        Err(format!("Duplicate output URLs:\n{}\nGive each source a unique address.", collisions.join("\n")))
-    }
+    collisions
 }
 
 /// Withhold the body of every page whose address a passthrough `.html` file

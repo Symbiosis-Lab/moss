@@ -1458,3 +1458,19 @@ fn a_later_registration_drops_the_unwritten_copy_of_its_path() {
     assert_eq!(unwritten.keys().collect::<Vec<_>>(), ["essay/index.html"]);
     assert!(m.take_unwritten_pages().is_empty(), "taking them leaves none behind");
 }
+
+#[test]
+fn output_collisions_belong_to_the_sealed_render_and_persist() {
+    let message = "one.md and two.md both publish to /shared/. Give each source a unique address.";
+    let mut pending = empty_manifest();
+    pending.record_output_collisions(vec![message.into()]);
+    let sealed = pending.seal();
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("hashes.json");
+    sealed.write_to_disk(&path).unwrap();
+    let persisted: SiteHashes = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(persisted.output_collisions, vec![message]);
+    let clean = PendingManifest::new(persisted).seal();
+    assert!(clean.site_hashes_view().output_collisions.is_empty());
+    assert_eq!(sealed.site_hashes_view().output_collisions, vec![message]);
+}

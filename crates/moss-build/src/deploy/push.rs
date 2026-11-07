@@ -76,6 +76,7 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
 pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
+    super::removal_gate::refuse_output_collisions(sealed)?;
     super::removal_gate::refuse_stale_generation(cx.folder_path, sealed)?;
     crate::deploy::refuse_publish(&cx.folder_path.to_string_lossy())?;
     crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path)?;

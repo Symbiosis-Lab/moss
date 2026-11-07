@@ -12,6 +12,12 @@ use crate::build::manifest::change_set::{PendingRemoval, RemovalCause, RemovalRe
 use crate::build::feeds::redirect_table::moves_a_folder;
 use crate::build::served_path::served_address;
 
+/// A collision verdict belongs to the sealed render, regardless of later builds.
+pub(crate) fn refuse_output_collisions(sealed: &crate::build::manifest::SealedManifest) -> Result<(), String> {
+    let messages = &sealed.site_hashes_view().output_collisions;
+    if messages.is_empty() { Ok(()) } else { Err(messages.join("\n")) }
+}
+
 /// How many addresses a message names before counting the rest.
 pub(crate) const LIST_CAP: usize = 20;
 
