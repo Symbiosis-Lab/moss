@@ -35,9 +35,11 @@
 //! colour reads there ([`CreditInk`]).
 
 mod ground;
+mod header;
 mod page;
 mod words;
 pub use ground::{built as grounds_built, Ground};
+pub use header::header_ink_attributes;
 pub use page::PageGround;
 pub(crate) use page::{COLOPHON_PX, CREDIT_LINE_PX};
 use page::colophon_px;

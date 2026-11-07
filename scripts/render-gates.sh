@@ -90,6 +90,7 @@ GATES_BUILD=(
   header-none
   header-scroll
   folded-callouts
+  header-over-ink
   edge-clamp
   vertical-nav-chrome
   video-embed-shape

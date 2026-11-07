@@ -2265,8 +2265,13 @@ header:has(+ .moss-hero) .main-nav {
 }
 
 /* header=over (`:::hero {header=over}` on the page's opening hero): the header
-   leaves the flow so the hero starts at the page top, under it. */
+   leaves the flow so the hero starts at the page top, under it. Its ink is
+   white unless the build found only dark ink reads on the picture's top band
+   (`data-header-ink`, `-night` for the dark theme). The build measures that
+   dark ink as the default `--moss-hero-tone-color`; a theme's own value is not
+   re-measured. */
 header:has(+ .moss-hero[data-header="over"]) {
+  --_over-ink: #ffffff;
   position: absolute;
   inset-block-start: 0;
   inset-inline: 0;
@@ -2274,12 +2279,15 @@ header:has(+ .moss-hero[data-header="over"]) {
   /* No band: the photo is the header's background. */
   background: transparent;
   border-block-end: none;
-  /* Light text, the same white the hero overlay text uses. */
-  color: #ffffff;
+  color: var(--_over-ink);
+}
+
+:is(:root:not([data-theme="dark"]) header:has(+ .moss-hero[data-header-ink="dark"]), :root[data-theme="dark"] header:has(+ .moss-hero[data-header-ink-night="dark"])) {
+  --_over-ink: var(--moss-hero-tone-color, #2c2825);
 }
 
 /* Nav links and the site name set their own colour from the base sheet, which
-   would stay dark over the photo; they take the header's light colour back.
+   would stay dark over the photo; they take the header's ink back.
    The phone menu's sheet is opaque and not over the photo, so its links keep
    their own colour. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
@@ -2287,15 +2295,17 @@ header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.
   color: inherit;
 }
 
-/* Focus rings sit on the photo, so they use the light header colour rather
-   than the accent, which can fall below contrast on a dark image. The opened
-   mobile sheet keeps the accent ring: it is opaque, not over the photo. */
+/* Focus rings sit on the photo, so they take the header's ink rather than the
+   accent, which can fall below contrast on an image. The opened mobile sheet
+   keeps the accent ring: it is opaque, not over the photo. */
 header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *) {
-  outline-color: #ffffff;
+  outline-color: var(--_over-ink);
 }
 
-/* A soft dark wash across the top of the photo keeps the light nav legible
-   over a pale image. */
+/* A wash across the top of the photo under the header. White needs a ground
+   no brighter than 0.18 luminance; black at 60% over pure white gives 0.13, so
+   where no ink was measured to read, the wash is that strong and solid over
+   the 5rem band the build measures. */
 .moss-hero[data-header="over"] {
   --moss-hero-wash-size: 6rem;
 }
@@ -2305,9 +2315,15 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
   inset-block-start: 0;
   inset-inline: 0;
   block-size: var(--moss-hero-wash-size);
-  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+  background: linear-gradient(rgba(0, 0, 0, 0.6) 5rem, rgba(0, 0, 0, 0));
   pointer-events: none;
   z-index: 1;
+}
+:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="light"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="light"])::after {
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+}
+:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="dark"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="dark"])::after {
+  content: none;
 }
 
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
