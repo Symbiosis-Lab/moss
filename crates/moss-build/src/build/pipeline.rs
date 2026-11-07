@@ -1799,8 +1799,14 @@ fn build_inner(
         // assets (jupyter/**/index.html) forward from the previous build, so
         // stale-html cleanup here doesn't delete them before
         // `run_notebook_processing` below re-registers them.
+        //
+        // An `index.html` in the folder is copied to staging by the asset walk,
+        // which runs after search has indexed staging: removed here, it would be
+        // missing from that index and from the preview until the copy lands.
         if let Some(permit) = sweep_permit.as_ref() {
-            remove_stale_html(&stage_dir, &background_ctx.blocking_keys, pending.notebook_outputs(), permit);
+            let mut keep = background_ctx.blocking_keys.clone();
+            keep.extend(project_structure.html_files.iter().map(|f| crate::build::render::resolve_path_with_overrides(&f.path, &background_ctx.dir_overrides)));
+            remove_stale_html(&stage_dir, &keep, pending.notebook_outputs(), permit);
         }
         // gen_dir is immutable post-materialize — stale-html cleanup runs on staging only.
 

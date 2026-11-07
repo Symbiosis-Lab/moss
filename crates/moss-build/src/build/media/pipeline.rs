@@ -491,16 +491,18 @@ fn maybe_inject_spa_cached(
     Ok(returned)
 }
 
-/// Remove generated HTML pages (index*.html) not produced by the current build.
+/// Remove generated HTML pages (index*.html) whose address is in neither `keep`
+/// nor `notebook_outputs`.
 ///
 /// Runs on staging in the blocking phase, just before the preview is pointed at this render,
-/// so it stops serving pages whose source was deleted. Source HTML assets (interactive embeds
-/// like `sketch.html`) are preserved — generated pages always use `index*.html`.
+/// so it stops serving pages whose source was deleted. Only `index*.html` names are
+/// considered, so an embed like `sketch.html` is never touched; a source file that is itself
+/// named `index.html` is kept only if `keep` holds its address.
 ///
 /// Staging is served, so this needs a `lifecycle::SweepPermit`.
 pub(crate) fn remove_stale_html(
     dir: &Path,
-    blocking_keys: &std::collections::HashSet<String>,
+    keep: &std::collections::HashSet<String>,
     notebook_outputs: &std::collections::HashSet<String>,
     _permit: &crate::build::lifecycle::SweepPermit,
 ) {
@@ -522,13 +524,12 @@ pub(crate) fn remove_stale_html(
         if let Ok(rel) = entry.path().strip_prefix(dir) {
             // Normalize `\`→`/`: keys are compared against `/`-form sets.
             let key = moss_core::slug::normalize_separators(&rel.to_string_lossy());
-            // blocking_keys covers this build's blocking-phase pages;
             // notebook_outputs covers background-phase JupyterLite assets
             // (jupyter/{lab,tree,doc,...}/index.html) carried forward from
             // the previous build — they'd otherwise match the generated-
             // page pattern and be deleted before notebook processing
             // re-registers them.
-            if !blocking_keys.contains(&key) && !notebook_outputs.contains(&key) {
+            if !keep.contains(&key) && !notebook_outputs.contains(&key) {
                 let _ = fs::remove_file(entry.path());
                 log::debug!("[stale-html] Removed: {}", key);
                 removed += 1;

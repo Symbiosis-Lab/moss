@@ -80,3 +80,25 @@ fn a_shadowed_index_md_still_maps_to_the_address_its_document_owns() {
         assert!(hashes["sources"][source].is_object(), "{source} keeps its source hash");
     }
 }
+
+/// The asset copy lays the documents down after the search index has read
+/// staging, so a build whose output changed must not sweep them out first.
+#[test]
+fn a_changed_build_still_indexes_the_documents_the_last_build_laid_down() {
+    let site = Site::with_config(&format!("search = true\n{CONFIG}"), &[
+        ("index.md", "---\ntitle: Old\n---\n"),
+        ("index.html", "<!doctype html><html lang=\"en\"><title>Home</title><p>real home</p></html>"),
+        ("fr/index.md", "---\ntitle: Accueil\n---\n"),
+        ("fr/index.html", "<!doctype html><html lang=\"fr\"><title>Fr</title><p>fr home</p></html>"),
+        ("fr/about.md", "---\ntitle: A propos\n---\n\nA propos texte.\n"),
+    ]);
+    let indexed = || {
+        let receipt = std::fs::read_to_string(site.root.join(".moss/build.nosync/index/receipt.json")).unwrap();
+        serde_json::from_str::<serde_json::Value>(&receipt).unwrap()["pages"].as_u64().unwrap()
+    };
+    site.rebuild();
+    let unchanged = indexed();
+    site.write("fr/about.md", "---\ntitle: A propos\n---\n\nA propos texte, revu.\n");
+    site.rebuild();
+    assert_eq!(indexed(), unchanged, "a changed build indexes the documents too");
+}
