@@ -843,7 +843,7 @@ fn synthesize_gallery_thumb_emits_picture_with_lazy() {
     let mut snap = AssetSnapshot::new();
     snap.dimensions
         .insert(PathBuf::from("photo.jpg"), (1200, 800));
-    let out = synthesize_image_html("photo.jpg", "alt", &snap, ImageContext::GalleryThumb, &p);
+    let out = synthesize_image_html("photo.jpg", "alt", &snap, ImageContext::GalleryThumb { columns: None }, &p);
     assert!(out.contains("<picture"), "{out}");
     // 1200px-wide fixture → ladder rung at 800 + capped base descriptor,
     // with the gallery grid-cell sizes (Task 3, responsive-image-variants).
@@ -867,7 +867,7 @@ fn synthesize_gallery_thumb_non_raster_bare_img() {
     let p = ImageRenderOptions::default();
     let mut snap = AssetSnapshot::new();
     snap.dimensions.insert(PathBuf::from("icon.svg"), (64, 64));
-    let out = synthesize_image_html("icon.svg", "", &snap, ImageContext::GalleryThumb, &p);
+    let out = synthesize_image_html("icon.svg", "", &snap, ImageContext::GalleryThumb { columns: None }, &p);
     assert!(!out.contains("<picture"), "{out}");
     assert!(!out.contains("<source"), "{out}");
     assert!(out.contains(r#"loading="lazy""#), "{out}");
@@ -892,7 +892,7 @@ fn synthesize_gallery_thumb_threads_its_display_style() {
         style: Some("object-position:50% 50%"),
         ..Default::default()
     };
-    let out = synthesize_image_html("photo.jpg", "", &snap, ImageContext::GalleryThumb, &opts);
+    let out = synthesize_image_html("photo.jpg", "", &snap, ImageContext::GalleryThumb { columns: None }, &opts);
     assert_eq!(
         out.matches("style=").count(),
         1,
@@ -1838,7 +1838,7 @@ fn webp_source_gallery_context_uses_gallery_sizes() {
         "g.webp",
         "",
         &assets,
-        ImageContext::GalleryThumb,
+        ImageContext::GalleryThumb { columns: None },
         &ImageRenderOptions::default(),
     );
     assert!(

@@ -343,7 +343,7 @@ pub trait RenderHooks {
                         &src_str,
                         if copy { "" } else { &item.alt },
                         assets_for_synth,
-                        crate::render::image::ImageContext::GalleryThumb,
+                        crate::render::image::ImageContext::GalleryThumb { columns: args.columns },
                         &opts,
                     );
                     out.push_str(&item_html);
@@ -1616,6 +1616,37 @@ mod tests {
         let html = render_shortcode_html(&sc);
         assert!(html.contains(r#"data-columns="8""#), "got: {html}");
         assert!(html.contains(r#"--moss-gallery-columns: 8"#), "got: {html}");
+    }
+
+    /// A counted gallery keeps two or more across on a phone, which WebKit, having
+    /// no `sizes=auto`, can only learn from the viewport list: there `100vw`
+    /// sent each thumbnail to the top rung. Auto-fill keeps its `100vw`, since its
+    /// 200px floor leaves one across on a phone.
+    #[test]
+    fn a_counted_gallery_tells_webkit_its_thumbnails_are_at_most_half_the_phone() {
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from("a.jpg"), (1920, 1080));
+        let hooks = DefaultHooks::with_snapshot(&snap);
+        let gallery = |columns| {
+            let mut out = String::new();
+            hooks.render_shortcode(&mut out, &Shortcode::Gallery(GalleryShortcode {
+                columns,
+                items: vec![GalleryItem {
+                    title: None,
+                    src: Url::resolved("a.jpg", UrlKind::Asset),
+                    alt: String::new(),
+                    alt_only: false,
+                    attrs: String::new(),
+                    caption: Vec::new(),
+                }],
+                ..Default::default()
+            }), None);
+            out
+        };
+        let counted = gallery(Some(3));
+        assert!(counted.contains(r#"sizes="auto, (min-width: 48rem) 33vw, 50vw""#), "got: {counted}");
+        let auto_fill = gallery(None);
+        assert!(auto_fill.contains(r#"sizes="auto, (min-width: 48rem) 33vw, 100vw""#), "got: {auto_fill}");
     }
 
     #[test]

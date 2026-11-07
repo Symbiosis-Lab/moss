@@ -171,8 +171,9 @@ pub enum ImageContext<'a> {
     /// Distinct from `MarkdownInline` so the gallery's per-item style
     /// passthrough (object-position from `MediaAttrs`) has a typed home
     /// to evolve into; today both contexts produce the same inner byte
-    /// shape via `synthesize_inner`.
-    GalleryThumb,
+    /// shape via `synthesize_inner`. `columns` is the gallery's author
+    /// count, which decides its `sizes=` (`sizes_for_gallery`).
+    GalleryThumb { columns: Option<u32> },
 
     /// Bare `<img>` emission with no `<picture>` wrap, no `<source>`, no LQIP, no width/height, no `loading` attr.
     /// Used by the hero typed-renderer fallback path
@@ -759,7 +760,7 @@ fn sizes_for<'s>(
         ImageContext::Hero { plate: true } => return Cow::Borrowed(ctx_sizes::SIZES_HERO_PLATE),
         ImageContext::Hero { plate: false } => return Cow::Borrowed(ctx_sizes::SIZES_FULL_BLEED),
         ImageContext::FolderCardCover => return Cow::Borrowed(ctx_sizes::SIZES_CARD),
-        ImageContext::GalleryThumb => return Cow::Borrowed(ctx_sizes::SIZES_GALLERY),
+        ImageContext::GalleryThumb { columns } => return Cow::Borrowed(ctx_sizes::sizes_for_gallery(*columns)),
         _ => return Cow::Borrowed(ctx_sizes::SIZES_BODY),
     };
     if options.vertical {

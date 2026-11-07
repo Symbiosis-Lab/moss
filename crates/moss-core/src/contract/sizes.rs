@@ -120,6 +120,21 @@ pub const SIZES_CARD: &str = "auto, (min-width: 48rem) 24rem, 100vw";
 /// the viewport fallback below overstates a phone thumbnail several times.
 pub const SIZES_GALLERY: &str = "auto, (min-width: 48rem) 33vw, 100vw";
 
+/// A gallery with an author count of two or more (`:::gallery N`). Below 48rem
+/// site.css keeps it at least two across (tracks floored at 88px), so `50vw`
+/// never understates a thumbnail there; it is the value WebKit, which has no
+/// `sizes=auto`, reads. A 3-across strip of 110px thumbnails otherwise fetched
+/// the top rung on an iPhone.
+pub const SIZES_GALLERY_COUNTED: &str = "auto, (min-width: 48rem) 33vw, 50vw";
+
+/// The `sizes=` value for a gallery thumbnail, by the gallery's author count.
+pub fn sizes_for_gallery(columns: Option<u32>) -> &'static str {
+    match columns {
+        Some(n) if n >= 2 => SIZES_GALLERY_COUNTED,
+        _ => SIZES_GALLERY,
+    }
+}
+
 /// The `sizes=` value for a figure carrying a canonical `data-width` token
 /// (`body | wide | page | screen`; `full` is canonicalized to `screen` at
 /// parse time but accepted here for robustness).
@@ -223,7 +238,7 @@ mod tests {
                     .map(move |w| sizes_for_grid_cell(n, w))
             })
             .collect();
-        for s in [SIZES_FULL_BLEED, SIZES_BODY, SIZES_CARD, SIZES_GALLERY, SIZES_WIDE, SIZES_PAGE]
+        for s in [SIZES_FULL_BLEED, SIZES_BODY, SIZES_CARD, SIZES_GALLERY, SIZES_GALLERY_COUNTED, SIZES_WIDE, SIZES_PAGE]
             .into_iter()
             .chain(grid_samples.iter().map(String::as_str))
         {
@@ -254,7 +269,7 @@ mod tests {
         // A lazy image in these contexts has a laid-out width no viewport
         // formula names; without `auto` a 110px gallery thumb on a phone
         // resolves `100vw` and fetches the top rung.
-        for s in [SIZES_BODY, SIZES_CARD, SIZES_GALLERY] {
+        for s in [SIZES_BODY, SIZES_CARD, SIZES_GALLERY, SIZES_GALLERY_COUNTED] {
             assert!(s.starts_with("auto, "), "{s}");
         }
     }
