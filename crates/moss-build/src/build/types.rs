@@ -1156,6 +1156,13 @@ impl SourceMetadata {
     pub fn from_stat(hash: String, stat: crate::build::stat::FileStat) -> Self {
         Self { hash, stat }
     }
+
+    /// Whether `current`, the file stat'd now, proves it still holds the bytes
+    /// this record hashed, without reading them: the shared rule plus the
+    /// racy-write window around `captured_at`, the manifest's clock.
+    pub(crate) fn vouches_for(&self, current: &crate::build::stat::FileStat, captured_at: Option<u64>) -> bool {
+        !crate::build::stat::mtime_is_racy(self.stat.mtime, captured_at) && self.stat.vouches_for(current, captured_at)
+    }
 }
 
 impl moss_core::sort::SortableDoc for ParsedDocument {

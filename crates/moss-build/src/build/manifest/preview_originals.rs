@@ -36,6 +36,23 @@ impl Originals {
         found
     }
 
+    /// The ladder rungs this generation promised for `source`, by width,
+    /// read from the URLs it recorded, so a folder's `url:` override is
+    /// honoured and a user file merely named like a rung (recorded under its
+    /// own source) is never mistaken for one.
+    pub(crate) fn rungs(&self, source: &str) -> BTreeMap<u32, (&str, &Original)> {
+        let mut rungs = BTreeMap::new();
+        for url in self.images.iter().filter(|(_, original)| original.source == source).map(|(url, _)| url) {
+            for width in moss_core::asset_paths::LADDER {
+                if let Some((rung, original)) = self.images.get_key_value(&moss_core::asset_paths::to_webp_rung(url, width))
+                    .filter(|(_, original)| original.source == source) {
+                    rungs.insert(width, (rung.as_str(), original));
+                }
+            }
+        }
+        rungs
+    }
+
     pub(crate) fn read(generations: &Path, generation: &str) -> std::io::Result<Option<Self>> {
         let bytes = match std::fs::read(receipt_path(generations, generation)) {
             Ok(bytes) => bytes,

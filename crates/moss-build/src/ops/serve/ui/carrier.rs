@@ -61,9 +61,9 @@ pub(super) fn router(
         // The editor shows a page's images from its source, behind the session.
         .route("/__moss/source/*path", get({
             let dir = source_dir;
-            move |Path(path): Path<String>| {
+            move |Path(path): Path<String>, axum::extract::RawQuery(query): axum::extract::RawQuery| {
                 let dir = dir.clone();
-                async move { super::super::router::source_asset_route(dir, path).await }
+                async move { super::super::router::source_asset_route(dir, path, query).await }
             }
         }))
         .route(

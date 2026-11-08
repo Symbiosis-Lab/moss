@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `==text==` renders as `<mark>` (`Inline::Mark`), coloured by the `--moss-color-highlight` token. The pass runs after parsing in `ast::inline::highlight`, beside the hard line breaks and inline `#tag` passes, which moved to `ast::inline::line_breaks` and `ast::inline::tags` (still reachable as `ast::line_breaks` and `ast::tags`).
+- `resolve::editor::ResolvedAsset::rung_widths`: the ladder widths a host with a build holds for an image and can still vouch for, narrowest first. moss-core leaves it empty.
 
 ## [0.22.0] - 2026-11-07
 

@@ -100,6 +100,11 @@ pub struct ResolvedAsset {
     /// case-mismatch path as a problem and offers the file's real path.
     /// The single-asset lookup (`resolve_asset`) returns it too.
     pub provenance: AssetProvenance,
+    /// The ladder widths the current build holds for this image and can still
+    /// vouch for, narrowest first: each is what `request_url?w=<width>` serves.
+    /// Empty when there is no fresh rung or the host has no build; the original
+    /// is never listed.
+    pub rung_widths: Vec<u32>,
 }
 
 /// Which files a reference may search. Loose folders only search the named folders.

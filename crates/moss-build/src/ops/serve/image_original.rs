@@ -21,8 +21,7 @@ pub(super) async fn recorded_original(
     let vault = crate::vault::paths::VaultRoot::find_containing(&root)?;
     let mp = crate::moss_paths::MossPaths::from_moss_dir(vault.path().join(".moss"));
     let generation = root.file_name()?.to_str()?.to_string();
-    if generation.len() != 16 || !generation.bytes().all(|b| b.is_ascii_hexdigit())
-        || mp.generation_dir(&generation).canonicalize().ok()? != root { return None; }
+    if mp.sealed_generation_dir(&generation)? != root { return None; }
     contained_candidate(mp.project_root(), &crate::build::manifest::preview_originals::receipt_path(&mp.generations_dir(), &generation))?;
     let hashes = contained_candidate(mp.project_root(), &mp.hashes())?;
     let generations = mp.generations_dir();
@@ -36,7 +35,7 @@ pub(super) async fn recorded_original(
                 // The content-derived id must prove this is their manifest,
                 // even when no original copy made it into the output tree.
                 if crate::build::icloud::is_still_in_the_cloud(&hashes) { return None; }
-                let hashes: crate::types::content::SiteHashes = serde_json::from_slice(&std::fs::read(hashes).ok()?).ok()?;
+                let hashes = crate::types::content::SiteHashes::read(&hashes)?;
                 if crate::build::assets::paths::compute_manifest_generation_id(&hashes.files) != generation { return None; }
                 let receipt = Originals::legacy(&hashes, generation);
                 (receipt.get(&url)?, Some(receipt))

@@ -2321,7 +2321,14 @@ absolute_path: string; request_url: string; mime_type: string; width: number | n
  * case-mismatch path as a problem and offers the file's real path.
  * The single-asset lookup (`resolve_asset`) returns it too.
  */
-provenance: AssetProvenance }
+provenance: AssetProvenance; 
+/**
+ * The ladder widths the current build holds for this image and can still
+ * vouch for, narrowest first: each is what `request_url?w=<width>` serves.
+ * Empty when there is no fresh rung or the host has no build; the original
+ * is never listed.
+ */
+rung_widths: number[] }
 
 /**
  * One path [`restore_version`] could not carry through — a field-named struct

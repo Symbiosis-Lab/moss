@@ -42,6 +42,7 @@ use tower_http::services::{ServeDir, ServeFile};
 pub(super) async fn source_asset_route(
     site_dir_state: Arc<std::sync::RwLock<std::path::PathBuf>>,
     path: String,
+    query: Option<String>,
 ) -> Response {
     use crate::editor::source_asset::serve_source_asset;
 
@@ -53,7 +54,7 @@ pub(super) async fn source_asset_route(
         return source_asset_404();
     };
 
-    let r = serve_source_asset(vault.path(), &path).await;
+    let r = serve_source_asset(vault.path(), &path, query.as_deref()).await;
     Response::builder()
         .status(r.status)
         .header("Content-Type", r.content_type)
@@ -283,8 +284,8 @@ pub async fn start_server(
     // `moss-source://` Tauri scheme uses (`editor::source_asset_protocol::serve_source_asset`).
     // One implementation, two carriers — not two implementations kept in step by a test.
     // It exists so a host with no custom-scheme support (a browser, an Obsidian
-    // pane) can still render the editor's SOURCE assets, which must
-    // come from the vault rather than from `.moss/build.nosync`.
+    // pane) can still render the editor's SOURCE assets, which come from the
+    // vault, or for a raster image from its built rung (`editor::source_asset`).
     //
     // Internal moss endpoints live under the `/__moss_*` namespace. They MUST
     // be registered as explicit `.route(...)` entries BEFORE the
@@ -315,9 +316,10 @@ pub async fn start_server(
             )
             .route(
                 "/__moss/source/*path",
-                get(move |axum::extract::Path(p): axum::extract::Path<String>| {
+                get(move |axum::extract::Path(p): axum::extract::Path<String>,
+                          axum::extract::RawQuery(query): axum::extract::RawQuery| {
                     let site_dir = state_for_source.clone();
-                    async move { source_asset_route(site_dir, p).await }
+                    async move { source_asset_route(site_dir, p, query).await }
                 }),
             )
             // Preview-only comment stub: receives the comment form POST and

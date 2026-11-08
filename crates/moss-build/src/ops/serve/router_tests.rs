@@ -1697,7 +1697,8 @@ fn a_directory_url_is_resolved_to_its_index_before_the_cloud_check() {
 }
 
 /// One assertion for the invariant that `/__moss/source/` serves the VAULT's
-/// bytes, never the build output's.
+/// bytes, never the build output's file at the same path. (A built rung stands
+/// in only for an admitted raster source; see `editor::source_asset`.)
 ///
 /// The fixture puts a different file at the same relative path in both places,
 /// so the test can tell them apart. Wiring this route to the served site dir —
@@ -1766,6 +1767,30 @@ async fn source_route_serves_files_sandboxed() {
         Some("sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
     );
     assert_eq!(response.header("x-content-type-options"), Some("nosniff"));
+    let _ = shutdown_tx.send(());
+}
+
+/// The route hands its query to the core, which reads `w` from it: a width
+/// outside the ladder is refused here as it is through the desktop's scheme.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn source_route_passes_the_width_query_to_the_core() {
+    let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let site_dir = vault.path().join(".moss/build.nosync/current");
+    std::fs::create_dir_all(&site_dir).unwrap();
+    std::fs::write(vault.path().join("inside.txt"), b"INSIDE").unwrap();
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(Arc::new(std::sync::RwLock::new(site_dir)), 58750))
+        .await
+        .expect("Server should start");
+
+    let status = |query: &str| match ureq::get(&format!("http://localhost:{port}/__moss/source/inside.txt?{query}"))
+        .timeout(std::time::Duration::from_secs(5)).call() {
+        Ok(response) => response.status(),
+        Err(ureq::Error::Status(status, _)) => status,
+        Err(error) => panic!("HTTP failed: {error}"),
+    };
+    assert_eq!(status("w=800"), 200, "a ladder width is accepted");
+    assert_eq!(status("w=1000"), 400, "the query reached the core");
+
     let _ = shutdown_tx.send(());
 }
 

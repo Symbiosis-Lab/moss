@@ -636,6 +636,11 @@ impl SiteHashes {
     pub fn source_metadata_for(&self, relative_path: &str) -> Option<&SourceMetadata> {
         self.sources.get(relative_path)
     }
+
+    /// The manifest at `path`, or `None` when it is absent or unreadable.
+    pub(crate) fn read(path: &std::path::Path) -> Option<Self> {
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    }
 }
 
 #[cfg(test)]

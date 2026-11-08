@@ -1,4 +1,6 @@
 //! Filesystem snapshot and asset metadata adapter for pure reference resolution.
+//!
+//! The editor requests each image by its source path via `moss-source://`.
 use crate::build::scan::classify::{left_out, left_out_of_site};
 use moss_core::content_graph::{normalize_path, ContentGraph};
 use moss_core::resolve::editor::{RefTarget, ResolveInput};
@@ -98,6 +100,8 @@ pub(super) fn compute_from_source(from_file: &Path, canonical_root: &Path) -> St
 }
 
 /// Add only host facts; classification, request URL and MIME stay core-owned.
+/// The width and height are the source's even when `moss-source://` answers
+/// with a built rung, so the editor's image box does not change when the bytes do.
 pub(super) fn enrich(mut asset: ResolvedAsset, root: &Path) -> Option<ResolvedAsset> {
     let absolute = root.join(&asset.absolute_path);
     let meta = std::fs::metadata(&absolute).ok()?;
@@ -107,6 +111,8 @@ pub(super) fn enrich(mut asset: ResolvedAsset, root: &Path) -> Option<ResolvedAs
             asset.height = Some(height);
         }
     }
+    asset.rung_widths = crate::editor::source_asset::built_rungs(root, &absolute)
+        .into_iter().map(|(width, _)| width).collect();
     asset.absolute_path = absolute.to_string_lossy().to_string();
     asset.size_bytes = meta.len();
     Some(asset)

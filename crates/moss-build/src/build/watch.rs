@@ -63,7 +63,7 @@ use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 use std::path::{Path, PathBuf};
 
-use crate::build::stat::{mtime_is_racy, FileStat};
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 
 pub mod drift;
@@ -711,7 +711,7 @@ pub(crate) fn source_metadata_matches(meta: &SourceMetadata, fs_path: &Path) -> 
 
 /// [`source_metadata_matches`] against the manifest's capture clock,
 /// [`SiteHashes::captured_at`](crate::types::content::SiteHashes::captured_at):
-/// the racy-write window ([`mtime_is_racy`]) arms, and an exact-zero sub-second
+/// the racy-write window ([`mtime_is_racy`](crate::build::stat::mtime_is_racy)) arms, and an exact-zero sub-second
 /// mtime comfortably older than the capture can fast-path (see
 /// [`FileStat::vouches_for`]). The window only ever routes to the hash tier —
 /// it can never suppress, so a false positive costs one hash and self-absorbs.
@@ -779,7 +779,7 @@ pub(crate) fn source_metadata_verdict(
     // The window sends an mtime near the capture to the hash tier, which
     // catches such a pair when the read was close to the capture.
     let current = FileStat::of(md);
-    if !mtime_is_racy(meta.stat.mtime, captured_at) && meta.stat.vouches_for(&current, captured_at) {
+    if meta.vouches_for(&current, captured_at) {
         return SourceVerdict::Unchanged { refreshed: None };
     }
 

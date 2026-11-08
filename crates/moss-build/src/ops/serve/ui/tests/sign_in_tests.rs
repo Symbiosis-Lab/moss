@@ -247,13 +247,14 @@ async fn sources_are_served_behind_the_session() {
     let f = Fixture::new();
     // allow:raw_write a fixture source in a fresh temp dir
     std::fs::write(f.site.join("photo.txt"), "the source").unwrap();
-    let get = |cookie: Option<&str>| {
-        let mut request = f.request("GET", "/__moss/source/photo.txt", json!(null));
+    let get_at = |path: &str, cookie: Option<&str>| {
+        let mut request = f.request("GET", path, json!(null));
         if let Some(cookie) = cookie {
             request.headers_mut().insert("cookie", cookie.parse().unwrap());
         }
         f.send(request)
     };
+    let get = |cookie| get_at("/__moss/source/photo.txt", cookie);
     assert_eq!(get(None).await.status(), StatusCode::UNAUTHORIZED);
     let (_, cookie) = f.enrolled().await;
     let response = get(Some(&cookie)).await;
@@ -263,6 +264,8 @@ async fn sources_are_served_behind_the_session() {
     assert!(policies.iter().any(|p| p.starts_with("sandbox; default-src 'none'")), "{policies:?}");
     assert_eq!(response.headers()["x-content-type-options"], "nosniff");
     assert_eq!(&axum::body::to_bytes(response.into_body(), 1000).await.unwrap()[..], b"the source");
+    // The query reaches the core, which refuses a width outside the ladder.
+    assert_eq!(get_at("/__moss/source/photo.txt?w=1000", Some(&cookie)).await.status(), StatusCode::BAD_REQUEST);
 }
 
 /// A browser's PDF plugin asks for the source with no fetch metadata and no Origin.

@@ -530,6 +530,18 @@ impl MossPaths {
         self.generations_dir().join(gen_id)
     }
 
+    /// The canonical directory of generation `gen_id`, or `None` unless the id
+    /// has the form the build mints (16 hex digits) and the directory exists
+    /// directly under [`generations_dir`](Self::generations_dir) once links
+    /// are resolved. For an id read from a file rather than computed.
+    pub(crate) fn sealed_generation_dir(&self, gen_id: &str) -> Option<PathBuf> {
+        if gen_id.len() != 16 || !gen_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let dir = self.generation_dir(gen_id).canonicalize().ok()?;
+        (dir.parent()? == self.generations_dir().canonicalize().ok()?).then_some(dir)
+    }
+
     /// `.moss/build.nosync/current` — symlink to the active generation directory.
     ///
     /// Points at `generations/<id>`, relative to the link's own directory, so a
