@@ -2,7 +2,7 @@
 mod assets;
 pub mod auth;
 pub mod client;
-pub use super::trust_boundary::PublicOrigin;
+pub use super::trust_boundary::{PublicOrigin, PublicUrl};
 mod carrier;
 mod listener;
 pub(crate) mod routes;

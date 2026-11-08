@@ -42,8 +42,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "edit",
-            args: "[folder] [--serve] [--no-browser] [--port <n>] [--public-url <https origin>]",
-            description: "Open the editor in moss desktop when installed and stdin is a terminal. With --serve, without a terminal, or without desktop, build, watch and serve the editor and preview. A terminal opens a sign-in link in the default browser; --no-browser or piped stdin prints a link and QR. --port selects the UI port; --public-url names the HTTPS origin a reverse proxy serves the UI at, for another device. The folder defaults to the current directory. A second edit requests a fresh sign-in link from the live owner.",
+            args: "[folder] [--serve] [--no-browser] [--port <n>] [--public-url <https origin> [--public-preview-port <n>]]",
+            description: "Open the editor in moss desktop when installed and stdin is a terminal. With --serve, without a terminal, or without desktop, build, watch and serve the editor and preview. A terminal opens a sign-in link in the default browser; --no-browser or piped stdin prints a link and QR. --port selects the UI port, and the preview takes the next one. --public-url names the HTTPS origin a reverse proxy serves the UI at, for another device; it needs --port, and the proxy serves the preview at the same host on the next port or on --public-preview-port, forwarding each to the port moss edit prints. The folder defaults to the current directory. A second edit requests a fresh sign-in link from the live owner.",
         },
         CliCommandInfo {
             name: "sessions",

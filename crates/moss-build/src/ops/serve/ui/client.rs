@@ -19,17 +19,11 @@ pub fn link_for_owner(folder: &Path) -> Result<Option<OwnerLink>, String> {
     let local = owner
         .ui_url
         .ok_or("this folder's live owner does not serve the editor")?;
-    let token = std::fs::read_to_string(carrier_token::token_path(folder))
-        .map_err(|_| "cannot read the live owner's token file")?;
+    let token = carrier_token::read(folder).ok_or("cannot read the live owner's token file")?;
     let endpoint = format!("{}/__moss/sign-in/new", owner.url);
-    // Redirects must not carry a local capability to another listener.
-    let agent = ureq::AgentBuilder::new()
-        .redirects(0)
-        .timeout(std::time::Duration::from_secs(5))
-        .build();
-    let value: serde_json::Value = agent
+    let value: serde_json::Value = carrier_token::agent(std::time::Duration::from_secs(5))
         .post(&endpoint)
-        .set(carrier_token::TOKEN_HEADER, token.trim())
+        .set(carrier_token::TOKEN_HEADER, &token)
         .send_string("")
         .map_err(|_| "could not request a sign-in link from the live owner")?
         .into_json()

@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PreviewState, PreviewStatus, resolveUnshowableReason, type UnshowableInputs } from '../preview-state';
 import type { ProgressUpdate } from '@symbiosis-lab/moss-ui';
+import { host } from '../../host';
+import { resetTestHost } from '../../__tests__/helpers/test-host';
 
 // Helper to create a progress update with defaults
 function createProgressUpdate(overrides: Partial<ProgressUpdate> = {}): ProgressUpdate {
@@ -665,5 +667,21 @@ describe('PreviewState stage field', () => {
     s.setStage('compiling');
     s.reset();
     expect(s.getStage()).toBe('initial');
+  });
+});
+
+describe('a preview reached at another address', () => {
+  it('loads from where the host says, both on completion and while a rebuild of a served site runs', () => {
+    host.previewUrl = () => 'https://edit.example.test:444';
+    try {
+      const done = new PreviewState();
+      expect(done.handleProgressUpdate(createProgressUpdate({ completed: true, percentage: 100, port: 444, is_empty: false })))
+        .toEqual({ type: 'ready', url: 'https://edit.example.test:444' });
+      const early = new PreviewState();
+      expect(early.handleProgressUpdate(createProgressUpdate({ port: 444, is_empty: false })))
+        .toEqual({ type: 'ready', url: 'https://edit.example.test:444' });
+    } finally {
+      resetTestHost();
+    }
   });
 });

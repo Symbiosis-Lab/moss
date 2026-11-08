@@ -128,6 +128,7 @@ GATES_BUILD=(
   archival-footer
   type-defaults
   diagrams
+  browser-editor
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads
@@ -303,7 +304,7 @@ if [ "$needs_bin" = true ]; then
     fi
   fi
   test -x "$MOSS_BIN" || {
-    echo "no executable moss-cli at $MOSS_BIN — run \`cargo build -p moss-cli\` (or \`cargo build --release -p moss-cli\`), or set MOSS_BIN" >&2
+    echo "no executable moss-cli at $MOSS_BIN — run \`bash scripts/build-moss-cli.sh\` (or \`bash scripts/build-moss-cli.sh --release\`), or set MOSS_BIN" >&2
     echo "  (most gates need no binary: bash scripts/render-gates.sh --group nobuild, or npx playwright test -c playwright/<name>.config.ts)" >&2
     exit 1
   }

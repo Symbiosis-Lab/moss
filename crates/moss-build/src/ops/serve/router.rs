@@ -39,7 +39,7 @@ use tower_http::services::{ServeDir, ServeFile};
 /// hands it. Do not decode again — `resolve_scoped` is the containment check,
 /// and a second decode would hand it a different string than the one that was
 /// checked.
-async fn source_asset_route(
+pub(super) async fn source_asset_route(
     site_dir_state: Arc<std::sync::RwLock<std::path::PathBuf>>,
     path: String,
 ) -> Response {
@@ -60,9 +60,15 @@ async fn source_asset_route(
         // Source bytes change whenever the user saves; the editor busts with
         // `?_t=`, so never let an intermediary hold a stale copy.
         .header("Cache-Control", "no-cache")
+        // Served sandboxed, so a file in the folder can't run script on the
+        // origin that shows it; it may still show its own images and media.
+        .header("Content-Security-Policy", SOURCE_CSP)
+        .header("X-Content-Type-Options", "nosniff")
         .body(Body::from(r.body))
         .unwrap_or_else(|_| source_asset_404())
 }
+
+const SOURCE_CSP: &str = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'";
 
 fn source_asset_404() -> Response {
     Response::builder()
@@ -245,7 +251,7 @@ pub async fn start_server(
     // error). If neither stack can be bound at any port in the scan range,
     // we return Err synchronously, before spawning anything.
     let (port, listener_v4, listener_v6) =
-        super::port::bind_with_scan(config.start_port).await?;
+        super::port::bind_preview(config.start_port, config.ui.as_ref().is_some_and(|ui| ui.public_url.is_some())).await?;
 
     let ui_listener = super::ui::bind(&config, port).await?;
     let ui_port = ui_listener.as_ref().map(|listener| listener.port);
@@ -263,7 +269,7 @@ pub async fn start_server(
         host_routes,
         ..
     } = config;
-    let origins = Arc::new(super::trust_boundary::origins(port, None));
+    let origins = Arc::new(super::trust_boundary::Admission::new(port, config.ui.as_ref(), invoke_ctx.clone().map(|ctx| (ctx, site_dir_state.clone()))));
 
     // Create shutdown channel for graceful server termination
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -290,7 +296,7 @@ pub async fn start_server(
                         invoke: Option<super::invoke::InvokeCtx>,
                         is_evicted: EvictedProbe,
                         host_routes: Option<Router>,
-                        origins: Arc<Vec<(String, String)>>| {
+                        origins: Arc<super::trust_boundary::Admission>| {
         let state_for_viewed = state.clone();
         let registry_for_layer = registry.clone();
         // The `/__moss_health/` route is registered BEFORE `.fallback()` so it
@@ -693,11 +699,8 @@ pub async fn start_server(
                 let site_dir = state_for_viewed.clone();
                 middleware::from_fn(move |request, next| super::events::track_viewer(site_dir.clone(), request, next))
             })
-            // Outermost layer: added last, so it runs FIRST — ahead of routing,
-            // ServeDir and bridge injection — and covers every route including
-            // the health check. Refuses a Host that is not loopback
-            // (DNS-rebinding defense) and a foreign Origin before any
-            // handler sees the request.
+            // Outermost layer: added last, so it runs FIRST, ahead of routing,
+            // ServeDir and bridge injection; see `trust_boundary::validate_host_origin`.
             .layer({
                 let origins = origins.clone();
                 middleware::from_fn(move |request, next| {

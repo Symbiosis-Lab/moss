@@ -155,7 +155,7 @@ async fn sessions_survive_new_server_and_revoke_all() {
             site_root: f.site.clone(),
         },
         62001,
-        "http://localhost:62000".into(),
+        62000,
         Some(super::super::super::InvokeCtx::standalone()),
         Arc::new(std::sync::RwLock::new(f.site.clone())),
         super::super::super::HostKind::Cli,
@@ -209,19 +209,26 @@ async fn private_session_file_outside_site_only() {
         .is_err());
 }
 
+/// A browser reaches the preview the way it reached the UI: one signed in at
+/// loopback has no cookie for the public origin, so it gets the loopback preview.
 #[tokio::test]
-async fn config_exposes_external_preview_url() {
-    let f = Fixture::new();
-    let response = f
-        .send(f.request("GET", "/__moss/config", json!(null)))
-        .await;
-    let bytes = axum::body::to_bytes(response.into_body(), 10000)
-        .await
-        .unwrap();
-    assert_eq!(
-        serde_json::from_slice::<Value>(&bytes).unwrap()["preview_url"],
-        "https://preview.example.test"
-    );
+async fn config_names_the_preview_at_the_origin_the_browser_used() {
+    let f = &Fixture::new();
+    let config = |host: &'static str, origin: &'static str| {
+        let mut request = f.request("GET", "/__moss/config", json!(null));
+        request.headers_mut().insert("host", host.parse().unwrap());
+        request.headers_mut().insert("origin", origin.parse().unwrap());
+        async move {
+            let response = f.send(request).await;
+            serde_json::from_slice::<Value>(&axum::body::to_bytes(response.into_body(), 10000).await.unwrap()).unwrap()
+        }
+    };
+    let public = config("editor.example.test", "https://editor.example.test").await;
+    assert_eq!(public["preview_url"], "https://editor.example.test:444");
+    assert_eq!(public["public_url"], "https://editor.example.test");
+    let local = config("localhost:62001", ORIGIN).await;
+    assert_eq!(local["preview_url"], "http://localhost:62000");
+    assert_eq!(local["public_url"], "https://editor.example.test");
 }
 
 #[tokio::test]
@@ -233,4 +240,111 @@ async fn expired_session_is_refused() {
     records[0]["last_seen"] = json!(secrets::now() - sessions::SESSION_SECONDS);
     std::fs::write(&f.session_path, serde_json::to_vec(&records).unwrap()).unwrap();
     assert_eq!(f.probe(&cookie).await, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn sources_are_served_behind_the_session() {
+    let f = Fixture::new();
+    // allow:raw_write a fixture source in a fresh temp dir
+    std::fs::write(f.site.join("photo.txt"), "the source").unwrap();
+    let get = |cookie: Option<&str>| {
+        let mut request = f.request("GET", "/__moss/source/photo.txt", json!(null));
+        if let Some(cookie) = cookie {
+            request.headers_mut().insert("cookie", cookie.parse().unwrap());
+        }
+        f.send(request)
+    };
+    assert_eq!(get(None).await.status(), StatusCode::UNAUTHORIZED);
+    let (_, cookie) = f.enrolled().await;
+    let response = get(Some(&cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    // Sandboxed on the UI origin too, under the origin's own framing policy.
+    let policies: Vec<_> = response.headers().get_all("content-security-policy").iter().map(|v| v.to_str().unwrap().to_owned()).collect();
+    assert!(policies.iter().any(|p| p.starts_with("sandbox; default-src 'none'")), "{policies:?}");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(&axum::body::to_bytes(response.into_body(), 1000).await.unwrap()[..], b"the source");
+}
+
+/// A browser's PDF plugin asks for the source with no fetch metadata and no Origin.
+#[tokio::test]
+async fn a_source_loads_without_fetch_metadata_and_nothing_else_does() {
+    let f = Fixture::new();
+    // allow:raw_write a fixture source in a fresh temp dir
+    std::fs::write(f.site.join("doc.pdf"), "%PDF-").unwrap();
+    let mut request = f.request("GET", "/__moss/source/doc.pdf", json!(null));
+    request.headers_mut().remove("origin");
+    request.headers_mut().remove("sec-fetch-site");
+    assert_eq!(f.send(request).await.status(), StatusCode::UNAUTHORIZED);
+    let (_, cookie) = f.enrolled().await;
+    let bare = |method: &str, path: &str, site: Option<&str>| {
+        let mut request = f.request(method, path, json!(null));
+        let headers = request.headers_mut();
+        headers.remove("origin");
+        headers.remove("sec-fetch-site");
+        if let Some(site) = site {
+            headers.insert("sec-fetch-site", site.parse().unwrap());
+        }
+        headers.insert("cookie", cookie.parse().unwrap());
+        f.send(request)
+    };
+    assert_eq!(bare("GET", "/__moss/source/doc.pdf", None).await.status(), StatusCode::OK);
+    assert_eq!(bare("GET", "/__moss/source/doc.pdf", Some("cross-site")).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(bare("POST", "/__moss/source/doc.pdf", None).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(bare("GET", "/__moss/config", None).await.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_minted_link_comes_with_its_qr_code() {
+    let f = Fixture::new();
+    let (_, cookie) = f.enrolled().await;
+    let mut request = f.request("POST", "/__moss/sign-in/new", json!({}));
+    request.headers_mut().insert("cookie", cookie.parse().unwrap());
+    let response = f.send(request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+    let url = value["url"].as_str().unwrap();
+    assert!(url.starts_with("https://editor.example.test/__moss/sign-in#code="), "{url}");
+    assert_eq!(value["qr_svg"].as_str().unwrap(), crate::build::media::qr::generate_qr_svg(url).unwrap());
+}
+
+/// The preview is same-site with the UI, so a page on the preview origin
+/// sends the session cookie with a request to the UI. The UI never admits
+/// that origin, at loopback or behind the public URL.
+#[tokio::test]
+async fn the_ui_refuses_a_write_from_the_preview_origin() {
+    let f = Fixture::new();
+    let (_, cookie) = f.enrolled().await;
+    for (host, origin) in [
+        ("editor.example.test", "https://editor.example.test:444"),
+        ("localhost:62001", "http://localhost:62000"),
+    ] {
+        for site in ["same-site", "same-origin"] {
+            let mut request = f.request("POST", "/__moss/mutate/save_editor_content", json!({}));
+            let headers = request.headers_mut();
+            headers.insert("host", host.parse().unwrap());
+            headers.insert("origin", origin.parse().unwrap());
+            headers.insert("sec-fetch-site", site.parse().unwrap());
+            headers.insert("cookie", cookie.parse().unwrap());
+            forbidden(f.send(request).await).await;
+        }
+    }
+}
+
+/// Under HTTPS the session cookie is `Secure`, both where it is set and
+/// where each admitted request renews it; plain loopback HTTP cannot carry one.
+#[tokio::test]
+async fn the_session_cookie_is_secure_under_https() {
+    let f = Fixture::new();
+    let (_, cookie) = f.enrolled().await;
+    let renewed = |host: &'static str, origin: &'static str| {
+        let mut request = f.request("POST", PROBE, json!({}));
+        let headers = request.headers_mut();
+        headers.insert("host", host.parse().unwrap());
+        headers.insert("origin", origin.parse().unwrap());
+        headers.insert("cookie", cookie.parse().unwrap());
+        let f = &f;
+        async move { f.send(request).await.headers()["set-cookie"].to_str().unwrap().to_owned() }
+    };
+    assert!(renewed("editor.example.test", "https://editor.example.test").await.contains("; Secure"));
+    assert!(!renewed("localhost:62001", ORIGIN).await.contains("Secure"));
 }

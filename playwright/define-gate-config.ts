@@ -129,6 +129,8 @@ interface GateConfigOptions {
   outputDir?: string;
   /** notebook-loads' JupyterLite boot needs more than Playwright's own default per-test timeout. */
   timeout?: number;
+  /** Run the chromium project on Chromium's full build rather than the headless shell, which lacks the PDF viewer. */
+  fullChromium?: boolean;
 }
 
 export function defineGateConfig(options: GateConfigOptions) {
@@ -151,7 +153,10 @@ export function defineGateConfig(options: GateConfigOptions) {
     outputDir: options.outputDir ?? `../target/test-tmp/playwright-${options.gate}`,
     ...(options.timeout ? { timeout: options.timeout } : {}),
     use: options.use ?? {},
-    projects: engines.map((engine) => ENGINE_PROJECT[engine]),
+    projects: engines.map((engine) =>
+      engine === 'chromium' && options.fullChromium
+        ? { ...ENGINE_PROJECT.chromium, use: { ...ENGINE_PROJECT.chromium.use, channel: 'chromium' } }
+        : ENGINE_PROJECT[engine]),
     ...(webServer ? { webServer } : {}),
   });
 }

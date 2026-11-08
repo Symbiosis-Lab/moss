@@ -44,12 +44,12 @@ impl Fixture {
             auth: auth.clone(),
             site_root: site.clone(),
             assets: ASSETS,
-            public_url: Some(PublicOrigin::parse("https://editor.example.test").unwrap()),
+            public_url: Some(PublicUrl::new(PublicOrigin::parse("https://editor.example.test").unwrap(), None).unwrap()),
         };
         let app = super::router(
             config,
             62001,
-            "https://preview.example.test".into(),
+            62000,
             Some(super::super::InvokeCtx::standalone()),
             Arc::new(std::sync::RwLock::new(site.clone())),
             super::super::HostKind::Cli,

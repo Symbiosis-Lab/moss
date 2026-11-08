@@ -45,6 +45,8 @@ pub const MOSS_HEALTH_MARKER: &str = "\"moss-preview-server\"";
 /// alive on the port. A field schema 2 introduces needs a `schema >= 2` gate,
 /// not presence alone — an older server has no `folder_id`, not an empty
 /// one, and `>=` keeps a future schema-3 reader accepting this body too.
+/// [`readiness_only`] is schema 2 with no `folder_id` either, so a reader
+/// treats a missing `folder_id` as "not confirmed", whatever the schema.
 /// `folder_id` is JSON `null` (never `""`) when the served directory
 /// resolves to no vault.
 ///
@@ -83,6 +85,16 @@ pub(crate) async fn moss_health_handler(
         .header("content-type", "application/json; charset=utf-8")
         .header("cache-control", "no-store")
         .body(axum::body::Body::from(moss_health_body(folder_id.as_deref(), std::process::id())))
+        .unwrap()
+}
+
+/// The health answer for a caller without credentials behind a public URL:
+/// that moss is here, and nothing of the folder or the process.
+pub(crate) fn readiness_only() -> axum::response::Response<axum::body::Body> {
+    axum::response::Response::builder()
+        .header("content-type", "application/json; charset=utf-8")
+        .header("cache-control", "no-store")
+        .body(axum::body::Body::from(format!("{{\"server\":{MOSS_HEALTH_MARKER},\"schema\":2}}")))
         .unwrap()
 }
 
@@ -145,9 +157,12 @@ pub fn env_port_base() -> u16 {
 /// [`super::ownership::find_live_owner`]'s one-shot discovery probe have in
 /// common — see [`blocking_get`] for why the retry policy around it is not
 /// shared too.
-fn blocking_get_sync(url: &str) -> Result<String, ureq::Error> {
-    ureq::get(url)
-        .timeout(std::time::Duration::from_secs(1))
+fn blocking_get_sync(url: &str, token: Option<&str>) -> Result<String, ureq::Error> {
+    let mut request = super::carrier_token::agent(std::time::Duration::from_secs(1)).get(url);
+    if let Some(token) = token {
+        request = request.set(super::carrier_token::TOKEN_HEADER, token);
+    }
+    request
         .call()
         .map(|resp| resp.into_string().unwrap_or_default())
 }
@@ -159,8 +174,8 @@ fn blocking_get_sync(url: &str) -> Result<String, ureq::Error> {
 /// this collapsed shape throws away. [`find_live_owner`] has no such
 /// distinction to make — any failure at all simply means "not a confirmed
 /// live owner" — so it reuses the plain GET without the retry wrapper.
-pub(crate) async fn blocking_get(url: String) -> Result<String, String> {
-    match tokio::task::spawn_blocking(move || blocking_get_sync(&url)).await {
+pub(crate) async fn blocking_get(url: String, token: Option<String>) -> Result<String, String> {
+    match tokio::task::spawn_blocking(move || blocking_get_sync(&url, token.as_deref())).await {
         Ok(Ok(body)) => Ok(body),
         Ok(Err(e)) => Err(e.to_string()),
         Err(e) => Err(format!("probe task panicked: {e}")),
@@ -178,7 +193,7 @@ pub async fn verify_server_ready(port: u16) -> Result<(), String> {
 
     for attempt in 1..=max_attempts {
         let url_clone = url.clone();
-        let result = tokio::task::spawn_blocking(move || blocking_get_sync(&url_clone)).await;
+        let result = tokio::task::spawn_blocking(move || blocking_get_sync(&url_clone, None)).await;
 
         match result {
             Ok(Ok(body)) => {
@@ -317,6 +332,21 @@ pub(super) async fn bind_fixed(
     if port == 0 { return Err("a fixed UI port must be nonzero".into()); }
     let (v4, v6) = try_bind_dual_stack(port).await?;
     Ok((port, v4, v6))
+}
+
+/// The preview's listeners. Behind a public URL a proxy forwards to the
+/// preview's port, so it binds exactly that port or fails naming it; on
+/// loopback alone it scans up from it.
+pub(super) async fn bind_preview(
+    port: u16,
+    behind_proxy: bool,
+) -> Result<(u16, tokio::net::TcpListener, tokio::net::TcpListener), String> {
+    if behind_proxy {
+        return bind_fixed(port)
+            .await
+            .map_err(|e| format!("the preview cannot listen on port {port}, where the proxy sends it: {e}"));
+    }
+    bind_with_scan(port).await
 }
 
 /// Serve `app` on both loopback listeners until `shutdown_rx` fires, then

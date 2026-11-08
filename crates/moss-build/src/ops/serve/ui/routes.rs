@@ -108,7 +108,11 @@ pub(crate) fn mint_router(auth: Arc<dyn UiAuth>, origin: String) -> Router {
         let (auth, origin) = (auth.clone(), origin.clone());
         async move {
             match auth.mint_sign_in() {
-                Ok(link) => Json(serde_json::json!({"url": format!("{origin}{}", link.url_path())})).into_response(),
+                Ok(link) => {
+                    let url = format!("{origin}{}", link.url_path());
+                    let qr = crate::build::media::qr::generate_qr_svg(&url).ok();
+                    Json(serde_json::json!({"url": url, "qr_svg": qr})).into_response()
+                }
                 Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
             }
         }

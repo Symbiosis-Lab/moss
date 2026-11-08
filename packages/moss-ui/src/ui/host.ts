@@ -186,6 +186,13 @@ export interface UiHost {
    */
   pickFiles(filters: FileFilter[], multiple: boolean, dirFor?: (fileName: string) => Promise<string>): Promise<string[]>;
 
+  /**
+   * The address the preview server is reached at, where the host knows it
+   * better than `http://localhost:<port>`: a browser reaches it at the host
+   * it reached the UI by, or at a public origin.
+   */
+  previewUrl?: () => string;
+
   // ── What a host with files on disk and windows of its own adds (the desktop) ──
 
   /** The editor beside the preview. */

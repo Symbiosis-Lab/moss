@@ -164,6 +164,7 @@ const TOPIC_SUMMARIES: &[(&str, &str)] = &[
     ("authoring", "read to style or write pages: styling rungs, dark mode, hero, gallery, lists"),
     ("comments", "read to review, hide or unhide a site's comments before publishing"),
     ("debugging", "read when a build, plugin or shortcode misbehaves: logs, build diffs, preview checks"),
+    ("editing", "read to edit in a browser, from another device, or with moss on a server behind a proxy"),
     ("example", "read when starting a new site: the canonical folder shape and file contents to copy"),
     ("import-and-redesign", "read to import an existing site and redesign it in moss rather than copy it"),
     ("importing", "read to convert an existing website or a folder of files into a moss project"),

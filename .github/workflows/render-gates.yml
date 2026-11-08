@@ -29,6 +29,7 @@ on:
       - 'crates/moss-core/**'
       - 'crates/moss-cli/**'
       - 'packages/moss-syntax/**'
+      - 'packages/moss-ui/**'
       - 'Cargo.lock'
       - 'pnpm-lock.yaml'
       - '.github/workflows/render-gates.yml'
@@ -85,7 +86,7 @@ jobs:
       # under what merging workflows (or a cross-workflow run-id lookup) to
       # share a build would be worth.
       - name: Build moss-cli
-        run: cargo build -p moss-cli
+        run: bash scripts/build-moss-cli.sh
 
       # Playwright browser cache. A cache hit means the browsers are present
       # but system packages may not be, so install-deps runs without a full
@@ -145,7 +146,7 @@ jobs:
 
       # Compiled here rather than downloaded, same reason as the Chromium job above.
       - name: Build moss-cli
-        run: cargo build -p moss-cli
+        run: bash scripts/build-moss-cli.sh
 
       # Same cache mechanics as the Chromium job; the path is macOS's own
       # Playwright cache location, not Linux's.

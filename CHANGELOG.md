@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- `moss edit --serve` serves the editor to any browser, on this computer or another device. Behind an HTTPS proxy, `--public-url` names the address it is reached at; `moss guide editing` walks through both.
 - `[site].color_scheme` accepts `"auto"` (default), `"light"` or `"dark"`. Fixed palettes apply before first paint, keep browser chrome and preview consistent, and omit only the theme toggle while retaining search and language controls.
 
 - The engine announces `SourceContentChanged` with the paths of the pages (and the four `.moss` sources the editor reloads) whose bytes the watcher saw change, before the rebuild starts, so an editor reloads a page another program rewrote without waiting for the build, and even when the build fails.

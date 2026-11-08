@@ -5,6 +5,7 @@ use super::{
 };
 use axum::{
     body::Body,
+    extract::Extension,
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -26,15 +27,15 @@ pub struct UiOriginConfig {
     pub port: UiPort,
     pub assets: &'static [super::assets::UiAsset],
     pub auth: Arc<dyn UiAuth>,
-    /// Optional canonical HTTPS origin exposed by a proxy.
-    pub public_url: Option<super::PublicOrigin>,
+    /// Where a proxy serves the UI and the preview, when one does.
+    pub public_url: Option<super::PublicUrl>,
     pub site_root: PathBuf,
 }
 
 impl UiOriginConfig {
     /// The origin sign-in links name: the public one when set.
     pub(crate) fn origin(&self, port: u16) -> String {
-        self.public_url.as_ref().map_or_else(|| format!("http://localhost:{port}"), |p| p.as_str().to_owned())
+        self.public_url.as_ref().map_or_else(|| format!("http://localhost:{port}"), |p| p.ui.as_str().to_owned())
     }
 
     pub(crate) fn validate(
@@ -73,11 +74,17 @@ impl Boundary {
             && headers
                 .get("sec-fetch-dest")
                 .is_some_and(|v| v == "document");
+        // A browser's PDF plugin fetches a source with no fetch metadata. The
+        // strict session cookie never rides on a cross-site request, so a
+        // source read without metadata is admitted here and nowhere else.
+        let source_read = matches!(*request.method(), axum::http::Method::GET | axum::http::Method::HEAD)
+            && request.uri().path().starts_with("/__moss/source/");
         let fetch_ok = sign_in_page
-            || match headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
-                Some("same-origin") => true,
-                Some("none") => navigation,
-                _ => false,
+            || match headers.get("sec-fetch-site").map(|v| v.as_bytes()) {
+                Some(b"same-origin") => true,
+                Some(b"none") => navigation,
+                None => source_read,
+                Some(_) => false,
             };
         if !fetch_ok {
             super::super::trust_boundary::drain_body(request.into_body()).await;
@@ -113,25 +120,37 @@ impl Boundary {
 pub(crate) fn router(
     config: UiOriginConfig,
     port: u16,
-    preview_url: String,
+    preview_port: u16,
     ctx: Option<InvokeCtx>,
     site_dir: Arc<RwLock<PathBuf>>,
     kind: super::super::ownership::HostKind,
     notify: Arc<tokio::sync::Notify>,
 ) -> Result<Router, String> {
-    let origins = super::super::trust_boundary::origins(port, config.public_url.as_ref());
-    if origins.iter().any(|(origin, _)| *origin == preview_url) {
+    if port == preview_port {
         return Err("UI and preview must have separate origins".into());
     }
+    let origins = super::super::trust_boundary::origins(port, config.public_url.as_ref().map(|p| &p.ui));
     let origin = config.origin(port);
+    let public_url = config.public_url.as_ref().map(|p| p.ui.as_str().to_owned());
+    // A browser reaches the preview at the host it reached the UI by: a
+    // cookie is scoped to the host, not the port.
+    let public_preview = config.public_url.as_ref().map(|p| p.preview.as_str().to_owned());
     let boundary = Boundary { auth: config.auth.clone(), origins };
     let carrier = super::carrier::router(config.auth.clone(), origin, ctx, site_dir, kind, notify);
     let host = super::assets::router(config.assets);
     Ok(host
         .route(
             "/__moss/config",
-            axum::routing::get(move || async move {
-                axum::Json(serde_json::json!({"preview_url": preview_url}))
+            axum::routing::get(move |Extension(origin): Extension<super::routes::RequestOrigin>| async move {
+                let preview_url = match &public_preview {
+                    Some(preview) if public_url.as_deref() == Some(origin.0.as_str()) => preview.clone(),
+                    _ => {
+                        let mut url = url::Url::parse(&origin.0).expect("an admitted origin parses");
+                        url.set_port(Some(preview_port)).expect("an http origin takes a port");
+                        url.origin().ascii_serialization()
+                    }
+                };
+                axum::Json(serde_json::json!({"preview_url": preview_url, "public_url": public_url}))
             }),
         )
         .merge(super::routes::router(config.auth))
@@ -141,7 +160,8 @@ pub(crate) fn router(
         }))
         .layer(middleware::from_fn(|request, next: Next| async move {
             let mut response = next.run(request).await;
-            response.headers_mut().append("content-security-policy", "frame-ancestors 'none'".parse().unwrap());
+            // The entry page frames the shell and the editor; nothing else may frame either.
+            response.headers_mut().append("content-security-policy", "frame-ancestors 'self'".parse().unwrap());
             response
         })))
 }
@@ -164,7 +184,7 @@ pub(crate) async fn bind(server: &super::super::ServeConfig, preview_port: u16) 
     let app = router(
         config.clone(),
         port,
-        format!("http://localhost:{preview_port}"),
+        preview_port,
         server.invoke.clone(),
         server.site_dir_cell.clone(),
         server.kind,

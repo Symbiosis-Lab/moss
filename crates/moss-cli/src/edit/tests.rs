@@ -1,6 +1,11 @@
 use super::*;
 use std::cell::RefCell;
 
+fn public(origin: &str, preview_port: Option<u16>) -> moss_build::ops::serve::ui::PublicUrl {
+    let ui = moss_build::ops::serve::ui::PublicOrigin::parse(origin).unwrap();
+    moss_build::ops::serve::ui::PublicUrl::new(ui, preview_port).unwrap()
+}
+
 fn parse(args: &[&str]) -> Result<EditArgs, String> {
     EditArgs::parse(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
 }
@@ -25,9 +30,12 @@ fn flags_and_default_folder() {
             serve: true,
             no_browser: true,
             port: Some(9000),
-            public_url: Some(moss_build::ops::serve::ui::PublicOrigin::parse("https://edit.example.test").unwrap())
+            public_url: Some(public("https://edit.example.test", None)),
         }
     );
+    let funnel = parse(&["--port", "9000", "--public-url", "https://edit.example.test", "--public-preview-port", "8443"]).unwrap();
+    assert_eq!(funnel.public_url, Some(public("https://edit.example.test", Some(8443))));
+    assert_eq!(funnel.public_url.unwrap().preview.as_str(), "https://edit.example.test:8443");
     assert_eq!(parse(&["--", "-garden"]).unwrap().folder, "-garden");
     for args in [
         vec!["--port"],
@@ -38,6 +46,11 @@ fn flags_and_default_folder() {
         vec!["a", "b"],
         vec!["--public-url=http://example.test"],
         vec!["--public-url=https://example.test/path"],
+        // A proxy forwards to fixed ports.
+        vec!["--public-url=https://example.test"],
+        vec!["--port=9000", "--public-preview-port=8443"],
+        vec!["--port=9000", "--public-url=https://example.test", "--public-preview-port=443"],
+        vec!["--port=9000", "--public-url=https://example.test", "--public-preview-port=0"],
     ] {
         assert!(parse(&args).is_err(), "accepted {args:?}");
     }

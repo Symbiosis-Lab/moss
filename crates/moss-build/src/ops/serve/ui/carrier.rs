@@ -27,6 +27,7 @@ pub(super) fn router(
 ) -> Router {
     let invoke_ctx = ctx.clone();
     let invoke_dir = site_dir.clone();
+    let source_dir = site_dir.clone();
     super::routes::mint_router(auth.clone(), origin)
         .route(
             "/__moss/invoke/*cmd",
@@ -57,6 +58,14 @@ pub(super) fn router(
             ),
         )
         .route("/__moss/events", get(super::super::events::handle_events))
+        // The editor shows a page's images from its source, behind the session.
+        .route("/__moss/source/*path", get({
+            let dir = source_dir;
+            move |Path(path): Path<String>| {
+                let dir = dir.clone();
+                async move { super::super::router::source_asset_route(dir, path).await }
+            }
+        }))
         .route(
             "/__moss/upload",
             post(

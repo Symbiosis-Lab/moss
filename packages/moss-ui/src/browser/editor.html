@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>moss Editor</title>
+  <!-- Apply theme BEFORE CSS parses so the initial paint uses the right
+       custom-property values. The shell and the editor share an origin, so the
+       override the shell's theme toggle writes to localStorage is readable here. -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("preview-theme");
+        var prefers = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var theme = saved || (prefers ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) { /* localStorage blocked — fall through to defaults */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="../ui/editor/editor.css" />
+</head>
+<body>
+  <div class="moss-editor" id="moss-editor-root">
+    <!-- Nav surface: breadcrumb titlebar + expandable tree (CSS grid) -->
+    <div class="nav-surface" id="nav-surface">
+      <div class="nav-grid" id="nav-grid">
+        <!-- Cold-start nav skeleton: clone of the .nav-bc-strip box (same
+             height + hairline) with one shimmer pill. FileTree.mount APPENDS
+             without clearing, so editor-main dismisses this explicitly right
+             before the tree mounts (editor-skeleton.ts); on the no-project
+             path the init().finally failsafe removes it instead. -->
+        <div class="moss-nav-skeleton" id="moss-nav-skeleton" aria-hidden="true"></div>
+      </div>
+      <div class="nav-right" id="nav-right">
+        <!-- Untitled-first create (＋ and its ▾ menu — create-flow.ts).
+             data-tooltip is written dynamically ("New page in {folder}"),
+             so no static data-i18n-tooltip here. -->
+        <!-- New-document glyph (Lucide file-plus), NOT a bare "+": the property
+             bar below owns "+"/"+N" for add-property, and two bare plusses on
+             one narrow panel clash. -->
+        <button class="editor-create-btn" id="editor-create-btn" data-tooltip-position="bottom" data-tooltip-kbd="⌘N">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h6"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
+        </button>
+        <button class="editor-create-btn editor-create-caret" id="editor-create-caret">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <!-- Hidden at rest: wireLayoutButton shows it only in full-width mode
+             (the exit affordance). Static HTML must match, or the icon flashes
+             during boot before init hides it. -->
+        <button class="editor-layout-btn" id="editor-layout-btn" style="display: none" aria-label="Toggle full width" data-i18n-aria="toolbar.toggle_full_width" data-tooltip-position="bottom" data-tooltip="Toggle full width" data-i18n-tooltip="toolbar.toggle_full_width" data-tooltip-kbd="⌘⇧E">
+          <!-- Split icon (Lucide maximize-2): shown in split mode, click to expand -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        </button>
+        <!-- The save status; moves into the bottom band once that mounts (doc-state-cluster.ts). -->
+        <span id="moss-save-status" data-inline-task-anchor="save"></span>
+      </div>
+
+      <!-- Caption buttons, for a host that draws its own; a browser draws none. -->
+      <div class="nav-caption" id="nav-caption" data-tauri-drag-region>
+        <button
+          type="button"
+          id="moss-caption-minimize"
+          class="moss-caption-btn moss-caption-btn--minimize"
+          aria-label="Minimize"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M0 5h10" stroke="currentColor" stroke-width="1"/>
+          </svg>
+        </button>
+        <button
+          type="button"
+          id="moss-caption-maximize"
+          class="moss-caption-btn moss-caption-btn--maximize"
+          data-maximized="false"
+          aria-label="Maximize"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <rect class="moss-caption-maximize-icon" x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/>
+            <path class="moss-caption-restore-icon" d="M2.5 0.5h7v7h-2v-5.5h-5zM0.5 2.5h7v7h-7z" fill="none" stroke="currentColor" stroke-width="1"/>
+          </svg>
+        </button>
+        <button
+          type="button"
+          id="moss-caption-close"
+          class="moss-caption-btn moss-caption-btn--close"
+          aria-label="Close"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Drag handle between nav and content -->
+    <div class="divider" id="divider"></div>
+
+    <!-- Frontmatter chips: hidden until markdown loads, then moved into the editor above the heading. -->
+    <div class="chip-bar" id="chip-bar" style="display: none"></div>
+
+    <!-- Why the preview shows what it does, for files with no page of their own. -->
+    <div class="preview-note" id="preview-note" data-i18n="editor.preview_note_site_wide" hidden>Site-wide · shows on every page</div>
+
+    <!-- Article heading — bound to filename, edit to rename -->
+    <div class="editor-heading" id="editor-heading" contenteditable="plaintext-only" spellcheck="false" data-empty="true"></div>
+
+    <!-- The editor, with a skeleton that paints before the script runs; every mount clears it (editor-skeleton.ts). -->
+    <div class="moss-editor-cm" id="moss-editor-cm">
+      <div class="moss-editor-skeleton" id="moss-editor-skeleton" aria-hidden="true">
+        <div class="moss-editor-skeleton__line moss-editor-skeleton__line--heading"></div>
+        <div class="moss-editor-skeleton__line"></div>
+        <div class="moss-editor-skeleton__line"></div>
+        <div class="moss-editor-skeleton__line moss-editor-skeleton__line--short"></div>
+      </div>
+    </div>
+
+    <!-- Untitled-first status line: "New page in {folder} · {filename} · Undo"
+         (create-flow.ts). Hidden except during an active create session. -->
+    <div class="create-status" id="moss-create-status" hidden></div>
+  </div>
+
+  <!-- Completion dropdown -->
+  <div class="dropdown" id="dropdown"></div>
+
+  <!-- Toast Notification Container -->
+  <div id="moss-toast-container" role="status" aria-live="polite"></div>
+
+  <!-- Fills the host record, then starts the editor. -->
+  <script type="module" src="./editor.ts"></script>
+</body>
+</html>

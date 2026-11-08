@@ -89,6 +89,15 @@ pub struct ViewerActivity {
 
 static ACTIVITY: OnceLock<watch::Sender<ViewerActivity>> = OnceLock::new();
 
+/// Held by every test that opens an event stream or navigates to a page:
+/// both move the one process-global viewer-activity signal, so what a test
+/// reads of it is only meaningful while no sibling can move it.
+#[cfg(test)]
+pub(crate) fn viewer_signal_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Watch the preview's viewers. The first call installs the signal; before
 /// it, a request skips it after one atomic load, so a process that never asks
 /// pays nothing for it.
@@ -230,12 +239,13 @@ fn event_stream(
 pub(crate) async fn handle_events(
     axum::Extension(session): axum::Extension<Arc<super::invoke::Session>>,
     browser: Option<axum::Extension<super::ui::auth::BrowserSession>>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+) -> impl axum::response::IntoResponse {
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
     let stream = event_stream(Subscription::open(), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned());
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    // A reverse proxy that buffers responses (nginx by default) would hold events back.
+    ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 /// Printed when a served build's `current` has caught up with the preview.

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>moss</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: Canvas; }
+      #moss-frames { position: fixed; inset: 0; display: flex; }
+      #moss-frames iframe { border: 0; height: 100%; min-width: 0; }
+      #moss-shell-frame { flex: 1 1 0; }
+      #moss-editor-frame { flex: 0 0 0; }
+      #moss-frames[data-editor="split"] #moss-editor-frame { flex: 0 0 min(50%, 720px); order: -1; }
+      #moss-frames[data-editor="full"] #moss-shell-frame { display: none; }
+      #moss-frames[data-editor="full"] #moss-editor-frame { flex: 1 1 0; }
+    </style>
+  </head>
+  <body>
+    <div id="moss-frames" data-editor="closed"></div>
+    <script type="module" src="./page.ts"></script>
+  </body>
+</html>

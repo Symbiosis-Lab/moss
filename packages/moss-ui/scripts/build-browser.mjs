@@ -1,15 +1,27 @@
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+// Builds the browser UI `moss edit --serve` serves into `dist-browser/`: the
+// entry page and the shell and editor frames it holds, each a page of the
+// same origin. `crates/moss-cli/build.rs` embeds that directory.
+import { build } from 'vite';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('../', import.meta.url);
-const out = new URL('dist-browser/', root);
-const script = await readFile(new URL('src/browser/placeholder.js', root));
-const hash = createHash('sha256').update(script).digest('hex').slice(0, 12);
-await rm(out, { recursive: true, force: true });
-await mkdir(new URL('assets/', out), { recursive: true });
-await writeFile(new URL(`assets/app-${hash}.js`, out), script);
-await writeFile(new URL('index.html', out), `<!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>moss editor</title><body><main><h1>moss editor</h1><p id="status">Connecting to moss…</p></main>
-<script type="module" src="/assets/app-${hash}.js"></script></body></html>
-`);
+const pages = new URL('../src/browser/', import.meta.url);
+const page = (name) => fileURLToPath(new URL(name, pages));
+
+await build({
+  configFile: false,
+  root: fileURLToPath(pages),
+  base: '/',
+  logLevel: 'warn',
+  build: {
+    outDir: fileURLToPath(new URL('../dist-browser/', import.meta.url)),
+    emptyOutDir: true,
+    target: 'es2022',
+    // The CLI gzips every file it embeds; a map would only add to it.
+    sourcemap: false,
+    rollupOptions: {
+      input: { index: page('index.html'), shell: page('shell.html'), editor: page('editor.html') },
+      // Hex, so the server can tell a hashed name and let a browser keep it.
+      output: { hashCharacters: 'hex' },
+    },
+  },
+});

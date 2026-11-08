@@ -286,6 +286,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `moss guide comments`.
 - **Building a site in more than one language** →
   `moss guide authoring`, Multilingual sites.
+- **Editing in a browser, from another device, or with moss on a server** → read `moss guide editing`.
 - **Putting the site online** → Publishing below. moss publishes to mosspub.com, to other built-in targets, or anywhere a deploy plugin reaches.
 
 ## Publishing

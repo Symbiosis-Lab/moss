@@ -1741,6 +1741,34 @@ async fn source_route_serves_vault_bytes_not_build_output() {
     let _ = shutdown_tx.send(());
 }
 
+/// Source files are served sandboxed: an SVG with a script in it arrives with
+/// a policy that runs no script, and its type is never sniffed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn source_route_serves_files_sandboxed() {
+    let vault = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let site_dir = vault.path().join(".moss/build.nosync/current");
+    std::fs::create_dir_all(&site_dir).unwrap();
+    std::fs::write(
+        vault.path().join("drawing.svg"),
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><script>parent.document.title = "ran"</script></svg>"#,
+    )
+    .unwrap();
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(Arc::new(std::sync::RwLock::new(site_dir)), 58650))
+        .await
+        .expect("Server should start");
+    let response = ureq::get(&format!("http://localhost:{port}/__moss/source/drawing.svg"))
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .expect("source route should answer");
+    assert_eq!(response.header("content-type"), Some("image/svg+xml"));
+    assert_eq!(
+        response.header("content-security-policy"),
+        Some("sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
+    );
+    assert_eq!(response.header("x-content-type-options"), Some("nosniff"));
+    let _ = shutdown_tx.send(());
+}
+
 /// The containment check survives the HTTP carrier.
 ///
 /// `%2e%2e` rather than a literal `..`: a literal one is normalized away by the
@@ -2868,14 +2896,7 @@ async fn read_carrier_walks_its_own_root_not_a_caller_supplied_one() {
 
 // ── The event carrier (`GET /__moss/events`) ─────────────────────────────────
 
-/// Held by every test that opens `/__moss/events` or navigates to a page:
-/// both move the one process-global viewer-activity signal, so what a test
-/// reads of it is only meaningful while no sibling can move it.
-static EVENT_STREAM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn event_stream_lock() -> std::sync::MutexGuard<'static, ()> {
-    EVENT_STREAM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
+use crate::ops::serve::events::viewer_signal_lock as event_stream_lock;
 
 /// Read one SSE record (up to the blank line) off a blocking reader, or give up.
 ///

@@ -4,6 +4,12 @@
 import type { ProgressUpdate } from '@symbiosis-lab/moss-ui';
 import { warn } from "../log";
 import { t } from "../i18n/index";
+import { host } from "../host";
+
+/** Where the preview server on `port` is reached: the host says, or loopback. */
+function previewServerUrl(port: number): string {
+  return host.previewUrl?.() ?? `http://localhost:${port}`;
+}
 
 /**
  * Coarse-grained pipeline stage, used by the progress panel to show a
@@ -283,7 +289,7 @@ export class PreviewState {
       // serve it right away while the rebuild continues in background.
       // Once serverUrl is set, subsequent progress events become "silent rebuild".
       if (update.port && update.is_empty === false) {
-        this.serverUrl = `http://localhost:${update.port}`;
+        this.serverUrl = previewServerUrl(update.port);
         this.status = { type: 'ready', url: this.serverUrl };
         return this.status;
       }
@@ -301,7 +307,7 @@ export class PreviewState {
     // always go to `ready`. Empty-ness is recorded separately for the
     // app shell's onboarding decision.
     if (update.port) {
-      this.serverUrl = `http://localhost:${update.port}`;
+      this.serverUrl = previewServerUrl(update.port);
       this.lastEmpty = update.is_empty === true;
       this.status = { type: 'ready', url: this.serverUrl };
     } else if (this.serverFailure !== null) {

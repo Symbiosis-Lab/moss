@@ -42,7 +42,7 @@ async fn ui_mint_requires_strict_cookie_admission_and_returns_public_link() {
         let response = f.send(request).await;
         assert_eq!(response.status(), expected);
         if expected == StatusCode::OK {
-            let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
             let value: Value = serde_json::from_slice(&bytes).unwrap();
             let code = value["url"].as_str().unwrap().strip_prefix("https://editor.example.test/__moss/sign-in#code=").unwrap();
             assert_eq!(f.exchange(code).await.status(), StatusCode::NO_CONTENT);
@@ -71,7 +71,7 @@ async fn token_mint_refuses_cookie_and_uses_same_live_auth() {
         let response = app.clone().oneshot(request).await.unwrap();
         if credential == Some(("x-moss-token", token.as_str())) {
             assert_eq!(response.status(), StatusCode::OK);
-            let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
             let value: Value = serde_json::from_slice(&bytes).unwrap();
             let code = value["url"].as_str().unwrap().strip_prefix(&format!("{ORIGIN}/__moss/sign-in#code=")).unwrap();
             assert_eq!(f.exchange(code).await.status(), StatusCode::NO_CONTENT);
@@ -79,22 +79,31 @@ async fn token_mint_refuses_cookie_and_uses_same_live_auth() {
     }
 }
 
+/// The entry page frames the shell and the editor, so the origin may frame
+/// itself and nothing else may; the sign-in page is never framed.
 #[tokio::test]
-async fn ui_responses_forbid_framing_including_errors() {
+async fn ui_responses_are_framed_only_by_their_own_origin_including_errors() {
     let f = Fixture::new();
-    for path in ["/", "/bundle.js", "/missing", "/__moss/sign-in", "/__moss/sign-in/new"] {
+    let framing = |response: &Response| -> Vec<String> {
+        response.headers().get_all("content-security-policy").iter()
+            .filter_map(|v| v.to_str().unwrap().split(';').map(str::trim).find(|d| d.starts_with("frame-ancestors")).map(str::to_owned))
+            .collect()
+    };
+    for path in ["/", "/bundle.js", "/missing", "/__moss/sign-in/new"] {
         let response = f.send(f.request("GET", path, json!(null))).await;
-        assert!(response.headers().get_all("content-security-policy").iter()
-            .any(|v| v.to_str().unwrap().contains("frame-ancestors 'none'")), "{path}");
+        assert_eq!(framing(&response), ["frame-ancestors 'self'"], "{path}");
     }
+    let response = f.send(f.request("GET", "/__moss/sign-in", json!(null))).await;
+    assert!(framing(&response).contains(&"frame-ancestors 'none'".to_owned()));
     let mut request = f.request("GET", "/", json!(null));
     request.headers_mut().insert("host", "evil.test".parse().unwrap());
-    assert_eq!(f.send(request).await.headers()["content-security-policy"], "frame-ancestors 'none'");
+    assert_eq!(f.send(request).await.headers()["content-security-policy"], "frame-ancestors 'self'");
 }
 
 #[tokio::test(start_paused = true)]
 async fn revoked_signed_out_and_expired_streams_end_while_idle() {
     use http_body_util::BodyExt;
+    let _streams = crate::ops::serve::events::viewer_signal_lock();
     for action in ["revoke", "sign-out", "expire"] {
         let f = Fixture::new();
         let (id, cookie) = f.enrolled().await;
@@ -102,6 +111,7 @@ async fn revoked_signed_out_and_expired_streams_end_while_idle() {
         request.headers_mut().insert("cookie", cookie.parse().unwrap());
         let response = f.send(request).await;
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-accel-buffering"], "no");
         let mut body = response.into_body();
         // Poll once to establish the idle wait before revocation.
         assert!(tokio::time::timeout(std::time::Duration::from_secs(1), body.frame()).await.is_err());
@@ -130,6 +140,7 @@ async fn revoked_signed_out_and_expired_streams_end_while_idle() {
 #[tokio::test]
 async fn revoked_stream_cannot_deliver_queued_event() {
     use http_body_util::BodyExt;
+    let _streams = crate::ops::serve::events::viewer_signal_lock();
     let f = Fixture::new();
     let (id, cookie) = f.enrolled().await;
     let mut request = f.request("GET", "/__moss/events", json!(null));

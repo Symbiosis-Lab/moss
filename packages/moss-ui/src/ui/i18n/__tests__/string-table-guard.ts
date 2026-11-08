@@ -112,6 +112,10 @@ const BRAND_ALLOWLIST = new Set<string>(
     'publish.awaiting_advice',
     // `moss build` is the command a terminal runs, typed the same in every language.
     'appsettings.terminal_desc',
+    // `moss edit` is the command that serves the browser editor, typed the same everywhere.
+    'device.needs_https',
+    'browser.signed_out',
+    'browser.no_folder',
   ].flatMap((key) => [`zh-hans:${key}`, `zh-hant:${key}`]),
 );
 

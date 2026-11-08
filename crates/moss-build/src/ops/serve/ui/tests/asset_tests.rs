@@ -34,7 +34,7 @@ fn app(f: &Fixture) -> Router {
             assets: TABLE,
         },
         62001,
-        "http://localhost:62000".into(),
+        62000,
         None,
         Arc::new(std::sync::RwLock::new(f.site.clone())),
         super::super::super::HostKind::Cli,

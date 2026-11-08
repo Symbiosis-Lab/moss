@@ -44,8 +44,9 @@ fn execute(args: &[String]) -> Result<i32, String> {
     }
     let assets = crate::bundle::require_bundle()?;
     let auth = Arc::new(SignInLink::new(crate::sessions::session_file()?, &folder)?);
-    // `--port` fixes the UI and the preview scans from the next port; without
-    // it both scan, the preview from `MOSS_PREVIEW_PORT_BASE`.
+    // `--port` fixes the UI and puts the preview on the next port, exactly
+    // there behind a public URL; without it both scan, the preview from
+    // `MOSS_PREVIEW_PORT_BASE`.
     let (ui_port, port_base) = match parsed.port {
         Some(port) => (UiPort::Fixed(port), port.checked_add(1)),
         None => (UiPort::ScanFrom(8081), None),
@@ -60,13 +61,17 @@ fn execute(args: &[String]) -> Result<i32, String> {
     let serve = HeadlessServe {
         ui: Some(ui),
         port_base,
-        on_ready: Some(Arc::new(move |_, port| {
+        on_ready: Some(Arc::new(move |preview, port| {
             let port = port.ok_or("UI listener did not start")?;
+            if let Some(public) = &parsed.public_url {
+                println!("Proxy {} to http://127.0.0.1:{port}", public.ui.as_str());
+                println!("Proxy {} to http://127.0.0.1:{preview}", public.preview.as_str());
+            }
             let sign_in = auth.mint_sign_in()?;
             let local = format!("http://127.0.0.1:{port}{}", sign_in.url_path());
             let public = parsed.public_url.as_ref().map_or_else(
                 || local.clone(),
-                |origin| format!("{}{}", origin.as_str(), sign_in.url_path()),
+                |public| format!("{}{}", public.ui.as_str(), sign_in.url_path()),
             );
             present::present(
                 terminal,

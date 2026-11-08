@@ -63,6 +63,7 @@ export default defineConfig({
     projects: [
       { extends: true, test: { name: 'contract', environment: 'node', include: ['src/__tests__/**/*.test.ts'] } },
       { extends: true, test: { name: 'scripts', environment: 'node', include: ['scripts/__tests__/**/*.test.mjs'] } },
+      { extends: true, test: { name: 'browser', environment: 'jsdom', include: ['src/browser/**/*.test.ts'], setupFiles: UI_SETUP } },
       { extends: true, test: { name: 'ui-node', environment: 'node', include: UI_NODE_TESTS, setupFiles: UI_SETUP } },
       {
         extends: true,

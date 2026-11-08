@@ -301,9 +301,10 @@ fn read_record(folder: &Path) -> Option<OwnerRecord> {
 /// different folder now — been re-pointed at another folder without
 /// releasing this one's lock, which a later folder-switch change may do.
 ///
-/// The one HTTP check this performs reuses [`super::port::blocking_get`],
-/// the exact GET [`super::port::verify_server_ready`] already makes — not
-/// the whole of that function, because the two probes disagree on retry
+/// The one HTTP check this performs is [`super::port::blocking_get`], the
+/// GET [`super::port::verify_server_ready`] makes, with the folder's token,
+/// since an owner behind a public URL names its folder only to a token
+/// holder. It does not reuse the whole of that function, because the two probes disagree on retry
 /// policy as much as on what they're checking: `verify_server_ready` polls
 /// for up to a second while a server it already decided to wait for is
 /// still binding, where this is a single-shot "does anyone answer at all
@@ -311,16 +312,18 @@ fn read_record(folder: &Path) -> Option<OwnerRecord> {
 /// starting.
 ///
 /// `None` for every negative: no record, the record's process gone quiet,
-/// a 4xx/5xx, a body with no `folder_id` (an older moss, schema 1 — the
-/// schema's own doc comment calls for exactly this `>=` gate rather than a
-/// hard equality, so a newer schema 3 reader still accepts this one), or a
+/// a 4xx/5xx (a 401 for a token from before the owner published its own),
+/// a body with no `folder_id` (an older moss, schema 1 — the schema's own
+/// doc comment calls for exactly this `>=` gate rather than a hard equality,
+/// so a newer schema 3 reader still accepts this one — or an owner behind a
+/// public URL answering a caller without its token), or a
 /// `folder_id` that names a different folder (the same owner process, moved
 /// on).
 pub async fn find_live_owner(folder: &Path) -> Option<OwnerRecord> {
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let record = read_record(&canonical)?;
     let url = format!("{}{}", record.url, super::port::MOSS_HEALTH_PATH);
-    let body = super::port::blocking_get(url).await.ok()?;
+    let body = super::port::blocking_get(url, super::carrier_token::read(&canonical)).await.ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
     let schema = parsed.get("schema").and_then(serde_json::Value::as_u64).unwrap_or(0);
     if schema < 2 {
@@ -544,16 +547,15 @@ pub async fn request_yield(folder: &Path) -> Result<YieldOutcome, String> {
     };
     let vault = crate::vault::paths::VaultRoot::find_containing(&canonical)
         .ok_or_else(|| format!("{} is not inside a vault", canonical.display()))?;
-    let token_path = super::carrier_token::token_path(vault.path());
-    let token = std::fs::read_to_string(&token_path)
-        .map_err(|e| format!("could not read the HTTP carrier token at {}: {e}", token_path.display()))?;
+    let token = super::carrier_token::read(vault.path()).ok_or_else(|| {
+        format!("could not read the HTTP carrier token at {}", super::carrier_token::token_path(vault.path()).display())
+    })?;
     let url = format!("{}/__moss/yield", owner.url);
     let post_url = url.clone();
-    let token = token.trim().to_string();
     let result = tokio::task::spawn_blocking(move || {
-        ureq::post(&post_url)
+        super::carrier_token::agent(std::time::Duration::from_secs(5))
+            .post(&post_url)
             .set(super::carrier_token::TOKEN_HEADER, &token)
-            .timeout(std::time::Duration::from_secs(5))
             .send_string("")
     })
     .await

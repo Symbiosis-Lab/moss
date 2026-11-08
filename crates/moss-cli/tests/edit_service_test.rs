@@ -20,6 +20,17 @@ fn link(child: &ServedChild) -> String {
         .into()
 }
 
+/// A free port whose next port is free too, for the UI and the preview.
+fn free_pair() -> u16 {
+    loop {
+        let first = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = first.local_addr().unwrap().port();
+        if port < u16::MAX && std::net::TcpListener::bind(("127.0.0.1", port + 1)).is_ok() {
+            return port;
+        }
+    }
+}
+
 #[test]
 #[cfg_attr(moss_ui_bundle_missing, ignore = "needs the browser bundle built")]
 fn second_edit_mints_fresh_link_without_storing_codes() {
@@ -27,13 +38,19 @@ fn second_edit_mints_fresh_link_without_storing_codes() {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(site.path().join("index.md"), "# A garden\n").unwrap();
     std::fs::create_dir(home.path().join("moss.app")).unwrap();
+    let port = free_pair().to_string();
     let first = edit(
         site.path(),
         home.path(),
-        &["--no-browser", "--public-url", "https://edit.example.test"],
+        &["--no-browser", "--port", &port, "--public-url", "https://edit.example.test", "--public-preview-port", "8443"],
     );
     let first_link = link(&first);
     assert!(first_link.starts_with("https://edit.example.test/__moss/sign-in#code="));
+    // The proxy is told where both listeners are, the preview at the next public port.
+    let printed = joined(&first.stdout);
+    let preview = port.parse::<u16>().unwrap() + 1;
+    assert!(printed.contains(&format!("Proxy https://edit.example.test to http://127.0.0.1:{port}")), "{printed}");
+    assert!(printed.contains(&format!("Proxy https://edit.example.test:8443 to http://127.0.0.1:{preview}")), "{printed}");
     let mut second = edit(site.path(), home.path(), &[]);
     let second_link = link(&second);
     assert_eq!(

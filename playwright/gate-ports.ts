@@ -159,6 +159,8 @@ const GATE_PORT_KEYS = [
   'type-defaults',
   'closing-picture:wordless',
   'hero-links',
+  'browser-editor:ui',
+  'browser-editor:preview',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

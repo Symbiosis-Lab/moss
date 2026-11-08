@@ -1,0 +1,63 @@
+/* What the browser shell adds to the shared shell stylesheet. */
+
+/* Shaped like the edit button, at the titlebar's far end. */
+.moss-device-button {
+  width: var(--moss-pill-size);
+  height: var(--moss-pill-size);
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.moss-device-button:focus-visible {
+  box-shadow: 0 0 0 3px var(--moss-accent-light);
+  outline: none;
+}
+
+.moss-device-panel {
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  border: 0;
+  border-radius: var(--moss-radius-window);
+  background: var(--moss-color-bg);
+  color: var(--moss-color-text);
+  text-align: center;
+}
+
+.moss-device-panel::backdrop {
+  background: rgb(0 0 0 / 0.3);
+}
+
+.moss-device-panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+/* A QR code is read against white whatever the theme. */
+.moss-device-panel__qr {
+  display: block;
+  width: 12rem;
+  height: 12rem;
+  margin: 0 auto;
+  padding: 0.5rem;
+  background: #fff;
+  border-radius: 0.5rem;
+}
+
+.moss-device-panel input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-block: 0.5rem;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.moss-browser-notice {
+  margin: auto;
+  padding: 2rem;
+  max-width: 32rem;
+  text-align: center;
+  color: var(--moss-color-text);
+}

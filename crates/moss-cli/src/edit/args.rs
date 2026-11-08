@@ -1,4 +1,4 @@
-use moss_build::ops::serve::ui::PublicOrigin;
+use moss_build::ops::serve::ui::{PublicOrigin, PublicUrl};
 
 #[derive(Debug, Default, PartialEq)]
 pub struct EditArgs {
@@ -6,13 +6,14 @@ pub struct EditArgs {
     pub serve: bool,
     pub no_browser: bool,
     pub port: Option<u16>,
-    pub public_url: Option<PublicOrigin>,
+    pub public_url: Option<PublicUrl>,
 }
 
 impl EditArgs {
     pub fn parse(args: &[String]) -> Result<Self, String> {
         let mut parsed = Self::default();
         let mut folder = None;
+        let (mut public, mut preview_port) = (None, None);
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -29,24 +30,20 @@ impl EditArgs {
                     let (flag, inline) = arg
                         .split_once('=')
                         .map_or((arg, None), |(k, v)| (k, Some(v)));
-                    if !matches!(flag, "--port" | "--public-url") {
+                    if !matches!(flag, "--port" | "--public-url" | "--public-preview-port") {
                         return Err(format!("unknown edit option: {flag}"));
                     }
                     let value = inline
                         .or_else(|| args.next().map(String::as_str))
                         .filter(|s| !s.is_empty() && !s.starts_with('-'))
                         .ok_or_else(|| format!("{flag} needs a value"))?;
+                    let port = || {
+                        value.parse::<u16>().ok().filter(|p| *p > 0).ok_or(format!("{flag} must be between 1 and 65535"))
+                    };
                     match flag {
-                        "--port" => {
-                            parsed.port = Some(
-                                value
-                                    .parse::<u16>()
-                                    .ok()
-                                    .filter(|p| *p > 0)
-                                    .ok_or("--port must be between 1 and 65535")?,
-                            )
-                        }
-                        _ => parsed.public_url = Some(PublicOrigin::parse(value)?),
+                        "--port" => parsed.port = Some(port()?),
+                        "--public-preview-port" => preview_port = Some(port()?),
+                        _ => public = Some(PublicOrigin::parse(value)?),
                     }
                 }
                 _ => {
@@ -57,6 +54,13 @@ impl EditArgs {
             }
         }
         parsed.folder = folder.unwrap_or_else(|| ".".into());
+        match public {
+            // A proxy forwards to fixed ports: the UI's and the preview's next to it.
+            Some(_) if parsed.port.is_none() => return Err("--public-url needs --port".into()),
+            Some(public) => parsed.public_url = Some(PublicUrl::new(public, preview_port)?),
+            None if preview_port.is_some() => return Err("--public-preview-port needs --public-url".into()),
+            None => {}
+        }
         Ok(parsed)
     }
 }

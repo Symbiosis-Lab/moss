@@ -28,9 +28,10 @@
 //! shipped for CVE-2018-5702. The token-free routes are read-only; the mutating
 //! carriers add a token on top (`carrier_token`).
 //!
-//! Allowed origins derive from the bound port and, for the UI listener, one
-//! optional HTTPS public origin. A request must address one of them by `Host`,
-//! and an `Origin` it carries must be that same origin.
+//! Allowed origins derive from the bound port and, behind a public URL, one
+//! HTTPS origin per listener: the UI's, and the preview's at the next port. A
+//! request must address one of them by `Host`, and an `Origin` it carries must
+//! be that same origin.
 
 use axum::{
     body::Body,
@@ -55,6 +56,33 @@ impl PublicOrigin {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Where a proxy serves the UI and the preview: the same host, two ports.
+/// The preview needs an origin of its own, since it runs the site's scripts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicUrl {
+    pub ui: PublicOrigin,
+    pub preview: PublicOrigin,
+}
+
+impl PublicUrl {
+    /// The preview at `preview_port`, or at the UI's next port: a proxy
+    /// serving the UI at `https://host` then serves the preview at `https://host:444`.
+    pub fn new(ui: PublicOrigin, preview_port: Option<u16>) -> Result<Self, String> {
+        let mut url = url::Url::parse(ui.as_str()).expect("checked in parse");
+        let ui_port = url.port_or_known_default().expect("https has a default port");
+        let port = match preview_port {
+            Some(port) => port,
+            None => ui_port.checked_add(1).ok_or("the public URL's port leaves no next port for the preview")?,
+        };
+        if port == 0 || port == ui_port {
+            return Err("the public preview port must differ from the public URL's".into());
+        }
+        url.set_port(Some(port)).expect("an https URL takes a port");
+        let preview = PublicOrigin(url.origin().ascii_serialization());
+        Ok(Self { ui, preview })
     }
 }
 
@@ -99,22 +127,84 @@ pub(crate) fn admit_origin<'a>(headers: &HeaderMap, origins: &'a [(String, Strin
     Ok(origin)
 }
 
-/// Central middleware: reject a request whose `Host` is not loopback (`421`) or
-/// whose `Origin` is present-and-foreign (`403`), before it reaches any route.
+/// Who may address the preview: its loopback origins and, behind a public
+/// URL, its public origin too, where every request but the readiness check
+/// needs credentials.
+pub(crate) struct Admission {
+    origins: Vec<(String, String)>,
+    credentials: Option<Credentials>,
+}
+
+/// The carrier a local moss process reaches, and the folder whose token it holds.
+pub(crate) type Carrier = (super::invoke::InvokeCtx, std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>);
+
+/// What admits a request to a preview that has a public URL: a signed-in
+/// browser's session, or the carrier token a local moss process reads from
+/// the folder. A proxy forwards with whatever Host it likes from a loopback
+/// peer, so neither the Host nor the peer tells a remote reader from a local one.
+struct Credentials {
+    auth: std::sync::Arc<dyn super::ui::auth::UiAuth>,
+    carrier: Option<Carrier>,
+}
+
+/// What a request's credentials come to. A token that is presented and
+/// wrong is refused, never treated as no credential at all.
+enum Verdict {
+    Admitted,
+    Anonymous,
+    Refused,
+}
+
+impl Credentials {
+    fn judge(&self, request: &Request<Body>) -> Verdict {
+        if super::ui::sessions::cookie(request.headers()).is_some_and(|s| self.auth.admits(s)) {
+            return Verdict::Admitted;
+        }
+        if !request.headers().contains_key(super::carrier_token::TOKEN_HEADER) {
+            return Verdict::Anonymous;
+        }
+        match &self.carrier {
+            Some((ctx, dir)) if super::carrier_token::admit(ctx, dir, request).is_ok() => Verdict::Admitted,
+            _ => Verdict::Refused,
+        }
+    }
+}
+
+impl Admission {
+    pub(crate) fn new(port: u16, ui: Option<&super::ui::UiOriginConfig>, carrier: Option<Carrier>) -> Self {
+        let public = ui.and_then(|ui| Some((&ui.public_url.as_ref()?.preview, ui.auth.clone())));
+        Self {
+            origins: origins(port, public.as_ref().map(|(preview, _)| *preview)),
+            credentials: public.map(|(_, auth)| Credentials { auth, carrier }),
+        }
+    }
+}
+
+/// Central middleware: reject a request whose `Host` is not one of the
+/// preview's origins (`421`) or whose `Origin` is present-and-foreign
+/// (`403`), and, behind a public URL, one without credentials (`401`),
+/// before it reaches any route.
 ///
-/// Added as the outermost layer so it runs first — ahead of routing, `ServeDir`
-/// and bridge injection — and so it covers **every** route, including
-/// `/__moss_health/` (whose `127.0.0.1` Host and absent Origin both pass, which
-/// is why startup readiness is not special-cased here).
+/// Added as the outermost layer so it runs first — ahead of routing,
+/// `ServeDir` and bridge injection — and covers **every** route. Without
+/// credentials, `/__moss_health/` answers only that moss is here, and
+/// nothing of the folder or the process.
 pub async fn validate_host_origin(
-    origins: std::sync::Arc<Vec<(String, String)>>,
+    admission: std::sync::Arc<Admission>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Err(refusal) = admit_origin(request.headers(), &origins) {
+    if let Err(refusal) = admit_origin(request.headers(), &admission.origins) {
         return refusal.response(request).await;
     }
-    next.run(request).await
+    match admission.credentials.as_ref().map(|c| c.judge(&request)) {
+        None | Some(Verdict::Admitted) => next.run(request).await,
+        Some(Verdict::Anonymous) if request.uri().path() == super::port::MOSS_HEALTH_PATH => {
+            drain_body(request.into_body()).await;
+            super::port::readiness_only()
+        }
+        Some(Verdict::Anonymous | Verdict::Refused) => Refusal(StatusCode::UNAUTHORIZED, "Sign in to see this preview.").response(request).await,
+    }
 }
 
 /// Drain a request body a refusal is about to drop instead of route.
@@ -181,5 +271,19 @@ mod tests {
             assert!(PublicOrigin::parse(origin).is_err(), "{origin}");
         }
         assert!(PublicOrigin::parse("https://example.test:9443").is_ok());
+    }
+
+    #[test]
+    fn the_preview_answers_at_the_next_port_or_the_one_named() {
+        let preview = |origin: &str, port| {
+            PublicUrl::new(PublicOrigin::parse(origin).unwrap(), port).map(|p| p.preview.as_str().to_owned())
+        };
+        assert_eq!(preview("https://edit.example.test", None).unwrap(), "https://edit.example.test:444");
+        assert_eq!(preview("https://edit.example.test:9443", None).unwrap(), "https://edit.example.test:9444");
+        assert_eq!(preview("https://edit.example.test", Some(8443)).unwrap(), "https://edit.example.test:8443");
+        assert_eq!(preview("https://edit.example.test:8443", Some(443)).unwrap(), "https://edit.example.test");
+        for (origin, port) in [("https://edit.example.test", Some(443)), ("https://edit.example.test:65535", None), ("https://edit.example.test", Some(0))] {
+            assert!(preview(origin, port).is_err(), "{origin} {port:?}");
+        }
     }
 }

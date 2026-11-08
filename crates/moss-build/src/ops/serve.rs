@@ -48,11 +48,13 @@
 //!
 //! The server binds loopback only (dual-stack `127.0.0.1` + `[::1]`), and the
 //! OUTERMOST router layer (`trust_boundary::validate_host_origin`) refuses a
-//! `Host` that is not loopback (DNS-rebinding defence) and a foreign `Origin`
-//! with 403 before any handler runs — including on the token-gated tiers, so
-//! the token is never even inspected for a foreign caller. Which carrier a given moss instance mounts is governed
-//! by a one-carrier-per-instance rule: the routes exist only when the host
-//! threads an `InvokeCtx` into [`ServeConfig`].
+//! `Host` that is not one of its origins (DNS-rebinding defence) and a foreign
+//! `Origin` with 403 before any handler runs, so a foreign caller is refused
+//! before the token-gated tiers inspect a token. Behind a public URL it also
+//! answers the preview's public origin, and then admits on every Host only a
+//! signed-in browser or a local process holding the carrier token. Which
+//! carrier a given moss instance mounts is governed by a one-carrier-per-instance
+//! rule: the routes exist only when the host threads an `InvokeCtx` into [`ServeConfig`].
 //!
 //! ## Module layout
 //! - `router` — Axum router construction, [`ServeConfig`]/[`start_server`], middleware stack
