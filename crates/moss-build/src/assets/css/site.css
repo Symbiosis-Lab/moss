@@ -267,25 +267,42 @@
   --moss-section-text: var(--moss-section-text-dark, var(--moss-color-text));
 }
 
-/* Traditional Chinese — prioritize TC fonts.
-   Critical: 為/为, 體/体 etc. render with the wrong regional shape
-   if SC variants are picked first. */
+/* The Han-first stacks, for a Chinese, Japanese or Korean page and for Han
+   text on any page (a collage quote, vertical type). Fallback is per glyph, so
+   with Latin serifs in front a mixed heading would draw its Latin from one file
+   and its Han from another; the Latin behind the Han faces are high-contrast
+   transitionals, the closest match for a Ming's hairline horizontals. */
+:root {
+  --moss-font-body-han: -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
+    'Moss PingFang SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans SC', 'WenQuanYi Micro Hei', sans-serif;
+  --moss-font-heading-han:
+    'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSongti',
+    'NSimSun', 'SimSun', 'Source Serif 4', 'Source Serif Pro',
+    'Times New Roman', Times, serif;
+}
+
+/* Traditional Chinese: TC faces first, or 為/为 and 體/体 take the
+   Simplified shape. */
 html[lang="zh-Hant"] {
-  --moss-font-body: -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
+  --moss-font-body-han: -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
     'Moss PingFang TC', 'PingFang TC', 'Moss PingFang SC', 'PingFang SC',
     'Microsoft JhengHei', 'Noto Sans TC', sans-serif;
-  /* Same repair as the default stack in tokens.json, and the reason the two
-     stacks stay two: font-family has no lang awareness, so "TC faces first"
-     can only be said by a second stack. Han leads (fallback is per-glyph, and
-     a Latin serif in front splits every mixed heading between two files), the
-     Latin fallbacks behind are high-contrast transitionals rather than the
-     humanist Iowan/Palatino. */
-  --moss-font-heading:
+  --moss-font-heading-han:
     'Source Han Serif TC', 'Noto Serif CJK TC',
     'Songti TC', 'Songti SC', 'STSongti',
     'PMingLiU', 'MingLiU',
     'Source Serif 4', 'Source Serif Pro',
     'Times New Roman', Times, serif;
+}
+
+/* The tokens' defaults are Latin-first; these pages take the Han stacks.
+   Weight 320 is Regular for Han (the PingFang pin) and draws the system
+   sans's Latin a little lighter, to match PingFang's colour. */
+html:is([lang|="zh"], [lang|="ja"], [lang|="ko"]) {
+  --moss-font-body: var(--moss-font-body-han);
+  --moss-font-heading: var(--moss-font-heading-han);
+  --moss-font-weight-body: 320;
 }
 
 /* Hover and focus feedback on plain links and buttons.
@@ -6147,7 +6164,8 @@ hr::before {
   font-family: var(--moss-font-heading);
   font-size: var(--moss-title-size, var(--moss-read-title));
   font-weight: var(--moss-font-heading-weight);
-  line-height: 1.5;
+  /* Display leading for Latin; Han titles keep 1.5 (the rule after .moss-folder-title). */
+  line-height: 1.2;
   margin-block-start: 0;
   /* The page title is the largest, most prominent heading, so it earns more
      room below it than a subsection — a body h2 carries --moss-space-sm below
@@ -6168,7 +6186,7 @@ hr::before {
   font-family: var(--moss-font-heading);
   font-size: var(--moss-title-size, min(var(--moss-read-title), 2rem));
   font-weight: var(--moss-font-heading-weight);
-  line-height: 1.5;
+  line-height: 1.2;
   /* Mirror .moss-article-title's below-gap (--moss-space-md). The former
      --moss-space-xs (8px) left the largest heading on the page more cramped
      below than a body h2 is (--moss-space-sm below it), inverting the
@@ -6183,8 +6201,14 @@ hr::before {
   display: none;
 }
 
+/* Han titles need the room Latin display type does not. `:where()` keeps
+   these at the specificity of the title rules above. */
+:where(html:is([lang|="zh"], [lang|="ja"], [lang|="ko"])) :is(.moss-article-title, .article-title, .moss-folder-title) {
+  line-height: 1.5;
+}
+
 @media (width >= 48rem) {
-  .moss-folder-title {
+  :where(html:is([lang|="zh"], [lang|="ja"], [lang|="ko"])) .moss-folder-title {
     line-height: 1.6875;
   }
 }
@@ -9449,12 +9473,12 @@ a.moss-grid-card:hover {
 
 /* A collage quote the build marked `data-script="cjk"` (its letters are mostly
    Han or kana) is set in the CJK face, a step larger and tracked out, as such
-   text is. The heading stack leads with Han faces and switches to Traditional
-   ones on a Traditional page. A long quote keeps its smaller size and scales
+   text is: the Han heading stack, which switches to Traditional faces on a
+   Traditional page, on a page in any language. A long quote keeps its smaller size and scales
    with its tile like any other; a short one has no word to fit whole, so it
    takes the design's size without the tile cap. `--moss-font-quote` still wins when set. */
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"] blockquote {
-  font-family: var(--moss-font-quote, var(--moss-font-cjk, var(--moss-font-heading)));
+  font-family: var(--moss-font-quote, var(--moss-font-cjk, var(--moss-font-heading-han)));
   line-height: 1.6;
   letter-spacing: 0.08em;
 }
@@ -9468,7 +9492,7 @@ a.moss-grid-card:hover {
 }
 /* Japanese goes in Mincho faces first, so its kanji do not fall back to the Chinese forms. */
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"] blockquote:lang(ja) {
-  font-family: var(--moss-font-quote, var(--moss-font-cjk, 'Hiragino Mincho ProN', 'Yu Mincho', 'Source Han Serif JP', 'Noto Serif JP', var(--moss-font-heading)));
+  font-family: var(--moss-font-quote, var(--moss-font-cjk, 'Hiragino Mincho ProN', 'Yu Mincho', 'Source Han Serif JP', 'Noto Serif JP', var(--moss-font-heading-han)));
 }
 
 /* Horizontal inline space narrows on phones. Vertical typesetting keeps

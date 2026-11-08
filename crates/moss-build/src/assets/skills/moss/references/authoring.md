@@ -89,6 +89,9 @@ body[data-page="home"] .moss-hero { --moss-hero-object-position: center; }
 **The header's vertical spacing has three owners.** `header` has the top padding (`--moss-space-lg`) and a bottom padding (`--moss-space-sm`), `.main-nav` has a bottom margin (`--moss-space-sm`), and `.nav-content` has the padding above the hairline rule (`--moss-space-md`); change the one that owns the gap you see, in `.moss/theme/style.css`.
 
 **The side gutter.** `--moss-container-padding` is the page's side gutter from 48rem up (`2rem`); `--moss-container-padding-narrow` (default `1.5rem`) is the gutter below 48rem, so set that one to change a phone's gutter (`1rem` for 16px) and leave the desktop alone. The section headings in a page's text use the body face: `--moss-font-heading` sets the page, folder and card titles, and `--moss-font-section` sets the section headings.
+
+**Fonts by language.** moss's font stacks split by the page's language: Latin faces first by default, Han faces first on a Chinese, Japanese or Korean page. To change one language's faces on a bilingual site, set `--moss-font-heading` or `--moss-font-body` under `html:lang(en)` (or that language's tag) instead of `:root`, and the other language's pages keep theirs. Give each `@font-face` a `unicode-range` for the script its file covers, so text in the other script never downloads it.
+
 **The title size.** `--moss-title-size` sets the size of a page's title and a folder's title at every width (a length or `clamp()`). Unset, an article's title follows the reading size (40px by default) and a folder's title is 32px on a desktop and never larger on a phone.
 
 
@@ -195,7 +198,10 @@ Consequences you can rely on:
   still published for pages and HTML you write yourself. Only relative
   `url()`s to fonts and pictures up to 5 MB that sit inside `.moss/theme/` are
   rewritten; larger files, absolute paths, full URLs and `data:` URLs stay as
-  written.
+  written. A subset or instanced copy of an OFL font is a modified
+  version: where its licence names a Reserved Font Name (Source Serif's is
+  "Source"), rename the family inside the files and in `font-family`, and keep
+  the licence beside them.
 - For JS that needs theme assets, moss injects `window.mossTheme.base` (the
   `/_moss/theme/` URL) before your `.moss/theme/script.js` runs. Resolve assets
   with `new URL("asset.woff2", mossTheme.base)`.
