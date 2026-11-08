@@ -59,6 +59,23 @@ Detailed message for logs/debugging
 
 ***
 
+### offer?
+
+```ts
+optional offer?: 
+  | {
+  title: string;
+}
+  | null;
+```
+
+Work a `process` hook started by a build found and leaves to the person,
+because it would write their folder. moss shows `title` with a Sync
+action that runs the hook again as the person's own act. Ignored from any
+other run. Needs moss 0.15.20.
+
+***
+
 ### setup?
 
 ```ts

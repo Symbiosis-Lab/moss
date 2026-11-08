@@ -13,6 +13,8 @@ release heading.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-08
+
 ### Added
 
 - `HookResult.offer`: a `process` hook a build started returns `{ title }` ("3 new posts on Matters") for work it may not do itself; moss shows it with a Sync action that runs the hook as the person's act. Needs moss 0.15.20.

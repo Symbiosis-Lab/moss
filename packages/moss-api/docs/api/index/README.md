@@ -1427,8 +1427,8 @@ function executeBinary(options): Promise<ExecuteResult>;
 
 Execute an external binary
 
-Working directory is auto-detected from the runtime context
-(always the project root).
+The working directory is the project root unless `workingDir` names
+another inside the project, or a deploy hook's `site_dir`.
 
 #### Parameters
 

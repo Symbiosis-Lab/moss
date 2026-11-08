@@ -36,8 +36,10 @@ binary: a PATH directory, a standard install directory such as
 optional env?: Record<string, string>;
 ```
 
-Environment variables to add. Only `GIT_TERMINAL_PROMPT` and
-`COPYFILE_DISABLE` are accepted; any other name refuses the call.
+Environment variables to add. Only `GIT_TERMINAL_PROMPT`,
+`COPYFILE_DISABLE` and `GIT_INDEX_FILE` are accepted; any other name
+refuses the call. `GIT_INDEX_FILE` must be a deploy hook's
+`context.index_file`.
 
 ***
 
@@ -90,4 +92,7 @@ Timeout in milliseconds (default: 60000)
 optional workingDir?: string;
 ```
 
-Working directory relative to project root (default: project root itself)
+Working directory: relative to the project root, or absolute, such as a
+deploy hook's `context.site_dir` (default: the project root). moss refuses
+one outside the project, or inside its `.moss/` folder other than
+`site_dir`.
