@@ -256,6 +256,16 @@ jobs:
           cargo check -p moss-core --target aarch64-apple-ios
           cargo check -p moss-bindings --features wasm --target wasm32-unknown-unknown
           cargo check -p moss-bindings --features ffi --target aarch64-apple-ios
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Smoke test WebAssembly exports
+        run: |
+          wasm-pack build crates/moss-bindings --release --target web --out-dir "$RUNNER_TEMP/wasm-smoke" --no-pack -- --features wasm
+          node crates/moss-bindings/tests/exports.mjs "$RUNNER_TEMP/wasm-smoke"
       - name: Verify moss-core packages cleanly
         run: |
           cargo package -p moss-core --no-verify

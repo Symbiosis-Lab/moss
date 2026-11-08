@@ -52,35 +52,10 @@ enum SlotProvenance {
 /// both `footer.md` and `<lang>/footer.md` are recognized, while a deeper
 /// `docs/footer.md` is not.
 pub fn slot_from_filename(rel_path: &str) -> Option<Slot> {
-    if rel_path == "footer.md" {
-        Some(Slot::Footer)
-    } else {
-        None
-    }
+    moss_core::source_edit::policy::slot_from_filename(rel_path).map(|_| Slot::Footer)
 }
 
-/// Split a source-relative path into its language-tree bucket and the path
-/// within that tree. A leading recognized language folder (e.g. `zh-hans/`)
-/// becomes the bucket (lowercased); everything else falls in the default
-/// bucket (`None`).
-///
-/// - `"footer.md"` → `(None, "footer.md")`
-/// - `"zh-hans/footer.md"` → `(Some("zh-hans"), "footer.md")`
-/// - `"zh-hans/docs/footer.md"` → `(Some("zh-hans"), "docs/footer.md")`
-pub fn language_tree_split(rel_path: &str) -> (Option<String>, &str) {
-    match moss_core::home::lang_tree_prefix(rel_path) {
-        // `lang_tree_prefix` returns the first path segment, so stripping it
-        // plus its `/` leaves the rest of the path.
-        Some(prefix) => {
-            let rest = rel_path
-                .strip_prefix(prefix)
-                .and_then(|r| r.strip_prefix('/'))
-                .unwrap_or(rel_path);
-            (Some(prefix.to_lowercase()), rest)
-        }
-        None => (None, rel_path),
-    }
-}
+pub use moss_core::source_edit::policy::language_tree_split;
 
 /// Whether a markdown file at this relative path is reserved for slot use
 /// (e.g. `footer.md`) and must NOT generate a page.
@@ -101,7 +76,7 @@ pub fn is_excluded_from_pages(rel_path: &str) -> bool {
 /// Reserved filename of the welcome email at a language-tree root. It is
 /// slot-only like `footer.md` but fills no slot: it feeds
 /// `emit::welcome_email` instead, so `slot_from_filename` does not know it.
-pub const WELCOME_EMAIL_FILE: &str = "welcome-email.md";
+pub use moss_core::source_edit::policy::WELCOME_EMAIL_FILE;
 
 /// What the frontmatter says about whether a document ships, as the caller knows
 /// it. Callers fill the fields they have and leave the rest at the default, so a
@@ -528,25 +503,6 @@ mod tests {
 
     // Note: `Slot` enum round-trip is tested in `crate::build::slots::tests`.
     // The tests here exercise the footer-specific logic only.
-
-    #[test]
-    fn test_slot_from_filename_root_footer() {
-        assert_eq!(slot_from_filename("footer.md"), Some(Slot::Footer));
-    }
-
-    #[test]
-    fn test_slot_from_filename_ignores_subdir_paths() {
-        assert_eq!(slot_from_filename("zh-hans/footer.md"), None);
-        assert_eq!(slot_from_filename("docs/footer.md"), None);
-    }
-
-    #[test]
-    fn test_slot_from_filename_ignores_unrelated_files() {
-        assert_eq!(slot_from_filename("index.md"), None);
-        assert_eq!(slot_from_filename("about.md"), None);
-        assert_eq!(slot_from_filename("footer-left.md"), None);
-        assert_eq!(slot_from_filename("footer-right.md"), None);
-    }
 
     #[test]
     fn test_footer_md_excluded_from_pages() {

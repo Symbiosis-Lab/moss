@@ -1,11 +1,11 @@
-//! Pure editor-content cores — the tauri-free halves of `commands.rs`.
-//!
-//! Every function here is a plain data-in/data-out (or filesystem-only) core
-//! that a `#[tauri::command]` wrapper in `commands.rs` calls, and that the HTTP
-//! command carrier (`ops::serve::invoke`) reaches without a Tauri shell.
-//! Nothing in this file may name a `tauri::` type.
+//! Editor source I/O, history retention, and command error containment.
+//! Pure parse, save and source policy is re-exported from moss-core.
 
 use super::filesystem::EditorFileInfo;
+pub use moss_core::source_edit::{
+    SaveResult, ParsedFrontmatter, SourceRole, parse_frontmatter_of,
+    bootstrap_source_path, compute_heading_state_inner, describe_source_role_inner,
+};
 
 // ── Panic boundary ─────────────────────────────────────────────────────────
 
@@ -45,34 +45,6 @@ pub fn panic_message_from_payload(p: &(dyn std::any::Any + Send)) -> String {
 
 // ── Wire types ─────────────────────────────────────────────────────────────
 
-/// What an editor save did. A failure to write is an `Err`; this is the
-/// outcome of a save that did not fail.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-pub enum SaveResult {
-    /// Written. `hash` is the [`content_hash`] of the bytes now on disk, the
-    /// base the editor's next save must name. `displaced` is the history
-    /// version that keeps the bytes this save replaced, when the save was
-    /// asked to keep them.
-    Saved {
-        hash: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        displaced: Option<String>,
-    },
-    /// Nothing written: the file is no longer at this path, renamed or deleted
-    /// outside moss since it was opened. Not a failure — the file event that
-    /// follows says which, and the text stays unsaved in the editor until then.
-    Gone,
-    /// Nothing written: another writer changed the file since the editor last
-    /// read it. `disk` is what is there now, so the editor can merge it into
-    /// the unsaved text and save again with `disk.hash` as the base.
-    Conflict { disk: ParsedFrontmatter },
-    /// Nothing written: the save was to replace another writer's text and
-    /// moss could not keep that text first, because history is turned off for
-    /// the site or the file is in no site.
-    NotKept,
-}
-
 /// The event that tells an agent its text was replaced, for a save that kept
 /// it: the page's site-relative path, and the history version holding it.
 pub fn displaced_event(file_path: &str, result: &SaveResult) -> Option<crate::types::events::MossEvent> {
@@ -82,51 +54,6 @@ pub fn displaced_event(file_path: &str, result: &SaveResult) -> Option<crate::ty
 }
 
 pub use moss_core::page::content_hash;
-
-/// Frontmatter parsing result exposed to the frontend.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct ParsedFrontmatter {
-    /// [`content_hash`] of the file's bytes as read, before any newline
-    /// normalisation. Empty while [`still_arriving`](Self::still_arriving).
-    pub hash: String,
-    /// Parsed frontmatter as a JSON value (object).
-    pub frontmatter: serde_json::Value,
-    /// The markdown body (everything after the closing `---`).
-    pub body: String,
-    /// Whether the document had frontmatter delimiters.
-    pub has_frontmatter: bool,
-    /// serde_yaml error message when a delimited `---...---` block failed to
-    /// parse. `None` when it parsed cleanly or there was no block. The frontend
-    /// can render an "invalid YAML" banner off this so a malformed block flags an
-    /// error instead of silently showing a blank frontmatter form. `body` still
-    /// holds the whole document so the author can repair the raw block in CM6.
-    #[serde(default)]
-    pub frontmatter_error: Option<String>,
-    /// The file is real and its bytes are not here yet — a cloud placeholder
-    /// the provider has not handed back. Every other field is
-    /// empty, and the editor must mount its "still arriving" pane rather than
-    /// this document: an empty CM6 buffer over a file with content is the same
-    /// lie as the errno toast this replaced.
-    ///
-    /// Set only by [`classify_source_read`], which is the one place in the
-    /// editor that reads the cloud's answer. Never true together with content.
-    #[serde(default)]
-    pub still_arriving: bool,
-}
-
-impl ParsedFrontmatter {
-    /// The document for a source whose bytes are still in the cloud.
-    pub fn still_arriving() -> Self {
-        Self {
-            hash: String::new(),
-            frontmatter: serde_json::Value::Object(serde_json::Map::new()),
-            body: String::new(),
-            has_frontmatter: false,
-            frontmatter_error: None,
-            still_arriving: true,
-        }
-    }
-}
 
 /// Everything the editor webview needs for first paint, in one IPC round trip.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -157,33 +84,6 @@ pub struct EditorBootstrap {
     /// nothing about that folder is a site — and emitting `project_path` for it
     /// would be a lie the preview and deploy paths would act on.
     pub editor_root: Option<String>,
-}
-
-/// What a source file becomes on the built site. "Which slot, if any" rather
-/// than a boolean, so a future slot file needs no new command.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct SourceRole {
-    /// Layout slot this file fills INSTEAD of becoming a page (`"footer-left"`).
-    pub slot: Option<String>,
-    /// Language tree the file lives in (`"zh-hans"`); `None` for the default
-    /// tree. Reported for EVERY file, not just slot files: the shell compares
-    /// the tree of the slot file being edited against the tree of the page the
-    /// preview is showing, and needs the same answer for both sides of that
-    /// comparison. One command, one definition of "which language tree" —
-    /// asking a second command for the page side would be a place to drift.
-    pub language: Option<String>,
-    /// Whether the build turns this file's extension into a page at all.
-    ///
-    /// Reported so the preview follower can tell "not built YET" (keep
-    /// retrying on the next build) from "never a page" (stop, and say so).
-    /// It answers the extension question only — `slot` above still overrides
-    /// it, and `.moss/` inputs are a path fact the frontend already owns.
-    ///
-    /// This rides on `describe_source_role` rather than becoming a set in
-    /// TypeScript for the same reason `slot` does: the authority is
-    /// `build::scan::classify::is_page_source`, and a second copy of it is the
-    /// Rust↔TS parity trap.
-    pub can_be_page: bool,
 }
 
 // ── Reading a source file (the pending-read seam) ─────────────────────────────
@@ -231,17 +131,16 @@ fn classify_source_read(
     path: &std::path::Path,
     read: std::io::Result<String>,
 ) -> Result<Option<String>, String> {
-    match read {
-        Ok(text) => Ok(Some(text)),
+    use moss_core::source_edit::SourceRead;
+    let read = match read {
+        Ok(text) => SourceRead::Text(text),
         Err(e) if crate::build::icloud::is_offline_not_absent(path, &e) => {
-            log::info!(
-                "[editor] {} is still in the cloud — showing the waiting pane, not an error",
-                path.display()
-            );
-            Ok(None)
+            log::info!("[editor] {} is still in the cloud", path.display());
+            SourceRead::StillArriving
         }
-        Err(e) => Err(format!("Failed to read file '{}': {}", path.display(), e)),
-    }
+        Err(e) => SourceRead::Failed(e.to_string()),
+    };
+    moss_core::source_edit::classify_source_read(&path.to_string_lossy(), read)
 }
 
 /// [`read_vault_text`], on a thread that is allowed to block.
@@ -289,26 +188,6 @@ fn parse_frontmatter_at(file_path: &str) -> Result<ParsedFrontmatter, String> {
     }
 }
 
-/// The pure half: everything `parse_frontmatter` does once the bytes are in
-/// hand. Split out so the blocking read can happen off the async runtime.
-pub fn parse_frontmatter_of(content: String) -> Result<ParsedFrontmatter, String> {
-    let hash = content_hash(content.as_bytes());
-    let doc = moss_core::frontmatter::parse(&content);
-
-    // Convert the HashMap<String, serde_yaml::Value> to serde_json::Value
-    // for consistent JSON transport to the frontend.
-    let fm_json = super::frontmatter::yaml_map_to_json(&doc.frontmatter)?;
-
-    Ok(ParsedFrontmatter {
-        hash,
-        frontmatter: fm_json,
-        body: doc.body,
-        has_frontmatter: doc.frontmatter_range.is_some(),
-        frontmatter_error: doc.frontmatter_error,
-        still_arriving: false,
-    })
-}
-
 // ── editor_bootstrap cores ─────────────────────────────────────────────────
 
 /// THE root name for the editor bootstrap: resolved once, by the owner.
@@ -316,45 +195,6 @@ fn bootstrap_root_name(project_path: Option<&str>) -> Option<String> {
     crate::vault_root::VaultRoot::resolve(project_path?)
         .name_opt()
         .map(str::to_owned)
-}
-
-/// Resolve the editor URL's `source` param to an absolute path. The param is
-/// typically absolute (baked by `build_editor_url` from `resolve_page_source`),
-/// but the file-tree event domain is project-root-relative — accept both:
-/// absolute passes through, relative joins onto the project path (mirror of
-/// the app's own `toAbsolute`).
-fn resolve_bootstrap_source(project_path: Option<&str>, source: &str) -> Option<String> {
-    if std::path::Path::new(source).is_absolute() {
-        return Some(source.to_string());
-    }
-    project_path.map(|root| {
-        std::path::Path::new(root)
-            .join(source)
-            .to_string_lossy()
-            .to_string()
-    })
-}
-
-/// Which file `editor_bootstrap` should pre-parse, if any: only `.md`/
-/// `.markdown` sources (case-insensitive), resolved to an absolute path.
-///
-/// Pure — no I/O — so the async command can do the read itself, off the
-/// runtime. `None` here (and any later failure) just means the frontend falls
-/// back to its existing `parse_frontmatter` call.
-pub fn bootstrap_source_path(
-    project_path: Option<&str>,
-    source: Option<&str>,
-) -> Option<String> {
-    let source = source?;
-    let is_markdown = std::path::Path::new(source)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
-        .unwrap_or(false);
-    if !is_markdown {
-        return None;
-    }
-    resolve_bootstrap_source(project_path, source)
 }
 
 /// Read-and-parse counterpart of [`bootstrap_source_path`], for synchronous
@@ -393,52 +233,6 @@ pub fn assemble_bootstrap(
 
 // ── Heading state, file info, source role ──────────────────────────────────
 
-/// Core of `compute_heading_state`: the JSON `Value` → `HeadingInputs` bridge
-/// over `moss_core::heading::compute` — the single source of truth shared with
-/// the build pipeline's `<h1 class="moss-article-title">` injection gate
-/// (`build::markdown::pipeline`).
-pub fn compute_heading_state_inner(
-    file_path: &str,
-    frontmatter: &serde_json::Value,
-    body: &str,
-) -> moss_core::heading::HeadingState {
-    let title_str = match frontmatter.get("title") {
-        Some(serde_json::Value::String(s)) => Some(s.as_str()),
-        _ => None,
-    };
-
-    // Apply CriticMarkup acceptance before hero-from-body detection so the
-    // editor sees the same normalized body the build pipeline does
-    // (pipeline.rs:103). Otherwise an author with a leading `{>>comment<<}`
-    // before `:::hero` would see the editor and pipeline disagree about
-    // hero ownership of the heading slot.
-    let accepted_body = crate::build::markdown::html_post::accept_criticmarkup(body);
-
-    moss_core::heading::compute(moss_core::heading::HeadingInputs {
-        file_path,
-        frontmatter_title: title_str,
-        body_markdown: &accepted_body,
-        // The editor command receives a workspace-relative file_path, but
-        // doesn't have the workspace folder's basename here. Self-named
-        // home detection at the project root will fall through to the
-        // path-based check (i.e. won't catch `<root>/<root>.md`). The
-        // editor's heading state is already a "best effort" preview vs
-        // the build pipeline's authoritative answer; this is one of the
-        // pre-existing gaps documented at HeadingInputs::root_folder_name.
-        root_folder_name: None,
-        is_home_override: false,
-        // The editor doesn't render slot files (`footer.md`) inline
-        // — the slot-file flow is exclusively the build pipeline's
-        // concern. Pass false here so the editor's heading-state preview
-        // for an open `footer.md` shows the would-be H1 the author can
-        // toggle off via `title: ""`. The pipeline's authoritative
-        // answer still suppresses the H1 because `is_excluded_from_pages`
-        // sees the reserved filename.
-        slot_only: false,
-        dated: ["date", "start"].iter().any(|k| frontmatter.get(*k).is_some_and(|v| !v.is_null())),
-    })
-}
-
 /// Core of `get_file_info`: size, modification time, and (for images) pixel
 /// dimensions, for the file viewer's info bars on non-text files.
 pub fn get_file_info_inner(file_path: &str) -> Result<EditorFileInfo, String> {
@@ -476,32 +270,9 @@ pub fn get_file_info_inner(file_path: &str) -> Result<EditorFileInfo, String> {
     })
 }
 
-/// A source's language and slot role, from its path inside the site.
-pub fn describe_source_role_inner(rel_path: &str) -> SourceRole {
-    let normalized = moss_core::slug::normalize_separators(rel_path);
-    let normalized = normalized.trim_matches('/');
-
-    let (language, within_tree) = crate::build::footer::language_tree_split(normalized);
-    let slot =
-        crate::build::footer::slot_from_filename(within_tree).map(|s| s.as_str().to_string());
-
-    let extension = std::path::Path::new(within_tree)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let can_be_page = crate::build::scan::classify::is_page_source(&extension);
-
-    SourceRole {
-        language,
-        slot,
-        can_be_page,
-    }
-}
-
 // ── Saving ─────────────────────────────────────────────────────────────────
 
-/// Pure byte-writing core of `save_editor_content`: write `frontmatter` +
+/// Host writer for `save_editor_content`: write `frontmatter` +
 /// `body` over `file_path` if the file is still the one the editor read, the
 /// bytes whose [`content_hash`] is `expected_hash`. Otherwise nothing is
 /// written and the answer is [`SaveResult::Conflict`] with what is on disk: an
@@ -540,35 +311,39 @@ pub fn persist_editor_content(
     // allow:raw_write vault user state, not .moss/build.nosync output
     let mut file = match std::fs::OpenOptions::new().read(true).write(true).open(file_path) {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SaveResult::Gone),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return match moss_core::source_edit::decide_save(None, Some(expected_hash), frontmatter, body)? {
+                moss_core::source_edit::SaveDecision::Gone => Ok(SaveResult::Gone),
+                other => Err(format!("A save of the missing file '{}' was not refused: {:?}", file_path, other)),
+            };
+        }
         Err(e) => return Err(fail(e)),
     };
     let mut on_disk = String::new();
     file.read_to_string(&mut on_disk)
         .map_err(|e| format!("Failed to read file '{}': {}", file_path, e))?;
-    if content_hash(on_disk.as_bytes()) != expected_hash {
-        return Ok(SaveResult::Conflict { disk: parse_frontmatter_of(on_disk)? });
-    }
-    let mut fm_map = super::frontmatter::json_to_yaml_map(frontmatter)?;
-    coerce_union_fields(&mut fm_map);
-    let content = match edit_in_place(&on_disk, &fm_map, body) {
-        Some(content) => content,
-        None => moss_core::frontmatter::serialize(&fm_map, body)?,
+    let content = match moss_core::source_edit::decide_save(Some(on_disk.as_bytes()), Some(expected_hash), frontmatter, body)? {
+        moss_core::source_edit::SaveDecision::AlreadySaved => return Ok(SaveResult::Saved {
+            hash: content_hash(on_disk.as_bytes()), displaced: None,
+        }),
+        moss_core::source_edit::SaveDecision::Conflict { disk } => return Ok(SaveResult::Conflict { disk }),
+        moss_core::source_edit::SaveDecision::Write { bytes } => bytes,
+        moss_core::source_edit::SaveDecision::Gone => return Ok(SaveResult::Gone),
     };
-    let displaced = match keep_displaced && content != on_disk {
+    let displaced = match keep_displaced && content != on_disk.as_bytes() {
         true => match keep_version(file_path, on_disk.as_bytes())? {
             Some(id) => Some(id),
             None => return Ok(SaveResult::NotKept),
         },
         false => None,
     };
-    if let Err(e) = rewrite(&mut file, content.as_bytes()) {
+    if let Err(e) = rewrite(&mut file, &content) {
         // A full disk can fail the write after the truncate: put back what was
         // there, so the next read is not a torn file taken for an outside edit.
         let _ = rewrite(&mut file, on_disk.as_bytes());
         return Err(fail(e));
     }
-    Ok(SaveResult::Saved { hash: content_hash(content.as_bytes()), displaced })
+    Ok(SaveResult::Saved { hash: content_hash(&content), displaced })
 }
 
 /// `bytes`, the page at `file_path` as another writer left it, kept in its
@@ -593,68 +368,6 @@ fn rewrite(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
     file.set_len(0)?;
     file.rewind()?;
     file.write_all(bytes)
-}
-
-/// The saved file as the one on disk with only the changed fields' lines
-/// rewritten, so a save keeps the author's key order, quoting and comments.
-/// `None` sends the save to the full re-serialize: the frontmatter on disk is
-/// not valid YAML (the editor then holds the raw block in `body`), the file
-/// uses CRLF (the editor's body is LF), every field was removed, or the line
-/// editor refuses the change.
-fn edit_in_place(on_disk: &str, fm_map: &std::collections::HashMap<String, serde_yaml::Value>, body: &str) -> Option<String> {
-    if fm_map.is_empty() || on_disk.contains("\r\n") || moss_core::frontmatter::parse(on_disk).frontmatter_error.is_some() {
-        return None;
-    }
-    let mut out = moss_core::frontmatter::set_fields(on_disk, fm_map).ok()?;
-    out.truncate(moss_core::frontmatter::frontmatter_span(&out)?.body);
-    out.push_str(body);
-    Some(out)
-}
-
-/// Guard the union frontmatter fields (`children`, `series`) before writing.
-///
-/// The editor saves the AUTHORED single-key form — a valid `bool`, wikilink
-/// `string`, or wikilink `sequence` is written through unchanged (preserving
-/// `children: "[[News]]"` byte-for-byte). Only a NON-canonical shape (e.g. a map
-/// or number that the widget should never produce, but a malformed paste might)
-/// is coerced to the canonical authored form via the shared normalizer, so a
-/// junk value can never reach the file. v1 hard-codes the two union field names;
-/// schema-driven detection is deferred (see design §4).
-fn coerce_union_fields(fm_map: &mut std::collections::HashMap<String, serde_yaml::Value>) {
-    use serde_yaml::Value;
-
-    if let Some(v) = fm_map.get("children") {
-        let canonical = matches!(v, Value::Bool(_) | Value::String(_));
-        if !canonical {
-            let norm = moss_core::frontmatter_union::normalize_children(v);
-            fm_map.insert("children".to_string(), Value::Bool(norm.children));
-        }
-    }
-
-    if let Some(v) = fm_map.get("series") {
-        let canonical = match v {
-            Value::Bool(_) => true,
-            Value::Sequence(items) => items.iter().all(|i| matches!(i, Value::String(_))),
-            _ => false,
-        };
-        if !canonical {
-            let norm = moss_core::frontmatter_union::normalize_series(v);
-            fm_map.insert("series".to_string(), Value::Bool(norm.series));
-        }
-    }
-
-    // uid is moss-owned metadata and is always semantically a string. YAML may
-    // have parsed an all-digit uid as a number (e.g. `uid: 46160604`). Re-quote
-    // it on write so the on-disk file self-heals to `uid: "46160604"` — closing
-    // the loop on the build-side coercion. Author-owned
-    // fields are never silently rewritten; uid is the one field moss owns.
-    if let Some(v) = fm_map.get("uid") {
-        if matches!(v, Value::Number(_) | Value::Bool(_)) {
-            if let Some(s) = moss_core::frontmatter::value_as_string(v) {
-                fm_map.insert("uid".to_string(), Value::String(s));
-            }
-        }
-    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -785,66 +498,6 @@ mod tests {
         content_hash(&std::fs::read(file).unwrap())
     }
 
-    /// BUG 3 editor surface: parsing a file with a malformed `---...---` block
-    /// (the 'Europe - A Prophecy.md' corruption) must report the YAML error AND
-    /// keep the raw block in `body` so the author can repair it in CM6 — no
-    /// silent data loss.
-    #[test]
-    fn parse_frontmatter_preserves_block_and_reports_error() {
-        let dir = make_test_tmpdir();
-        let file = dir.path().join("europe.md");
-        let content =
-            "---\nchildren_style: grid\nseries: true\nweight: 10\nuid: blk-europecover: \"006.jpg\"\n---\n\n\nreal body\n";
-        std::fs::write(&file, content).expect("write temp md");
-
-        let parsed =
-            parse_frontmatter_at(&file.to_string_lossy()).expect("parse_frontmatter");
-
-        assert!(
-            parsed.frontmatter_error.is_some(),
-            "malformed YAML must surface an error"
-        );
-        assert!(
-            parsed.has_frontmatter,
-            "a block exists (even though invalid) → has_frontmatter is true"
-        );
-        assert!(
-            parsed.body.contains("uid: blk-europecover"),
-            "raw block must stay in body so CM6 can repair it, got: {}",
-            parsed.body
-        );
-    }
-
-    #[test]
-    fn parse_frontmatter_valid_reports_no_error() {
-        let dir = make_test_tmpdir();
-        let file = dir.path().join("ok.md");
-        std::fs::write(&file, "---\ntitle: Hi\n---\nBody.\n").expect("write temp md");
-
-        let parsed =
-            parse_frontmatter_at(&file.to_string_lossy()).expect("parse_frontmatter");
-        assert!(parsed.frontmatter_error.is_none());
-        assert!(parsed.has_frontmatter);
-    }
-
-    #[test]
-    fn coerce_union_fields_quotes_numeric_uid() {
-        // A uid YAML parsed as a number must be re-quoted to a
-        // string on write so the on-disk file self-heals.
-        let mut m = std::collections::HashMap::new();
-        m.insert("uid".to_string(), serde_yaml::Value::Number(46160604u64.into()));
-        coerce_union_fields(&mut m);
-        assert_eq!(m.get("uid"), Some(&serde_yaml::Value::String("46160604".to_string())));
-    }
-
-    #[test]
-    fn coerce_union_fields_leaves_string_uid_untouched() {
-        let mut m = std::collections::HashMap::new();
-        m.insert("uid".to_string(), serde_yaml::Value::String("54ddc5c0".to_string()));
-        coerce_union_fields(&mut m);
-        assert_eq!(m.get("uid"), Some(&serde_yaml::Value::String("54ddc5c0".to_string())));
-    }
-
     // ── the editor's pending-read seam ────────────────────────────────────
 
     /// The seam defers on exactly the errors `icloud::is_offline_not_absent`
@@ -879,86 +532,6 @@ mod tests {
         }
     }
 
-    // ── compute_heading_state_inner (JSON-bridge smoke tests) ────────────
-    //
-    // The full heading rule is unit-tested in `moss_core::heading`. These
-    // tests cover the JSON `Value` → `Option<&str>` bridge for `title` and
-    // the body-pass-through.
-
-    use moss_core::heading::HeadingSource;
-
-    #[test]
-    fn heading_state_bridges_basic_article() {
-        let s = compute_heading_state_inner(
-            "posts/my-first-post.md",
-            &serde_json::json!({}),
-            "",
-        );
-        assert!(s.visible);
-        assert_eq!(s.text, "my first post");
-        assert!(matches!(s.source, HeadingSource::Filename));
-    }
-
-    #[test]
-    fn heading_state_bridges_title_field() {
-        let s = compute_heading_state_inner(
-            "posts/article.md",
-            &serde_json::json!({ "title": "Custom" }),
-            "",
-        );
-        assert_eq!(s.text, "Custom");
-        assert!(matches!(s.source, HeadingSource::Title));
-        assert!(s.visible);
-    }
-
-    #[test]
-    fn heading_state_bridges_empty_title_hides() {
-        let s = compute_heading_state_inner(
-            "posts/article.md",
-            &serde_json::json!({ "title": "" }),
-            "",
-        );
-        assert!(!s.visible);
-        assert!(matches!(s.source, HeadingSource::Title));
-    }
-
-    #[test]
-    fn heading_state_bridges_non_string_title_as_filename() {
-        // Defensive: only string title:'s are honored. A boolean or number
-        // shouldn't accidentally promote to Title source.
-        let s = compute_heading_state_inner(
-            "posts/article.md",
-            &serde_json::json!({ "title": false }),
-            "",
-        );
-        assert!(s.visible);
-        assert!(matches!(s.source, HeadingSource::Filename));
-    }
-
-    #[test]
-    fn heading_state_bridges_hero_in_body_hides() {
-        let s = compute_heading_state_inner(
-            "posts/article.md",
-            &serde_json::json!({}),
-            ":::hero\n# Overlay title\n:::\n\nBody.",
-        );
-        assert!(!s.visible);
-    }
-
-    #[test]
-    fn heading_state_keeps_the_pinned_heading_for_an_image_only_hero() {
-        // The editor reads the same rule the build does, so the 87-page title
-        // loss showed up here too: a full-bleed cover made the pinned heading
-        // element vanish from the editor, giving the author no way to see or
-        // edit the title of the page they were writing.
-        let s = compute_heading_state_inner(
-            "posts/article.md",
-            &serde_json::json!({}),
-            ":::hero {image=assets/cover.jpg}\n:::\n\nBody.",
-        );
-        assert!(s.visible);
-    }
-
     /// Repo-local temp dir (moss convention: test artifacts live under the
     /// repo's `target/test-tmp/`, never `$HOME`/`/tmp`). Local replica of the
     /// pattern in build.rs's private `repo_temp_dir()` (not importable from
@@ -975,36 +548,6 @@ mod tests {
             .prefix("moss-test-")
             .tempdir_in(&test_tmp)
             .unwrap()
-    }
-
-    #[test]
-    fn resolve_bootstrap_source_absolute_passes_through() {
-        // Build an OS-native absolute path: a bare "/abs/..." literal is NOT
-        // absolute on Windows (no drive prefix), so it would take the join
-        // branch and fail there. Production callers always pass OS-native
-        // absolute paths (baked by resolve_page_source).
-        let abs = std::env::temp_dir().join("posts").join("a.md");
-        let abs_str = abs.to_string_lossy().to_string();
-        let resolved = resolve_bootstrap_source(Some("/proj"), &abs_str);
-        assert_eq!(resolved.as_deref(), Some(abs_str.as_str()));
-        // Absolute source needs no project path at all.
-        let resolved = resolve_bootstrap_source(None, &abs_str);
-        assert_eq!(resolved.as_deref(), Some(abs_str.as_str()));
-    }
-
-    #[test]
-    fn resolve_bootstrap_source_relative_joins_project() {
-        let resolved = resolve_bootstrap_source(Some("/proj"), "posts/a.md");
-        let expected = std::path::Path::new("/proj")
-            .join("posts/a.md")
-            .to_string_lossy()
-            .to_string();
-        assert_eq!(resolved.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn resolve_bootstrap_source_relative_without_project_is_none() {
-        assert_eq!(resolve_bootstrap_source(None, "posts/a.md"), None);
     }
 
     #[test]
@@ -1178,5 +721,20 @@ mod tests {
         assert_eq!(outcome, SaveResult::Saved { hash: content_hash(b"After.\n"), displaced: None });
         assert!(displaced_event(&file.to_string_lossy(), &outcome).is_none());
         assert!(crate::deploy::history::HistoryStore::in_vault(dir.path()).list_records().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod saved_retry_tests {
+    use super::*;
+
+    #[test]
+    fn stale_retry_of_identical_text_is_saved_without_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "already there").unwrap();
+        let result = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "already there", "old hash", true).unwrap();
+        assert_eq!(result, SaveResult::Saved { hash: content_hash(b"already there"), displaced: None });
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "already there");
     }
 }

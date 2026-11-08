@@ -79,3 +79,50 @@ fn diagnostics(items: Vec<Diagnostic>) -> Vec<EditorDiagnostic> {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+/// The engine's tree root as JSON, from a `ListingEntry[]` and `TreeOptions`.
+/// Leave `path_prefix` empty to keep paths relative to the folder.
+pub fn build_tree(entries_json: &str, options_json: &str) -> Result<String, String> {
+    let entries: Vec<moss_core::source_edit::ListingEntry> = decode(entries_json)?;
+    let options: moss_core::source_edit::TreeOptions = decode(options_json)?;
+    encode(&moss_core::source_edit::build_tree_root(&entries, &options))
+}
+
+/// Plan a text save. Disk is an optional UTF-8 string, not base64. `Write.bytes`
+/// is a JSON array of u8 values, preserving the exact bytes to write. Conflict
+/// documents have the engine's `ParsedFrontmatter` shape; after a successful
+/// host write (or `already-saved`), the host reports `SaveResult::Saved`.
+pub fn decide_save(disk_text: Option<&str>, expected_hash: Option<&str>, frontmatter_json: &str, body: &str) -> Result<String, String> {
+    let frontmatter = decode(frontmatter_json)?;
+    encode(&moss_core::source_edit::decide_save(disk_text.map(str::as_bytes), expected_hash, &frontmatter, body)?)
+}
+
+/// The same parsed document and raw-byte hash as the editor's read command.
+pub fn parse_frontmatter(text: &str) -> Result<String, String> {
+    encode(&moss_core::source_edit::parse_frontmatter_of(text.to_string())?)
+}
+
+pub fn describe_source_role(rel_path: &str) -> Result<String, String> {
+    encode(&moss_core::source_edit::describe_source_role_inner(rel_path))
+}
+
+pub fn compute_heading_state(file_path: &str, frontmatter_json: &str, body: &str) -> Result<String, String> {
+    let frontmatter: serde_json::Value = decode(frontmatter_json)?;
+    if !frontmatter.is_object() { return Err("frontmatter must be a JSON object".to_string()); }
+    encode(&moss_core::source_edit::compute_heading_state_inner(file_path, &frontmatter, body))
+}
+
+pub fn bootstrap_source_path(project_path: Option<&str>, source: Option<&str>) -> Result<String, String> {
+    encode(&moss_core::source_edit::bootstrap_source_path(project_path, source))
+}
+
+fn decode<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, String> {
+    serde_json::from_str(json).map_err(|e| e.to_string())
+}
+
+fn encode(value: &impl Serialize) -> Result<String, String> {
+    serde_json::to_string(value).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod source_edit_tests;

@@ -36,3 +36,33 @@ impl MossSite {
 pub fn builtin_schema_json() -> String {
     crate::builtin_schema_json()
 }
+
+#[wasm_bindgen(js_name = buildTree)]
+pub fn build_tree(entries_json: &str, options_json: &str) -> Result<String, JsValue> {
+    crate::build_tree(entries_json, options_json).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = decideSave)]
+pub fn decide_save(disk_text: Option<String>, expected_hash: Option<String>, frontmatter_json: &str, body: &str) -> Result<String, JsValue> {
+    crate::decide_save(disk_text.as_deref(), expected_hash.as_deref(), frontmatter_json, body).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = parseFrontmatter)]
+pub fn parse_frontmatter(text: &str) -> Result<String, JsValue> {
+    crate::parse_frontmatter(text).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = describeSourceRole)]
+pub fn describe_source_role(rel_path: &str) -> Result<String, JsValue> {
+    crate::describe_source_role(rel_path).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = computeHeadingState)]
+pub fn compute_heading_state(file_path: &str, frontmatter_json: &str, body: &str) -> Result<String, JsValue> {
+    crate::compute_heading_state(file_path, frontmatter_json, body).map_err(|e| JsValue::from_str(&e))
+}
+
+#[wasm_bindgen(js_name = bootstrapSourcePath)]
+pub fn bootstrap_source_path(project_path: Option<String>, source: Option<String>) -> Result<String, JsValue> {
+    crate::bootstrap_source_path(project_path.as_deref(), source.as_deref()).map_err(|e| JsValue::from_str(&e))
+}

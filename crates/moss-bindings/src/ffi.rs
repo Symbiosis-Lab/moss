@@ -54,3 +54,4 @@ impl MossSite {
         self.site().preview(&path, &text, &base_href)
     }
 }
+

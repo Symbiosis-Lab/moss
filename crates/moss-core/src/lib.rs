@@ -121,6 +121,7 @@ pub mod schema_fields;
 pub mod slug;
 pub mod untrusted_text;
 pub mod sort;
+pub mod source_edit;
 pub mod terms;
 pub mod template;
 pub mod validation;

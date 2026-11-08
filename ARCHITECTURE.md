@@ -48,8 +48,8 @@ The author edits a folder; `moss-build` watches it, builds it and serves the res
 
 | Crate | What it's for | What it must never depend on |
 |---|---|---|
-| `moss-core` | pure Rust: markdown parsing, frontmatter typing, schema validation, wikilink/embed resolution, the design-token and HTML-class contract | filesystem I/O, network I/O, any async runtime |
-| `moss-bindings` | the JSON boundary moss-core's page API crosses into WebAssembly and Swift | moss-build, any I/O |
+| `moss-core` | pure Rust: source-folder editing policy, markdown parsing, frontmatter typing, schema validation, wikilink/embed resolution, the design-token and HTML-class contract | filesystem I/O, network I/O, any async runtime |
+| `moss-bindings` | the JSON boundary moss-core's page and source-edit APIs cross into WebAssembly and Swift | moss-build, any I/O |
 | `moss-build` | everything that runs without a window: the build pipeline (scan → render → emit), the preview server, the publish path, the plugin engine, the HTTP client for the hosting service | any GUI toolkit, direct or transitive (no Tauri, no wry, no webview) |
 | `moss-cli` | the `moss` binary | anything beyond `moss-build` — it links `moss-build` only, never `moss-core` directly |
 
@@ -93,7 +93,7 @@ One line each, matching `crates/moss-build/src/lib.rs` as it stands today:
 - `vault_root` — the compiler's root identity: which folder is the site being built.
 - `build` — the compiler itself: scan → render → emit, the staging/generations build-directory model, file watching. How it records the inputs it read and decides when the preview may show a render: [build inputs and preview readiness](docs/reference/build-inputs-and-preview-readiness.md).
 - `commands` — the engine's command table: every command a moss UI sends, one typed function each, and the `CommandHost` a transport supplies (the HTTP carrier's `Session`, or a host's in-process one).
-- `editor` — the editor backend: path resolution, file tree, content parse/persist, source-asset bytes; the cores `commands` calls.
+- `editor` — the editor backend: path resolution, source I/O and history, source-asset bytes; delegates pure file policy to `moss-core::source_edit`.
 - `engine` — the QuickJS plugin execution engine.
 - `i18n` — language detection, UI string translation, and translation linking for multilingual sites.
 - `ops` — long-running processes over a built site: the preview server (`ops/serve`) and the file-watch debouncer (`ops/watch`).

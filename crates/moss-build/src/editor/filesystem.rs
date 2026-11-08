@@ -12,87 +12,13 @@ mod publish_dates;
 pub use bounded::{bounded_tree, DOCUMENT_TREE_BUDGET};
 pub use publish_dates::{PublishDateCacheView, PublishDateMemo};
 pub use directory::list_directory_inner;
+#[cfg(test)]
 use directory::list_directory_counted;
 
 // ── Public types ──────────────────────────────────────────────────────────
 
-/// Metadata about a file for the editor's file viewer.
-#[derive(Debug, Clone, serde::Serialize, specta::Type)]
-pub struct EditorFileInfo {
-    /// File size in bytes.
-    pub size: u64,
-    /// Last modified time as ISO 8601 string, if available.
-    pub modified: Option<String>,
-    /// Image width in pixels (images only).
-    pub width: Option<u32>,
-    /// Image height in pixels (images only).
-    pub height: Option<u32>,
-}
-
-/// A directory entry returned by `list_directory`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct DirEntry {
-    /// File or folder name (not the full path).
-    pub name: String,
-    /// Absolute path to the entry.
-    pub path: String,
-    /// Whether this entry is a directory.
-    pub is_dir: bool,
-    /// Last modified time as seconds since UNIX epoch. None if unavailable.
-    pub modified: Option<f64>,
-    /// Opaque cross-platform identity for this filesystem entry, serialized as
-    /// decimal u64 (`Some("42")`) or `None` when not extractable. Used by
-    /// EntryRegistry.reconcileSnapshot to reuse EntryIds when a rename moves
-    /// an existing file_id to a new path.
-    ///
-    /// Unix: `Some(metadata.ino().to_string())` via MetadataExt.
-    /// Windows (v1): always `None` — stable Rust doesn't expose file_index
-    /// without nightly. Future PR can wire the `file-id` crate (already
-    /// transitive via notify-debouncer-full) for proper Windows support.
-    pub file_id: Option<String>,
-}
-
-/// A recursive tree node for the full project file tree.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct TreeNode {
-    pub name: String,
-    pub path: String,
-    pub is_dir: bool,
-    /// Last modified time as seconds since UNIX epoch. None if unavailable.
-    pub modified: Option<f64>,
-    /// Resolved publish date as `YYYY-MM-DD`, or `None`.
-    ///
-    /// For markdown files: from frontmatter `date` field, filename `YYYY-MM-DD-…`
-    /// prefix, or ctime fallback. For folders: max recency over descendants per
-    /// the spec (see `compute_folder_recency`). Always `None` for non-md files.
-    pub publish_date: Option<String>,
-    /// Provenance of `publish_date`. Drives sort-zone classification:
-    /// `Frontmatter` and `FilenamePrefix` are explicit (dated-md zone);
-    /// `Ctime` is implicit (undated-md zone). For folders, always `None`.
-    pub date_source: DateSource,
-    /// Whether this node is its parent folder's ELECTED home file — the single
-    /// winner of `moss_core::home::detect_home_file_in_folder_marked` (order:
-    /// `home: true` frontmatter marker › index stems › self-named folder note ›
-    /// first document alphabetically), computed per folder in
-    /// `list_tree_inner_cached` with the folder's REAL basename (so the project
-    /// root's self-named home is recognized too). At most one child per folder
-    /// is `true`; always `false` for directories. The frontend consumes this
-    /// flag (`entries.find(e => e.is_home)`) instead of re-deriving the
-    /// election — the backend owns the home decision (consolidation-map
-    /// homeRank row).
-    pub is_home: bool,
-    /// Children of this directory. `None` for files.
-    pub children: Option<Vec<TreeNode>>,
-    pub hidden: u32,
-    /// See `DirEntry::file_id`.
-    pub file_id: Option<String>,
-    /// The file's role on the site when it has a special one, decided by
-    /// `classify::special_file_kind`. Always `None` for folders.
-    #[serde(default)]
-    pub special: Option<SpecialFileKind>,
-}
-
-pub use crate::build::scan::classify::SpecialFileKind;
+pub use moss_core::source_edit::{EditorFileInfo, DirEntry, TreeNode, SpecialFileKind};
+pub use moss_core::source_edit::tree::{cmp_dir_entry, cmp_entry_fields, sort_tree_nodes, compute_folder_recency};
 
 // Re-export so downstream modules and tests can reference DateSource via
 // editor::filesystem::DateSource — single source of truth lives in moss-core.
@@ -247,166 +173,66 @@ pub fn list_tree_inner_cached_with_error(
     show_internal: bool,
     cache: &PublishDateCacheView<'_>,
 ) -> Result<TreeNode, crate::build::cloud_readiness::storage::Unavailable> {
-    let page_settings_dirs = crate::build::scan::classify::page_settings_dirs(project_path);
-    build_tree_node(path, project_path, show_internal, cache, &page_settings_dirs)
+    let (entries, options) = tree_listing(path, project_path, show_internal, cache)?;
+    let mut tree = moss_core::source_edit::build_tree_root(&entries, &options);
+    // Preserve the spelling the caller supplied for the containing directory.
+    tree.path = path.to_string();
+    Ok(tree)
 }
 
-fn build_tree_node(
+/// Collect directory facts with the existing availability handling and memo.
+fn tree_listing(
     path: &str,
     project_path: &str,
     show_internal: bool,
     cache: &PublishDateCacheView<'_>,
-    page_settings_dirs: &std::collections::HashSet<String>,
-) -> Result<TreeNode, crate::build::cloud_readiness::storage::Unavailable> {
-    let (entries, hidden) = list_directory_counted(path, project_path, show_internal)?;
-
-    // Basenames of md children whose frontmatter carries the `home: true`
-    // marker — collected from the same cached frontmatter read that resolves
-    // publish dates, and fed to the home election below.
-    let mut marked: Vec<String> = Vec::new();
-
-    let mut children: Vec<TreeNode> = entries
-        .into_iter()
-        .map(|entry| {
-            if entry.is_dir {
-                build_tree_node(&entry.path, project_path, show_internal, cache, page_settings_dirs)
-            } else {
-                let (publish_date, date_source) = if entry.name.to_ascii_lowercase().ends_with(".md") {
-                    let (date, source, home_marker) = resolve_md_date(&entry, cache);
-                    if home_marker {
-                        marked.push(entry.name.clone());
-                    }
-                    (date, source)
-                } else {
-                    (None, DateSource::None)
-                };
-                let rel = std::path::Path::new(&entry.path)
-                    .strip_prefix(project_path)
-                    .map(|p| p.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_default();
-                let special = crate::build::scan::classify::special_file_kind(&rel, page_settings_dirs);
-                Ok(TreeNode {
-                    name: entry.name,
-                    path: entry.path,
-                    is_dir: false,
-                    modified: entry.modified,
-                    publish_date,
-                    date_source,
-                    is_home: false,
-                    children: None,
-                    hidden: 0,
-                    file_id: entry.file_id,
-                    special,
-                })
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Compute the max mtime across all children (recursive — children already
-    // have their own `modified` computed).
-    let max_modified = children
-        .iter()
-        .filter_map(|c| c.modified)
-        .fold(None::<f64>, |acc, m| Some(acc.map_or(m, |a: f64| a.max(m))));
-
-    // Who is this folder, per the OWNER of vault-root identity? Both questions
-    // the home election below asks — "is THIS folder the project root" and
-    // "what is the root called" — come from `vault_root::VaultRoot`, never
-    // re-derived from the path string with a second `Path::file_name()` /
-    // `trim_end_matches`. That re-derivation returns `None` / `""` for `.`, a
-    // trailing slash and `/`, silently demoting a self-named root home
-    // (`河灣/河灣.md`) off `/` — the `moss build .` bug one code path over.
-    // `VaultRoot::resolve` collapses all three spellings the way the build
-    // does, so the tree's `is_home` flag can never disagree with which file the
-    // built site serves at the folder's URL. A SUBFOLDER keeps its plain
-    // basename — a per-folder name read off a real absolute child path, not a
-    // root identity.
-    let project_root = crate::vault_root::VaultRoot::resolve(project_path);
-    let is_root = crate::vault_root::VaultRoot::resolve(path) == project_root;
-    let name = if is_root {
-        project_root.name().to_string()
-    } else {
-        std::path::Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default()
+) -> Result<(Vec<moss_core::source_edit::ListingEntry>, moss_core::source_edit::TreeOptions), crate::build::cloud_readiness::storage::Unavailable> {
+    let root = crate::vault_root::VaultRoot::resolve(project_path);
+    let directory = crate::vault_root::VaultRoot::resolve(path);
+    let relative = directory.path().strip_prefix(root.path()).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    let options = moss_core::source_edit::TreeOptions {
+        root_name: root.name().to_string(),
+        path_prefix: project_path.to_string(),
+        directory: relative.clone(), show_internal,
+        page_settings_dirs: crate::build::scan::classify::page_settings_dirs(project_path),
+        passthrough: Vec::new(),
     };
+    let mut listing = Vec::new();
+    collect_tree_listing(path, project_path, &relative, show_internal, cache, &mut listing)?;
+    Ok((listing, options))
+}
 
-    // Elect this folder's single home child — marker › index › self-named ›
-    // first-doc-alphabetically, the SAME election the build runs
-    // (`detect_home_file_in_folder_marked`), so the tree's flag can never
-    // disagree with which file the built site serves at this folder's URL.
-    // `name` is the folder's name from the owner above — the root's blessed
-    // `VaultRoot::name`, a subfolder's basename — which the self-named rule
-    // needs. Exactly one child gets the flag (basenames are unique within a
-    // directory); folders are never home.
-    let elected_home: Option<String> = {
-        let file_names: Vec<&str> = children
-            .iter()
-            .filter(|c| !c.is_dir)
-            .map(|c| c.name.as_str())
-            .collect();
-        let marked_refs: Vec<&str> = marked.iter().map(|s| s.as_str()).collect();
-        let candidate =
-            moss_core::home::detect_home_file_in_folder_marked(&file_names, &name, &marked_refs);
-        // PROJECT ROOT ONLY: gate out the priority-5 alphabetical fallback,
-        // mirroring `detect_root_home_source` (commands.rs, 014638c66) — the
-        // root editor surface deliberately keeps its "create home page" CTA
-        // rather than silently adopting a random article as the SITE home, so
-        // the tree flag (which gates the "Create home file" context item)
-        // must agree or the two in-app surfaces contradict each other on the
-        // root. Subfolders keep the full election including the fallback
-        // (build parity). The built site may still serve a fallback home at
-        // `/` — that residual editor-vs-build divergence is the standing
-        // 2026-06-22 decision, out of scope here.
-        candidate
-            .filter(|c| {
-                if !is_root {
-                    return true;
-                }
-                let stem = std::path::Path::new(c)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(c);
-                marked_refs.iter().any(|m| m.eq_ignore_ascii_case(c))
-                    || moss_core::home::is_home_file(stem, &name)
-            })
-            .map(|s| s.to_string())
-    };
-    if let Some(home_name) = elected_home {
-        for c in children.iter_mut() {
-            if !c.is_dir && c.name == home_name {
-                c.is_home = true;
-            }
+fn collect_tree_listing(
+    path: &str,
+    project_path: &str,
+    relative: &str,
+    show_internal: bool,
+    cache: &PublishDateCacheView<'_>,
+    listing: &mut Vec<moss_core::source_edit::ListingEntry>,
+) -> Result<(), crate::build::cloud_readiness::storage::Unavailable> {
+    use moss_core::source_edit::ListingEntry;
+    let (entries, hidden) = directory::list_directory_sized(path, project_path, show_internal)?;
+    let metadata = std::fs::metadata(path).ok();
+    listing.push(ListingEntry {
+        path: relative.to_string(), is_dir: true, size: metadata.as_ref().map_or(0, |m| m.len()),
+        modified: metadata.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs_f64()),
+        file_id: metadata.as_ref().and_then(extract_file_id),
+        frontmatter: None, resolved_date: None, hidden,
+    });
+    for (entry, size) in entries {
+        let rel = if relative.is_empty() { entry.name.clone() } else { format!("{relative}/{}", entry.name) };
+        if entry.is_dir {
+            collect_tree_listing(&entry.path, project_path, &rel, show_internal, cache, listing)?;
+        } else {
+            let resolved_date = entry.name.to_ascii_lowercase().ends_with(".md").then(|| resolve_md_date(&entry, cache));
+            listing.push(ListingEntry {
+                path: rel, is_dir: false,
+                size,
+                modified: entry.modified, file_id: entry.file_id, frontmatter: None, resolved_date, hidden: 0,
+            });
         }
     }
-
-    // Extract this directory's own file_id so it can be tracked in the
-    // registry alongside file entries. Errors degrade to None (no identity
-    // reuse for this directory).
-    let dir_file_id = std::fs::metadata(path)
-        .ok()
-        .and_then(|m| extract_file_id(&m));
-
-    let mut folder_node = TreeNode {
-        name,
-        path: path.to_string(),
-        is_dir: true,
-        modified: max_modified,
-        publish_date: None,
-        date_source: DateSource::None,
-        is_home: false,
-        children: Some(children),
-        hidden,
-        file_id: dir_file_id,
-        special: None,
-    };
-    folder_node.publish_date = compute_folder_recency(&folder_node);
-    sort_tree_nodes(
-        folder_node.children.as_mut().unwrap(),
-        &folder_node.name,
-    );
-    Ok(folder_node)
+    Ok(())
 }
 
 /// Resolve an md file's publish date AND its `home: true` frontmatter marker
@@ -462,17 +288,7 @@ fn resolve_md_date(
             Err(_) => (Default::default(), true),
         }
     };
-    let home_marker = frontmatter
-        .get("home")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let ctime_date = entry.modified.and_then(mtime_to_yyyy_mm_dd);
-    let (date, source) = moss_core::date::resolve_publish_date(
-        &frontmatter,
-        &[&entry.name],
-        ctime_date.as_deref(),
-    );
-    let resolved = (date, source, home_marker);
+    let resolved = moss_core::source_edit::tree::resolve_md_date(&entry.name, entry.modified, &frontmatter);
 
     if cacheable {
         let mut guard = cache.lock().expect("publish-date cache poisoned");
@@ -480,14 +296,6 @@ fn resolve_md_date(
     }
 
     resolved
-}
-
-/// Convert a UNIX-epoch-seconds mtime to a `YYYY-MM-DD` string in UTC.
-fn mtime_to_yyyy_mm_dd(secs: f64) -> Option<String> {
-    use std::time::{Duration, UNIX_EPOCH};
-    let st = UNIX_EPOCH.checked_add(Duration::from_secs(secs as u64))?;
-    let dt = chrono::DateTime::<chrono::Utc>::from(st);
-    Some(dt.format("%Y-%m-%d").to_string())
 }
 
 /// `path`, or the first of `name-2.ext`, `name-3.ext`, … beside it that
@@ -529,226 +337,18 @@ pub(crate) fn first_free(path: &std::path::Path, claimed: impl Fn(&std::path::Pa
     unreachable!()
 }
 
-// ── Sort helpers ──────────────────────────────────────────────────────────
-
-/// Sort comparator: directories first, then by mtime descending (newest
-/// first), with case-insensitive alphabetical as tiebreaker.
-pub fn cmp_dir_entry(a: &DirEntry, b: &DirEntry) -> std::cmp::Ordering {
-    cmp_entry_fields(a.is_dir, a.modified, &a.name, b.is_dir, b.modified, &b.name)
-}
-
-/// Shared sort logic: directories first, then mtime descending, then
-/// alphabetical.
-pub fn cmp_entry_fields(
-    a_is_dir: bool,
-    a_modified: Option<f64>,
-    a_name: &str,
-    b_is_dir: bool,
-    b_modified: Option<f64>,
-    b_name: &str,
-) -> std::cmp::Ordering {
-    match (a_is_dir, b_is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => {
-            let time_ord = match (b_modified, a_modified) {
-                (Some(bm), Some(am)) => bm.partial_cmp(&am).unwrap_or(std::cmp::Ordering::Equal),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            };
-            time_ord.then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
-        }
-    }
-}
-
-// ── Five-zone tree sort (publish-date aware) ──────────────────────────────
-
-/// Sort children of a folder per the spec's five-zone ordering.
-///
-/// Zone order: elected-home → home-md → dated-md → undated-md → folders → non-md.
-/// Within each zone: recency desc → mtime desc → alpha case-insensitive.
-///
-/// `parent_folder_name` is the containing folder's `file_name`, used by
-/// `moss_core::home::is_home_file` for the self-named index convention.
-///
-/// ## Sort/flag agreement
-///
-/// The ELECTED home (`TreeNode::is_home`, set by `list_tree_inner_cached`
-/// before sorting) is pinned FIRST, ahead of `Zone::HomeMd`. `zone_of`
-/// classifies by filename shape alone, so it can put SEVERAL files in the
-/// home zone (index.md + readme.md) — and would let a newer readme.md
-/// out-sort the elected index.md — or MISS the election winner entirely
-/// (a `home: true` marker file or the alphabetical-fallback home has an
-/// ordinary filename). Pinning the single winner keeps the flag and the
-/// frontend's home-pair row (folder + home collapsed onto one row, built
-/// from the flagged entry) in agreement.
-pub fn sort_tree_nodes(nodes: &mut [TreeNode], parent_folder_name: &str) {
-    nodes.sort_by(|a, b| {
-        match b.is_home.cmp(&a.is_home) {
-            std::cmp::Ordering::Equal => {}
-            ord => return ord,
-        }
-        let za = zone_of(a, parent_folder_name);
-        let zb = zone_of(b, parent_folder_name);
-        if za != zb {
-            return za.cmp(&zb);
-        }
-        // Recency: empty string sorts last, otherwise lexicographic-as-date.
-        let ra = recency_key(a);
-        let rb = recency_key(b);
-        match (ra.is_empty(), rb.is_empty()) {
-            (false, false) => match rb.cmp(&ra) {
-                std::cmp::Ordering::Equal => {}
-                ord => return ord,
-            },
-            (false, true) => return std::cmp::Ordering::Less,
-            (true, false) => return std::cmp::Ordering::Greater,
-            (true, true) => {}
-        }
-        // mtime tiebreak — desc.
-        match b.modified.partial_cmp(&a.modified).unwrap_or(std::cmp::Ordering::Equal) {
-            std::cmp::Ordering::Equal => {}
-            ord => return ord,
-        }
-        a.name.to_lowercase().cmp(&b.name.to_lowercase())
-    });
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Zone {
-    HomeMd = 0,
-    DatedMd = 1,
-    UndatedMd = 2,
-    Folder = 3,
-    NonMd = 4,
-}
-
-fn zone_of(node: &TreeNode, parent_folder_name: &str) -> Zone {
-    if node.is_dir {
-        return Zone::Folder;
-    }
-    let lower = node.name.to_ascii_lowercase();
-    if !lower.ends_with(".md") {
-        return Zone::NonMd;
-    }
-    let stem = node
-        .name
-        .rsplit_once('.')
-        .map(|(s, _)| s)
-        .unwrap_or(&node.name);
-    if moss_core::home::is_home_file(stem, parent_folder_name) {
-        return Zone::HomeMd;
-    }
-    match node.date_source {
-        DateSource::Frontmatter | DateSource::FilenamePrefix => Zone::DatedMd,
-        DateSource::Ctime | DateSource::None => Zone::UndatedMd,
-    }
-}
-
-fn recency_key(node: &TreeNode) -> String {
-    node.publish_date.clone().unwrap_or_default()
-}
-
-// ── Folder recency ────────────────────────────────────────────────────────
-
-/// Compute a folder's recency string per spec Zone 4 rules.
-///
-/// Precedence:
-///   1. Max explicit publish_date over md descendants (Frontmatter/FilenamePrefix).
-///   2. Else max mtime over md descendants (as `YYYY-MM-DD`).
-///   3. Else max mtime over non-md descendants.
-///   4. Else folder's own mtime.
-///
-/// Returning `None` only if the folder has no descendants and no own mtime.
-pub fn compute_folder_recency(folder: &TreeNode) -> Option<String> {
-    let children = folder.children.as_deref().unwrap_or(&[]);
-
-    let md_descendants = collect_descendants(children, &is_md_file);
-
-    let max_explicit = md_descendants
-        .iter()
-        .filter(|n| matches!(n.date_source, DateSource::Frontmatter | DateSource::FilenamePrefix))
-        .filter_map(|n| n.publish_date.clone())
-        .max();
-    if max_explicit.is_some() {
-        return max_explicit;
-    }
-
-    let max_md_mtime = md_descendants
-        .iter()
-        .filter_map(|n| n.modified)
-        .fold(None::<f64>, |acc, m| Some(acc.map_or(m, |a| a.max(m))));
-    if let Some(m) = max_md_mtime {
-        return mtime_to_yyyy_mm_dd(m);
-    }
-
-    let max_any_mtime = collect_descendants(children, &|_| true)
-        .iter()
-        .filter_map(|n| n.modified)
-        .fold(None::<f64>, |acc, m| Some(acc.map_or(m, |a| a.max(m))));
-    if let Some(m) = max_any_mtime {
-        return mtime_to_yyyy_mm_dd(m);
-    }
-
-    folder.modified.and_then(mtime_to_yyyy_mm_dd)
-}
-
-/// Recursively collect every leaf descendant matching `pred`.
-///
-/// Walks into directory children but only `pred(node)` decides whether
-/// a non-directory node is included. Returns a flat `Vec` of references
-/// into the original tree.
-fn collect_descendants<'a>(
-    nodes: &'a [TreeNode],
-    pred: &impl Fn(&TreeNode) -> bool,
-) -> Vec<&'a TreeNode> {
-    let mut out = Vec::new();
-    for n in nodes {
-        if !n.is_dir {
-            if pred(n) {
-                out.push(n);
-            }
-        } else if let Some(kids) = n.children.as_deref() {
-            out.extend(collect_descendants(kids, pred));
-        }
-    }
-    out
-}
-
-fn is_md_file(node: &TreeNode) -> bool {
-    !node.is_dir && node.name.to_ascii_lowercase().ends_with(".md")
-}
-
 // ── Frontmatter helper for tree construction ──────────────────────────────
 
-/// Read the first 4 KB of a file and parse just the frontmatter.
-///
-/// Returns an empty `HashMap` when the file has no frontmatter or the
-/// `---` block isn't fully contained in the first 4 KB. Returns `Err`
-/// only on I/O errors (permission, deleted mid-scan, etc.).
-///
-/// We only need the frontmatter for tree-construction sort decisions, so
-/// reading the whole file would be wasteful. The body is parsed and
-/// immediately discarded; for typical projects (~50 .md files × 4 KB)
-/// this is well under one frame.
+/// Read and parse the core's bounded frontmatter prefix for tree construction.
 pub fn read_frontmatter_only(
     path: &std::path::Path,
 ) -> std::io::Result<std::collections::HashMap<String, serde_yaml::Value>> {
     use std::io::Read;
-    // 4 KB covers ~99% of real-world frontmatter blocks. If a file's
-    // frontmatter is larger, parsing will fail (closing `---` not in the
-    // window) and the caller falls through to filename-prefix → ctime.
-    const MAX_FRONTMATTER_BYTES: usize = 4096;
-    let mut f = std::fs::File::open(path)?;
-    let mut buf = vec![0u8; MAX_FRONTMATTER_BYTES];
-    let n = f.read(&mut buf)?;
-    buf.truncate(n);
-    let text = String::from_utf8_lossy(&buf);
-    // `frontmatter_map`, not `parse`: the file tree needs the fields, and a
-    // simplified-frontmatter page used to come back empty here — no date in the
-    // tree, and its `home: true` never flagged.
-    Ok(moss_core::frontmatter::frontmatter_map(&text))
+    use moss_core::source_edit::tree::{frontmatter_from_prefix, FRONTMATTER_PREFIX_BYTES};
+    let file = std::fs::File::open(path)?;
+    let mut buf = Vec::with_capacity(FRONTMATTER_PREFIX_BYTES);
+    file.take(FRONTMATTER_PREFIX_BYTES as u64).read_to_end(&mut buf)?;
+    Ok(frontmatter_from_prefix(&buf))
 }
 
 // ── Publish-date resolution ────────────────────────────────────────────────
@@ -811,164 +411,6 @@ mod tests {
         std::fs::write(&p, "no frontmatter here").unwrap();
         let fm = read_frontmatter_only(&p).unwrap();
         assert!(fm.is_empty());
-    }
-
-    // --- five-zone sort + folder recency ---
-
-    fn node_md(name: &str, date: Option<&str>, source: DateSource, mtime: f64) -> TreeNode {
-        TreeNode {
-            name: name.to_string(),
-            path: name.to_string(),
-            is_dir: false,
-            modified: Some(mtime),
-            publish_date: date.map(|s| s.to_string()),
-            date_source: source,
-            is_home: false,
-            children: None,
-            hidden: 0,
-            file_id: None,
-            special: None,
-        }
-    }
-
-    fn node_dir(name: &str, mtime: f64, publish_date: Option<&str>) -> TreeNode {
-        TreeNode {
-            name: name.to_string(),
-            path: name.to_string(),
-            is_dir: true,
-            modified: Some(mtime),
-            publish_date: publish_date.map(|s| s.to_string()),
-            date_source: DateSource::None,
-            is_home: false,
-            children: Some(vec![]),
-            hidden: 0,
-            file_id: None,
-            special: None,
-        }
-    }
-
-    fn node_file(name: &str, mtime: f64) -> TreeNode {
-        TreeNode {
-            name: name.to_string(),
-            path: name.to_string(),
-            is_dir: false,
-            modified: Some(mtime),
-            publish_date: None,
-            date_source: DateSource::None,
-            is_home: false,
-            children: None,
-            hidden: 0,
-            file_id: None,
-            special: None,
-        }
-    }
-
-    #[test]
-    fn five_zone_sort_groups_in_order() {
-        let mut nodes = vec![
-            node_file("image.png", 100.0),
-            node_dir("News", 50.0, Some("2025-11-15")),
-            node_md("undated.md", Some("2024-01-01"), DateSource::Ctime, 90.0),
-            node_md("dated.md", Some("2025-03-01"), DateSource::Frontmatter, 80.0),
-            node_md("index.md", None, DateSource::None, 10.0),
-        ];
-        sort_tree_nodes(&mut nodes, "Project");
-        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["index.md", "dated.md", "undated.md", "News", "image.png"]
-        );
-    }
-
-    #[test]
-    fn dated_md_sorts_newest_first_with_mtime_tiebreak() {
-        let mut nodes = vec![
-            node_md("apple.md", Some("2025-11-15"), DateSource::Frontmatter, 100.0),
-            node_md("zebra.md", Some("2025-11-15"), DateSource::Frontmatter, 200.0),
-        ];
-        sort_tree_nodes(&mut nodes, "Project");
-        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, vec!["zebra.md", "apple.md"]);
-    }
-
-    #[test]
-    fn undated_md_sorts_by_mtime() {
-        let mut nodes = vec![
-            node_md("a.md", Some("2024-01-01"), DateSource::Ctime, 100.0),
-            node_md("b.md", Some("2025-01-01"), DateSource::Ctime, 200.0),
-        ];
-        sort_tree_nodes(&mut nodes, "Project");
-        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, vec!["b.md", "a.md"]);
-    }
-
-    #[test]
-    fn folder_recency_prefers_md_descendant_dates() {
-        let folder = TreeNode {
-            name: "News".to_string(),
-            path: "News".to_string(),
-            is_dir: true,
-            modified: Some(50.0),
-            publish_date: None,
-            date_source: DateSource::None,
-            is_home: false,
-            children: Some(vec![
-                node_md("article.md", Some("2025-11-15"), DateSource::Frontmatter, 80.0),
-                node_file("photo.png", 999_999_999.0), // very recent image, must NOT win
-            ]),
-            hidden: 0,
-            file_id: None,
-            special: None,
-        };
-        assert_eq!(
-            compute_folder_recency(&folder),
-            Some("2025-11-15".to_string())
-        );
-    }
-
-    #[test]
-    fn folder_recency_falls_back_to_md_mtime_when_no_dates() {
-        let folder = TreeNode {
-            name: "Pages".to_string(),
-            path: "Pages".to_string(),
-            is_dir: true,
-            modified: Some(50.0),
-            publish_date: None,
-            date_source: DateSource::None,
-            is_home: false,
-            children: Some(vec![
-                node_md("a.md", None, DateSource::None, 100.0),
-                node_md("b.md", None, DateSource::None, 200.0),
-            ]),
-            hidden: 0,
-            file_id: None,
-            special: None,
-        };
-        assert!(compute_folder_recency(&folder).is_some());
-    }
-
-    #[test]
-    fn folder_recency_falls_back_to_non_md_mtime_when_no_md() {
-        let folder = TreeNode {
-            name: "assets".to_string(),
-            path: "assets".to_string(),
-            is_dir: true,
-            modified: Some(50.0),
-            publish_date: None,
-            date_source: DateSource::None,
-            is_home: false,
-            children: Some(vec![node_file("photo.png", 200.0)]),
-            hidden: 0,
-            file_id: None,
-            special: None,
-        };
-        assert!(compute_folder_recency(&folder).is_some());
-    }
-
-    #[test]
-    fn folder_recency_uses_folder_mtime_when_empty() {
-        let folder = node_dir("Empty", 100.0, None);
-        assert!(compute_folder_recency(&folder).is_some());
     }
 
     // --- list_tree_inner integration ---
@@ -1416,5 +858,80 @@ mod tests {
             1,
             "exactly one home in the subfolder too"
         );
+    }
+}
+
+#[cfg(test)]
+mod listing_parity_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_walk_and_flat_listing_produce_the_same_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        for (path, text) in [
+            ("index.md", "---\ntitle: Home\n---\n"),
+            ("chosen.md", "home: true\n---\nBody"),
+            ("dated.md", "---\ndate: 2025-11-15\n---\n"),
+            ("2024-01-01-post.md", "Body"),
+            ("plain.md", "Body"),
+            ("notes/note.md", "date: 2026-01-01\n---\nBody"),
+            ("notes/.draft.md", "Body"),
+            ("photo.png", "image"),
+            (".secret", "hidden"),
+            (".moss/config.toml", "[build]\npassthrough = [\"index.html\", \"fr/index.html\", \"app/index.html\"]\n"),
+            ("index.html", "html"),
+            ("fr/index.html", "html"),
+            ("fr/index.md", "body"),
+            ("app/index.html", "html"),
+            ("app/index.md", "body"),
+            (".moss/theme/style.css", ""),
+            (".moss/cache/private", ""),
+            ("node_modules/package/code.js", ""),
+            ("notes/Thumbs.db", ""),
+        ] {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let header = "---\ndate: 2099-01-01\nhome: true\npadding: ";
+        let limit = moss_core::source_edit::tree::FRONTMATTER_PREFIX_BYTES;
+        let long = format!("{header}{}\n---\nBody", "x".repeat(limit));
+        let split = format!("{header}{}河\n---\nBody", "x".repeat(limit - header.len() - 1));
+        for (name, text) in [("long-frontmatter.md", long), ("split-utf8.md", split)] {
+            std::fs::write(dir.path().join("notes").join(name), text).unwrap();
+        }
+        for show_internal in [false, true] {
+            let mut memo = std::collections::HashMap::new();
+            let cache = std::sync::Mutex::new(&mut memo);
+            let (listing, options) = tree_listing(root, root, show_internal, &cache).unwrap();
+            let desktop = list_tree_inner_cached(root, root, show_internal, &cache).unwrap();
+            let core = moss_core::source_edit::build_tree_root(&listing, &options);
+            assert_eq!(serde_json::to_value(&desktop).unwrap(), serde_json::to_value(&core).unwrap());
+
+            // A byte-only host can supply the raw listing instead of the desktop
+            // memo and prefilter. Both must yield the identical flags and counts.
+            let raw: Vec<_> = walkdir::WalkDir::new(dir.path()).into_iter().map(|entry| {
+                let entry = entry.unwrap();
+                let meta = entry.metadata().unwrap();
+                let relative = entry.path().strip_prefix(dir.path()).unwrap().to_string_lossy().replace('\\', "/");
+                moss_core::source_edit::ListingEntry {
+                    path: relative, is_dir: meta.is_dir(), size: meta.len(),
+                    modified: meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs_f64()),
+                    file_id: extract_file_id(&meta),
+                    frontmatter: (!meta.is_dir()).then(|| std::fs::read_to_string(entry.path()).unwrap()),
+                    resolved_date: None, hidden: 0,
+                }
+            }).collect();
+            let byte_options = moss_core::source_edit::TreeOptions {
+                page_settings_dirs: Default::default(),
+                passthrough: vec!["index.html".into(), "fr/index.html".into(), "app/index.html".into()],
+                ..options
+            };
+            let from_bytes = moss_core::source_edit::build_tree_root(&raw, &byte_options);
+            assert_eq!(serde_json::to_value(&desktop).unwrap(), serde_json::to_value(&from_bytes).unwrap());
+            let names: Vec<_> = desktop.children.as_ref().unwrap().iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(&names[..5], ["chosen.md", "index.md", "dated.md", "2024-01-01-post.md", "plain.md"]);
+        }
     }
 }

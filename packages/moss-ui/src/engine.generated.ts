@@ -1832,7 +1832,7 @@ parent: string | null; state: TaskState }
  */
 export type ParsedFrontmatter = { 
 /**
- * [`content_hash`] of the file's bytes as read, before any newline
+ * [`crate::page::content_hash`] of the file's bytes as read, before any newline
  * normalisation. Empty while [`still_arriving`](Self::still_arriving).
  */
 hash: string; 
@@ -1863,7 +1863,7 @@ frontmatter_error?: string | null;
  * this document: an empty CM6 buffer over a file with content is the same
  * lie as the errno toast this replaced.
  * 
- * Set only by [`classify_source_read`], which is the one place in the
+ * Set only by [`super::classify_source_read`], which is the one place in the
  * editor that reads the cloud's answer. Never true together with content.
  */
 still_arriving?: boolean }
@@ -2299,7 +2299,7 @@ export type SaveEditorContentArgs = { filePath: VaultPath; frontmatter: JsonValu
  */
 export type SaveResult = 
 /**
- * Written. `hash` is the [`content_hash`] of the bytes now on disk, the
+ * Written. `hash` is the [`crate::page::content_hash`] of the bytes now on disk, the
  * base the editor's next save must name. `displaced` is the history
  * version that keeps the bytes this save replaced, when the save was
  * asked to keep them.
@@ -3014,15 +3014,14 @@ publish_date: string | null;
 date_source: DateSource; 
 /**
  * Whether this node is its parent folder's ELECTED home file — the single
- * winner of `moss_core::home::detect_home_file_in_folder_marked` (order:
+ * winner of `crate::home::detect_home_file_in_folder_marked` (order:
  * `home: true` frontmatter marker › index stems › self-named folder note ›
  * first document alphabetically), computed per folder in
- * `list_tree_inner_cached` with the folder's REAL basename (so the project
+ * `build_tree_root` with the folder's REAL basename (so the project
  * root's self-named home is recognized too). At most one child per folder
  * is `true`; always `false` for directories. The frontend consumes this
  * flag (`entries.find(e => e.is_home)`) instead of re-deriving the
- * election — the backend owns the home decision (consolidation-map
- * homeRank row).
+ * election — the core owns the home decision.
  */
 is_home: boolean; 
 /**
@@ -3035,7 +3034,7 @@ children: TreeNode[] | null; hidden: number;
 file_id: string | null; 
 /**
  * The file's role on the site when it has a special one, decided by
- * `classify::special_file_kind`. Always `None` for folders.
+ * `super::policy::special_file_kind`. Always `None` for folders.
  */
 special?: SpecialFileKind | null }
 
