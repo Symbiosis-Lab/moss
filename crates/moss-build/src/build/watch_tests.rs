@@ -1266,6 +1266,24 @@ fn gate_suppresses_when_every_path_is_unchanged() {
     assert!(!should_rebuild_for_paths(folder.to_str().unwrap(), &paths, None));
 }
 
+/// The build stats a page, reads it, and a same-size save lands in the same
+/// mtime tick: the recorded stat matches the file while the bytes differ. The
+/// manifest's capture clock marks that mtime racy, so the gate hashes.
+#[test]
+fn gate_hashes_a_save_in_the_same_mtime_tick_as_the_build_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path();
+    let p = gate_write_file(folder, "a.md", b"saved");
+    let stat = FileStat::of(&fs::metadata(&p).unwrap());
+    assert_ne!(stat.mtime_nanos, Some(0), "needs a sub-second mtime, or the stat tier never vouches");
+
+    let mut hashes = crate::types::content::SiteHashes::new();
+    hashes.captured_at = crate::build::stat::recording_clock();
+    hashes.sources.insert("a.md".into(), SourceMetadata { hash: gate_sha256_hex(b"older"), stat });
+
+    assert!(should_rebuild_for_paths(folder.to_str().unwrap(), &[p], Some(&hashes)));
+}
+
 #[test]
 fn gate_passes_when_any_path_is_changed() {
     let dir = tempfile::tempdir().unwrap();

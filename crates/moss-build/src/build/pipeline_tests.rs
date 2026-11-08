@@ -149,6 +149,20 @@ fn build_test_full_with_gates(
     resolved_slots: &ResolvedSlots,
     gates: crate::build::render::IncrementalGates,
 ) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+    build_test_with_stash(folder_path, site_dir_state, progress_sender, server_port, services, resolved_slots, gates)
+        .map(|(is_empty, missing, _)| (is_empty, missing))
+}
+
+/// `build_test_full_with_gates`, also handing back the hashes the watcher stashes.
+fn build_test_with_stash(
+    folder_path: &str,
+    site_dir_state: Option<&SiteDirectoryState>,
+    progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
+    server_port: Option<u16>,
+    services: Option<&BuildServices>,
+    resolved_slots: &ResolvedSlots,
+    gates: crate::build::render::IncrementalGates,
+) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>, crate::types::content::SiteHashes), String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -171,7 +185,7 @@ fn build_test_full_with_gates(
             is_empty,
             bg_handle,
             build_documents: _documents,
-            content_hashes: _content_hashes,
+            content_hashes,
             missing_references,
             unresolved_inputs: _unresolved_inputs,
             cancelled: _cancelled,
@@ -208,7 +222,7 @@ fn build_test_full_with_gates(
                 }
             }
         }
-        Ok((is_empty, missing_references))
+        Ok((is_empty, missing_references, content_hashes))
     })
 }
 
@@ -275,6 +289,49 @@ fn a_replayed_page_records_the_bytes_it_was_replayed_from() {
     let want = crate::build::render::blocking::source_metadata(None, edited.as_bytes()).hash;
     let recorded = load_previous_hashes(folder).sources.get("index.md").map(|m| m.hash.clone());
     assert_eq!(recorded, Some(want), "the replayed page is recorded at the bytes it was replayed from");
+    crate::build::parse_cache::reset_for_tests();
+}
+
+/// Every page entry in the watch stash is the hash of the bytes the render
+/// read, never of the file as it stands when the stash is taken. The watcher
+/// gates an event that arrived during a build against that stash, so a save
+/// landing after the read must not match it. Covers a page read fresh, a page
+/// replayed from the parse cache, and a slot source.
+#[test]
+fn the_stash_records_the_bytes_the_render_read_not_a_later_save() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let hash = |s: &str| crate::build::render::blocking::source_metadata(None, s.as_bytes()).hash;
+    let build = || build_test_with_stash(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build").2;
+    let build_saving_during = |read: (&str, &str), page: &'static str, footer: &'static str| {
+        let d = dir.clone();
+        crate::build::render::blocking::AFTER_THE_READS.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                fs::write(d.join("index.md"), page).unwrap();
+                fs::write(d.join("footer.md"), footer).unwrap();
+            }))
+        });
+        let stash = build();
+        assert!(crate::build::render::blocking::AFTER_THE_READS.with(|h| h.borrow().is_none()), "the save ran inside the build");
+        let sealed = load_previous_hashes(folder);
+        for (key, map) in [("stash", &stash), ("sealed manifest", &sealed)] {
+            let recorded = |src: &str| map.sources.get(src).map(|m| m.hash.clone());
+            assert_eq!(recorded("index.md"), Some(hash(read.0)), "the {key} records the page the render read");
+            assert_eq!(recorded("footer.md"), Some(hash(read.1)), "the {key} records the footer the render read");
+        }
+    };
+
+    fs::write(dir.join("index.md"), "# Home\nfirst").unwrap();
+    fs::write(dir.join("footer.md"), "chrome one").unwrap();
+    build_saving_during(("# Home\nfirst", "chrome one"), "# Home\nsecond", "chrome two");
+
+    build();
+    build_saving_during(("# Home\nsecond", "chrome two"), "# Home\nthird", "chrome three");
+    let stats = crate::build::parse_cache::last_stats().expect("completed cache stats");
+    assert!(stats.eligible && !stats.missed("index.md") && !stats.missed("footer.md"), "the last build must replay both, or this proves nothing: {stats:?}");
     crate::build::parse_cache::reset_for_tests();
 }
 

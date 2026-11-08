@@ -996,6 +996,10 @@ pub fn generate_blocking_content_for_build(
         (docs, deferred_mutex.into_inner().unwrap(), source_records)
     };
 
+    #[cfg(test)]
+    if let Some(hook) = AFTER_THE_READS.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
     let folder_index = crate::build::folder_index::NoFolderIndex;
     let url_index = crate::build::folder_index::NoUrlIndex;
     let reference_context = moss_core::resolve::reference::ReferenceContext {
@@ -3565,6 +3569,12 @@ pub(super) fn resolve_favicon(
         used_default,
         raster_sizes,
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once after the render has read every page, before any source hash is registered.
+    pub(crate) static AFTER_THE_READS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]

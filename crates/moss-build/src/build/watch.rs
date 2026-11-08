@@ -704,6 +704,7 @@ pub(crate) enum SourceCheck {
 ///    - Hash match → `Unchanged`.
 ///    - Hash mismatch → `Changed`.
 /// 4. Any I/O error while reading metadata or bytes → `Unknown` (fail open).
+#[cfg(test)]
 pub(crate) fn source_metadata_matches(meta: &SourceMetadata, fs_path: &Path) -> SourceCheck {
     source_metadata_matches_at(meta, fs_path, None)
 }
@@ -897,7 +898,7 @@ pub fn should_rebuild_for_paths(
             Some(m) => m,
             None => return true, // unknown to manifest → fail open
         };
-        match source_metadata_matches(meta, abs) {
+        match source_metadata_matches_at(meta, abs, hashes.captured_at) {
             SourceCheck::Unchanged => continue,
             SourceCheck::Changed | SourceCheck::Unknown => return true,
         }
