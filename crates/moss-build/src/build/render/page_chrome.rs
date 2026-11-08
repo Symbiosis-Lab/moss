@@ -89,7 +89,7 @@ impl PageChromeContext<'_, '_> {
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
-        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
+        ).with_color_scheme(self.layout.color_scheme).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
             .with_asset_snapshot(self.media_lookup.asset_snapshot());
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
@@ -137,6 +137,18 @@ impl PageChromeContext<'_, '_> {
         let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
         body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
         if contents_pictures { body_attrs.push_str(r#" data-contents="pictures""#); }
+        // The body names the mode only where the header really stays: a site
+        // with no header has nothing to keep, and a header laid over the
+        // page's opening hero scrolls away with it, so the island keeps its bar.
+        let header_over = doc
+            .and_then(|d| d.hero_html.as_deref())
+            .and_then(|h| h.split('>').next())
+            .is_some_and(|open_tag| open_tag.contains(r#" data-header="over""#));
+        if self.layout.header != crate::build::components::nav::HeaderMode::None && !header_over {
+            if let Some(value) = self.layout.header_scroll.attr_value() {
+                body_attrs.push_str(&format!(r#" data-header-scroll="{value}""#));
+            }
+        }
         if let Some(section) = doc.and_then(|d| d.section.as_ref()) {
             if !section.segment.is_empty() {
                 body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));
@@ -160,6 +172,7 @@ impl PageChromeContext<'_, '_> {
             navigation: nav.generate_navigation(),
             has_header: self.layout.header != crate::build::components::nav::HeaderMode::None,
             colophon: self.layout.colophon,
+            color_scheme: self.layout.color_scheme,
             colophon_credit: self.layout.colophon_credit.clone(),
             nav_island: if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
             footer: Some(nav.generate_footer(self.show_rss_in_footer)),

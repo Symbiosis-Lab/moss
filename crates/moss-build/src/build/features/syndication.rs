@@ -1,6 +1,6 @@
-//! Where a page was also published: the "Also on" line at the end of an
-//! article, and the one host-to-platform-name table the comment "Reply on"
-//! link shares.
+//! Where a page was also published: its copies marked at the end of an
+//! article for tools to read, never drawn, and the one host-to-platform-name
+//! table the comment "Reply on" link shares.
 
 use crate::i18n::Language;
 
@@ -44,10 +44,11 @@ fn link_label(url: &str) -> Option<String> {
     Some(host.strip_prefix("www.").unwrap_or(host).to_string())
 }
 
-/// The "Also on" line for an article's `syndicated:` list, or `None` when no
-/// entry is an http(s) address. `rel="syndication"` and `u-syndication` are
-/// IndieWeb's markup, which tools such as Bridgy read to pair a copy with its
-/// original.
+/// The copies in an article's `syndicated:` list, or `None` when no entry is
+/// an http(s) address. The element is `hidden`: moss adds nothing visible to an
+/// article on its own. `rel="syndication"` and `u-syndication` are IndieWeb's
+/// markup, which tools such as Bridgy read inside the article to pair a copy
+/// with its original.
 pub fn render_syndication_line(urls: &[String], lang: Language) -> Option<String> {
     let links: Vec<String> = urls
         .iter()
@@ -65,7 +66,7 @@ pub fn render_syndication_line(urls: &[String], lang: Language) -> Option<String
         return None;
     }
     Some(format!(
-        "<p class=\"moss-syndication\"><span class=\"moss-syndication-label\">{}</span> {}</p>",
+        "<p class=\"moss-syndication\" hidden><span class=\"moss-syndication-label\">{}</span> {}</p>",
         crate::i18n::t(lang, "also_on"),
         links.join(" · "),
     ))
@@ -101,6 +102,7 @@ mod tests {
         assert!(bsky < masto && masto < matters, "{html}");
         assert_eq!(html.matches("rel=\"syndication\" class=\"u-syndication\"").count(), 3, "{html}");
         assert!(html.contains("Also on"), "{html}");
+        assert!(html.starts_with("<p class=\"moss-syndication\" hidden>"), "{html}");
     }
 
     #[test]

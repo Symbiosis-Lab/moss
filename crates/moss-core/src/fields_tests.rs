@@ -269,6 +269,7 @@ fn parse_place_takes_each_name_and_refuses_others() {
         ("subtitle", Some(Place::Subtitle)),
         ("facts", Some(Place::Facts)),
         ("key-figure", Some(Place::KeyFigure)),
+        ("end", Some(Place::End)),
         ("none", None),
         ("sidebar", None),
     ];

@@ -1,7 +1,6 @@
 //! DNS record CRUD endpoints for moss-seta.
-//!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use super::client::{MossSetaClient, SetaError};
 
@@ -54,10 +53,7 @@ impl MossSetaClient {
         domain: &str,
         records: &[crate::config::deployment::DnsRecord],
     ) -> Result<DnsConfigureResponse, SetaError> {
-        let path = format!("/api/domains/{}/dns", domain);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "POST {} domain={} records={}", url, domain, records.len());
+        let path = format!("/api/domains/{}/dns", urlencoding::encode(domain));
 
         // Convert domain DnsRecord to API format
         let api_records: Vec<serde_json::Value> = records.iter().map(|r| {
@@ -67,21 +63,7 @@ impl MossSetaClient {
                 "value": r.value,
             })
         }).collect();
-
-        let response = self.client
-            .post(&url)
-            .header("Authorization", auth_header)
-            .json(&serde_json::json!({ "records": api_records }))
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        Self::send_json(self.signed_json(Method::POST, &path, &serde_json::json!({ "records": api_records }))?).await
     }
 
     /// Get current DNS zone records for a domain.
@@ -92,23 +74,6 @@ impl MossSetaClient {
     /// # Arguments
     /// * `domain` - The domain to fetch DNS records for
     pub async fn get_dns_zone(&self, domain: &str) -> Result<DnsZoneResponse, SetaError> {
-        let path = format!("/api/domains/{}/dns", domain);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {} domain={}", url, domain);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.get_json(&format!("/api/domains/{}/dns", urlencoding::encode(domain))).await
     }
 }

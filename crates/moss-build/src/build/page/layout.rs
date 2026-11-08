@@ -44,6 +44,10 @@ pub struct LayoutConfig {
     pub colophon_credit: Option<crate::build::render::credits::ColophonCredit>,
     /// `[site].header` — resolved. See `crate::build::components::nav::HeaderMode`.
     pub header: crate::build::components::nav::HeaderMode,
+    /// `[site].header_scroll` — resolved. See `crate::build::components::nav::HeaderScroll`.
+    pub header_scroll: crate::build::components::nav::HeaderScroll,
+    /// `[site].color_scheme` — automatic reader choice or a fixed palette.
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
@@ -88,8 +92,10 @@ impl LayoutConfig {
             floating_nav: false,
             ai: Default::default(),
             colophon: true,
+            color_scheme: Default::default(),
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
+            header_scroll: crate::build::components::nav::HeaderScroll::Static,
             lang_tag: "en".to_string(),
             place_maps: None,
             term_nav: Vec::new(),
@@ -191,9 +197,20 @@ impl LayoutConfig {
         self
     }
 
+    pub fn with_color_scheme(mut self, color_scheme: crate::build::page::color_scheme::ColorScheme) -> Self {
+        self.color_scheme = color_scheme;
+        self
+    }
+
     /// Set `[site].header` (default `HeaderMode::Brand`)
     pub fn with_header_mode(mut self, header: crate::build::components::nav::HeaderMode) -> Self {
         self.header = header;
+        self
+    }
+
+    /// Set `[site].header_scroll` (default `HeaderScroll::Static`)
+    pub fn with_header_scroll(mut self, header_scroll: crate::build::components::nav::HeaderScroll) -> Self {
+        self.header_scroll = header_scroll;
         self
     }
 

@@ -465,7 +465,7 @@ impl ConfigFile {
                         ));
                     }
                 }
-                let place = Self::declared_place(sub, name, &mut problems);
+                let place = Self::declared_place(sub, name, FieldKind::Text, &mut problems);
                 let label = Self::declared_labels(sub, "label", name, &mut problems);
                 decls.push(FieldDecl { name: name.clone(), place, label, ..Default::default() });
                 continue;
@@ -482,7 +482,7 @@ impl ConfigFile {
                 continue;
             };
             for key in sub.keys() {
-                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in" | "card") {
+                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in" | "card" | "pictures") {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }
@@ -524,8 +524,9 @@ impl ConfigFile {
                 }
                 (_, None) => Vec::new(),
             };
-            let place = Self::declared_place(sub, name, &mut problems);
+            let place = Self::declared_place(sub, name, kind, &mut problems);
             let label = Self::declared_labels(sub, "label", name, &mut problems);
+            let pictures = Self::declared_pictures(sub, name, place, &mut problems);
             let text = if kind == FieldKind::Url {
                 Self::declared_labels(sub, "text", name, &mut problems)
             } else {
@@ -536,7 +537,7 @@ impl ConfigFile {
             };
             let scope = Self::string_list(sub, "in", &format!("fields.{name}"), &mut problems);
             let card = Self::declared_card(sub, name, kind, &mut problems);
-            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, text, scope, of, card });
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, text, scope, of, card, pictures });
         }
         let declared: Vec<String> = decls.iter().filter(|d| d.kind != FieldKind::Group).map(|d| d.name.clone()).collect();
         let groups: Vec<String> = decls.iter().filter(|d| d.kind == FieldKind::Group).map(|d| d.name.clone()).collect();
@@ -577,9 +578,13 @@ impl ConfigFile {
     }
 
     /// A declaration's `place`, when it names one. `none` and an absent key both mean no place.
-    fn declared_place(sub: &toml::Table, name: &str, problems: &mut Vec<String>) -> Option<moss_core::fields::Place> {
-        use moss_core::fields::{parse_place, place_names};
+    fn declared_place(sub: &toml::Table, name: &str, kind: moss_core::fields::FieldKind, problems: &mut Vec<String>) -> Option<moss_core::fields::Place> {
+        use moss_core::fields::{parse_place, place_names, FieldKind};
         match sub.get("place").and_then(|v| v.as_str()) {
+            Some("end") if !matches!(kind, FieldKind::Page | FieldKind::Pages) => {
+                problems.push(format!("[fields.{name}] has place \"end\", which draws linked pages and so needs type \"page\" or \"pages\"; it draws nowhere"));
+                None
+            }
             None | Some("none") => None,
             Some(v) => match parse_place(v) {
                 Some(place) => Some(place),
@@ -591,6 +596,29 @@ impl ConfigFile {
                     None
                 }
             },
+        }
+    }
+
+    /// A declaration's `pictures`: how many of each linked page's pictures an `end` card draws, 1 to 12. Absent means the cover alone (0).
+    fn declared_pictures(sub: &toml::Table, name: &str, place: Option<moss_core::fields::Place>, problems: &mut Vec<String>) -> usize {
+        let Some(v) = sub.get("pictures") else { return 0 };
+        if place != Some(moss_core::fields::Place::End) {
+            problems.push(format!("[fields.{name}] has `pictures`, which only a field placed at \"end\" takes; ignoring it"));
+            return 0;
+        }
+        match v.as_integer() {
+            Some(1) => 1,
+            Some(n) => match moss_core::resolve::embed_renderer::folder_list::picture_count(&n.to_string()) {
+                Ok(n) => n,
+                Err(why) => {
+                    problems.push(format!("[fields.{name}] pictures: {why}; ignoring it"));
+                    0
+                }
+            },
+            None => {
+                problems.push(format!("[fields.{name}] `pictures` must be a whole number from 1 to 12; ignoring it"));
+                0
+            }
         }
     }
 

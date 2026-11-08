@@ -233,6 +233,11 @@ pub enum Block {
         /// knows; the callout then renders as a note.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unknown_kind: Option<String>,
+        /// The `name` of the exclusive group a folded callout belongs to: set
+        /// by [`crate::ast::accordion::group_callouts`] for a folded callout
+        /// directly inside `::: {accordion}`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
         children: Vec<Block>,
     },
     /// `- item` / `1. item`. Each item is a list of blocks (so list items
@@ -861,6 +866,7 @@ mod tests {
     fn block_callout_round_trips_through_serde() {
         let original = Block::Callout {
             unknown_kind: None,
+            group: None,
             kind: CalloutKind::Warning,
             fold: Some(Fold::Open),
             title: Some("Hey".to_string()),
@@ -907,5 +913,33 @@ pub fn is_link_row(inlines: &[Inline]) -> bool {
             Inline::Link { .. } | Inline::LineBreak => true,
             Inline::Text(t) => t.trim().is_empty(),
             _ => false,
+        })
+}
+
+/// [`is_link_row`] where every link has words in it. A link around nothing but
+/// a picture belongs to a figure or gallery, not to a row of buttons, and a
+/// picture anywhere inside the link, however it is bolded or emphasised,
+/// keeps it out.
+pub fn is_text_link_row(inlines: &[Inline]) -> bool {
+    /// Whether the inlines hold some words and no image at any depth.
+    fn words_without_picture(inlines: &[Inline]) -> Option<bool> {
+        let mut words = false;
+        for i in inlines {
+            match i {
+                Inline::Image { .. } => return None,
+                Inline::Text(t) => words |= !t.trim().is_empty(),
+                Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) | Inline::Link { children: c, .. } => {
+                    words |= words_without_picture(c)?;
+                }
+                Inline::LineBreak => {}
+                _ => words = true,
+            }
+        }
+        Some(words)
+    }
+    is_link_row(inlines)
+        && inlines.iter().all(|i| match i {
+            Inline::Link { children, .. } => words_without_picture(children) == Some(true),
+            _ => true,
         })
 }

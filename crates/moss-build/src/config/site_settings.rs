@@ -54,6 +54,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "Show moss's one-line colophon as the footer's last line; false leaves it out of every page.",
         },
         SiteSettingInfo {
+            name: "color_scheme",
+            r#type: "string",
+            default: Some("auto"),
+            description: "Colour scheme: \"auto\" follows the reader's saved choice or OS preference; \"light\" and \"dark\" fix the palette and omit the theme toggle, keeping search and language controls.",
+        },
+        SiteSettingInfo {
             name: "comments",
             r#type: "bool",
             default: None,
@@ -94,6 +100,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "string",
             default: Some("brand"),
             description: "Header layout: \"brand\" shows the site name first; \"nav\" shows the link list first, opening with a Home link.",
+        },
+        SiteSettingInfo {
+            name: "header_scroll",
+            r#type: "string",
+            default: Some("static"),
+            description: "Whether the header stays at the top while the reader scrolls: \"static\" scrolls away with the page; \"sticky\" stays; \"hide\" stays, slides out of view once the reader scrolls down past it and slides back on any scroll up. Without JavaScript or under reduced motion \"hide\" is \"sticky\". Ignored when `header` is \"none\".",
         },
         SiteSettingInfo {
             name: "heading_anchors",

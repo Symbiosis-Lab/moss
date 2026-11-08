@@ -18,6 +18,7 @@ fn parses_basic_callout_with_inline_title() {
     match first_block("> [!note] Heads up\n> Body line 1.\n") {
         Block::Callout {
             unknown_kind: _,
+            group: _,
             kind,
             fold,
             title,
@@ -37,6 +38,7 @@ fn parses_titleless_callout() {
     match first_block("> [!warning]\n> Watch out.\n") {
         Block::Callout {
             unknown_kind: _,
+            group: _,
             kind,
             fold,
             title,
@@ -208,6 +210,7 @@ fn callout_multi_paragraph_body_preserves_blocks() {
     match first_block(md) {
         Block::Callout {
             unknown_kind: _,
+            group: _,
             kind,
             title,
             children,

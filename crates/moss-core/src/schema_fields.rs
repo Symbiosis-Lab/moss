@@ -1223,6 +1223,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "children_motion",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["marquee"]),
+        score: 85,
+        description: "With children_pictures on a summary listing, slide each row's strip of pictures sideways in a loop (\"marquee\"), rows alternating direction. Pauses on hover and focus, and stays still for readers who ask for less motion. Absent = a still strip.",
+        label: Some("Motion"),
+        label_key: "chip.children_motion.label",
+        group: "Child Styles",
+        applies_when: Some(LISTS_CHILDREN),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "children_pictures",
         field_type: FieldType::Integer,
         widget: Widget::NumberInput,
@@ -1267,6 +1280,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         label_key: "chip.logo.label",
         group: "Whole Site",
         file_kinds: Some(&[ExtKind::Image]),
+        applies_when: Some(&[HOME]),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "tagline",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=2, Importance=3 → score=76
+        score: 76,
+        description: "A phrase that follows the site name in the home page's browser-tab title and its link-preview title (\"Name - tagline\"). Every other page's title, the nav and the feed keep the plain site name",
+        label: Some("Tagline"),
+        label_key: "chip.tagline.label",
+        group: "Whole Site",
         applies_when: Some(&[HOME]),
         ..FIELD_DEFAULTS
     },

@@ -346,6 +346,7 @@ fn spa_inject_params(defaults: &crate::build::site_meta::spa_inject::SpaDefaults
         "raster_favicons": defaults.raster_favicons,
         "theme_color_light": defaults.theme_color_light,
         "theme_color_dark": defaults.theme_color_dark,
+        "color_scheme": defaults.color_scheme.fixed(),
     })
 }
 

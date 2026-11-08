@@ -2201,6 +2201,29 @@ explorer = false
 lat = 35.0
 lng = 135.0
 precision = "city"
+
+["Harbor Annex"]
+lat = 35.4
+lng = 135.4
+precision = "city"
+
+["Inland"]
+lat = 38.0
+lng = 138.0
+precision = "city"
+`,
+    "nearby.md": `---
+title: Nearby
+location: [Harbor, Harbor Annex, Inland]
+---
+
+Nearby places.
+`,
+    "maps.md": `---
+title: Maps
+---
+
+![[places/|style:map]]
 `,
   },
 };
@@ -4531,6 +4554,56 @@ children: false
   },
 };
 
+// A case study that ends on a hand-picked next project: `place = "end"` on a page field.
+// Served by playwright/field-place-end.config.ts.
+export const FIELD_PLACE_END_GATE: ScratchSiteSpec = {
+  name: "field-place-end-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    ".moss/config.toml": `[fields.next]
+type = "page"
+place = "end"
+label = "next project"
+pictures = 2
+`,
+    "index.md": `---
+title: Studio
+uid: "end00001"
+children: false
+---
+
+Two case studies.
+`,
+    "work/mill-house.md": `---
+title: Mill House
+uid: "end00010"
+next: "[[harbour-pavilion]]"
+---
+
+The mill opens onto the weir.
+
+## Method
+
+${Array.from({ length: 12 }, (_, i) => `Paragraph ${i + 1} of the long body, so the end of the page is well below the fold.`).join("\n\n")}
+`,
+    "work/harbour-pavilion.md": `---
+title: Harbour Pavilion
+uid: "end00020"
+---
+
+# Can a pier be a room?
+
+![Quay, one](../pics/1.png)
+
+![Quay, two](../pics/2.png)
+
+![Quay, three](../pics/3.png)
+`,
+  },
+};
+
 // A request form with one of each kind of field, for tests/render-gates/site/request-form.spec.ts
 // and playwright/request-form.config.ts.
 export const REQUEST_FORM: ScratchSiteSpec = {
@@ -4623,5 +4696,49 @@ country_map:
 lang = "en"
 `,
     ".moss/theme/style.css": THEME_FOCUS_RING,
+  },
+};
+
+// Sliding picture strips: three `motion:marquee` rows of a work feed, then a
+// `:::gallery marquee`, then a one-picture gallery too short to fill its box.
+// Served by playwright/marquee.config.ts.
+export const MARQUEE_GATE: ScratchSiteSpec = {
+  name: "marquee-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    "pics/4.png": syntheticBusyImage(640, 360),
+    "pics/5.png": syntheticBusyImage(300, 450),
+    "index.md": `---
+title: Work feed
+uid: "marq0001"
+children: false
+---
+
+![[work/|style:summary,pictures:5,motion:marquee]]
+
+:::gallery marquee
+![One](pics/1.png)
+*First caption*
+![Two](pics/2.png)
+*Second caption*
+![Three](pics/3.png)
+![Four](pics/4.png)
+:::
+
+:::gallery marquee
+![Alone](pics/5.png)
+:::
+`,
+    "work/index.md": `---
+title: Work
+uid: "marq0010"
+children: false
+---
+`,
+    "work/alpha.md": STRIP_PROJECT("Alpha Ventures"),
+    "work/beta.md": STRIP_PROJECT("Beta Ventures"),
+    "work/gamma.md": STRIP_PROJECT("Gamma Ventures"),
   },
 };

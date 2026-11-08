@@ -6,7 +6,7 @@
 //! page's language and typesetting. Pure: page links arrive as a closure.
 
 use crate::build::components::field_text::{datetime_attr, number_text, value_text};
-use crate::build::components::child_list;
+use crate::build::components::{child_list, child_summary};
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use moss_core::content_graph::ContentGraph;
@@ -128,8 +128,7 @@ pub fn draw_for_page(
     typesetting: Option<&str>,
 ) -> Placements {
     let page_href = |target: &str| {
-        let source = graph?.resolve_path(target, doc.source_path.as_deref()?)?;
-        let page = all_docs.iter().find(|d| d.source_path.as_deref() == Some(source.as_str()))?;
+        let page = linked_page(doc, all_docs, graph, target)?;
         Some(crate::build::markdown::pipeline::absolute_pretty_url(&page.url_path))
     };
     let mut drawn = draw(&doc.placed_fields, doc.lang, typesetting, &page_href);
@@ -146,6 +145,62 @@ pub fn draw_for_page(
         }
     }
     drawn
+}
+
+/// The page of `all_docs` that a page link `target` written on `doc` names.
+fn linked_page<'a>(doc: &ParsedDocument, all_docs: &'a [ParsedDocument], graph: Option<&ContentGraph>, target: &str) -> Option<&'a ParsedDocument> {
+    let source = graph?.resolve_path(target, doc.source_path.as_deref()?)?;
+    all_docs.iter().find(|d| d.source_path.as_deref() == Some(source.as_str()))
+}
+
+/// How an `end` card is drawn: everything the shared summary card needs beyond the linked page.
+pub struct EndCards<'a> {
+    pub graph: Option<&'a ContentGraph>,
+    pub root_path: &'a str,
+    pub dir_overrides: &'a std::collections::HashMap<String, String>,
+    pub typesetting: Option<&'a str>,
+    pub now: chrono::NaiveDateTime,
+    pub media_lookup: &'a crate::build::media::dimensions::MediaDimensionLookup,
+}
+
+/// The sections for `doc`'s fields placed at `end`: the pages a page field links to, each as the summary card a listing draws for it, under the field's label.
+/// A card headlines the linked page's opening heading when it has a different one, else its title. A link that names no page of the site draws nothing.
+pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &EndCards<'_>) -> String {
+    let card = |decl: &FieldDecl, link: &PageLink| {
+        let target = linked_page(doc, all_docs, cards.graph, &link.target)?;
+        let strip = Some(decl.pictures).filter(|n| *n >= 2);
+        let mut props = child_list::props_for_document(target, all_docs, cards.root_path, cards.dir_overrides, cards.typesetting, cards.now, strip);
+        if let Some(headline) = &target.opening_heading {
+            props.title = headline.clone();
+        }
+        // A hand-picked card names no date: the axis that says nothing about one.
+        Some(child_summary::render_with_sort(&props, doc.lang, cards.typesetting, Some(cards.media_lookup), moss_core::sort::SortAxis::Weight))
+    };
+    end_html(&doc.placed_fields, doc.lang, &card)
+}
+
+/// One `<section data-field>` per placed `end` field that has a card to draw, headed by the field's label.
+fn end_html(placed: &[Placed], lang: Language, card: &dyn Fn(&FieldDecl, &PageLink) -> Option<String>) -> String {
+    placed
+        .iter()
+        .filter_map(|p| {
+            let Placed::Value(decl, value) = p else { return None };
+            if decl.place != Some(Place::End) {
+                return None;
+            }
+            let links: &[PageLink] = match value {
+                TypedValue::Page(link) => std::slice::from_ref(link),
+                TypedValue::Pages(links) => links,
+                _ => return None,
+            };
+            let cards: String = links.iter().filter_map(|link| card(decl, link)).collect::<Vec<_>>().join("\n");
+            (!cards.is_empty()).then(|| {
+                let label = html_escape(&decl.label_for(lang.as_bcp47_attr()));
+                let list = crate::build::components::cards_container("list", false, false, &Default::default(), &cards);
+                format!("<section class=\"moss-field-end\" data-field=\"{}\">\n<h2 class=\"moss-field-end-label\">{label}</h2>\n{list}\n</section>\n", html_escape(&decl.name))
+            })
+        })
+        .collect()
 }
 
 /// The declarations a page draws, in declaration order. A group draws the

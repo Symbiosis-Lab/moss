@@ -26,6 +26,7 @@ export const CLUSTER_LAYER_ZOOM_GATE: ScratchSiteSpec = {
 
 [site]
 lang = "en"
+locator = "align-right"
 
 [terms.places]
 type = "place"

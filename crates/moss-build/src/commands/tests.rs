@@ -137,6 +137,7 @@ struct TestHost {
     announced: std::sync::Mutex<Vec<(String, String)>>,
     withdrawn: std::sync::Mutex<Vec<(String, String)>>,
     saved: std::sync::Mutex<Vec<String>>,
+    refuses_moss_dir: bool,
 }
 
 impl TestHost {
@@ -158,11 +159,19 @@ impl TestHost {
             announced: Default::default(),
             withdrawn: Default::default(),
             saved: Default::default(),
+            refuses_moss_dir: false,
         }
+    }
+    /// A host whose caller is across the network, as the HTTP carrier's is.
+    fn remote(root: &Path) -> Self {
+        TestHost { refuses_moss_dir: true, ..Self::site(root) }
     }
 }
 
 impl CommandHost for TestHost {
+    fn refuses_moss_dir(&self) -> bool {
+        self.refuses_moss_dir
+    }
     fn root(&self) -> &Path {
         self.root.as_deref().expect("a command read the root of a host with no folder open")
     }
@@ -786,4 +795,60 @@ fn the_contract_matches_the_command_table() {
         "{} is stale; regenerate it with UPDATE_ENGINE_CONTRACT=1 cargo test -p moss-build --lib commands::tests::the_contract",
         path.display()
     );
+}
+
+/// moss's own files are judged in any letter case, since a folder's file
+/// system may ignore case; the files an author edits there are not its own.
+#[test]
+fn moss_own_files_are_told_from_the_ones_an_author_edits() {
+    use crate::build::scan::classify::is_moss_internal;
+    for own in [".moss", ".moss/build.nosync/http-token", ".MOSS/plugins/new.wasm", ".moss/identity/secret-key"] {
+        assert!(is_moss_internal(Path::new(own)), "{own}");
+    }
+    for authored in [".moss/config.toml", ".moss/theme/style.css", ".moss/places.toml", "notes/.moss-ideas.md", "a.md"] {
+        assert!(!is_moss_internal(Path::new(authored)), "{authored}");
+    }
+}
+
+/// A remote caller's path into moss's own files is refused where it really
+/// leads: through a symlinked folder, for a file not created yet.
+#[cfg(unix)]
+#[test]
+fn a_remote_path_through_a_symlink_into_moss_own_files_is_refused() {
+    let (_d, root) = pages();
+    std::fs::create_dir_all(root.join(".moss/plugins")).unwrap();
+    std::os::unix::fs::symlink(root.join(".moss/plugins"), root.join("link")).unwrap();
+    let remote = TestHost::remote(&root);
+    assert!(super::resolve(&remote, &VaultPath::from("link/new.md")).is_err());
+    assert!(super::resolve(&remote, &VaultPath::from(".moss/build.nosync/http-token")).is_err());
+    assert!(super::resolve(&remote, &VaultPath::from(".moss/config.toml")).is_ok(), "the site's config is the author's");
+    assert!(super::resolve(&remote, &VaultPath::from("a.md")).is_ok());
+    assert!(super::resolve(&TestHost::site(&root), &VaultPath::from("link/new.md")).is_ok(), "the app's own host is unchanged");
+}
+
+/// A remote caller cannot copy, rename or move into moss's own folder, which
+/// would carry its files out under another name or put a folder in its place.
+#[tokio::test]
+async fn a_remote_caller_cannot_copy_rename_or_move_into_moss_own_folder() {
+    let (_d, root) = pages();
+    std::fs::create_dir_all(root.join(".moss/plugins")).unwrap();
+    std::fs::create_dir_all(root.join("plugins")).unwrap();
+    let remote = TestHost::remote(&root);
+    let refused = |out: Option<CommandResult>| matches!(out, Some(Err(CommandError::Failed(_))));
+    assert!(refused(write::dispatch(&remote, "duplicate_entry", json!({ "path": ".moss" })).await), "copy");
+    assert!(refused(write::dispatch(&remote, "move_entries", json!({ "paths": ["plugins"], "targetDir": ".moss" })).await), "move into");
+    assert!(refused(write::dispatch(&remote, "move_entries", json!({ "paths": [".moss"], "targetDir": "plugins" })).await), "move out");
+    assert!(root.join(".moss/plugins").is_dir() && root.join("plugins").is_dir(), "nothing moved");
+    let copies = std::fs::read_dir(&root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".moss")).count();
+    assert_eq!(copies, 1, "no copy of .moss was made");
+}
+
+/// A folder's derivation choice is never written for moss's own folders.
+#[tokio::test]
+async fn a_derivation_choice_for_moss_own_folder_is_refused() {
+    let (_d, root) = pages();
+    std::fs::create_dir_all(root.join(".moss/plugins")).unwrap();
+    let host = TestHost::site(&root);
+    let out = dispatch(&host, "set_folder_derivation", json!({ "folder": ".moss/plugins", "choice": "keep" })).await;
+    assert!(matches!(out, Some(Err(CommandError::Failed(_)))), "got {out:?}");
 }

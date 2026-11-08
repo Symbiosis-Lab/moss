@@ -230,6 +230,7 @@ fn render_block(
         }
         Block::Callout {
             unknown_kind: _,
+            group: _,
             kind,
             fold,
             title,

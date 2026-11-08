@@ -465,6 +465,8 @@ pub struct ParsedDocument {
     /// Pictures a `summary` row draws as a strip in place of its one cover
     /// (`children_pictures:`); see `FolderEmbedParams::pictures`.
     pub children_pictures: Option<u32>,
+    /// `children_motion:` — `Some("marquee")` slides that strip sideways.
+    pub children_motion: Option<String>,
     /// What this listing's folder cards say they count; absent = the built-in
     /// "N articles" text. Left out of the exported bindings: the listing
     /// reads it, no UI does.
@@ -570,6 +572,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub body_cover_candidates: Vec<String>,
+    /// The `# Heading` the body opens with when its text is not the title: a
+    /// case study's question over its name. A card for the page headlines it.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub opening_heading: Option<String>,
     /// Hero overlay text — the opening prose of `HeroShortcode.overlay_markdown`
     /// after running through `meta::extract_description`: its first paragraph,
     /// or that paragraph plus the next where the first is only a fragment (an
@@ -933,6 +940,11 @@ pub struct PageFeatures {
     /// runtime script via [`SiteAssets`]. Read from the typed AST
     /// (`moss_core::ast::has_scroll_row_recursive`).
     pub scroll_rows: bool,
+    /// True if the page has a `:::gallery marquee`, or a folder embed with
+    /// `motion:marquee` (set when the embed is expanded). A page's own
+    /// `children_motion` is read from the document itself. Gates `marquee.js`
+    /// via [`SiteAssets`].
+    pub marquee: bool,
     /// True if the page's hero is drawn from an event that has not ended, so
     /// it must step aside at view time. Gates `hero-ends.js` via
     /// [`SiteAssets`]. Set when the hero is drawn, after parsing.
@@ -991,6 +1003,8 @@ pub struct SiteAssets {
     pub has_footnotes: bool,
     /// Any page has a `:::grid N {scroll}` row. Gates `scroll-row.js`.
     pub scroll_rows: bool,
+    /// Any page has a picture strip that slides sideways. Gates `marquee.js`.
+    pub marquee: bool,
     /// Any page's hero is drawn from an event. Gates `hero-ends.js`.
     pub hero_ends: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
@@ -1078,6 +1092,7 @@ impl SiteAssets {
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
+            marquee: false,
             hero_ends: false,
             viewer: false,
             field_places: false,
@@ -1094,6 +1109,7 @@ impl SiteAssets {
             ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
+            out.marquee |= page.features.marquee || page.children_motion.is_some();
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;

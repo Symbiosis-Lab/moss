@@ -324,6 +324,22 @@ fn shared_social_data_write_refused_when_its_directory_is_symlinked_into_identit
     );
 }
 
+/// A symlinked folder inside the site that points into `.moss/` is refused
+/// for a path that does not name `.moss` itself.
+#[cfg(unix)]
+#[test]
+fn resolve_under_refuses_a_symlink_into_the_moss_directory() {
+    let root = project_root();
+    std::fs::create_dir_all(root.path().join(".moss/plugins/other")).unwrap();
+    std::os::unix::fs::symlink(root.path().join(".moss/plugins"), root.path().join("assets")).unwrap();
+
+    let err = PluginPath::sandboxed("assets/other/main.bundle.js")
+        .unwrap()
+        .resolve_under(root.path())
+        .expect_err("a project path that resolves into .moss/ must be refused");
+    assert!(err.contains(".moss"), "got: {err}");
+}
+
 /// The same class of escape, but leaving the vault entirely — containment
 /// under `base` must hold even when the target is not `.moss/identity/`.
 #[cfg(unix)]

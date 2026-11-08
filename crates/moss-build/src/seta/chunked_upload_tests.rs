@@ -599,3 +599,14 @@ async fn a_slow_link_walks_the_escalation_ladder_down() {
         "request sizes must be monotonically decreasing; sent {sizes:?}"
     );
 }
+
+/// The offset probe and the abort are signed for the session they name.
+#[tokio::test]
+async fn the_offset_probe_and_the_abort_are_signed() {
+    use crate::seta::client::tests::signed_requests;
+    let identity = crate::identity::Identity::generate().unwrap();
+    let probe = signed_requests(&identity, |c| async move { c.chunked_upload_offset("s1", "u1").await }).await;
+    assert_eq!((probe[0].method.as_str(), probe[0].path_and_query.as_str()), ("HEAD", "/api/sites/s1/upload/u1"));
+    let abort = signed_requests(&identity, |c| async move { c.abort_chunked_upload("s1", "u1").await }).await;
+    assert_eq!((abort[0].method.as_str(), abort[0].path_and_query.as_str()), ("DELETE", "/api/sites/s1/upload/u1"));
+}

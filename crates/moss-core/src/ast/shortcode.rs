@@ -129,6 +129,10 @@ pub struct GalleryShortcode {
     /// the width and every photo keeps its proportions) instead of the grid.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rows: bool,
+    /// `:::gallery marquee` — the pictures slide sideways in a loop, in one
+    /// row at a fixed height.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub marquee: bool,
     /// A caption for the whole gallery: the italic line under a line of several
     /// pictures, which no single picture owns. Empty when the author wrote none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -732,6 +736,7 @@ mod tests {
             ],
             width: None,
             rows: false,
+            marquee: false,
             caption: Vec::new(),
         });
         match &sc {
@@ -768,6 +773,7 @@ mod tests {
             }],
             width: None,
             rows: false,
+            marquee: false,
             caption: Vec::new(),
         });
         let s = serde_json::to_string(&sc).expect("serialize");

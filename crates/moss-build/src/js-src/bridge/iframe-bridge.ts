@@ -113,6 +113,7 @@ import { installCaptureResponder } from "./capture/responder";
     // Set the attribute WITHOUT dispatching moss-theme-change (no echo loop);
     // a same-value write would still fire the reporters' observer, so skip it.
     const root = document.documentElement;
+    if (root.hasAttribute("data-moss-color-scheme")) return;
     if (root.getAttribute("data-theme") !== theme) root.setAttribute("data-theme", theme);
     // The site's own key, so the next document's pre-paint (shell.html) shows
     // what the shell last pushed instead of what the site last toggled. The
@@ -1136,14 +1137,20 @@ import { installCaptureResponder } from "./capture/responder";
         // Sync <html> attributes (lang, data-theme, class) — the separate
         // head/body morphs don't touch the root element itself.
         const newRoot = doc.documentElement;
+        // A rebuild can return a fixed site to auto. Remove only the policy's
+        // own attributes; unrelated runtime root styles still belong to the page.
+        if (document.documentElement.hasAttribute("data-moss-color-scheme") && !newRoot.hasAttribute("data-moss-color-scheme")) {
+          document.documentElement.removeAttribute("data-moss-color-scheme");
+          document.documentElement.style.removeProperty("color-scheme");
+        }
         for (const attr of Array.from(newRoot.attributes)) {
           if (document.documentElement.getAttribute(attr.name) !== attr.value) document.documentElement.setAttribute(attr.name, attr.value);
         }
         // Re-assert the shell-driven theme: the fetched HTML may carry a
-        // different (or no) data-theme; the shell's choice wins inside moss.
+        // different (or no) data-theme; fixed sites keep their own policy.
         // No-op when not shell-mounted; only on a real difference, since a
         // same-value write still queues a mutation record (reporters re-fire).
-        if (currentShellTheme && document.documentElement.getAttribute("data-theme") !== currentShellTheme) {
+        if (currentShellTheme && !document.documentElement.hasAttribute("data-moss-color-scheme") && document.documentElement.getAttribute("data-theme") !== currentShellTheme) {
           document.documentElement.setAttribute("data-theme", currentShellTheme);
         }
         // Re-assert shell chrome. The fetched HTML carries `moss-shell-frame`

@@ -882,6 +882,44 @@ body > header {
   background: var(--moss-header-bg, transparent);
 }
 
+/* `[site].header_scroll`: the header stays at the top; under "hide" the script
+   (header-scroll.ts) slides it away with `data-hidden` while the reader scrolls
+   down. A page whose header is laid over its hero carries no attribute, so it
+   keeps its own placement and its island bar. The band needs a
+   paint of its own once page content scrolls beneath it. Both motions are off
+   under reduced motion: the header just stays. */
+body[data-header-scroll] > header {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  background: var(--moss-header-bg, var(--moss-color-bg));
+}
+
+html:has(body[data-header-scroll]) {
+  scroll-padding-top: calc(var(--moss-header-height, 4.5rem) + var(--moss-space-sm));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Outranks the immersive-mode fade on `body:not(.immersive-fs-active) > header`,
+     which would otherwise replace the slide with its own transition; the fade is
+     kept alongside. */
+  body[data-header-scroll="hide"]:not(.immersive-fs-active) > header {
+    transition:
+      transform var(--moss-header-scroll-duration, 0.2s) var(--moss-header-scroll-ease, ease-out),
+      opacity 200ms ease 100ms;
+  }
+
+  body[data-header-scroll="hide"] > header[data-hidden] {
+    transform: translateY(-100%);
+  }
+}
+
+/* The header is always there, so the island's bar would repeat it. The island
+   stays for its contents ruler. */
+body[data-header-scroll] > .moss-nav-island :is(.moss-nav-island-bar, .moss-nav-island-menu) {
+  display: none;
+}
+
 /* Chrome clearance is NOT applied here. The moss app shell insets its
    preview iframe below the floating titlebar, so the previewed document never
    paints under the chrome and needs no compensating padding. site.css therefore
@@ -7332,7 +7370,7 @@ article a:where(:not(.moss-btn)):focus {
   min-inline-size: 0;
 }
 
-.moss-cards[data-layout="list"] .moss-card-pictures > .moss-card-cover {
+.moss-cards[data-layout="list"] .moss-card-pictures .moss-card-cover {
   inline-size: auto;
   aspect-ratio: var(--moss-card-pictures-ratio, 5 / 3);
 }
@@ -7344,8 +7382,136 @@ article a:where(:not(.moss-btn)):focus {
     scroll-snap-type: inline proximity;
     overscroll-behavior-inline: contain;
   }
-  .moss-card-pictures > .moss-card-cover {
+  .moss-card-pictures .moss-card-cover {
     scroll-snap-align: start;
+  }
+}
+
+/* A strip that slides sideways in a loop (`motion:marquee`, `:::gallery
+   marquee`). The build draws its pictures twice in one track, the second set
+   hidden from assistive technology. Until marquee.js has marked the strip
+   `data-marquee-ready`, and for a reader who asks for less motion, the track
+   and the first set vanish into the strip's own layout and the copy is not
+   drawn, so the strip is the still one above. Otherwise the track slides by
+   one set's width, which is where the copy starts, so the loop has no seam.
+   Hooks: `--moss-marquee-speed` (pixels per second, read by the script),
+   `--moss-marquee-hover` (`running` keeps it moving under the pointer),
+   `--moss-marquee-item-width` for a listing strip, `--moss-marquee-height`
+   for a gallery. */
+.moss-marquee-track,
+.moss-marquee-set {
+  display: contents;
+}
+
+.moss-marquee-set[inert] {
+  display: none;
+}
+
+@keyframes moss-marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-motion="marquee"][data-marquee-ready] {
+    display: block;
+    overflow: hidden;
+    scroll-snap-type: none;
+  }
+
+  [data-marquee-ready] > .moss-marquee-track {
+    display: flex;
+    inline-size: max-content;
+    animation: moss-marquee var(--moss-marquee-duration, 40s) linear infinite;
+  }
+
+  [data-marquee-ready][data-marquee-reverse] > .moss-marquee-track {
+    animation-direction: reverse;
+  }
+
+  /* A strip no wider than its box stays where it is, the copy undrawn. */
+  [data-marquee-ready][data-marquee-still] > .moss-marquee-track {
+    animation: none;
+  }
+
+  [data-marquee-ready][data-marquee-still] .moss-marquee-set[inert] {
+    display: none;
+  }
+
+  /* The page's pause button wins over the hover token. */
+  :root[data-marquee-paused] [data-marquee-ready] > .moss-marquee-track {
+    animation-play-state: paused;
+  }
+
+  [data-marquee-ready]:hover > .moss-marquee-track {
+    animation-play-state: var(--moss-marquee-hover, paused);
+  }
+
+  /* A listing row's strip sits inside the card's link, so the link's own focus counts. */
+  [data-marquee-ready]:focus-within > .moss-marquee-track,
+  a:focus-visible [data-marquee-ready] > .moss-marquee-track {
+    animation-play-state: paused;
+  }
+
+  /* The set ends with one gap, so two sets are exactly twice one set. */
+  [data-marquee-ready] .moss-marquee-set {
+    display: flex;
+    flex: none;
+    gap: var(--moss-card-pictures-gap, var(--moss-space-xs));
+    padding-inline-end: var(--moss-card-pictures-gap, var(--moss-space-xs));
+  }
+
+  .moss-cards[data-layout="list"] .moss-card-pictures[data-marquee-ready] .moss-card-cover {
+    flex: none;
+    inline-size: var(--moss-marquee-item-width, clamp(12rem, 28vw, 22rem));
+  }
+
+  .moss-gallery[data-marquee-ready] .moss-marquee-set {
+    gap: var(--moss-gallery-gap, 6px);
+    padding-inline-end: var(--moss-gallery-gap, 6px);
+  }
+
+  .moss-gallery[data-marquee-ready] .moss-gallery-item {
+    flex: none;
+    inline-size: calc(var(--moss-marquee-height, 14rem) * var(--ar, 1.5));
+  }
+
+  .moss-gallery[data-marquee-ready] .moss-gallery-item img {
+    height: var(--moss-marquee-height, 14rem);
+  }
+}
+
+/* The page's one button that pauses every sliding strip (WCAG 2.2.2), drawn by
+   marquee.ts before the first strip that moves. Small and quiet; a theme may
+   restyle it but should keep it visible. Nothing moves for a reader who asks
+   for less motion, so it is not shown. */
+.moss-marquee-control {
+  display: block;
+  min-block-size: 24px;
+  margin-block: 0 var(--moss-space-xs);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--moss-color-text-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+.moss-marquee-control:hover {
+  color: var(--moss-color-text);
+}
+
+.moss-marquee-control[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce), print {
+  .moss-marquee-control {
+    display: none;
   }
 }
 

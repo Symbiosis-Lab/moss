@@ -174,6 +174,36 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Under `mobile=overlay`, the height of image reserved above the text panel on a narrow viewport. Without a floor here the panel could grow tall enough (a heading plus a long paragraph and a link) to cover the whole hero, leaving no picture at all — a photo the words sit on, not one they erase. Raise it for a subject that needs more room to read, or lower it toward `0px` for a short caption where the default reserve would look like wasted space.",
     },
     CustomProp {
+        name: "--moss-header-scroll-duration",
+        owner: "body > header",
+        default: "0.2s",
+        description: "How long the header takes to slide out of view and back under `[site].header_scroll = \"hide\"`. Not applied under reduced motion, where the header stays.",
+    },
+    CustomProp {
+        name: "--moss-header-scroll-ease",
+        owner: "body > header",
+        default: "ease-out",
+        description: "The easing of that slide, any CSS timing function.",
+    },
+    CustomProp {
+        name: "--moss-header-height",
+        owner: "html",
+        default: "4.5rem until measured",
+        description: "The header's height in px, written by the site runtime on a site with `[site].header_scroll` set; the root's `scroll-padding-top` is this plus a small gap, so a heading reached by a link is not left under the sticky header. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-callout-fold-duration",
+        owner: "details.callout",
+        default: "0.4s",
+        description: "How long a folded callout's answer takes to open or close. Browsers without animated `<details>` content, and readers who ask for reduced motion, get no motion at all.",
+    },
+    CustomProp {
+        name: "--moss-callout-fold-ease",
+        owner: "details.callout",
+        default: "cubic-bezier(0.19, 1, 0.22, 1)",
+        description: "The easing of that motion, any CSS timing function: an expo ease-out by default.",
+    },
+    CustomProp {
         name: "--moss-nav-island-display",
         owner: "moss-nav-island",
         default: "block",
@@ -352,6 +382,36 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-card-pictures",
         default: "5 / 3",
         description: "Aspect ratio every picture in a summary row's strip (`pictures:N`) is cropped to. `--moss-card-cover-fit` applies to the strip too.",
+    },
+    CustomProp {
+        name: "--moss-marquee-speed",
+        owner: "moss-marquee-track",
+        default: "60",
+        description: "How fast a marquee strip (`motion:marquee`, `:::gallery marquee`) slides, in pixels per second, as a bare number. marquee.js divides one set's width by it to set `--moss-marquee-duration`, so a long strip and a short one move at the same pace.",
+    },
+    CustomProp {
+        name: "--moss-marquee-duration",
+        owner: "moss-marquee-track",
+        default: "40s",
+        description: "Time one loop of a marquee takes. Set by marquee.js on each strip from its width and `--moss-marquee-speed`; set `--moss-marquee-speed` instead of this.",
+    },
+    CustomProp {
+        name: "--moss-marquee-hover",
+        owner: "moss-marquee-track",
+        default: "paused",
+        description: "`animation-play-state` of a marquee under the pointer: `paused` (the default, so a reader can stop it) or `running` to keep it moving. Focus inside the strip always pauses it.",
+    },
+    CustomProp {
+        name: "--moss-marquee-item-width",
+        owner: "moss-card-pictures",
+        default: "clamp(12rem, 28vw, 22rem)",
+        description: "Width of each picture in a sliding summary-row strip; `--moss-card-pictures-ratio` sets its height.",
+    },
+    CustomProp {
+        name: "--moss-marquee-height",
+        owner: "moss-gallery",
+        default: "14rem",
+        description: "Height of the pictures in a `:::gallery marquee`; each keeps its own proportions, so its width follows.",
     },
     CustomProp {
         name: "--moss-card-pictures-gap",
@@ -745,9 +805,15 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
     },
     ScopeAttr {
         selector: "html",
+        name: "data-moss-color-scheme",
+        values: &["light", "dark"],
+        description: "The site's fixed `[site].color_scheme`. Absent in auto mode. Fixed pages omit the theme toggle and ignore the reader's stored theme, OS preference and preview shell theme.",
+    },
+    ScopeAttr {
+        selector: "html",
         name: "data-theme",
         values: &["light", "dark"],
-        description: "The resolved colour scheme, set on `<html>` before the first paint by an inline script, from the reader's stored choice or their OS preference. So `[data-theme=\"dark\"]` alone is sufficient for dark-mode rules — do not also write an `@media (prefers-color-scheme: dark)` block, which ignores the toggle and will disagree with it.",
+        description: "The resolved colour scheme, set on `<html>` before the first paint by an inline script, from `[site].color_scheme` when fixed to `light` or `dark`, otherwise from the reader's stored choice or their OS preference. So `[data-theme=\"dark\"]` alone is sufficient for dark-mode rules — do not also write an `@media (prefers-color-scheme: dark)` block, which ignores the toggle and will disagree with it.",
     },
     ScopeAttr {
         selector: "article > [data-width]",

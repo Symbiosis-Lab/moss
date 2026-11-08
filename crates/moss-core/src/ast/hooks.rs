@@ -260,6 +260,9 @@ pub trait RenderHooks {
                 if args.rows {
                     out.push_str(r#" data-layout="rows""#);
                 }
+                if args.marquee {
+                    out.push_str(r#" data-motion="marquee""#);
+                }
                 out.push('>');
                 // Every item goes through `synthesize_image_html` as a
                 // `GalleryThumb`, so every `<img>` is synth-emitted (the
@@ -269,6 +272,12 @@ pub trait RenderHooks {
                 let empty_snapshot = crate::asset_snapshot::AssetSnapshot::new();
                 let assets_for_synth = self.gallery_assets().unwrap_or(&empty_snapshot);
                 let total = args.items.len();
+                // A marquee draws the items twice: the second set is the copy
+                // that makes the loop seamless, so it is hidden from assistive
+                // technology and the viewer and carries no alt text or link
+                // names of its own. It keeps the captions: they slide with
+                // their pictures across the loop boundary.
+                let draw_items = |out: &mut String, copy: bool| {
                 for (index, item) in args.items.iter().enumerate() {
                     let src_str = match &item.src {
                         crate::ast::url::Url::Resolved(r) => r.href.clone(),
@@ -286,7 +295,7 @@ pub trait RenderHooks {
                     // the script it is a plain link to the full-size image.
                     // The row layout sizes each item by its ratio. Unknown or zero
                     // dimensions fall back to 1.5, not the 800x600 placeholder.
-                    let item_style = if args.rows {
+                    let item_style = if args.rows || args.marquee {
                         let ar = match crate::render::image::lookup_dims(assets_for_synth, &src_str) {
                             Some((w, h)) if w > 0 && h > 0 => f64::from(w) / f64::from(h),
                             _ => 1.5,
@@ -301,14 +310,14 @@ pub trait RenderHooks {
                     out.push_str(&escape_attr(&src_str));
                     out.push('"');
                     // `![alt|](…)` has no visible title, so the viewer shows no caption.
-                    if !item.alt_only {
+                    if !item.alt_only && !copy {
                         out.push_str(r#" data-title=""#);
                         out.push_str(&escape_attr(&item.alt));
                         out.push('"');
                     }
                     // Without alt text the link has no name of its own, so it
                     // is announced as "link" alone.
-                    if item.alt.is_empty() {
+                    if item.alt.is_empty() && !copy {
                         out.push_str(r#" aria-label=""#);
                         let label = self
                             .gallery_link_template()
@@ -332,7 +341,7 @@ pub trait RenderHooks {
                     };
                     let item_html = crate::render::image::synthesize_image_html(
                         &src_str,
-                        &item.alt,
+                        if copy { "" } else { &item.alt },
                         assets_for_synth,
                         crate::render::image::ImageContext::GalleryThumb,
                         &opts,
@@ -345,6 +354,16 @@ pub trait RenderHooks {
                         out.push_str("</p>");
                     }
                     out.push_str("</div>");
+                }
+                };
+                if args.marquee {
+                    out.push_str(r#"<div class="moss-marquee-track"><div class="moss-marquee-set">"#);
+                    draw_items(out, false);
+                    out.push_str(r#"</div><div class="moss-marquee-set no-viewer" aria-hidden="true" inert>"#);
+                    draw_items(out, true);
+                    out.push_str("</div></div>");
+                } else {
+                    draw_items(out, false);
                 }
                 out.push_str("</div>");
                 if !args.caption.is_empty() {
@@ -633,8 +652,11 @@ pub trait RenderHooks {
         true
     }
 
-    /// A class for a paragraph's `<p>`, from what it holds. Default: none.
-    fn paragraph_class(&self, _children: &[super::node::Inline]) -> Option<&'static str> { None }
+    /// A class for a paragraph's `<p>`, from what it holds. Default: `moss-links` on a
+    /// paragraph of nothing but links, which CSS cannot tell from a sentence holding one.
+    fn paragraph_class(&self, children: &[super::node::Inline]) -> Option<&'static str> {
+        super::node::is_text_link_row(children).then_some("moss-links")
+    }
 
     /// Whether a heading at `level` carries the `moss-heading-anchor`
     /// permalink. The `id` is kept regardless of the answer, so a fragment
@@ -953,7 +975,11 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
     }
 
     fn paragraph_class(&self, children: &[super::node::Inline]) -> Option<&'static str> {
-        (self.hero_words && super::node::is_link_row(children)).then_some("moss-hero-actions")
+        if self.hero_words && super::node::is_link_row(children) {
+            Some("moss-hero-actions")
+        } else {
+            super::node::is_text_link_row(children).then_some("moss-links")
+        }
     }
 
     fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {

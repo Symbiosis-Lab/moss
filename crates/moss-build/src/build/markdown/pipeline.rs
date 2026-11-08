@@ -1387,6 +1387,7 @@ pub fn process_markdown_file(
     // The declarations with a `place` that this page has a value for, in
     // declaration order. The render stage draws them: a page link needs the
     // target's title, which only it knows. A folder index and a slot take none.
+    let opening_heading = moss_core::heading::opening_heading_beyond_title(&markdown_content_raw, &title);
     let placed_fields = crate::build::components::field_places::placed_for_page(site.fields, file_path, &title, field_source.as_ref(), format, &declared, &field_errors, is_index_file || is_slot_only);
     let has_field_places = !placed_fields.is_empty();
 
@@ -1687,6 +1688,7 @@ pub fn process_markdown_file(
         children_covers,
         children_when,
         children_pictures,
+        children_motion: frontmatter.children_motion,
         children_count,
         from_sidebar_alias,
         series,
@@ -1707,6 +1709,7 @@ pub fn process_markdown_file(
         hero_image_url,
         body_cover_path,
         body_cover_candidates,
+        opening_heading,
         hero_overlay_text,
         citations: moss_core::ast::quote_source::citations(&doc.blocks),
         features: crate::build::types::PageFeatures {
@@ -1715,6 +1718,7 @@ pub fn process_markdown_file(
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
+            marquee: moss_core::ast::has_marquee_recursive(&doc),
             hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,

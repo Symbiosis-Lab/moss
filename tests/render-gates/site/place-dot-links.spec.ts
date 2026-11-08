@@ -83,3 +83,31 @@ test("Enter on the focused dot opens its place page, whose own dot is not a link
   // Without links the figure is an image again.
   await expect(page.locator(".moss-place-map").first()).toHaveAttribute("role", "img");
 });
+
+for (const path of ["places/", "nearby/", "maps/"]) {
+  test(`static map targets do not overlap at 390px: ${path}`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, javaScriptEnabled: false });
+    const page = await context.newPage();
+    await page.goto(new URL(path, test.info().project.use.baseURL).href);
+    const map = page.locator(".moss-place-map").first();
+    await map.scrollIntoViewIfNeeded();
+    const targets = await map.locator('a path[stroke="transparent"]').evaluateAll((els) => els.map((el) => {
+      const target = el as SVGGraphicsElement;
+      const box = target.getBBox();
+      const point = new DOMPoint(box.x, box.y).matrixTransform(target.getScreenCTM()!);
+      return { link: target.closest("a")!.getAttribute("href"), x: point.x, y: point.y, radius: parseFloat(getComputedStyle(target).strokeWidth) / 2 };
+    }));
+    expect(new Set(targets.map((t) => t.link)).size).toBeGreaterThan(1);
+    // Targets of one link may overlap; a tap there opens the same page either way.
+    for (let i = 0; i < targets.length; i++) {
+      for (let j = i + 1; j < targets.length; j++) {
+        const a = targets[i], b = targets[j];
+        if (a.link === b.link) continue;
+        expect(Math.hypot(a.x - b.x, a.y - b.y), `targets of ${a.link} and ${b.link} overlap`).toBeGreaterThanOrEqual(a.radius + b.radius);
+      }
+    }
+    await expect(map.locator("[data-map-marker]:not([data-map-globe-marker])"), "every place keeps its own dot").toHaveCount(3);
+    await expect(map.getByRole("link", { name: "Harbor, Harbor Annex", exact: true })).toHaveAttribute("href", "/places/harbor/");
+    await context.close();
+  });
+}

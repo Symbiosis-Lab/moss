@@ -1441,7 +1441,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
+        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
         let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.
@@ -2884,6 +2884,7 @@ pub fn generate_blocking_content_for_build(
             site_lang,
             project_structure.has_content_folders,
         )
+        .with_color_scheme(layout_config.color_scheme)
         .with_search(layout_config.assets.search)
         .with_header_mode(match layout_config.header {
             // A generated media page has no island to carry the controls.
@@ -2899,6 +2900,9 @@ pub fn generate_blocking_content_for_build(
         };
 
         let nav_html = nav_builder.generate_navigation();
+
+        let color_scheme_attrs = layout_config.color_scheme.html_attrs();
+        let theme_meta = crate::build::page::shell::theme_color_meta(layout_config.color_scheme);
 
         for (media_type, items) in &media_collections {
             if items.is_empty() {
@@ -2939,6 +2943,8 @@ pub fn generate_blocking_content_for_build(
                 js_fullscreen_path_arg,
                 &shared.scripts.tag("search", &layout_config.assets, &media_path_resolver),
                 layout_config.ai.robots_tag(false).as_deref(),
+                &color_scheme_attrs,
+                &theme_meta,
             );
 
             let page_url = format!("{}/index.html", page_slug);
@@ -3346,22 +3352,16 @@ pub fn generate_blocking_content_for_build(
             None
         };
 
-        // Derive theme-color values from the embedded tokens.json (--moss-color-bg)
-        // so the SPA meta stays in sync with the CSS; avoids stale hardcoded literals.
-        let (tc_light, tc_dark) = {
-            use moss_core::contract::tokens::{bg_colors, load_tokens};
-            let t = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {}", e));
-            let (l, d) = bg_colors(&t);
-            (l.to_owned(), d.to_owned())
-        };
+        let (tc_light, tc_dark) = crate::build::page::shell::theme_bg_colors();
         let owned = SpaDefaultsOwned {
             description: homepage_description,
             og_tags,
             twitter_tags,
             apple_touch_icon,
             raster_favicons,
-            theme_color_light: Some(tc_light),
-            theme_color_dark: Some(tc_dark),
+            theme_color_light: Some(tc_light.clone()),
+            theme_color_dark: Some(tc_dark.clone()),
+            color_scheme: site_config.color_scheme,
             site_host,
             site_www_canonical: false,
         };

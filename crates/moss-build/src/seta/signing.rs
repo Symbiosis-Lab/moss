@@ -1,82 +1,42 @@
-//! Request signing for moss-seta authentication.
+//! Request signing for moss-seta authentication: BIP-340 Schnorr signatures
+//! (Nostr-compatible) over each request.
 //!
-//! Creates signed requests that moss-seta can verify using
-//! BIP-340 Schnorr signatures (Nostr-compatible).
+//! REFACTOR-LATER (keystore): this signs with the identity key directly. The
+//! identity key is one entry in the keystore at the `System` scope
+//! (`identity::keystore`), so this should become a keystore caller, unifying
+//! every signing path, as a change with no behavior difference.
 
-use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 use crate::identity::keypair::{Identity, IdentityError};
 
-/// Signed request format for moss-seta authentication.
-///
-/// Sent in Authorization header as: `Nostr <base64(SignedRequest)>`
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignedRequest {
-    /// Signer's BIP-340 x-only public key (64 hex chars)
-    pub pubkey: String,
-    /// BIP-340 Schnorr signature (64 bytes = 128 hex chars)
-    pub signature: String,
-    /// Unix timestamp in seconds
-    pub timestamp: u64,
-    /// Request identifier (typically endpoint path)
-    pub payload: String,
+/// The v2 message: every part of the request on its own line, so no part
+/// can be shifted into another. The server rebuilds it from the request it
+/// receives, so a header signed for one request fails on any other, and the
+/// server refuses a nonce it has seen, so the header works once.
+pub fn message_v2(timestamp: u64, nonce: &str, method: &str, path_and_query: &str, body: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let body_sha256 = hex::encode(Sha256::digest(body));
+    format!("moss-seta-v2\n{timestamp}\n{nonce}\n{}\n{path_and_query}\n{body_sha256}", method.to_ascii_uppercase())
 }
 
-impl SignedRequest {
-    /// Create the Authorization header value.
-    pub fn to_auth_header(&self) -> String {
-        let json = serde_json::to_string(self).unwrap();
-        let encoded = BASE64.encode(&json);
-        format!("Nostr {}", encoded)
-    }
-}
-
-/// Sign a request payload with the user's identity using BIP-340 Schnorr.
-///
-/// # Arguments
-/// * `identity` - User's identity with private key
-/// * `payload` - Request identifier (usually the API endpoint path)
-///
-/// # Returns
-/// A `SignedRequest` that can be used in the Authorization header.
-///
-/// # Protocol
-/// The message format is "{timestamp}:{payload}". Both the Rust k256 library
-/// and TypeScript @noble/curves library implement BIP-340 with internal tagged
-/// hashing, so we sign the raw message bytes and the server verifies the same.
-///
-/// REFACTOR-LATER (keystore): this signs with the identity key directly.
-/// The identity key is now one entry in the keystore at the `System` scope
-/// (`identity::keystore`), so this should become a keystore caller —
-/// `keystore.sign(&System, "identity", ...)` — unifying every signing path. Left
-/// as-is deliberately: the keystore shipped with plugin keys as its first new
-/// caller; rewiring this working seta-auth path is a separate change with no
-/// behavior difference, made when there is a reason to touch it.
-pub fn sign_request(identity: &Identity, payload: &str) -> Result<SignedRequest, IdentityError> {
+/// The `Authorization` header for one request, signed over its method, its
+/// path and query exactly as sent, and its body bytes.
+pub fn sign_request_v2(identity: &Identity, method: &str, path_and_query: &str, body: &[u8]) -> Result<String, IdentityError> {
     use k256::schnorr::signature::Signer;
-
-    let signing_key = identity.signing_key_loaded()?;
-
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_secs();
-
-    // Message format: "{timestamp}:{payload}"
-    let message_str = format!("{}:{}", timestamp, payload);
-
-    // Sign the raw message bytes. k256's Schnorr implementation handles
-    // BIP-340 tagged hashing internally (taggedHash('BIP0340/challenge', ...))
-    let signature = signing_key.sign(message_str.as_bytes());
-
-    Ok(SignedRequest {
-        pubkey: identity.pubkey.clone(),
-        signature: hex::encode(signature.to_bytes()),
-        timestamp,
-        payload: payload.to_string(),
-    })
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_secs();
+    let nonce = hex::encode(rand::random::<[u8; 16]>());
+    let message = message_v2(timestamp, &nonce, method, path_and_query, body);
+    let signature = identity.signing_key_loaded()?.sign(message.as_bytes());
+    let header = serde_json::json!({
+        "v": 2,
+        "pubkey": identity.pubkey,
+        "signature": hex::encode(signature.to_bytes()),
+        "timestamp": timestamp,
+        "nonce": nonce,
+    });
+    Ok(format!("Nostr {}", BASE64.encode(header.to_string())))
 }
 
 #[cfg(test)]
@@ -84,24 +44,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sign_request() {
-        let identity = Identity::generate().unwrap();
-        let signed = sign_request(&identity, "/api/test").unwrap();
-
-        assert_eq!(signed.pubkey, identity.pubkey);
-        assert!(!signed.signature.is_empty());
-        // BIP-340 signature is 64 bytes = 128 hex chars
-        assert_eq!(signed.signature.len(), 128);
-        assert_eq!(signed.payload, "/api/test");
-        assert!(signed.timestamp > 0);
+    fn v2_message_has_each_part_on_its_own_line() {
+        let m = message_v2(1700000000, "00112233445566778899aabbccddeeff", "post", "/api/sites/a?x=1", b"{\"id\":\"a\"}");
+        assert_eq!(
+            m,
+            "moss-seta-v2\n1700000000\n00112233445566778899aabbccddeeff\nPOST\n/api/sites/a?x=1\n\
+             8489a5deb454a360345c7868bca8672de92b446caf3d3b014af6a56e3d549d30"
+        );
     }
 
+    /// The server's own tests verify this header, made by this signer for
+    /// fixed inputs. It must still verify against `message_v2` here, so a
+    /// change of message format on either side fails a test.
     #[test]
-    fn test_auth_header_format() {
-        let identity = Identity::generate().unwrap();
-        let signed = sign_request(&identity, "/api/test").unwrap();
-        let header = signed.to_auth_header();
-
-        assert!(header.starts_with("Nostr "));
+    fn the_servers_fixture_header_verifies_against_this_message() {
+        use sha2::{Digest, Sha256};
+        const HEADER: &str = "eyJub25jZSI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwicHVia2V5IjoiOTRlYmZmY2NlNDk4MmIyNjQyMWY0Mjc1NzBjMThhZDZiNDIyMDFhODQ4YmQ4ZWY0YmE4ODY0NDExOTcyMjY5ZiIsInNpZ25hdHVyZSI6ImQxZTg0N2QxOWU2NTNhNjdmNTdlYmE1MGY2YmVmMmM0ZmQ1NjhiNDZhNWMwMDViY2E4ZWU1MjM2ZTYwNGJiZjM2MmU5MjE4Y2NmY2RiMTIxZGZhMTgwNzA0NmEyODc2MDg4YTkyM2M1MWYzNTg5NDQyOTJiODMzYTViZWQ5NTVkIiwidGltZXN0YW1wIjoxNzAwMDAwMDAwLCJ2IjoyfQ==";
+        let h: serde_json::Value = serde_json::from_slice(&BASE64.decode(HEADER).unwrap()).unwrap();
+        assert_eq!((h["v"].as_u64(), h["timestamp"].as_u64()), (Some(2), Some(1700000000)));
+        let message = message_v2(1700000000, h["nonce"].as_str().unwrap(), "POST", "/api/sites/a?x=1", b"{\"id\":\"a\"}");
+        let key = k256::schnorr::VerifyingKey::from_slice(&hex::decode(h["pubkey"].as_str().unwrap()).unwrap()).unwrap();
+        let signature = k256::schnorr::Signature::try_from(hex::decode(h["signature"].as_str().unwrap()).unwrap().as_slice()).unwrap();
+        key.verify_raw(&Sha256::digest(message.as_bytes()), &signature).expect("the fixture signs this message");
     }
 }

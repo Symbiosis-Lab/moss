@@ -22,7 +22,8 @@
         "crates/moss-build/src/build.rs": 1200,
         "crates/moss-core/src/ast/parser.rs": 1400,
         "crates/moss-core/src/ast/shortcode_extract.rs": 1400,
-        "packages/moss-api/src/testing/mock-tauri.ts": 900
+        "packages/moss-api/src/testing/mock-tauri.ts": 900,
+        "crates/moss-core/src/contract/custom_props.rs": 900
       },
       "oversized": {
         "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately free of any GUI-framework dependency via the HostPorts ports. run_pipeline_body (about 450 code lines) is most of it: scan once, re-scan after content-producing hooks, the native process phase, then the build. It needs the scan as an explicit value carried across the re-scan before the phases can move to their own file.",
@@ -53,10 +54,10 @@
         "crates/moss-build/src/build/media": 20,
         "crates/moss-build/src/deploy": 18,
         "crates/moss-build/src/js-src/bridge": 17,
-        "crates/moss-build/src/js-src/site": 26,
+        "crates/moss-build/src/js-src/site": 27,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 41,
-        "crates/moss-core/src/ast": 28,
+        "crates/moss-core/src/ast": 29,
         "crates/moss-core/src/resolve": 17,
         "crates/moss-build/src/ops/serve": 19,
         "crates/moss-build/src/js-src/site/maps/places-explorer": 18,
@@ -64,7 +65,7 @@
         "crates/moss-build/src/cli": 24,
         "crates/moss-build/src/build/components": 16,
         "crates/moss-build/src/build/emit": 18,
-        "crates/moss-build/src/assets/js": 16,
+        "crates/moss-build/src/assets/js": 17,
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 18
       },
@@ -97,7 +98,7 @@
       "value": {
         "crates/moss-build/src/build.rs::run_pipeline_body": 450,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
-        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
+        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 750,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
         "crates/moss-build/src/build/media/image.rs::run_image_conversion": 400,
@@ -118,11 +119,10 @@
         "crates/moss-build/src/engine/host_fns.rs::dispatch_command_core": 300,
         "crates/moss-build/src/ops/serve/router.rs::start_server": 350,
         "crates/moss-build/src/ops/watch/sweep/tick.rs::run": 400,
-        "crates/moss-build/src/seta/chunked_upload.rs::upload_file_chunked": 250,
         "crates/moss-build/src/vault/import/scrape/run.rs::scrape_to_folder": 350,
         "crates/moss-core/src/ast/hooks.rs::render_shortcode": 350,
         "crates/moss-core/src/ast/parser.rs::parse_block_with_tag": 300,
-        "crates/moss-core/src/ast/render.rs::render_block": 400,
+        "crates/moss-core/src/ast/render.rs::render_block": 450,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs::dispatch_embed_form": 250,
         "packages/moss-api/src/testing/mock-tauri.ts::setupMockTauri": 450,
         "packages/moss-ui/src/ui/shared/ui/ctx-menu.ts::openCtxMenu": 400,

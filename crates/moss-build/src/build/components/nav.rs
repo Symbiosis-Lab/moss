@@ -25,7 +25,7 @@ pub(crate) mod footer;
 /// two above (nothing here reads `NavigationBuilder`'s privates), just a
 /// sibling kept close to its one reader.
 mod header_mode;
-pub use header_mode::HeaderMode;
+pub use header_mode::{HeaderMode, HeaderScroll};
 
 /// A single segment of a breadcrumb trail
 pub struct BreadcrumbSegment {
@@ -77,6 +77,7 @@ pub struct NavigationBuilder<'a> {
     /// a `.nav-search-btn` is emitted into `.nav-icons`; the client runtime
     /// binds to it and lazy-loads `/_moss/pagefind/pagefind.js` on first use.
     has_search: bool,
+    color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// Editor preview (`emit_source_lines`): `data-source-fm` annotations.
     /// The trail names `breadcrumb:` (the page's own toggle; fm outranks the
     /// surrounding `<nav data-source-none>` in the bridge's resolver).
@@ -116,6 +117,7 @@ impl<'a> NavigationBuilder<'a> {
             assets: None,
             has_content_folders,
             has_search: false,
+            color_scheme: Default::default(),
             fm_breadcrumb: false,
             fm_logo: false,
             header_mode: HeaderMode::Brand,
@@ -136,6 +138,11 @@ impl<'a> NavigationBuilder<'a> {
     pub fn with_source_fm(mut self, breadcrumb: bool, logo: bool) -> Self {
         self.fm_breadcrumb = breadcrumb;
         self.fm_logo = logo;
+        self
+    }
+
+    pub fn with_color_scheme(mut self, color_scheme: crate::build::page::color_scheme::ColorScheme) -> Self {
+        self.color_scheme = color_scheme;
         self
     }
 

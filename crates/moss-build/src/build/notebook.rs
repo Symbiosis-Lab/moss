@@ -326,7 +326,7 @@ pub(crate) fn viewer_path(
 ///
 /// Complete HTML string for the viewer page.
 pub fn generate_viewer_html(notebook_filename: &str, jupyter_base_path: &str) -> String {
-    generate_viewer_html_with_content(notebook_filename, jupyter_base_path, None, None)
+    generate_viewer_html_with_content(notebook_filename, jupyter_base_path, None, None, Default::default())
 }
 
 /// Like `generate_viewer_html` but accepts optional notebook JSON content
@@ -337,7 +337,16 @@ pub fn generate_viewer_html_with_content(
     notebook_content: Option<&str>,
     // The site's `<meta name="robots">` tag, from its search and AI switches.
     robots_tag: Option<&str>,
+    color_scheme: crate::build::page::color_scheme::ColorScheme,
 ) -> String {
+    use crate::build::page::color_scheme::ColorScheme;
+    let color_scheme_attrs = color_scheme.html_attrs();
+    let dark_css = "body, #ld { background: #111; } #ld .d span { background: #666; } #ld .f { color: #555; }";
+    let dark_styles = match color_scheme {
+        ColorScheme::Auto => format!("@media (prefers-color-scheme: dark) {{ {dark_css} }}"),
+        ColorScheme::Dark => dark_css.to_string(),
+        ColorScheme::Light => String::new(),
+    };
     let robots = robots_tag.map(|t| format!("\n{t}")).unwrap_or_default();
     // Extract title: try notebook JSON first, then fall back to filename
     let title_from_content = notebook_content.and_then(extract_notebook_title);
@@ -355,14 +364,13 @@ pub fn generate_viewer_html_with_content(
 
     format!(
         r#"<!DOCTYPE html>
-<html data-moss-html-version="1" lang="en">
+<html data-moss-html-version="1" lang="en"{color_scheme_attrs}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">{robots}
 <title>{title}</title>
 <style>
 body {{ margin: 0; overflow: hidden; background: #faf8f5; }}
-@media (prefers-color-scheme: dark) {{ body {{ background: #111; }} }}
 iframe {{ width: 100%; height: 100vh; border: none; display: block; }}
 #ld {{
   position: fixed; inset: 0; z-index: 10;
@@ -371,7 +379,6 @@ iframe {{ width: 100%; height: 100vh; border: none; display: block; }}
   background: #faf8f5;
   transition: opacity 0.6s ease;
 }}
-@media (prefers-color-scheme: dark) {{ #ld {{ background: #111; }} }}
 #ld.done {{ opacity: 0; pointer-events: none; }}
 #ld .d span {{
   display: inline-block; width: 6px; height: 6px;
@@ -388,10 +395,7 @@ iframe {{ width: 100%; height: 100vh; border: none; display: block; }}
   margin-top: 16px; font-family: -apple-system, system-ui, sans-serif;
   font-size: 13px; color: #aaa; letter-spacing: 0.02em;
 }}
-@media (prefers-color-scheme: dark) {{
-  #ld .d span {{ background: #666; }}
-  #ld .f {{ color: #555; }}
-}}
+{dark_styles}
 </style>
 </head>
 <body>
@@ -442,6 +446,18 @@ fn url_encode_path(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewer_dark_styles_follow_the_site_policy() {
+        use crate::build::page::color_scheme::ColorScheme;
+        for scheme in [ColorScheme::Auto, ColorScheme::Light, ColorScheme::Dark] {
+            let html = generate_viewer_html_with_content("a.ipynb", "/jupyter", None, None, scheme);
+            assert_eq!(html.contains("@media (prefers-color-scheme: dark)"), scheme == ColorScheme::Auto);
+            assert!(!html.contains("localStorage"));
+            assert_eq!(html.contains("background: #111"), scheme != ColorScheme::Light);
+            if scheme.fixed().is_some() { assert!(html.contains(&scheme.html_attrs())); }
+        }
+    }
 
     #[test]
     fn test_jupyterlite_asset_config_is_pinned() {
@@ -766,7 +782,7 @@ mod tests {
             "nbformat": 4,
             "nbformat_minor": 5
         }"##;
-        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", Some(ipynb), None);
+        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", Some(ipynb), None, Default::default());
         assert!(
             html.contains("<title>My Custom Title</title>"),
             "Title should come from notebook content, not filename"
@@ -775,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_viewer_html_falls_back_to_filename_title() {
-        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", None, None);
+        let html = generate_viewer_html_with_content("analysis.ipynb", "/jupyter", None, None, Default::default());
         assert!(
             html.contains("<title>analysis</title>"),
             "Title should fall back to filename without .ipynb"
@@ -790,7 +806,7 @@ mod tests {
             "nbformat": 4,
             "nbformat_minor": 5
         }"#;
-        let html = generate_viewer_html_with_content("test.ipynb", "/jupyter", Some(ipynb), None);
+        let html = generate_viewer_html_with_content("test.ipynb", "/jupyter", Some(ipynb), None, Default::default());
         assert!(
             !html.contains("<script>alert(1)</script>"),
             "Title must be HTML-escaped to prevent XSS"
@@ -804,9 +820,9 @@ mod tests {
     #[test]
     fn test_viewer_html_carries_the_sites_robots_tag() {
         let tag = r#"<meta name="robots" content="noindex, noai, noimageai">"#;
-        let html = generate_viewer_html_with_content("a.ipynb", "/jupyter", None, Some(tag));
+        let html = generate_viewer_html_with_content("a.ipynb", "/jupyter", None, Some(tag), Default::default());
         let head = &html[..html.find("</head>").unwrap()];
         assert!(head.contains(tag), "{html}");
-        assert!(!generate_viewer_html_with_content("a.ipynb", "/jupyter", None, None).contains("name=\"robots\""));
+        assert!(!generate_viewer_html_with_content("a.ipynb", "/jupyter", None, None, Default::default()).contains("name=\"robots\""));
     }
 }

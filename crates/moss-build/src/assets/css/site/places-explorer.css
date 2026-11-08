@@ -1217,6 +1217,10 @@ button.moss-places-chip-crumb {
 .moss-place-map[data-moss-place-embed][data-moss-place-embed-state="fallback"] > svg {
   display: block;
 }
+/* The static credit shows only with the static map it credits; the explorer draws its own. */
+.moss-place-map[data-moss-place-embed][data-moss-place-embed-state]:not([data-moss-place-embed-state="fallback"]) > .moss-place-map-credit {
+  display: none;
+}
 .moss-places-embed-status,
 .moss-places-embed-load {
   position: absolute;

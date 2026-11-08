@@ -77,6 +77,8 @@ pub struct FieldDecl {
     pub of: Vec<String>,
     /// Whether every listing card and row draws this field's value for a page (never a link).
     pub card: bool,
+    /// For a page field placed at `end`: how many of each linked page's pictures its card draws; 0 or 1 = the cover alone.
+    pub pictures: usize,
 }
 
 impl FieldDecl {
@@ -136,6 +138,8 @@ pub enum Place {
     Subtitle,
     Facts,
     KeyFigure,
+    /// Page links only: the linked pages as cards after the page's body.
+    End,
 }
 
 const PLACE_NAMES: &[(&str, Place)] = &[
@@ -143,6 +147,7 @@ const PLACE_NAMES: &[(&str, Place)] = &[
     ("subtitle", Place::Subtitle),
     ("facts", Place::Facts),
     ("key-figure", Place::KeyFigure),
+    ("end", Place::End),
 ];
 
 /// The `place` names a declaration may use. `none` is also accepted in config

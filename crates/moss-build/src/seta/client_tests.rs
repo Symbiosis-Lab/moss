@@ -1,4 +1,5 @@
 use super::*;
+use crate::seta::wire::device_name;
 
 fn test_identity() -> Identity {
     Identity::generate().expect("Failed to generate test identity")
@@ -121,40 +122,148 @@ fn test_non_challenge_cf_mitigated_value_is_not_a_challenge() {
     assert_eq!(extract_api_error_message(body), "bad request");
 }
 
-/// Serve ONE canned HTTP response on a throwaway localhost port and return
-/// its base URL. Lets a test drive a real request through the shared client
-/// (proxy, User-Agent, `from_failed_response` and all) rather than asserting
-/// on a hand-built `SetaError`.
-async fn serve_once(response: String) -> (String, tokio::task::JoinHandle<()>) {
-    use std::net::SocketAddr;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+/// One request as a server standing in for seta received it.
+#[derive(Debug, Clone)]
+pub(crate) struct Received {
+    pub method: String,
+    pub path_and_query: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
 
-    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = stream.read(&mut buf).await.unwrap();
-        stream.write_all(response.as_bytes()).await.unwrap();
-        stream.shutdown().await.ok();
-    });
-    (format!("http://{}", addr), handle)
+impl Received {
+    /// Parse one raw HTTP/1.1 request, as a hand-rolled test server reads it.
+    pub(crate) fn from_raw(raw: &[u8]) -> Self {
+        let split = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("a complete request head");
+        let head = String::from_utf8_lossy(&raw[..split]);
+        let mut lines = head.split("\r\n");
+        let mut request_line = lines.next().unwrap_or("").split(' ');
+        let (method, path_and_query) = (request_line.next().unwrap_or("").to_string(), request_line.next().unwrap_or("").to_string());
+        let headers = lines
+            .filter_map(|l| l.split_once(':'))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .collect();
+        Self { method, path_and_query, headers, body: raw[split + 4..].to_vec() }
+    }
+
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+
+    pub(crate) fn body_json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).unwrap_or_else(|e| panic!("{} {}: body is not JSON: {e}", self.method, self.path_and_query))
+    }
+
+    /// The key that signed this request, checked as seta's middleware checks
+    /// it: a v2 header whose signature covers the method, path and query, and
+    /// body this server received. Panics with the reason when it does not.
+    pub(crate) fn signer(&self) -> String {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use sha2::{Digest, Sha256};
+        let at = format!("{} {}", self.method, self.path_and_query);
+        let auth = self.header("authorization").unwrap_or_else(|| panic!("{at}: no Authorization header"));
+        let json = BASE64.decode(auth.strip_prefix("Nostr ").unwrap_or_else(|| panic!("{at}: not a Nostr header"))).unwrap();
+        let h: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(h["v"], 2, "{at}: not a v2 header");
+        let timestamp = h["timestamp"].as_u64().unwrap_or_else(|| panic!("{at}: timestamp is not an integer"));
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert!(now.abs_diff(timestamp) <= 300, "{at}: timestamp outside seta's window");
+        let nonce = h["nonce"].as_str().unwrap();
+        assert!(
+            (32..=64).contains(&nonce.len()) && nonce.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{at}: nonce {nonce:?}"
+        );
+        // `new URL()` drops an empty query: `/a?` is signed as `/a`.
+        let path_and_query = match self.path_and_query.split_once('?') {
+            Some((path, "")) => path,
+            _ => self.path_and_query.as_str(),
+        };
+        // GET and HEAD have no body to seta, whatever was sent.
+        let body: &[u8] = if matches!(self.method.as_str(), "GET" | "HEAD") { b"" } else { &self.body };
+        let message = [
+            "moss-seta-v2".to_string(),
+            timestamp.to_string(),
+            nonce.to_string(),
+            self.method.to_ascii_uppercase(),
+            path_and_query.to_string(),
+            hex::encode(Sha256::digest(body)),
+        ]
+        .join("\n");
+        let pubkey = h["pubkey"].as_str().unwrap();
+        let key = k256::schnorr::VerifyingKey::from_slice(&hex::decode(pubkey).unwrap()).unwrap();
+        let signature = k256::schnorr::Signature::try_from(hex::decode(h["signature"].as_str().unwrap()).unwrap().as_slice()).unwrap();
+        key.verify_raw(&Sha256::digest(message.as_bytes()), &signature)
+            .unwrap_or_else(|e| panic!("{at}: the signature does not cover the request as received: {e}"));
+        pubkey.to_string()
+    }
+}
+
+/// A local server standing in for seta: it answers every request with
+/// `status`, `headers` and the body `respond` picks for its method and path,
+/// and records what it received.
+pub(crate) struct StandIn {
+    server: mockito::ServerGuard,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<Received>>>,
+}
+
+impl StandIn {
+    pub(crate) async fn new(
+        status: usize,
+        headers: &[(&'static str, &str)],
+        respond: impl Fn(&str, &str) -> String + Send + Sync + 'static,
+    ) -> Self {
+        let mut server = mockito::Server::new_async().await;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let respond = std::sync::Arc::new(respond);
+        for method in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] {
+            let (log, respond) = (std::sync::Arc::clone(&seen), std::sync::Arc::clone(&respond));
+            let mut mock = server
+                .mock(method, mockito::Matcher::Any)
+                .match_request(move |r| {
+                    log.lock().unwrap().push(Received {
+                        method: r.method().to_string(),
+                        path_and_query: r.path_and_query().to_string(),
+                        headers: r.headers().iter().map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string())).collect(),
+                        body: r.body().cloned().unwrap_or_default(),
+                    });
+                    true
+                })
+                .with_status(status)
+                .with_body_from_request(move |r| respond(r.method(), r.path_and_query()).into_bytes());
+            for (name, value) in headers {
+                mock = mock.with_header(*name, value);
+            }
+            mock.create_async().await;
+        }
+        Self { server, seen }
+    }
+
+    /// Answers every request with `status` and the JSON `body`.
+    pub(crate) async fn json(status: usize, body: &str) -> Self {
+        let body = body.to_string();
+        Self::new(status, &[("content-type", "application/json")], move |_, _| body.clone()).await
+    }
+
+    pub(crate) fn url(&self) -> String {
+        self.server.url()
+    }
+
+    pub(crate) fn requests(&self) -> Vec<Received> {
+        self.seen.lock().unwrap().clone()
+    }
 }
 
 /// A Cloudflare managed-challenge response, in the shape the edge really
 /// sends it.
-fn challenge_response(status_line: &str) -> String {
-    let body = "<!DOCTYPE html><html><head><title>Just a moment...</title></head>\
+async fn challenge() -> StandIn {
+    let page = "<!DOCTYPE html><html><head><title>Just a moment...</title></head>\
             <body><script src=\"/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page\"></script></body></html>";
-    format!(
-            "HTTP/1.1 {}\r\ncf-mitigated: challenge\r\ncf-ray: 8f0a1b2c3d4e5f60-SJC\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-            status_line,
-            body.len(),
-            body
-        )
+    StandIn::new(
+        403,
+        &[("cf-mitigated", "challenge"), ("cf-ray", "8f0a1b2c3d4e5f60-SJC"), ("content-type", "text/html")],
+        move |_, _| page.to_string(),
+    )
+    .await
 }
 
 /// `fetch_stripe_publishable_key` used to hand-roll its own `SetaError::Api`
@@ -164,13 +273,12 @@ fn challenge_response(status_line: &str) -> String {
 /// a wall of raw HTML. Every endpoint goes through the one door.
 #[tokio::test]
 async fn the_stripe_key_endpoint_classifies_a_challenge_like_every_other() {
-    let (url, handle) = serve_once(challenge_response("403 Forbidden")).await;
-    let client = MossSetaClient::with_url(&url);
+    let server = challenge().await;
+    let client = MossSetaClient::with_url(&server.url());
     let err = client
         .fetch_stripe_publishable_key()
         .await
         .expect_err("a 403 challenge must fail");
-    handle.await.unwrap();
 
     assert!(
         matches!(err, SetaError::Challenge { status: 403 }),
@@ -189,20 +297,13 @@ async fn the_stripe_key_endpoint_classifies_a_challenge_like_every_other() {
 /// server's authored sentence.
 #[tokio::test]
 async fn the_domain_link_conflict_surfaces_the_authored_message() {
-    let body = r#"{"error":"Domain is already linked to another site"}"#;
-    let resp = format!(
-        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    let (url, handle) = serve_once(resp).await;
+    let server = StandIn::json(409, r#"{"error":"Domain is already linked to another site"}"#).await;
     let identity = test_identity();
-    let client = MossSetaClient::with_identity_and_url(&identity, &url);
+    let client = MossSetaClient::with_identity_and_url(&identity, &server.url());
     let err = client
         .link_custom_domain("site", "example.com")
         .await
         .expect_err("a 409 conflict must fail");
-    handle.await.unwrap();
 
     match err {
         SetaError::Api {
@@ -222,14 +323,13 @@ async fn the_domain_link_conflict_surfaces_the_authored_message() {
 /// job state.
 #[tokio::test]
 async fn the_domain_link_endpoint_classifies_a_challenge() {
-    let (url, handle) = serve_once(challenge_response("403 Forbidden")).await;
+    let server = challenge().await;
     let identity = test_identity();
-    let client = MossSetaClient::with_identity_and_url(&identity, &url);
+    let client = MossSetaClient::with_identity_and_url(&identity, &server.url());
     let err = client
         .link_custom_domain("site", "example.com")
         .await
         .expect_err("a 403 challenge must fail");
-    handle.await.unwrap();
 
     assert!(
         matches!(err, SetaError::Challenge { status: 403 }),
@@ -244,39 +344,12 @@ async fn the_domain_link_endpoint_classifies_a_challenge() {
 /// `domain::commands` from answering a permanent block with retry advice.
 #[tokio::test]
 async fn a_challenge_response_reaches_the_caller_as_challenge() {
-    use std::net::SocketAddr;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = stream.read(&mut buf).await.unwrap();
-        // Shape of a real Cloudflare managed-challenge response: 403,
-        // `cf-mitigated: challenge`, an unsolvable HTML interstitial.
-        let body = "<!DOCTYPE html><html><head><title>Just a moment...</title></head>\
-                <body><script src=\"/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page\"></script></body></html>";
-        let resp = format!(
-                "HTTP/1.1 403 Forbidden\r\ncf-mitigated: challenge\r\ncf-ray: 8f0a1b2c3d4e5f60-SJC\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(),
-                body
-            );
-        stream.write_all(resp.as_bytes()).await.unwrap();
-        stream.shutdown().await.ok();
-    });
-
-    let url = format!("http://{}", addr);
-    let client = MossSetaClient::with_url(&url);
+    let server = challenge().await;
+    let client = MossSetaClient::with_url(&server.url());
     let err = client
         .search_domains("example", &crate::seta::domains::SearchPhase::Popular)
         .await
         .expect_err("a 403 challenge must fail");
-    handle.await.unwrap();
 
     assert!(
         matches!(err, SetaError::Challenge { status: 403 }),
@@ -380,23 +453,6 @@ fn test_client_stores_identity() {
     assert_eq!(stored_identity.pubkey, identity.pubkey);
 }
 
-#[test]
-fn test_sign_request_payload() {
-    let _env = crate::ENV_TEST_MUTEX
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let identity = test_identity();
-    std::env::remove_var("MOSS_SETA_URL");
-    let client = MossSetaClient::with_identity(&identity);
-    let result = client.sign_request_payload("/api/test");
-    assert!(result.is_ok(), "Should be able to sign request");
-    let auth_header = result.unwrap();
-    assert!(
-        auth_header.starts_with("Nostr "),
-        "Auth header should start with 'Nostr '"
-    );
-}
-
 #[tokio::test]
 async fn test_seta_url_is_reachable() {
     let url = {
@@ -434,14 +490,6 @@ async fn test_seta_url_is_reachable() {
         url,
         status
     );
-}
-
-#[test]
-fn test_configure_dns_url_construction() {
-    let identity = test_identity();
-    let client = MossSetaClient::with_identity_and_url(&identity, "https://test.example.com");
-    let result = client.sign_request_payload("/api/domains/example.com/dns");
-    assert!(result.is_ok(), "Should be able to sign DNS config request");
 }
 
 #[test]
@@ -494,23 +542,13 @@ fn test_with_url_rejects_non_localhost_http() {
 }
 
 #[test]
-fn test_unauthenticated_client_sign_request_fails() {
-    let client = MossSetaClient::with_url("https://test.example.com");
-    let result = client.sign_request_payload("/api/test");
-    assert!(
-        result.is_err(),
-        "Unauthenticated client should not be able to sign requests"
-    );
-    let err = result.unwrap_err();
-    match err {
-        SetaError::Identity(msg) => {
-            assert!(
-                msg.contains("without identity"),
-                "Error should mention missing identity: {}",
-                msg
-            );
-        }
-        _ => panic!("Expected Identity error, got: {:?}", err),
+fn only_a_client_with_a_loaded_key_can_sign() {
+    assert!(MossSetaClient::with_identity_and_url(&test_identity(), "https://test.example.com").can_sign());
+    let anonymous = MossSetaClient::with_url("https://test.example.com");
+    assert!(!anonymous.can_sign());
+    match anonymous.signed(reqwest::Method::GET, "/api/test", bytes::Bytes::new()) {
+        Err(SetaError::Identity(msg)) => assert!(msg.contains("without identity"), "{msg}"),
+        other => panic!("expected an Identity error, got {:?}", other.map(|_| ())),
     }
 }
 
@@ -538,138 +576,32 @@ fn test_client_is_send_and_sync() {
     assert_send_sync::<MossSetaClient>();
 }
 
-fn extract_payload_from_auth_header(header: &str) -> String {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    let b64 = header
-        .strip_prefix("Nostr ")
-        .expect("auth header must start with 'Nostr '");
-    let json = BASE64
-        .decode(b64)
-        .expect("auth header must be valid base64");
-    let value: serde_json::Value =
-        serde_json::from_slice(&json).expect("auth header must be valid JSON");
-    value
-        .get("payload")
-        .and_then(|v| v.as_str())
-        .expect("signed request must have a 'payload' field")
-        .to_string()
-}
-
-proptest::proptest! {
-    #[test]
-    #[ignore = "blocked on dot-segment normalization"]
-    fn sign_and_build_signs_what_it_sends(segment in "[^\n]{1,64}") {
-        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("MOSS_SETA_URL");
-        let identity = test_identity();
-        let client = MossSetaClient::with_identity_and_url(&identity, "https://test.example.com");
-        let path = format!("/api/sites/abc/files/{}", urlencoding::encode(&segment));
-        let (url, auth) = client.sign_and_build(&path).expect("sign_and_build must succeed for authenticated client");
-        let signed_payload = extract_payload_from_auth_header(&auth);
-        let parsed = reqwest::Url::parse(&url).expect("sign_and_build must produce a parseable URL");
-        let wire_path_and_query = match parsed.query() {
-            Some(q) => format!("{}?{}", parsed.path(), q),
-            None => parsed.path().to_string(),
-        };
-        proptest::prop_assert_eq!(signed_payload, wire_path_and_query);
-    }
-}
-
 #[tokio::test]
 async fn test_request_reverify_sends_mode_and_site_id() {
-    use std::net::SocketAddr;
-    use std::sync::Arc;
-    use std::sync::Mutex as StdMutex;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
-    let captured_bg = Arc::clone(&captured);
-
-    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let n = stream.read(&mut buf).await.unwrap();
-        let request = String::from_utf8_lossy(&buf[..n]).to_string();
-        *captured_bg.lock().unwrap() = Some(request);
-        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\n";
-        stream.write_all(resp).await.unwrap();
-        stream.shutdown().await.ok();
-    });
-
-    let url = format!("http://{}", addr);
-    let client = MossSetaClient::with_url(&url);
-    client
+    let server = StandIn::json(200, r#"{"success":true}"#).await;
+    MossSetaClient::with_url(&server.url())
         .request_reverify("user@example.com", "abcd1234", "sess-xyz", "my-site")
         .await
         .expect("reverify request should succeed");
-    handle.await.unwrap();
-
-    let req = captured
-        .lock()
-        .unwrap()
-        .clone()
-        .expect("server captured request");
-    assert!(req.starts_with("POST /auth/request"), "path: {}", req);
-    assert!(req.contains("\"mode\":\"re_verify\""), "payload: {}", req);
-    assert!(req.contains("\"site_id\":\"my-site\""), "payload: {}", req);
-    assert!(
-        req.contains("\"email\":\"user@example.com\""),
-        "payload: {}",
-        req
-    );
-    assert!(req.contains("\"pubkey\":\"abcd1234\""), "payload: {}", req);
-    assert!(
-        req.contains("\"session_id\":\"sess-xyz\""),
-        "payload: {}",
-        req
-    );
+    let req = &server.requests()[0];
+    assert_eq!((req.method.as_str(), req.path_and_query.as_str()), ("POST", "/auth/request"));
+    let body = req.body_json();
+    assert_eq!(body["mode"], "re_verify");
+    assert_eq!(body["site_id"], "my-site");
+    assert!(body["client"].is_object(), "the confirm page names the app: {body}");
+    assert_eq!(body["email"], "user@example.com");
+    assert_eq!(body["pubkey"], "abcd1234");
+    assert_eq!(body["session_id"], "sess-xyz");
 }
 
 #[tokio::test]
 async fn test_request_reverify_forwards_caller_supplied_email() {
-    use std::net::SocketAddr;
-    use std::sync::Arc;
-    use std::sync::Mutex as StdMutex;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
-    let captured_bg = Arc::clone(&captured);
-
-    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let n = stream.read(&mut buf).await.unwrap();
-        *captured_bg.lock().unwrap() = Some(String::from_utf8_lossy(&buf[..n]).to_string());
-        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\n";
-        stream.write_all(resp).await.unwrap();
-        stream.shutdown().await.ok();
-    });
-
-    let url = format!("http://{}", addr);
-    let client = MossSetaClient::with_url(&url);
-    client
+    let server = StandIn::json(200, r#"{"success":true}"#).await;
+    MossSetaClient::with_url(&server.url())
         .request_reverify("caller-supplied@example.com", "pk", "sid", "site")
         .await
         .expect("reverify ok");
-    handle.await.unwrap();
-    let req = captured.lock().unwrap().clone().unwrap();
-    assert!(
-        req.contains("\"email\":\"caller-supplied@example.com\""),
-        "email arg must reach payload: {}",
-        req
-    );
+    assert_eq!(server.requests()[0].body_json()["email"], "caller-supplied@example.com");
 }
 
 /// Every request through the shared seta client must carry moss's
@@ -681,49 +613,12 @@ async fn test_request_reverify_forwards_caller_supplied_email() {
 /// a reverted `.user_agent(..)` line fails here, not in production.
 #[tokio::test]
 async fn test_shared_client_sends_moss_user_agent() {
-    use std::net::SocketAddr;
-    use std::sync::Arc;
-    use std::sync::Mutex as StdMutex;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
-    let captured_bg = Arc::clone(&captured);
-
-    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = [0u8; 4096];
-        let n = stream.read(&mut buf).await.unwrap();
-        *captured_bg.lock().unwrap() = Some(String::from_utf8_lossy(&buf[..n]).to_string());
-        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nContent-Type: application/json\r\n\r\n{\"success\":true}\n";
-        stream.write_all(resp).await.unwrap();
-        stream.shutdown().await.ok();
-    });
-
-    let url = format!("http://{}", addr);
-    let client = MossSetaClient::with_url(&url);
-    client
+    let server = StandIn::json(200, r#"{"success":true}"#).await;
+    MossSetaClient::with_url(&server.url())
         .request_reverify("ua@example.com", "pk", "sid", "site")
         .await
         .expect("request ok");
-    handle.await.unwrap();
-
-    let req = captured
-        .lock()
-        .unwrap()
-        .clone()
-        .expect("server captured request");
-    let ua_line = req
-        .lines()
-        .find(|l| l.to_ascii_lowercase().starts_with("user-agent:"))
-        .unwrap_or_else(|| panic!("no User-Agent header in request:\n{req}"))
-        .to_string();
-    let ua_value = ua_line.splitn(2, ':').nth(1).unwrap().trim().to_string();
+    let ua_value = server.requests()[0].header("user-agent").expect("a User-Agent header").to_string();
     // Assert against the SHARED constant, so this test and the net-diagnosis
     // probe's test pin the same string and neither client can drift.
     assert_eq!(
@@ -1281,48 +1176,36 @@ fn unsafe_runtime_override_falls_back_for_every_constructor() {
     }
 }
 
+/// A stand-in that redirects every request to `location`.
+async fn redirect_to(location: &str) -> StandIn {
+    StandIn::new(302, &[("location", location)], |_, _| String::new()).await
+}
+
 #[tokio::test]
 async fn transport_policy_blocks_redirect_credentials_before_the_destination() {
-    let body = r#"{"status":"pending","email":null}"#;
-    let (destination, destination_server) = serve_once(format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body
-    )).await;
-    let credential_destination = destination.replacen("http://", "http://user:password@", 1);
-    let (source, source_server) = serve_once(format!(
-        "HTTP/1.1 302 Found\r\nLocation: {credential_destination}/auth/status/test-session\r\nContent-Length: 0\r\n\r\n"
-    )).await;
-    let result = MossSetaClient::with_url(&source).check_auth_status("test-session").await;
-    source_server.await.unwrap();
-    destination_server.abort();
+    let destination = StandIn::json(200, r#"{"status":"pending","email":null}"#).await;
+    let credential_destination = destination.url().replacen("http://", "http://user:password@", 1);
+    let source = redirect_to(&format!("{credential_destination}/auth/status/test-session")).await;
+    let result = MossSetaClient::with_url(&source.url()).check_auth_status("test-session").await;
     match result {
         Err(SetaError::Http(error)) => assert!(error.is_redirect(), "{error}"),
         result => panic!("unsafe redirect should fail before a second request: {result:?}"),
     }
+    assert!(destination.requests().is_empty(), "the redirect reached its destination");
 }
 
 #[tokio::test]
 async fn transport_policy_preserves_local_redirects() {
-    let body = r#"{"status":"pending","email":null}"#;
-    let (destination, destination_server) = serve_once(format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body
-    )).await;
-    let (source, source_server) = serve_once(format!(
-        "HTTP/1.1 302 Found\r\nLocation: {destination}/auth/status/test-session\r\nContent-Length: 0\r\n\r\n"
-    )).await;
-    let result = MossSetaClient::with_url(&source).check_auth_status("test-session").await.unwrap();
-    source_server.await.unwrap();
-    destination_server.await.unwrap();
+    let destination = StandIn::json(200, r#"{"status":"pending","email":null}"#).await;
+    let source = redirect_to(&format!("{}/auth/status/test-session", destination.url())).await;
+    let result = MossSetaClient::with_url(&source.url()).check_auth_status("test-session").await.unwrap();
     assert_eq!(result.status, "pending");
 }
 
-
 #[tokio::test]
 async fn transport_policy_blocks_remote_http_redirects_before_connecting() {
-    let (source, source_server) = serve_once(
-        "HTTP/1.1 302 Found\r\nLocation: http://localhost.attacker.invalid/auth/status/test-session\r\nContent-Length: 0\r\n\r\n".to_string()
-    ).await;
-    let result = MossSetaClient::with_url(&source).check_auth_status("test-session").await;
-    source_server.await.unwrap();
+    let source = redirect_to("http://localhost.attacker.invalid/auth/status/test-session").await;
+    let result = MossSetaClient::with_url(&source.url()).check_auth_status("test-session").await;
     match result {
         Err(SetaError::Http(error)) => assert!(error.is_redirect(), "{error}"),
         result => panic!("remote HTTP redirect should fail before connecting: {result:?}"),
@@ -1367,23 +1250,27 @@ fn auth_request_body_sends_lang_only_when_valid() {
     assert_eq!(body(None)["email"], "a@example.com");
 }
 
+#[test]
+fn auth_request_body_names_this_app_for_the_confirm_page() {
+    let body = auth_request_body("a@example.com", "pk", "sid", None);
+    let name = body["client"]["name"].as_str().unwrap();
+    assert_eq!(name, device_name("moss", crate::system::device_kind()));
+    assert_eq!(body["client"]["version"], crate::system::app_version());
+    let os = body["client"]["os"].as_str().unwrap();
+    assert!(!os.is_empty() && os != "macos", "a person's name for the OS, got {os:?}");
+}
+
 #[tokio::test]
 async fn a_site_limit_403_through_the_failed_response_path_is_site_limit_reached() {
-    let (url, handle) = serve_once(forbidden(r#"{"error":"site_limit_reached","limit":2,"contact":"help@example.com"}"#)).await;
-    let err = MossSetaClient::with_url(&url)
+    let server = StandIn::json(403, r#"{"error":"site_limit_reached","limit":2,"contact":"help@example.com"}"#).await;
+    let err = MossSetaClient::with_url(&server.url())
         .request_auth("user@example.com", "pk", "sid", None)
         .await
         .expect_err("a 403 is an error");
-    handle.await.unwrap();
     assert!(
         matches!(&err, SetaError::SiteLimitReached { limit: 2, contact: Some(c) } if c == "help@example.com"),
         "{err:?}"
     );
-}
-
-/// A 403 response carrying `body`, for [`serve_once`].
-fn forbidden(body: &str) -> String {
-    format!("HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}", body.len(), body)
 }
 
 /// The refusal a sign-in link lifts is logged at info, so the command line
@@ -1394,15 +1281,157 @@ fn forbidden(body: &str) -> String {
 async fn a_refusal_to_verify_the_email_is_no_warning() {
     use crate::build::cache::tests::logged_count;
     logged_count(log::Level::Info, "");
-    let (url, handle) = serve_once(forbidden(r#"{"error":"Email verification required (refusal-4b1e)"}"#)).await;
-    let err = MossSetaClient::with_url(&url).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
-    handle.await.unwrap();
+    let server = StandIn::json(403, r#"{"error":"Email verification required (refusal-4b1e)"}"#).await;
+    let err = MossSetaClient::with_url(&server.url()).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
     assert!(matches!(&err, SetaError::Api { status: 403, message } if asks_to_verify_email(403, message)), "{err:?}");
     assert_eq!(logged_count(log::Level::Warn, "refusal-4b1e"), 0);
     assert_eq!(logged_count(log::Level::Info, "refusal-4b1e"), 1);
 
-    let (url, handle) = serve_once(forbidden(r#"{"error":"Not the owner of this site (refusal-7c2d)"}"#)).await;
-    MossSetaClient::with_url(&url).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
-    handle.await.unwrap();
+    let server = StandIn::json(403, r#"{"error":"Not the owner of this site (refusal-7c2d)"}"#).await;
+    MossSetaClient::with_url(&server.url()).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
     assert_eq!(logged_count(log::Level::Warn, "refusal-7c2d"), 1);
+}
+
+/// The body a stand-in gives each request of a signed call, so the call goes
+/// as far as it would against seta.
+fn seta_like(method: &str, path: &str) -> String {
+    let path = path.split('?').next().unwrap_or(path);
+    match (method, path.rsplit('/').next()) {
+        ("POST", Some("upload")) => r#"{"uploadId":"u1"}"#.into(),
+        ("GET", Some("uploads")) => "[]".into(),
+        _ => "{}".into(),
+    }
+}
+
+/// Every request `call` makes against a stand-in, each checked to be signed
+/// by `identity` the way seta checks it.
+pub(crate) async fn signed_requests<F, Fut, T>(identity: &Identity, call: F) -> Vec<Received>
+where
+    F: FnOnce(MossSetaClient) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let server = StandIn::new(200, &[("content-type", "application/json")], seta_like).await;
+    let _ = call(MossSetaClient::with_identity_and_url(identity, &server.url())).await;
+    let requests = server.requests();
+    for request in &requests {
+        assert_eq!(request.signer(), identity.pubkey, "{} {}", request.method, request.path_and_query);
+    }
+    requests
+}
+
+/// One test per signed call: what it sends is what it signed, on the method
+/// and path and query the call is for.
+macro_rules! signed_call {
+    ($($name:ident: $method:literal $path:literal => |$c:ident| $call:expr;)*) => {$(
+        #[tokio::test]
+        async fn $name() {
+            let requests = signed_requests(&test_identity(), |$c| async move { $call.await }).await;
+            let first = requests.first().expect("the call sent a request");
+            assert_eq!((first.method.as_str(), first.path_and_query.as_str()), ($method, $path));
+        }
+    )*};
+}
+
+signed_call! {
+    whoami_is_signed: "GET" "/auth/whoami" => |c| c.whoami();
+    send_logs_is_signed: "POST" "/api/logs" => |c| c.send_logs(&serde_json::json!({ "lines": ["a"] }));
+    get_domain_cdn_is_signed: "GET" "/api/domains/example.com/cdn" => |c| c.get_domain_cdn("example.com");
+    get_domain_connect_is_signed: "GET" "/api/domains/example.com/connect" => |c| c.get_domain_connect("example.com");
+    start_domain_cdn_is_signed: "POST" "/api/domains/example.com/cdn" => |c| c.start_domain_cdn("example.com");
+    link_custom_domain_is_signed: "POST" "/api/sites/s1/domains" => |c| c.link_custom_domain("s1", "example.com");
+    configure_dns_is_signed: "POST" "/api/domains/example.com/dns" => |c| c.configure_dns("example.com", &[
+        serde_json::from_value(serde_json::json!({ "record_type": "A", "name": "@", "value": "192.0.2.1" })).unwrap(),
+    ]);
+    get_dns_zone_is_signed: "GET" "/api/domains/example.com/dns" => |c| c.get_dns_zone("example.com");
+    a_non_ascii_domain_is_signed_as_sent: "GET" "/api/domains/b%C3%BCcher.de/dns" => |c| c.get_dns_zone("bücher.de");
+    a_space_is_signed_as_sent: "GET" "/api/domains/a%20b/dns" => |c| c.get_dns_zone("a b");
+    a_slash_in_a_domain_stays_in_its_segment: "GET" "/api/domains/a%2F..%2Fb/dns" => |c| c.get_dns_zone("a/../b");
+    an_empty_query_is_signed_as_the_server_reads_it: "GET" "/auth/whoami?" => |c| c.get_json::<serde_json::Value>("/auth/whoami?");
+    create_payment_intent_is_signed: "POST" "/api/domains/create-payment" => |c| c.create_payment_intent("example.com", 1);
+    charge_saved_for_domain_is_signed: "POST" "/api/payment/domains/charge-saved" => |c| c.charge_saved_for_domain("pm_1", "example.com", 1);
+    get_payment_method_billing_is_signed: "GET" "/api/payment/methods/pm_1/billing" => |c| c.get_payment_method_billing("pm_1");
+    list_payment_methods_is_signed: "GET" "/api/payment/methods" => |c| c.list_payment_methods();
+    get_domains_is_signed: "GET" "/api/domains" => |c| c.get_domains();
+    register_domain_is_signed: "POST" "/api/domains/register" => |c| c.register_domain("example.com", "pi_1", &crate::seta::domains::RegistrantContact {
+        name: "A B".into(), phone: "+1.5555550100".into(), address1: "1 Main St".into(), country: "US".into(), city: None,
+    });
+    get_assignable_domains_is_signed: "GET" "/api/domains/owned" => |c| c.get_assignable_domains();
+    assign_domain_is_signed: "PUT" "/api/domains/example.com/assign" => |c| c.assign_domain("example.com", "s1");
+    get_domain_status_is_signed: "GET" "/api/domains/example.com/status" => |c| c.get_domain_status_for_host("example.com");
+    register_site_is_signed: "POST" "/api/sites" => |c| c.register_site("s1");
+    sync_manifest_is_signed: "POST" "/api/sites/s1/sync" => |c| c.sync_manifest("s1", &[("a.html".to_string(), "h".to_string())].into(), "g1");
+    upload_file_is_signed: "PUT" "/api/sites/s1/files/docs%2Fa%20b.html" => |c| c.upload_file("s1", "docs/a b.html", b"<p>".to_vec(), "g1", None);
+    upload_symlink_is_signed: "PUT" "/api/sites/s1/files/latest" => |c| c.upload_symlink("s1", "latest", "v2".into(), "g1");
+    list_upload_sessions_is_signed: "GET" "/api/sites/s1/uploads?generation_id=g1" => |c| c.list_upload_sessions("s1", "g1");
+    commit_sync_is_signed: "POST" "/api/sites/s1/commit" => |c| c.commit_sync("s1", &[("a.html".to_string(), "h".to_string())].into(), "g1");
+    live_generation_is_signed: "GET" "/api/sites/s1/generation" => |c| c.live_generation("s1");
+    list_site_domains_is_signed: "GET" "/api/sites/s1/domains" => |c| c.list_site_domains("s1");
+    pull_site_data_is_signed: "GET" "/api/sites/s1/data" => |c| c.pull_site_data("s1");
+    pull_events_is_signed: "GET" "/api/sites/s1/events?since=5&limit=10" => |c| c.pull_events("s1", 5, 10);
+}
+
+/// A JSON body is signed as the bytes sent, so seta reads the same document.
+#[tokio::test]
+async fn a_json_body_is_sent_as_signed() {
+    let requests = signed_requests(&test_identity(), |c| async move { c.register_site("my-site").await }).await;
+    assert_eq!(requests[0].body, br#"{"id":"my-site"}"#);
+    assert_eq!(requests[0].header("content-type"), Some("application/json"));
+}
+
+#[test]
+fn the_device_name_is_the_app_on_the_kind_of_computer() {
+    assert_eq!(device_name("moss command line", Some("Mac Studio")), "moss command line on Mac Studio");
+    assert_eq!(device_name("moss", Some("a Windows PC")), "moss on a Windows PC");
+    assert_eq!(device_name("moss command line", None), "moss command line");
+}
+
+#[test]
+fn a_mac_is_named_by_its_family_only() {
+    use crate::system::mac_kind;
+    for (model, kind) in [
+        ("Mac Studio (2023)", "Mac Studio"),
+        ("MacBook Air (M2, 2022)", "MacBook Air"),
+        ("MacBookPro16,1", "MacBook Pro"),
+        ("MacBook10,1", "MacBook"),
+        ("Macmini9,1", "Mac mini"),
+        ("iMac (24-inch, M1, 2021)", "iMac"),
+        ("Mac14,14", "a Mac"),
+        ("", "a Mac"),
+        ("Ana’s Mac Studio", "a Mac"),
+    ] {
+        assert_eq!(mac_kind(model), kind, "{model:?}");
+    }
+}
+
+/// This Mac's family is the one System Information names, so a misread of the
+/// device tree cannot hide behind the "a Mac" fallback.
+#[cfg(target_os = "macos")]
+#[test]
+fn this_mac_is_named_by_the_family_system_information_gives() {
+    let out = std::process::Command::new("system_profiler").args(["SPHardwareDataType", "-json"]).output().unwrap();
+    let info: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let machine = info["SPHardwareDataType"][0]["machine_name"].as_str().unwrap_or_default();
+    assert_eq!(crate::system::device_kind(), Some(crate::system::mac_kind(machine)), "System Information says {machine:?}");
+}
+
+/// The name its owner gave this computer often holds the owner's own name,
+/// so a sign-in request carries one of a fixed list of device kinds and
+/// nothing taken from the computer's name.
+#[test]
+fn the_owners_computer_name_never_reaches_the_sign_in_request() {
+    let body = auth_request_body("a@example.com", "pk", "sid", None);
+    let sent = body["client"]["name"].as_str().unwrap().to_string();
+    let allowed: Vec<String> = std::iter::once("moss".to_string())
+        .chain(crate::system::DEVICE_KINDS.iter().map(|k| format!("moss on {k}")))
+        .collect();
+    assert!(allowed.contains(&sent), "{sent:?} is not from the fixed list");
+    if cfg!(target_os = "macos") {
+        for source in [["scutil", "--get", "ComputerName"], ["scutil", "--get", "LocalHostName"]] {
+            let out = std::process::Command::new(source[0]).args(&source[1..]).output().unwrap();
+            let set = String::from_utf8(out.stdout).unwrap().trim().to_string();
+            if !set.is_empty() && !crate::system::DEVICE_KINDS.contains(&set.as_str()) {
+                assert!(!sent.contains(&set), "{sent:?} carries the computer's name {set:?}");
+            }
+        }
+    }
 }

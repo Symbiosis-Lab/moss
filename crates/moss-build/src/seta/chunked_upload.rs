@@ -1,15 +1,14 @@
 //! The chunked (resumable) upload protocol.
 //!
-//! Split out of `sites.rs` 2026-08-03. It is a self-contained five-endpoint
-//! protocol — create session, PATCH chunks, HEAD for the authoritative offset,
-//! complete, abort — with its own failure handling, and it has nothing to do
-//! with the site registration / metadata / analytics endpoints that make up the
-//! rest of `sites.rs`. Keeping them together pushed that file past its
-//! prod-line budget; the split is the boundary the budget was pointing at.
+//! A self-contained five-endpoint protocol (create session, PATCH chunks, HEAD
+//! for the authoritative offset, complete, abort) with its own failure
+//! handling.
 //!
 //! Sizing (chunk size, concurrency, request timeout, retry escalation) lives in
 //! `upload_policy`.
 
+use bytes::Bytes;
+use reqwest::Method;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -165,24 +164,20 @@ impl MossSetaClient {
 
             // Retry the sign+PATCH unit; abort-session stays OUTSIDE it, so a
             // recoverable blip re-sends the chunk instead of killing the session.
-            let patch_path = format!("/api/sites/{}/upload/{}", site_id, encoded_id);
+            let patch_path = format!("/api/sites/{}/upload/{}", urlencoding::encode(site_id), encoded_id);
             let chunk = bytes::Bytes::from(chunk);
             let (this, patch_path, chunk_ref, tp) =
                 (self, patch_path.as_str(), &chunk, throughput);
             let (file_reqs, file_oks) = (&file_requests, &file_requests_ok);
             let sent = crate::seta::client::retry_transient(file_path, &budget, || async move {
-                let (patch_url, patch_auth) = this.sign_and_build(patch_path)?;
+                let request = this.signed(Method::PATCH, patch_path, chunk_ref.clone())?;
                 tp.note_request();
                 file_reqs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let started = std::time::Instant::now();
-                let resp = this
-                    .client
-                    .patch(&patch_url)
+                let resp = request
                     .timeout(UPLOAD_REQUEST_TIMEOUT)
-                    .header("Authorization", patch_auth)
                     .header("Content-Type", "application/octet-stream")
                     .header("Upload-Offset", offset.to_string())
-                    .body(chunk_ref.clone())
                     .send()
                     .await?;
                 if !resp.status().is_success() {
@@ -325,20 +320,17 @@ impl MossSetaClient {
 
         let complete_path = format!(
             "/api/sites/{}/upload/{}/complete",
-            site_id, encoded_id
+            urlencoding::encode(site_id), encoded_id
         );
-        let (complete_url, complete_auth) = match self.sign_and_build(&complete_path) {
+        let request = match self.signed(Method::POST, &complete_path, Bytes::new()) {
             Ok(v) => v,
             Err(e) => {
                 self.abort_if_unusable(site_id, &encoded_id, &e).await;
                 return Err(e);
             }
         };
-        let resp = self
-            .client
-            .post(&complete_url)
+        let resp = request
             .timeout(UPLOAD_REQUEST_TIMEOUT)
-            .header("Authorization", complete_auth)
             .header("Content-Length", "0")
             .header("X-Moss-Content-Hash", &content_hash)
             .send()
@@ -499,55 +491,31 @@ impl MossSetaClient {
         total_size: usize,
         generation_id: &str,
     ) -> Result<String, SetaError> {
-        let create_path = format!("/api/sites/{}/upload", site_id);
-        let (create_url, create_auth) = self.sign_and_build(&create_path)?;
-        let response = self
-            .client
-            .post(&create_url)
-            .timeout(UPLOAD_REQUEST_TIMEOUT)
-            .header("Authorization", create_auth)
-            .header("X-Moss-Generation", generation_id)
-            .json(&serde_json::json!({ "filePath": file_path, "size": total_size }))
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
+        let create_path = format!("/api/sites/{}/upload", urlencoding::encode(site_id));
         #[derive(Deserialize)]
         struct CreateResp {
             #[serde(rename = "uploadId")]
             upload_id: String,
         }
-        Ok(response
-            .json::<CreateResp>()
-            .await
-            .map_err(|e| SetaError::Parse(e.to_string()))?
-            .upload_id)
+        let request = self
+            .signed_json(Method::POST, &create_path, &serde_json::json!({ "filePath": file_path, "size": total_size }))?
+            .timeout(UPLOAD_REQUEST_TIMEOUT)
+            .header("X-Moss-Generation", generation_id);
+        Ok(Self::send_json::<CreateResp>(request).await?.upload_id)
     }
 
     /// Ask the server how many bytes of this session it actually holds.
     ///
-    /// `HEAD /api/sites/:id/upload/:uploadId` -> `Upload-Offset`. seta has
-    /// served this since the chunked protocol was written and its own comment
-    /// claims "the moss client uses HEAD" — which was not true until 2026-08-03.
-    /// This is dead capability being switched on, not new protocol.
+    /// `HEAD /api/sites/:id/upload/:uploadId` -> `Upload-Offset`.
     ///
-    /// Signed per call: `retry_transient`'s contract is that every attempt
-    /// re-signs, because seta rejects a clock skew over 300s.
+    /// Signed per call: a signed header is good for one request.
     async fn chunked_upload_offset(
         &self,
         site_id: &str,
         encoded_upload_id: &str,
     ) -> Result<usize, SetaError> {
-        let path = format!("/api/sites/{}/upload/{}", site_id, encoded_upload_id);
-        let (url, auth) = self.sign_and_build(&path)?;
-        let resp = self
-            .client
-            .head(&url)
-            .timeout(UPLOAD_REQUEST_TIMEOUT)
-            .header("Authorization", auth)
-            .send()
-            .await?;
+        let path = format!("/api/sites/{}/upload/{}", urlencoding::encode(site_id), encoded_upload_id);
+        let resp = self.signed(Method::HEAD, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT).send().await?;
         if !resp.status().is_success() {
             return Err(SetaError::from_failed_response(resp).await);
         }
@@ -596,19 +564,11 @@ impl MossSetaClient {
     /// clean up any sessions we fail to abort explicitly.
     async fn abort_chunked_upload(&self, site_id: &str, encoded_upload_id: &str) {
         const ABORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-        let Ok((url, auth)) = self.sign_and_build(&format!(
-            "/api/sites/{}/upload/{}",
-            site_id, encoded_upload_id
-        )) else {
+        let path = format!("/api/sites/{}/upload/{}", urlencoding::encode(site_id), encoded_upload_id);
+        let Ok(request) = self.signed(Method::DELETE, &path, Bytes::new()) else {
             return;
         };
-        let _ = self
-            .client
-            .delete(&url)
-            .timeout(ABORT_TIMEOUT)
-            .header("Authorization", auth)
-            .send()
-            .await;
+        let _ = request.timeout(ABORT_TIMEOUT).send().await;
     }
 }
 

@@ -2195,13 +2195,11 @@ async fn mutate_carrier_without_or_with_wrong_token_is_401() {
     let _ = shutdown_tx.send(());
 }
 
-/// `carrier_token::admit` accepts the session token carried as the
-/// `moss_token` cookie, not just the `X-Moss-Token` header — the second way
-/// in, set by `GET /__moss/session`'s `Set-Cookie` response for a plain
-/// browser tab with no script of its own. A wrong cookie value still 401s;
-/// the gate is comparing the value, not just checking the cookie's presence.
+/// The preview origin runs the site's own scripts, which a browser lets send
+/// its cookies, so the carrier takes the token only in the `X-Moss-Token`
+/// header, which only a process that reads the token file can set.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mutate_carrier_accepts_the_session_cookie_and_rejects_a_wrong_one() {
+async fn mutate_carrier_refuses_the_token_carried_as_a_cookie() {
     let (vault, site_dir) = served_vault();
     let (port, shutdown_tx, token) = serve_bound(site_dir, 62750).await;
 
@@ -2212,28 +2210,17 @@ async fn mutate_carrier_accepts_the_session_cookie_and_rejects_a_wrong_one() {
     .to_string();
     let url = format!("http://localhost:{}/__moss/mutate/create_files", port);
 
-    // A wrong cookie value must still 401, and must not create the file.
     match ureq::post(&url)
-        .set("Content-Type", "application/json")
-        .set("Cookie", "moss_token=not-the-real-token")
-        .timeout(std::time::Duration::from_secs(5))
-        .send_string(&payload)
-    {
-        Err(ureq::Error::Status(401, _)) => {}
-        Ok(resp) => panic!("a wrong cookie must 401; got {}", resp.status()),
-        Err(e) => panic!("expected a 401, got transport error: {e}"),
-    }
-    assert!(!target.exists(), "a 401'd mutation must not have created any file");
-
-    // The real token, carried as a cookie instead of the header, must pass.
-    let resp = ureq::post(&url)
         .set("Content-Type", "application/json")
         .set("Cookie", &format!("other=ignored; moss_token={token}"))
         .timeout(std::time::Duration::from_secs(5))
         .send_string(&payload)
-        .expect("the session cookie must admit the mutation carrier");
-    assert_eq!(resp.status(), 200);
-    assert!(target.exists(), "the carrier must have created the file");
+    {
+        Err(ureq::Error::Status(401, _)) => {}
+        Ok(resp) => panic!("the token as a cookie must 401; got {}", resp.status()),
+        Err(e) => panic!("expected a 401, got transport error: {e}"),
+    }
+    assert!(!target.exists(), "a refused mutation must not have created any file");
 
     let _ = shutdown_tx.send(());
 }
@@ -2740,55 +2727,88 @@ fn confinement_vault() -> (tempfile::TempDir, std::path::PathBuf, std::path::Pat
     (parent, vault_path, site_dir)
 }
 
-/// The token-FREE tier must not read outside the vault.
-///
-/// `parse_frontmatter` is the only path-taking arm on `/__moss/invoke`, and its
-/// shared core (`read_vault_text`) deliberately does not confine — the desktop
-/// caller has no need to. So this arm's `confine` is the whole defence, and an
-/// unauthenticated same-origin caller is exactly who it defends against.
+/// Reading a source over the carrier must not leave the vault.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_free_carrier_refuses_to_read_a_file_outside_the_vault() {
+async fn carrier_refuses_to_read_a_file_outside_the_vault() {
     let (parent, vault_path, site_dir) = confinement_vault();
-    let (port, shutdown_tx, _token) = serve_bound(site_dir.clone(), 63400).await;
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63400).await;
 
     let post = |file: std::path::PathBuf| {
-        ureq::post(&format!("http://localhost:{}/__moss/invoke/parse_frontmatter", port))
+        ureq::post(&format!("http://localhost:{}/__moss/read/parse_frontmatter", port))
             .set("Content-Type", "application/json")
+            .set("X-Moss-Token", &token)
             .timeout(std::time::Duration::from_secs(5))
             .send_string(&serde_json::json!({ "filePath": file.to_string_lossy() }).to_string())
     };
 
-    // Positive control: an IN-vault read must succeed, or the refusal below
-    // proves nothing about confinement.
+    // Positive control: an in-vault read succeeds, or the refusals below prove nothing.
     let inside = post(vault_path.join("inside.md"))
         .expect("control: an in-vault read must succeed")
         .into_string()
         .unwrap();
-    assert!(
-        inside.contains("INSIDE"),
-        "control: the arm answered but did not return the in-vault file's frontmatter: {inside}"
-    );
+    assert!(inside.contains("INSIDE"), "control: the in-vault file's frontmatter was not returned: {inside}");
 
-    // The escape: a sibling of the vault, named absolutely.
-    let escaped = post(parent.path().join("secret.md"));
-    match escaped {
-        Err(ureq::Error::Status(status, _)) => assert_eq!(
-            status, 500,
-            "an out-of-vault read must be refused as a command error"
-        ),
-        Ok(r) => panic!(
-            "token-free carrier read a file OUTSIDE the vault: {}",
-            r.into_string().unwrap_or_default()
-        ),
+    match post(parent.path().join("secret.md")) {
+        Err(ureq::Error::Status(status, _)) => assert_eq!(status, 500, "an out-of-vault read is a command error"),
+        Ok(r) => panic!("the carrier read a file OUTSIDE the vault: {}", r.into_string().unwrap_or_default()),
+        Err(e) => panic!("unexpected transport error: {e}"),
+    }
+    assert!(post(vault_path.join("../secret.md")).is_err(), "a `..` traversal out of the vault must be refused");
+
+    let _ = shutdown_tx.send(());
+}
+
+/// Reading a source takes the session token: a page's own script on the
+/// preview origin has no token, so it cannot read the folder's files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reading_a_source_is_not_a_token_free_command() {
+    let (_parent, vault_path, site_dir) = confinement_vault();
+    let (port, shutdown_tx, _token) = serve_bound(site_dir.clone(), 63420).await;
+
+    let res = ureq::post(&format!("http://localhost:{}/__moss/invoke/parse_frontmatter", port))
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "filePath": vault_path.join("inside.md").to_string_lossy() }).to_string());
+    match res {
+        Err(ureq::Error::Status(status, _)) => assert_eq!(status, 404, "the token-free tier has no such command"),
+        Ok(r) => panic!("a token-free call read a source: {}", r.into_string().unwrap_or_default()),
         Err(e) => panic!("unexpected transport error: {e}"),
     }
 
-    // And the traversal spelling of the same escape.
-    let traversal = post(vault_path.join("../secret.md"));
-    assert!(
-        traversal.is_err(),
-        "a `..` traversal out of the vault must be refused"
-    );
+    let _ = shutdown_tx.send(());
+}
+
+/// moss's own files under `.moss/` (the carrier token among them) are out of
+/// a carrier read's reach even with the token; the site's config, which the
+/// author edits, is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_carrier_read_never_reaches_moss_own_files() {
+    let (_parent, vault_path, site_dir) = confinement_vault();
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63440).await;
+    let token_file = crate::ops::serve::carrier_token::token_path(&vault_path);
+    assert!(token_file.exists(), "control: the carrier published its token file");
+    let relative = token_file.strip_prefix(&vault_path).unwrap().to_string_lossy().into_owned();
+
+    for path in [relative.clone(), token_file.to_string_lossy().into_owned()] {
+        let res = ureq::post(&format!("http://localhost:{}/__moss/read/parse_frontmatter", port))
+            .set("Content-Type", "application/json")
+            .set("X-Moss-Token", &token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_string(&serde_json::json!({ "filePath": path }).to_string());
+        match res {
+            Err(ureq::Error::Status(500, _)) => {}
+            Ok(r) => panic!("the carrier read {path}: {}", r.into_string().unwrap_or_default()),
+            Err(e) => panic!("{path}: unexpected answer {e}"),
+        }
+    }
+
+    std::fs::write(vault_path.join(".moss/config.toml"), "title = \"Harbour\"\n").unwrap();
+    let config = ureq::post(&format!("http://localhost:{}/__moss/read/parse_frontmatter", port))
+        .set("Content-Type", "application/json")
+        .set("X-Moss-Token", &token)
+        .timeout(std::time::Duration::from_secs(5))
+        .send_string(&serde_json::json!({ "filePath": ".moss/config.toml" }).to_string());
+    assert!(config.is_ok(), "the site's config stays readable: {config:?}");
 
     let _ = shutdown_tx.send(());
 }

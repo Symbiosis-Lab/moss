@@ -2500,6 +2500,45 @@ fn test_search_button_absent_by_default() {
     );
 }
 
+#[test]
+fn fixed_color_scheme_omits_theme_toggle_but_keeps_search_and_language() {
+    use crate::build::page::color_scheme::ColorScheme;
+    let documents = vec![make_doc("index.html", "Home", None, None)];
+    for scheme in [ColorScheme::Light, ColorScheme::Dark] {
+        let html = NavigationBuilder::new(
+            &documents, "Test Site", None, crate::i18n::Language::En, false,
+        )
+        .with_color_scheme(scheme)
+        .with_search(true)
+        .with_translations(crate::i18n::Language::En, "en", vec![TranslationLink {
+            lang_tag: "zh-Hans".to_string(),
+            url_path: "index.zh-hans.html".to_string(),
+            display_name: "简",
+        }])
+        .generate_navigation();
+
+        assert!(!html.contains("nav-theme-btn"), "{scheme:?}: {html}");
+        assert!(html.contains("nav-search-btn"), "{scheme:?}: {html}");
+        assert!(html.contains("nav-lang-toggle"), "{scheme:?}: {html}");
+        assert!(html.contains(r#"class="nav-lang-link" hreflang="zh-Hans""#), "{scheme:?}: {html}");
+    }
+}
+
+#[test]
+fn default_and_auto_color_scheme_keep_theme_toggle() {
+    use crate::build::page::color_scheme::ColorScheme;
+    let documents = vec![make_doc("index.html", "Home", None, None)];
+    for scheme in [None, Some(ColorScheme::Auto)] {
+        let mut nav = NavigationBuilder::new(
+            &documents, "Test Site", None, crate::i18n::Language::En, false,
+        );
+        if let Some(scheme) = scheme {
+            nav = nav.with_color_scheme(scheme);
+        }
+        assert!(nav.generate_navigation().contains("nav-theme-btn"), "{scheme:?}");
+    }
+}
+
 /// The one test that pins the toggle cluster's full order.
 ///
 /// Left to right: search, language, theme — most content-related control to

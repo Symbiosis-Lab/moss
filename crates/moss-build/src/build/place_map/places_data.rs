@@ -125,6 +125,11 @@ pub(crate) fn page_url(url_path: &str) -> String {
     format!("/{}", pretty.trim_start_matches('/'))
 }
 
+/// The places root's page: the explorer, or the static places map.
+pub(crate) fn root_url(namespace: &str) -> String {
+    format!("/{namespace}/") // allow:served-path-url-construct (a term kind's root page, not a framework asset)
+}
+
 /// A page's cover, resolved to a URL the build actually serves. `None`
 /// given no cover.
 ///

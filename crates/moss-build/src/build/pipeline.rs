@@ -369,6 +369,7 @@ fn run_notebook_processing(
     cancel_flag: Option<&std::sync::atomic::AtomicBool>,
     evidence: &super::cloud_ledger::InputEvidence,
     robots_tag: Option<String>,
+    color_scheme: crate::build::page::color_scheme::ColorScheme,
 ) -> Vec<NotebookReceipt> {
     use crate::build::assets::asset_resolver::resolve_asset_directory;
     use crate::build::notebook::{collect_notebooks, generate_contents_manifest, generate_viewer_html_with_content, jupyterlite_asset_config, patch_jupyterlite_config, CONTENTS_ALL_JSON_FILE};
@@ -657,6 +658,7 @@ fn run_notebook_processing(
                 "/jupyter",
                 notebook_content.as_deref(),
                 robots_tag.as_deref(),
+                color_scheme,
             );
             let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
@@ -1504,11 +1506,13 @@ fn build_inner(
         // Default-on by key absence, like `link_preview`: `[site].colophon = false`
         // is the only way to leave moss's credit out.
         colophon,
+        color_scheme: crate::build::page::color_scheme::ColorScheme::from_config(site_str("color_scheme").as_deref()),
         colophon_credit: crate::build::render::credits::ColophonCredit::from_site(site_str("credit").as_deref(), colophon),
         // `[site].header` — "brand" (default), "nav" or "none"; an absent or
         // unrecognized value resolves to "brand" (`HeaderMode::from_config`
         // logs a warning on the latter).
         header: crate::build::components::nav::HeaderMode::from_config(site_str("header").as_deref()),
+        header_scroll: crate::build::components::nav::HeaderScroll::from_config(site_str("header_scroll").as_deref()),
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
         ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
@@ -1559,6 +1563,7 @@ fn build_inner(
     let build_now = crate::build::folder_embed::upcoming::now();
     // Read again by the notebook viewers, after `site_config` is consumed.
     let site_ai = site_config.ai;
+    let color_scheme = site_config.color_scheme;
     let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_now)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
@@ -1861,6 +1866,7 @@ fn build_inner(
             cancel,
             &input_evidence,
             site_ai.robots_tag(false),
+            color_scheme,
         );
         // Register the receipts. `pending` is still alive here (constructed in
         // build_inner before generate_blocking_content and passed as &mut); the

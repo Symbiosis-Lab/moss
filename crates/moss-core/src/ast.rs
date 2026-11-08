@@ -30,6 +30,7 @@
 //!   `Url::Resolved`; emitting `Url::Unresolved` is a bug.
 //! - moss-core stays pure Rust: zero I/O, zero async.
 
+mod accordion;
 pub mod attrs;
 pub mod cells;
 pub mod dispatch_wikilink_embeds;
@@ -65,7 +66,7 @@ pub use extract_hero::{extract_hero, HeroDrawnFrom, HeroExtraction};
 pub use grid_parts::{card_parts, render_grid_parts, GridCellParts, GridParts};
 pub use extract_form::{FieldKind, FormField, FormShortcode};
 pub use hooks::{DefaultHooks, RenderHooks, RequestFormFn, SubscribeFormFn};
-pub use node::{is_link_row, Block, CalloutKind, Fold, Inline};
+pub use node::{is_link_row, is_text_link_row, Block, CalloutKind, Fold, Inline};
 pub use parser::{clear_heading_ids, parse, parse_with_config, parser_options, unwrap_implicit_figures, ParseConfig};
 pub use plain_text::{inlines_to_plain_text, render_plain_text};
 pub use query::{block_images, find_first_block_image, has_raw_style_block, has_viewable_picture_recursive, images_without_text, marked_media_at, image_word_warnings, MarkedMedia, MediaMarker};
@@ -77,4 +78,4 @@ pub use shortcode::{
 };
 pub use tags::extract_inline_tags;
 pub use url::{ResolvedUrl, Url, UrlKind};
-pub use visit::{for_each_child_sequence, forms_recursive, has_callout_recursive, has_diagram_recursive, is_diagram_lang, has_scroll_row_recursive, has_shortcode_recursive, visit_block_raw_html_mut, visit_blocks, visit_urls_mut};
+pub use visit::{for_each_child_sequence, forms_recursive, has_callout_recursive, has_diagram_recursive, is_diagram_lang, has_scroll_row_recursive, has_marquee_recursive, has_shortcode_recursive, visit_block_raw_html_mut, visit_blocks, visit_urls_mut};

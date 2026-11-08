@@ -67,6 +67,8 @@ GATES_BUILD=(
   card-cover-auto
   lead-listing
   listing-picture-strip
+  marquee
+  field-place-end
   grid-card-image-inline-size
   hero-caption
   hero-links
@@ -85,6 +87,8 @@ GATES_BUILD=(
   contents-ruler
   contents-lens
   header-none
+  header-scroll
+  folded-callouts
   edge-clamp
   vertical-nav-chrome
   video-embed-shape

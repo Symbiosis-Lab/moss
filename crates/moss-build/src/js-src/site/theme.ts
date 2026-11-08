@@ -128,6 +128,7 @@ document.addEventListener("moss-morph-patched", syncMobileMenuToViewport);
  * so site-level scripts can react to theme changes (e.g., exit custom modes).
  */
 function toggleTheme(): void {
+  if (document.documentElement.hasAttribute("data-moss-color-scheme")) return;
   const previous = document.documentElement.getAttribute("data-theme");
   const next = previous === "dark" ? "light" : "dark";
 
@@ -418,6 +419,11 @@ import "./nav/hint-place";
 // no-ops on a page whose markup carries no island, which is every page without
 // a breadcrumb trail.
 import "./nav/nav-island";
+
+// `[site].header_scroll` — measures the header for anchor clearance and, for
+// `hide`, slides it away while the reader scrolls down. Self-wires on import;
+// no-ops on a page whose <body> carries no `data-header-scroll`.
+import "./nav/header-scroll";
 
 // The blurred placeholder an image is painted with until it loads. Its own
 // module so the scan and the load listener can be tested without this

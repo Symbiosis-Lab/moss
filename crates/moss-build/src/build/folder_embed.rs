@@ -83,6 +83,8 @@ struct ParsedMarker<'a> {
     when: Option<&'a str>,
     /// Pictures per `summary` row (`FolderEmbedParams::pictures`).
     pictures: Option<usize>,
+    /// `motion:marquee`: the strip slides sideways (`FolderEmbedParams::marquee`).
+    marquee: bool,
     /// Internal filter: root homepage's own listing — scope to the default language
     /// tree (drop language-prefix subtrees) when the site is multilingual (homepage only).
     scope_default_tree: bool,
@@ -163,6 +165,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "covers" => out.covers = Some(v.trim()),
                 "when" => out.when = Some(v.trim()),
                 "pictures" => out.pictures = folder_list::picture_count(v).ok(),
+                "motion" => out.marquee = v.trim() == "marquee",
                 "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
                 "align" => {
                     out.placement.align = match v.trim() {
@@ -451,6 +454,7 @@ pub(crate) fn generate_children(
             // `props_for_document` (frontmatter, then the first byline row) and
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
+            props.marquee = rows.marquee;
             props.count_setting = props.count_setting.take().or_else(|| rows.count.cloned());
             props.lang = rows.listing_tag.and_then(|tag| components::child_list::RowLang::between(doc, tag, lang));
             if style != "grid" {
@@ -699,6 +703,8 @@ pub(crate) struct ListingRowOptions<'a> {
     pub listing_tag: Option<&'a str>,
     /// Pictures per `summary` row (`pictures:N`).
     pub pictures: Option<usize>,
+    /// The strip slides sideways in a loop (`motion:marquee`).
+    pub marquee: bool,
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in
@@ -813,6 +819,13 @@ pub(crate) fn expand_markers_in_documents(
     expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None, upcoming::now())
 }
 
+/// Whether a folder-embed marker on the page asks for `motion:marquee`.
+fn has_marquee_marker(doc: &ParsedDocument) -> bool {
+    [Some(doc.html_content.as_str()), doc.hero_html.as_deref()].into_iter().flatten().any(|html| {
+        html.split(MARKER_FOLDER_LIST).skip(1).any(|marker| marker.split(MARKER_END).next().is_some_and(|body| body.split('|').any(|tok| tok.trim() == "motion=marquee")))
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn expand_markers_in_documents_with_place_maps(
     documents: &mut [ParsedDocument],
@@ -850,6 +863,9 @@ pub fn expand_markers_in_documents_with_place_maps(
         // `synthesize_children_marker`. One SVG identity sequence per page.
         let ordinal = std::cell::Cell::new(0);
         let shown = ListedUrls::default();
+        // The markers still carry the authored options, so the page's script
+        // gate is read from them before they are replaced by the listing.
+        documents[i].features.marquee |= has_marquee_marker(&documents[i]);
         let expand = |html: &str| {
             resolve_markers_impl(
                 html,
@@ -1587,6 +1603,7 @@ fn render_one(
         count: parsed.count.as_ref(),
         listing_tag: host_tag.as_deref(),
         pictures: parsed.pictures,
+        marquee: parsed.marquee,
     };
 
     // Dispatch rendering based on style.
@@ -1840,6 +1857,7 @@ pub(crate) fn synthesize_children_marker_for(
         covers: doc.children_covers.clone(),
         when: doc.children_when.clone(),
         pictures: doc.children_pictures.map(|n| n as usize),
+        marquee: doc.children_motion.is_some(),
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),

@@ -72,16 +72,7 @@ fn theme_color_dark_matches_token_dark_bg() {
             "dark --moss-color-bg token must be #1c1914 (got {}); update tokens.json if changed intentionally",
             dark
         );
-    // Also verify the processor emits it (not the old wrong literal).
-    // Build a minimal shell template and process it.
-    let shell = concat!(
-        r#"<meta name="theme-color" content="{theme_color_light}" media="(prefers-color-scheme: light)">"#,
-        "\n",
-        r#"<meta name="theme-color" content="{theme_color_dark}" media="(prefers-color-scheme: dark)">"#
-    );
-    let replaced_dark = shell
-        .replace("{theme_color_light}", _light)
-        .replace("{theme_color_dark}", dark);
+    let replaced_dark = ShellProcessor::new().process(ShellType::Page, make_test_vars(false));
     assert!(
         replaced_dark.contains("content=\"#1c1914\""),
         "emitted dark theme-color must be #1c1914, got: {}",
@@ -91,6 +82,51 @@ fn theme_color_dark_matches_token_dark_bg() {
         !replaced_dark.contains("content=\"#1a1816\""),
         "stale wrong dark value #1a1816 must NOT appear in emitted meta"
     );
+}
+
+#[test]
+fn fixed_color_scheme_sets_root_attributes_and_unconditional_theme_color() {
+    use crate::build::page::color_scheme::ColorScheme;
+    use moss_core::contract::tokens::{bg_colors, load_tokens};
+    let tokens = load_tokens().expect("tokens.json must parse");
+    let (light, dark) = bg_colors(&tokens);
+    for (scheme, name, color) in [
+        (ColorScheme::Light, "light", light),
+        (ColorScheme::Dark, "dark", dark),
+    ] {
+        let mut vars = make_test_vars(false);
+        vars.color_scheme = scheme;
+        let html = ShellProcessor::new().process(ShellType::Page, vars);
+        let root = html.lines().find(|line| line.starts_with("<html ")).expect("html root");
+        assert!(!html.contains("localStorage"), "fixed pages need no pre-paint script");
+        assert!(root.contains(&format!(r#"data-theme="{name}""#)), "{root}");
+        assert!(root.contains(&format!(r#"data-moss-color-scheme="{name}""#)), "{root}");
+        assert!(root.contains(&format!(r#"style="color-scheme: {name}""#)), "{root}");
+        assert_eq!(html.matches(r#"<meta name="theme-color""#).count(), 1);
+        assert!(html.contains(&format!(r#"<meta name="theme-color" content="{color}">"#)), "{html}");
+    }
+}
+
+#[test]
+fn default_and_auto_color_scheme_leave_root_unfixed() {
+    use crate::build::page::color_scheme::ColorScheme;
+    for scheme in [None, Some(ColorScheme::Auto)] {
+        let mut vars = make_test_vars(false);
+        if let Some(scheme) = scheme {
+            vars.color_scheme = scheme;
+        }
+        let html = ShellProcessor::new().process(ShellType::Page, vars);
+        let root = html.lines().find(|line| line.starts_with("<html ")).expect("html root");
+        let pre_paint = SHELL_TEMPLATE.lines().find(|line| line.contains("<script>var t=")).unwrap();
+        assert!(html.contains(pre_paint), "auto pages keep the pre-paint script unchanged");
+        assert!(!root.contains("data-theme="), "{root}");
+        assert!(!root.contains("data-moss-color-scheme="), "{root}");
+        assert!(!root.contains("color-scheme:"), "{root}");
+        assert_eq!(html.matches(r#"<meta name="theme-color""#).count(), 2);
+        for name in ["light", "dark"] {
+            assert!(html.contains(&format!(r#"media="(prefers-color-scheme: {name})""#)), "{html}");
+        }
+    }
 }
 
 /// Shorthand: substitute with an empty value map (every lowercase token is
@@ -1622,6 +1658,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         lightbox: String::new(),
         robots_meta: None,
         colophon: true,
+        color_scheme: Default::default(),
         colophon_credit: None,
     }
 }

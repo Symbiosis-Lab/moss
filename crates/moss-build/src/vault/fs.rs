@@ -775,7 +775,7 @@ impl PluginPath {
     /// Mirrors [`recheck_canonical_allowing_missing`] for the first-party
     /// door: walk up to the deepest existing ancestor (nothing below it can
     /// be a symlink), canonicalize it, and require it stay (a) under `base`
-    /// and (b) outside `base`'s own `.moss/identity/` — separate from (a)
+    /// and (b) outside `base/.moss`, or only outside `.moss/identity/` for a path that names `.moss` — separate from (a)
     /// because that path sits *inside* the vault root, so containment under
     /// `base` alone would not exclude it there. A `base` that does not exist
     /// yet (a brand-new plugin's storage directory) has nothing on disk to
@@ -786,10 +786,12 @@ impl PluginPath {
             Ok(b) => b,
             Err(_) => return Ok(target),
         };
-        // `.ok()`: absent for every base but the vault root, where containment
-        // under `base` already covers it (see doc above).
-        let identity_dir_canonical =
-            std::fs::canonicalize(base.join(".moss").join("identity")).ok();
+        // A path that does not name `.moss` itself must not reach it through a
+        // symlink either; one that does (the shared social-data door) is still
+        // kept out of `.moss/identity/`. `.ok()`: a base with no `.moss` child
+        // (plugin storage, the build directory) has no fence to keep.
+        let fence = if first_segment_is_moss(&self.0) { base.join(".moss").join("identity") } else { base.join(".moss") };
+        let fence_canonical = std::fs::canonicalize(&fence).ok();
 
         let mut probe: &Path = target.as_path();
         loop {
@@ -802,13 +804,11 @@ impl PluginPath {
                         self.0
                     ));
                 }
-                if identity_dir_canonical
-                    .as_ref()
-                    .is_some_and(|identity_dir| probe_canonical.starts_with(identity_dir))
-                {
+                if fence_canonical.as_ref().is_some_and(|f| probe_canonical.starts_with(f)) {
                     return Err(format!(
-                        "'{}' resolves into .moss/identity/, which is never reachable this way",
-                        self.0
+                        "'{}' resolves into {}, which is never reachable this way",
+                        self.0,
+                        fence.strip_prefix(base).unwrap_or(&fence).display()
                     ));
                 }
                 break;

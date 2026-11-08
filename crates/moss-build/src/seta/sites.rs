@@ -1,16 +1,12 @@
 //! Site registration, metadata, publish/push, and analytics endpoints for moss-seta.
-//!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 
+use bytes::Bytes;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use super::client::{MossSetaClient, SetaError};
 
-// Sizing policy — how big a request may be, how many may be in flight, and how
-// to react to a timeout — lives in `upload_policy`. It is pure arithmetic over
-// numbers, and it is the whole substance of the 2026-08-03 publish failure, so
-// it is kept where it can be read and unit-tested without a TCP harness. The
-// chunk loop that consumes the rest of those numbers lives in
-// `chunked_upload`; this file only needs the per-request ceiling.
+// Sizing policy (request size, concurrency, timeouts) lives in `upload_policy`,
+// pure arithmetic tested without a server; the chunk loop is `chunked_upload`.
 use super::upload_policy::{manifest_request_timeout, UPLOAD_REQUEST_TIMEOUT};
 
 /// Response from POST /api/sites (register a site).
@@ -184,23 +180,7 @@ impl MossSetaClient {
     /// # Arguments
     /// * `site_id` - Desired site identifier (e.g., "her-blog" → her-blog.mosspub.com)
     pub async fn register_site(&self, site_id: &str) -> Result<RegisterSiteResponse, SetaError> {
-        let auth_header = self.sign_request_payload("/api/sites")?;
-        let url = self.secure_url("/api/sites");
-
-        log::debug!(target: "seta", "POST {} site_id={}", url, site_id);
-
-        let response = self.client
-            .post(&url)
-            .header("Authorization", auth_header)
-            .json(&serde_json::json!({ "id": site_id }))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.post_json("/api/sites", &serde_json::json!({ "id": site_id })).await
     }
 
     /// Send manifest (path -> hash) to server, receive list of files to upload/remove.
@@ -216,14 +196,14 @@ impl MossSetaClient {
         manifest: &std::collections::HashMap<String, String>,
         generation_id: &str,
     ) -> Result<SyncManifestResponse, SetaError> {
-        let path = format!("/api/sites/{}/sync", site_id);
+        let path = format!("/api/sites/{}/sync", urlencoding::encode(site_id));
 
         log::debug!(target: "seta", "POST {}{} ({} files in manifest) generation={}", self.base_url, path, manifest.len(), generation_id);
 
         // Serialized ONCE, outside the retry, for two reasons: a retry then
         // re-sends the identical buffer instead of re-encoding a 10k-entry map,
         // and the exact body length is what sets the deadline below.
-        let body = bytes::Bytes::from(
+        let body = Bytes::from(
             serde_json::to_vec(&serde_json::json!({ "files": manifest }))
                 .map_err(|e| SetaError::Parse(e.to_string()))?,
         );
@@ -233,28 +213,20 @@ impl MossSetaClient {
         // bandwidth. See `upload_policy::manifest_request_timeout`.
         let timeout = manifest_request_timeout(body.len() as u64);
 
-        // Retried, with the same budget discipline as an upload. A large site's
-        // manifest POST is itself a sizeable body on a slow uplink, and until
-        // 2026-08-03 this call had NO retry and only the 120s default timeout —
-        // so a single edge blip here failed the publish before a byte of
-        // content had moved. The closure re-signs every attempt (seta rejects
-        // clock skew over 300s), which is why the whole sign-and-send unit is
-        // inside it.
+        // Retried with an upload's budget: a large site's manifest is a
+        // sizeable body on a slow uplink, and one edge blip here would fail the
+        // publish before any content moved. Each attempt signs afresh.
         let budget = crate::seta::client::RetryBudget::new();
         let (this, path_ref, body_ref) = (self, path.as_str(), &body);
         let response = crate::seta::client::retry_transient(
             "sync manifest",
             &budget,
             || async move {
-                let (url, auth_header) = this.sign_and_build(path_ref)?;
                 let resp = this
-                    .client
-                    .post(&url)
+                    .signed(Method::POST, path_ref, body_ref.clone())?
                     .timeout(timeout)
-                    .header("Authorization", auth_header)
                     .header("Content-Type", "application/json")
                     .header("X-Moss-Generation", generation_id)
-                    .body(body_ref.clone())
                     .send()
                     .await?;
                 if !resp.status().is_success() {
@@ -289,29 +261,25 @@ impl MossSetaClient {
     ) -> Result<(), SetaError> {
         let path = format!(
             "/api/sites/{}/files/{}",
-            site_id,
+            urlencoding::encode(site_id),
             urlencoding::encode(file_path),
         );
         log::debug!(target: "seta", "PUT {}{} ({} bytes) generation={}", self.base_url, path, body.len(), generation_id);
 
         // `Bytes` so each retry re-sends the same buffer without copying it.
-        // Signing happens *inside* the retried closure: the header signs a
-        // timestamp seta rejects past 300s of skew, so a retry must re-sign.
-        let body = bytes::Bytes::from(body);
+        // Each attempt signs afresh: a signed header is good for one request.
+        let body = Bytes::from(body);
         let (this, path, body) = (self, path.as_str(), &body);
         let budget = crate::seta::client::RetryBudget::new();
         crate::seta::client::retry_transient(file_path, &budget, || async move {
-            let (url, auth_header) = this.sign_and_build(path)?;
+            let request = this.signed(Method::PUT, path, body.clone())?;
             if let Some(tp) = stats {
                 tp.note_request();
             }
-            let response = this.client
-                .put(&url)
+            let response = request
                 .timeout(UPLOAD_REQUEST_TIMEOUT)
-                .header("Authorization", auth_header)
                 .header("Content-Type", "application/octet-stream")
                 .header("X-Moss-Generation", generation_id)
-                .body(body.clone())
                 .send()
                 .await?;
             if !response.status().is_success() {
@@ -345,31 +313,23 @@ impl MossSetaClient {
     ) -> Result<(), SetaError> {
         let path = format!(
             "/api/sites/{}/files/{}",
-            site_id,
+            urlencoding::encode(site_id),
             urlencoding::encode(file_path),
         );
         log::debug!(target: "seta", "PUT {}{} (symlink → {}) generation={}", self.base_url, path, target, generation_id);
 
-        let target = bytes::Bytes::from(target.into_bytes());
+        let target = Bytes::from(target.into_bytes());
         let (this, path, target) = (self, path.as_str(), &target);
         let budget = crate::seta::client::RetryBudget::new();
         crate::seta::client::retry_transient(file_path, &budget, || async move {
-            let (url, auth_header) = this.sign_and_build(path)?;
-            let response = this.client
-                .put(&url)
-                // Explicit, not inherited. Every other upload verb overrides
-                // the client's 120 s default, and `client::MAX_ATTEMPT_DURATION`
-                // — the headroom the retry budget reserves — is defined as
-                // UPLOAD_REQUEST_TIMEOUT. Riding the default here made this the
-                // one verb whose worst case the budget arithmetic did not
-                // describe. The body is a path string, so the value is
-                // irrelevant to throughput; being stated is the point.
+            let response = this
+                .signed(Method::PUT, path, target.clone())?
+                // Stated, not inherited: the retry budget reserves
+                // UPLOAD_REQUEST_TIMEOUT per attempt (`client::MAX_ATTEMPT_DURATION`).
                 .timeout(UPLOAD_REQUEST_TIMEOUT)
-                .header("Authorization", auth_header)
                 .header("Content-Type", "text/plain; charset=utf-8")
                 .header("X-Moss-Entry", crate::types::content::MODE_SYMLINK)
                 .header("X-Moss-Generation", generation_id)
-                .body(target.clone())
                 .send()
                 .await?;
             if !response.status().is_success() {
@@ -410,33 +370,17 @@ impl MossSetaClient {
     ) -> Result<Vec<UploadSession>, SetaError> {
         let path = format!(
             "/api/sites/{}/uploads?generation_id={}",
-            site_id,
+            urlencoding::encode(site_id),
             urlencoding::encode(generation_id),
         );
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {} (resumable upload sessions)", url);
-
-        let response = self.client
-            .get(&url)
-            .timeout(UPLOAD_REQUEST_TIMEOUT)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
+        let response = self.signed(Method::GET, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT).send().await?;
         if response.status().as_u16() == 404 {
-            log::debug!(
-                target: "seta",
-                "GET {} → 404: server predates the resume endpoint, uploading from zero",
-                url
-            );
+            log::debug!(target: "seta", "GET {} → 404: server predates the resume endpoint, uploading from zero", path);
             return Ok(Vec::new());
         }
-
         if !response.status().is_success() {
             return Err(SetaError::from_failed_response(response).await);
         }
-
         response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
     }
 
@@ -451,7 +395,7 @@ impl MossSetaClient {
         manifest: &std::collections::HashMap<String, String>,
         generation_id: &str,
     ) -> Result<CommitResponse, SetaError> {
-        let path = format!("/api/sites/{}/commit", site_id);
+        let path = format!("/api/sites/{}/commit", urlencoding::encode(site_id));
 
         log::debug!(target: "seta", "POST {}{} ({} files)", self.base_url, path, manifest.len());
 
@@ -462,7 +406,7 @@ impl MossSetaClient {
         // retrying an incomplete generation cannot make it complete.
         // Same shape as sync_manifest: serialize once, and let the deadline
         // scale with the body rather than with nothing (I1).
-        let body = bytes::Bytes::from(
+        let body = Bytes::from(
             serde_json::to_vec(&serde_json::json!({
                 "manifest": manifest,
                 "generation_id": generation_id,
@@ -477,14 +421,10 @@ impl MossSetaClient {
             "commit deploy",
             &budget,
             || async move {
-                let (url, auth_header) = this.sign_and_build(path_ref)?;
                 let resp = this
-                    .client
-                    .post(&url)
+                    .signed(Method::POST, path_ref, body_ref.clone())?
                     .timeout(timeout)
-                    .header("Authorization", auth_header)
                     .header("Content-Type", "application/json")
-                    .body(body_ref.clone())
                     .send()
                     .await?;
                 if !resp.status().is_success() {
@@ -514,21 +454,11 @@ impl MossSetaClient {
     /// which `moss deploy` compares with this folder's last publish. 404 is
     /// `LiveGeneration::default()` — nothing known, for the same reason.
     pub async fn live_generation(&self, site_id: &str) -> Result<LiveGeneration, SetaError> {
-        let path = format!("/api/sites/{}/generation", site_id);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {} (live generation check)", url);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        // 404 means the server doesn't support this endpoint yet (old seta).
-        // Treat as "no live generation known" → proceed with normal deploy.
+        let path = format!("/api/sites/{}/generation", urlencoding::encode(site_id));
+        let response = self.signed(Method::GET, &path, Bytes::new())?.send().await?;
+        // An older seta has no such route: nothing known, deploy as usual.
         if response.status().as_u16() == 404 {
-            log::debug!(target: "seta", "GET {} → 404, server does not support /generation endpoint", url);
+            log::debug!(target: "seta", "GET {} → 404, server does not support /generation endpoint", path);
             return Ok(LiveGeneration::default());
         }
 
@@ -553,25 +483,7 @@ impl MossSetaClient {
             domains: Vec<DomainRow>,
         }
 
-        let path = format!("/api/sites/{}/domains", site_id);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {} (custom domains)", url);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        let resp: DomainsResponse = response
-            .json()
-            .await
-            .map_err(|e| SetaError::Parse(e.to_string()))?;
+        let resp: DomainsResponse = self.get_json(&format!("/api/sites/{}/domains", urlencoding::encode(site_id))).await?;
         Ok(resp.domains.into_iter().map(|d| d.domain).collect())
     }
 
@@ -580,22 +492,7 @@ impl MossSetaClient {
     /// # Arguments
     /// * `site_id` - Site identifier
     pub async fn pull_site_data(&self, site_id: &str) -> Result<SiteDataResponse, SetaError> {
-        let path = format!("/api/sites/{}/data", site_id);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {}", url);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.get_json(&format!("/api/sites/{}/data", urlencoding::encode(site_id))).await
     }
 
     /// Pull a single page of raw analytics events for delta sync.
@@ -613,25 +510,7 @@ impl MossSetaClient {
         since: u64,
         limit: u32,
     ) -> Result<EventsBatchResponse, SetaError> {
-        let path = format!(
-            "/api/sites/{}/events?since={}&limit={}",
-            site_id, since, limit
-        );
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {} (events delta sync since={})", url, since);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.get_json(&format!("/api/sites/{}/events?since={}&limit={}", urlencoding::encode(site_id), since, limit)).await
     }
 }
 

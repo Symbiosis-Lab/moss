@@ -509,9 +509,18 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     return viewportEl.closest('[data-moss-places-embed-mode="collapsed"]') ? undefined : freeFrame(viewport);
   }
 
-  /** A work's fit goes as deep as the tile ceiling only where tiles cover its whole frame; elsewhere it stops at the world layer's clean depth. */
+  /** Places a detail layer covers fit down to the layer's own depth, with its tighter minimum span; elsewhere `ceiling` caps the site's own fit. */
+  function fitOver(points: Point[], viewport: Viewport, ceiling: number): { fit: ExplorerFit; deepest: number } {
+    const layerZoom = layerCeilingZoom(layers, viewport, points);
+    return layerZoom === null
+      ? { fit: options.fit, deepest: ceiling }
+      : { fit: { ...options.fit, minSpanDegrees: LAYER_FIT_MIN_SPAN_DEGREES }, deepest: Math.max(ceiling, layerZoom) };
+  }
+
+  /** A work's fit goes as deep as the tile ceiling, or a layer's depth over a layer, only where that depth covers its whole frame; elsewhere it stops at the world layer's clean depth. */
   function fitWorkCamera(points: Point[], viewport: Viewport, frame: Rect | undefined): Camera {
-    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, options.fit, frame, maxZoom), tileDetailMaxZoom(viewport), viewport);
+    const { fit, deepest } = fitOver(points, viewport, tileDetailMaxZoom(viewport));
+    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, fit, frame, maxZoom), deepest, viewport);
     return deep ?? clean;
   }
 
@@ -522,11 +531,9 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const fitFrame = frame && workFrame(viewport);
     const cover = coverCamera(points, viewport, fitFrame);
     if (!points.length) return { camera: cover, whole: true };
-    // Places that all lie inside one layer's extent open fitted to themselves, down to the layer's depth; otherwise the opening depth caps the fit.
-    const layerZoom = layerCeilingZoom(layers, viewport, points);
-    const opening = openingMaxZoom(viewport, options.fit.openingDegreesPerPx);
-    const fit = layerZoom === null ? options.fit : { ...options.fit, minSpanDegrees: LAYER_FIT_MIN_SPAN_DEGREES };
-    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, fit, fitFrame, maxZoom), layerZoom === null ? opening : Math.max(opening, layerZoom), viewport);
+    // Places a layer covers open fitted to themselves, down to the layer's depth; otherwise the opening depth caps the fit.
+    const { fit, deepest } = fitOver(points, viewport, openingMaxZoom(viewport, options.fit.openingDegreesPerPx));
+    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, fit, fitFrame, maxZoom), deepest, viewport);
     if (!deep) return { camera: cover, whole: true };
     const shown = deep === clean || layerCoversView(deep, viewport) || tileLayer.hasOpaqueViewportCoverage(deep, viewport) ? deep : clean;
     const opened = shown.zoom > cover.zoom ? shown : cover;

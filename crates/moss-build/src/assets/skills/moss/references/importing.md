@@ -33,8 +33,9 @@ moss import --list <urls.txt> [folder] [-r|--recursive]
 
 1. **Arrange files** into the canonical shape (a folder per section; a home file named `index.md` or after its folder).
 2. **Clean up markup** — move any inline styling into `.moss/theme/style.css`; convert raw HTML to `::: {.class}` fenced divs; convert image links to `![](path/to/file.ext)`.
-3. **Palette and fonts** are not read from the original site yet and stay the agent's work for now: inspect its styling (computed CSS via browser devtools, or a screenshot) and write the rules into `.moss/theme/style.css`.
-4. `moss preview <folder>` to build and check, then apply the authoring
+3. **Palette, fonts and spacing** are not read from the original site yet and stay the agent's work for now: read them from the computed styles of real elements at phone and desktop width (each heading level, body text, the nav, the page's side margin, the space between blocks) and write the rules into `.moss/theme/style.css`. The original, measured, is the target, phone width first; a prototype or a screenshot of it is not, because every value retyped from one drifts. A site the original shows only in light colours sets `color_scheme = "light"` under `[site]` in `.moss/config.toml`, since moss otherwise follows the reader's dark setting and adds a theme toggle.
+4. **Compare the port with the original** before calling it done, page by page at 390 and 1280 px: match each text block by its text and compare its font size, weight and letter case, its left edge and width, the gap to the next block, and each page's height, and check that a dark scheme or a theme toggle exists on both or on neither. Every difference is fixed or written down as deliberate with its reason. Contrast, overlap and sideways-scroll checks measure the port against itself, so a port that passes them all can still look like another site.
+5. `moss preview <folder>` to build and check, then apply the authoring
    discipline in `moss guide authoring`. That opens moss desktop, which an
    agent cannot see — use `moss build <folder> --serve` instead.
 

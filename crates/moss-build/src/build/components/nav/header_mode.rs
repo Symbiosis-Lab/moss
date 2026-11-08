@@ -5,6 +5,46 @@
 //! needs the builder's private state, so it earns a plain sibling module
 //! instead of one built for privacy access.
 
+/// `[site].header_scroll` — whether the header stays at the top while the
+/// reader scrolls. `Static` (the default) scrolls away with the page;
+/// `Sticky` stays; `Hide` stays, but slides out of view while the reader
+/// scrolls down and returns on any scroll up (the script is `header-scroll.ts`;
+/// without JavaScript `Hide` is `Sticky`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HeaderScroll {
+    #[default]
+    Static,
+    Sticky,
+    Hide,
+}
+
+impl HeaderScroll {
+    /// An absent key, empty string or `"static"` is the default; an
+    /// unrecognized value falls back to `Static` with a build warning.
+    pub fn from_config(value: Option<&str>) -> Self {
+        match value {
+            None | Some("") | Some("static") => Self::Static,
+            Some("sticky") => Self::Sticky,
+            Some("hide") => Self::Hide,
+            Some(other) => {
+                crate::build::cli_output::log_warn_problem!(
+                    "[site].header_scroll must be 'static', 'sticky' or 'hide', not '{other}'; using 'static'"
+                );
+                Self::Static
+            }
+        }
+    }
+
+    /// The `<body data-header-scroll>` value the stylesheet and script read.
+    pub fn attr_value(self) -> Option<&'static str> {
+        match self {
+            Self::Static => None,
+            Self::Sticky => Some("sticky"),
+            Self::Hide => Some("hide"),
+        }
+    }
+}
+
 /// `Brand` (the default) is the site name or breadcrumb trail
 /// `NavigationBuilder::nav_left_html` already renders. `Nav` drops that
 /// entirely: no site name or breadcrumb on any page, and the link list opens

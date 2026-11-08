@@ -357,6 +357,8 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
         }
     }
 
+    super::accordion::group_callouts(&mut blocks);
+
     // Apply duplicate-suffix numbering to heading IDs in document order.
     // Each Tag::Heading arm computes the base slug; this pass disambiguates
     // collisions across the whole document, matching production's id_counts
@@ -2019,6 +2021,7 @@ fn detect_and_assemble_callout(
         fold,
         title,
         unknown_kind,
+        group: None,
         children: body_blocks,
     };
     Some((block, i))
