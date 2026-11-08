@@ -27,7 +27,7 @@ use crate::render::placement::placement_attrs;
 use crate::resolve::embed_renderer::html_escape_attr;
 use crate::resolve::title_params::TitleParams;
 
-/// CSS class the pre-Phase-0 renderer placed on the `<model-viewer>` element.
+/// CSS class on the `<model-viewer>` element.
 /// Mirrors `CLASS_EMBED` in `crates/moss-core/src/resolve/embed_renderer.rs`.
 const CLASS_EMBED: &str = "moss-embed";
 
@@ -48,11 +48,10 @@ pub fn page_needs_model_viewer_script(page_html: &str) -> bool {
 
 /// Synthesize 3D model-viewer embed HTML for `Tag::Link` with `moss:kind=3d` title.
 ///
-/// Byte shape matches the pre-Phase-0 3D-model renderer's emission in
-/// moss-core: `camera-controls` and `auto-rotate` are emitted by default
-/// (suppress with `param=false`), and `ar` is opt-in (`ar=true`). This
-/// preserves the implicit defaults of existing `![[scene.glb]]` wikilinks
-/// while still allowing explicit override via title params.
+/// `camera-controls` and `auto-rotate` are emitted by default (suppress
+/// with `param=false`), and `ar` is opt-in (`ar=true`). This gives bare
+/// `![[scene.glb]]` wikilinks sensible defaults while still allowing
+/// explicit override via title params.
 #[allow(unused_variables)]
 pub fn synthesize_model_html(
     params: &TitleParams,
@@ -84,9 +83,8 @@ pub fn synthesize_model_html(
 
 /// Concatenate the boolean-flag attribute fragment.
 ///
-/// `camera-controls` and `auto-rotate` default ON to match the pre-Phase-0
-/// 3D-model renderer's byte shape — they emit unless `param=false` opts
-/// out. `ar` defaults OFF (opt-in only). Each flag becomes a bare HTML
+/// `camera-controls` and `auto-rotate` default ON — they emit unless
+/// `param=false` opts out. `ar` defaults OFF (opt-in only). Each flag becomes a bare HTML
 /// attribute (`camera-controls`, not `camera-controls="true"`).
 fn collect_flag_attrs(params: &TitleParams) -> String {
     // (name, default_on)
@@ -114,7 +112,6 @@ fn collect_flag_attrs(params: &TitleParams) -> String {
 ///
 /// Unlike iframe/video, `<model-viewer>` consumes CSS length values via
 /// inline style (the element ignores HTML `width=`/`height=` attributes).
-/// Mirrors `model_viewer_style` in the pre-Phase-0 renderer.
 fn collect_style_attr(params: &TitleParams) -> String {
     let w = params.get("width");
     let h = params.get("height");
@@ -180,7 +177,7 @@ mod tests {
         );
     }
 
-    // --- Additional byte-shape pins (preserve the pre-Phase-0 3D-model renderer's shape) ---
+    // --- Additional byte-shape pins ---
 
     #[test]
     fn model_emits_moss_embed_class_and_data_type() {
@@ -196,7 +193,7 @@ mod tests {
     #[test]
     fn model_emits_touch_action_and_loading() {
         // `touch-action="pan-y"` and `loading="lazy"` are always emitted —
-        // they preserve the pre-Phase-0 byte shape.
+        // they are part of the byte shape.
         let p = params_with(&[("kind", "3d")]);
         let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());
         assert!(out.contains(r#"touch-action="pan-y""#), "got: {}", out);
@@ -257,7 +254,7 @@ mod tests {
 
     #[test]
     fn model_defaults_emit_camera_controls_and_auto_rotate() {
-        // Pre-Phase-0 parity: bare `![[scene.glb]]` (no flag params) must
+        // Bare `![[scene.glb]]` (no flag params) must
         // still emit camera-controls and auto-rotate. `ar` stays opt-in.
         let p = params_with(&[("kind", "3d")]);
         let out = synthesize_model_html(&p, &Placement::default(), "x.glb", &empty_snapshot());

@@ -15,12 +15,16 @@
 //!   already implies (`translation_keys.rs`).
 //! - Lifting a classed div into a declared field (`--lift`, `lift.rs`)
 //!   changes the page on purpose — moss draws the field instead — so it is
-//!   asked for one class at a time and never runs on its own.
+//!   asked for one class at a time and never runs on its own. So is moving
+//!   an import's source address out of `syndicated:` into `origin:`
+//!   (`--import-sources`, `import_sources.rs`): the page stops showing it as
+//!   a copy.
 
 use std::path::{Path, PathBuf};
 
 use crate::vault_root::{resolve_input, VaultRoot};
 
+mod import_sources;
 mod lift;
 mod translation_keys;
 
@@ -52,6 +56,7 @@ struct Args {
     lift: Option<String>,
     field: Option<String>,
     place: Option<String>,
+    import_sources: Option<String>,
 }
 
 /// What a usage error prints, as the command's other errors do.
@@ -75,6 +80,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--lift" => out.lift = Some(value("--lift")?.trim_start_matches('.').to_string()),
             "--as" => out.field = Some(value("--as")?),
             "--place" => out.place = Some(value("--place")?),
+            "--import-sources" => out.import_sources = Some(value("--import-sources")?),
             flag if flag.starts_with('-') => return Err(format!("unknown flag {flag}")),
             folder if out.folder.is_none() => out.folder = Some(folder.to_string()),
             extra => return Err(format!("unexpected argument {extra}")),
@@ -86,6 +92,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if out.place.is_some() && out.lift.is_none() {
         return Err("--place goes with --lift".to_string());
     }
+    if out.import_sources.is_some() && (out.lift.is_some() || out.field.is_some() || out.place.is_some()) {
+        return Err("--import-sources is a run of its own, without --lift, --as or --place".to_string());
+    }
     if out.lift.is_some() && out.place.is_none() {
         return Err("--lift needs --place: where moss draws the field (eyebrow, subtitle, key-figure or facts), or none to keep it in the frontmatter only".to_string());
     }
@@ -95,6 +104,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
 fn usage() -> &'static str {
     "Usage: moss migrate [<folder>] [--apply] [--json]
        moss migrate [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json]
+       moss migrate [<folder>] --import-sources <list.json> [--apply] [--json]
 
 Rewrites what `moss doctor --surface` finds. Without --apply it prints the
 change as a diff and writes nothing; with --apply it saves a version of the
@@ -113,7 +123,15 @@ of plain text into the page's frontmatter as <field>, declares <field> in
 .moss/config.toml if it is not, and lists the pages it left as written.
 --place says where moss draws the field instead: eyebrow, subtitle, key-figure
 or facts, or none to keep it in the frontmatter only. It sets the field's place
-for the whole site, so none also removes a place the field already has."
+for the whole site, so none also removes a place the field already has.
+
+--import-sources <list.json> reads a JSON array of addresses a page was
+imported from. Imports made before `origin:` existed wrote that address into
+`syndicated:`, so the page marks it as a copy for tools. Each page whose
+`syndicated:` holds one listed address gets it as `origin:` instead; its
+other entries stay. A page is left as written when it already names a
+different origin, holds two listed addresses, shares one with another page,
+or when moss itself posted a copy to that address."
 }
 
 pub fn run(args: &[String]) -> i32 {
@@ -183,9 +201,10 @@ fn migrate(folder: &Path, args: &Args) -> Result<Report, String> {
     // Saving a version builds the site, and a build stamps `uid:` into a page
     // that has none, so the change is planned again from the files it left.
     let root = VaultRoot::resolve(folder);
-    let label = match &args.lift {
-        Some(class) => format!("Before moss migrate --lift .{class}"),
-        None => "Before moss migrate".to_string(),
+    let label = match (&args.lift, &args.import_sources) {
+        (Some(class), _) => format!("Before moss migrate --lift .{class}"),
+        (None, Some(_)) => "Before moss migrate --import-sources".to_string(),
+        (None, None) => "Before moss migrate".to_string(),
     };
     let (id, _) = crate::deploy::history::cli::save_version(&root, Some(label)).map_err(|e| format!("{e} — nothing was changed"))?;
     report = plan(folder, args)?;
@@ -222,6 +241,9 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
         Err(e) => return Err(format!("could not read {CONFIG}: {e}")),
     };
 
+    if let Some(list) = &args.import_sources {
+        return plan_import_sources(folder, &pages, list);
+    }
     let mut notes = Vec::new();
     let (changes, skipped, check) = match (&args.lift, &args.field) {
         (Some(class), Some(field)) => {
@@ -279,6 +301,12 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
         report.notes.push("Removing these would change the built site, so they stay as written.".to_string());
     }
     Ok(report)
+}
+
+fn plan_import_sources(folder: &Path, pages: &[(String, String)], list: &str) -> Result<Report, String> {
+    let plan = import_sources::plan(pages, &import_sources::load(list)?, &import_sources::copy_addresses(folder));
+    let notes = if plan.unmatched.is_empty() { Vec::new() } else { vec![format!("No page's syndicated: holds {}.", plan.unmatched.join(", "))] };
+    Ok(Report { changes: plan.changes, skipped: plan.skipped, notes, check: Check::NotNeeded, saved: None, applied: false })
 }
 
 /// Write every change whose file still holds the text it was planned from,

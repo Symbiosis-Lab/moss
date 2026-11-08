@@ -1,7 +1,5 @@
 //! Domain search, purchase, and ownership endpoints for moss-seta.
 //!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
-//!
 //! The types these methods speak live in the sibling `wire` module and are
 //! re-exported here, so `seta::domains::X` keeps naming them.
 
@@ -150,28 +148,7 @@ impl MossSetaClient {
     /// * `domain` - The domain name to purchase (e.g., "example.com")
     /// * `years` - Number of years to register (1-10)
     pub async fn create_payment_intent(&self, domain: &str, years: i32) -> Result<PaymentIntentResponse, SetaError> {
-        let auth_header = self.sign_request_payload("/api/domains/create-payment")?;
-        let url = self.secure_url("/api/domains/create-payment");
-
-        log::debug!(target: "seta", "POST {} domain={} years={}", url, domain, years);
-
-        let response = self.client
-            .post(&url)
-            .header("Authorization", auth_header)
-            .json(&serde_json::json!({
-                "domain": domain,
-                "years": years,
-            }))
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.post_json("/api/domains/create-payment", &serde_json::json!({ "domain": domain, "years": years })).await
     }
 
     /// Charge a saved payment method for a domain purchase.
@@ -199,38 +176,12 @@ impl MossSetaClient {
             "years must be 1..=10"
         );
 
-        let auth_header = self.sign_request_payload("/api/payment/domains/charge-saved")?;
-        let url = self.secure_url("/api/payment/domains/charge-saved");
-
-        log::debug!(
-            target: "seta",
-            "POST {} domain={} years={}",
-            url, domain, years
-        );
-
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", auth_header)
-            .json(&serde_json::json!({
-                "payment_method_id": payment_method_id,
-                "domain": domain,
-                "years": years,
-            }))
-            .send()
-            .await?;
-
-        let status = response.status();
-        log::debug!(target: "seta", "Response status: {}", status);
-
-        if !status.is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response
-            .json::<ChargeSavedResult>()
-            .await
-            .map_err(|e| SetaError::Parse(e.to_string()))
+        self.post_json("/api/payment/domains/charge-saved", &serde_json::json!({
+            "payment_method_id": payment_method_id,
+            "domain": domain,
+            "years": years,
+        }))
+        .await
     }
 
     /// Fetch billing address for a saved payment method.
@@ -243,28 +194,7 @@ impl MossSetaClient {
         &self,
         payment_method_id: &str,
     ) -> Result<BillingAddress, SetaError> {
-        let path = format!("/api/payment/methods/{}/billing", payment_method_id);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {}", url);
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response
-            .json::<BillingAddress>()
-            .await
-            .map_err(|e| SetaError::Parse(e.to_string()))
+        self.get_json(&format!("/api/payment/methods/{}/billing", urlencoding::encode(payment_method_id))).await
     }
 
     /// List saved payment methods for the authenticated user.
@@ -274,33 +204,11 @@ impl MossSetaClient {
     /// Users without a Stripe customer on file receive an empty list (not an
     /// error).
     pub async fn list_payment_methods(&self) -> Result<Vec<StoredPaymentMethodRemote>, SetaError> {
-        let auth_header = self.sign_request_payload("/api/payment/methods")?;
-        let url = self.secure_url("/api/payment/methods");
-
-        log::debug!(target: "seta", "GET {}", url);
-
-        let response = self
-            .client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
         #[derive(serde::Deserialize)]
         struct Envelope {
             payment_methods: Vec<StoredPaymentMethodRemote>,
         }
-
-        let envelope: Envelope = response
-            .json()
-            .await
-            .map_err(|e| SetaError::Parse(e.to_string()))?;
+        let envelope: Envelope = self.get_json("/api/payment/methods").await?;
         Ok(envelope.payment_methods)
     }
 
@@ -308,24 +216,7 @@ impl MossSetaClient {
     ///
     /// Returns all domains associated with the authenticated user's email.
     pub async fn get_domains(&self) -> Result<UserDomainsResponse, SetaError> {
-        let auth_header = self.sign_request_payload("/api/domains")?;
-        let url = self.secure_url("/api/domains");
-
-        log::debug!(target: "seta", "GET {}", url);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.get_json("/api/domains").await
     }
 
     /// Register a domain after payment is confirmed.
@@ -340,35 +231,16 @@ impl MossSetaClient {
         payment_intent_id: &str,
         registrant: &RegistrantContact,
     ) -> Result<DomainRegistrationResponse, SetaError> {
-        let auth_header = self.sign_request_payload("/api/domains/register")?;
-        let url = self.secure_url("/api/domains/register");
-
-        log::debug!(target: "seta", "POST {} domain={}", url, domain);
-
-        // The server-side registrant resolver (moss-seta:registrant-resolution.ts)
-        // derives city/state from the Stripe payment_intent's postal_code for
-        // US/CA/AU buyers and uses the user's verified account email. We only
-        // forward what the user genuinely typed into the widget. The `domain`
-        // arg is unused at the wire level (the server pulls it from the PI's
-        // metadata) but kept on the Rust signature for log correlation; consumed
-        // by the log::debug! above.
-        let response = self.client
-            .post(&url)
-            .header("Authorization", auth_header)
-            .json(&serde_json::json!({
-                "payment_intent_id": payment_intent_id,
-                "registrant": registrant,
-            }))
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        // The server derives city and state from the payment's postal code
+        // and uses the account's verified email, so only what the user typed
+        // is sent. It reads the domain from the payment, so `domain` is only
+        // logged.
+        log::debug!(target: "seta", "POST /api/domains/register domain={}", domain);
+        self.post_json("/api/domains/register", &serde_json::json!({
+            "payment_intent_id": payment_intent_id,
+            "registrant": registrant,
+        }))
+        .await
     }
 
     /// Get all domains owned by the authenticated user.
@@ -376,24 +248,7 @@ impl MossSetaClient {
     /// Calls GET /api/domains/owned and returns both moss-purchased and
     /// externally-linked domains with their current assignment.
     pub async fn get_assignable_domains(&self) -> Result<AssignableDomainsResponse, SetaError> {
-        let auth_header = self.sign_request_payload("/api/domains/owned")?;
-        let url = self.secure_url("/api/domains/owned");
-
-        log::debug!(target: "seta", "GET {}", url);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.get_json("/api/domains/owned").await
     }
 
     /// Assign (or reassign) an owned domain to a site.
@@ -405,19 +260,11 @@ impl MossSetaClient {
     /// * `host` - The domain to assign (e.g. "example.com")
     /// * `folder_id` - The site/folder ID to assign the domain to
     pub async fn assign_domain(&self, host: &str, folder_id: &str) -> Result<(), SetaError> {
-        let path = format!("/api/domains/{}/assign", host);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "PUT {} host={} folder_id={}", url, host, folder_id);
-
-        let response = self.client
-            .put(&url)
-            .header("Authorization", auth_header)
-            .json(&serde_json::json!({ "folder_id": folder_id }))
+        let path = format!("/api/domains/{}/assign", urlencoding::encode(host));
+        let response = self
+            .signed_json(reqwest::Method::PUT, &path, &serde_json::json!({ "folder_id": folder_id }))?
             .send()
             .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
 
         if !response.status().is_success() {
             return Err(SetaError::from_failed_response(response).await);
@@ -436,23 +283,6 @@ impl MossSetaClient {
     /// # Arguments
     /// * `host` - The domain to check (e.g. "example.com")
     pub async fn get_domain_status_for_host(&self, host: &str) -> Result<DomainStatus, SetaError> {
-        let path = format!("/api/domains/{}/status", host);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "GET {} host={}", url, host);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        self.get_json(&format!("/api/domains/{}/status", urlencoding::encode(host))).await
     }
 }

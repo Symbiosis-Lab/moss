@@ -1,8 +1,8 @@
 # Untranslated pages
 
 English docs pages that intentionally have **no zh-hans / zh-hant counterpart yet**.
-Tracked here so the three language trees don't silently diverge (per the docs-IA
-design's structural-drift convention). When a page below is translated, add the
+Tracked here so the three language trees don't silently diverge (the structural-drift
+convention). When a page below is translated, add the
 zh files with the matching `translationKey` and remove it from this list.
 
 ## English-only reference (generated / contract pages)

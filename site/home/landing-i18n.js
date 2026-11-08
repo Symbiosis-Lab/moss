@@ -7,7 +7,7 @@
     closeH:'Join the beta test.',closeB:"The internet is not only for browsing; it's also for creating.<br>Meet your internet publisher.",download:'Download moss',macNote:'macOS 12 or later',soon:'Coming soon',install:'Install from your terminal',copy:'Copy',copyNpm:'Copy npm install command',copyBrew:'Copy Homebrew install command',macTitle:'Download moss for macOS (universal DMG)',windowsAria:'Windows desktop app, Coming soon',linuxAria:'Linux desktop app, Coming soon',
     betaH:'Get updates.',betaB:'Occasional news about moss, from the people who build it.',email:'Your email',request:'Subscribe',staticSignup:'Enable JavaScript to subscribe.',footer:'Footer',privacy:'Privacy',github:'moss on GitHub',language:'Language',
     editorFrame:'moss editor',previewFrame:'moss preview',notebook:'Jupyter notebook: a continuous Mandelbrot zoom',sketch:'an HTML sketch',article:'the published video article',pause:'Pause',play:'Play',pauseAria:'Pause the loop',playAria:'Play the loop',
-    copied:'Copied to clipboard.',selected:'Command selected. Press Command-C or Ctrl-C to copy.',sending:'Sending…',success:'Please confirm the email we just sent.',alreadySubscribed:"You're already subscribed.",offline:'Could not connect. Check your connection and try again.',error:'Something went wrong. Please try again.',
+    copied:'Copied to clipboard.',selected:'Command selected. Press Command-C or Ctrl-C to copy.',
     docs:{start:'/get-started/',editor:'/get-started/editor/',theme:'/get-started/design/',media:'/get-started/links/',plugin:'/get-started/extend/',privacy:'/privacy/'}
   };
   const hans = {
@@ -17,7 +17,7 @@
     closeH:'加入公测。',closeB:'互联网不只用来浏览，也用来创造。这里是你的互联网发布器。',download:'下载青苔',macNote:'macOS 12 或更高版本',soon:'即将推出',install:'从终端安装',copy:'复制',copyNpm:'复制 npm 安装命令',copyBrew:'复制 Homebrew 安装命令',macTitle:'下载适用于 macOS 的青苔（通用 DMG）',windowsAria:'Windows 桌面应用，即将推出',linuxAria:'Linux 桌面应用，即将推出',
     betaH:'获取更新',betaB:'偶尔一封，来自青苔团队的消息。',email:'你的邮箱',request:'订阅',staticSignup:'启用 JavaScript 即可订阅。',footer:'页脚',privacy:'隐私',github:'在 GitHub 查看青苔',language:'语言',
     editorFrame:'青苔编辑器',previewFrame:'青苔预览',notebook:'Jupyter 笔记本：连续放大的曼德博集合',sketch:'HTML 作品',article:'已发布的视频文章',pause:'暂停',play:'播放',pauseAria:'暂停循环视频',playAria:'播放循环视频',
-    copied:'已复制到剪贴板。',selected:'已选中命令。按 Command-C 或 Ctrl-C 复制。',sending:'正在发送…',success:'请确认刚刚收到的邮件。',alreadySubscribed:'你已订阅。',offline:'无法连接。请检查网络后重试。',error:'出现问题，请重试。',
+    copied:'已复制到剪贴板。',selected:'已选中命令。按 Command-C 或 Ctrl-C 复制。',
     docs:{start:'/zh-hans/开始使用/',editor:'/zh-hans/开始使用/editor/',theme:'/zh-hans/开始使用/design/',media:'/zh-hans/开始使用/links/',plugin:'/zh-hans/开始使用/extend/',privacy:'/zh-hans/privacy/'}
   };
   const hant = {
@@ -27,7 +27,7 @@
     closeH:'加入公測。',closeB:'網路不只用來瀏覽，也用來創作。這裡是你的網路發布器。',download:'下載青苔',macNote:'macOS 12 或更新版本',soon:'即將推出',install:'從終端機安裝',copy:'複製',copyNpm:'複製 npm 安裝指令',copyBrew:'複製 Homebrew 安裝指令',macTitle:'下載適用於 macOS 的青苔（通用 DMG）',windowsAria:'Windows 桌面應用程式，即將推出',linuxAria:'Linux 桌面應用程式，即將推出',
     betaH:'取得更新',betaB:'不定期一封，來自青苔團隊的消息。',email:'你的電子郵件地址',request:'訂閱',staticSignup:'啟用 JavaScript 即可訂閱。',footer:'頁尾',privacy:'隱私權',github:'在 GitHub 查看青苔',language:'語言',
     editorFrame:'青苔編輯器',previewFrame:'青苔預覽',notebook:'Jupyter 筆記本：連續放大的曼德博集合',sketch:'HTML 作品',article:'已發布的影片文章',pause:'暫停',play:'播放',pauseAria:'暫停循環影片',playAria:'播放循環影片',
-    copied:'已複製到剪貼簿。',selected:'已選取指令。按 Command-C 或 Ctrl-C 複製。',sending:'正在傳送…',success:'請確認剛寄出的信件。',alreadySubscribed:'你已訂閱。',offline:'無法連線。請檢查網路連線後再試一次。',error:'發生問題，請再試一次。',
+    copied:'已複製到剪貼簿。',selected:'已選取指令。按 Command-C 或 Ctrl-C 複製。',
     docs:{start:'/zh-hant/開始使用/',editor:'/zh-hant/開始使用/editor/',theme:'/zh-hant/開始使用/design/',media:'/zh-hant/開始使用/links/',plugin:'/zh-hant/開始使用/extend/',privacy:'/zh-hant/privacy/'}
   };
   const catalogs={en,'zh-hans':hans,'zh-hant':hant};
@@ -58,17 +58,16 @@
     text('#five-headline','closeH');html('.closing-lede','closeB');attr('#downloads','aria-label','download');
     const notes=document.querySelectorAll('#downloads .availability');if(notes[0])notes[0].textContent=c.macNote;if(notes[1])notes[1].textContent=c.soon;if(notes[2])notes[2].textContent=c.soon;attr('[data-platform="macos"]','title','macTitle');attr('[data-platform="windows"]','aria-label','windowsAria');attr('[data-platform="linux"]','aria-label','linuxAria');
     attr('#commands','aria-label','install');document.querySelectorAll('.command button').forEach((b,i)=>{b.textContent=c.copy;b.setAttribute('aria-label',i?c.copyBrew:c.copyNpm)});
-    text('#beta-title','betaH');text('#beta > div p','betaB');text('label[for="beta-email"]','email');attr('#beta-email','placeholder','email');text('#beta-form button','request');
+    text('#beta-title','betaH');text('#beta > div p','betaB');text('label[for="beta-email"]','email');attr('#beta-email','placeholder','email');text('#beta-form .moss-btn__label','request');
     const footer=document.querySelector('#footer nav');footer?.setAttribute('aria-label',c.footer);const links=footer?.querySelectorAll('a');if(links?.[0]){links[0].textContent=c.privacy;links[0].href=c.docs.privacy}if(links?.[2])links[2].setAttribute('aria-label',c.github);
     attr('#ed','title','editorFrame');attr('#sh','title','previewFrame');attr('#vd','title','previewFrame');attr('#nb','title','notebook');attr('#sk','title','sketch');attr('#s3-site-frame','title','article');
     const toggle=document.querySelector('#loop-toggle');if(toggle){const playing=[en.pause,hans.pause,hant.pause].includes(toggle.textContent);toggle.textContent=playing?c.pause:c.play;toggle.setAttribute('aria-label',playing?c.pauseAria:c.playAria)}
     document.querySelector('.language-picker')?.setAttribute('aria-label',c.language);
-    const status=document.querySelector('#beta-form .form-status');if(status?.dataset.messageKey)status.textContent=t(status.dataset.messageKey);
   }
   const key=url=>'moss-landing:'+url;
-  const snap=()=>{const pending=!!document.querySelector('#beta-form button[aria-busy="true"]');return {y:scrollY,email:document.querySelector('#beta-email')?.value||'',status:pending?'':document.querySelector('#beta-form .form-status')?.textContent||'',state:pending?'':document.querySelector('#beta-form .form-status')?.dataset.state||'',messageKey:pending?'':document.querySelector('#beta-form .form-status')?.dataset.messageKey||''}};
-  document.addEventListener('click',event=>{if(event.target.closest?.('[data-landing-locale]')&&document.querySelector('#beta-form button[aria-busy="true"]'))event.preventDefault()},true);
+  const snap=()=>({y:scrollY,email:document.querySelector('#beta-email')?.value||''});
+  document.addEventListener('click',event=>{if(event.target.closest?.('[data-landing-locale]')&&document.querySelector('#beta-form[data-state="loading"]'))event.preventDefault()},true);
   const save=(url,state)=>{try{sessionStorage.setItem(key(url),JSON.stringify(state))}catch{}};
-  const restore=()=>{try{const s=JSON.parse(sessionStorage.getItem(key(location.href))||'null');if(!s)return;const applyState=()=>{const input=document.querySelector('#beta-email');if(input)input.value=s.email;const status=document.querySelector('#beta-form .form-status');if(status){status.textContent=s.messageKey?t(s.messageKey):s.status;if(s.state)status.dataset.state=s.state;if(s.messageKey)status.dataset.messageKey=s.messageKey}scrollTo(0,s.y)};requestAnimationFrame(applyState);setTimeout(applyState,250)}catch{}};
-  document.addEventListener('DOMContentLoaded',()=>{apply(initial);restore();document.querySelectorAll('a[href]').forEach(link=>{const url=new URL(link.href);if(url.origin!==location.origin){link.target='_blank';link.rel='noopener'}});document.querySelectorAll('[data-landing-locale]').forEach(link=>link.addEventListener('click',event=>{if(document.querySelector('#beta-form button[aria-busy="true"]')){event.preventDefault();return}const next=link.dataset.landingLocale;if(!supported.has(next)||next===window.__LANDING_LOCALE)return;const state=snap(),url=new URL(link.href);save(location.href,state);save(url.href,state);try{localStorage.setItem('moss-landing-locale',next)}catch{}}))});
+  const restore=()=>{try{const s=JSON.parse(sessionStorage.getItem(key(location.href))||'null');if(!s)return;const applyState=()=>{const input=document.querySelector('#beta-email');if(input)input.value=s.email;scrollTo(0,s.y)};requestAnimationFrame(applyState);setTimeout(applyState,250)}catch{}};
+  document.addEventListener('DOMContentLoaded',()=>{apply(initial);restore();document.querySelectorAll('a[href]').forEach(link=>{const url=new URL(link.href);if(url.origin!==location.origin){link.target='_blank';link.rel='noopener'}});document.querySelectorAll('[data-landing-locale]').forEach(link=>link.addEventListener('click',event=>{if(document.querySelector('#beta-form[data-state="loading"]')){event.preventDefault();return}const next=link.dataset.landingLocale;if(!supported.has(next)||next===window.__LANDING_LOCALE)return;const state=snap(),url=new URL(link.href);save(location.href,state);save(url.href,state);try{localStorage.setItem('moss-landing-locale',next)}catch{}}))});
 })();

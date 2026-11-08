@@ -121,7 +121,7 @@ fn a_quote_cell_renders_as_a_quote_figure_whose_source_alone_links() {
     ))
     .replace('\n', "");
     assert!(
-        html.contains(r#"<figure class="moss-quote"><blockquote><p>Communication is health.</p></blockquote><figcaption><a href="https://example.org/essays/""#),
+        html.contains(r#"<figure class="moss-quote"><blockquote cite="https://example.org/essays/"><p>Communication is health.</p></blockquote><figcaption><a href="https://example.org/essays/""#),
         "got: {html}"
     );
     assert!(html.contains(r#"<figure class="moss-quote" data-length="long"><blockquote>"#), "got: {html}");

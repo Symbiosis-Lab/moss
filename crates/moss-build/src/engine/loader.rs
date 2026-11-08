@@ -1,4 +1,4 @@
-//! IIFE bundle loader (report 5 §5b). Eval the esbuild IIFE, then read the plugin
+//! IIFE bundle loader. Eval the esbuild IIFE, then read the plugin
 //! object off globalThis by manifest global_name via a trailer assignment (strict
 //! mode may not auto-attach `var X` to globalThis — the load-bearing detail).
 
@@ -22,8 +22,8 @@ pub fn load_bundle<'js>(ctx: &Ctx<'js>, bundle: &str, global_name: &str) -> Resu
 /// instance, awaiting a returned promise. Absent onload → Ok. A throw/rejection
 /// is an INIT failure (webview parity: plugin-runtime.ts:185-191; failure path
 /// :208-221). onunload is deliberately NOT implemented — the webview never calls
-/// it (Phase-4 plan D5). Contract is {project_path} ONLY: manifest.config rides
-/// config.json via plugin-file commands (Phase-3 D4), not this call.
+/// it. Contract is {project_path} ONLY: manifest.config rides
+/// config.json via plugin-file commands, not this call.
 pub async fn call_onload<'js>(ctx: &Ctx<'js>, project_path: &str) -> std::result::Result<(), String> {
     let instance: Object = ctx.globals().get("__moss_loaded").map_err(|e| format!("{e}"))?;
     let onload_val: Value = instance.get("onload").map_err(|e| format!("{e}"))?;

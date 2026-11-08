@@ -266,6 +266,7 @@ pub fn root_page_source(
         is_dir: true,
         is_article: false,
         syndicated: vec![],
+        syndicate: None,
         takeover: None,
         source_pending,
     };
@@ -305,7 +306,7 @@ pub fn folder_page_source(takeover: super::takeover::Takeover) -> super::links::
         (HomeVerdict::StillArriving, _) => (None, true, None),
         _ => (None, false, Some(takeover)),
     };
-    super::links::PageSource { source_path, is_dir: true, is_article: false, syndicated: vec![], takeover, source_pending }
+    super::links::PageSource { source_path, is_dir: true, is_article: false, syndicated: vec![], syndicate: None, takeover, source_pending }
 }
 
 #[cfg(test)]

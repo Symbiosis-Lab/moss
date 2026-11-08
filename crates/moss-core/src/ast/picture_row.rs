@@ -25,6 +25,8 @@ pub(super) fn promote(blocks: &mut [Block]) {
 
 fn picture_row(inlines: &[Inline]) -> Option<GalleryShortcode> {
     let mut items: Vec<GalleryItem> = Vec::new();
+    // Pictures on the previous line, which the italic line directly under it captions.
+    let (mut line_pictures, mut above, mut caption) = (0, 0, Vec::new());
     // What the current line holds: nothing, pictures, or an italic caption.
     let (mut on_line, mut caption_line) = (false, false);
     for inline in inlines {
@@ -32,26 +34,36 @@ fn picture_row(inlines: &[Inline]) -> Option<GalleryShortcode> {
             Inline::Image { .. } if caption_line => return None,
             Inline::Image { .. } => {
                 items.push(item(inline)?);
+                line_pictures += 1;
                 on_line = true;
             }
             Inline::Emphasis(inner) if !on_line && !inner.is_empty() && !items.is_empty() => {
-                let last = items.last_mut()?;
-                if !last.caption.is_empty() {
-                    return None;
+                // Under several pictures on one line the italic line belongs to
+                // the row; under one picture it is that picture's caption.
+                if above > 1 {
+                    if !caption.is_empty() {
+                        return None;
+                    }
+                    caption = inner.clone();
+                } else {
+                    let last = items.last_mut()?;
+                    if !last.caption.is_empty() {
+                        return None;
+                    }
+                    last.caption = inner.clone();
                 }
-                last.caption = inner.clone();
                 (on_line, caption_line) = (true, true);
             }
-            Inline::LineBreak => (on_line, caption_line) = (false, false),
+            Inline::LineBreak => (on_line, caption_line, above, line_pictures) = (false, false, line_pictures, 0),
             Inline::Text(s) if s.trim().is_empty() => {
                 if s.contains('\n') {
-                    (on_line, caption_line) = (false, false);
+                    (on_line, caption_line, above, line_pictures) = (false, false, line_pictures, 0);
                 }
             }
             _ => return None,
         }
     }
-    (items.len() >= 2).then(|| GalleryShortcode { items, rows: true, ..Default::default() })
+    (items.len() >= 2).then(|| GalleryShortcode { items, rows: true, caption, ..Default::default() })
 }
 
 /// The gallery item for a picture that is plainly an image with no placement.

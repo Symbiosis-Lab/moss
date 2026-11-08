@@ -1,11 +1,13 @@
-//! `_moss/commerce.json`: the site's public description of its request forms,
-//! at a fixed, unhashed address so a form service can fetch it by the site's URL.
+//! `_moss/commerce.json`: the site's public description of its request forms
+//! and its booking offer, at a fixed, unhashed address so a service can fetch it
+//! by the site's URL.
 //! On the moss host it also carries `subscribe.turnstile: true`: this build's
 //! subscribe script can pass the host's bot check, so the host may require it.
 //!
-//! Written when the site has a form, a `[services.forms]` setting, or a moss
-//! host site id. It sits under `_moss/`, which the publish removal gate does
-//! not guard, so removing the last form never refuses a publish.
+//! Written when the site has a form, a `[services.forms]` setting, a
+//! `[services.booking]` offer, or a moss host site id. It sits under `_moss/`,
+//! which the publish removal gate does not guard, so removing the last form
+//! never refuses a publish.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -16,6 +18,7 @@ use crate::build::context::BuildContext;
 use crate::build::manifest::{link_audit, HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
 use crate::build::types::ParsedDocument;
+use crate::config::services::BookingService;
 
 pub const COMMERCE_PATH: &str = "_moss/commerce.json";
 
@@ -28,7 +31,7 @@ fn site_forms(documents: &[ParsedDocument]) -> Vec<FormShortcode> {
         .collect()
 }
 
-fn json(forms: &[FormShortcode], hosted: bool) -> String {
+fn json(forms: &[FormShortcode], booking: Option<&BookingService>, hosted: bool) -> String {
     let mut seen = HashSet::new();
     let described: serde_json::Map<String, serde_json::Value> = forms
         .iter()
@@ -52,12 +55,15 @@ fn json(forms: &[FormShortcode], hosted: bool) -> String {
     if hosted {
         out["subscribe"] = serde_json::json!({"turnstile": true});
     }
+    if let Some(booking) = booking {
+        out["booking"] = serde_json::to_value(booking).expect("a booking offer serializes");
+    }
     out.to_string()
 }
 
-/// The problems only the whole site can see: a name used by two forms, and
-/// forms with nowhere to post.
-fn problems(forms: &[FormShortcode], endpoint: Option<&str>) -> Vec<String> {
+/// The problems only the whole site can see: a name used by two forms, forms
+/// with nowhere to post, and a booking offer that cannot be published.
+fn problems(forms: &[FormShortcode], endpoint: Option<&str>, booking: Option<&Result<BookingService, String>>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out: Vec<String> = forms
         .iter()
@@ -68,6 +74,9 @@ fn problems(forms: &[FormShortcode], endpoint: Option<&str>) -> Vec<String> {
     if !forms.is_empty() && endpoint.is_none() {
         out.push("The site has request forms but no `[services.forms] endpoint` in .moss/config.toml, so they cannot send: published pages do not show them, and the preview simulates sending.".to_string());
     }
+    if let Some(Err(problem)) = booking {
+        out.push(format!("{problem}; the offer is left out of {COMMERCE_PATH} until it is fixed."));
+    }
     out
 }
 
@@ -75,19 +84,21 @@ fn problems(forms: &[FormShortcode], endpoint: Option<&str>) -> Vec<String> {
 pub fn emit(
     documents: &[ParsedDocument],
     endpoint: Option<&str>,
+    booking: Option<&Result<BookingService, String>>,
     hosted: bool,
     output_dir: &Path,
     pending: &mut PendingManifest,
 ) -> Result<(), String> {
     let forms = site_forms(documents);
-    for problem in problems(&forms, endpoint) {
+    for problem in problems(&forms, endpoint, booking) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
-    if forms.is_empty() && endpoint.is_none() && !hosted {
+    let booking = booking.and_then(|b| b.as_ref().ok());
+    if forms.is_empty() && endpoint.is_none() && booking.is_none() && !hosted {
         return Ok(());
     }
     BuildContext::for_render(output_dir, pending)
-        .emit_held(&ServedPath::for_commerce_json(), json(&forms, hosted).into_bytes(), HashBucket::Files)
+        .emit_held(&ServedPath::for_commerce_json(), json(&forms, booking, hosted).into_bytes(), HashBucket::Files)
         .map_err(|e| format!("Failed to emit {COMMERCE_PATH}: {e}"))
 }
 
@@ -101,6 +112,11 @@ pub fn audit_next(stage_dir: &Path, sealed: &SealedManifest) {
     for (name, form) in description["forms"].as_object().into_iter().flatten() {
         if let Some(next) = form["next"].as_str().filter(|n| link_audit::is_dead(n, &satisfied, stage_dir)) {
             crate::build::cli_output::log_warn_problem!("`:::form {{#{name}}}` has `next={next}`, which names a page this build wrote nothing for.");
+        }
+    }
+    for (key, page) in description["booking"]["pages"].as_object().into_iter().flatten() {
+        if let Some(page) = page.as_str().filter(|p| link_audit::is_dead(p, &satisfied, stage_dir)) {
+            crate::build::cli_output::log_warn_problem!("[services.booking] pages.{key} is `{page}`, a page this build wrote nothing for.");
         }
     }
 }

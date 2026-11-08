@@ -2,9 +2,7 @@ use super::*;
 use crate::asset_snapshot::VariantKindSet;
 
 /// Build an AssetSnapshot with a single entry — the per-test fixture
-/// shape after the Phase 1 B1 migration (2026-05-25). Replaces the prior
-/// `MediaDimensionLookup`-based `lookup(vec![img_meta(...)])` builder.
-/// The snapshot keys are `PathBuf` per `AssetSnapshot`'s contract; the
+/// shape. The snapshot keys are `PathBuf` per `AssetSnapshot`'s contract; the
 /// stem-derived `variants` entry mirrors what
 /// `AssetRegistry::iter_registered_variants` would populate when a WebP
 /// variant is registered.
@@ -393,7 +391,7 @@ fn the_placeholder_and_the_display_style_share_one_attribute() {
 
 // --- Step 8: figure wrapper for MarkdownStandalone --------------------
 
-/// Phase 1 C1 test helper: build an empty extras BTreeMap.
+/// Test helper: build an empty extras BTreeMap.
 fn empty_extras() -> std::collections::BTreeMap<String, String> {
     std::collections::BTreeMap::new()
 }
@@ -636,10 +634,7 @@ fn markdown_standalone_no_manifest_still_wraps_in_figure() {
     // The wrapper is structural identity (Step 8 contract), not
     // manifest-dependent. Even with an empty AssetSnapshot (test/
     // fragment-render path), `<figure class="moss-image">` still wraps
-    // the synthesized `<img>`. The Phase 1 B1 migration (2026-05-25)
-    // replaced the `Option<&MediaDimensionLookup>` parameter with
-    // `&AssetSnapshot`; the empty-snapshot path is now the test
-    // equivalent of the prior `None` lookup.
+    // the synthesized `<img>`.
     let s = AssetSnapshot::new();
     let extras = empty_extras();
     let html = synthesize_image_html(
@@ -673,20 +668,14 @@ fn missing_dimensions_fall_back_to_800x600() {
         ImageContext::MarkdownInline,
         &ImageRenderOptions::default(),
     );
-    // FALLBACK_WIDTH / FALLBACK_HEIGHT (still 800×600, sourced from
-    // `moss_core::asset_snapshot::FALLBACK_WIDTH` so the synthesizer and
-    // the surviving regex pass agree on the absent-dims default).
+    // FALLBACK_WIDTH / FALLBACK_HEIGHT (800×600, from
+    // `moss_core::asset_snapshot::FALLBACK_WIDTH`).
     assert!(html.contains(r#"width="800" height="600""#), "Got: {html}");
 }
 
-// --- regex-pass idempotency on synthesizer output ----------------------
-//
-// Phase 2E v5 PR5 (2026-05-26) retired the Stage 3 regex post-pass; the
-// image synthesizer in this module is now the sole emitter of width /
+// The image synthesizer in this module is the sole emitter of width /
 // height / loading / LQIP / dominant-color attributes for moss-emitted
-// <img> tags. The three idempotency tests in the desktop app's
-// `image_synth_regex_parity.rs` that guarded the
-// regex+synth byte-shape parity were deleted alongside the regex.
+// <img> tags.
 
 // --- TrackingPixel (Phase 2C, 2026-05-25) ---
 //
@@ -836,7 +825,7 @@ fn synthesize_email_body_escapes() {
     assert!(html.contains("&quot;"), "\" must be escaped");
 }
 
-// --- ImageContext::GalleryThumb (Phase 2E v5 PR3, 2026-05-26) ---------
+// --- ImageContext::GalleryThumb ---
 //
 // Gallery body images: below-the-fold thumbnail, same inner byte
 // shape as MarkdownInline (`<picture><source srcset=*.webp><img
@@ -915,7 +904,7 @@ fn synthesize_gallery_thumb_threads_its_display_style() {
     );
 }
 
-// --- ImageContext::HeroBare (Phase 2E PR2, 2026-05-26) ----------------
+// --- ImageContext::HeroBare ---
 //
 // The no-snapshot hero fallback. Emits a bare `<img>` with no
 // `<picture>`, no `<source>`, no LQIP, no dims, no `loading` attr.
@@ -924,8 +913,7 @@ fn synthesize_gallery_thumb_threads_its_display_style() {
 // variant is the explicit opt-out for code paths that run before
 // `AssetRegistry::set_pending` has been called for the source's
 // `.webp` companion (test/fragment-render paths). The byte shape
-// mirrors the pre-PR2 fallback at
-// `typed_renderers.rs::render_hero_html_typed` lines 554-557.
+// is `<img src="X" alt=""[ STYLE] />`.
 
 #[test]
 fn synthesize_hero_bare_basic_shape() {
@@ -1528,12 +1516,11 @@ fn synthesize_hero_bare_escapes_url() {
 
 #[test]
 fn synthesize_hero_bare_byte_shape_matches_legacy_fallback() {
-    // Pin the byte shape against a literal reconstruction of the
-    // pre-PR2 emission so a future "tidy" of the synthesizer's
-    // HeroBare branch can't drift away from the legacy fallback
-    // without flipping this assertion deliberately.
+    // Pin the byte shape against a literal reconstruction so a future
+    // "tidy" of the synthesizer's HeroBare branch can't drift without
+    // flipping this assertion deliberately.
     //
-    // Legacy line:
+    // Expected line:
     //   format!("<img src=\"{}\" alt=\"\"{} />", html_escape(href), style)
     // where `style` was `""` or ` style="..."` (with leading space).
     let href = "covers/img.jpg";
@@ -1544,8 +1531,7 @@ fn synthesize_hero_bare_byte_shape_matches_legacy_fallback() {
         style_fragment,
     );
 
-    // PR2 path: thread the style through extra_attrs minus the leading
-    // space (matches typed_renderers.rs migration).
+    // Thread the style through extra_attrs minus the leading space.
     let pr2 = synthesize_image_html(
         href,
         "",

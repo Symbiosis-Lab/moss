@@ -462,7 +462,11 @@ test("mounting a long row's indicator does not push the page below it", async ({
     const page = await context.newPage();
     await page.goto("/scroll-row-count/");
     if (javaScriptEnabled) await expect(page.locator(".moss-scroll-dots")).toBeVisible();
-    const y = await page.getByText("After the row.").evaluate((el) => el.getBoundingClientRect().top);
+    // From the top of `main`: the masthead's own layout differs with scripts
+    // off (no measured split), and it is not what this test is about.
+    const y = await page
+      .getByText("After the row.")
+      .evaluate((el) => el.getBoundingClientRect().top - document.querySelector("main")!.getBoundingClientRect().top);
     await context.close();
     return y;
   };

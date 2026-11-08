@@ -270,33 +270,37 @@ fn find_complete_class(css: &str, pattern: &str) -> bool {
 
 /// Strip `/* ... */` block comments from CSS. CSS has no `//` line comments.
 pub(crate) fn strip_comments(css: &str) -> String {
-    let mut out = String::with_capacity(css.len());
-    let mut chars = css.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '/' && chars.peek() == Some(&'*') {
-            chars.next();
-            while let Some(c) = chars.next() {
-                if c == '*' && chars.peek() == Some(&'/') {
-                    chars.next();
-                    break;
-                }
+    let b = css.as_bytes();
+    let (mut out, mut copied, mut i) = (String::with_capacity(css.len()), 0, 0);
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                out.push_str(&css[copied..i]);
+                i = comment_end(b, i);
+                copied = i;
             }
-        } else if c == '"' || c == '\'' {
-            // A quoted string (`url("a/*b")`) is copied whole; a `/*` in it opens no comment.
-            out.push(c);
-            while let Some(d) = chars.next() {
-                out.push(d);
-                if d == '\\' {
-                    out.extend(chars.next());
-                } else if d == c {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
+            q @ (b'"' | b'\'') => i = (string_end(b, i, q) + 1).min(b.len()),
+            _ => i += 1,
         }
     }
+    out.push_str(&css[copied..]);
     out
+}
+
+/// One past the `*/` closing the comment that opens at `start`, or the end.
+/// Every CSS reader here steps over comments and quoted strings with this and
+/// [`string_end`], so a `/*` inside a string (`url("a/*b")`) opens no comment.
+pub(crate) fn comment_end(b: &[u8], start: usize) -> usize {
+    b[start + 2..].windows(2).position(|w| w == b"*/").map_or(b.len(), |p| start + 2 + p + 2)
+}
+
+/// Index of the quote closing the string that opens at `start`, or the end.
+pub(crate) fn string_end(b: &[u8], start: usize, quote: u8) -> usize {
+    let mut j = start + 1;
+    while j < b.len() && b[j] != quote {
+        j += if b[j] == b'\\' { 2 } else { 1 };
+    }
+    j.min(b.len())
 }
 
 /// One style rule of a stylesheet, with the context needed to reproduce its effect.
@@ -342,11 +346,7 @@ pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
         match bytes[i] {
             b'/' if bytes.get(i + 1) == Some(&b'*') => {
                 let start = i;
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(bytes.len());
+                i = comment_end(bytes, i);
                 // Only a comment sitting alone above a rule is context for it.
                 // One trailing a declaration (`.a { … } /* note */`) belongs to
                 // the line it is on, and hoisting it above the next rule would
@@ -375,13 +375,21 @@ pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
                 let mut depth = 1;
                 i += 1;
                 while i < bytes.len() && depth > 0 {
-                    match bytes[i] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    i += 1;
+                    i = match bytes[i] {
+                        b'/' if bytes.get(i + 1) == Some(&b'*') => comment_end(bytes, i),
+                        q @ (b'"' | b'\'') => string_end(bytes, i, q) + 1,
+                        b'{' => {
+                            depth += 1;
+                            i + 1
+                        }
+                        b'}' => {
+                            depth -= 1;
+                            i + 1
+                        }
+                        _ => i + 1,
+                    };
                 }
+                i = i.min(bytes.len());
                 out.push(StyleRule {
                     conditions: conditions.clone(),
                     comment: pending_comment,
@@ -398,6 +406,7 @@ pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
                 prelude_start = i;
                 pending_comment = None;
             }
+            q @ (b'"' | b'\'') => i = (string_end(bytes, i, q) + 1).min(bytes.len()),
             b';' => {
                 // A statement at this level (`@import`, `@layer a, b;`).
                 i += 1;
@@ -413,6 +422,13 @@ pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_comment_opener_or_brace_inside_a_string_ends_no_rule() {
+        let css = "a[title=\"/*\"] .x { content: \"}\"; color: red }\n.y { }\n";
+        let preludes: Vec<&str> = style_rules(css).iter().map(|r| r.prelude).collect();
+        assert_eq!(preludes, vec!["a[title=\"/*\"] .x", ".y"]);
+    }
 
     fn dark_gap(css: &str) -> Vec<String> {
         lint_theme_css(css).into_iter().filter(|w| w.contains("dark mode keeps")).collect()

@@ -65,13 +65,13 @@ fn renders_resolved_link_internal() {
         is_wikilink: false,
         has_pothole: false,
     }])]);
-    assert_eq!(html, "<p><a href=\"docs/\">Docs</a></p>\n");
+    assert_eq!(html, "<p class=\"moss-links\"><a href=\"docs/\">Docs</a></p>\n");
 }
 
 #[test]
 fn renders_resolved_link_wikilink_carries_class() {
-    // PR7a: wikilink class can come from either the resolved URL kind
-    // (legacy production path) OR the new is_wikilink AST flag.
+    // Wikilink class can come from either the resolved URL kind
+    // OR the is_wikilink AST flag.
     let html = render(vec![Block::Paragraph(vec![Inline::Link {
         url: Url::resolved("../docs/", UrlKind::Wikilink),
         title: None,
@@ -84,8 +84,7 @@ fn renders_resolved_link_wikilink_carries_class() {
 
 #[test]
 fn renders_link_with_is_wikilink_flag_emits_class() {
-    // PR7a: is_wikilink: true on a non-wikilink-kind URL still
-    // produces the wikilink class. Parser sets this for any
+    // is_wikilink: true on a non-wikilink-kind URL still produces the wikilink class. Parser sets this for any
     // pulldown-cmark Tag::Link { link_type: LinkType::WikiLink, .. }.
     let html = render(vec![Block::Paragraph(vec![Inline::Link {
         url: Url::resolved("../docs/", UrlKind::Internal),
@@ -156,8 +155,7 @@ fn renders_ordered_list() {
 #[test]
 fn render_ordered_list_emits_start_attribute_when_non_default() {
     // `3. foo` should produce `<ol start="3">…</ol>`. The attribute
-    // appears immediately after `<ol`, before any `data-source-line`
-    // (Phase 4 followup B contract).
+    // appears immediately after `<ol`, before any `data-source-line`.
     let html = render(vec![Block::List {
         ordered: true,
         start: Some(3),
@@ -234,7 +232,7 @@ fn renders_thematic_break() {
 }
 
 // -----------------------------------------------------------------
-// Phase 4 PR4: Block::Callout render shape
+// Block::Callout render shape
 // -----------------------------------------------------------------
 
 use super::super::node::{CalloutKind, Fold};
@@ -243,6 +241,7 @@ use super::super::node::{CalloutKind, Fold};
 fn renders_basic_callout_with_title() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Note,
         fold: None,
         title: Some("Heads up".into()),
@@ -267,6 +266,7 @@ fn renders_basic_callout_with_title() {
 fn renders_callout_falls_back_to_default_title() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Warning,
         fold: None,
         title: None,
@@ -282,6 +282,7 @@ fn renders_callout_falls_back_to_default_title() {
 fn folded_callout_renders_closed_details_with_summary_title() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Tip,
         fold: Some(Fold::Closed),
         title: Some("More".into()),
@@ -306,6 +307,7 @@ fn folded_callout_renders_closed_details_with_summary_title() {
 fn unfolded_plus_callout_renders_open_details() {
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Tip,
         fold: Some(Fold::Open),
         title: None,
@@ -327,6 +329,7 @@ fn callout_alias_renders_canonical_data_type_slug() {
     // appears in HTML.
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Abstract,
         fold: None,
         title: Some("TL;DR".into()),
@@ -346,6 +349,7 @@ fn callout_title_is_html_escaped() {
     // attribute values, and title sits between `<div>` tags as text.
     let html = render(vec![Block::Callout {
         unknown_kind: None,
+        group: None,
         kind: CalloutKind::Warning,
         fold: None,
         title: Some(r#"Use <script> & "quotes""#.into()),
@@ -580,7 +584,7 @@ fn round_trips_parse_to_render_for_canonical_doc() {
     // End-to-end: post-resolve markdown → parse → simulate visit
     // (mark every URL Internal) → render → check shape.
     //
-    // Phase 4 PR2: the parser now populates Block::Heading.id with the
+    // The parser populates Block::Heading.id with the
     // Obsidian anchor slug, so the rendered <h1> carries id="title" — but,
     // since a level-1 heading is never a permalink target, no `.moss-heading-anchor`.
     let md = "# Title\n\npara with [link](docs/) and *em*.\n";
@@ -596,7 +600,7 @@ fn round_trips_parse_to_render_for_canonical_doc() {
 }
 
 // -----------------------------------------------------------------
-// Phase 4 PR3 (2026-05-27): Block::Figure render
+// Block::Figure render
 // -----------------------------------------------------------------
 
 #[test]
@@ -990,7 +994,7 @@ fn unresolved_url_in_link_panics_in_debug() {
 }
 
 // -----------------------------------------------------------------
-// 2026-05-28 (Phase 4 source-line wiring): BlockMeta → data-source-line
+// BlockMeta → data-source-line
 // emission.
 // -----------------------------------------------------------------
 
@@ -1113,12 +1117,9 @@ fn list_blockquote_codeblock_table_hr_emit_data_source_line() {
 
 #[test]
 fn list_emits_per_li_data_source_line_when_parser_tracks() {
-    // 2026-05-28 (Phase 4 source-lines followup): `<li>` carries
-    // `data-source-line="N"` when the parser populated
-    // `item_source_lines`. Mirrors the legacy transform_events shape
-    // (commit f91aca8fa, 2026-04-01) that emitted on `<li>` for
-    // proportional scroll-sync interpolation. The outer `<ul>` carries
-    // BlockMeta.source_line separately.
+    // `<li>` carries `data-source-line="N"` when the parser populated
+    // `item_source_lines`, for proportional scroll-sync interpolation. The
+    // outer `<ul>` carries BlockMeta.source_line separately.
     let blocks = vec![Block::List {
         ordered: false,
         start: None,
@@ -1632,4 +1633,43 @@ fn a_named_id_also_answers_the_spelling_a_wikilink_gives_it() {
     let html = render_md("## Release {#v1.2}\n");
     assert!(html.contains("<h2 id=\"v1.2\"><span id=\"v12\"></span>Release"), "{html}");
     assert_eq!(crate::ast::resolve_urls::slug_wikilink_suffix("#v1.2"), "#v12");
+}
+
+fn render_resolved(md: &str) -> String {
+    let mut doc = super::super::parser::parse(md);
+    super::super::visit::visit_urls_mut(&mut doc, |u| {
+        if let Url::Unresolved(s) = u {
+            *u = Url::resolved(s.clone(), UrlKind::Internal);
+        }
+    });
+    render_document(&doc, &DefaultHooks::new())
+}
+
+#[test]
+fn a_paragraph_of_only_links_is_marked_moss_links() {
+    for md in [
+        "[Book now](https://e.com/x)\n",
+        "[Book now](https://e.com/x)\\\n[Contact](https://e.com/y)\n",
+        "[**Book now**](https://e.com/x)\n",
+        "[*Book* **now**](https://e.com/x)\n",
+    ] {
+        let html = render_resolved(md);
+        assert!(html.starts_with("<p class=\"moss-links\""), "{md:?} gave {html}");
+    }
+}
+
+#[test]
+fn a_sentence_or_a_picture_link_is_not_marked_moss_links() {
+    for md in [
+        "Please [book now](https://e.com/x) today.\n",
+        "[![A harbour](https://e.com/a.jpg)](https://e.com/p)\n",
+        "[Book now](https://e.com/x) [![A harbour](https://e.com/a.jpg)](https://e.com/p)\n",
+        "[**![A harbour](https://e.com/a.jpg)**](https://e.com/p)\n",
+        "[*__![A harbour](https://e.com/a.jpg)__*](https://e.com/p)\n",
+        "[Harbour **![A harbour](https://e.com/a.jpg)**](https://e.com/p)\n",
+        "[~~![A harbour](https://e.com/a.jpg)~~](https://e.com/p)\n",
+    ] {
+        let html = render_resolved(md);
+        assert!(!html.contains("moss-links"), "{md:?} gave {html}");
+    }
 }

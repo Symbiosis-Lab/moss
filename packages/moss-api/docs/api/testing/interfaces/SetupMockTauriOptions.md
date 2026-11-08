@@ -6,6 +6,16 @@ Options for setting up mock Tauri environment
 
 ## Properties
 
+### envVars?
+
+```ts
+optional envVars?: Record<string, string>;
+```
+
+Host environment variables visible to `getPluginEnvVar` (only allow-listed names are served)
+
+***
+
 ### pluginName?
 
 ```ts

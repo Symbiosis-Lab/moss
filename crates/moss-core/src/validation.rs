@@ -832,6 +832,18 @@ mod tests {
     // --- Date validation unit tests ---
 
     #[test]
+    fn route_is_a_known_field() {
+        let schema = builtin_schema();
+        let fm = make_fm(&[("title", str_val("Trip")), ("route", bool_val(true))]);
+        let diags = validate_frontmatter(&fm, &schema);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("'route'")),
+            "route is a frontmatter key and must not be flagged unknown: {:?}",
+            diags
+        );
+    }
+
+    #[test]
     fn skip_schema_fields_are_not_flagged_unknown() {
         let schema = builtin_schema();
         // `home` is a skip_schema field — it lives in internal_fields, not fields.

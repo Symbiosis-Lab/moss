@@ -2,21 +2,23 @@
 
 use crate::build::incremental_gates::IncrementalGates;
 
-/// Resolve a logo path from frontmatter to a root-relative URL.
-/// HTTP URLs pass through unchanged. A local path has its `.` and `..`
-/// segments resolved (`./assets/x.png` → `/assets/x.png`) so the URL and the
-/// media lookup key both name the file in its plain form.
-pub(super) fn resolve_logo_url(path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        return path.to_string();
+/// The address the header asks for a `logo:` at. An external URL stays as
+/// written. A local path becomes the URL the build publishes the file at, whose
+/// folders are slugs, so not the path as written. A path no file matches is made
+/// root-absolute with its `.` and `..` segments resolved.
+pub(super) fn logo_src(graph: &moss_core::content_graph::ContentGraph, logo: &str, from_path: &str) -> String {
+    if logo.starts_with("http://") || logo.starts_with("https://") {
+        return logo.to_string();
     }
-    match moss_core::content_graph::join_written("", path) {
-        Some(clean) => format!("/{clean}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
-        None if path.starts_with('/') => path.to_string(),
-        None => format!("/{path}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
+    if let Some(source) = graph.resolve_path(logo, from_path) {
+        return graph.pinned_url(&source);
+    }
+    match moss_core::content_graph::join_written("", logo) {
+        Some(clean) => format!("/{clean}"), // allow:served-path-url-construct (a logo path no site file matches)
+        None if logo.starts_with('/') => logo.to_string(),
+        None => format!("/{logo}"), // allow:served-path-url-construct (a logo path no site file matches)
     }
 }
-
 
 /// Bundled into a single struct to keep `generate_blocking_content`'s signature clean.
 pub struct SiteConfig {
@@ -89,6 +91,13 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub floating_nav: bool,
+    /// `[site].selection_tools` — Share and Copy on selected text, and the
+    /// QR codes the shared picture carries. Default OFF: sharing tools are
+    /// asked for, not inherited.
+    pub selection_tools: bool,
+    /// The comments service is switched on, so some page may offer Comment
+    /// on selected text: a page's own `comments: true` beats `[site].comments`.
+    pub selection_comments: bool,
     /// `[site].colophon` — moss's one-line "Published with moss" credit.
     /// Default ON: an absent key resolves to `true` at the construction
     /// site. Authors who don't want it write `[site].colophon = false`, and
@@ -101,6 +110,10 @@ pub struct SiteConfig {
     /// carries the default and the unrecognized-value fallback), so
     /// consumers never re-decide either.
     pub header: crate::build::components::nav::HeaderMode,
+    /// `[site].header_scroll` — resolved (`HeaderScroll::from_config`).
+    pub header_scroll: crate::build::components::nav::HeaderScroll,
+    /// `[site].color_scheme` — automatic reader choice or a fixed palette.
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// CLI `--site-url` override. When set, `resolve_site_url` will use this
     /// value instead of deriving the URL from `.moss/state.toml`. `None` means
     /// "derive from deployment state as usual". Consumed by Task 2.5.
@@ -108,10 +121,12 @@ pub struct SiteConfig {
     /// `[redirects]` from the config the build parsed once: old address, new
     /// address, as the author wrote them.
     pub declared_redirects: Vec<(String, String)>,
-    /// `[site].ai_policy` — site-level AI crawler policy that drives the
-    /// generated robots.txt. One of `"standard"` (default), `"unrestricted"`,
-    /// or `"restricted"`. `None` falls back to the standard policy.
-    pub ai_policy: Option<String>,
+    /// `[site]` `search_engines` / `ai_answers` / `ai_training` and
+    /// `ai_policy`, resolved: robots.txt, the robots meta tag, `llms.txt` and
+    /// `tdmrep.json` all read this one value.
+    pub ai: crate::build::feeds::robots::AiSettings,
+    /// `[site].me` and `[site].atproto_did`.
+    pub identity: crate::config::site_identity::SiteIdentity,
     /// `[site].search` — full-text search, resolved at the construction site
     /// in `build/pipeline.rs`: `true` when the author turned the Services-tab
     /// toggle on. By design, the gate is expressed here in the
@@ -135,6 +150,8 @@ pub struct SiteConfig {
     /// `[services.forms] endpoint`, without a trailing slash: where request
     /// forms post. `None` leaves forms pending.
     pub forms_endpoint: Option<String>,
+    /// `[services.booking]` as read: the offer, or why it could not be read.
+    pub booking: Option<Result<crate::config::services::BookingService, String>>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -187,17 +204,23 @@ impl Default for SiteConfig {
             link_preview: false,
             heading_anchors: false,
             floating_nav: false,
+            selection_tools: false,
+            selection_comments: false,
             colophon: true,
+            color_scheme: Default::default(),
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
+            header_scroll: crate::build::components::nav::HeaderScroll::Static,
             site_url_override: None,
             declared_redirects: Vec::new(),
-            ai_policy: None,
+            ai: Default::default(),
+            identity: Default::default(),
             search: false,
             term_kinds: Vec::new(),
             term_nav: Vec::new(),
             field_decls: Vec::new(),
             forms_endpoint: None,
+            booking: None,
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

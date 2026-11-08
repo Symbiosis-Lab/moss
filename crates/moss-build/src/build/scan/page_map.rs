@@ -390,9 +390,9 @@ pub(crate) fn compute_home_file_winners(
 /// (e.g. `"News"`, `"News/Sub Section"`, `"视频"`). Values are the **slug**
 /// form of the override target from the folder index's `url:` frontmatter
 /// (e.g. `"blog"`, `"video"`). Both `lookup` and `path` arguments here are
-/// raw source paths, so this function never sees slugified input. Phase 2
+/// raw source paths, so this function never sees slugified input. Pass 2
 /// of `build_page_map` slugifies the prefix before stripping it off
-/// `url_path` (see `slugify_path_segments`), because by the time Phase 2
+/// `url_path` (see `slugify_path_segments`), because by the time pass 2
 /// runs, `url_path` itself has already been slugified by `compute_url_path`.
 ///
 /// # Call sites
@@ -423,11 +423,11 @@ pub(crate) fn compute_home_file_winners(
 ///
 /// If you call this with a directory path (no filename), the returned last
 /// segment is NOT slugified. Don't use the raw return value as a URL prefix
-/// — wrap it in [`slugify_path_segments`] first. `build_page_map` Phase 2
+/// — wrap it in [`slugify_path_segments`] first. `build_page_map` pass 2
 /// is the one such caller in moss today and applies that wrap. Any new
 /// directory-only call site must do the same; otherwise a Title-Case last
 /// segment will leak back into URLs whenever an unrelated folder in the
-/// same site has a `url:` override (which makes Phase 2 fire).
+/// same site has a `url:` override (which makes pass 2 fire).
 ///
 /// # Examples
 ///
@@ -489,7 +489,7 @@ pub(crate) fn build_page_map_with_evicted(
 ) -> (std::collections::HashMap<String, String>, std::collections::HashMap<String, String>) {
     use std::collections::HashMap;
 
-    // Phase 1: Compute initial url_path for each file and collect dir overrides
+    // Compute initial url_path for each file and collect dir overrides
     let mut entries: Vec<(String, String, bool)> = Vec::new();
     let mut dir_overrides: HashMap<String, String> = HashMap::new();
 
@@ -540,7 +540,7 @@ pub(crate) fn build_page_map_with_evicted(
     (page_map, dir_overrides)
 }
 
-/// The per-file half of [`build_page_map_with_evicted`]'s Phase 1: given a
+/// The per-file half of [`build_page_map_with_evicted`]'s pass 1: given a
 /// file's already-extracted `url:` frontmatter override, computes its
 /// `(url_path, is_index)` and, for a winning index file with a `url:`
 /// override, the `(dir, slug)` pair to fold into `dir_overrides`.
@@ -674,7 +674,7 @@ pub(super) fn page_map_entry(
     (url_path, is_index, dir_override)
 }
 
-/// Phase 2 of [`build_page_map_with_evicted`]: rewrite every entry's
+/// Pass 2 of [`build_page_map_with_evicted`]: rewrite every entry's
 /// `url_path` prefix for cascading `dir_overrides`.
 ///
 /// For non-index files: resolve source_dir through overrides, rewrite url_path prefix.
@@ -700,7 +700,7 @@ pub(super) fn apply_cascading_dir_overrides(
         //
         // resolve_path_with_overrides preserves the LAST segment verbatim
         // because most callers pass file paths whose last segment is a
-        // filename. Phase 2 always passes directory-only paths, so we
+        // filename. Pass 2 always passes directory-only paths, so we
         // re-slugify the result to drop any case in the trailing segment
         // (e.g. "my-section/Sub Section" → "my-section/sub-section").
         //

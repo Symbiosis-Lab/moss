@@ -20,7 +20,9 @@ use text::{precision_name, xml_escape};
 // broke.
 pub(crate) use text::precision_rank;
 mod detail;
+mod dots;
 mod locator;
+pub(crate) use dots::DotLinks;
 use locator::{keep_alternate_bands, LOCATOR_DISPLAY_SCALE};
 pub use locator::{
     emit_locator, emit_locator_svg, LocatorProfile, LocatorSafetyError, LocatorSvg,
@@ -36,7 +38,7 @@ pub(crate) use route::{route_blocked_diagnostic, route_precision_gate};
 
 use super::geometry::{marker_radius, FrameTier, TILE_K, TILE_STROKE_BASE_K, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES, REGION_FADE_MIN_RADIUS};
 use super::globe::{globe_line, globe_marker, globe_rings};
-use super::layer_crop::LayerImage;
+use super::layer_crop::{StreetGround, View};
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
 
@@ -59,7 +61,9 @@ pub struct SvgMapOptions<'a> {
     pub location: &'a str,
     pub precision: Precision,
     pub href: Option<&'a str>,
-    pub(crate) layers: &'a [LayerImage],
+    pub(crate) ground: Option<&'a StreetGround>,
+    /// What the dots link to; `None` draws plain dots.
+    pub(crate) links: Option<DotLinks<'a>>,
 }
 
 impl<'a> SvgMapOptions<'a> {
@@ -75,7 +79,8 @@ impl<'a> SvgMapOptions<'a> {
             location,
             precision,
             href: None,
-            layers: &[],
+            ground: None,
+            links: None,
         }
     }
 }
@@ -90,16 +95,17 @@ pub fn emit_svg(
     page_path: &str,
     ordinal: usize,
 ) -> String {
-    emit_svg_over(context, target, page_path, ordinal, &[])
+    emit_svg_over(context, target, page_path, ordinal, None, None)
 }
 
-/// [`emit_svg`] with detail layers drawn over a flat ground.
+/// [`emit_svg`] with detail layers drawn over a flat ground, cut to the part of the canvas they cover.
 pub(crate) fn emit_svg_over(
     context: &PlaceMapContext,
     target: &PlaceMapTarget,
     page_path: &str,
     ordinal: usize,
-    layers: &[LayerImage],
+    ground: Option<&StreetGround>,
+    links: Option<DotLinks<'_>>,
 ) -> String {
     let location = target
         .aggregate_name
@@ -115,7 +121,7 @@ pub(crate) fn emit_svg_over(
     emit_svg_with_options(
         context,
         target,
-        SvgMapOptions { layers, ..SvgMapOptions::new(page_path, ordinal, location, precision) },
+        SvgMapOptions { ground, links, ..SvgMapOptions::new(page_path, ordinal, location, precision) },
     )
 }
 
@@ -168,7 +174,9 @@ fn emit_svg_with_mode(
         canvas_height: f64::from(SVG_HEIGHT),
         full_extent: false,
         tile: false,
-        layers: options.layers,
+        ground: options.ground,
+        dot_links: options.links,
+        linked: false,
     };
     writer.open_figure(
         target,
@@ -230,7 +238,7 @@ pub(super) fn render_svg(
     // gets the world map's rank/layer thinning either.
     let wide = !writer.tile && projection.as_ref().is_some_and(Projection::is_wide);
     let wide_locator = writer.locator_profile.is_some() && wide;
-    let grouped = target.frame.as_ref().filter(|_| writer.layers.is_empty()).map(|frame| {
+    let grouped = target.frame.as_ref().filter(|_| writer.layers().is_empty()).map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
         let mut grouped = grouped_features(context.pack(), &selected);
         if wide {
@@ -342,7 +350,11 @@ pub(super) struct Writer<'a> {
     /// those effects into a fixed-pixel canvas before camera transforms.
     pub(super) tile: bool,
     /// Detail layers drawn over a flat ground in place of the world's data.
-    pub(super) layers: &'a [LayerImage],
+    pub(super) ground: Option<&'a StreetGround>,
+    /// Where the dots of this figure may link, with the page it is drawn on.
+    pub(super) dot_links: Option<DotLinks<'a>>,
+    /// Some dot of this figure is a link, set by `open_figure`.
+    pub(super) linked: bool,
 }
 
 impl<'a> Writer<'a> {
@@ -372,7 +384,9 @@ impl<'a> Writer<'a> {
             canvas_height,
             full_extent,
             tile: false,
-            layers: &[],
+            ground: None,
+            dot_links: None,
+            linked: false,
         }
     }
 }
@@ -494,9 +508,15 @@ impl Writer<'_> {
             // kept here only so this match stays exhaustive.
             FrameTier::Tile => "tile",
         };
+        // A figure that holds links cannot be an image: `role="img"` hides
+        // its children from assistive technology, so it stays a labelled
+        // `figure` and its svg is no longer hidden.
+        self.linked = href.is_none() && self.any_dot_link(target);
+        let role = if self.linked { "" } else { " role=\"img\"" };
         write!(
             self.output,
-            "<figure class=\"moss-place-map\" role=\"img\" aria-label=\"{}\" data-map-tier=\"{tier}\" data-map-precision=\"{}\" data-map-location=\"{}\">",
+            "<figure class=\"moss-place-map\"{}{role} aria-label=\"{}\" data-map-tier=\"{tier}\" data-map-precision=\"{}\" data-map-location=\"{}\">",
+            self.cut_figure_attrs(),
             xml_escape(label),
             precision_name(precision),
             xml_escape(location),
@@ -515,11 +535,12 @@ impl Writer<'_> {
     }
 
     fn open_svg(&mut self) {
-        let width = length(self.canvas_width);
-        let height = length(self.canvas_height);
+        let View { x, y, width, height } = self.window();
+        let (x, y, width, height) = (length(x), length(y), length(width), length(height));
+        let hidden = if self.linked { "" } else { " aria-hidden=\"true\"" };
         write!(
             self.output,
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" aria-hidden=\"true\" focusable=\"false\">",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"{x} {y} {width} {height}\"{hidden} focusable=\"false\">",
         )
         .expect("writing to String cannot fail");
         // A tile is composited at a fractional size. WebKit clips the
@@ -886,32 +907,25 @@ impl Writer<'_> {
         ));
         if let Some(frame) = target.frame.as_ref() {
             let projection = Projection::new(frame);
-            // Soft fades first, so none covers a dot. A marker that would
-            // draw the same shape on the same pixel as one already drawn is
-            // left out, so several places in one city make one dot.
-            let mut drawn = std::collections::HashSet::new();
-            for place in target.markers_in_draw_order() {
-                let Some(point) = place.point().and_then(|point| projection.project(point)) else {
-                    continue;
-                };
+            for dots::MarkerGroup { point, places: group, dots } in dots::marker_groups(target, &projection, self.linked) {
+                let place = group[0];
                 let (x, y) = (snap(point.0), snap(point.1));
-                let shape = match place.precision {
-                    Precision::Exact | Precision::City => 0,
-                    Precision::Region => 1,
-                    Precision::Country => 2,
-                };
-                if !drawn.insert((x, y, shape)) {
-                    continue;
-                }
                 let key = xml_escape(&place.key);
                 match place.precision {
                     Precision::Exact | Precision::City => {
-                        let radius = marker_radius(place.precision);
                         // A fade below is a geographic extent and may crop at
-                        // the frame; a dot is a fixed-size marker and may not.
-                        let (cx, cy) = clamp_dot(point, radius + 1.0);
-                        let (x, y) = (snap(cx), snap(cy));
-                        write!(self.output, "{}{}", dot(x, y, radius + 1.0, "var(--moss-place-marker-casing, #ffffff)", ""), dot(x, y, radius, "var(--moss-place-marker, #2d5a2d)", &format!(" data-map-marker=\"{key}\""))).expect("writing to String cannot fail");
+                        // the frame; a dot is a fixed-size marker and may not,
+                        // so its centre is clamped in `marker_groups`.
+                        let radius = marker_radius(place.precision);
+                        let centres: Vec<(i32, i32)> = dots.iter().map(|&(x, y, _)| (x, y)).collect();
+                        let linked = self.open_dot_link(&group, &centres, radius + 5.0, false);
+                        for &(x, y, member) in &dots {
+                            let key = xml_escape(&member.key);
+                            write!(self.output, "{}{}", dot(x, y, radius + 1.0, "var(--moss-place-marker-casing, #ffffff)", ""), dot(x, y, radius, "var(--moss-place-marker, #2d5a2d)", &format!(" data-map-marker=\"{key}\""))).expect("writing to String cannot fail");
+                        }
+                        if linked {
+                            self.close_dot_link(&centres);
+                        }
                     }
                     Precision::Region | Precision::Country => {
                         let fade_edge = place.point().filter(|_| place.precision == Precision::Region).and_then(|centre| {
@@ -920,7 +934,11 @@ impl Writer<'_> {
                         let radius = fade_edge
                             .and_then(|edge| projection.project(edge))
                             .map_or(marker_radius(place.precision), |edge| (edge.0 - point.0).hypot(edge.1 - point.1).max(REGION_FADE_MIN_RADIUS));
+                        let linked = self.open_dot_link(&group, &[(x, y)], 10.0, true);
                         write!(self.output, "<circle cx=\"{x}\" cy=\"{y}\" r=\"{radius:.0}\" fill=\"url(#{fade})\" data-map-marker=\"{key}\"/>").expect("writing to String cannot fail");
+                        if linked {
+                            self.close_dot_link(&[(x, y)]);
+                        }
                     }
                 }
             }
@@ -941,7 +959,7 @@ impl Writer<'_> {
                 longitude: 0.0,
                 latitude: 0.0,
             });
-        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #dbe7ea)\"/>").expect("writing to String cannot fail");
+        write!(self.output, "<g id=\"{id}\" data-map-layer=\"globe\" clip-path=\"url(#{clip})\"{}><circle cx=\"{GLOBE_CENTER_X:.0}\" cy=\"{GLOBE_CENTER_Y:.0}\" r=\"{GLOBE_RADIUS:.0}\" fill=\"var(--moss-place-globe-water, #dbe7ea)\"/>", self.globe_shift()).expect("writing to String cannot fail");
         // The world tier holds land alone: its rings are the globe's land
         // and, stroked first, its coast.
         let quantisation = context.pack().header.quantisation;
@@ -1174,7 +1192,9 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
             tile: false,
-            layers: &[],
+            ground: None,
+            dot_links: None,
+            linked: false,
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1220,7 +1240,9 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
             tile: false,
-            layers: &[],
+            ground: None,
+            dot_links: None,
+            linked: false,
         };
         writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1427,7 +1449,9 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: true,
             tile: false,
-            layers: &[],
+            ground: None,
+            dot_links: None,
+            linked: false,
         };
         let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None, route: false };
         let projection = choose_projection(&writer, &target).unwrap();

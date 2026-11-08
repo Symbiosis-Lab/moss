@@ -226,13 +226,19 @@ describe("scroll dots", () => {
     expect(Array.from(g.children).some((c) => vi.mocked((c as HTMLElement).scrollIntoView).mock.calls.length > 0)).toBe(false);
   });
 
-  test("the buttons are named in the page's language", () => {
-    document.documentElement.lang = "de";
+  test.each([
+    ["de", "Zurück", "Weiter"],
+    ["deu", "Zurück", "Weiter"],
+    ["zh-Hans-HK", "上一个", "下一个"],
+    ["yue-HK", "上一個", "下一個"],
+    ["cmn-Hant", "上一個", "下一個"],
+  ])("the buttons are named in the page's language (%s)", (lang, previous, next) => {
+    document.documentElement.lang = lang;
     try {
       const g = row(9);
       initScrollDots();
       const names = Array.from(g.nextElementSibling!.querySelectorAll("button")).map((b) => b.getAttribute("aria-label"));
-      expect(names).toEqual(["Zurück", "Weiter"]);
+      expect(names).toEqual([previous, next]);
     } finally {
       document.documentElement.lang = "";
     }

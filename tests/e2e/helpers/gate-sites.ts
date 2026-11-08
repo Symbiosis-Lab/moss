@@ -741,6 +741,71 @@ link_preview = false
   },
 };
 
+// ── `--moss-card-cover-ratio: auto` keeps each cover's own shape ─────────────
+// Covers of two shapes (3:2 and 2:3) in a folder's grid listing, in hand-picked
+// `:::grid {rows=equal}` cards and in a summary list. The spec sets the token
+// itself, so the same pages also show the default fixed ratio. A captioned
+// listing sits in a figure, whose `img` rule must not shorten a cropped cover.
+// Served by playwright/card-cover-auto.config.ts.
+const WIDE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="300" height="200" fill="#a47"/></svg>`;
+const TALL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300"><rect width="200" height="300" fill="#47a"/></svg>`;
+const coverPage = (title: string, uid: string, cover: string) => `---
+title: ${title}
+uid: "${uid}"
+date: 2024-01-0${uid.slice(-1)}
+cover: ${cover}
+---
+
+A few words about ${title.toLowerCase()}.
+`;
+
+export const CARD_COVER_AUTO_GATE: ScratchSiteSpec = {
+  name: "card-cover-auto-gate",
+  files: {
+    "wide.svg": WIDE_SVG,
+    "tall.svg": TALL_SVG,
+    "index.md": `---
+title: Covers
+uid: "cca00001"
+---
+
+## Grid
+
+![[/prints/|style:grid]]
+
+## Shelf
+
+:::grid 2 {rows=equal}
+[[Wide print]]
++++
+[[Tall print]]
+:::
+
+## Summary
+
+![[/prints/|style:summary]]
+
+## Captioned
+
+![[/prints/|style:grid|The prints, cropped]]
+`,
+    "prints/index.md": `---
+title: Prints
+uid: "cca00002"
+---
+`,
+    "prints/Wide print.md": coverPage("Wide print", "cca00003", "../wide.svg"),
+    "prints/Tall print.md": coverPage("Tall print", "cca00004", "../tall.svg"),
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+link_preview = false
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── A grid-card image fills the card's inline size ───────────────────────────
 // An internal whole-cell image link renders as `a.moss-grid-card[data-kind=
 // "link"]` wrapping a `<figure class="moss-image">`; nothing stretches that
@@ -980,6 +1045,36 @@ const VERTICAL_BODY = Array.from({ length: 12 }, () =>
   "這是一段用來填滿版面的測試文字。每一段的長度大致相同，足以讓直排的欄位向左延伸好幾列。",
 ).join("\n\n");
 
+// A hero's words with a link inside a sentence and a paragraph that is only a
+// link, on a page and on the closing picture. Served by
+// playwright/hero-links.config.ts.
+const HERO_LINK_WORDS = `[A text link](/notes/) runs on into the rest of a sentence.
+
+[Plan a visit](/visit/)`;
+export const HERO_LINKS_GATE: ScratchSiteSpec = {
+  name: "hero-links-gate",
+  files: {
+    "cover.svg": HERO_PORTRAIT_SVG,
+    "index.md": `---
+title: Hero links
+uid: "hlg00101"
+---
+
+:::hero {image=cover.svg}
+# Example title
+
+${HERO_LINK_WORDS}
+:::
+
+Body text.
+`,
+    "footer.md": `:::hero {image=cover.svg align=top}
+${HERO_LINK_WORDS}
+:::
+`,
+  },
+};
+
 export const HERO_CAPTION_GATE: ScratchSiteSpec = {
   name: "hero-caption-gate",
   files: {
@@ -990,6 +1085,20 @@ uid: "hcg00101"
 ---
 
 :::hero {image=cover.svg caption="Cover: the memorial wall at the monastery gate (photo: A. Photographer)"}
+:::
+
+Body text.
+`,
+    "overlay.md": `---
+title: Phone overlay with a credit
+uid: "hcg00105"
+---
+
+:::hero {mobile=overlay align=end caption="Photograph credit line long enough to wrap on a phone."}
+![[cover.svg]]
+# Example title
+
+A second line
 :::
 
 Body text.
@@ -1391,7 +1500,8 @@ typesetting: vertical
 
 印：「字曰年」。
 `,
-    ".moss/config.toml": CONFIG_TOML,
+    ".moss/config.toml": `${CONFIG_TOML}selection_tools = true
+`,
     // No user theme: this gate is about moss's own defaults.
     ".moss/theme/style.css": null,
   },
@@ -2054,6 +2164,66 @@ precision = "region"
 lat = 34.0
 lng = 134.5
 precision = "city"
+`,
+  },
+};
+
+// Two located pages and their place pages, for the dots of a static place map
+// being links: Tab reaches one, it is named for its place, shows a focus ring,
+// and Enter opens the place page, whose own dot is not a link. Served by
+// playwright/place-dot-links.config.ts.
+export const PLACE_DOT_LINKS_GATE: ScratchSiteSpec = {
+  name: "place-dot-links-gate",
+  files: {
+    "index.md": `---
+title: Place Dot Links Gate
+uid: "pdl001a"
+location: Harbor
+---
+
+# Place Dot Links
+
+A page with one located place and a locator map beside it.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+locator = "align-right"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+line = false
+explorer = false
+`,
+    ".moss/places.toml": `["Harbor"]
+lat = 35.0
+lng = 135.0
+precision = "city"
+
+["Harbor Annex"]
+lat = 35.4
+lng = 135.4
+precision = "city"
+
+["Inland"]
+lat = 38.0
+lng = 138.0
+precision = "city"
+`,
+    "nearby.md": `---
+title: Nearby
+location: [Harbor, Harbor Annex, Inland]
+---
+
+Nearby places.
+`,
+    "maps.md": `---
+title: Maps
+---
+
+![[places/|style:map]]
 `,
   },
 };
@@ -3268,9 +3438,12 @@ precision = "exact"
 export const NAV_SPLIT_ORDER_GATE: ScratchSiteSpec = {
   name: "nav-split-order-gate",
   files: {
+    // `breadcrumb: true` is the site-wide enable; the archive pages below give
+    // a three-crumb trail, long enough for the fold to engage at phone widths.
     "index.md": `---
 title: Nav Split Order Gate Site With A Long Name
 uid: "nso00101"
+breadcrumb: true
 ---
 
 # Nav Split Order Gate Site
@@ -3332,6 +3505,27 @@ nav: true
 ---
 
 # Colophon
+`,
+    "archive/index.md": `---
+title: An Archive Of Field Recordings
+uid: "nso00301"
+---
+
+# An Archive Of Field Recordings
+`,
+    "archive/autumn/index.md": `---
+title: Autumn Recordings From The Coast
+uid: "nso00302"
+---
+
+# Autumn Recordings From The Coast
+`,
+    "archive/autumn/rain.md": `---
+title: Rain On The Harbour Wall
+uid: "nso00303"
+---
+
+# Rain On The Harbour Wall
 `,
     "places/index.md": `---
 title: Places
@@ -4164,7 +4358,9 @@ export const WCAG_OUTPUT: ScratchSiteSpec = {
   files: {
     // Comments with a server address, so the form renders live; the spec
     // stands in for the server.
-    ".moss/config.toml": `${CONFIG_TOML}
+    // Selection tools on, so the popover's Share, Comment and Copy are audited.
+    ".moss/config.toml": `${CONFIG_TOML}selection_tools = true
+
 [services.comments]
 enabled = true
 server_url = "https://comments.example.test"
@@ -4317,6 +4513,97 @@ The opening line of the fourth note.
   },
 };
 
+// A theme rule with no layer, the way real themes ship one: a boxed field must not draw it as a second box.
+const THEME_FOCUS_RING = `:focus-visible { outline: 2px solid rgb(255, 0, 0); outline-offset: 2px; }\n`;
+
+// A work feed: `pictures:5` rows, each a project page that is only its pictures.
+// Served by playwright/listing-picture-strip.config.ts.
+const STRIP_PROJECT = (title: string) => `---
+title: ${title}
+---
+
+${[1, 2, 3, 4, 5].map((n) => `![${title}, picture ${n}|](../pics/${n}.png)`).join("\n\n")}
+`;
+
+export const LISTING_PICTURE_STRIP_GATE: ScratchSiteSpec = {
+  name: "listing-picture-strip-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    "pics/4.png": syntheticBusyImage(640, 360),
+    "pics/5.png": syntheticBusyImage(300, 450),
+    "index.md": `---
+title: Work feed
+uid: "strip0001"
+children: false
+---
+
+![[work/|style:summary,pictures:5]]
+`,
+    "work/index.md": `---
+title: Work
+uid: "strip0010"
+children: false
+---
+`,
+    "work/alpha.md": STRIP_PROJECT("Alpha Ventures"),
+    "work/beta.md": STRIP_PROJECT("Beta Ventures"),
+    // A linkblog row (external address and publisher) wraps its strip in its own link.
+    "work/gamma.md": STRIP_PROJECT("Gamma Ventures").replace("---\n\n", "external_url: https://example.com/gamma\npublisher: Example Press\n---\n\n"),
+  },
+};
+
+// A case study that ends on a hand-picked next project: `place = "end"` on a page field.
+// Served by playwright/field-place-end.config.ts.
+export const FIELD_PLACE_END_GATE: ScratchSiteSpec = {
+  name: "field-place-end-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    ".moss/config.toml": `[fields.next]
+type = "page"
+place = "end"
+label = "next project"
+pictures = 2
+`,
+    "index.md": `---
+title: Studio
+uid: "end00001"
+children: false
+---
+
+Two case studies.
+`,
+    "work/mill-house.md": `---
+title: Mill House
+uid: "end00010"
+next: "[[harbour-pavilion]]"
+---
+
+The mill opens onto the weir.
+
+## Method
+
+${Array.from({ length: 12 }, (_, i) => `Paragraph ${i + 1} of the long body, so the end of the page is well below the fold.`).join("\n\n")}
+`,
+    "work/harbour-pavilion.md": `---
+title: Harbour Pavilion
+uid: "end00020"
+---
+
+# Can a pier be a room?
+
+![Quay, one](../pics/1.png)
+
+![Quay, two](../pics/2.png)
+
+![Quay, three](../pics/3.png)
+`,
+  },
+};
+
 // A request form with one of each kind of field, for tests/render-gates/site/request-form.spec.ts
 // and playwright/request-form.config.ts.
 export const REQUEST_FORM: ScratchSiteSpec = {
@@ -4354,6 +4641,7 @@ uid: "rfm00102"
 Thanks.
 `,
     ".moss/config.toml": `${CONFIG_TOML}\n[services.forms]\nendpoint = "http://127.0.0.1:9/f"\n`,
+    ".moss/theme/style.css": THEME_FOCUS_RING,
   },
 };
 
@@ -4370,6 +4658,16 @@ Before the map.
 
 ![[risk-levels|style:map]]
 `,
+    "apart.md": `---
+title: List apart
+---
+
+![[risk-levels|style:map]]
+
+Between the map and its list.
+
+![[risk-levels|style:levels]]
+`,
     "risk-levels.md": `---
 title: Risk levels
 date: 2026-11-03
@@ -4381,6 +4679,7 @@ country_map:
     - Elevated
     - High
   unrated: "No assessment yet."
+  action: { label: "Plan a trip", link: "/ask/?to={country}" }
 ---
 | Country | Level | Note |
 |---|---|---|
@@ -4388,11 +4687,58 @@ country_map:
 | Japan | Guarded | Calm. |
 | Brazil | Elevated | |
 | Chile | High | |
+| Russia | Elevated | |
+| Singapore | Low | |
 `,
     ".moss/config.toml": `schema_version = 6
 
 [site]
 lang = "en"
 `,
+    ".moss/theme/style.css": THEME_FOCUS_RING,
+  },
+};
+
+// Sliding picture strips: three `motion:marquee` rows of a work feed, then a
+// `:::gallery marquee`, then a one-picture gallery too short to fill its box.
+// Served by playwright/marquee.config.ts.
+export const MARQUEE_GATE: ScratchSiteSpec = {
+  name: "marquee-gate",
+  files: {
+    "pics/1.png": syntheticBusyImage(600, 400),
+    "pics/2.png": syntheticBusyImage(400, 600),
+    "pics/3.png": syntheticBusyImage(500, 500),
+    "pics/4.png": syntheticBusyImage(640, 360),
+    "pics/5.png": syntheticBusyImage(300, 450),
+    "index.md": `---
+title: Work feed
+uid: "marq0001"
+children: false
+---
+
+![[work/|style:summary,pictures:5,motion:marquee]]
+
+:::gallery marquee
+![One](pics/1.png)
+*First caption*
+![Two](pics/2.png)
+*Second caption*
+![Three](pics/3.png)
+![Four](pics/4.png)
+:::
+
+:::gallery marquee
+![Alone](pics/5.png)
+:::
+`,
+    "work/index.md": `---
+title: Work
+uid: "marq0010"
+children: false
+---
+`,
+    "work/alpha.md": STRIP_PROJECT("Alpha Ventures"),
+    "work/beta.md": STRIP_PROJECT("Beta Ventures"),
+    "work/gamma.md": STRIP_PROJECT("Gamma Ventures"),
   },
 };

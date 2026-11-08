@@ -19,7 +19,7 @@ use crate::plugins::types::Plugin;
 
 /// The ids moss draws itself. A plugin cannot claim them: `children_style:
 /// list` must keep meaning the same thing on every install.
-pub const BUILTIN_STYLE_IDS: [&str; 5] = ["list", "summary", "lead", "grid", "map"];
+pub const BUILTIN_STYLE_IDS: [&str; 6] = ["list", "summary", "lead", "grid", "map", "levels"];
 
 /// Whether `children_style` names one of moss's own styles.
 pub fn is_builtin_style(id: &str) -> bool {

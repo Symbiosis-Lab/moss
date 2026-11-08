@@ -2,21 +2,13 @@
 //!
 //! Covers: `process_markdown_file` (the typed-AST production path),
 //! `render_markdown_to_html` + `render_markdown_to_html_with` (fragment
-//! renderers, also typed-AST since PR7a-fragment, 2026-05-28), URL
+//! renderers, also typed-AST), URL
 //! classification (`classify_url_prod`), URL prettification
 //! (`transform_markdown_link`), and private path helpers
 //! (`split_path_suffix`, `relative_pretty_url`, `url_path_to_dir`).
 //!
-//! # Pre-PR7a-fragment architecture (deleted 2026-05-28)
-//!
-//! Pre-PR7a-fragment, this module also owned `transform_events` (~860
-//! LOC) — the legacy pulldown-cmark event-pipeline that did heading-ID
-//! assignment, image-caption folding, `data-source-line` injection,
-//! wikilink dispatch, and figure promotion via event-window pattern
-//! matching. PR7a-fragment routes the last caller
-//! (`render_markdown_to_html_with`) through `moss_core::ast::parse` +
-//! `render_document`; the AST renderer is now the sole markdown-to-HTML
-//! path in moss.
+//! The AST renderer (`moss_core::ast::parse` + `render_document`) is the sole
+//! markdown-to-HTML path in moss, including `render_markdown_to_html_with`.
 
 use crate::build::types::ParsedDocument;
 use moss_core::PageKind;
@@ -75,13 +67,13 @@ fn normalize_body_like_gray_matter(body: &str) -> String {
 }
 
 /// Builds a [`moss_core::asset_snapshot::AssetSnapshot`] from the desktop
-/// app's in-flight asset state. Phase 0 Task F1 — packages the data moss-core's
+/// app's in-flight asset state. Packages the data moss-core's
 /// pure-Rust resolve/synthesize layers need (dimensions, LQIP, dominant
 /// color, registered WebP/AVIF variants) into a single typed contract.
 ///
-/// Phase 0 only **threads** the snapshot through the resolve pipeline;
-/// nothing reads it yet. Phase 1 wires the consumption side in moss-core's
-/// Stage 2 synthesizer. Mirrors the architectural shape of `ContentGraph`:
+/// Only **threads** the snapshot through the resolve pipeline;
+/// the consumption side lives in moss-core's synthesizer. Mirrors the
+/// architectural shape of `ContentGraph`:
 /// the desktop app does the I/O, moss-core takes typed data IN.
 ///
 /// `MediaMaps` keys are `String` (the path as it appears in markdown/HTML),
@@ -478,13 +470,12 @@ pub fn process_markdown_file(
     site_lang: crate::i18n::Language,
     site_id: Option<&str>,
     site: SiteMarkdown<'_>,
-    // 2026-05 (structural-html-emission migration, Step 2): when `Some`,
-    // markdown `Tag::Image` events route through `image_render::synthesize_image_html`
-    // at the event-iterator level, producing HTML with dimensions, LQIP,
-    // dominant-color background, loading="lazy", and optional
-    // `<picture><source>` wrap baked in. Phase 2E v5 PR5 (2026-05-26) retired
-    // the Stage 3 regex post-pass — the synthesizer now owns every
-    // image-attribute emission and every `<picture>` wrap. When `None`, the
+    // When `Some`, markdown `Tag::Image` events route through
+    // `image_render::synthesize_image_html` at the event-iterator level,
+    // producing HTML with dimensions, LQIP, dominant-color background,
+    // loading="lazy", and optional `<picture><source>` wrap baked in. The
+    // synthesizer owns every image-attribute emission and every
+    // `<picture>` wrap. When `None`, the
     // function emits bare `<img>` events through pulldown-cmark's default
     // serializer (the test/fragment-rendering fallback); production call sites
     // at `build/render/blocking.rs` always pass `Some`.
@@ -498,7 +489,7 @@ pub fn process_markdown_file(
     // outlet. Tests pass `None`; the production call site in `blocking.rs`
     // builds the map from the same frontmatter pre-scan as `build_page_map`.
     external_url_map: Option<&HashMap<String, String>>,
-    // Phase 3 PR2 (native wikilinks): the page's content graph. When
+    // The page's content graph. When
     // provided, pulldown-cmark's `LinkType::WikiLink` events get dispatched
     // through `moss_core::resolve::wikilink_dispatch::dispatch_wikilink_embed`
     // (extension routing + ContentGraph resolution + obsidian-heading-anchor
@@ -520,9 +511,6 @@ pub fn process_markdown_file(
     // suffix split is additive. Used below to make the source-line-offset search
     // skip the frontmatter region (so a body line that happens to equal a
     // frontmatter value line is not matched too early). 0 when no frontmatter.
-    let mut declared = std::collections::BTreeMap::new();
-    let mut field_errors = std::collections::BTreeMap::new();
-    let mut declared_written = std::collections::BTreeSet::new();
     let (mut frontmatter, markdown_content_raw, raw_frontmatter, frontmatter_line_count) =
         if is_simplified_frontmatter(content) {
             let (fm, body) = parse_simplified_frontmatter(content);
@@ -637,6 +625,15 @@ pub fn process_markdown_file(
         frontmatter.date = Some(date);
     }
 
+    // A file named by its date stamp is dated by it, unless the page says when
+    // itself: `date:`, or an event's `start:`. Read before the stamp fills
+    // `date`: a page that dates itself is never an untitled post.
+    let dated = frontmatter.date.is_some() || frontmatter.start.is_some();
+    if !dated {
+        let stem = Path::new(file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        frontmatter.date = moss_core::date::parse_filename_stamp(stem).map(|s| s.page_date());
+    }
+
     // Translate the deprecated `sidebar:` field for both simplified and YAML
     // paths. Runs after frontmatter is fully parsed so it sees the final state
     // of children_source. See `apply_sidebar_alias` for the conflict rules.
@@ -738,15 +735,16 @@ pub fn process_markdown_file(
         lang: doc_lang.as_bcp47_attr(),
         decimal: crate::build::components::field_text::decimal_mark(doc_lang),
     };
-    if let Some(source) = &field_source {
-        let fields = declared_fields(file_path, source, site.fields, format);
-        for warning in fields.warnings {
-            crate::build::cli_output::cli_warn!("{}", warning);
+    let (declared, field_errors, declared_written) = match &field_source {
+        Some(source) => {
+            let fields = declared_fields(file_path, source, site.fields, format);
+            for warning in fields.warnings {
+                crate::build::cli_output::cli_warn!("{}", warning);
+            }
+            (fields.values, fields.errors, fields.written)
         }
-        declared = fields.values;
-        field_errors = fields.errors;
-        declared_written = fields.written;
-    }
+        None => Default::default(),
+    };
 
     // Detect if this is an index file (needed for url_path computation).
     let filename_lower = Path::new(file_path)
@@ -906,10 +904,7 @@ pub fn process_markdown_file(
     };
 
     // ----------------------------------------------------------------
-    // Phase 4 PR7a-flip-core-C (2026-05-28): THE production flip.
-    //
-    // Replace `apply_typed_shortcodes` + `transform_events` + post-passes
-    // with the typed-AST pipeline: `parse → dispatch_wikilink_embeds →
+    // The typed-AST pipeline: `parse → dispatch_wikilink_embeds →
     // resolve_urls → extract_hero → find_first_block_image →
     // classify_remaining_urls → render_document`.
     //
@@ -954,15 +949,13 @@ pub fn process_markdown_file(
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
-    //    natively as `Shortcode::*` variants; sees the Stage 1 callout
-    //    output (`<div class="callout">`) as `Block::Other` raw HTML.
+    //    natively as `Shortcode::*` variants; sees callout output
+    //    (`<div class="callout">`) as `Block::Other` raw HTML.
     //
     //    `ParseConfig` threads two runtime flags through the parser:
     //    - `emit_source_lines`: populates `BlockMeta::source_line` for
     //      preview scroll-sync (`data-source-line="N"` on the rendered
-    //      open tag). Restored 2026-05-28 (Phase 4 cleanup): the legacy
-    //      `transform_events` pipeline emitted this attribute before
-    //      PR7a's deletion; the AST renderer now owns the emission.
+    //      open tag); the AST renderer owns the emission.
     //    - `implicit_figure`: when false, undoes the parser's
     //      `try_promote_to_figure` for image-only paragraphs so they
     //      render as bare `<p><img></p>`. Default behavior is true,
@@ -1118,8 +1111,7 @@ pub fn process_markdown_file(
             diag.source_path
         );
     }
-    let mut outgoing_links: Vec<moss_core::resolve::OutgoingLink> = wikilink_outgoing;
-    outgoing_links.extend(graph_resolution.outgoing);
+    let outgoing_links: Vec<moss_core::resolve::OutgoingLink> = wikilink_outgoing.into_iter().chain(graph_resolution.outgoing).collect();
 
     // 2b. Host-context URL classification. `resolve_urls` only handles the
     //     content-graph subset (bare image refs + standard markdown links).
@@ -1153,7 +1145,6 @@ pub fn process_markdown_file(
     } else {
         moss_core::ast::extract_hero(&mut doc, &pipeline_hooks)
     };
-    let mut hero_html = hero_extraction.as_ref().map(|h| h.html.clone());
     let hero_image_url = hero_extraction.as_ref().and_then(|h| h.image_url.clone());
     let hero_overlay_text = hero_extraction
         .as_ref()
@@ -1162,9 +1153,7 @@ pub fn process_markdown_file(
     // fence holds is only the fallback. With nothing in the fence there is no
     // fallback, so no empty hero box is left behind.
     let hero_drawn_from = hero_extraction.as_ref().and_then(|h| h.drawn_from.clone());
-    if hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()) {
-        hero_html = None;
-    }
+    let hero_html = hero_extraction.as_ref().map(|h| h.html.clone()).filter(|_| !hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()));
 
     // 4. Capture the first body image for the cover chain.
     //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
@@ -1265,9 +1254,6 @@ pub fn process_markdown_file(
             }
         });
     }
-    let mut body_plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
-    // A diagram's note links are dependency edges like a prose link's.
-    outgoing_links.extend(diagram_links.take());
 
     // Subscribe-form presence: read from the typed AST (descends into
     // shortcode bodies). Replaces the `has_inline_subscribe` flag the
@@ -1283,13 +1269,6 @@ pub fn process_markdown_file(
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
     let has_forms = moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Form);
     let has_viewer = moss_core::ast::has_viewable_picture_recursive(&doc);
-
-    // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
-    // from upstream Stage 1) may still contain `href="moss-resolved:..."` /
-    // `wikilink:` / `moss-newtab:` prefixes that the AST renderer didn't
-    // see (they're opaque pass-through). Route any leakage through
-    // `resolve_link`. Idempotent on already-decoded hrefs.
-    body_plan.map_html(&|html| sweep_unresolved_hrefs(html, &resolve_link));
 
     // `:::toc` was removed in the unified grammar migration; the post-pass
     // that replaced its placeholder is gone. Tables of contents are now a
@@ -1322,10 +1301,8 @@ pub fn process_markdown_file(
     // pipeline so their HTML is available for `collect_footer_slots_by_language`, but
     // they must never receive the auto-injected `<h1 class="moss-article-title">`
     // — the fragment lands inside a `<footer>` slot, and an article-level
-    // heading there is structurally wrong. PR7b routes that
-    // suppression through `HeadingInputs::slot_only` rather than the
-    // pre-2026-05-28 frontmatter-synthesis hack (`title: ""` injected by the
-    // now-deleted `render_footer_pages_from_disk`).
+    // heading there is structurally wrong. `HeadingInputs::slot_only`
+    // carries that suppression.
     let heading_inputs = moss_core::heading::HeadingInputs {
         file_path,
         frontmatter_title: frontmatter.title.as_deref(),
@@ -1333,19 +1310,18 @@ pub fn process_markdown_file(
         root_folder_name: Some(root_folder_name),
         is_home_override: is_index_by_home_override,
         slot_only: is_slot_only,
+        dated,
     };
     let heading = moss_core::heading::compute(heading_inputs);
 
-    // Chrome label cascade — `state.text` (from compute(): `title:` else
-    // filename/folder name) when non-empty, filename otherwise (state.text is
-    // empty only in the title:"" case, which we ALWAYS chrome to filename to
-    // avoid <title></title>). Never sourced from body content for any page type
-    // (Obsidian-match, 2026-05-30).
-    let label = if heading.text.is_empty() {
-        filename_title.clone()
-    } else {
-        heading.text.clone()
-    };
+    // The chrome label: an untitled post's opening words, else `state.text`
+    // (`title:`, else the file or folder name), else the filename, so
+    // `title: ""` never gives an empty <title>.
+    let untitled = moss_core::heading::is_untitled_stamp(file_path, frontmatter.title.as_deref(), dated);
+    let label = if untitled {
+        let excerpt = crate::build::page::meta::extract_description(&markdown_content_raw, site.math);
+        moss_core::heading::opening_words(&excerpt).unwrap_or_else(|| filename_title.clone())
+    } else if heading.text.is_empty() { filename_title.clone() } else { heading.text.clone() };
 
     // Title source: NEVER the document body. For index/folder pages,
     // `title:` if set, else the filename/folder name (`filename_title`,
@@ -1401,16 +1377,17 @@ pub fn process_markdown_file(
     if let Some(body_heading) = moss_core::heading::body_heading_replacing_title(heading_inputs, is_nav_page) {
         crate::build::cli_output::log_note!("Heading: in '{file_path}' the body's `# {body_heading}` replaces the page title '{}'; to keep the title as the page heading, open the body with `# {}` and make the other heading `##`", heading.text, heading.text);
     }
-    match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
-        TitleOutcome::None => {}
-        outcome => body_plan.prepend_html(inject_article_title_h1(
+    let title_h1 = match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
+        TitleOutcome::None => None,
+        outcome => Some(inject_article_title_h1(
             "", &heading.text, emit_source_lines, outcome == TitleOutcome::Hidden,
         )),
-    }
+    };
 
     // The declarations with a `place` that this page has a value for, in
     // declaration order. The render stage draws them: a page link needs the
     // target's title, which only it knows. A folder index and a slot take none.
+    let opening_heading = moss_core::heading::opening_heading_beyond_title(&markdown_content_raw, &title);
     let placed_fields = crate::build::components::field_places::placed_for_page(site.fields, file_path, &title, field_source.as_ref(), format, &declared, &field_errors, is_index_file || is_slot_only);
     let has_field_places = !placed_fields.is_empty();
 
@@ -1548,6 +1525,15 @@ pub fn process_markdown_file(
     let children_more = frontmatter.children_more;
     let children_covers = frontmatter.children_covers;
     let children_when = frontmatter.children_when;
+    let children_pictures = frontmatter.children_pictures.and_then(|n| {
+        match moss_core::resolve::embed_renderer::folder_list::picture_count(&n.to_string()) {
+            Ok(n) => Some(n as u32),
+            Err(why) => {
+                crate::build::cli_output::log_warn_problem!("[{file_path}] children_pictures: {why}, so it is ignored");
+                None
+            }
+        }
+    });
     let children_count = frontmatter.children_count;
     let from_sidebar_alias = frontmatter._from_sidebar_alias;
     let series = frontmatter.series;
@@ -1563,6 +1549,13 @@ pub fn process_markdown_file(
     // comment on ParsedDocument::cascade); moss_core's typed FrontMatter
     // keeps HashMap since it's a broader public/frontend-facing type.
     let cascade = frontmatter.cascade.map(|m| m.into_iter().collect());
+    let syndicate = frontmatter.syndicate.and_then(|v| {
+        serde_json::to_value(v)
+            .map_err(|e| e.to_string())
+            .and_then(|v| crate::syndication::parse_choice(&v))
+            .map_err(|e| crate::build::cli_output::log_warn_problem!("[{file_path}] {e}; this page posts no copies"))
+            .ok()
+    });
     let also_in = frontmatter.also_in;
     let comments = frontmatter.comments;
     let map = frontmatter.map;
@@ -1577,11 +1570,25 @@ pub fn process_markdown_file(
     let permalink = format!("/{}", url_path); // allow:served-path-url-construct (page permalink derived from doc url_path, stored in ParsedDocument)
     let media_items = crate::build::media_collection::extract_media_items(&doc.blocks, &url_path, doc_lang);
 
-    // Adjust relative paths for pretty URLs: non-index files get wrapped in a subdirectory
-    // (e.g., article.md → article/index.html), so relative paths need one extra "../"
-    if !is_index_file {
-        body_plan.map_html(&adjust_relative_paths_for_pretty_urls);
-    }
+    // The plan is edited in order: sweep, title, then the pretty-URL depth, which
+    // must see the title too. Non-index files are wrapped in a subdirectory
+    // (article.md → article/index.html), so their relative paths need one extra "../".
+    let body_plan = {
+        let mut plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
+        // `Block::Other` raw HTML (e.g. `<div class="callout">`) is opaque to the
+        // AST renderer and may still carry `moss-resolved:` / `wikilink:` /
+        // `moss-newtab:` hrefs. Idempotent on already-decoded hrefs.
+        plan.map_html(&|html| sweep_unresolved_hrefs(html, &resolve_link));
+        if let Some(h1) = title_h1 {
+            plan.prepend_html(h1);
+        }
+        if !is_index_file {
+            plan.map_html(&adjust_relative_paths_for_pretty_urls);
+        }
+        plan
+    };
+    // A diagram's note links are dependency edges like a prose link's.
+    let outgoing_links: Vec<_> = outgoing_links.into_iter().chain(diagram_links.take()).collect();
 
     // The plan, flattened. Consumers that only want bytes read this; the render
     // phase reads `body_plan` when it needs to know what the bytes are made of.
@@ -1664,6 +1671,7 @@ pub fn process_markdown_file(
         explorer_places_hash: None,
         passthrough_root: None,
         has_own_map_embed: false,
+        country_lists: Default::default(),
         embedded_listing_urls: Default::default(),
         map,
         route,
@@ -1679,6 +1687,8 @@ pub fn process_markdown_file(
         children_more,
         children_covers,
         children_when,
+        children_pictures,
+        children_motion: frontmatter.children_motion,
         children_count,
         from_sidebar_alias,
         series,
@@ -1699,13 +1709,16 @@ pub fn process_markdown_file(
         hero_image_url,
         body_cover_path,
         body_cover_candidates,
+        opening_heading,
         hero_overlay_text,
+        citations: moss_core::ast::quote_source::citations(&doc.blocks),
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
             forms: has_forms,
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
+            marquee: moss_core::ast::has_marquee_recursive(&doc),
             hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,
@@ -1716,8 +1729,8 @@ pub fn process_markdown_file(
         // through the standard pipeline but is NEVER emitted as a page;
         // `collect_footer_slots_by_language` picks up its `html_content` for the
         // `footer-left` slot. The flag is set structurally (by filename),
-        // not from any YAML key. See PR7b's
-        // typed-AST mirror on `moss_core::ast::Document::slot_only`.
+        // not from any YAML key. See the typed-AST
+        // mirror on `moss_core::ast::Document::slot_only`.
         slot_only: is_slot_only,
         kind: if is_index_file {
             PageKind::Folder
@@ -1732,6 +1745,8 @@ pub fn process_markdown_file(
         layout: frontmatter.layout,
         source_path: Some(file_path.to_string()),
         url_override: frontmatter.url,
+        syndicate,
+        untitled,
         raw_frontmatter,
         sort: frontmatter.sort.clone(),
         direct_children_sort: None,
@@ -1937,25 +1952,14 @@ fn url_path_to_dir(url_path: &str) -> String {
     }
 }
 
-// Phase 4 PR7a-fragment (2026-05-28): the legacy event-pipeline block
-// that lived here — `byte_offset_to_line`, `transform_events`
-// (~860 LOC), and its caption-folding / image-detection / raw-HTML-media
-// helpers (`emit_standalone_figure_image`, `raw_html_media_kind`,
-// `strip_resolver_sentinel`, `render_inline_md_for_dispatch`,
-// `is_image_then_emphasis`, `collect_image_alt`, `bare_image_paragraph_alt`,
-// `extract_html_attr`, `image_paragraph_has_non_empty_alt`,
-// `is_image_only_paragraph`, `EmphasisParagraph`,
-// `peek_emphasis_paragraph`) — deleted in one shot. `render_markdown_to_html_with`
-// is now the only fragment renderer, and it routes through
-// `moss_core::ast::parse` + `render_document`, matching the production
+// `render_markdown_to_html_with` is the only fragment renderer, and it routes
+// through `moss_core::ast::parse` + `render_document`, matching the production
 // path used by `process_markdown_file`.
 //
 // `data-source-line` annotations (scroll-sync) and implicit-figure flag
-// gating are not wired through the AST renderer yet; both were no-ops
-// on the production path before PR7a-fragment too (see the `let _ = …`
-// at the AST render call in `process_markdown_file`). They will return
-// as Block-level span carriers + `ParseConfig` in a follow-up if the
-// scroll-sync feature returns.
+// gating are not wired through the AST renderer; both are no-ops on the
+// production path (see the `let _ = …` at the AST render call in
+// `process_markdown_file`).
 
 /// Render markdown to HTML through the typed-AST renderer using a
 /// default link resolver (`transform_markdown_link` — `.md` → pretty URL).
@@ -1977,11 +1981,10 @@ pub fn render_markdown_to_html(markdown: &str) -> String {
 /// `Shortcode::Recent`'s fallback-markdown call site passes the real
 /// `self.heading_anchors` it was constructed with).
 ///
-/// Phase 4 PR7a-fragment (2026-05-28): the body now routes through the
-/// typed AST (`moss_core::ast::parse` → `render_document`), matching the
-/// production path used by `process_markdown_file`. Before PR7a-fragment,
-/// this function called the legacy `transform_events` event-pipeline; now
-/// every markdown-to-HTML path in moss flows through one renderer.
+/// The body routes through the typed AST (`moss_core::ast::parse` →
+/// `render_document`), matching the production path used by
+/// `process_markdown_file`: every markdown-to-HTML path in moss flows through
+/// one renderer.
 ///
 /// Fragment context (no ContentGraph):
 /// - **No wikilink dispatch.** The AST visitor `dispatch_wikilink_embeds`
@@ -1997,7 +2000,7 @@ pub fn render_markdown_to_html(markdown: &str) -> String {
 ///   the parity-probe tests treat that as page-level behavior matching
 ///   today's `process_markdown_file`.
 ///
-/// Phase 4 PR4.5 (2026-05-28): the grid-shortcode caller (`render_card_html`)
+/// The grid-shortcode caller (`render_card_html`)
 /// was deleted; grid cells now render through the typed AST in
 /// `moss_core::ast::hooks::DefaultHooks::render_shortcode`. Hero overlay
 /// HTML likewise routes through `render_blocks` inside `DefaultHooks`.
@@ -2085,7 +2088,7 @@ fn render_markdown_to_html_with_config(
     // Strip %%...%% Obsidian-style comments. Cheap no-op when no `%%` present.
     let accepted = strip_percent_comments(&accepted);
 
-    // Phase 4 PR7a-fragment: parse markdown into the typed AST. Mirrors
+    // Parse markdown into the typed AST. Mirrors
     // the call order in `process_markdown_file` minus the production-only
     // passes (`dispatch_wikilink_embeds`, `resolve_urls`, `extract_hero`,
     // `find_first_block_image`) which require a `ContentGraph` and apply
@@ -2196,8 +2199,7 @@ pub fn transform_markdown_link(url: &str) -> String {
 /// (site_id, lang) needed to render shortcodes whose HTML depends on
 /// per-site state (subscribe form's API endpoint, etc.).
 ///
-/// Phase 2E v5 PR3 (2026-05-26): also carries an optional
-/// [`AssetSnapshot`] reference, forwarded into
+/// Also carries an optional [`AssetSnapshot`] reference, forwarded into
 /// `DefaultHooks::with_snapshot` at the Gallery delegation point so
 /// gallery items emit the canonical `<picture>`/dims/LQIP byte shape
 /// via [`moss_core::render::image::synthesize_image_html`]. The
@@ -2205,11 +2207,10 @@ pub fn transform_markdown_link(url: &str) -> String {
 /// only, not on `PipelineHooks` — `PipelineHooks` delegates to
 /// `DefaultHooks::with_snapshot(self.assets)` for the Gallery arm.
 ///
-/// After PR3 this struct reduces to a **Subscribe-only override**
-/// (Hero + Grid are intercepted upstream as `unreachable!`; Buttons
-/// + Gallery delegate to `DefaultHooks`). Full deletion is a
-/// follow-up if Subscribe's `site_id`/`lang` can move into
-/// `DefaultHooks` state too.
+/// Beyond that it only overrides Subscribe, which needs
+/// `site_id`/`lang` that `DefaultHooks` does not hold (Hero + Grid are
+/// intercepted upstream as `unreachable!`; Buttons + Gallery delegate to
+/// `DefaultHooks`).
 struct PipelineHooks<'a> {
     site_id: &'a str,
     lang: crate::i18n::Language,
@@ -2229,18 +2230,15 @@ struct PipelineHooks<'a> {
     /// Drives the gallery synth's snapshot-aware byte shape.
     assets: Option<&'a moss_core::asset_snapshot::AssetSnapshot>,
     /// `Some` in the production path; `None` in test / fragment-render
-    /// paths. Phase 4 PR7a-flip-core-A (2026-05-28): plumbed through so
-    /// the `Hero` arm of [`render_shortcode`] can delegate to
+    /// paths. The `Hero` arm of [`render_shortcode`] can delegate to
     /// [`crate::build::markdown::typed_renderers::render_hero_html_typed`]
     /// for full Hero byte shape (synth-emitted `<img>`, overlay
     /// rendering, width attrs).
     ///
-    /// The Hero arm is **still unreachable from current production**:
+    /// The Hero arm is **unreachable from production**:
     /// `apply_typed_shortcodes` intercepts Hero entries upstream and
     /// hoists them to the article-template hero slot via a direct call
-    /// to `render_hero_html_typed`. PR7a-flip-core-B will remove that
-    /// upstream hoist and rely on this arm. The wiring lands here so the
-    /// flip is a one-spot change.
+    /// to `render_hero_html_typed`.
     media_lookup: Option<&'a crate::build::media::dimensions::MediaDimensionLookup>,
     /// Localized `aria-label` for the per-heading permalink anchor.
     ///
@@ -2339,19 +2337,11 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
     }
 
-    /// Phase 4 PR1 (2026-05-27): route the inline `Inline::Image`
-    /// emission through `DefaultHooks::with_snapshot(self.assets)` so
+    /// Route the inline `Inline::Image` emission through `DefaultHooks::with_snapshot(self.assets)` so
     /// production renders via `synthesize_image_html` with the populated
     /// asset snapshot (real dims/LQIP/`<picture>` wrap). When no snapshot
     /// is in scope (test / fragment-render paths), fall through to
-    /// `DefaultHooks::new()`'s bare-`<img>` default — same shape as
-    /// before PR1 for those paths.
-    ///
-    /// This override exists so that the moment `render_document` becomes
-    /// the production path (PR7a), inline image emission is asset-aware
-    /// without code changes at the call site. Until then the wikilink
-    /// dispatcher in `transform_events` carries the load — this hook is
-    /// reachable only via `observe_typed_ast` / future test paths.
+    /// `DefaultHooks::new()`'s bare-`<img>` default.
     ///
     /// `img_style` (fit/position from a parameterized wikilink embed) and
     /// `width` (the figure's `data-width` token) ride the same hook, so the
@@ -2373,22 +2363,18 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         );
     }
 
-    /// Phase 4 PR1 (2026-05-27): delegate to `DefaultHooks` for link
-    /// emission. The default impl already handles every UrlKind variant
+    /// Delegate to `DefaultHooks` for link emission. The default impl already handles every UrlKind variant
     /// (`Wikilink` → `class="wikilink"`, `AssetNewtab` → `target="_blank"
     /// rel="noopener"`, others → plain `<a href>`); the override here is
     /// for symmetry with `render_image` (so a future change to the
     /// default's byte shape lands in one place — `DefaultHooks` — without
     /// risking diverged PipelineHooks output).
     ///
-    /// Phase 4 PR7a-flip-core-A (2026-05-28): signature now carries
-    /// `is_wikilink: bool` — the parse-time wikilink discriminator from
+    /// `is_wikilink` is the parse-time wikilink discriminator from
     /// pulldown-cmark's `LinkType::WikiLink`. Passed through to the
     /// default impl so a wikilink that resolves to an asset-newtab kind
     /// emits BOTH `class="wikilink"` AND `target="_blank" rel="noopener"`
-    /// (orthogonal flags). Pre-flip-core-A, the renderer synthesized a
-    /// wikilink-kinded `ResolvedUrl` to coax the wikilink class — that
-    /// workaround dropped the asset-newtab kind silently.
+    /// (orthogonal flags).
     fn render_link(
         &self,
         out: &mut String,
@@ -2452,8 +2438,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
             }
             moss_core::ast::Shortcode::Buttons(_) | moss_core::ast::Shortcode::Gallery(_) => {
                 // Delegate to DefaultHooks. For Buttons, this is a pure
-                // byte-for-byte handoff. For Gallery, Phase 2E v5 PR3
-                // (2026-05-26): with a snapshot in scope the synth path emits
+                // byte-for-byte handoff. For Gallery, with a snapshot in
+                // scope the synth path emits
                 // the canonical `<picture><source srcset=*.webp>` shape with
                 // dims/LQIP/loading="lazy"; without one, the bare-`<img>`
                 // shape.
@@ -2466,14 +2452,11 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 );
             }
             moss_core::ast::Shortcode::Hero(args) => {
-                // Phase 4 PR7a-flip-core-A (2026-05-28): delegate to
-                // `render_hero_html_typed` — the existing typed Hero
-                // renderer used by the upstream hoist path in
-                // `apply_typed_shortcodes`. Forward-prep for
-                // PR7a-flip-core-B which will REMOVE the upstream hoist
-                // and rely on this arm to produce the body's Hero HTML.
+                // Delegate to `render_hero_html_typed`, the typed Hero
+                // renderer also used by the upstream hoist path in
+                // `apply_typed_shortcodes`.
                 //
-                // Reachability today: Hero is still hoisted upstream
+                // Reachability: Hero is hoisted upstream
                 // (line ~2932) and the placeholder is replaced with
                 // empty string, so the AST never carries a `Shortcode::Hero`
                 // by the time `render_document` walks the body. This arm
@@ -2578,7 +2561,7 @@ fn classify_url_prod<R: Fn(&str) -> String>(raw: &str, resolve_link: &R) -> moss
 }
 
 // Tests for the pipeline module are co-located with their subjects in
-// build/markdown/{frontmatter,pipeline,html_post}.rs (split per Phase 3 restructure).
+// build/markdown/{frontmatter,pipeline,html_post}.rs .
 
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]

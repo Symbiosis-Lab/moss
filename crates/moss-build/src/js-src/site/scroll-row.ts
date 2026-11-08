@@ -81,7 +81,8 @@
  * whichever cards exist now, not a stale array from the first attach — are
  * rebuilt every time, since an edit can change the card count.
  */
-import { isVertical, pageLanguage, type SiteLanguage } from "./writing-mode";
+import { langBucket, type Lang } from "./subscribe/i18n";
+import { isVertical } from "./writing-mode";
 
 export {};
 
@@ -93,7 +94,7 @@ const MAX_DOT_COUNT = 7;
 /** "Previous" and "Next" in each site language, for the counter's buttons.
  * A Rust test (`scroll_row_labels_match_the_site_strings`) holds them to
  * `i18n/strings.rs`, the site's own copy. */
-const LABELS: Record<SiteLanguage, { previous: string; next: string }> = {
+const LABELS: Record<Lang, { previous: string; next: string }> = {
   en: { previous: "Previous", next: "Next" },
   de: { previous: "Zurück", next: "Weiter" },
   "zh-hans": { previous: "上一个", next: "下一个" },
@@ -434,7 +435,7 @@ function buildCounter(
   if (isVertical(row)) nav.dataset.axis = "block";
   const rtl = getComputedStyle(row).direction === "rtl";
   if (rtl) nav.dir = "rtl";
-  const words = LABELS[pageLanguage()];
+  const words = LABELS[langBucket(document.documentElement.lang)];
   const button = (cls: string, text: string, name: string): HTMLButtonElement => {
     const b = document.createElement("button");
     b.type = "button";

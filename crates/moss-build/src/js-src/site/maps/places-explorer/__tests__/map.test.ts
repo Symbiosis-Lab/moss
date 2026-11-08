@@ -295,6 +295,25 @@ describe("mountPlacesMap — embed seams", () => {
     expect(reset.x).toBeCloseTo(opened.x, 1);
   });
 
+  test("reset stays out of sight at the opening view when the card row grows after the fit", () => {
+    const { figure } = mount();
+    const reset = figure.querySelector<HTMLElement>('[data-control="reset"]')!;
+    expect(reset.hidden).toBe(true);
+
+    // The cards' covers load and the row grows into the bottom of the map; nothing moves the camera.
+    const rect = (y: number, height: number) => ({ x: 0, y, width: height ? VIEWPORT.width : 0, height, top: y, left: 0, right: VIEWPORT.width, bottom: y + height, toJSON() {} }) as DOMRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.parentElement?.classList.contains("moss-places-cards")) return rect(340, 160);
+      if (this.closest(".moss-places-controls, .moss-places-chip")) return rect(0, 0);
+      return rect(0, VIEWPORT.height);
+    });
+    window.dispatchEvent(new Event("resize"));
+    expect(reset.hidden).toBe(true);
+
+    figure.querySelector<HTMLElement>('[data-control="zoom-in"]')!.click();
+    expect(reset.hidden).toBe(false);
+  });
+
   test("a lone place opens at a regional zoom, not the deepest one", async () => {
     tilesDecode();
     mount(PLACES, neighbourhoodCells(PLACES.places));

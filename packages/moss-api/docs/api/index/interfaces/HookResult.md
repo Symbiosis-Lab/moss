@@ -29,6 +29,16 @@ async function deploy(context): Promise<HookResult> {
 
 ## Properties
 
+### copy?
+
+```ts
+optional copy?: CopyOutcome | null;
+```
+
+A copy hook's answer (populated by `publish_copy` and its siblings)
+
+***
+
 ### deployment?
 
 ```ts

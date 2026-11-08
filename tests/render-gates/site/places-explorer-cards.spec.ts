@@ -49,6 +49,8 @@ test("a vertical mouse wheel over the works row scrolls it sideways, not the map
   const overflows = await row.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
   test.skip(!overflows, "the gate site's cards fit this width");
   const before = new URL(page.url()).searchParams.get("z");
+  // At this size the row starts near the fold; aim at it only once it is on screen.
+  await row.scrollIntoViewIfNeeded();
   const box = (await page.locator(".moss-places-cards .moss-card").first().boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, 400);

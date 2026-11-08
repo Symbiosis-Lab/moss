@@ -1,6 +1,6 @@
 # Country maps: colour whole countries from a table
 
-**Status:** Slice 1 is built; the later slices wait for a site build to show the gap.
+**Status:** In progress. Slices 1 to 3 have landed on develop.
 
 A site that rates or measures countries (a travel-risk desk, an NGO's country programmes, a lab's field sites by country) wants a world map with each country coloured by a value it owns and updates often, a legend, and the same rows as text for phones, screen readers and search. moss draws landscape maps of places today; it has no country shapes and no way to colour by a value. A country map is drawn equal-area in Equal Earth, on flat land made from the country shapes themselves, unlike moss's place maps (Patterson, over the landscape); see "Why its own drawing, not the landscape map" below for the reasons.
 
@@ -77,11 +77,24 @@ The shapes: Natural Earth 1:50m admin-0 countries and breakaway/disputed areas, 
 
 Done means: a fixture table of about fifty countries builds strict with no problem; a misspelt name, a value outside `levels`, a duplicate row and a disputed name each fail `--strict` naming the row; the figure, legend and list agree; both themes pass the contrast rule; the page works at 390 px and in WebKit; the stamp shows the page's `date:`.
 
-## Later slices
+## Slice 2: hover, framing and the phone view
 
-Each waits for a site build to show the gap with a reproduction, and lands on its own:
+One rule under all of it: **hover previews, choosing commits.** A hover never moves the map, dims anything or opens the panel. Choosing (a tap or click on a country, a list row, a search result, or the address `#<country-slug>`) runs one action: the country is outlined, the map frames it, the panel opens, and the address takes the hash, so a rating can be sent as a link. Esc, the panel's close button or a click on empty sea returns the whole world.
 
-- **Hover.** On devices that hover, a label beside the pointer ("NIGERIA · 3 ELEVATED") and a one-step lift of the colour; hovering a legend level lifts every country at it.
-- **Framing.** Choosing a country frames its region, at most 2.5 times the world view, with the panel beside it, or as a bottom sheet on a phone.
-- **Search.** A combobox over every country, its common names and major cities (Natural Earth populated places), with the level in each result, written by the build from the same sources.
-- **Change email.** When a published table's values change, subscribers get the changed rows. This crosses into hosting and is designed with it.
+- **Hover**, only where the device hovers (`@media (hover: hover)`; on touch a tap chooses at once, never a two-tap preview). A rated country lifts its colour one step and a small label shows beside the pointer, "NIGERIA · ELEVATED"; an unrated country lifts its land a shade and the label says "Not rated" (localised). Disputed land gives no label and no lift. The label stays inside the map, flips away from its edges, and never covers the panel. The map is not a tab stop per country; the keyboard path is search and the list.
+- **The legend** answers "which countries are High?": hovering a level lifts every country at it and dims the rest; the list below groups the same countries by level, which is the keyboard's answer. Legend items are not tab stops.
+- **Framing.** Choosing moves the map only as far as the region: the country is centred in the space beside the panel, at most 2.5 times the world view and never below it, so neighbours stay readable. The move eases over about 400 ms; with reduced motion it jumps. Reading the hash on load frames without animation.
+- **The panel** sits over the map's right side on a wide screen. On a narrow screen (under 56rem) it is a sheet that rises from the bottom of the viewport, with a grabber, the close button and the action inside it.
+- **The phone view.** Under 56rem the world is drawn wider than the screen inside a box that scrolls sideways (vertical swipes still scroll the page), so countries keep a tappable size; choosing scrolls the chosen country to the middle. Without script the box still scrolls and the list below is the content.
+- **First view.** With script and without reduced motion, the levels fade in lowest first, once, the first time the map is a third in view. Without script every level shows in the still frame.
+
+## Slice 3: search
+
+A combobox above the map finds every country, rated or not, because a traveller types where they are going, not what was rated.
+
+- It matches, ignoring accents and case, a country's names (Natural Earth `NAME`, `NAME_LONG`, `FORMAL_EN`), the alias list the build already uses (UK, USA, Ivory Coast, Burma), and major cities, which point to their country ("Lagos, Nigeria"). Cities come from Natural Earth's populated places, the same public-domain source, pinned in the countries manifest and cut by `scalerank` so the index stays small. Prefix matches rank before word-start matches.
+- Results show at most six rows, each with its level swatch and level ("Nigeria · Elevated"; "Not rated"). Arrow keys move, Enter chooses the highlighted row (the first is highlighted as you type), Esc closes. It follows the ARIA combobox pattern, with a live count for screen readers. No match says so, with what was typed, and links to the list below the map.
+- Choosing a result runs the same choose action as a tap.
+- The build writes the index as its own JSON asset beside the shapes, fetched the first time the field gets focus, so the page carries none of it until someone searches. Disputed and breakaway land is not in it.
+- Without script the field is a link to the list.
+- `search: false` under `country_map:` turns it off; it is on by default.

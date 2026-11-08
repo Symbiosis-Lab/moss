@@ -98,4 +98,14 @@ test.describe("hero caption", () => {
     const img = page.locator(".moss-hero img");
     expect(await img.evaluate((el) => getComputedStyle(el).objectFit)).toBe("cover");
   });
+
+  for (const width of [390, 768, 1280]) {
+    test(`a caption never overlaps its overlay hero (${width}px)`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/overlay/");
+      const hero = (await page.locator(".moss-hero").boundingBox())!;
+      const cap = (await page.locator(CAPTION).boundingBox())!;
+      expect(cap.y - (hero.y + hero.height), "a gap between the hero and its credit").toBeGreaterThan(0);
+    });
+  }
 });

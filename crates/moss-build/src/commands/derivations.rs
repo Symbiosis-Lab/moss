@@ -121,7 +121,11 @@ fn folder_in_site(site_root: &Path, folder: &str) -> Result<PathBuf, String> {
         return Err(format!("{folder} is not a folder of this site"));
     }
     let path = site_root.join(relative);
-    if !path.is_dir() {
+    let inside = path.canonicalize().is_ok_and(|real| {
+        let root = site_root.canonicalize().unwrap_or_else(|_| site_root.to_path_buf());
+        real.strip_prefix(&root).is_ok_and(|rel| !crate::build::scan::classify::is_moss_internal(rel))
+    });
+    if !inside || !path.is_dir() {
         return Err(format!("{folder} is not a folder of this site"));
     }
     Ok(path)

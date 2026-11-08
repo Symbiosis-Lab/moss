@@ -131,9 +131,14 @@ async function enter(page: Page, k: number, offset = 0): Promise<{ x: number; y:
   return point;
 }
 
+const atRest = async (page: Page): Promise<boolean> =>
+  (await rows(page)).every((row) => !row.focus && Math.abs(row.box.centre - row.rest.centre) < 0.5);
+
+/** Move off the list and wait until it has closed and every row has eased back to rest. */
 async function leave(page: Page): Promise<void> {
   await page.mouse.move(1000, 2);
   await expect.poll(() => isOpen(page)).toBe(false);
+  await expect.poll(() => atRest(page)).toBe(true);
 }
 
 /** The least contrast of the far names (rows 0, 5 and 6) against the pixels actually behind them, read with the names hidden. */
@@ -511,8 +516,6 @@ test.describe('contents: pictures', () => {
   test('moving off the list closes it', async ({ page }) => {
     await enter(page, 2);
     await leave(page);
-    const r = await rows(page);
-    expect(r.every((row) => !row.focus && Math.abs(row.box.centre - row.rest.centre) < 0.5)).toBe(true);
   });
 });
 

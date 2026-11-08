@@ -59,6 +59,9 @@ pub struct AttrBlock {
     /// packed set of smaller tiles); inert on every other shortcode, like
     /// `scroll`.
     pub collage: bool,
+    /// `accordion` bare flag, read only by a plain fenced div: the folded
+    /// callouts directly inside it open one at a time. Inert elsewhere.
+    pub accordion: bool,
 }
 
 impl AttrBlock {
@@ -69,6 +72,7 @@ impl AttrBlock {
             && self.width.is_none()
             && !self.scroll
             && !self.collage
+            && !self.accordion
     }
 
     /// Convenience for renderers: get the value for a key.
@@ -259,6 +263,8 @@ pub fn parse_attrs_spanned(input: &str) -> Result<(AttrBlock, Vec<KvSpan>), Attr
                             block.scroll = true;
                         } else if key == "collage" {
                             block.collage = true;
+                        } else if key == "accordion" {
+                            block.accordion = true;
                         } else {
                             return Err(AttrError::InvalidKey { token: key });
                         }

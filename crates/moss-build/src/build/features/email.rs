@@ -219,8 +219,7 @@ pub fn read_site_languages(project_root: &std::path::Path) -> Option<Vec<EmailAu
 
 /// Render the Buttondown subscribe form HTML for the footer.
 ///
-/// No production caller in Phase 1 — kept for Phase 2 (3rd-party providers
-/// render path).
+/// No production caller yet; reserved for third-party providers' render path.
 ///
 /// When `active` is false, adds `moss-service-inactive` class and an
 /// `aria-label` naming the inactive state. Not `title=`: the inactive
@@ -274,9 +273,8 @@ fn subscribe_label(lang: Language) -> &'static str {
 
 /// Fetch the Buttondown newsletter username from the API.
 ///
-/// No production caller in Phase 1 — the build path no longer fetches. Kept,
-/// with its bounded-timeout test, for Phase 2's Settings-time wiring
-/// acquisition, which persists the username into `[services.email]`.
+/// No production caller: the build path does not fetch. Kept, with its
+/// bounded-timeout test, for the Settings-time acquisition, which persists the username into `[services.email]`.
 pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
     let base = std::env::var("MOSS_BUTTONDOWN_API_BASE")
         .unwrap_or_else(|_| "https://api.buttondown.com".to_string());

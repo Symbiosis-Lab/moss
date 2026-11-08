@@ -44,7 +44,7 @@ fn amount_is_a_value_not_a_string() {
     assert_eq!(json["noun"], "pages");
 }
 
-// ── tone is computed from job nature, not stored (Step 3 Phase 6 R5) ──
+// ── tone is computed from job nature, not stored ──
 
 #[test]
 fn tone_is_computed_from_job_nature() {
@@ -227,7 +227,7 @@ fn awaiting_is_not_terminal() {
     assert!(!tasks[0].is_terminal());
 }
 
-// ── T5.1: Syndicate stays Inline (rail) when Awaiting ────────────────
+// ── Syndicate stays Inline (rail) when Awaiting ────────────────
 
 #[test]
 fn syndicate_awaiting_stays_inline_deploy_awaiting_stays_awaiting() {
@@ -349,10 +349,7 @@ fn blocking_downgrade_keeps_amount_none() {
     assert!(matches!(task.state, TaskState::Failed { .. }));
 }
 
-// `done_with_elapsed_freezes_the_producer_supplied_span` and
-// `done_with_elapsed_blocking_downgrade_keeps_amount_none` were removed with
-// `TaskHandle::done_with_elapsed` (Phase-4 review FIX 4 — dead API). The
-// equivalent registry-level coverage lives in
+// Registry-level coverage of `done_with_elapsed` lives in
 // `done_with_elapsed_by_id_drives_the_parent_receipt` +
 // `done_with_elapsed_by_id_blocking_advisory_keeps_amount_none` below.
 
@@ -1049,7 +1046,7 @@ fn with_progress_empty_label_leaves_title_none() {
     );
 }
 
-// ── wire-snapshot + emitter (T2) ─────────────────────────────────
+// ── wire-snapshot + emitter ─────────────────────────────────
 
 #[test]
 fn panel_task_wire_strips_instant_and_preserves_state() {
@@ -1240,11 +1237,11 @@ fn escape_download_tool_drops_a_tool_without_a_source_here() {
     );
 }
 
-// ── parent/child Jobs (Step 3 Phase 4 — media nests under Build) ──────
+// ── parent/child Jobs (media nests under Build) ──────
 
 #[test]
 fn spawn_child_sets_parent_to_the_build_job() {
-    // The media child Job nests under the Build parent (Phase 4): spawn the
+    // The media child Job nests under the Build parent: spawn the
     // parent first, then spawn a child carrying `parent: Some(buildJobId)`.
     let reg = registry();
     let parent = reg.spawn(

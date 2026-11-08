@@ -23,9 +23,9 @@ import { fileURLToPath } from "node:url";
 import { openCrateDir } from "../../support/crate-paths";
 import { resolveMossBin } from "../../support/moss-bin";
 
-// The embedded-JS output dirs `scripts/build-backend-scripts.mjs` derives
-// EMBEDDED_DIRS from (its BUNDLES table) — the dirs a build embeds its site
-// scripts from, so the stamp below needs to know them too.
+// The dirs moss-build embeds its site scripts from, two of the outputs of
+// `scripts/build-backend-scripts.mjs`'s BUNDLES table, so the stamp below
+// needs to know them too.
 const EMBEDDED_DIRS = [
   path.join(openCrateDir("moss-build"), "src/assets/js"),
   path.join(openCrateDir("moss-build"), "src/ops/serve/js"),

@@ -173,6 +173,13 @@ describe("fitPoints", () => {
     expect(camera.zoom).toBe(detailMaxZoom(viewport));
   });
 
+  test("a tight group fits as deep as a ceiling far past the world's, never stopping at the minimum span", () => {
+    const viewport = { width: 1000, height: 600 };
+    const ceiling = detailMaxZoom(viewport) * 5000;
+    const camera = fitPoints([{ x: 500, y: 280 }, { x: 500.0001, y: 280.0001 }], viewport, ceiling);
+    expect(camera.zoom).toBe(ceiling);
+  });
+
   test("a frame shorter than the viewport (a card row eating the bottom) keeps points out of the cropped band", () => {
     // The map is 1000x600; a card row reserves the bottom 150px, leaving a
     // 450px-tall free rectangle starting at the top. A point fit against

@@ -1,9 +1,8 @@
 //! Operational modes over the built site — long-running processes a host
 //! starts and owns, as opposed to the one-shot pipeline under [`crate::build`].
 //!
-//! NORTH-STAR charters this family: `ops/serve` (the preview server, crossed
-//! at S1 of the 2026-08-28 relocation plan) and `ops/watch` (the
-//! debouncer driver, crossed at slice W1 of the same plan).
+//! This family holds `ops/serve` (the preview server) and `ops/watch` (the
+//! debouncer driver).
 
 pub mod serve;
 pub mod watch;

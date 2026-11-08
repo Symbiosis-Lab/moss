@@ -15,7 +15,7 @@ use crate::types::content::ProjectStructure;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::config::{resolve_logo_url, resolve_data_attr, resolve_comments_attr};
+use super::config::{resolve_data_attr, resolve_comments_attr};
 
 pub(super) enum PageFamily {
     Authored,
@@ -89,7 +89,7 @@ impl PageChromeContext<'_, '_> {
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
-        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
+        ).with_color_scheme(self.layout.color_scheme).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
             .with_asset_snapshot(self.media_lookup.asset_snapshot());
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
@@ -97,7 +97,7 @@ impl PageChromeContext<'_, '_> {
         let logo = if !generated && ui_lang != self.site_lang {
             let root = format!("{}/index.html", ui_lang.code());
             self.documents.iter().find(|d| d.url_path == root)
-                .and_then(|d| d.logo.as_ref()).map(|l| resolve_logo_url(l))
+                .and_then(|d| d.logo.clone())
                 .or_else(|| self.layout.logo_path.clone())
         } else {
             self.layout.logo_path.clone()
@@ -137,6 +137,18 @@ impl PageChromeContext<'_, '_> {
         let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
         body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
         if contents_pictures { body_attrs.push_str(r#" data-contents="pictures""#); }
+        // The body names the mode only where the header really stays: a site
+        // with no header has nothing to keep, and a header laid over the
+        // page's opening hero scrolls away with it, so the island keeps its bar.
+        let header_over = doc
+            .and_then(|d| d.hero_html.as_deref())
+            .and_then(|h| h.split('>').next())
+            .is_some_and(|open_tag| open_tag.contains(r#" data-header="over""#));
+        if self.layout.header != crate::build::components::nav::HeaderMode::None && !header_over {
+            if let Some(value) = self.layout.header_scroll.attr_value() {
+                body_attrs.push_str(&format!(r#" data-header-scroll="{value}""#));
+            }
+        }
         if let Some(section) = doc.and_then(|d| d.section.as_ref()) {
             if !section.segment.is_empty() {
                 body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));
@@ -156,19 +168,19 @@ impl PageChromeContext<'_, '_> {
         ShellVars {
             title: String::new(),
             css_path: paths.css_path(), js_path: paths.js_path(),
-            lazy_chunk_attrs: paths.lazy_chunk_attrs(
-                self.assets.scripts.hash("share-card"),
-                self.layout.assets.video_ladder.then(|| self.assets.scripts.hash("hls")),
-            ),
+            lazy_chunk_attrs: self.assets.scripts.lazy_chunk_attrs(&self.layout.assets),
             navigation: nav.generate_navigation(),
             has_header: self.layout.header != crate::build::components::nav::HeaderMode::None,
             colophon: self.layout.colophon,
+            color_scheme: self.layout.color_scheme,
             colophon_credit: self.layout.colophon_credit.clone(),
             nav_island: if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
             footer: Some(nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),
-            head_alternates: self.assets.head_alternates.map(str::to_string),
+            head_alternates: Some([self.assets.head_alternates.unwrap_or_default(), self.layout.profile_links.as_str()]
+                .iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join("\n    "))
+                .filter(|tags| !tags.is_empty()),
             analytics: analytics_home.and_then(|d| d.analytics.as_ref()).map(|a| a.to_script_tag()),
             body_attrs,
             lang: page_lang_tag, ui_lang,
@@ -197,7 +209,7 @@ impl PageChromeContext<'_, '_> {
             date: None, formatted_date: None, date_line: None, short_date: None, content: None,
             description: None, og_tags: None, twitter_tags: None, canonical_link: None,
             hreflang_links, schema_json_ld: None, embed_head_assets: String::new(),
-            post_article: String::new(), lightbox: String::new(), robots_meta: None,
+            post_article: String::new(), lightbox: String::new(), robots_meta: self.layout.ai.robots_tag(doc.is_some_and(|d| !d.is_public_page())).map(|t| format!("\n    {t}")),
         }
     }
 }

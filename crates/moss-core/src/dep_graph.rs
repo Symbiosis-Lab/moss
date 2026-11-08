@@ -1,8 +1,8 @@
-//! Forward and backward link/embed edges between pages (Stage 4).
+//! Forward and backward link/embed edges between pages.
 //!
 //! `DepGraph` answers "who links to / embeds this page?" — the question
-//! Stage 5's facade-gated render skip needs to widen a changed page's
-//! minimal render set to its backlinks. It is a standalone type, not a
+//! the facade-gated render skip needs to widen a changed page's minimal
+//! render set to its backlinks. It is a standalone type, not a
 //! `ContentGraph` field: `ContentGraph` is a structural path index built
 //! from file paths alone (zero content reads, see `content_graph.rs`)
 //! while `DepGraph` is built from parsed per-page edges — same
@@ -72,7 +72,7 @@ impl DepGraph {
         graph
     }
 
-    /// Fold in transclusion edges recorded by the resolve phase (Stage 7).
+    /// Fold in transclusion edges recorded by the resolve phase.
     ///
     /// `pairs` are `(target, immediate_embedder)` — exactly the shape
     /// `ResolveResult::embed_deps` produces (`resolve/embeds.rs`), i.e. DIRECT
@@ -117,7 +117,7 @@ impl DepGraph {
     /// dependency on content the resolver refused to splice. Cycles terminate
     /// on the visited set.
     ///
-    /// This is the parse cache's validity input (Stage 7): `path`'s
+    /// This is the parse cache's validity input: `path`'s
     /// cached `ParsedDocument` is only reusable if every member of this set
     /// still hashes to what it hashed to when the entry was written.
     pub fn embed_closure(&self, path: &str) -> Vec<String> {

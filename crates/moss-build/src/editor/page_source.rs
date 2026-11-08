@@ -41,18 +41,14 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         let source_path = (!info.source_path.is_empty())
             .then(|| existing(&info.source_path))
             .flatten();
-        let syndicated = info
-            .frontmatter
-            .get("syndicated")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
+        let syndicated = crate::build::types::syndicated_urls(info.frontmatter.get("syndicated"));
         if source_path.is_some() {
             return Ok(PageSource {
                 source_path,
                 is_dir: false,
                 is_article: true,
                 syndicated,
+                syndicate: info.syndicate.clone(),
                 takeover: None,
                 source_pending: false,
             });
@@ -65,6 +61,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
             is_dir: true,
             is_article: false,
             syndicated: vec![],
+            syndicate: None,
             takeover: None,
             source_pending: false,
         });
@@ -107,6 +104,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         is_dir: normalized.is_empty(),
         is_article: false,
         syndicated: vec![],
+        syndicate: None,
         takeover,
         source_pending: false,
     })
@@ -173,7 +171,7 @@ mod tests {
                     k.to_string(),
                     serde_json::json!({
                         "source_path": src, "title": "T", "content": "", "url_path": k,
-                        "date": null, "tags": [],
+                        "date": null, "tags": [], "syndicate": ["example-network"],
                         "frontmatter": { "syndicated": ["https://example.test/a"] }
                     }),
                 )
@@ -201,6 +199,7 @@ mod tests {
         assert!(r.is_article && !r.is_dir);
         assert!(r.source_path.unwrap().ends_with("posts/hello.md"));
         assert_eq!(r.syndicated, vec!["https://example.test/a"]);
+        assert_eq!(r.syndicate.as_deref(), Some(&["example-network".to_string()][..]), "the channels its copies go to");
     }
 
     /// The served slug is not derivable from the file name; only the map knows.

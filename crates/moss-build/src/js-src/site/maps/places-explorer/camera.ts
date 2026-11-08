@@ -166,8 +166,8 @@ export const DETAIL_MAX_SCALE = 7.21 * (560 / 480);
 const FIT_PAD_MIN = 36;
 const FIT_PAD_MAX = 90;
 const FIT_PAD_FRACTION = 0.12;
-/** The smallest span `fitPoints` ever fits to, so a single point (zero span) still produces a finite zoom. */
-const FIT_MIN_SPAN = 12;
+/** The smallest span `fitPoints` ever fits to, so a single point (zero span) still produces a finite zoom. Far below one screen pixel at any ceiling a layer allows, so a tight group fits as deep as the ceiling and never shallower than the view it was clicked from. */
+const FIT_MIN_SPAN = 1e-3;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -430,4 +430,25 @@ export function fitWork(
     zoom * coverScale(viewport),
   );
   return clampCamera({ x: centered.x, y: centered.y, zoom }, viewport, maxZoom);
+}
+
+/** `from` moved as if its content followed the pointer by (dx, dy) screen px, clamped. */
+export function pannedCamera(from: Camera, dx: number, dy: number, viewport: Viewport, maxZoom: number): Camera {
+  const scale = screenScale(from, viewport);
+  return clampCamera({ x: from.x - dx / (scale * aspectX(from, viewport)), y: from.y - dy / scale, zoom: from.zoom }, viewport, maxZoom);
+}
+
+/** `camera` zoomed by `factor` with the world point under the screen point `anchor` held fixed: the inverse of `worldToScreen` solved for the new centre at the target zoom, then clamped. `maxZoomAt` gives the detail ceiling for that anchor. */
+export function zoomedCameraAt(camera: Camera, viewport: Viewport, factor: number, anchor: Point, maxZoomAt: (anchorWorld: Point) => number): Camera {
+  const anchorWorld = screenToWorld(anchor, camera, viewport);
+  const targetZoom = camera.zoom * factor;
+  const scaleAtTarget = screenScale({ x: camera.x, y: camera.y, zoom: targetZoom }, viewport);
+  const y = anchorWorld.y - (anchor.y - viewport.height / 2) / scaleAtTarget;
+  const target: Camera = { x: camera.x, y, zoom: targetZoom };
+  const candidate: Camera = {
+    x: anchorWorld.x - (anchor.x - viewport.width / 2) / (scaleAtTarget * aspectX(target, viewport)),
+    y,
+    zoom: targetZoom,
+  };
+  return clampCamera(candidate, viewport, maxZoomAt(anchorWorld));
 }

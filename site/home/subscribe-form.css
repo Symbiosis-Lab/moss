@@ -1,0 +1,210 @@
+/* Generated from crates/moss-build/src/assets/css/site.css by scripts/build-backend-scripts.mjs; edit it there. */
+.moss-subscribe-form[data-moss-hosted="true"] {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 2.5rem;
+  --moss-ease-subscribe: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-input {
+  box-sizing: border-box;
+  block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-input {
+  transition:
+    border-color 0.2s ease,
+    opacity 0.35s var(--moss-ease-subscribe),
+    transform 0.35s var(--moss-ease-subscribe);
+}
+
+.moss-btn-slot {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.moss-btn__label {
+  display: inline-block;
+}
+
+.moss-btn-slot .moss-btn {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  block-size: calc(var(--moss-reading-size, 1.125rem) * 1.75);
+}
+
+@media (width < 48rem), (pointer: coarse) {
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+  .moss-btn-slot .moss-btn {
+    block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
+  }
+}
+
+[data-state="loading"] .moss-btn-slot .moss-btn { cursor: wait; }
+[data-state="loading"] .moss-btn-slot .moss-btn__label { opacity: 0; }
+[data-state="loading"] .moss-btn-slot .moss-btn__spinner { opacity: 1; }
+
+.moss-btn__spinner,
+.moss-btn__check {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.moss-btn__spinner::after {
+  content: "";
+  width: 0.875em;
+  height: 0.875em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: moss-btn-spin 0.7s linear infinite;
+}
+
+@keyframes moss-btn-spin { to { transform: rotate(360deg); } }
+@keyframes moss-subscribe-spin { to { transform: rotate(360deg); } }
+
+.moss-btn__check svg {
+  width: 1.125em;
+  height: 1.125em;
+}
+.moss-btn__check svg path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-btn-slot {
+  min-height: 2.25rem;
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
+  flex: none;
+  transition:
+    background-color 0.3s var(--moss-ease-subscribe),
+    color 0.3s var(--moss-ease-subscribe),
+    width 0.45s var(--moss-ease-subscribe),
+    height 0.45s var(--moss-ease-subscribe),
+    padding 0.45s var(--moss-ease-subscribe),
+    border-radius 0.45s var(--moss-ease-subscribe);
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-btn__label {
+  transition: opacity 0.2s var(--moss-ease-subscribe);
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-btn__spinner {
+  transition: opacity 0.2s var(--moss-ease-subscribe);
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-btn__check {
+  transform: scale(0.6);
+  transition:
+    opacity 0.25s var(--moss-ease-subscribe) 0.1s,
+    transform 0.4s var(--moss-ease-subscribe) 0.1s;
+}
+.moss-subscribe-form[data-moss-hosted="true"] .moss-btn__check svg path {
+  transition: stroke-dashoffset 0.45s var(--moss-ease-subscribe) 0.2s;
+}
+
+.moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-status {
+  flex-basis: 100%;
+  margin-block-start: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  color: var(--moss-color-muted);
+  font-size: 0.95rem;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.35s var(--moss-ease-subscribe),
+    transform 0.35s var(--moss-ease-subscribe);
+  pointer-events: none;
+}
+.moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-status__icon {
+  width: 1.125em;
+  height: 1.125em;
+  color: var(--moss-color-accent);
+  flex-shrink: 0;
+}
+
+.moss-subscribe-form[data-state="loading"] .moss-input {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.moss-subscribe-form[data-state="success"] .moss-input {
+  position: absolute;
+  inset-inline-start: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+.moss-subscribe-form[data-state="success"] .moss-btn-slot .moss-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+  width: 2.25rem;
+  height: 2.25rem;
+  background: var(--moss-color-accent);
+  color: var(--moss-color-bg);
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.moss-subscribe-form[data-state="success"] .moss-btn__label { opacity: 0; }
+.moss-subscribe-form[data-state="success"] .moss-btn__spinner { opacity: 0; }
+.moss-subscribe-form[data-state="success"] .moss-btn__check {
+  opacity: 1;
+  transform: scale(1);
+}
+.moss-subscribe-form[data-state="success"] .moss-btn__check svg path {
+  stroke-dashoffset: 0;
+}
+.moss-subscribe-form[data-state="success"] .moss-subscribe-status {
+  order: -1;
+  flex: 1;
+  min-inline-size: 0;
+  margin-block-start: 0;
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 0.35s;
+}
+
+.moss-subscribe-form[data-state="error"] .moss-btn__label { opacity: 1; }
+.moss-subscribe-form[data-state="error"] .moss-btn__spinner { opacity: 0; }
+.moss-subscribe-form[data-state="error"] .moss-subscribe-status {
+  opacity: 1;
+  transform: translateY(0);
+  color: var(--moss-error, #c85450);
+}
+.moss-subscribe-form[data-state="error"] .moss-subscribe-status__icon {
+  color: var(--moss-error, #c85450);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn,
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn__label,
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn__check,
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn__check svg path,
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-status { transition: none; }
+  .moss-subscribe-form[data-moss-hosted="true"] .moss-btn__check svg path { stroke-dashoffset: 0; }
+}

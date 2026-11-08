@@ -31,6 +31,7 @@ const CASCADE_KEYS: &[&str] = &[
     "reader_controls",
     "sort",
     "timezone",
+    "syndicate",
 ];
 
 /// Apply frontmatter cascade: parent pages push values to descendants.
@@ -160,6 +161,11 @@ fn report_cascade_values(
             log::warn!(
                 "`timezone:` is not a time zone name (use Area/City), so these events' calendar times are floating: `{shown}` (cascaded from {page})"
             );
+        }
+    }
+    if let Some(value) = cascade.get("syndicate") {
+        if let Err(e) = serde_json::to_value(value).map_err(|e| e.to_string()).and_then(|v| crate::syndication::parse_choice(&v)) {
+            log::warn!("{e}, so the pages beneath post no copies (cascaded from {page})");
         }
     }
     if let Some(value) = cascade.get("author") {
@@ -294,6 +300,14 @@ fn apply_cascade_values(
                 if doc.sort.is_none() {
                     if let Ok(v) = serde_yaml::from_value::<moss_core::sort::SortField>(value.clone()) {
                         doc.sort = Some(v);
+                    }
+                }
+            }
+            "syndicate" => {
+                // A page's own `syndicate:`, even an invalid one, is the page's say.
+                if doc.syndicate.is_none() && !doc.raw_frontmatter.contains_key("syndicate") {
+                    if let Ok(v) = serde_json::to_value(value).map_err(|e| e.to_string()).and_then(|v| crate::syndication::parse_choice(&v)) {
+                        doc.syndicate = Some(v);
                     }
                 }
             }
@@ -722,6 +736,7 @@ mod tests {
             "reader_controls" => serde_yaml::Value::Bool(false),
             "sort" => serde_yaml::Value::String("title".to_string()),
             "timezone" => serde_yaml::Value::String("Europe/Oslo".to_string()),
+            "syndicate" => serde_yaml::to_value(vec!["example-network"]).unwrap(),
             other => panic!("CASCADE_KEYS names `{other}` but the test has no sample value for it"),
         }
     }
@@ -759,6 +774,27 @@ mod tests {
         let mut docs = vec![parent, make_event_doc("Concert", "events/concert/index.html")];
         apply_cascade(&mut docs, &declared);
         assert!(docs[1].declared.contains_key("kind"), "a declared field cascades to the page beneath it");
+    }
+
+    #[test]
+    fn a_folder_names_channels_for_its_posts_and_a_post_can_say_otherwise() {
+        let mut parent = make_doc("Notes", "notes/index.html");
+        parent.cascade = Some(HashMap::from([("syndicate".to_string(), serde_yaml::to_value(vec!["bluesky", "mastodon"]).unwrap())]));
+        let inherits = make_doc("A", "notes/a/index.html");
+        let mut opts_out = make_doc("B", "notes/b/index.html");
+        opts_out.raw_frontmatter.insert("syndicate".into(), serde_json::json!(false));
+        opts_out.syndicate = Some(vec![]);
+        let mut invalid = make_doc("C", "notes/c/index.html");
+        invalid.raw_frontmatter.insert("syndicate".into(), serde_json::json!(3));
+        let elsewhere = make_doc("D", "other/d/index.html");
+
+        let mut docs = vec![parent, inherits, opts_out, invalid, elsewhere];
+        apply_cascade(&mut docs, &[]);
+
+        assert_eq!(docs[1].syndicate.as_deref(), Some(&["bluesky".to_string(), "mastodon".to_string()][..]));
+        assert_eq!(docs[2].syndicate.as_deref(), Some(&[][..]), "`syndicate: false` stops the folder's list");
+        assert_eq!(docs[3].syndicate, None, "a page's own value, even an invalid one, is not replaced by the folder's");
+        assert_eq!(docs[4].syndicate, None);
     }
 
     /// Empty cascade map is harmless.

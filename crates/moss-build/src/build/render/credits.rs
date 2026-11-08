@@ -304,7 +304,12 @@ fn render_row(row: &str) -> String {
 /// paragraph (a stray `#`, a list dash).
 fn inline_row(row: &str) -> Option<String> {
     let html = crate::build::markdown::render_markdown_to_html(row);
-    let inner = html.trim().strip_prefix("<p>")?.strip_suffix("</p>")?;
+    let html = html.trim();
+    // A row that is one link carries `moss-links`, which an inline row has no use for.
+    let inner = html
+        .strip_prefix("<p>")
+        .or_else(|| html.strip_prefix("<p class=\"moss-links\">"))?
+        .strip_suffix("</p>")?;
     // `</p>` may only appear at the end, or the row produced more than one
     // block and the unwrap would splice unbalanced markup into the page.
     (!inner.contains("</p>")).then(|| inner.to_string())

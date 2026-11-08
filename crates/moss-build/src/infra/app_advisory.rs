@@ -50,7 +50,7 @@ advisory_strings! {
     scanning_folder         => { en: "Scanning folder...",         zh_hans: "正在扫描文件夹……",   zh_hant: "正在掃描資料夾……", de: "Ordner wird durchsucht …" },
     published               => { en: "Published!",                 zh_hans: "已发布！",           zh_hant: "已發佈！", de: "Veröffentlicht!" },
     uploaded_checking_live  => { en: "Uploaded — checking your site is live…", zh_hans: "已上传 —— 正在确认网站已上线……", zh_hant: "已上傳 —— 正在確認網站已上線……", de: "Hochgeladen — prüfen, ob deine Website online ist …" },
-    // ── Advisories + receipts (Phase 1b) ────────────────────────────────────
+    // ── Advisories + receipts ────────────────────────────────────
     ffmpeg_offer => { en: "Videos ship full-size because FFmpeg isn't installed. Download it and moss will optimize them.", zh_hans: "没有安装 FFmpeg，视频将以原始大小发布。下载它后，青苔会为视频做优化。", zh_hant: "沒有安裝 FFmpeg，影片將以原始大小發佈。下載它後，青苔會為影片做最佳化。", de: "Videos werden in voller Größe veröffentlicht, weil FFmpeg nicht installiert ist. Lade es herunter, dann optimiert moss sie." },
     ffmpeg_install => { en: "Videos ship full-size because FFmpeg isn't installed. Install it with your system's package manager and moss will optimize them.", zh_hans: "没有安装 FFmpeg，视频将以原始大小发布。请用系统的包管理器安装它，青苔会随后为视频做优化。", zh_hant: "沒有安裝 FFmpeg，影片將以原始大小發佈。請用系統的套件管理員安裝它，青苔會隨後為影片做最佳化。", de: "Videos werden in voller Größe veröffentlicht, weil FFmpeg nicht installiert ist. Installiere es über den Paketmanager deines Systems, dann optimiert moss sie." },
     download_ffmpeg => { en: "Download FFmpeg", zh_hans: "下载 FFmpeg", zh_hant: "下載 FFmpeg", de: "FFmpeg herunterladen" },

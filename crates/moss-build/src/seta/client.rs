@@ -1,10 +1,9 @@
 //! moss-seta HTTP client — struct, auth helpers, error types, base URL resolution.
-//!
-//! Split out of the app-side `domain/moss_seta_client.rs` (since deleted).
 
 use crate::identity::Identity;
-use crate::seta::signing::sign_request;
-use reqwest::Client;
+use crate::seta::signing::sign_request_v2;
+use bytes::Bytes;
+use reqwest::{header, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
@@ -261,10 +260,8 @@ fn backpressure_delay(occurrence: u32) -> Duration {
 /// [`RETRY_MAX_ATTEMPTS`] tries with [`full_jitter_delay`] between them.
 ///
 /// `op` must encapsulate the **whole sign-and-send unit**, not just the send:
-/// `seta/signing.rs` signs `"{timestamp}:{payload}"` and seta rejects a
-/// clock skew over 300s, so a cached `Authorization` header cannot be replayed
-/// on a later attempt. That is why callers pass a closure that re-runs
-/// `sign_and_build` per attempt instead of wrapping an already-built request.
+/// a signed header is good for one request (seta refuses a nonce it has seen),
+/// so each attempt builds a fresh one with [`MossSetaClient::signed`].
 ///
 /// `what` names the unit of work for the warn log so a retried publish is
 /// diagnosable after the fact.
@@ -605,15 +602,22 @@ impl SetaError {
             return SetaError::Challenge { status };
         }
         let message = extract_api_error_message(&body);
-        // One durable diagnostic line per failure, at `warn` so it survives the
-        // release-default `Info` level: with the per-site `log::error!` lines
-        // gone, this is the only seta failure record in pulled "Send logs"
-        // telemetry (the deploy/payment paths don't re-log). The cleaned message
-        // keeps challenge HTML / unbounded bodies out of the log; callers that
-        // need a louder signal still escalate to `error` themselves.
-        log::warn!(target: "seta", "request to {} failed ({}): {}{}", url, status, message, ray_suffix);
+        // One diagnostic line per failure, the only seta failure record in
+        // "Send logs" telemetry, which release builds keep from `info` up: at
+        // `warn`, except the refusal a key gets before its email is verified,
+        // which is expected and which the caller reports, so it is `info`. The
+        // cleaned message keeps challenge HTML and unbounded bodies out of the
+        // log; callers that need a louder signal escalate to `error` themselves.
+        let level = if asks_to_verify_email(status, &message) { log::Level::Info } else { log::Level::Warn };
+        log::log!(target: "seta", level, "request to {} failed ({}): {}{}", url, status, message, ray_suffix);
         SetaError::Api { status, message }
     }
+}
+
+/// Whether seta refused because the folder's key is not yet linked to a
+/// verified email: the refusal `--email` lifts with a sign-in link.
+pub(crate) fn asks_to_verify_email(status: u16, message: &str) -> bool {
+    status == 403 && (message.contains("Email verification required") || message.contains("pubkey not verified"))
 }
 
 /// Auth session status returned by the polling endpoint.
@@ -718,21 +722,10 @@ impl MossSetaClient {
         url.to_string()
     }
 
-    /// Sign a request payload, returning the Authorization header value.
-    ///
-    /// # Errors
-    /// Returns `SetaError::Identity` if the client was created without an identity.
-    pub fn sign_request_payload(&self, payload: &str) -> Result<String, SetaError> {
-        let identity = self.identity.as_ref().ok_or_else(|| {
-            SetaError::Identity(
-                "Cannot sign request: client created without identity. \
-                 Use MossSetaClient::with_identity() for authenticated endpoints."
-                    .to_string(),
-            )
-        })?;
-        let signed = sign_request(identity, payload)
-            .map_err(|e| SetaError::Identity(e.to_string()))?;
-        Ok(signed.to_auth_header())
+    /// Whether this client can sign requests: it has an identity and that
+    /// identity's private key is loaded.
+    pub fn can_sign(&self) -> bool {
+        self.identity.as_ref().is_some_and(|i| i.signing_key_loaded().is_ok())
     }
 
     /// Build a URL, verifying it uses secure transport.
@@ -744,65 +737,62 @@ impl MossSetaClient {
         url
     }
 
-    /// Build URL and Authorization header for an authenticated request.
-    ///
-    /// Takes the canonical wire-form path (already percent-encoded for any
-    /// user-controlled segments) and uses the same string for both signing
-    /// and URL construction. Known limitation: dot-segments in a path are not
-    /// specially handled.
+    /// A request whose `Authorization` header signs exactly what it sends:
+    /// the method, the path and query as the parsed URL sends them, and the
+    /// body. A header is good for one request, so build one per attempt.
     ///
     /// # Errors
-    /// Returns `SetaError::Identity` if the client was created without an identity.
-    pub(super) fn sign_and_build(&self, path: &str) -> Result<(String, String), SetaError> {
-        let auth = self.sign_request_payload(path)?;
-        let url = self.secure_url(path);
-        Ok((url, auth))
+    /// `SetaError::Identity` if the client has no identity or cannot sign.
+    pub(super) fn signed(&self, method: Method, path: &str, body: impl Into<Bytes>) -> Result<RequestBuilder, SetaError> {
+        let identity = self.identity.as_ref().ok_or_else(|| {
+            SetaError::Identity(
+                "Cannot sign request: client created without identity. \
+                 Use MossSetaClient::with_identity() for authenticated endpoints."
+                    .to_string(),
+            )
+        })?;
+        let url = url::Url::parse(&self.secure_url(path)).map_err(|e| SetaError::Parse(format!("{path}: {e}")))?;
+        // An empty query is no query to the server's URL parser.
+        let path_and_query = match url.query().filter(|q| !q.is_empty()) {
+            Some(query) => format!("{}?{query}", url.path()),
+            None => url.path().to_string(),
+        };
+        let body = body.into();
+        log::debug!(target: "seta", "{method} {path_and_query} ({} bytes, signed)", body.len());
+        let auth = sign_request_v2(identity, method.as_str(), &path_and_query, &body)
+            .map_err(|e| SetaError::Identity(e.to_string()))?;
+        let request = self.client.request(method, url).header(header::AUTHORIZATION, auth);
+        Ok(if body.is_empty() { request } else { request.body(body) })
     }
 
-    /// Signed GET → deserialize JSON response.
-    ///
-    /// Path-only signing (matches the existing `whoami` / `send_logs` pattern):
-    /// the server authenticates via pubkey + path signature.
-    pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, SetaError> {
-        let auth = self.sign_request_payload(path)?;
-        let url = self.secure_url(path);
-        let resp = self
-            .client
-            .get(&url)
-            .header("Authorization", auth)
-            .send()
-            .await?;
+    /// [`Self::signed`] with `body` as JSON, serialized once so the bytes
+    /// signed are the bytes sent.
+    pub(super) fn signed_json<B: Serialize + ?Sized>(&self, method: Method, path: &str, body: &B) -> Result<RequestBuilder, SetaError> {
+        let bytes = serde_json::to_vec(body).map_err(|e| SetaError::Parse(e.to_string()))?;
+        Ok(self.signed(method, path, bytes)?.header(header::CONTENT_TYPE, "application/json"))
+    }
+
+    /// Send `request`; a success is read as JSON, a failure becomes its error.
+    pub(super) async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, SetaError> {
+        let resp = request.send().await?;
         if !resp.status().is_success() {
             return Err(SetaError::from_failed_response(resp).await);
         }
         resp.json().await.map_err(|e| SetaError::Parse(e.to_string()))
     }
 
+    /// Signed GET → deserialize JSON response.
+    pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, SetaError> {
+        Self::send_json(self.signed(Method::GET, path, Bytes::new())?).await
+    }
+
     /// Signed POST with JSON body → deserialize JSON response.
-    ///
-    /// Note: the signature covers the path only (same pattern as
-    /// `whoami` / `send_logs`). The body is sent in the clear; the server
-    /// authenticates via pubkey + path signature and trusts the body content
-    /// once auth passes.
     pub async fn post_json<B: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<T, SetaError> {
-        let auth = self.sign_request_payload(path)?;
-        let url = self.secure_url(path);
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", auth)
-            .header("Content-Type", "application/json")
-            .json(body)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(SetaError::from_failed_response(resp).await);
-        }
-        resp.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        Self::send_json(self.signed_json(Method::POST, path, body)?).await
     }
 
     // ========== Auth Endpoints ==========
@@ -854,13 +844,12 @@ impl MossSetaClient {
         let response = self.client
             .post(&url)
             .timeout(std::time::Duration::from_secs(15))
-            .json(&serde_json::json!({
-                "email": email,
-                "pubkey": pubkey,
-                "session_id": session_id,
-                "mode": "re_verify",
-                "site_id": site_id,
-            }))
+            .json(&{
+                let mut body = auth_request_body(email, pubkey, session_id, None);
+                body["mode"] = "re_verify".into();
+                body["site_id"] = site_id.into();
+                body
+            })
             .send()
             .await?;
 
@@ -892,21 +881,7 @@ impl MossSetaClient {
 
     /// Ask the server which email is linked to the caller's pubkey.
     pub async fn whoami(&self) -> Result<WhoamiResponse, SetaError> {
-        let auth_header = self.sign_request_payload("/auth/whoami")?;
-        let url = self.secure_url("/auth/whoami");
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
+        Self::send_json(self.signed(Method::GET, "/auth/whoami", Bytes::new())?.timeout(Duration::from_secs(5))).await
     }
 
     /// Fetch the Stripe publishable key for THIS client's environment from the backend.
@@ -929,21 +904,13 @@ impl MossSetaClient {
         Ok(body.publishable_key)
     }
 
-    /// Send application logs to moss-seta for debugging/support.
-    /// Returns the server-assigned ticket id (e.g. "LOG-2A6D-T1820-04-26")
-    /// so the caller can surface it to the user. Pre-Thread-5 servers
-    /// return `{ success: true }` with no ticket; in that case we return None.
+    /// Send application logs to moss-seta for debugging/support. Returns the
+    /// ticket id the server assigns, for the user to quote; `None` from an
+    /// older server, which answers `{ success: true }` with no ticket.
     pub async fn send_logs(&self, payload: &serde_json::Value) -> Result<Option<String>, SetaError> {
-        let auth_header = self.sign_request_payload("/api/logs")?;
-        let url = self.secure_url("/api/logs");
-
-        let response = self.client
-            .post(&url)
-            // Fail fast: a small log upload must not inherit the 120s upload
-            // ceiling and leave the "Sending logs…" spinner looking hung.
+        let response = self
+            .signed_json(Method::POST, "/api/logs", payload)?
             .timeout(SEND_LOGS_REQUEST_TIMEOUT)
-            .header("Authorization", auth_header)
-            .json(payload)
             .send()
             .await?;
 
@@ -964,4 +931,4 @@ impl MossSetaClient {
 
 #[cfg(test)]
 #[path = "client_tests.rs"]
-mod tests;
+pub(super) mod tests;

@@ -616,6 +616,41 @@ test('without fade=top nothing fades and the credit stays at the foot', async ({
   expect(m).toEqual({ fade: false, mask: 'none' });
 });
 
+// A closing picture with no words is still the closing picture: its credit at
+// the foot, its crop keeping the foot, and its top faded into the page.
+const WORDLESS = `http://localhost:${gatePort('closing-picture:wordless')}/`;
+for (const scheme of SCHEMES) {
+  for (const width of [400, 1360]) {
+    test(`a closing picture with no words, ${scheme}, ${width}px: credit at the foot, top faded, foot kept`, async ({ browser }) => {
+      const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
+      const page = await context.newPage();
+      await openFaded(page, null, WORDLESS);
+      const m = await page.evaluate(() => {
+        const hero = document.querySelector('footer .moss-hero-closing')!;
+        const img = [...hero.querySelectorAll('img')].find((i) => getComputedStyle(i).display !== 'none')!;
+        const credit = hero.querySelector('.moss-hero-credit');
+        const h = hero.getBoundingClientRect();
+        const c = credit?.getBoundingClientRect();
+        const s = getComputedStyle(img);
+        return {
+          viewport: document.documentElement.clientWidth,
+          hero: { left: h.left, right: h.right, top: h.top, bottom: h.bottom },
+          credit: c && { top: c.top, bottom: c.bottom, text: credit!.textContent },
+          mask: s.maskImage || s.webkitMaskImage,
+          position: s.objectPosition,
+        };
+      });
+      expect(m.credit?.text).toBe(CREDIT);
+      expect(m.credit!.bottom).toBeLessThanOrEqual(m.hero.bottom + 0.5);
+      expect(m.credit!.top, 'in the lower half of the picture').toBeGreaterThan((m.hero.top + m.hero.bottom) / 2);
+      expect(m.mask).not.toBe('none');
+      expect(m.position.split(' ')[1]).toBe('100%');
+      expect(Math.abs(m.hero.left) + Math.abs(m.hero.right - m.viewport), 'edge to edge').toBeLessThanOrEqual(1);
+      await context.close();
+    });
+  }
+}
+
 // Busy under the words and along the foot, with the fade: the words keep their
 // panel (on a phone ending in its fade), and the credit stays at the foot on a
 // small panel of its own.

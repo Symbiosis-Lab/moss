@@ -7,10 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.22.0] - 2026-11-03
+## [0.22.0] - 2026-11-07
+
+### Added
+
+- `media::html_escape_attr`, `media::html_escape_text` and `media::xml_escape` beside `media::html_escape`: one escaper per meaning (attribute without the apostrophe, element text, XML with `&apos;`). `resolve::embed_renderer::html_escape_attr` is now a re-export of the first.
+- `ast::link_card::blocks_text` and `push_inlines_text` are public, so every renderer of a link card reads its title text the same way.
+- `contract::describe::ConfigTableInfo` and `DescribePayload::with_config_tables` carry `.moss/config.toml` tables beyond `[site]` in `moss describe --json`, under `config_tables`; today only `[redirects]`.
+- `content_width` accepts `screen`.
+- `AppliesWhen` and `PagePosition`: where a schema field can change a page, as `{"position": "page" | "folder" | "home"}` or `{"set": "<other field>"}`, any one of which is enough. The built-in table sets it on the fields that do nothing elsewhere: `sort`, `cascade` and `color` on a folder index or the home, `logo` on the home, the event fields once `start` is set, the listing fields where a listing draws. An editor can leave such a field out of its add list.
+- Component contract entry `moss-lang-mark`, the language name a listing row carries when its page is in another language than the listing.
+- `RenderHooks::render_diagram(out, info, source, source_line, fallback_html)`: a fenced block whose info string's first word is `mermaid` renders through it. The default emits `fallback_html`, the same code block as before, so output is unchanged unless a host overrides it. `ast::has_diagram_recursive` answers whether a document has one, nested blocks included, and `ast::is_diagram_lang` whether an info string asks for one.
+- `ast::extract_form`: `FormShortcode`, `FormField`, `FieldKind` and `parse_form(args, body)`, which reads a `:::form` fence into fields and returns the problems it found. `ast::forms_recursive` lists a document's forms, nested ones included.
+- `RenderHooks::request_form_html`, the production HTML for a `:::form` when the host supplies one (by default `None`, and `render_shortcode` emits an empty `.moss-form`), and `DefaultHooks::with_request_form(RequestFormFn)` for a host that draws the form.
+- Component contract entries for the request form's classes, the country map's classes and its `--moss-country-*` custom properties, and `moss-card-field`; `moss-credit` and `moss-facts` rows carry `data-term` and `data-value`.
+- `frontmatter::bom_len`, the length of a leading byte-order mark. A page with a byte-order mark and no front matter no longer starts with it.
 
 ### Changed
 
+- The `moss-place-map` contract entry describes linked dots, and `--moss-place-focus` is a documented custom property.
 - **BREAKING:** `DefaultHooks::hero_overlay` and `DefaultHooks::grid_cells` are one constructor, `DefaultHooks::without_heading_anchors`. The two built the same hooks; call the new name with the same argument.
 - **BREAKING:** `describe::DescribePayload` gains `config_tables`; a struct literal must name it.
 - **BREAKING:** `Block::Heading` gains `legacy_id: Option<String>`, a second id the heading answers, and `HeadingMarks` gains `legacy_id`; the renderer prints it as an empty `<span id>` first inside the heading. A struct literal must name it. For a derived id it is the id before punctuation was dropped; for a `{#id}` it is that id's slugged spelling.
@@ -28,19 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The built-in `children_group` and `children_depth` no longer name defaults the build does not use; their descriptions say what an unset value does.
 - The breadcrumb separator in the component contract carries `aria-hidden="true"`.
 
-### Added
+### Removed
 
-- `media::html_escape_attr`, `media::html_escape_text` and `media::xml_escape` beside `media::html_escape`: one escaper per meaning (attribute without the apostrophe, element text, XML with `&apos;`). `resolve::embed_renderer::html_escape_attr` is now a re-export of the first.
-- `ast::link_card::blocks_text` and `push_inlines_text` are public, so every renderer of a link card reads its title text the same way.
-- `contract::describe::ConfigTableInfo` and `DescribePayload::with_config_tables` carry `.moss/config.toml` tables beyond `[site]` in `moss describe --json`, under `config_tables`; today only `[redirects]`.
-- `content_width` accepts `screen`.
-- `AppliesWhen` and `PagePosition`: where a schema field can change a page, as `{"position": "page" | "folder" | "home"}` or `{"set": "<other field>"}`, any one of which is enough. The built-in table sets it on the fields that do nothing elsewhere: `sort`, `cascade` and `color` on a folder index or the home, `logo` on the home, the event fields once `start` is set, the listing fields where a listing draws. An editor can leave such a field out of its add list.
-- Component contract entry `moss-lang-mark`, the language name a listing row carries when its page is in another language than the listing.
-- `RenderHooks::render_diagram(out, info, source, source_line, fallback_html)`: a fenced block whose info string's first word is `mermaid` renders through it. The default emits `fallback_html`, the same code block as before, so output is unchanged unless a host overrides it. `ast::has_diagram_recursive` answers whether a document has one, nested blocks included, and `ast::is_diagram_lang` whether an info string asks for one.
-- `ast::extract_form`: `FormShortcode`, `FormField`, `FieldKind` and `parse_form(args, body)`, which reads a `:::form` fence into fields and returns the problems it found. `ast::forms_recursive` lists a document's forms, nested ones included.
-- `RenderHooks::request_form_html`, the production HTML for a `:::form` when the host supplies one (by default `None`, and `render_shortcode` emits an empty `.moss-form`), and `DefaultHooks::with_request_form(RequestFormFn)` for a host that draws the form.
-- Component contract entries for the request form's classes, the country map's classes and its `--moss-country-*` custom properties, and `moss-card-field`; `moss-credit` and `moss-facts` rows carry `data-term` and `data-value`.
-- `frontmatter::bom_len`, the length of a leading byte-order mark. A page with a byte-order mark and no front matter no longer starts with it.
+- **BREAKING:** `resolve::embeds::resolve_embeds_with_visited`, which nothing called. Use `resolve_embeds`, which keeps its own cycle-detection set.
+
+### Fixed
+
+- A `style: list` data file whose title cell holds a `[`, a `]` or a trailing `\` keeps the whole title inside its link instead of breaking it.
+- `route` is a known frontmatter field: it no longer draws an unknown-field hint, and the schema, the frontmatter contract and the editor list it.
 
 ## [0.21.0] - 2026-10-30
 

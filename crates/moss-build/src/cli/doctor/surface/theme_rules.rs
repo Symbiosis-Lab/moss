@@ -23,7 +23,7 @@ use std::path::Path;
 use scraper::{Html, Selector};
 
 use crate::build::folder_embed::listing_markup::is_listing_name;
-use crate::build::theme_lint::style_rules;
+use crate::build::theme_lint::{strip_comments, style_rules};
 use crate::cli::describe::css_query::mentions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +47,7 @@ pub enum ThemeRules {
 }
 
 /// At-rule blocks whose inner preludes are not selectors.
-const NOT_SELECTOR_BLOCKS: &[&str] = &["keyframes", "@font-face", "@page", "@counter-style", "@property"];
+pub(super) const NOT_SELECTOR_BLOCKS: &[&str] = &["keyframes", "@font-face", "@page", "@counter-style", "@property"];
 
 /// Pseudo-classes that depend on interaction or form state, which a built page
 /// never has.
@@ -81,7 +81,7 @@ pub fn check(sheets: &[(String, String)], site: &Path) -> ThemeRules {
             if rule.conditions.iter().any(|c| not_selectors(c)) {
                 continue;
             }
-            let selector = without_comments(rule.prelude).split_whitespace().collect::<Vec<_>>().join(" ");
+            let selector = strip_comments(rule.prelude).split_whitespace().collect::<Vec<_>>().join(" ");
             let mut statics = Vec::new();
             let mut names_in = Vec::new();
             let mut negated = Vec::new();
@@ -189,18 +189,6 @@ fn script_mentions(scripts: &str, name: &str) -> bool {
         }
     }
     !camel.is_empty() && mentions(scripts, &format!("dataset.{camel}"))
-}
-
-fn without_comments(s: &str) -> String {
-    let mut out = String::new();
-    let mut rest = s;
-    while let Some(open) = rest.find("/*") {
-        out.push_str(&rest[..open]);
-        rest = rest[open + 2..].find("*/").map_or("", |close| &rest[open + 2 + close + 2..]);
-        out.push(' ');
-    }
-    out.push_str(rest);
-    out
 }
 
 /// Where the identifier starting at `chars[from]` ends.
@@ -370,7 +358,7 @@ fn without_not(selector: &str) -> String {
 
 /// The class, id and attribute names a selector mentions, each led by its
 /// kind: `.class`, `#id`, `[attribute`.
-fn names(selector: &str) -> Vec<String> {
+pub(super) fn names(selector: &str) -> Vec<String> {
     let chars: Vec<char> = selector.chars().collect();
     let mut out = Vec::new();
     syntax_chars(&chars, |i, c, _| {

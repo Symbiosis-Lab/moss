@@ -27,6 +27,7 @@ use crate::build::markdown::{process_markdown_file, resolve_duplicate_slugs_with
 use crate::build::folder_embed::{generate_children, resolve_children_config};
 use crate::build::assets::paths::{compute_binary_hash, compute_content_hash, PathResolver};
 use crate::build::context::BuildContext;
+use crate::build::manifest::change_set::Withdrawn;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::media::qr;
 use crate::build::outcome::BuildStopped;
@@ -45,7 +46,7 @@ use crate::build::scan::sort_inference::populate_direct_children_sorts;
 // Sibling module imports (within build/render/)
 pub use super::config::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
-use super::config::resolve_logo_url;
+use super::config::logo_src;
 use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedAssets};
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
@@ -239,7 +240,7 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
 /// a large site is skipped — that is most of the site.
 ///
 /// A page absent from `hashes` was not read this build, which is only ever
-/// because its bytes provably did not change (parse-cache hit, Stage-5b carry)
+/// because its bytes provably did not change (parse-cache hit, render-skip carry)
 /// or could not be read (iCloud deferral). All three want the previous hash.
 fn register_page_source(
     pending: &mut PendingManifest,
@@ -289,7 +290,7 @@ pub fn generate_blocking_content(
 /// when the build returns (CLI, snapshot tests), same condition
 /// `search_lane::Freshness::of` already reads for the same reason: an
 /// interactive rebuild must not block on the network, so it keeps relying on
-/// `spawn_native_process_sync`'s background task instead. The only caller
+/// `start_background_sync`'s background task instead. The only caller
 /// that needs this distinction is `pipeline::run`; every other caller wants
 /// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
 /// rendered pages in `pending` for the slot pass to write. `defer_title_cards`
@@ -337,11 +338,8 @@ pub fn generate_blocking_content_for_build(
     // 1. Video conversion caching (sources) — needed by BackgroundContext
     // 2. Carry-forward is already in `pending.inner` (seeded by caller via PendingManifest::new)
     let hashes_path = paths.hashes();
-    let previous_hashes: SiteHashes = if let Ok(content) = fs::read_to_string(&hashes_path) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        SiteHashes::default()
-    };
+    let previous_hashes: SiteHashes =
+        fs::read_to_string(&hashes_path).ok().and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default();
     // Note: the carry-forward of files/video_outputs/image_outputs/notebook_outputs is now
     // implicit in `pending` (caller seeded it with PendingManifest::new(previous_hashes)).
     // We still need `previous_hashes` for BackgroundContext.previous_hashes.
@@ -627,7 +625,7 @@ pub fn generate_blocking_content_for_build(
     }
 
     // Source-path → hash of the bytes this build actually read, for the pages
-    // it actually read. Absent means "skipped" (parse-cache hit, Stage-5b
+    // it actually read. Absent means "skipped" (parse-cache hit, render-skip
     // carry, iCloud deferral), which `register_page_source` turns into a
     // carry-forward rather than a gap. See `PendingManifest::register_page_source_hash`.
     let mut page_source_hashes: HashMap<String, crate::build::types::SourceMetadata> = HashMap::new();
@@ -752,7 +750,7 @@ pub fn generate_blocking_content_for_build(
                     // - Deferred renderers (notebook, table, plugins) emit
                     //   markers resolved by MarkerHandlers in a post-pass.
                     let t_resolve = std::time::Instant::now();
-                    // Phase 0 Task F1: thread the AssetSnapshot through. The
+                    // Thread the AssetSnapshot through. The
                     // snapshot is built once above the loop and reused for every
                     // markdown file in this build.
                     let derived_site = site_config.derivations.as_deref();
@@ -850,7 +848,7 @@ pub fn generate_blocking_content_for_build(
                     // bytes here, before the AST dispatcher that fills
                     // `outgoing_links` ever runs — so they feed both the parse
                     // cache's validity check and `DepGraph::back_embeds`, which
-                    // sat over an empty relation until now (Stage 5b finding #2).
+                    // would otherwise be computed over an empty relation.
                     doc.embed_deps = std::mem::take(&mut resolve_result.embed_deps);
                     // Demote non-winner index files to normal pages.
                     // When multiple files qualify as home files (e.g., index.md and
@@ -932,6 +930,8 @@ pub fn generate_blocking_content_for_build(
                         }
                     }
 
+                    doc.logo = doc.logo.take().map(|logo| logo_src(&content_graph, &logo, &file_info.path));
+
                     // Slugify inline asset-dir segments in every doc's HTML
                     // (src, srcset, poster, data-placeholder-src). The resolve
                     // phase in moss-core uses source filesystem names; this maps
@@ -950,11 +950,10 @@ pub fn generate_blocking_content_for_build(
 
                     // Placeholder attributes (width, height, loading, LQIP/color
                     // background, .mov→.mp4 src rewrite, poster, data-thumb-src)
-                    // are now emitted at parse time by the moss-core synthesizers
+                    // are emitted at parse time by the moss-core synthesizers
                     // (`render::{image,video,audio,iframe,model,pdf}`), which read
-                    // from the `AssetSnapshot` built once per run. The Stage 3
-                    // regex post-pass (`add_placeholder_attributes`) was retired in
-                    // Phase 2E v5 PR5 (2026-05-26).
+                    // from the `AssetSnapshot` built once per run; no post-pass
+                    // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     Some((doc, Some((source_file_path, content, stat_before_read))))
@@ -1169,8 +1168,8 @@ pub fn generate_blocking_content_for_build(
     // immediately below: each one is a no-op or trivially-correct for a
     // single self-contained synthetic doc with no source_path.
     //
-    // Hoisted here (rather than just-before-the-homepage-render) on the
-    // architecture-review feedback for T3: a *deployed* empty site would
+    // Hoisted here (rather than just before the homepage render) because a
+    // *deployed* empty site would
     // otherwise emit a sitemap with zero entries and an llms.txt titled
     // "site" (i18n fallback) instead of the folder name.
     if documents.is_empty() {
@@ -1295,7 +1294,7 @@ pub fn generate_blocking_content_for_build(
         if let Some(ctx) = site_config.place_maps.take() {
             let json = crate::build::place_map::places_data::emit_places_data(&documents, &ctx, site_config.math, &dir_overrides);
             let hash = compute_content_hash(&json);
-            site_config.place_maps = Some(ctx.with_explorer_places_hash(hash));
+            site_config.place_maps = Some(ctx.with_explorer_places_hash(hash).with_term_pages(&term_index));
         }
 
         // The canonical site URL and the calendar plan are decided before the
@@ -1406,12 +1405,11 @@ pub fn generate_blocking_content_for_build(
         let layout_config = LayoutConfig::new(folder_name, Some(resolved_site_name.as_str()))
             .with_lang_tag(crate::i18n::lang_tag(&site_config.lang));
 
-        // Extract logo from homepage frontmatter (e.g., `logo: assets/logo.svg`)
+        // The home page's logo, already the URL its file is published at
         let homepage_logo = documents
             .iter()
             .find(|d| d.url_path == "index.html")
-            .and_then(|d| d.logo.as_ref())
-            .map(|logo| resolve_logo_url(logo));
+            .and_then(|d| d.logo.clone());
         let layout_config = match homepage_logo {
             Some(logo) => layout_config.with_logo(logo),
             None => layout_config,
@@ -1440,11 +1438,11 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_heading_anchors(site_config.heading_anchors);
         // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
+        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
-        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone());
+        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
+        let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.
         // Localhost fallbacks (no deployment configured) skip RSS/sitemap.
@@ -1494,7 +1492,7 @@ pub fn generate_blocking_content_for_build(
     //
     // Which optional partials this build ships is a site-level fact — the
     // union of every page's parse-time features with the resolved config.
-    // `site_assets` is NOT what invalidates the Stage 5b render skip: it
+    // `site_assets` is NOT what invalidates the incremental render skip: it
     // changes the sheet's *contents*, and `css_version` — a hash of those
     // contents, folded into `asset_versions` below — is what the skip reads.
     // See the note on `SiteAssets` itself.
@@ -1524,6 +1522,8 @@ pub fn generate_blocking_content_for_build(
             places_explorer: crate::build::features::should_inject_places_explorer(&term_index, &site_config),
             map_layers: site_config.place_maps.as_ref().is_some_and(|maps| maps.has_layers()),
             colophon_credit: site_config.colophon_credit.is_some(),
+            selection_tools: site_config.selection_tools,
+            selection_comments: site_config.selection_comments,
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four
@@ -1541,11 +1541,6 @@ pub fn generate_blocking_content_for_build(
     // One listing per folder for the filename-cover rung, shared by its pages.
     let filename_covers = crate::build::page::cover::FilenameCovers::default();
     let js_version = scripts.hash("theme").to_string();
-    let share_card_hash = scripts.hash("share-card").to_string();
-    let hls_hash = scripts.hash("hls").to_string();
-    // `None` keeps `data-hls` off every page of a site with no ladder, which is
-    // what keeps those sites byte-identical. See `lazy_chunk_attrs`.
-    let hls_attr_hash: Option<&str> = site_assets.video_ladder.then_some(hls_hash.as_str());
     let fullscreen_hash = scripts.hash("fullscreen").to_string();
 
 
@@ -1578,7 +1573,7 @@ pub fn generate_blocking_content_for_build(
         crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &input_evidence)
     });
     let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
-        // Phase 1 PR-1d: warn when theme references pre-v1 (Retired) class
+        // Warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
         for warning in crate::build::theme_lint::lint_theme_css(content) {
             log_warn_problem!("{}", warning);
@@ -1660,7 +1655,7 @@ pub fn generate_blocking_content_for_build(
     }
 
     // Every content-addressed asset whose HASHED FILENAME appears in emitted
-    // HTML, folded into one build-global key. A page that the Stage 5b skip
+    // HTML, folded into one build-global key. A page that the incremental skip
     // carries forward keeps its old `<link href>`/`<script src>`, so if any of
     // these moved, that page now points at a file this build deleted.
     // See `FacadeCache::asset_versions` — this is the value it stores.
@@ -1755,6 +1750,8 @@ pub fn generate_blocking_content_for_build(
             typesetting: layout_config.typesetting.as_deref(),
             math: site_config.math,
             term_nav: &layout_config.term_nav,
+            render_id: pending.render_id(),
+            sealed_render_id: previous_hashes.render_id.as_deref(),
         },
     );
     // The carry machinery's own price, and on a real vault the largest single
@@ -1826,6 +1823,7 @@ pub fn generate_blocking_content_for_build(
                 &previous_hashes,
                 output_dir,
                 &site_url,
+                layout_config.assets.selection_tools,
             )
         });
     let homepage_carried = homepage_carry_proof.is_some();
@@ -1909,6 +1907,7 @@ pub fn generate_blocking_content_for_build(
                     &previous_hashes,
                     output_dir,
                     &site_url,
+                    layout_config.assets.selection_tools,
                 ) {
                     Some(proof) => carry.push((doc, proof)),
                     None => render.push(doc),
@@ -1980,10 +1979,10 @@ pub fn generate_blocking_content_for_build(
             );
         }
 
-        // Phase 1 — render in parallel. Progress is emitted on a monotonic
+        // Render in parallel. Progress is emitted on a monotonic
         // completion counter (tasks finish out of order). `reporter` is
         // Option<&AppHandle> and AppHandle is Sync, so emitting from worker
-        // threads is sound. Errors surface in `documents` order in phase 2, so
+        // threads is sound. Errors surface in `documents` order in the registration pass below, so
         // the first error propagated is identical to the sequential loop's.
         let render_total = to_render.len();
         let rendered_atomic = AtomicUsize::new(0);
@@ -2078,7 +2077,7 @@ pub fn generate_blocking_content_for_build(
         );
         log::debug!(target: "timing", "[render] html_pages: phase1 done: {:?}", total_start.elapsed());
 
-        // Phase 2 — register into `pending` sequentially, in `documents` order.
+        // Register into `pending` sequentially, in `documents` order.
         // Wrap in a closure so `?` short-circuits to the inner Result and the
         // completion event fires on every exit path (Ok or Err) before we
         // propagate — same rationale as the original loop.
@@ -2293,6 +2292,7 @@ pub fn generate_blocking_content_for_build(
                 &previous_hashes,
                 output_dir,
                 &site_url,
+                layout_config.assets.selection_tools,
             ) {
                 if carry_verification.is_some() {
                     verification_snapshot =
@@ -2341,10 +2341,8 @@ pub fn generate_blocking_content_for_build(
                 // direct_children_sort exists. Date fallback (None → Date) matches
                 // the legacy meta-slot behavior.
                 None,
-                site_config.math, false,
-                &Default::default(),
-                false, None,
-                Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())),
+                site_config.math,
+                &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), ..Default::default() },
                 now,
             );
             // The generated half of the same split the claimed term page gets
@@ -2402,7 +2400,7 @@ pub fn generate_blocking_content_for_build(
             let vars = ShellVars {
                 title: tab_title(&page_title, &localized_site_name, false),
                 homepage_content: content_html,
-                share_qr_attr: qr::share_qr_attr(&auto_url_path, true, &site_url),
+                share_qr_attr: qr::share_qr_attr(&auto_url_path, true, &site_url, layout_config.assets.selection_tools),
                 ..chrome
             };
             let html_page = ShellProcessor::new().process(ShellType::Page, vars);
@@ -2514,30 +2512,33 @@ pub fn generate_blocking_content_for_build(
         // sitemap.xml is emitted further down, once every page is registered.
 
         // Generate robots.txt (user's own will overwrite during background asset copy)
-        let robots_content =
-            crate::build::feeds::sitemap::generate_robots_txt(url, site_config.ai_policy.as_deref());
-        // Site 12 (Pattern A): emit robots.txt.
+        let robots_content = site_config.ai.robots_txt(url);
+        // robots.txt, from the site's search and AI settings.
         BuildContext::for_render(output_dir, pending)
             .emit(&ServedPath::for_robots_txt(), robots_content.as_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit robots.txt: {}", e))?;
-
-        // Generate QR codes for article pages
-        let qr_dir = output_dir.join("qr");
-        crate::build::io_utils::create_output_dir_all(&qr_dir)
-            .map_err(|e| format!("Failed to create qr directory: {}", e))?;
+        if let Some(tdmrep) = site_config.ai.tdmrep_json() {
+            BuildContext::for_render(output_dir, pending)
+                .emit(&ServedPath::for_tdmrep_json(), tdmrep.as_bytes(), HashBucket::Files)
+                .map_err(|e| format!("Failed to emit tdmrep.json: {}", e))?;
+        }
 
         // Which pages get a code, and where it lives, is decided in ONE place —
         // `build/media/qr.rs` — because `render/html.rs` has to reach the same
         // verdict to write `data-share-qr`. Anything decided here instead is
         // invisible to the reader, which is how folder notes ended up with
         // cards missing their QR corner.
-        qr::emit_share_qrs(&documents, &site_url, output_dir, pending)?;
+        qr::emit_share_qrs(&documents, &site_url, layout_config.assets.selection_tools, output_dir, pending)?;
     }
+    // What the settings leave out, so the publish gate reads a missing
+    // llms.txt, tdmrep.json or QR code as the owner's choice.
+    pending.set_withdrawn(Withdrawn::from_settings(site_config.ai, layout_config.assets.selection_tools));
 
     // Calendar files for event pages and for folders of them. Written whether or
     // not the site has a deployed address, so a preview serves the links the
     // pages carry.
     shared.calendar.emit(output_dir, pending)?;
+    emit_atproto_did(&site_config.identity, output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: rss+sitemap+robots+qr: {:?}", total_start.elapsed());
 
     // Search indexing (Pagefind) does NOT run here. Pagefind walks rendered
@@ -2548,8 +2549,8 @@ pub fn generate_blocking_content_for_build(
     // after `generate_blocking_content` returns, using `BackgroundContext::search_enabled`
     // (set below). See `build/feeds/search.rs`.
 
-    // Generate llms.txt — full site content for LLM consumption (unconditional)
-    {
+    // llms.txt: the whole site's text, unless AI answers are asked not to.
+    if site_config.ai.publishes_llms_txt() {
         let llms_site_title = documents
             .iter()
             .find(|d| d.url_path == "index.html")
@@ -2585,7 +2586,7 @@ pub fn generate_blocking_content_for_build(
     // publish the templates.
     let on_moss_host = crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some();
     if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
-    crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), on_moss_host, output_dir, pending)?;
+    crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
     send_progress(
         progress_sender,
@@ -2883,6 +2884,7 @@ pub fn generate_blocking_content_for_build(
             site_lang,
             project_structure.has_content_folders,
         )
+        .with_color_scheme(layout_config.color_scheme)
         .with_search(layout_config.assets.search)
         .with_header_mode(match layout_config.header {
             // A generated media page has no island to carry the controls.
@@ -2898,6 +2900,9 @@ pub fn generate_blocking_content_for_build(
         };
 
         let nav_html = nav_builder.generate_navigation();
+
+        let color_scheme_attrs = layout_config.color_scheme.html_attrs();
+        let theme_meta = crate::build::page::shell::theme_color_meta(layout_config.color_scheme);
 
         for (media_type, items) in &media_collections {
             if items.is_empty() {
@@ -2934,9 +2939,12 @@ pub fn generate_blocking_content_for_build(
                 &layout_config.lang_tag,
                 Some(&event_level_image_lookup),
                 &media_path_resolver.js_path(),
-                &media_path_resolver.lazy_chunk_attrs(&share_card_hash, hls_attr_hash),
+                &shared.scripts.lazy_chunk_attrs(&layout_config.assets),
                 js_fullscreen_path_arg,
                 &shared.scripts.tag("search", &layout_config.assets, &media_path_resolver),
+                layout_config.ai.robots_tag(false).as_deref(),
+                &color_scheme_attrs,
+                &theme_meta,
             );
 
             let page_url = format!("{}/index.html", page_slug);
@@ -3223,7 +3231,7 @@ pub fn generate_blocking_content_for_build(
     log::debug!(target: "timing", "[render] total: {:?}", total_start.elapsed());
 
     // Build site-level meta defaults for bundled-SPA `<head>` injection
-    // (link-preview-defaults plan, Phase 5). The injector preserves anything
+    // (link-preview defaults). The injector preserves anything
     // the SPA author already set, so we always pass these defaults — the SPA
     // wins on conflict.
     //
@@ -3283,7 +3291,7 @@ pub fn generate_blocking_content_for_build(
 
         // For og:url + canonical, use the site root URL (the SPA folder URL is
         // applied per-injection in `as_borrowed`). og:image is left None for
-        // now — Phase 4.3 wires the auto-generated card.
+        // now — the auto-generated card is wired separately.
         let og_tags = if let Some(ref host) = site_host {
             let site_root_url = format!("https://{}/", host.trim_start_matches("www."));
             Some(build_og_tags_website(
@@ -3344,22 +3352,16 @@ pub fn generate_blocking_content_for_build(
             None
         };
 
-        // Derive theme-color values from the embedded tokens.json (--moss-color-bg)
-        // so the SPA meta stays in sync with the CSS; avoids stale hardcoded literals.
-        let (tc_light, tc_dark) = {
-            use moss_core::contract::tokens::{bg_colors, load_tokens};
-            let t = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {}", e));
-            let (l, d) = bg_colors(&t);
-            (l.to_owned(), d.to_owned())
-        };
+        let (tc_light, tc_dark) = crate::build::page::shell::theme_bg_colors();
         let owned = SpaDefaultsOwned {
             description: homepage_description,
             og_tags,
             twitter_tags,
             apple_touch_icon,
             raster_favicons,
-            theme_color_light: Some(tc_light),
-            theme_color_dark: Some(tc_dark),
+            theme_color_light: Some(tc_light.clone()),
+            theme_color_dark: Some(tc_dark.clone()),
+            color_scheme: site_config.color_scheme,
             site_host,
             site_www_canonical: false,
         };
@@ -3501,6 +3503,19 @@ pub(super) struct ResolvedFavicon {
     /// every size in `SIZES` for an SVG favicon, the sizes that fit a supplied
     /// PNG, or none. The pages link exactly these.
     pub raster_sizes: Vec<u32>,
+}
+
+/// Writes the file an AT Protocol handle check reads, when the site names its DID.
+fn emit_atproto_did(
+    identity: &crate::config::site_identity::SiteIdentity,
+    output_dir: &Path,
+    pending: &mut PendingManifest,
+) -> Result<(), String> {
+    let Some(did) = identity.atproto_did() else { return Ok(()) };
+    let path = ServedPath::for_atproto_did();
+    BuildContext::for_render(output_dir, pending)
+        .emit(&path, format!("{did}\n").as_bytes(), HashBucket::Files)
+        .map_err(|e| format!("Failed to emit {}: {}", path.as_str(), e))
 }
 
 /// Registers the favicon PNGs that `resolve_favicon` wrote in the build's

@@ -114,15 +114,24 @@ pub(crate) fn moved_folder_files(moves: &[FolderMove], files: &HashMap<String, S
     kept.into_iter().collect()
 }
 
+/// The QR codes a folder move keeps, as [`moved_folder_files`] keeps its
+/// files: the code of every page under the old folder. The folder's own page
+/// is a stub, whose code the redirect table keeps.
+pub(crate) fn moved_folder_qr_codes(moves: &[FolderMove], files: &HashMap<String, String>) -> Vec<(String, String)> {
+    let under: Vec<FolderMove> = moves.iter().map(|m| FolderMove { from: format!("qr/{}", m.from), to: format!("qr/{}", m.to), old_served: false }).collect();
+    moved_folder_files(&under, files)
+}
+
 /// Write each kept address into `stage_dir` and `sealed`. An old address two
 /// sources reach takes the first: a declared file redirect, then a dropped
-/// derivative of a served picture, then a file under a folder move. Returns
+/// derivative of a served picture, then a file or QR code under a folder move. Returns
 /// the `(old, served)` pairs written that no line names on its own, for the
 /// report. An address the build already serves is never overwritten.
 pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest, late: &LateRedirects) -> Vec<(String, String)> {
     let files = sealed.files().into_owned();
     let moves = &late.folder_moves;
     let folder_files = moved_folder_files(moves, &files);
+    let folder_qr = moved_folder_qr_codes(moves, &files);
     // A folder line that keeps nothing is reported here, the first point that can tell.
     for m in moves {
         if !files.keys().any(|k| k.starts_with(&m.to) && is_public_address(k)) {
@@ -137,7 +146,7 @@ pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest
     let mut planned: BTreeMap<&str, (&str, Origin)> = BTreeMap::new();
     let copies = late.copies.iter().filter(|c| !files.contains_key(&c.from));
     let copies = copies.map(|c| (c.from.as_str(), c.to.as_str(), Origin::Declared { raw: &c.raw }));
-    let own = derivatives.iter().chain(&folder_files).map(|(from, to)| (from.as_str(), to.as_str(), Origin::Kept));
+    let own = derivatives.iter().chain(&folder_files).chain(&folder_qr).map(|(from, to)| (from.as_str(), to.as_str(), Origin::Kept));
     for (from, to, origin) in copies.chain(own) {
         planned.entry(from).or_insert((to, origin));
     }

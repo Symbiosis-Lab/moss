@@ -160,7 +160,7 @@ pub fn generate_llms_txt<'a>(
 
     // Collect publishable documents (exclude drafts and slot-only
     // files). Slot-only files like `footer.md` exist in `documents` so the
-    // standard pipeline can wire their HTML into layout slots (PR7b),
+    // standard pipeline can wire their HTML into layout slots,
     // but they're chrome — not articles — and don't belong in
     // llms.txt. `is_listable` is the canonical four-rule predicate.
     let mut docs: Vec<&ParsedDocument> = documents

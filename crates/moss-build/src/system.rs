@@ -3,16 +3,19 @@
 //! resolution, the resumable verified download, the single-shot `fetch_text`/
 //! `fetch_bytes` pair `moss desktop install` uses for the updater manifest and
 //! the release tarball, the outbound `User-Agent`, and "Show in Finder"
-//! ([`reveal`], which two carriers ask for). The rest of the family (windows,
+//! ([`reveal`], which two carriers ask for), and a bounded wait for blocking
+//! work ([`deadline`]). The rest of the family (windows,
 //! menus, dialogs, commands) stays app-side; the reqwest adapter over
 //! [`proxy`] stays there too, so this crate carries no reqwest.
 pub mod bounded_command;
+pub mod deadline;
 pub mod derive;
 pub mod build_records;
 pub mod folder_session;
 pub mod large_download;
 pub mod proxy;
 pub mod proxy_reqwest;
+pub mod redirects;
 pub mod reveal;
 pub mod stack_exec;
 pub mod tar_safe;
@@ -49,6 +52,95 @@ pub fn app_version() -> &'static str {
         .get()
         .copied()
         .expect("seed_app_version runs at startup, before the first plugin check or request")
+}
+
+static APP_NAME: OnceLock<&'static str> = OnceLock::new();
+/// Name the moss binary that owns this process, as a sign-in request shows it
+/// to the person who reads the link. The app is plain `moss`; the command line
+/// seeds its own name at startup.
+pub fn seed_app_name(name: &'static str) {
+    let _ = APP_NAME.set(name);
+}
+
+/// The running moss's name, as seeded; `moss` when nothing was.
+pub fn app_name() -> &'static str {
+    APP_NAME.get().copied().unwrap_or("moss")
+}
+
+/// Every answer [`device_kind`] can give. A fixed list, so a sign-in request
+/// can say what kind of computer asked without ever carrying the name its
+/// owner gave it, which often holds the owner's own name.
+pub const DEVICE_KINDS: &[&str] = &[
+    "MacBook Air", "MacBook Pro", "MacBook", "Mac mini", "Mac Studio", "Mac Pro", "iMac", "a Mac",
+    "a Windows PC", "a Linux computer",
+];
+
+/// What kind of computer this is, one of [`DEVICE_KINDS`]; `None` on a
+/// system with no entry there.
+pub fn device_kind() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some(mac_kind(&mac_model().unwrap_or_default()))
+    } else if cfg!(windows) {
+        Some("a Windows PC")
+    } else if cfg!(target_os = "linux") {
+        Some("a Linux computer")
+    } else {
+        None
+    }
+}
+
+/// The Mac family a model name or identifier names ("Mac Studio (2023)",
+/// "MacBookPro16,1"), else "a Mac".
+pub(crate) fn mac_kind(model: &str) -> &'static str {
+    let compact = |s: &str| s.replace(' ', "").to_ascii_lowercase();
+    let model = compact(model);
+    DEVICE_KINDS
+        .iter()
+        .filter(|kind| !kind.starts_with("a "))
+        .find(|kind| model.starts_with(&compact(kind)))
+        .copied()
+        .unwrap_or("a Mac")
+}
+
+/// The device tree's product name (Apple silicon: "Mac Studio (2023)" on the
+/// `/product` node), else
+/// the `hw.model` identifier (Intel: "MacBookPro16,1").
+#[cfg(target_os = "macos")]
+fn mac_model() -> Option<String> {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::data::CFData;
+    use core_foundation::string::CFString;
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IORegistryEntryFromPath(main_port: u32, path: *const std::ffi::c_char) -> u32;
+        fn IORegistryEntryCreateCFProperty(entry: u32, key: core_foundation_sys::string::CFStringRef, allocator: *const std::ffi::c_void, options: u32) -> core_foundation_sys::base::CFTypeRef;
+        fn IOObjectRelease(object: u32) -> i32;
+    }
+    // SAFETY: a valid C path; port 0 is the default main port; a zero entry is "none".
+    let entry = unsafe { IORegistryEntryFromPath(0, c"IODeviceTree:/product".as_ptr()) };
+    let from_tree = (entry != 0).then(|| {
+        let key = CFString::from_static_string("product-name");
+        // SAFETY: a live entry and key; the result is +1 (the Create rule) or null.
+        let value = unsafe { IORegistryEntryCreateCFProperty(entry, key.as_concrete_TypeRef(), std::ptr::null(), 0) };
+        // SAFETY: the entry came from IORegistryEntryFromPath and is released once.
+        unsafe { IOObjectRelease(entry) };
+        // SAFETY: non-null and owned by us.
+        let value = (!value.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(value) })?;
+        let bytes = value.downcast::<CFData>()?;
+        Some(String::from_utf8_lossy(bytes.bytes()).trim_end_matches('\0').to_string())
+    });
+    from_tree.flatten().filter(|m| !m.is_empty()).or_else(|| {
+        let mut buf = [0u8; 64];
+        let mut len = buf.len();
+        // SAFETY: the buffer is writable for `len` bytes and `len` is updated in place.
+        let ok = unsafe { libc::sysctlbyname(c"hw.model".as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) } == 0;
+        ok.then(|| String::from_utf8_lossy(&buf[..len]).trim_end_matches('\0').to_string())
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_model() -> Option<String> {
+    None
 }
 
 /// Whether the running moss meets a `min_moss_version` floor (a site's or a

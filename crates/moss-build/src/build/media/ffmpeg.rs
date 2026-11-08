@@ -374,51 +374,11 @@ pub fn get_moss_bin_dir() -> Result<PathBuf, String> {
 /// Linux users should install FFmpeg via their package manager since
 /// the Linux distribution uses tar.xz which is not supported by `binary_resolver`.
 pub fn ffmpeg_binary_config() -> BinaryConfig {
-    BinaryConfig {
-        name: "ffmpeg".to_string(),
-        binary_name: None,
-        version_check: Some(VersionCheck {
-            args: vec!["-version".to_string()],
-            pattern: Some(r"ffmpeg version (\d+\.\d+(?:\.\d+)?)".to_string()),
-        }),
-        sources: HashMap::from([
-            (
-                "darwin-arm64".to_string(),
-                BinarySource {
-                    github: None,
-                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffmpeg-macos-arm64.zip".to_string()),
-                    sha256: Some("e92f5ba2a8138afeda79c3d82f3c3024f5bfda0f765554d8e92945d4cc4e0039".to_string()),
-                    archive_format: Some(ArchiveFormat::Zip),
-                },
-            ),
-            (
-                "darwin-x64".to_string(),
-                BinarySource {
-                    github: None,
-                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffmpeg-macos-x86_64.zip".to_string()),
-                    sha256: Some("9db13e87646b56cffb75a1779b50a29d87828b98e1b7a449694eba3ece0f3d8b".to_string()),
-                    archive_format: Some(ArchiveFormat::Zip),
-                },
-            ),
-            (
-                "windows-x64".to_string(),
-                BinarySource {
-                    github: None,
-                    direct_url: Some(
-                        "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-                            .to_string(),
-                    ),
-                    sha256: None,
-                    archive_format: Some(ArchiveFormat::Zip),
-                },
-            ),
-            // Linux tar.xz is not supported by binary_resolver (only tar.gz and zip).
-            // Linux users should install FFmpeg via their package manager.
-        ]),
-        archive_layout: None,
-        cache_dir: None,
-        required_disk_space: None,
-    }
+    binary_config(
+        "ffmpeg",
+        "e92f5ba2a8138afeda79c3d82f3c3024f5bfda0f765554d8e92945d4cc4e0039",
+        "9db13e87646b56cffb75a1779b50a29d87828b98e1b7a449694eba3ece0f3d8b",
+    )
 }
 
 /// Binary configuration for **ffprobe** — the media-probe tool moss uses to read
@@ -435,48 +395,49 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
 ///   the resolver's zip extractor selects `ffprobe.exe` by the config `name`.
 /// - Linux: omitted (package managers install both binaries co-located).
 pub fn ffprobe_binary_config() -> BinaryConfig {
+    binary_config(
+        "ffprobe",
+        "9a84899a65c2735e43d27042c2cf88f708310026eb88dadb3d2ff89b67e1512f",
+        "18ea144dc8d313495a8714f6fd0657c535506245957fb9a6da3172c8fbc480f1",
+    )
+}
+
+/// Config for one binary of the ffmpeg project: moss's pinned macOS zip per
+/// architecture (SHA-256 given) and the gyan Windows zip, which bundles both
+/// binaries and from which the extractor picks the one named by `name`.
+fn binary_config(name: &str, sha256_darwin_arm64: &str, sha256_darwin_x64: &str) -> BinaryConfig {
+    let release = "https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1";
+    let zip_source = |url: String, sha256: Option<&str>| BinarySource {
+        github: None,
+        direct_url: Some(url),
+        sha256: sha256.map(str::to_string),
+        archive_format: Some(ArchiveFormat::Zip),
+    };
     BinaryConfig {
-        name: "ffprobe".to_string(),
+        name: name.to_string(),
         binary_name: None,
         version_check: Some(VersionCheck {
             args: vec!["-version".to_string()],
-            pattern: Some(r"ffprobe version (\d+\.\d+(?:\.\d+)?)".to_string()),
+            pattern: Some(format!(r"{name} version (\d+\.\d+(?:\.\d+)?)")),
         }),
+        // No Linux entry: its tar.xz is unsupported by binary_resolver, and
+        // package managers install ffmpeg and ffprobe together.
         sources: HashMap::from([
             (
                 "darwin-arm64".to_string(),
-                BinarySource {
-                    github: None,
-                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffprobe-macos-arm64.zip".to_string()),
-                    sha256: Some("9a84899a65c2735e43d27042c2cf88f708310026eb88dadb3d2ff89b67e1512f".to_string()),
-                    archive_format: Some(ArchiveFormat::Zip),
-                },
+                zip_source(format!("{release}/{name}-macos-arm64.zip"), Some(sha256_darwin_arm64)),
             ),
             (
                 "darwin-x64".to_string(),
-                BinarySource {
-                    github: None,
-                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffprobe-macos-x86_64.zip".to_string()),
-                    sha256: Some("18ea144dc8d313495a8714f6fd0657c535506245957fb9a6da3172c8fbc480f1".to_string()),
-                    archive_format: Some(ArchiveFormat::Zip),
-                },
+                zip_source(format!("{release}/{name}-macos-x86_64.zip"), Some(sha256_darwin_x64)),
             ),
             (
                 "windows-x64".to_string(),
-                BinarySource {
-                    github: None,
-                    // The gyan essentials zip contains both ffmpeg.exe and
-                    // ffprobe.exe; the extractor picks ffprobe.exe by name.
-                    direct_url: Some(
-                        "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-                            .to_string(),
-                    ),
-                    sha256: None,
-                    archive_format: Some(ArchiveFormat::Zip),
-                },
+                zip_source(
+                    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip".to_string(),
+                    None,
+                ),
             ),
-            // Linux: install ffprobe via the system package manager (co-located
-            // with ffmpeg, so the sibling lookup in resolve_ffprobe_path finds it).
         ]),
         archive_layout: None,
         cache_dir: None,

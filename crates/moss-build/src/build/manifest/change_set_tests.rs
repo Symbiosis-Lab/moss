@@ -239,7 +239,7 @@ fn unmapped_output_files_count_as_assets_not_pages() {
 }
 
 /// The R1 safety valve. A page carried through a build without a source hash
-/// (Stage-5b skip, parse-cache hit, iCloud defer, or a manifest predating page
+/// (render skip, parse-cache hit, iCloud defer, or a manifest predating page
 /// hashing) must not be guessed at: on a watch-loop rebuild most of a large
 /// site is skipped, so guessing "edited" or "deleted" would report most of the
 /// site. It is classified by output alone.
@@ -610,7 +610,7 @@ fn a_publish_removing_only_internal_files_is_not_empty() {
 fn a_set_with_only_removed_addresses_is_not_empty() {
     let set = ChangeSet {
         classified: true,
-        removed: vec![RemovedAddress { path: "feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None }],
+        removed: vec![RemovedAddress { path: "feed.xml".into(), reason: RemovalReason::Unexplained, moved_to: None, source: None, withdrawn_by: None }],
         ..ChangeSet::default()
     };
     assert!(!set.is_empty());
@@ -632,9 +632,9 @@ fn removed_addresses_ride_on_an_unclassified_set_too() {
 
 #[test]
 fn removed_addresses_serialize_snake_case_and_omit_an_absent_moved_to() {
-    let bare = RemovedAddress { path: "a".into(), reason: RemovalReason::AuthorRemoved, moved_to: None, source: None };
+    let bare = RemovedAddress { path: "a".into(), reason: RemovalReason::AuthorRemoved, moved_to: None, source: None, withdrawn_by: None };
     assert_eq!(serde_json::to_value(bare).unwrap(), serde_json::json!({"path": "a", "reason": "author_removed"}));
-    let moved = RemovedAddress { path: "a/".into(), reason: RemovalReason::Unexplained, moved_to: Some("b/".into()), source: None };
+    let moved = RemovedAddress { path: "a/".into(), reason: RemovalReason::Unexplained, moved_to: Some("b/".into()), source: None, withdrawn_by: None };
     assert_eq!(
         serde_json::to_value(moved).unwrap(),
         serde_json::json!({"path": "a/", "reason": "unexplained", "moved_to": "b/"})
@@ -886,4 +886,18 @@ fn a_vanished_form_description_never_refuses_the_publish() {
     assert!(removed.is_empty(), "{removed:?}");
     assert!(pending_removals(&removed, None).is_empty());
     assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());
+}
+
+/// How a site's settings become the record, both directions: what a setting
+/// withdraws, and what it leaves a broken promise.
+#[test]
+fn the_settings_decide_what_is_withdrawn() {
+    use crate::build::feeds::robots::AiSettings;
+    let w = |ai, tools| Withdrawn::from_settings(ai, tools);
+    let answers_off = AiSettings::resolve(None, None, Some(false), None);
+    assert_eq!(w(answers_off, true), Withdrawn { llms_txt: true, tdmrep_json: false, qr_codes: false });
+    let answers_on = AiSettings::resolve(None, None, Some(true), None);
+    assert_eq!(w(answers_on, true), Withdrawn { llms_txt: false, tdmrep_json: false, qr_codes: false });
+    let no_switch = AiSettings::resolve(None, None, None, None);
+    assert_eq!(w(no_switch, false), Withdrawn { llms_txt: false, tdmrep_json: true, qr_codes: true });
 }

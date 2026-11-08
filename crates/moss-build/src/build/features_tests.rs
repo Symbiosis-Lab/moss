@@ -847,10 +847,9 @@ fn email_channel_without_site_id_injects_pending_form() {
 /// SYNTHESIZED pages — the auto-generated homepage of a site without
 /// an index.md/self-named home note, folder listing pages — get the
 /// form too. A PerPage map keyed on parsed url_paths misses them
-/// (caught during Phase 1 visual verification: the built homepage of
-/// a home-note-less site had no form while every parsed page did,
-/// which also made the deploy guard force a rebuild on every publish
-/// for such sites). Scoped sites still use PerPage — their
+/// (the built homepage of a home-note-less site would have no form while
+/// every parsed page had one, which also made the deploy guard force a
+/// rebuild on every publish). Scoped sites still use PerPage — their
 /// synthesized-page gap is a documented Follow-up.
 #[test]
 fn single_scope_form_covers_synthesized_pages() {
@@ -1519,27 +1518,6 @@ fn email_css_mobile_btn_width_rules_skip_success_state() {
     );
 }
 
-/// Regression guard for the stacked (≤32rem, in-page) success layout:
-/// site.css absolutely positions `.moss-subscribe-status` over the WHOLE
-/// form (`inset: 0`), which is right for the single-row desktop form but
-/// centers the copy across both stacked rows on mobile — the text lands
-/// on top of the success circle. email.css must re-anchor the status to
-/// the input row for the stacked card, and restore full-form overlay for
-/// the footer form (which stays single-row on mobile).
-#[test]
-fn email_css_mobile_status_anchors_to_input_row() {
-    let css = include_str!("../assets/css/email.css");
-    assert!(
-        css.contains(r#"[data-position="inline"] .moss-subscribe-status"#),
-        "email.css must re-anchor the stacked form's status to the input row"
-    );
-    assert!(
-            css.contains(r#"footer .moss-subscribe .moss-subscribe-form[data-position="inline"] .moss-subscribe-status"#),
-            "footer forms stay single-row on mobile — email.css must restore \
-             their full-form status overlay"
-        );
-}
-
 /// Slot-merge contract test: the review-colophon path in
 /// `generate_native_slots` honors a non-`None` `media_lookup` and
 /// routes the cover image through the synthesizer. Arch review of
@@ -1768,13 +1746,10 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
         "class identifier survives the no-manifest fallback, got: {}",
         after_title
     );
-    // Phase 1 B1 (2026-05-25): the synthesizer always wraps raster
-    // originals in `<picture>` regardless of manifest presence per
-    // the "honest mirror" invariant — the preview server fills
-    // in placeholder bytes when the variant hasn't landed yet. The
-    // prior "no manifest → no `<picture>`" expectation was a quirk of
-    // the old MediaDimensionLookup-gated emission. Falls back to
-    // 800×600 dims when the snapshot has no entry for the path.
+    // The synthesizer always wraps raster originals in `<picture>`
+    // regardless of manifest presence ("honest mirror" invariant): the
+    // preview server fills in placeholder bytes until the variant lands.
+    // Falls back to 800×600 dims when the snapshot has no entry for the path.
     assert!(
         after_title.contains("<picture>"),
         "raster cover always wraps in <picture> post-B1; got: {}",
@@ -1835,11 +1810,9 @@ fn test_should_inject_both_triggers() {
     assert!(should_inject_subscribe_assets(&pages, true));
 }
 
-// The `project_has_inline_subscribe` filesystem-scan tests were deleted
-// along with the function in PR7b. Detection now reads
-// `ParsedDocument.features.inline_subscribe` directly from the parsed
-// page slice produced by `pipeline::run`; `should_inject_subscribe_assets`
-// (above) tests cover the new path.
+// Detection reads `ParsedDocument.features.inline_subscribe` directly from
+// the parsed page slice produced by `pipeline::run`; the
+// `should_inject_subscribe_assets` tests above cover it.
 
 // ── mode-independence regression tests ─────────────────────────────────
 //

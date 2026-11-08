@@ -138,8 +138,7 @@ where
             }
         }
         Block::LinkCard { url, children } => {
-            // Phase 4 PR4.5: the wrapping URL (compound-link href) +
-            // every URL inside the inner block content.
+            // The wrapping URL (compound-link href) + every URL inside the inner block content.
             v.url(url);
             for nested in children {
                 visit_urls_in_block(nested, v);
@@ -171,6 +170,9 @@ where
                     visit_urls_in_inline(inline, v);
                 }
             }
+            for inline in &mut args.caption {
+                visit_urls_in_inline(inline, v);
+            }
         }
         Shortcode::Hero(args) => {
             if let Some(image) = args.image.as_mut() {
@@ -182,8 +184,7 @@ where
             for image in &mut args.extra_images {
                 v.url(image);
             }
-            // Phase 4 PR4.5 (2026-05-28): descend into the typed overlay
-            // blocks so URLs inside `:::hero` overlay markdown (e.g. a
+            // Descend into the typed overlay blocks so URLs inside `:::hero` overlay markdown (e.g. a
             // `[Read more](/x)` link in the overlay copy) get classified
             // by the same visitor pass.
             for block in &mut args.overlay {
@@ -200,8 +201,7 @@ where
             }
         }
         Shortcode::Grid(args) => {
-            // Phase 4 PR4.5 (2026-05-28): cells are now typed Vec<Block>;
-            // descend into each cell. Compound-link cells render through
+            // Descend into each cell. Compound-link cells render through
             // `Block::LinkCard { url, children }`, whose own visit arm
             // walks both the wrapping href and the inner children.
             for cell_blocks in &mut args.cells {
@@ -357,6 +357,12 @@ pub fn has_scroll_row_recursive(doc: &Document) -> bool {
         doc,
         |block| matches!(block, Block::Shortcode(Shortcode::Grid(grid)) if grid.is_scroll_row()),
     )
+}
+
+/// True if any `:::gallery marquee` is in the document, nested ones included.
+/// Gates the marquee script.
+pub fn has_marquee_recursive(doc: &Document) -> bool {
+    any_block(doc, |block| matches!(block, Block::Shortcode(Shortcode::Gallery(gallery)) if gallery.marquee))
 }
 
 /// Whether a fenced block's info string asks for a diagram: its first word is
@@ -749,6 +755,7 @@ mod tests {
     fn detects_a_callout_anywhere_it_can_appear() {
         let callout = || Block::Callout {
             unknown_kind: None,
+            group: None,
             kind: super::super::node::CalloutKind::Note,
             fold: None,
             title: None,
@@ -846,6 +853,7 @@ mod tests {
     fn visits_urls_inside_callout() {
         let mut doc = Document::from_blocks(vec![Block::Callout {
             unknown_kind: None,
+            group: None,
             kind: super::super::node::CalloutKind::Note,
             fold: None,
             title: None,
@@ -937,7 +945,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 4 PR3 (2026-05-27): Block::Figure URL descent
+    // Block::Figure URL descent
     // -----------------------------------------------------------------
 
     #[test]
@@ -1045,6 +1053,7 @@ mod tests {
             },
             Block::Callout {
                 unknown_kind: None,
+                group: None,
                 kind: CalloutKind::Note,
                 fold: None,
                 title: None,

@@ -209,3 +209,20 @@ fn country_map_is_a_described_object_field() {
     let schema = crate::schema::builtin_schema();
     assert!(schema.frontmatter.fields.contains_key("country_map"), "moss describe lists it");
 }
+
+#[test]
+fn every_typed_frontmatter_key_has_a_schema_row() {
+    let schema = crate::schema::builtin_schema();
+    let typed = serde_yaml::to_value(crate::frontmatter_typed::FrontMatter::default()).unwrap();
+    let missing: Vec<&str> = typed
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .filter_map(|k| k.as_str())
+        .filter(|k| {
+            !schema.frontmatter.fields.contains_key(*k)
+                && !schema.frontmatter.internal_fields.iter().any(|f| f == k)
+        })
+        .collect();
+    assert!(missing.is_empty(), "typed frontmatter keys without a BUILTIN_FIELDS row: {missing:?}");
+}

@@ -262,7 +262,7 @@ mod build_page_map_tests {
     #[test]
     fn title_case_sibling_unaffected_by_other_folder_override() {
         // Regression: when one folder has a `url:` override (so
-        // `dir_overrides` is non-empty), Phase 2 of build_page_map runs
+        // `dir_overrides` is non-empty), pass 2 of build_page_map runs
         // for every entry. A *sibling* Title-Case folder with no override
         // must produce clean lowercase URLs — no leakage of the original
         // case from the verbatim-last-segment heuristic in
@@ -294,7 +294,7 @@ mod build_page_map_tests {
         assert_eq!(map.get("Posts/hello.md").unwrap(), "blog/hello/index.html");
 
         // Sibling Title-Case folder with no override → straight slugify.
-        // No leakage from Phase 2 firing on the override-empty path.
+        // No leakage from pass 2 firing on the override-empty path.
         assert_eq!(
             map.get("My Section/My Section.md").unwrap(),
             "my-section/index.html"
@@ -307,7 +307,7 @@ mod build_page_map_tests {
 
     #[test]
     fn title_case_folder_with_url_override_cascades() {
-        // Regression for the Phase 2 cascade with mixed-case folders:
+        // Regression for the pass 2 cascade with mixed-case folders:
         // "News/" with `url: blog` on the index must (a) emit /blog/ for
         // the index and (b) cascade so children become /blog/<slug>/
         // — not /News/<slug>/ or a silently-broken passthrough.
@@ -381,7 +381,7 @@ mod build_page_map_tests {
     fn nested_url_overrides_cascade_to_leaf() {
         // a/index.md url: alpha → alpha/index.html (from compute_url_path, own segment)
         // a/b/index.md url: beta → alpha/beta/index.html (own segment from compute_url_path,
-        //   ancestor "a" cascaded to "alpha" in Phase 2)
+        //   ancestor "a" cascaded to "alpha" in pass 2)
         // a/b/leaf.md → cascaded: a → alpha, b → beta → alpha/beta/leaf/index.html
         let dir = setup_temp_dir(&[
             ("a/index.md", "---\nurl: alpha\n---\n# A"),
@@ -1082,7 +1082,7 @@ mod with_evicted_seam_tests {
             &std::collections::HashMap::new(),
             &is_evicted,
         );
-        // The evicted file is deferred entirely (Stage 3: skip, don't wait,
+        // The evicted file is deferred entirely (skip, don't wait,
         // don't fabricate a fallback) — it never gets a `url_path` entry at
         // all, and critically its `url: custom-slug` frontmatter override
         // was never read.

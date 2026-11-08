@@ -43,7 +43,7 @@ const hoisted = vi.hoisted(() => {
 
     constructor(cfg: Record<string, unknown> = {}) {
       this.ctorConfig = cfg;
-      this.config = { maxBufferLength: 30, testBandwidth: true, ...cfg };
+      this.config = { maxBufferLength: 30, testBandwidth: true, skipBufferHolePadding: 0.1, ...cfg };
       FakeHls.instances.push(this);
     }
     on(event: string, fn: Handler) {
@@ -473,12 +473,19 @@ describe("clean-up", () => {
 });
 
 describe("playback starts where the media does", () => {
-  test("the playhead steps over a start gap of a frame or two", () => {
+  test("the playhead steps over a start gap of a frame or two, a nudge into the media", () => {
     const v = video({ preload: "metadata", autoplay: true });
     player.attach(v, "m.m3u8");
     v.setBuffered(2.133, 0.133);
     FakeHls.instances[0].emit("fragBuffered", media(0));
-    expect(v.currentTime).toBe(0.133);
+    expect(v.currentTime).toBeCloseTo(0.233, 6);
+  });
+
+  test("the step stops at the end of what is buffered", () => {
+    const v = video({ preload: "metadata", autoplay: true });
+    v.setBuffered(0.18, 0.133);
+    player.stepIntoBuffer(v, 0.1);
+    expect(v.currentTime).toBe(0.18);
   });
 
   test("a playhead inside the media, or far before it, is left alone", () => {

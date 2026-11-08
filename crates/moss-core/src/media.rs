@@ -180,9 +180,8 @@ impl Position {
 ///
 /// Hyphenated `align-left` is the canonical pipe-keyword form; unhyphenated
 /// `alignleft` (matching the WP class name) is a forgiveness alias.
-/// Bare `left` / `right` are also accepted, because Stage 1 emits them as
-/// the value of an explicit `align=` key in TitleParams (e.g. `align=left`),
-/// where ambiguity with [`Position`]'s `left` / `right` does not arise.
+/// Bare `left` / `right` are also accepted as the value of an explicit
+/// `align=` key in TitleParams (e.g. `align=left`), where ambiguity with [`Position`]'s `left` / `right` does not arise.
 ///
 /// Note: in [`parse_media_attrs`]'s space-separated keyword parser, bare
 /// `left` / `right` still match [`Position::from_keyword`] FIRST and never
@@ -200,7 +199,7 @@ impl AlignSide {
     /// Accepts:
     /// - hyphenated `align-left` / `align-right` (canonical pipe keyword)
     /// - concatenated `alignleft` / `alignright` (WordPress class alias)
-    /// - bare `left` / `right` (Stage 1 TitleParams `align=` value)
+    /// - bare `left` / `right` (TitleParams `align=` value)
     pub fn from_keyword(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "align-left" | "alignleft" | "left" => Some(AlignSide::Left),
@@ -254,7 +253,7 @@ pub struct MediaAttrs {
     pub class_names: Vec<String>,
     /// Author-provided `key=value` attributes from Pandoc attribute blocks
     /// that aren't recognized moss vocabulary. Emitted as title-params
-    /// (`![alt](src "moss:k=v")`) by the wikilink Stage 1 translator in
+    /// (`![alt](src "moss:k=v")`) in
     /// deterministic alphabetical order (BTreeMap iteration is sorted).
     pub extra_attrs: BTreeMap<String, String>,
 }

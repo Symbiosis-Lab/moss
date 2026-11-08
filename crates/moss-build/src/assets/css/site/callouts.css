@@ -74,6 +74,31 @@ details.callout:not([open]) > .callout-title {
   margin-bottom: 0;
 }
 
+/* A folded callout's answer grows and shrinks instead of appearing. Engines
+   without `::details-content` or `interpolate-size` open it at once, and a
+   reader who asks for reduced motion gets that everywhere. `content-visibility`
+   is transitioned too, or the closing height would be cut off at the first
+   frame. */
+@supports (interpolate-size: allow-keywords) and selector(::details-content) {
+  @media (prefers-reduced-motion: no-preference) {
+    details.callout {
+      interpolate-size: allow-keywords;
+    }
+
+    details.callout::details-content {
+      block-size: 0;
+      overflow: clip;
+      transition:
+        block-size var(--moss-callout-fold-duration, 0.4s) var(--moss-callout-fold-ease, cubic-bezier(0.19, 1, 0.22, 1)),
+        content-visibility var(--moss-callout-fold-duration, 0.4s) allow-discrete;
+    }
+
+    details.callout[open]::details-content {
+      block-size: auto;
+    }
+  }
+}
+
 /* Callout body */
 .callout-content {
   color: var(--moss-color-text-secondary);

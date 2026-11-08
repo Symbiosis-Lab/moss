@@ -14,8 +14,8 @@
 //! on a platform with no dataless files.
 //!
 //! Two commands use it: `moss build` (a gate before the build starts) and
-//! `moss fetch <folder>`, which downloads everything cloud-only in a folder and
-//! writes nothing there.
+//! `moss fetch <folder>`, which downloads everything cloud-only in a folder
+//! except what moss regenerates, and writes nothing there.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -228,7 +228,7 @@ const USAGE: &str = "Usage: moss fetch <folder>";
 /// Entry point for `moss fetch`. Returns an exit code (0 = every file is local).
 pub fn run(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("{USAGE}\n\nDownloads every file in <folder> that is still only in the cloud, so the folder can be copied. Writes nothing. Exits 1 if the provider stops delivering, naming it and what to do.");
+        println!("{USAGE}\n\nDownloads every file in <folder> that is still only in the cloud, so the folder can be copied, except moss's own cache (.moss/cache), which a build downloads again: leave it out of a copy. Writes nothing. Exits 1 if the provider stops delivering, naming it and what to do.");
         return 0;
     }
     let [target] = args else {
@@ -273,8 +273,8 @@ pub fn fetch_folder(
         return 1;
     }
     out(&match total {
-        0 => format!("Nothing to fetch: every file in {} is already on this device.", folder.display()),
-        n => format!("Fetched {n} files: every file in {} is now on this device.", folder.display()),
+        0 => format!("Nothing to fetch: every file in {} but moss's cache is already on this device.", folder.display()),
+        n => format!("Fetched {n} files: every file in {} but moss's cache is now on this device.", folder.display()),
     });
     0
 }
@@ -286,13 +286,17 @@ struct Listing {
     unlisted: Vec<PathBuf>,
 }
 
-/// Every cloud-only regular file under `folder`, by `lstat` alone. All of it,
-/// dot folders included, because a copy takes it all; only `.moss/build.nosync`
-/// is left out, which the sync clients never upload.
+/// Every cloud-only regular file under `folder`, by `lstat` alone, dot folders
+/// included, except every path moss's path table marks regenerable: a build
+/// makes it again, or waits for a blob itself.
 fn cloud_only_files(folder: &Path) -> Listing {
-    let skipped = folder.join(".moss").join("build.nosync");
+    let regenerated: Vec<PathBuf> = crate::moss_paths::MOSS_PATH_RULES
+        .iter()
+        .filter(|r| r.cloud.is_regenerable())
+        .map(|r| folder.join(r.rel.trim_end_matches('/')))
+        .collect();
     let mut listing = Listing { files: Vec::new(), unlisted: Vec::new() };
-    for entry in walkdir::WalkDir::new(folder).sort_by_file_name().into_iter().filter_entry(|e| e.path() != skipped) {
+    for entry in walkdir::WalkDir::new(folder).sort_by_file_name().into_iter().filter_entry(|e| !regenerated.iter().any(|p| e.path() == p)) {
         match entry {
             Ok(entry) if entry.file_type().is_file() => {
                 let stub_target = icloud::icloud_stub_target(entry.path());

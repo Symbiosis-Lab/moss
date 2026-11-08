@@ -1,11 +1,8 @@
 //! Hosting environment — which seta URL, site suffix, and beacon host apply.
 //!
-//! Moved from the app crate's `domain/types.rs` (2026-08-27, M6a B3): the
-//! build tree resolves the environment for feed/comment/subscribe URLs, so
-//! the type must be reachable from `moss-build` when the pipeline crosses.
-//! Resolution *policy* (env vars > config key > default) stays app-side in
-//! `domain::config::resolve_environment` until the eviction-aware config
-//! read crosses with the cloud cluster.
+//! The build tree resolves the environment for feed/comment/subscribe URLs, so
+//! the type must be reachable from `moss-build`. Resolution *policy* (env vars >
+//! config key > default) stays app-side in `domain::config::resolve_environment`.
 
 use serde::{Deserialize, Serialize};
 

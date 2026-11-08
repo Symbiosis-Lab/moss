@@ -11,9 +11,8 @@
 //!    called by `render::grid_cells::apply_collection_cards` and
 //!    `page::generate_children` for `children_style: grid`.
 //!
-//! The Stage 3 regex post-pass that lived alongside this lookup until
-//! Phase 2E v5 PR5 (2026-05-26) is gone — the moss-core synthesizers
-//! now own all attribute emission at parse time.
+//! The moss-core synthesizers own all image attribute emission at parse time;
+//! there is no regex post-pass over the emitted HTML.
 //!
 //! # Design notes
 //!

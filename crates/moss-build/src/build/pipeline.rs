@@ -368,6 +368,8 @@ fn run_notebook_processing(
     staging_dir: &std::path::Path,
     cancel_flag: Option<&std::sync::atomic::AtomicBool>,
     evidence: &super::cloud_ledger::InputEvidence,
+    robots_tag: Option<String>,
+    color_scheme: crate::build::page::color_scheme::ColorScheme,
 ) -> Vec<NotebookReceipt> {
     use crate::build::assets::asset_resolver::resolve_asset_directory;
     use crate::build::notebook::{collect_notebooks, generate_contents_manifest, generate_viewer_html_with_content, jupyterlite_asset_config, patch_jupyterlite_config, CONTENTS_ALL_JSON_FILE};
@@ -557,47 +559,31 @@ fn run_notebook_processing(
         TimedOut,
     }
 
-    // Per-notebook I/O timeout — bounds the time any single notebook's
-    // synchronous filesystem operations can hold up the build thread.
-    // Cloud-storage paths (Dropbox CloudStorage, iCloud) can stall
-    // `fs::read_to_string` and `fs::copy` indefinitely while the
-    // sync client reconciles or hydrates a dehydrated file. Pre-2026-05
-    // a single stuck notebook would freeze the entire build pipeline
-    // at "Generating pages... (i / N)" with no escape; see
-    // investigation 2026-05-16. The helper spawns the I/O block on a
-    // detached worker thread, waits up to `NOTEBOOK_IO_TIMEOUT_SECS`
-    // (module-level const) on a channel, and on timeout returns
-    // `TimedOut` so the caller can surface a UI warning. The leaked
-    // worker thread completes silently when the OS eventually unblocks
-    // the syscall.
+    // Per-notebook I/O timeout: cloud-storage paths (Dropbox CloudStorage,
+    // iCloud) can stall `fs::read_to_string` and `fs::copy` indefinitely
+    // while the sync client hydrates a file, which would otherwise freeze the
+    // whole build on one notebook.
     fn with_io_timeout<F>(item_path: &str, f: F) -> IoOutcome
     where
         F: FnOnce() -> Result<Vec<NotebookReceipt>, String> + Send + 'static,
     {
-        use std::sync::mpsc;
-        use std::time::Duration;
-        let (tx, rx) = mpsc::sync_channel(1);
-        let label = item_path.to_string();
-        std::thread::spawn(move || {
-            let r = f();
-            let _ = tx.send(r);
-        });
-        match rx.recv_timeout(Duration::from_secs(NOTEBOOK_IO_TIMEOUT_SECS)) {
-            Ok(Ok(paths)) => IoOutcome::Done(paths),
-            Ok(Err(e)) => {
+        let budget = std::time::Duration::from_secs(NOTEBOOK_IO_TIMEOUT_SECS);
+        match crate::system::deadline::wait_at_most(budget, f) {
+            Some(Ok(paths)) => IoOutcome::Done(paths),
+            Some(Err(e)) => {
                 log::info!(
                     "[notebook] I/O for '{}' returned an error: {}; continuing",
-                    label, e
+                    item_path, e
                 );
                 IoOutcome::Errored(e)
             }
-            Err(_) => {
+            None => {
                 crate::build::cli_output::log_note!(
                     "[notebook] I/O for '{}' timed out after {}s. Likely cloud-storage \
                      dehydration (Dropbox CloudStorage / iCloud). The notebook is \
                      skipped on this build; the next rebuild will retry. Worker \
                      thread is detached and will exit when the OS unblocks.",
-                    label, NOTEBOOK_IO_TIMEOUT_SECS
+                    item_path, NOTEBOOK_IO_TIMEOUT_SECS
                 );
                 IoOutcome::TimedOut
             }
@@ -636,6 +622,7 @@ fn run_notebook_processing(
         let item_source_path = item.source_path.clone();
         let staging_owned = staging_dir.to_path_buf();
         let evidence_for_copy = evidence.clone();
+        let robots_tag = robots_tag.clone();
         let notebook_paths = with_io_timeout(&item.source_path, move || {
             let mut produced = Vec::new();
             // Copy .ipynb to its natural served path. Both this path and the
@@ -670,6 +657,8 @@ fn run_notebook_processing(
                 &notebook_filename,
                 "/jupyter",
                 notebook_content.as_deref(),
+                robots_tag.as_deref(),
+                color_scheme,
             );
             let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
@@ -1363,13 +1352,14 @@ fn build_inner(
     for note in cfg.as_ref().map(|c| c.unknown_site_keys()).unwrap_or_default() {
         crate::build::cli_output::log_note!("{note}");
     }
-    let forms_endpoint = cfg.as_ref().and_then(|c| match crate::build::site_config::parse_services(c) {
-        Ok(services) => services.forms_endpoint(),
+    let services_config = cfg.as_ref().and_then(|c| match crate::build::site_config::parse_services(c) {
+        Ok(services) => Some(services),
         Err(problem) => {
             crate::build::cli_output::log_warn_problem!("{problem}");
             None
         }
     });
+    let forms_endpoint = services_config.as_ref().and_then(|s| s.forms_endpoint());
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1506,17 +1496,27 @@ fn build_inner(
         // asked for, not inherited, so a site that never said anything gets no
         // floating nav (as amended 2026-08-30).
         floating_nav: site_bool("floating_nav").unwrap_or(false),
+        // Default-OFF, like `floating_nav`.
+        selection_tools: site_bool("selection_tools").unwrap_or(false),
+        // A page's own `comments: true` beats `[site].comments`, so the service
+        // alone decides whether some page may offer Comment.
+        selection_comments: services_config
+            .as_ref()
+            .is_some_and(|s| s.is_enabled(crate::config::services::ServiceKind::Comments, false)),
         // Default-on by key absence, like `link_preview`: `[site].colophon = false`
         // is the only way to leave moss's credit out.
         colophon,
+        color_scheme: crate::build::page::color_scheme::ColorScheme::from_config(site_str("color_scheme").as_deref()),
         colophon_credit: crate::build::render::credits::ColophonCredit::from_site(site_str("credit").as_deref(), colophon),
         // `[site].header` — "brand" (default), "nav" or "none"; an absent or
         // unrecognized value resolves to "brand" (`HeaderMode::from_config`
         // logs a warning on the latter).
         header: crate::build::components::nav::HeaderMode::from_config(site_str("header").as_deref()),
+        header_scroll: crate::build::components::nav::HeaderScroll::from_config(site_str("header_scroll").as_deref()),
         site_url_override,
         declared_redirects: cfg.as_ref().map(|c| c.declared_redirects()).unwrap_or_default(),
-        ai_policy: site_str("ai_policy"),
+        ai: crate::build::feeds::robots::AiSettings::from_config(cfg.as_ref()),
+        identity: crate::config::site_identity::SiteIdentity::from_config(cfg.as_ref()),
         // One switch: the per-site Services-tab toggle, absent key = off
         // (graduated out of `experimental.preview_features` 2026-08-31).
         // Resolved here into the ONE value the nav button
@@ -1536,6 +1536,7 @@ fn build_inner(
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
         forms_endpoint,
+        booking: cfg.as_ref().and_then(crate::config::services::booking::read),
         place_maps,
         incremental,
         derivations: derived.clone(),
@@ -1555,14 +1556,14 @@ fn build_inner(
         );
     }
     // `documents` is the parsed page slice (production type `ParsedDocument`,
-    // not yet the typed-AST `moss_core::ast::Document`). An earlier change
-    // threads it back to `build.rs` so native slot generation can read typed
-    // feature flags + slot-only files without the previous filesystem rescan
-    // hacks (`project_has_inline_subscribe`, `render_footer_pages_from_disk`).
-    // When the typed-AST migration completes (Phase 4+), this evolves to
-    // `Vec<moss_core::ast::Document>`.
+    // not the typed-AST `moss_core::ast::Document`). It is threaded back to
+    // `build.rs` so native slot generation can read typed feature flags and
+    // slot-only files without rescanning the filesystem.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
     let build_now = crate::build::folder_embed::upcoming::now();
+    // Read again by the notebook viewers, after `site_config` is consumed.
+    let site_ai = site_config.ai;
+    let color_scheme = site_config.color_scheme;
     let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_now)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
@@ -1864,6 +1865,8 @@ fn build_inner(
             &background_ctx.staging_dir,
             cancel,
             &input_evidence,
+            site_ai.robots_tag(false),
+            color_scheme,
         );
         // Register the receipts. `pending` is still alive here (constructed in
         // build_inner before generate_blocking_content and passed as &mut); the
@@ -1910,6 +1913,7 @@ fn build_inner(
         &mut pending,
     );
     crate::build::emit::place_map_assets::emit_country_notice(&documents, &stage_dir, &mut pending);
+    crate::build::emit::place_map_assets::emit_country_search(&documents, &stage_dir, &mut pending);
     // `layers.json` beside them; nothing is written without `[map.layers]`.
     let used_places = place_maps_for_places_data.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
     crate::build::emit::place_map_layers::emit_if_place_typed(
@@ -1984,7 +1988,7 @@ fn build_inner(
         // clone it here, before the video dispatch below consumes the original.
         let ctx_for_assets = background_ctx.clone();
 
-        // Step 3 Phase 4 (review fix). The parent Build Job is NO LONGER spawned
+        // The parent Build Job is not spawned
         // eagerly here — `collect_videos_for_conversion` returns every .mov
         // regardless of the transform cache, so a non-empty `video_items` is NOT
         // evidence of real work (a content-only rebuild on a video site cache-skips

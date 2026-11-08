@@ -4,6 +4,7 @@
 // reads as text, and keeps the honeypot out of sight and out of the tab order.
 import { test, expect, type Page } from '@playwright/test';
 import { gatePort } from '../../../playwright/gate-ports';
+import { expectFocusOnOwnEdge } from './field-focus-edge';
 
 const url = `http://localhost:${gatePort('request-form')}/`;
 
@@ -70,7 +71,7 @@ for (const scheme of ['light', 'dark'] as const) {
             const el = document.activeElement as HTMLElement;
             const cs = getComputedStyle(el);
             // A date field's calendar button takes focus inside the field and draws its own ring.
-            return { name: (el as HTMLInputElement).name || el.tagName, inForm: !!el.closest('.moss-form'), visible: el.matches(':focus-visible'), ring: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2 };
+            return { name: (el as HTMLInputElement).name || el.tagName, inForm: !!el.closest('.moss-form'), visible: el.matches(':focus-visible'), ring: (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2) || (el.classList.contains('moss-input--boxed') && cs.boxShadow !== 'none') };
           });
           if (!s.inForm) continue;
           seen.push(s.name);
@@ -81,6 +82,11 @@ for (const scheme of ['light', 'dark'] as const) {
         expect(seen).not.toContain('_hp');
         const hp = await page.locator('.moss-form__hp').boundingBox();
         expect(hp!.width).toBeLessThanOrEqual(1);
+      });
+
+      test('a click into the text area shows focus on its own edge, under a theme focus ring', async ({ page }) => {
+        await page.goto(url, { waitUntil: 'load' });
+        await expectFocusOnOwnEdge(page, page.locator('.moss-form textarea'), 'text area');
       });
 
       test('a refused field is marked and its message reads as text', async ({ page }) => {

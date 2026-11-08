@@ -658,3 +658,45 @@ describe("shipped morph failure correlation", () => {
     } finally { w.close(); }
   });
 });
+
+
+describe("shipped morph color scheme policy", () => {
+  it.each(["light", "dark"])("keeps fixed %s → auto → fixed across rebuilds", async (fixed) => {
+    const { JSDOM } = await import("jsdom");
+    const opposite = fixed === "light" ? "dark" : "light";
+    const page = (scheme: string | null) => `<html${scheme ? ` data-moss-color-scheme="${scheme}" data-theme="${scheme}" style="color-scheme: ${scheme}"` : ""}><head></head><body><p>content</p></body></html>`;
+    const dom = new JSDOM(page(fixed), { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
+    const w = dom.window;
+    const replies: unknown[] = [];
+    const parent = { postMessage: (message: unknown) => replies.push(message) };
+    dom.reconfigure({ windowTop: parent });
+    Object.defineProperty(w, "parent", { value: parent });
+    w.matchMedia = () => ({ matches: opposite === "dark", addEventListener() {}, removeEventListener() {} }) as any;
+    (w as any).ResizeObserver = class { observe() {} disconnect() {} };
+    (w as any).IntersectionObserver = class { observe() {} disconnect() {} };
+    w.HTMLCanvasElement.prototype.getContext = () => null;
+    w.document.elementFromPoint = () => null;
+    let next = page(fixed);
+    (w as any).fetch = async () => ({ ok: true, text: async () => next });
+    const send = (data: unknown) => w.dispatchEvent(new w.MessageEvent("message", { data }));
+    try {
+      w.localStorage.setItem("moss-theme", opposite);
+      w.eval(readFileSync(BUNDLE_PATH, "utf8"));
+      send({ type: "moss-set-theme", theme: opposite });
+      const root = w.document.documentElement;
+      expect(root.getAttribute("data-theme")).toBe(fixed);
+      for (const [gen, scheme] of [fixed, null, fixed].entries()) {
+        next = page(scheme);
+        send({ type: "moss-morph", gen });
+        await vi.waitFor(() => expect(replies).toContainEqual(expect.objectContaining({ type: "moss-morph-applied", gen })));
+        expect(root.getAttribute("data-moss-color-scheme")).toBe(scheme);
+        expect(root.getAttribute("data-theme")).toBe(scheme ?? opposite);
+        expect(root.style.colorScheme).toBe(scheme ?? "");
+        send({ type: "moss-set-theme", theme: opposite });
+        expect(root.getAttribute("data-theme")).toBe(scheme ?? opposite);
+        expect(w.localStorage.getItem("moss-theme")).toBe(opposite);
+      }
+      expect(replies).not.toContainEqual(expect.objectContaining({ type: "moss-morph-failed" }));
+    } finally { w.close(); }
+  });
+});

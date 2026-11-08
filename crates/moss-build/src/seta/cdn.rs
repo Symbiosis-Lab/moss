@@ -167,7 +167,7 @@ impl MossSetaClient {
     /// Calls `GET /api/domains/:host/cdn`. Purely an observation: it never
     /// creates a hostname, so it is safe to poll behind the status row.
     pub async fn get_domain_cdn(&self, host: &str) -> Result<DomainCdn, SetaError> {
-        self.get_json::<CdnWire>(&format!("/api/domains/{}/cdn", host)).await.map(DomainCdn::from)
+        self.get_json::<CdnWire>(&format!("/api/domains/{}/cdn", urlencoding::encode(host))).await.map(DomainCdn::from)
     }
 
     /// A link that sets the domain's records up at the owner's DNS provider in
@@ -179,7 +179,7 @@ impl MossSetaClient {
     /// assembles one. Only an https link with no control characters is
     /// accepted, since it is printed to a terminal.
     pub async fn get_domain_connect(&self, host: &str) -> Result<Option<ConnectLink>, SetaError> {
-        let wire: ConnectWire = self.get_json(&format!("/api/domains/{}/connect", host)).await?;
+        let wire: ConnectWire = self.get_json(&format!("/api/domains/{}/connect", urlencoding::encode(host))).await?;
         let printable = |s: &str| !s.chars().any(char::is_control);
         Ok(match (wire.supported, wire.provider, wire.url) {
             (true, Some(provider), Some(url)) if url.starts_with("https://") && printable(&url) && printable(&provider) => {
@@ -200,28 +200,8 @@ impl MossSetaClient {
     /// seta writes itself), 403 when the domain is not the caller's, and 502
     /// when Cloudflare fails — all of which arrive as `SetaError::Api`.
     pub async fn start_domain_cdn(&self, host: &str) -> Result<DomainCdn, SetaError> {
-        let path = format!("/api/domains/{}/cdn", host);
-        let (url, auth_header) = self.sign_and_build(&path)?;
-
-        log::debug!(target: "seta", "POST {} host={}", url, host);
-
-        let response = self.client
-            .post(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response
-            .json::<CdnWire>()
-            .await
-            .map(DomainCdn::from)
-            .map_err(|e| SetaError::Parse(e.to_string()))
+        let request = self.signed(reqwest::Method::POST, &format!("/api/domains/{}/cdn", urlencoding::encode(host)), bytes::Bytes::new())?;
+        Self::send_json::<CdnWire>(request).await.map(DomainCdn::from)
     }
 }
 

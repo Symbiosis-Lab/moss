@@ -2,6 +2,8 @@ import { ItemView, WorkspaceLeaf } from "obsidian";
 
 export const MOSS_PREVIEW_VIEW_TYPE = "moss-preview";
 
+export const PREVIEW_STOPPED = "No preview running. Run “moss: Preview site” to start one.";
+
 /**
  * Right-leaf pane holding the site preview in an iframe pointed at the local
  * server the moss CLI starts. Established Obsidian practice (HTML Preview,
@@ -11,7 +13,11 @@ export class MossPreviewView extends ItemView {
   private iframe: HTMLIFrameElement | null = null;
   private messageEl: HTMLElement | null = null;
 
-  constructor(leaf: WorkspaceLeaf) {
+  /** `onClosed` lets the plugin stop the server this pane was showing. */
+  constructor(
+    leaf: WorkspaceLeaf,
+    private onClosed: () => void = () => {},
+  ) {
     super(leaf);
   }
 
@@ -31,16 +37,15 @@ export class MossPreviewView extends ItemView {
     const container = this.contentEl;
     container.empty();
     container.addClass("moss-preview-container");
-    this.messageEl = container.createDiv({
-      cls: "moss-preview-message",
-      text: "Starting moss preview…",
-    });
+    // A pane Obsidian restores at startup has no server behind it.
+    this.messageEl = container.createDiv({ cls: "moss-preview-message", text: PREVIEW_STOPPED });
   }
 
   async onClose(): Promise<void> {
     this.iframe = null;
     this.messageEl = null;
     this.contentEl.empty();
+    this.onClosed();
   }
 
   /** Point the pane at the running preview server. */
@@ -54,9 +59,6 @@ export class MossPreviewView extends ItemView {
         cls: "moss-preview-iframe",
       });
       this.iframe.setAttribute("title", "moss site preview");
-      this.iframe.style.width = "100%";
-      this.iframe.style.height = "100%";
-      this.iframe.style.border = "none";
     }
     if (this.iframe.src !== url) {
       this.iframe.src = url;

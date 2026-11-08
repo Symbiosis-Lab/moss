@@ -6,7 +6,7 @@
 //! page's language and typesetting. Pure: page links arrive as a closure.
 
 use crate::build::components::field_text::{datetime_attr, number_text, value_text};
-use crate::build::components::child_list;
+use crate::build::components::{child_list, child_summary};
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use moss_core::content_graph::ContentGraph;
@@ -128,8 +128,7 @@ pub fn draw_for_page(
     typesetting: Option<&str>,
 ) -> Placements {
     let page_href = |target: &str| {
-        let source = graph?.resolve_path(target, doc.source_path.as_deref()?)?;
-        let page = all_docs.iter().find(|d| d.source_path.as_deref() == Some(source.as_str()))?;
+        let page = linked_page(doc, all_docs, graph, target)?;
         Some(crate::build::markdown::pipeline::absolute_pretty_url(&page.url_path))
     };
     let mut drawn = draw(&doc.placed_fields, doc.lang, typesetting, &page_href);
@@ -146,6 +145,62 @@ pub fn draw_for_page(
         }
     }
     drawn
+}
+
+/// The page of `all_docs` that a page link `target` written on `doc` names.
+fn linked_page<'a>(doc: &ParsedDocument, all_docs: &'a [ParsedDocument], graph: Option<&ContentGraph>, target: &str) -> Option<&'a ParsedDocument> {
+    let source = graph?.resolve_path(target, doc.source_path.as_deref()?)?;
+    all_docs.iter().find(|d| d.source_path.as_deref() == Some(source.as_str()))
+}
+
+/// How an `end` card is drawn: everything the shared summary card needs beyond the linked page.
+pub struct EndCards<'a> {
+    pub graph: Option<&'a ContentGraph>,
+    pub root_path: &'a str,
+    pub dir_overrides: &'a std::collections::HashMap<String, String>,
+    pub typesetting: Option<&'a str>,
+    pub now: chrono::NaiveDateTime,
+    pub media_lookup: &'a crate::build::media::dimensions::MediaDimensionLookup,
+}
+
+/// The sections for `doc`'s fields placed at `end`: the pages a page field links to, each as the summary card a listing draws for it, under the field's label.
+/// A card headlines the linked page's opening heading when it has a different one, else its title. A link that names no page of the site draws nothing.
+pub fn end_for_page(doc: &ParsedDocument, all_docs: &[ParsedDocument], cards: &EndCards<'_>) -> String {
+    let card = |decl: &FieldDecl, link: &PageLink| {
+        let target = linked_page(doc, all_docs, cards.graph, &link.target)?;
+        let strip = Some(decl.pictures).filter(|n| *n >= 2);
+        let mut props = child_list::props_for_document(target, all_docs, cards.root_path, cards.dir_overrides, cards.typesetting, cards.now, strip);
+        if let Some(headline) = &target.opening_heading {
+            props.title = headline.clone();
+        }
+        // A hand-picked card names no date: the axis that says nothing about one.
+        Some(child_summary::render_with_sort(&props, doc.lang, cards.typesetting, Some(cards.media_lookup), moss_core::sort::SortAxis::Weight))
+    };
+    end_html(&doc.placed_fields, doc.lang, &card)
+}
+
+/// One `<section data-field>` per placed `end` field that has a card to draw, headed by the field's label.
+fn end_html(placed: &[Placed], lang: Language, card: &dyn Fn(&FieldDecl, &PageLink) -> Option<String>) -> String {
+    placed
+        .iter()
+        .filter_map(|p| {
+            let Placed::Value(decl, value) = p else { return None };
+            if decl.place != Some(Place::End) {
+                return None;
+            }
+            let links: &[PageLink] = match value {
+                TypedValue::Page(link) => std::slice::from_ref(link),
+                TypedValue::Pages(links) => links,
+                _ => return None,
+            };
+            let cards: String = links.iter().filter_map(|link| card(decl, link)).collect::<Vec<_>>().join("\n");
+            (!cards.is_empty()).then(|| {
+                let label = html_escape(&decl.label_for(lang.as_bcp47_attr()));
+                let list = crate::build::components::cards_container("list", false, false, &Default::default(), &cards);
+                format!("<section class=\"moss-field-end\" data-field=\"{}\">\n<h2 class=\"moss-field-end-label\">{label}</h2>\n{list}\n</section>\n", html_escape(&decl.name))
+            })
+        })
+        .collect()
 }
 
 /// The declarations a page draws, in declaration order. A group draws the
@@ -247,7 +302,7 @@ fn subtitle_line(field: &str, html: &str) -> String {
 }
 
 /// Appends, to each page's card extras, the declared fields with `card = true` that the page has a value for.
-/// Plain text, never a link: a card is already one link. `decls` is in declaration order, which is the drawing order.
+/// Never a link (a text value keeps only inline emphasis): a card is already one link. `decls` is in declaration order, which is the drawing order.
 pub fn set_card_fields(documents: &mut [ParsedDocument], decls: &[FieldDecl], typesetting: Option<&str>) {
     let cards: Vec<&FieldDecl> = decls.iter().filter(|d| d.card).collect();
     if cards.is_empty() {
@@ -258,11 +313,12 @@ pub fn set_card_fields(documents: &mut [ParsedDocument], decls: &[FieldDecl], ty
             .iter()
             .filter_map(|d| {
                 let v = doc.declared.get(&d.name)?;
-                let (name, text) = (html_escape(&d.name), html_escape(&card_text(d, v, doc.lang, typesetting)));
-                // A choice's `data-value` is the slug of its key, as on a placed choice and a term credit; any other value is its own text.
+                let name = html_escape(&d.name);
+                let text = text_html(d, v, doc.lang, typesetting).unwrap_or_else(|| html_escape(&card_text(d, v, doc.lang, typesetting)));
+                // A choice's `data-value` is the slug of its key, as on a placed choice and a term credit; any other value is its own text without markup.
                 let value = match v {
                     TypedValue::Choice { value, .. } => html_escape(&moss_core::terms::term_slug(value)),
-                    _ => text.clone(),
+                    _ => strip_tags(&text),
                 };
                 Some(format!(r#"<span class="moss-card-field" data-field="{name}" data-value="{value}">{text}</span>"#))
             })
@@ -286,10 +342,35 @@ fn card_text(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Opti
     }
 }
 
+/// A text value as inline markup: `*x*`, `_x_`, `**x**` and `` `x` `` become emphasis and code, a link keeps its words and drops its target, the rest is escaped.
+/// The one place a text field's markdown is read, for a card and a placed field alike.
+/// The built-in `title` part of a group stays plain: it is the page's label, not an author's markup.
+fn text_html(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>) -> Option<String> {
+    (matches!(v, TypedValue::Text(_)) && decl.name != "title").then(|| crate::build::page::meta::render_description_html_in_link(&value_text(v, lang, typesetting)))
+}
+
+/// Drops the tags from markup whose text is escaped, so every `<` is a tag's.
+fn strip_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// One value as inline markup.
 fn inline(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> String {
     if let Some(datetime) = datetime_attr(v) {
         return format!("<time datetime=\"{}\">{}</time>", html_escape(&datetime), html_escape(&value_text(v, lang, typesetting)));
+    }
+    if let Some(html) = text_html(decl, v, lang, typesetting) {
+        return html;
     }
     match v {
         TypedValue::Number(n) => format!("<data value=\"{n}\">{}</data>", html_escape(&number_text(n, lang))),

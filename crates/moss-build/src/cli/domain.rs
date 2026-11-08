@@ -117,10 +117,9 @@ fn client_for_folder(folder: &Path) -> Result<MossSetaClient, String> {
     if !folder.exists() {
         return Err(format!("folder does not exist: {}", folder.display()));
     }
-    // load_for_signing forces the signing key into memory now, so later
-    // sign_request_payload calls don't fail opaquely. It intentionally does NOT
-    // regenerate on a missing key — a new pubkey would make seta stop
-    // recognizing this account as the owner of the site.
+    // Loads the signing key now, so a missing key fails here rather than at
+    // the first signed request. It never regenerates one: a new pubkey would
+    // make seta stop recognizing this account as the owner of the site.
     let identity = Identity::load_for_signing(folder).map_err(|e| {
         format!(
             "signing key unavailable: {} (expected identity at {}/.moss/identity/secret-key)",

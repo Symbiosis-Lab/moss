@@ -82,11 +82,14 @@ pub struct HeadingInputs<'a> {
     /// `true` iff the file is a layout-slot source (e.g. root `footer.md`)
     /// rather than an article. Slot files are embedded as fragments into a
     /// surrounding layout; the auto-injected `<h1 class="moss-article-title">`
-    /// would render as an unwanted heading inside that fragment. PR7b
-    /// replaces the pre-2026-05-28 frontmatter-synthesis hack
-    /// (`title: ""` injected at the call site to drive `empty_title=true`)
-    /// with this structural input. Editor passes `false`.
+    /// would render as an unwanted heading inside that fragment; this input
+    /// suppresses it directly, with no `title: ""` frontmatter needed.
+    /// Editor passes `false`.
     pub slot_only: bool,
+    /// The frontmatter names the page's own date (`date:` or `start:`). A
+    /// file named by a bare date stamp is an untitled post only without one,
+    /// so an event or post that already dates itself keeps its heading.
+    pub dated: bool,
 }
 
 /// Compute just the visible heading text for a file path. Used by callers
@@ -138,12 +141,27 @@ pub fn filename_text_with_root(file_path: &str, root_folder_name: Option<&str>) 
     // parent's raw disk name and lost the casing of a real site's name
     // (2026-09-14).
     let is_folder_note = home::is_index_stem_any_lang(stem);
+    // A date stamp is the page's date, not part of its title: the words after it are.
+    let stamp_words = crate::date::parse_filename_stamp(stem).and_then(|s| s.words);
     let source_name = if is_folder_note {
         parent_name.unwrap_or(stem)
     } else {
-        stem
+        stamp_words.as_deref().unwrap_or(stem)
     };
     source_name.replace('-', " ").replace('_', " ")
+}
+
+/// Whether the page is untitled: no `title:`, no `date:` or `start:` of its
+/// own (`dated`), and a file stem that is nothing but a date stamp. Its
+/// heading is hidden and its label comes from the body.
+pub fn is_untitled_stamp(file_path: &str, frontmatter_title: Option<&str>, dated: bool) -> bool {
+    frontmatter_title.is_none()
+        && !dated
+        && std::path::Path::new(file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(crate::date::parse_filename_stamp)
+            .is_some_and(|s| s.words.is_none())
 }
 
 /// Whether a `:::hero` at the top of the body takes over the page's title
@@ -283,17 +301,24 @@ pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> 
 /// different `# Text`, makes this false.
 pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
     let title = same_heading_text_key(title);
-    if title.is_empty() {
-        return false;
-    }
+    !title.is_empty() && opening_h1(body_markdown).is_some_and(|text| same_heading_text_key(text) == title)
+}
+
+/// The text of the `# Text` heading a body opens with, in the sense of [`body_opens_with_title`]: its first block, or the first heading of an opening `:::grid`.
+pub fn opening_h1(body_markdown: &str) -> Option<&str> {
     let mut lines = body_markdown.lines().filter(|line| !line.trim().is_empty());
     let first = lines.next();
-    let text = if first.is_some_and(|l| l.starts_with(":::grid")) {
+    if first.is_some_and(|l| l.starts_with(":::grid")) {
         lines.take_while(|l| l.trim() != ":::").find_map(h1_text)
     } else {
         first.and_then(h1_text)
-    };
-    text.is_some_and(|text| same_heading_text_key(text) == title)
+    }
+}
+
+/// The heading a body opens with when its text is not `title`: a case study's question over its name. `None` when the body opens with no heading, or with the title itself.
+pub fn opening_heading_beyond_title(body_markdown: &str, title: &str) -> Option<String> {
+    let heading = opening_h1(body_markdown)?.trim();
+    (!heading.is_empty() && !body_opens_with_title(body_markdown, title)).then(|| heading.to_string())
 }
 
 /// The text of a `# Text` line, or `None` for any other line.
@@ -358,6 +383,7 @@ fn resolve(input: HeadingInputs<'_>) -> HeadingState {
     // resolves to the project's folder name, not the bare "index" stem.
     let (text, source) = match input.frontmatter_title {
         Some(t) => (t.trim().to_string(), HeadingSource::Title),
+        None if is_untitled_stamp(input.file_path, None, input.dated) => (String::new(), HeadingSource::Title),
         None => (
             filename_text_with_root(input.file_path, input.root_folder_name),
             HeadingSource::Filename,
@@ -410,6 +436,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         }
     }
 
@@ -501,6 +528,24 @@ mod tests {
         assert_eq!(filename_text_with_root("index.zh-hans.md", Some("My Site")), "My Site");
     }
 
+    #[test]
+    fn a_date_stamp_is_not_part_of_the_filename_title() {
+        assert_eq!(filename_text("notes/2026-11-06 Autumn hotpot.md"), "Autumn hotpot");
+        assert_eq!(filename_text("notes/2026-11-06-autumn-hotpot.md"), "autumn hotpot");
+        assert_eq!(filename_text("notes/2026-11-06 1432 Autumn hotpot.md"), "Autumn hotpot");
+    }
+
+    #[test]
+    fn only_a_bare_stamp_without_title_is_untitled() {
+        assert!(is_untitled_stamp("notes/2026-11-06.md", None, false));
+        assert!(is_untitled_stamp("notes/202611061432.md", None, false));
+        assert!(!is_untitled_stamp("notes/2026-11-06.md", Some("Kept"), false));
+        assert!(!is_untitled_stamp("notes/2026-11-06 Autumn.md", None, false));
+        assert!(!is_untitled_stamp("notes/about.md", None, false));
+        // A page that dates itself (`date:` or `start:`) keeps its heading.
+        assert!(!is_untitled_stamp("events/2026-11-06.md", None, true));
+    }
+
     // ── filename_text_with_root: root-aware home title ─────────
 
     #[test]
@@ -576,6 +621,7 @@ mod tests {
             root_folder_name: Some("My Site"),
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(!s.visible, "root index still suppresses the auto H1");
         assert_eq!(s.text, "My Site");
@@ -625,6 +671,7 @@ mod tests {
             root_folder_name: Some("山居"),
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(!s.visible, "root-level self-named home file must hide H1");
     }
@@ -641,6 +688,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(!s.visible);
     }
@@ -741,6 +789,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(!s.visible);
         assert_eq!(s.text, "article");
@@ -755,6 +804,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(!s.visible, "hero ownership trumps title presence");
         assert_eq!(s.text, "Custom");
@@ -768,14 +818,15 @@ mod tests {
         // heading at all while `<title>`, OG and RSS all still had one.
         let s = compute(HeadingInputs {
             file_path: "awards/writing/s4/part-one.md",
-            frontmatter_title: Some("在前線，一座文學博物館的抵抗"),
+            frontmatter_title: Some("港邊的一間小書店"),
             body_markdown: ":::hero {image=assets/cover.jpg}\n:::\n\n正文。",
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(s.visible, "an empty hero renders no title, so the page keeps its own");
-        assert_eq!(s.text, "在前線，一座文學博物館的抵抗");
+        assert_eq!(s.text, "港邊的一間小書店");
     }
 
     #[test]
@@ -793,6 +844,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(s.visible, "a body-image-only hero renders no title, so the page keeps its own");
         assert_eq!(s.text, "安晚冊");
@@ -807,6 +859,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(s.visible, "hero anywhere but at top does not own heading");
     }
@@ -820,6 +873,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         });
         assert!(!s.visible, "leading blanks before :::hero still count as 'at top'");
     }
@@ -835,6 +889,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: true,
             slot_only: false,
+            dated: false,
         });
         assert!(!s.visible);
     }
@@ -843,8 +898,7 @@ mod tests {
 
     #[test]
     fn slot_only_hides_heading_regardless_of_title() {
-        // PR7b: `footer.md` flows through the normal pipeline
-        // with `slot_only = true`. The auto-injected H1 must be suppressed
+        // `footer.md` flows through the normal pipeline with `slot_only = true`. The auto-injected H1 must be suppressed
         // even when the author writes `title: "Custom"` in the
         // frontmatter — the rendered HTML lands inside a `<footer>` slot,
         // and an article-level heading there is structurally wrong.
@@ -855,6 +909,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: true,
+            dated: false,
         });
         assert!(
             !s.visible,
@@ -873,6 +928,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: true,
+            dated: false,
         });
         assert!(!s.visible);
     }
@@ -920,6 +976,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         }
     }
 
@@ -943,6 +1000,7 @@ mod tests {
             root_folder_name: None,
             is_home_override: false,
             slot_only: false,
+            dated: false,
         };
         assert_eq!(article_title_outcome(hello, false), TitleOutcome::None);
         assert_eq!(article_title_outcome(article_inputs("# custom\n", Some("Custom")), false), TitleOutcome::None);

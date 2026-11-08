@@ -1,25 +1,19 @@
 //! moss-build — the UI-free build pipeline crate.
 //!
-//! Seeded 2026-08-11 with vault-root identity: root
-//! identity is the compiler's *input identity* (`PipelineConfig.root` is a
-//! [`vault_root::VaultRoot`]), so the owner lands here before the M6a pipeline move —
-//! the moved pipeline files then reach it in-crate instead of needing a forbidden
-//! `moss-build → moss` edge (`scripts/check-crate-dag.mjs` rule 4).
+//! Vault-root identity is the compiler's *input identity* (`PipelineConfig.root`
+//! is a [`vault_root::VaultRoot`]), so the owner lives here and the pipeline
+//! files reach it in-crate instead of needing a forbidden `moss-build → moss`
+//! edge (`scripts/check-crate-dag.mjs` rule 4).
 //!
-//! Joined 2026-08-18 by the `.moss` **layout** owner: the crate
-//! that writes `.moss/build.nosync/generations/<id>/` owns the names for it, and 22 of
-//! `MossPaths`'s consumers sit in the build tree that moves at M6a. Same argument as
-//! above, second type — identity, then layout.
+//! The `.moss` **layout** owner lives here for the same reason: the crate that
+//! writes `.moss/build.nosync/generations/<id>/` owns the names for it, and 22 of
+//! `MossPaths`'s consumers sit in the build tree. Identity, then layout.
 //!
-//! Joined 2026-08-18 by [`config`] — the `.moss/config.toml` **reader** and the pure
-//! migration transform.
-//! The app still owns the file. Its modal-driven writers stay app-side; the one write
-//! primitive they share (`vault::config`, amendment of 2026-09-07) is here so the open
-//! binary's `env` write and the compiler's plugin uninstall edit the user's bytes
-//! through the same door, never re-emit them.
-//!
-//! Until M6a the rest of the compiler charter
-//! (scan → render → emit, headless, no tauri) migrates in.
+//! [`config`] holds the `.moss/config.toml` **reader** and the pure migration
+//! transform. The app still owns the file. Its modal-driven writers stay
+//! app-side; the one write primitive they share (`vault::config`) is here so the
+//! open binary's `env` write and the compiler's plugin uninstall edit the user's
+//! bytes through the same door, never re-emit them.
 
 pub mod advisory;
 pub mod config;
@@ -28,11 +22,9 @@ pub mod nested_roots;
 pub mod templates;
 pub mod vault_root;
 
-// ── The M6a move (2026-08-28): the compiler itself ──────────────────────────
+// ── The compiler itself ──────────────────────────
 //
-// The build tree and its private support cluster crossed from the desktop
-// app in one enlarged `git mv`.
-// Files kept their intra-tree `crate::…` spellings, so the module names here
+// The build tree and its private support cluster. The module names here
 // mirror the app crate's: `build`, `i18n`, `types`, `tasks`, and the partial
 // families below. The desktop app re-exports each at its old path.
 pub mod build;
@@ -59,6 +51,7 @@ pub mod infra;
 pub mod platform;
 pub mod seta;
 pub mod plugins;
+pub mod syndication;
 pub mod system;
 
 pub mod vault;

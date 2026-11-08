@@ -1,0 +1,393 @@
+/* ============================================================
+   Toast notification system — the ONE shared stylesheet,
+   imported by the shell, the launcher and the editor.
+
+   LOCKED LAYOUT — read before editing:
+
+       col 1     col 2 (minmax(0,1fr))          col 3
+     [ icon ]  [ message ......................] [ ✕ ]   row 1
+     [      ]  [ actions (own row, flex-wrap)  ] [   ]   row 2
+     [      ]  [ progress bar ........................]  row 3
+
+   1. The message's width is decided ONLY by track arithmetic:
+      toast width − icon column − close column. No sibling can
+      compress it, because nothing else occupies its row and
+      minmax(0, 1fr) removes the content-driven track minimum.
+      This is the structural fix for the recurring collapse bug
+      (inline nowrap actions — and before that, the progress
+      bar — starved the flex:1 message to one word per line).
+   2. Actions and progress live on their OWN grid rows below the
+      message. Do not move them back onto the message's row, and
+      do not reintroduce conditional layout (:has() patches).
+   3. row-gap and column-gap are 0 ON PURPOSE. Every optional
+      element (icon, close, actions, progress) carries its own
+      margin toward the message, so absent elements contribute
+      zero phantom space — grid gaps would leave dead space
+      around empty tracks in the message-only configuration.
+   4. Never append bare text nodes directly to .moss-toast — an
+      anonymous grid item would land in the icon cell. All text
+      goes inside .moss-toast-message.
+   5. An affordance that belongs ON the message's line (the
+      send-logs ticket's copy button; the publish confirmation's
+      domain link) goes INSIDE .moss-toast-message as an inline
+      child — never into .moss-toast-actions, which is row 2 by
+      rule 2 and therefore always a second line. Those are
+      ToastOptions.inlineCopy and ToastOptions.inlineLink;
+      geometry is guarded by the `inline-copy` and `inline-link`
+      cases in the layout spec below.
+
+   Layout guard: the desktop app's toast-layout spec, run in Chromium
+   and WebKit.
+   ============================================================ */
+
+/* --- Container (shelf) ------------------------------------- */
+/* Default centering is 50% of the window (launcher, editor).
+   The main shell overrides `left` in its own stylesheet to center over
+   the preview area — that override is the ONLY per-window rule. */
+#moss-toast-container {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-toast); /* toast layer — above everything */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* Click-through shelf; each toast re-enables its own events. */
+  pointer-events: none;
+}
+
+/* --- Toast card --------------------------------------------- */
+.moss-toast {
+  box-sizing: border-box;
+  /* Cap to the window so a narrow launcher (≥320px) never clips
+     the card; 40px = 20px breathing room per side. */
+  min-width: min(320px, calc(100vw - 40px));
+  max-width: min(500px, calc(100vw - 40px));
+  padding: 12px 16px;
+  border-radius: var(--moss-border-radius);
+  background: var(--moss-color-surface);
+  color: var(--moss-color-text);
+  border: 1px solid var(--moss-border-light);
+  box-shadow: var(--moss-elevation-2);
+  pointer-events: auto;
+  font-size: 14px;
+  font-weight: 500;
+
+  /* LOCKED GRID — see header comment. gap: 0 is deliberate;
+     spacing is carried by the optional elements' margins. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0;
+  /* Top-align rows so icon/close hug the FIRST line of a
+     multi-line message (each nudges down 2px to optically
+     center on the 19.6px line box: (1.4 × 14px − 16px) / 2). */
+  align-items: start;
+
+  animation: moss-toast-slide-in 0.24s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+.moss-toast.fade-out {
+  animation: moss-toast-fade-out 0.3s ease forwards;
+}
+
+/* Type variants — colored left border accent. */
+.moss-toast.success { border-left: 3px solid var(--moss-success); }
+.moss-toast.error   { border-left: 3px solid var(--moss-error); }
+.moss-toast.info    { border-left: 3px solid var(--moss-color-accent); }
+.moss-toast.warning { border-left: 3px solid var(--moss-warning); }
+
+/* --- Icon (col 1, row 1; success/warning only) --------------- */
+.moss-toast-icon {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  margin-right: 12px; /* gap travels WITH the icon (rule 3) */
+  margin-top: 2px;    /* optical first-line centering */
+}
+
+.moss-toast.success .moss-toast-icon { color: var(--moss-success); }
+.moss-toast.error   .moss-toast-icon { color: var(--moss-error); }
+.moss-toast.warning .moss-toast-icon { color: var(--moss-warning); }
+.moss-toast.info    .moss-toast-icon { color: var(--moss-color-accent); }
+
+/* Status dot — overrides the check/triangle icon for a two-phase "pending →
+   confirmed" toast (send logs, check for updates). Centered in the same icon
+   column as the SVG icons above. */
+.moss-toast-icon--dot {
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+.moss-toast-icon--dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.moss-toast-icon--dot-yellow::before { background: var(--moss-warning); }
+.moss-toast-icon--dot-green::before  { background: var(--moss-success); }
+
+/* Compact — a green-dot confirmation is a short one-liner ("Logs sent: …",
+   "You're up to date"); shrink to its natural width instead of the 320px
+   floor other toasts need to stay readable. `max-width` still applies so a
+   long ticket id wraps rather than overflowing the window. */
+.moss-toast--compact {
+  min-width: 0;
+  width: fit-content;
+}
+
+/* --- Message (col 2, row 1; the protected column) ------------ */
+.moss-toast-message {
+  grid-column: 2;
+  grid-row: 1;
+  line-height: 1.4;
+  /* Unbroken tokens (URLs, version strings) wrap instead of
+     widening the toast; CJK wraps naturally. NOT word-break:
+     break-all — English words stay whole. */
+  overflow-wrap: anywhere;
+}
+
+/* --- Actions (col 2, row 2 — always below the message) ------- */
+.moss-toast-actions {
+  grid-column: 2;
+  grid-row: 2;
+  margin-top: 8px; /* the row's only vertical gap (rule 3) */
+  display: flex;
+  flex-wrap: wrap;      /* two long actions stack, never squeeze */
+  align-items: center;
+  column-gap: 16px;     /* the separator between adjacent actions */
+  row-gap: 4px;
+}
+
+.moss-toast-action {
+  color: var(--moss-color-accent);
+  text-decoration: none;
+  font-size: 13px;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, text-decoration 0.15s ease;
+  /* Command actions render as <button> (for keyboard/AT semantics); reset the
+     UA button chrome so a command looks identical to an <a> navigation link.
+     Every line here is a no-op for an <a>. Keep font-size 13px — do NOT use
+     `font: inherit`, which would reset it to the toast's 14px. */
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.moss-toast-action:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/* Keyboard focus ring — the accent outline moss uses on interactive controls
+   (cf. .launcher__cta, .moss-copy-btn). Offset so it stays visible around the
+   filled primary button, not only the text links. */
+.moss-toast-action:focus-visible {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: 2px;
+}
+
+/* Primary / secondary pair — used when a toast has one clear default action
+   (e.g. the update-available toast: "Update & Restart" vs "Release notes").
+   Mirrors moss's established filled-primary + muted-text pattern
+   (.moss-setup-btn--primary / .moss-link--subtle). The base green stays the
+   DEFAULT for every un-varianted action, so existing toasts are untouched. */
+
+/* Primary: a filled accent button — the one thing the eye should land on.
+   Its solid fill (not just color) is what carries the hierarchy, so green
+   appears exactly once in the action row. */
+.moss-toast-action--primary {
+  color: var(--moss-pill-filled-text);
+  background: var(--moss-color-accent);
+  opacity: 1; /* solid — override the base link's 0.7 */
+  padding: 4px 12px;
+  border-radius: var(--moss-radius-capsule); /* every button is a capsule */
+  font-weight: 500;
+}
+
+.moss-toast-action--primary:hover {
+  /* Darken via an overlay rather than --moss-color-accent-hover: in dark mode
+     that token LIGHTENS the fill, dropping white text below WCAG AA. An overlay
+     darkens in BOTH themes, keeping contrast. */
+  background-image: linear-gradient(rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.14));
+  text-decoration: none; /* a button doesn't underline — override the base */
+}
+
+.moss-toast-action--primary:active {
+  background-image: linear-gradient(rgba(0, 0, 0, 0.22), rgba(0, 0, 0, 0.22));
+}
+
+/* Secondary: a muted text link (keeps the "→"), demoted off the accent so the
+   primary owns the color. Matches .moss-link--subtle. */
+.moss-toast-action--secondary {
+  color: var(--moss-color-text-secondary);
+  opacity: 1;
+}
+
+.moss-toast-action--secondary:hover {
+  color: var(--moss-color-text);
+}
+
+/* Inline link — the destination is the end of the sentence
+   ("Published to example-garden.mosspub.com"), so it sits on the
+   message's own line (rule 5) rather than in the row-2 action
+   grid. It reuses .moss-toast-action for color/hover/focus and
+   only overrides what being inline changes: full opacity (it is
+   the sentence, not a demoted follow-up), the toast's own 14px
+   so it doesn't shrink mid-sentence, and a leading space that
+   textContent can't carry. */
+.moss-toast-inline-link {
+  font-size: inherit;
+  opacity: 1;
+  margin-left: 0.35em;
+  /* Underlined at rest: inside a sentence, color alone is not a
+     reliable "this is clickable" signal (and not a WCAG-safe one). */
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  /* A host must not break mid-label onto two lines. */
+  white-space: nowrap;
+  /* …but it must not overflow the toast either. The live-publish Ack labels
+     this link with the site's HOST, and a v3 .onion host is 62 unbreakable
+     chars — wider than the whole message column on a narrow shelf. Contained
+     the same way a notice filename is (.moss-notice-file): the label moves to
+     its own line and ELLIPSIZES past the column edge; the href still carries
+     the full destination, and the middle of an onion address was never
+     human-readable anyway. */
+  display: inline-block;
+  /* Minus the sentence gap above: outer width = margin + max-width, and a
+     bare 100% would overflow the column by exactly that margin. */
+  max-width: calc(100% - 0.35em);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+/* --- Close (col 3, row 1) ------------------------------------ */
+.moss-toast-close {
+  grid-column: 3;
+  grid-row: 1;
+  margin-left: 12px; /* gap travels WITH the button (rule 3) */
+  margin-top: 2px;   /* optical first-line centering */
+  position: relative;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--moss-radius-capsule); /* square footprint — capsule token resolves to a circle */
+  opacity: 0.4;
+  transition: opacity 0.2s ease, background 0.2s ease;
+}
+
+/* Hit-target extender: the glyph stays 16px as designed, but the CLICKABLE
+   area meets the WCAG 2.2 SC 2.5.8 24px floor (stable-chrome rule). */
+.moss-toast-close::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+
+.moss-toast-close:hover {
+  opacity: 1;
+  background: var(--moss-hover-overlay);
+}
+
+.moss-toast-close:active {
+  background: var(--moss-active-overlay);
+}
+
+/* --- Progress (col 2 → right edge, row 3) --------------------
+   Starts at the message's left edge, runs under the close
+   button's column to the padding edge. Row 2 stays zero-height
+   when there are no actions, so this needs no :has() gymnastics
+   — the old `.moss-toast:has(.moss-toast-progress)` wrap patch
+   is retired. */
+.moss-toast-progress {
+  grid-column: 2 / -1;
+  grid-row: 3;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+/* Track + fill. The toast is the only consumer of the
+   .moss-progress-bar-* classes (the progress panel's bars were
+   removed in Phase C), so they stay scoped under
+   .moss-toast-progress. */
+.moss-toast-progress .moss-progress-bar-track {
+  width: 100%;
+  height: 4px;
+  background: var(--moss-border-light);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.moss-toast-progress .moss-progress-bar-fill {
+  height: 100%;
+  background: var(--moss-color-accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.moss-toast-progress .moss-progress-bar-fill.indeterminate {
+  background: linear-gradient(
+    90deg,
+    var(--moss-color-accent) 25%,
+    transparent 25%,
+    transparent 50%,
+    var(--moss-color-accent) 50%,
+    var(--moss-color-accent) 75%,
+    transparent 75%
+  );
+  background-size: 200% 100%;
+  animation: moss-progress-indeterminate 1.5s linear infinite;
+}
+
+/* --- Animations ---------------------------------------------- */
+@keyframes moss-toast-slide-in {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes moss-toast-fade-out {
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes moss-progress-indeterminate {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Entry/exit motion off for reduced-motion users; removal still
+   works — dismissal is timer-driven (300ms), not animation-driven.
+   The indeterminate stripe stays: it encodes "still working". */
+@media (prefers-reduced-motion: reduce) {
+  .moss-toast,
+  .moss-toast.fade-out {
+    animation-duration: 0.01ms;
+  }
+}

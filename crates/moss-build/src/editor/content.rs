@@ -433,7 +433,7 @@ pub fn compute_heading_state_inner(
         // pre-existing gaps documented at HeadingInputs::root_folder_name.
         root_folder_name: None,
         is_home_override: false,
-        // PR7b: the editor doesn't render slot files (`footer.md`) inline
+        // The editor doesn't render slot files (`footer.md`) inline
         // — the slot-file flow is exclusively the build pipeline's
         // concern. Pass false here so the editor's heading-state preview
         // for an open `footer.md` shows the would-be H1 the author can
@@ -441,6 +441,7 @@ pub fn compute_heading_state_inner(
         // answer still suppresses the H1 because `is_excluded_from_pages`
         // sees the reserved filename.
         slot_only: false,
+        dated: ["date", "start"].iter().any(|k| frontmatter.get(*k).is_some_and(|v| !v.is_null())),
     })
 }
 

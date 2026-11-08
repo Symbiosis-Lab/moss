@@ -11,6 +11,7 @@
 export {};
 
 import { holdPageScroll } from "./viewport";
+import { readStored, writeStored } from "./safe-storage";
 
 // Expose toggle functions globally for onclick handlers
 declare global {
@@ -127,11 +128,12 @@ document.addEventListener("moss-morph-patched", syncMobileMenuToViewport);
  * so site-level scripts can react to theme changes (e.g., exit custom modes).
  */
 function toggleTheme(): void {
+  if (document.documentElement.hasAttribute("data-moss-color-scheme")) return;
   const previous = document.documentElement.getAttribute("data-theme");
   const next = previous === "dark" ? "light" : "dark";
 
   document.documentElement.setAttribute("data-theme", next);
-  localStorage.setItem("moss-theme", next);
+  writeStored("moss-theme", next);
 
   // Sync <meta name="theme-color"> to the new computed --moss-color-bg so
   // browser chrome (Android status bar, iOS Safari, PWA title bar) reflects
@@ -191,7 +193,7 @@ window.addEventListener("resize", () => {
 // independent of whether the font control trigger exists. This ensures
 // homepage, folder pages, and about pages all respect the user's choice.
 (function () {
-  const saved = localStorage.getItem("moss-font-scale");
+  const saved = readStored("moss-font-scale");
   if (saved) {
     document.documentElement.classList.add(`scale-${saved}`);
   }
@@ -294,7 +296,7 @@ export function initFontPanel(): void {
     document.documentElement.className =
       document.documentElement.className.replace(/scale-\w+/g, "").trim() +
       (scale ? ` scale-${scale}` : "");
-    localStorage.setItem("moss-font-scale", scale || "");
+    writeStored("moss-font-scale", scale || "");
 
     if (before) {
       const after = pill.getBoundingClientRect();
@@ -345,7 +347,7 @@ export function initFontPanel(): void {
   window.addEventListener("resize", () => { if (isOpen) close(); }, { passive: true });
 
   // Restore saved font scale — pill is closed, so this writes no translate.
-  const savedScale = localStorage.getItem("moss-font-scale");
+  const savedScale = readStored("moss-font-scale");
   if (savedScale) {
     selectScale(savedScale);
   }
@@ -385,9 +387,6 @@ initCardVideos();
 import { initAmbientVideos } from "./video/ambient-video";
 initAmbientVideos();
 
-import { initSelectionActions } from "./selection-actions";
-initSelectionActions();
-
 
 // Breadcrumb hover hints, shown only while a segment's label is actually cut
 // off. It rides this bundle rather than shipping its own `<script>` because
@@ -420,6 +419,11 @@ import "./nav/hint-place";
 // no-ops on a page whose markup carries no island, which is every page without
 // a breadcrumb trail.
 import "./nav/nav-island";
+
+// `[site].header_scroll` — measures the header for anchor clearance and, for
+// `hide`, slides it away while the reader scrolls down. Self-wires on import;
+// no-ops on a page whose <body> carries no `data-header-scroll`.
+import "./nav/header-scroll";
 
 // The blurred placeholder an image is painted with until it loads. Its own
 // module so the scan and the load listener can be tested without this

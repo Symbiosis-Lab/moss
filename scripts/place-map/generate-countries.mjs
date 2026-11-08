@@ -14,7 +14,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { brotliCompressSync, constants as zlib } from "node:zlib";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import shp from "shpjs";
 import polygonClipping from "polygon-clipping";
 
@@ -24,6 +24,12 @@ const MANIFEST = resolve(DATA, "countries-source-manifest.toml");
 const OUT = resolve(DATA, "countries-v1.bin.br");
 const REPORT = resolve(DATA, "countries-size.json");
 const CACHE = resolve(process.env.MOSS_PLACE_MAP_SOURCE_DIR ?? "/private/tmp/moss-place-map-sources");
+
+// The search index's cities: every populated place of scalerank 4 or larger
+// (0 is the largest) and any national capital down to scalerank 6, about a
+// thousand names.
+const CITY_MAX_RANK = 4;
+const CAPITAL_MAX_RANK = 6;
 
 const MAGIC = Buffer.from("MOSSCTY1", "ascii");
 const SCHEMA = 1;
@@ -42,6 +48,8 @@ const MIN_RING_AREA_PX2 = 0.5;
 const MIN_KEPT_SHARE = 0.05;
 // The first measured run (32,117 brotli bytes of countries-v1.bin.br) plus 5%; it only moves down.
 const BUDGET_BYTES = 33723;
+// The search index moss-build writes from the city list and the shapes' names: the first measured size (27,174 bytes) plus 5%. It only moves down.
+const INDEX_BUDGET_BYTES = 28533;
 
 // Equal Earth (Savric, Patterson and Jenny 2018).
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796, M = Math.sqrt(3) / 2;
@@ -205,6 +213,25 @@ function compress(bytes) {
   return brotliCompressSync(bytes, { params: { [zlib.BROTLI_PARAM_QUALITY]: 11, [zlib.BROTLI_PARAM_SIZE_HINT]: bytes.length, [zlib.BROTLI_PARAM_LGWIN]: 24 } });
 }
 
+// ---- cities ---------------------------------------------------------------
+
+// [name, admin code] pairs, largest first. A place belongs to the country whose
+// shape carries its admin code, else to its sovereign state's; one on land
+// that has no shape of its own (a disputed name) is dropped.
+function cutCities(features, shaped) {
+  const seen = new Set();
+  const cities = [];
+  const kept = features.map((f) => f.properties).filter((p) => p.scalerank <= CITY_MAX_RANK || (p.adm0cap && p.scalerank <= CAPITAL_MAX_RANK));
+  for (const p of kept.sort((a, b) => a.scalerank - b.scalerank || b.pop_max - a.pop_max || a.name.localeCompare(b.name))) {
+    const code = [p.adm0_a3, p.sov_a3].find((c) => shaped.has(c));
+    const key = `${p.name}|${code}`;
+    if (!code || seen.has(key)) continue;
+    seen.add(key);
+    cities.push([p.name, code]);
+  }
+  return cities;
+}
+
 // ---- build ----------------------------------------------------------------
 
 async function build() {
@@ -239,10 +266,12 @@ async function build() {
   const countries = raw.map((c) => ({ ...c, rings: simplified.get(c.code) }));
   for (const c of countries) for (const ring of c.rings) for (const [, lat] of ring) if (lat > NORTH + 1e-6 || lat < SOUTH - 1e-6) fail(`${c.name} leaves the frame`);
   const bytes = encodeAsset(countries, simplified.get("\u0000disputed"), sha256(manifestBytes));
-  return { bytes, countries, disputedRings: simplified.get("\u0000disputed"), manifestDigest: sha256(manifestBytes) };
+  const places = await readFeatures(artifact("populated_places"));
+  const cities = cutCities(places, new Set(countries.filter((c) => c.rings.length).map((c) => c.adm0)));
+  return { bytes, countries, cities, disputedRings: simplified.get("\u0000disputed"), manifestDigest: sha256(manifestBytes) };
 }
 
-async function writeAsset({ bytes, countries, disputedRings, manifestDigest }, { out = OUT, reportPath = REPORT, budget = BUDGET_BYTES } = {}) {
+async function writeAsset({ bytes, countries, cities, disputedRings, manifestDigest }, { out = OUT, reportPath = REPORT, budget = BUDGET_BYTES } = {}) {
   const compressed = compress(bytes);
   const report = {
     schema: SCHEMA,
@@ -250,12 +279,15 @@ async function writeAsset({ bytes, countries, disputedRings, manifestDigest }, {
     raw_bytes: bytes.length,
     brotli_bytes: compressed.length,
     budget_bytes: budget,
+    index_budget_bytes: INDEX_BUDGET_BYTES,
     countries: countries.length,
     disputed_names: countries.filter((c) => c.disputedName).map((c) => c.name),
+    cities: cities.length,
     vertices: countries.reduce((n, c) => n + c.rings.reduce((m, r) => m + r.length, 0), 0) + disputedRings.reduce((m, r) => m + r.length, 0),
   };
   if (budget && compressed.length > budget) fail(`country shapes are ${compressed.length} brotli bytes, over the ${budget} budget; nothing written`);
   await writeFile(out, compressed);
+  await writeFile(resolve(dirname(out), "countries-cities-v1.json"), `${JSON.stringify({ schema: SCHEMA, manifest_sha256: manifestDigest.toString("hex"), cities })}\n`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   return report;
 }
@@ -275,4 +307,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 }
 
-export { BUDGET_BYTES, build, compress, encodeAsset, encodeRings, equalEarth, simplifyRings, toPx, writeAsset, QUANT, NORTH, SOUTH, HALF_WIDTH };
+export { BUDGET_BYTES, INDEX_BUDGET_BYTES, build, compress, cutCities, encodeAsset, encodeRings, equalEarth, simplifyRings, toPx, writeAsset, QUANT, NORTH, SOUTH, HALF_WIDTH };

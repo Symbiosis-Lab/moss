@@ -1,9 +1,10 @@
 {
   "schema": 1,
-  "manifest_sha256": "60e7f69003724e9914d679fd4834c728c4050833022344b3bae2cfe6fe3e69dd",
+  "manifest_sha256": "38482ba3be08a6ec38130cf0bcafd7422190852e158cc05c98c43d8ed861a4f4",
   "raw_bytes": 47918,
-  "brotli_bytes": 32117,
+  "brotli_bytes": 32197,
   "budget_bytes": 33723,
+  "index_budget_bytes": 28533,
   "countries": 241,
   "disputed_names": [
     "Somaliland",
@@ -11,5 +12,6 @@
     "N. Cyprus",
     "Siachen Glacier"
   ],
+  "cities": 1129,
   "vertices": 12468
 }

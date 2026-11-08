@@ -113,6 +113,7 @@ import { installCaptureResponder } from "./capture/responder";
     // Set the attribute WITHOUT dispatching moss-theme-change (no echo loop);
     // a same-value write would still fire the reporters' observer, so skip it.
     const root = document.documentElement;
+    if (root.hasAttribute("data-moss-color-scheme")) return;
     if (root.getAttribute("data-theme") !== theme) root.setAttribute("data-theme", theme);
     // The site's own key, so the next document's pre-paint (shell.html) shows
     // what the shell last pushed instead of what the site last toggled. The
@@ -830,10 +831,9 @@ import { installCaptureResponder } from "./capture/responder";
     // moves `src`/`srcset` into `data-moss-ph-*` so the browser stops
     // re-selecting a URL it already failed on. Only the placeholder module knows
     // those attribute names, so we call through the handle it publishes rather
-    // than duplicating them here. This is the whole fix for LOG-8D03-T0528-08-08:
-    // without it a pending image that errored once matched nothing forever, the
-    // swap buffer evicted it after 20 futile drains, and the blueprint grid
-    // survived until the user pressed Cmd+R.
+    // than duplicating them here. Without this call a pending image that errored
+    // once matched nothing forever, the swap buffer evicted it after 20 futile
+    // drains, and the blueprint grid survived until the user pressed Cmd+R.
     //
     // Runs for EVERY asset type: a missing video poster is an <img> too (the old
     // thumb-swap.js existed only to handle that one case).
@@ -1006,8 +1006,8 @@ import { installCaptureResponder } from "./capture/responder";
   //
   // Model: Eleventy Dev Server `reload-client.js` morph branch — it too
   // `fetch`es its own `location.href` and idiomorphs the live document
-  // (full <head>+<body>, restore focus). Phase-1 scope is REFRESH (same
-  // URL); morph-driven navigation is future work.
+  // (full <head>+<body>, restore focus). Scope is REFRESH only (same
+  // URL), not morph-driven navigation.
   window.addEventListener("message", (e: MessageEvent) => {
     if (e.data?.type !== "moss-morph") return;
     const { gen } = e.data as { gen?: number };
@@ -1137,14 +1137,20 @@ import { installCaptureResponder } from "./capture/responder";
         // Sync <html> attributes (lang, data-theme, class) — the separate
         // head/body morphs don't touch the root element itself.
         const newRoot = doc.documentElement;
+        // A rebuild can return a fixed site to auto. Remove only the policy's
+        // own attributes; unrelated runtime root styles still belong to the page.
+        if (document.documentElement.hasAttribute("data-moss-color-scheme") && !newRoot.hasAttribute("data-moss-color-scheme")) {
+          document.documentElement.removeAttribute("data-moss-color-scheme");
+          document.documentElement.style.removeProperty("color-scheme");
+        }
         for (const attr of Array.from(newRoot.attributes)) {
           if (document.documentElement.getAttribute(attr.name) !== attr.value) document.documentElement.setAttribute(attr.name, attr.value);
         }
         // Re-assert the shell-driven theme: the fetched HTML may carry a
-        // different (or no) data-theme; the shell's choice wins inside moss.
+        // different (or no) data-theme; fixed sites keep their own policy.
         // No-op when not shell-mounted; only on a real difference, since a
         // same-value write still queues a mutation record (reporters re-fire).
-        if (currentShellTheme && document.documentElement.getAttribute("data-theme") !== currentShellTheme) {
+        if (currentShellTheme && !document.documentElement.hasAttribute("data-moss-color-scheme") && document.documentElement.getAttribute("data-theme") !== currentShellTheme) {
           document.documentElement.setAttribute("data-theme", currentShellTheme);
         }
         // Re-assert shell chrome. The fetched HTML carries `moss-shell-frame`

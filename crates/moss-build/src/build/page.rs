@@ -1,6 +1,7 @@
 //! Page construction: layout, templates, metadata, and child page generation.
 
 pub mod canonical;
+pub mod color_scheme;
 pub mod cover;
 pub(crate) mod default_width;
 pub(crate) mod event_json_ld;

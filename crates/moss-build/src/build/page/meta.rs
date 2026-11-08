@@ -89,78 +89,18 @@ pub fn build_og_tags(
     locale: &str,
     site_url: &SiteUrl,
 ) -> String {
-    let cover_url = cover.map(|c| c.to_meta_url(site_url));
-
-    // Skip empty title/description rather than emitting empty `content=""`.
-    // Absent is better than empty: an empty meta tells scrapers "we deliberately
-    // have no value here" instead of falling through to other sources.
-    let mut tags_html = vec![
-        r#"<meta property="og:type" content="article">"#.to_string(),
-    ];
-    if !title.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:title" content="{}">"#,
-            escape_html_attr(title)
-        ));
-    }
-    tags_html.push(format!(
-        r#"<meta property="og:url" content="{}">"#,
-        escape_html_attr(url)
-    ));
-    tags_html.push(format!(
-        r#"<meta property="og:site_name" content="{}">"#,
-        escape_html_attr(site_name)
-    ));
-    if !description.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:description" content="{}">"#,
-            escape_html_attr(description)
-        ));
-    }
-
-    if let Some(date) = date {
-        tags_html.push(format!(
-            r#"<meta property="article:published_time" content="{}">"#,
-            escape_html_attr(date)
-        ));
-    }
-
-    if let Some(image) = cover_url.as_deref() {
-        tags_html.push(format!(
-            r#"<meta property="og:image" content="{}">"#,
-            escape_html_attr(image)
-        ));
-        tags_html.push(format!(
-            r#"<meta property="og:image:alt" content="{}">"#,
-            escape_html_attr(title)
-        ));
-        if let Some((w, h)) = cover_dims {
-            tags_html.push(format!(
-                r#"<meta property="og:image:width" content="{}">"#,
-                w
-            ));
-            tags_html.push(format!(
-                r#"<meta property="og:image:height" content="{}">"#,
-                h
-            ));
-        }
-    }
-
-    if !locale.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:locale" content="{}">"#,
-            escape_html_attr(locale)
-        ));
-    }
-
-    for tag in tags {
-        tags_html.push(format!(
-            r#"<meta property="article:tag" content="{}">"#,
-            escape_html_attr(tag)
-        ));
-    }
-
-    tags_html.join("\n    ")
+    og_tags(
+        "article",
+        title,
+        url,
+        site_name,
+        description,
+        cover,
+        cover_dims,
+        locale,
+        site_url,
+        Some((date, tags)),
+    )
 }
 
 /// Generate Open Graph meta tags for a website homepage.
@@ -182,63 +122,80 @@ pub fn build_og_tags_website(
     locale: &str,
     site_url: &SiteUrl,
 ) -> String {
-    let cover_url = cover.map(|c| c.to_meta_url(site_url));
+    og_tags(
+        "website",
+        title,
+        url,
+        site_name,
+        description,
+        cover,
+        cover_dims,
+        locale,
+        site_url,
+        None,
+    )
+}
 
-    // Skip empty fields rather than emitting empty `content=""`. `title` is the
-    // page label (== site name on the homepage); `site_name` is the real site
-    // name, kept separate so per-page Pages emit og:site_name = site, not label.
-    let mut tags_html = vec![
-        r#"<meta property="og:type" content="website">"#.to_string(),
-    ];
+/// Shared Open Graph builder. Empty title, description and locale are skipped
+/// rather than emitted as `content=""`: an absent tag lets scrapers fall back
+/// to other sources, an empty one says "deliberately none". `title` is the
+/// page label; `site_name` is the real site name, kept separate so per-page
+/// Pages emit og:site_name = site, not label. Articles always emit
+/// og:site_name; websites only when it is non-empty. `article` carries the
+/// article-only `(published_time, tags)`.
+fn og_tags(
+    og_type: &str,
+    title: &str,
+    url: &str,
+    site_name: &str,
+    description: &str,
+    cover: Option<&CoverRef>,
+    cover_dims: Option<(u32, u32)>,
+    locale: &str,
+    site_url: &SiteUrl,
+    article: Option<(Option<&str>, &[String])>,
+) -> String {
+    let cover_url = cover.map(|c| c.to_meta_url(site_url));
+    let meta = |property: &str, content: &str| {
+        format!(
+            r#"<meta property="{property}" content="{}">"#,
+            escape_html_attr(content)
+        )
+    };
+
+    let mut tags_html = vec![format!(r#"<meta property="og:type" content="{og_type}">"#)];
     if !title.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:title" content="{}">"#,
-            escape_html_attr(title)
-        ));
+        tags_html.push(meta("og:title", title));
     }
-    tags_html.push(format!(
-        r#"<meta property="og:url" content="{}">"#,
-        escape_html_attr(url)
-    ));
-    if !site_name.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:site_name" content="{}">"#,
-            escape_html_attr(site_name)
-        ));
+    tags_html.push(meta("og:url", url));
+    if article.is_some() || !site_name.is_empty() {
+        tags_html.push(meta("og:site_name", site_name));
     }
     if !description.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:description" content="{}">"#,
-            escape_html_attr(description)
-        ));
+        tags_html.push(meta("og:description", description));
+    }
+
+    if let Some((Some(date), _)) = article {
+        tags_html.push(meta("article:published_time", date));
     }
 
     if let Some(image) = cover_url.as_deref() {
-        tags_html.push(format!(
-            r#"<meta property="og:image" content="{}">"#,
-            escape_html_attr(image)
-        ));
-        tags_html.push(format!(
-            r#"<meta property="og:image:alt" content="{}">"#,
-            escape_html_attr(title)
-        ));
+        tags_html.push(meta("og:image", image));
+        tags_html.push(meta("og:image:alt", title));
         if let Some((w, h)) = cover_dims {
-            tags_html.push(format!(
-                r#"<meta property="og:image:width" content="{}">"#,
-                w
-            ));
-            tags_html.push(format!(
-                r#"<meta property="og:image:height" content="{}">"#,
-                h
-            ));
+            tags_html.push(format!(r#"<meta property="og:image:width" content="{w}">"#));
+            tags_html.push(format!(r#"<meta property="og:image:height" content="{h}">"#));
         }
     }
 
     if !locale.is_empty() {
-        tags_html.push(format!(
-            r#"<meta property="og:locale" content="{}">"#,
-            escape_html_attr(locale)
-        ));
+        tags_html.push(meta("og:locale", locale));
+    }
+
+    if let Some((_, tags)) = article {
+        for tag in tags {
+            tags_html.push(meta("article:tag", tag));
+        }
     }
 
     tags_html.join("\n    ")
@@ -345,7 +302,7 @@ pub(crate) fn page_json_ld(
         // Schema.org headline is chrome; use the plain-text label.
         return Ok(Some(build_schema_json_ld(
             &d.label, description, &page_meta_url(d, site_url)?, site_name,
-            d.date.as_deref(), cover, d.tags.as_deref().unwrap_or(&[]), site_url,
+            d.date.as_deref(), cover, d.tags.as_deref().unwrap_or(&[]), site_url, &d.citations,
         )));
     }
     Ok(is_homepage.then(|| build_schema_website(site_name, description, homepage_url, lang_tag)))
@@ -364,6 +321,7 @@ pub fn build_schema_json_ld(
     cover: Option<&CoverRef>,
     tags: &[String],
     site_url: &SiteUrl,
+    citations: &[moss_core::ast::quote_source::QuoteSource],
 ) -> String {
     let mut o = serde_json::json!({
         "@context": "https://schema.org",
@@ -382,6 +340,12 @@ pub fn build_schema_json_ld(
     }
     if !tags.is_empty() {
         o["keywords"] = tags.into();
+    }
+    if !citations.is_empty() {
+        o["citation"] = citations
+            .iter()
+            .map(|c| serde_json::json!({"@type": "CreativeWork", "name": c.text, "url": c.href}))
+            .collect();
     }
     ld_script(&o)
 }
@@ -1177,11 +1141,9 @@ pub fn strip_markdown_inline(text: &str) -> String {
         }
     }
 
-    // Phase 3 PR2: strip wikilinks `[[file]]`, `[[file|alias]]`,
-    // `![[file]]`, etc. Stage 1's wikilink resolver used to rewrite these
-    // into `[text](url)` shape before description extraction; Phase 3
-    // pushes wikilink resolution down into pulldown-cmark's event stream,
-    // which is invisible to this text-level stripper. The replacement
+    // Strip wikilinks `[[file]]`, `[[file|alias]]`,
+    // `![[file]]`, etc. Wikilink resolution happens in pulldown-cmark's
+    // event stream, which is invisible to this text-level stripper. The replacement
     // matches what `dispatch_wikilink_embed` produces for the link case:
     // alias text (when present) or the file part. Image embeds (`![[…]]`)
     // drop entirely — they're media references, not text — including the
@@ -1357,22 +1319,32 @@ fn resolve_wikilinks(text: &str) -> String {
 /// than being silently dropped, since [`render_description_html`] must
 /// never lose author content the way deletion-based stripping can. `*`/`**`
 /// have no CommonMark intraword exception (unlike `_`/`__` — see
-/// [`find_underscore_emphasis`]), so a plain left-to-right pairing is
-/// correct for them without a word-boundary guard.
+/// [`find_underscore_emphasis`]), so no word-boundary guard is needed, but
+/// they do follow its flanking rule: an opener is followed by a non-space
+/// and a closer preceded by one, so `2* and 3*` pairs nothing.
 fn wrap_delimited(text: &str, delim: &str, open: &str, close: &str) -> String {
+    let flanking = delim.starts_with('*');
     let mut out = String::new();
     let mut rest = text;
     while let Some(start) = rest.find(delim) {
         let after_open = &rest[start + delim.len()..];
-        match after_open.find(delim) {
-            Some(end) if end > 0 => {
+        let can_open = !flanking || after_open.chars().next().is_some_and(|c| !c.is_whitespace());
+        let close_at = can_open
+            .then(|| {
+                after_open.match_indices(delim).map(|(i, _)| i).find(|&i| {
+                    i > 0 && (!flanking || after_open[..i].chars().next_back().is_some_and(|c| !c.is_whitespace()))
+                })
+            })
+            .flatten();
+        match close_at {
+            Some(end) => {
                 out.push_str(&rest[..start]);
                 out.push_str(open);
                 out.push_str(&after_open[..end]);
                 out.push_str(close);
                 rest = &after_open[end + delim.len()..];
             }
-            _ => {
+            None => {
                 out.push_str(&rest[..start + delim.len()]);
                 rest = after_open;
             }
@@ -1666,10 +1638,9 @@ pub fn resolve_page_description(
 pub struct DescriptionChainInputs<'a> {
     /// Current page's `description:` frontmatter (may carry inline markdown).
     pub page_description: Option<&'a str>,
-    /// Current page's hero overlay text — pre-extracted at hoisting from
-    /// `HeroShortcode.overlay_markdown` via the same [`extract_description`]
-    /// pipeline used for body fallback. `None` when the hero had no
-    /// extractable paragraph or the page had no hero.
+    /// Current page's hero overlay text — plain text taken at hoisting from
+    /// the hero's first paragraph, else its first heading. `None` when the
+    /// hero had neither or the page had no hero.
     pub page_hero_overlay_text: Option<&'a str>,
     /// Current page's raw markdown body (fed to [`extract_description`]).
     pub page_content: &'a str,
@@ -1715,9 +1686,8 @@ fn description_from_explicit(s: Option<&str>) -> Option<String> {
     }
 }
 
-/// Pass-through for already-extracted text (hero overlay text). The value
-/// already went through [`extract_description`] at hoisting time; treat as
-/// a finished string. Empty becomes `None`.
+/// Pass-through for already-plain text (hero overlay text); treat as a
+/// finished string. Empty becomes `None`.
 fn description_from_extracted(s: Option<&str>) -> Option<String> {
     let raw = s?.trim();
     if raw.is_empty() {

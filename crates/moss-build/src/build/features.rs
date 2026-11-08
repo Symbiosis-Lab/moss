@@ -12,6 +12,7 @@ pub mod email;
 pub mod forms;
 pub mod review;
 pub mod sync;
+pub mod syndication;
 
 /// Get the inactive tooltip text for the given language.
 pub(crate) fn inactive_label(lang: crate::i18n::Language) -> &'static str {
@@ -108,17 +109,9 @@ pub fn should_inject_places_explorer(
         && term_index.place_namespace_roots().next().is_some()
 }
 
-// `project_has_inline_subscribe(folder_path)` was removed in PR7b.
-//
-// It was a temporary filesystem-scan stand-in for "does any page in this
-// build use the `:::subscribe` shortcode?", reading every .md file under
-// the project root looking for a `:::subscribe` substring. The proper
-// answer is on the parsed page: `ParsedDocument.features.inline_subscribe`
-// is populated at parse time by `process_markdown_file`. The call site
-// in `build.rs::run_pipeline` now reads
-// `pages.iter().any(|p| p.features.inline_subscribe)` directly.
-//
-// `should_inject_subscribe_assets` below already consumes that flag.
+// "Does any page in this build use the `:::subscribe` shortcode?" is answered
+// by `ParsedDocument.features.inline_subscribe`, populated at parse time by
+// `process_markdown_file`; `should_inject_subscribe_assets` below consumes it.
 
 /// Generate native feature slots from config and social data.
 ///
@@ -580,8 +573,7 @@ pub fn generate_native_slots(
         // High-signal diagnostic, gated on `email_installed` so off-by-default
         // sites stay quiet: the subscribe footer is the slot most likely to
         // "appear then disappear" across rebuilds, yet nothing on this path was
-        // logged (ticket LOG-325B-T1605 was undiagnosable for exactly this
-        // reason). Recording whether THIS build emitted the form lets Send-Logs
+        // logged, which made user reports undiagnosable. Recording whether THIS build emitted the form lets Send-Logs
         // tell "emitted but refresh suppressed" apart from "never emitted
         // (channel config read stale)".
         // Stat for footer.md only when the email channel is in play (the

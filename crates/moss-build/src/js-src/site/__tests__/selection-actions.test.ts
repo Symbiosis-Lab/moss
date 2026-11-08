@@ -15,8 +15,8 @@ import type { CardBlock } from "../share-card/text";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function createArticlePage(options: { author?: string; title?: string; comments?: boolean; dataComments?: string } = {}) {
-  const { author = "Test Author", title = "Test Article", comments = true, dataComments } = options;
+function createArticlePage(options: { author?: string; title?: string; comments?: boolean; dataComments?: string; tools?: boolean } = {}) {
+  const { author = "Test Author", title = "Test Article", comments = true, dataComments, tools = true } = options;
 
   document.head.innerHTML = "";
   const titleEl = document.createElement("title");
@@ -61,6 +61,13 @@ function createArticlePage(options: { author?: string; title?: string; comments?
   outside.id = "outside";
   outside.textContent = "This text is outside the article.";
   document.body.appendChild(outside);
+
+  // What a build with `[site].selection_tools` on puts on the theme tag.
+  if (tools) {
+    const script = document.createElement("script");
+    script.dataset.shareCard = "/_moss/js/share-card.abc.js";
+    document.body.appendChild(script);
+  }
 
   return { article, p, outside };
 }
@@ -278,6 +285,23 @@ describe("initSelectionActions", () => {
 
     expect(document.querySelector(".sel-popover .sel-comment")).not.toBeNull();
     expect(document.querySelector(".mobile-bar .sel-comment")).not.toBeNull();
+  });
+
+  test("a site without selection tools offers nothing when the page has no comments", () => {
+    createArticlePage({ tools: false, comments: false });
+    initSelectionActions();
+    expect(document.querySelector(".sel-popover")).toBeNull();
+    expect(document.querySelector(".mobile-bar")).toBeNull();
+  });
+
+  test("a site without selection tools still offers Comment, alone", () => {
+    createArticlePage({ tools: false, comments: true });
+    initSelectionActions();
+    const popover = document.querySelector(".sel-popover")!;
+    expect([...popover.querySelectorAll("button")].map((b) => b.className)).toEqual(["sel-comment"]);
+    expect(popover.querySelectorAll(".sel-sep").length).toBe(0);
+    const bar = document.querySelector(".mobile-bar")!;
+    expect([...bar.querySelectorAll("button")].map((b) => b.className)).toEqual(["pill-bar-btn sel-comment"]);
   });
 
   test("desktop popover has 1 separator without comments, 2 with", () => {

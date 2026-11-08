@@ -133,7 +133,10 @@ test("a sequence moves to the next clip and caption when a video ends", async ({
   await page.goto("/start/");
   const hero = page.locator(".moss-hero");
   await expect(page.locator('.moss-hero-caption[data-slide="0"]')).toBeVisible();
-  await page.locator('.moss-hero-slide[data-slide="0"] video').evaluate((v: HTMLVideoElement) => {
+  const first = page.locator('.moss-hero-slide[data-slide="0"] video');
+  // The first clip starts on its own; the seek below must not be what starts it.
+  await expect.poll(() => first.evaluate((v: HTMLVideoElement) => !v.paused && v.played.length > 0)).toBe(true);
+  await first.evaluate((v: HTMLVideoElement) => {
     v.currentTime = Math.max(0, v.duration - 0.3);
   });
   await expect(page.locator('.moss-hero-caption[data-slide="1"]')).toBeVisible({ timeout: 10000 });

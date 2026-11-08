@@ -13,7 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
-use moss_core::resolve::embed_renderer::{CLASS_EMBED, CLASS_EMBED_NOTEBOOK, CLASS_EMBED_TABLE};
+use moss_core::resolve::embed_renderer::folder_list::marker_decode;
+use moss_core::resolve::embed_renderer::{CLASS_EMBED, CLASS_EMBED_NOTEBOOK};
 use moss_core::resolve::embeds::{MarkerHandler, MarkerHandlers};
 use moss_core::resolve::Diagnostic;
 
@@ -97,13 +98,23 @@ fn render_ipynb_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
     )
 }
 
-/// Resolve `<!-- moss-embed-table:<path> -->` to an inline HTML `<table>`
-/// via `moss_core::csv_table::render`.
+/// Resolve `<!-- moss-embed-table:<path>[?options] -->` via
+/// `moss_core::csv_table::render`: a `<table>`, or with `style:list` the rows
+/// as a markdown list the page's markdown pass then renders.
 ///
 /// Separator inferred from extension: `,` for `.csv`, `\t` for `.tsv`.
-/// The first row is treated as a header.
+/// The first row names the columns.
 fn render_table_embed(target: &str, site_root: &Path, lang: crate::i18n::Language, diags: &mut Vec<Diagnostic>) -> String {
-    let (path, _query) = split_query(target);
+    let (path, query) = split_query(target);
+    let (mut pothole, mut page, mut inline) = (String::new(), path.to_string(), false);
+    for field in query.unwrap_or("").split('|') {
+        match field.split_once('=') {
+            Some(("opts", v)) => pothole = marker_decode(v),
+            Some(("from", v)) => page = marker_decode(v),
+            None if field == "inline" => inline = true,
+            _ => {}
+        }
+    }
 
     let abs = site_root.join(path);
     // Defer, never wait. This runs inside the rayon render fan-out while the
@@ -127,8 +138,8 @@ fn render_table_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
         Err(e) => {
             diags.push(Diagnostic {
                 message: format!("Failed to read {}: {}", path, e),
-                source_path: path.to_string(),
-                reference: target.to_string(),
+                source_path: page.clone(),
+                reference: format!("![[{path}|{pothole}]]"),
                 kind: moss_core::resolve::DiagnosticKind::Other,
             });
             let msg = crate::i18n::t(lang, "table_not_found").replace("{}", path);
@@ -141,14 +152,21 @@ fn render_table_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
     };
 
     let separator = if path.ends_with(".tsv") { '\t' } else { ',' };
-    let options = moss_core::csv_table::CsvTableOptions {
-        separator,
-        has_header: true,
-        caption: None,
-        class: CLASS_EMBED.to_string(),
-        data_type: Some("table".to_string()),
-    };
-    moss_core::csv_table::render(&content, &options)
+    let mut options = moss_core::csv_table::DataOptions::parse(&pothole);
+    if inline && options.style == moss_core::csv_table::Style::List {
+        options.style = moss_core::csv_table::Style::Table;
+        options.problems.push("is drawn as a table: `style:list` needs the embed on a line of its own".to_string());
+    }
+    let rendered = moss_core::csv_table::render(&content, separator, &options, crate::i18n::t(lang, "data_item_separator"));
+    for warning in rendered.warnings {
+        diags.push(Diagnostic {
+            message: format!("data file {path} {warning}"),
+            source_path: page.clone(),
+            reference: format!("![[{path}|{pothole}]]"),
+            kind: moss_core::resolve::DiagnosticKind::Other,
+        });
+    }
+    rendered.text
 }
 
 // ---------------------------------------------------------------------------

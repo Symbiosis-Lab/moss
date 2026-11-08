@@ -468,7 +468,7 @@ mod tests {
     ///   space so the surrounding sentence still tokenises correctly.
     /// Only the remaining prose is returned.
     fn strip_code_spans(text: &str) -> String {
-        // Phase 1: strip fenced blocks line-by-line.
+        // Strip fenced blocks line-by-line.
         let mut after_fences = String::with_capacity(text.len());
         let mut in_fence = false;
         for line in text.lines() {
@@ -484,7 +484,7 @@ mod tests {
             }
         }
 
-        // Phase 2: strip inline code spans (`...` and ``...``) from each prose line.
+        // Strip inline code spans (`...` and ``...``) from each prose line.
         // Replace the whole span (including backtick delimiters) with a space so
         // the preceding/following prose context doesn't merge across the gap.
         let re = regex::Regex::new(r"``[^`]+``|`[^`]+`").unwrap();

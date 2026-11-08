@@ -9,6 +9,12 @@
 
 .moss-place-map:has(> .moss-place-map-credit) { position: relative; }
 
+/* A map cut to its historical layer can be much taller than wide: keep it
+   within the window's height, left-aligned like an uncut map. */
+.moss-place-map[data-map-cut] {
+  max-inline-size: min(100%, calc(80svh * var(--moss-place-map-ar, 1.5)));
+}
+
 .moss-place-map-credit {
   position: absolute;
   inset-block-end: var(--moss-space-xs);

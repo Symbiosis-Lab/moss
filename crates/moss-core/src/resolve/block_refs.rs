@@ -13,14 +13,11 @@
 //! They are stripped from the rendered output and replaced with invisible
 //! anchors so that other notes can link directly to that block.
 //!
-//! # Stage 1 retention — intentional (Phase 4)
+//! # Regex-based, not AST-based — intentional
 //!
-//! This module was a candidate for AST migration in Phase 4 (originally
-//! PR5) but was DEFERRED after impl-feasibility review confirmed no
-//! production usage on any of the 4 client test sites. Block references
-//! are an Obsidian-import shape; promoting them to a typed
-//! `Inline::Anchor` variant would be speculative work without a real
-//! consumer.
+//! Block references are an Obsidian-import shape with no consumer that needs
+//! them as typed nodes, so promoting them to an `Inline::Anchor` variant
+//! would be speculative.
 //!
 //! The 246-LOC fence-aware regex below works correctly today and is the
 //! pragmatic shape until usage actually surfaces. Revisit AST migration

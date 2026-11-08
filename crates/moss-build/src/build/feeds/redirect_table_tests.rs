@@ -330,6 +330,39 @@ fn a_single_page_address_forwarded_to_the_root_is_not_reported() {
     assert_eq!(b.problems, 0);
 }
 
+/// A line from a page under a folder to that folder (an edition's own root,
+/// say) forwards the page; moving the folder would copy all of it under itself.
+#[test]
+fn a_page_forwarded_to_the_folder_around_it_moves_no_folder() {
+    let cfg = config(r#""/guide/apply/" = "/guide/""#);
+    let b = build(&[
+        ABOUT,
+        ("guide/index.md", "---\ntitle: Guide\n---\n\nBody.\n"),
+        ("guide/setup.md", "---\ntitle: Setup\n---\n\nBody.\n"),
+        (".moss/config.toml", &cfg),
+    ]);
+    assert!(b.read("guide/apply/index.html").contains("url=/guide/\""));
+    assert!(!b.has("guide/apply/setup/index.html"), "the folder was copied under itself");
+    assert_eq!(b.problems, 0);
+}
+
+/// A line into the folder around a folder that still holds pages forwards the
+/// page alone and is reported, as a line naming the root is.
+#[test]
+fn a_folder_line_into_the_folder_around_it_moves_no_folder_and_is_reported() {
+    let cfg = config(r#""/guide/old/" = "/guide/""#);
+    let b = build(&[
+        ABOUT,
+        ("guide/index.md", "---\ntitle: Guide\n---\n\nBody.\n"),
+        ("guide/setup.md", "---\ntitle: Setup\n---\n\nBody.\n"),
+        ("guide/old/note.md", "---\ntitle: Note\n---\n\nBody.\n"),
+        (".moss/config.toml", &cfg),
+    ]);
+    assert!(!b.has("guide/old/setup/index.html"), "the folder was copied under itself");
+    assert!(b.has("guide/old/note/index.html"), "a page the old folder still holds keeps its content");
+    assert!(b.problems >= 1, "the line is reported");
+}
+
 /// A file can only be kept by a copy, so a declared line sending the old feed
 /// to a page is reported and the generator's own alias stays.
 #[test]

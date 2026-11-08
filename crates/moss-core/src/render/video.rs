@@ -201,8 +201,7 @@ fn video_embed(
     let place = placement_attrs(placement);
     let align = place.align_suffix();
     // .mov → .mp4 source-extension swap (idempotent for .mp4 / .webm).
-    // Pre-Phase-0 lived in placeholder.rs; moved here because the typed-
-    // data layer is the single source of truth for the served URL.
+    // The typed-data layer is the single source of truth for the served URL.
     let converted_src = to_mp4(src);
 
     // The build records what it made for a video under the video's file
@@ -322,7 +321,7 @@ mod tests {
         AssetSnapshot::new()
     }
 
-    // --- byte-shape parity with the pre-Phase-0 video renderer ---
+    // --- byte shape ---
 
     #[test]
     fn video_basic_shape() {
@@ -345,9 +344,7 @@ mod tests {
 
     #[test]
     fn video_emits_closing_tag() {
-        // The pre-Phase-0 video renderer ended with `</video>` (not self-closing).
-        // The downstream rewriter regex matches `<video … src="…">` and
-        // expects a separate closing tag.
+        // The output ends with `</video>` (not self-closing).
         let p = params_with(&[("kind", "video")]);
         let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.ends_with("</video>"), "got: {}", out);
@@ -472,10 +469,8 @@ mod tests {
     #[test]
     fn video_mov_extension_swaps_to_mp4() {
         // moss transcodes .mov source files to .mp4 during build; the
-        // emitted URL must reference the .mp4 output. Pre-Phase-0 the
-        // regex pass in placeholder.rs owned this swap. Phase 1 moves it
-        // to the synthesizer at the typed-data boundary (Decision #6:
-        // zero carve-outs).
+        // emitted URL must reference the .mp4 output. The synthesizer owns
+        // this swap at the typed-data boundary.
         let p = params_with(&[("kind", "video")]);
         let out = synthesize_video_html(&p, &Placement::default(), "clip.mov", &empty_snapshot());
         assert!(
@@ -528,7 +523,7 @@ mod tests {
         assert!(out.contains(r#"src="clip.webm""#), "got: {}", out);
     }
 
-    // --- width/height from TitleParams (Stage 1 lifted |WxH alias) ---
+    // --- width/height from TitleParams (the |WxH alias) ---
 
     #[test]
     fn video_emits_width_param_when_present() {
@@ -648,12 +643,9 @@ mod tests {
         );
     }
 
-    // Phase 2E v5 PR5 (2026-05-26) retired the Stage 3 regex post-pass; the
-    // video synthesizer in this module is now the sole emitter of width /
+    // The video synthesizer in this module is the sole emitter of width /
     // height / poster / data-thumb-src / .mov→.mp4 src rewriting for
-    // moss-emitted <video> tags. The two regex-parity tests in the desktop
-    // app's `video_synth_regex_parity.rs` were deleted alongside
-    // the regex.
+    // moss-emitted <video> tags.
 
     // --- |loop ambient-video attribute (spec §3.6) -----------------------
 

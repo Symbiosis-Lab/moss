@@ -20,6 +20,8 @@ You can host the static site moss builds anywhere you like. When you do, moss's 
 
 If you publish to moss's servers, we use your email address and a public key moss generates for you automatically (an anonymous cryptographic ID). We store these on our server to know which sites are yours.
 
+When you ask for a sign-in link, moss tells our server which app asked (the moss app or the moss command line, its version and your operating system) and what kind of device it runs on, such as a Mac Studio or a Windows PC, so the page the sign-in link opens can show where the request came from. It never sends your computer's name, which often includes its owner's name. We keep these details with your sign-in records for 180 days.
+
 ## Payments
 
 Payments (hosting plans and domain purchases) are handled by Stripe, a payment processor in the US. Stripe holds your card details; we never see your card number. We keep only your Stripe customer ID and your email to manage your subscription, and Stripe sends your receipt.
@@ -63,7 +65,7 @@ Our server is in the **United States**, and some of the services we rely on (Str
 
 ## How long we keep things
 
-Crash reports: 90 days. Support logs: 30 days. Your account, payment, and subscriber records are kept while your account or site is active. You can contact us to remove your data sooner.
+Crash reports: 90 days. Support logs: 30 days. Sign-in records: 180 days. Your account, payment, and subscriber records are kept while your account or site is active. You can contact us to remove your data sooner.
 
 ## Your choices and rights
 
@@ -77,4 +79,4 @@ Questions, or want your data deleted? Email us at **hi@symbiosis-lab.org**.
 
 moss is early, and this policy will grow with it. We'll update this page when our practices change.
 
-*Last updated: 2026‑07‑19.*
+*Last updated: 2026‑11‑06.*

@@ -3,6 +3,8 @@
 use super::{html_escape, parse_marker_body, marker_decode, ParsedMarker, MARKER_END, MARKER_FOLDER_LIST};
 use crate::build::place_map::PlaceMapRenderContext;
 use crate::build::types::ParsedDocument;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn place_map_with_placement(
     svg: String,
@@ -22,17 +24,57 @@ pub(super) fn place_map_with_placement(
     )
 }
 
-pub(super) fn has_own_embed(html: &str, source: &str) -> bool {
-    html.split(MARKER_FOLDER_LIST).skip(1).any(|rest| {
-        rest.split_once(MARKER_END)
-            .and_then(|(body, _)| parse_marker_body(body))
-            .is_some_and(|p| p.style.as_deref() == Some("map") && marker_decode(p.path) == source)
-    })
+/// How a page places a country map's list apart from the map with `style:levels`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ListPlacement {
+    /// Beside the page's own embed of that map, which then leaves its list out.
+    Apart,
+    /// With no embed of the map on the page: the list stands on its own.
+    Alone,
+    /// Placed twice, or on the map's own page: not drawn, and the map keeps its list.
+    Refused,
 }
 
-/// `![[/places/|style:map]]` in a page other than the places root: the whole
-/// site's map. `None` when the target is not the place root or the host is the
-/// root page itself, which draws its own explorer in place.
+/// Reads a page's maps once, from its body and its hero: whether it embeds its
+/// own map, and how it places each country map's list, with a problem for a
+/// placement the page cannot draw.
+pub(super) fn record_placements(doc: &mut ParsedDocument, from: &str) {
+    let mut maps = BTreeSet::new();
+    let mut lists: BTreeMap<String, usize> = BTreeMap::new();
+    for html in [Some(doc.html_content.as_str()), doc.hero_html.as_deref()].into_iter().flatten() {
+        let markers = html.split(MARKER_FOLDER_LIST).skip(1).filter_map(|rest| rest.split_once(MARKER_END).and_then(|(body, _)| parse_marker_body(body)));
+        for marker in markers {
+            match marker.style.as_deref() {
+                Some("map") => { maps.insert(marker_decode(marker.path)); }
+                Some("levels") => *lists.entry(marker_decode(marker.path)).or_default() += 1,
+                _ => {}
+            }
+        }
+    }
+    doc.has_own_map_embed = maps.contains(from);
+    doc.country_lists = lists
+        .into_iter()
+        .map(|(source, count)| {
+            let placement = if count > 1 {
+                crate::build::cli_output::log_warn_problem!("[{from}] `style:levels` places the list of '{source}' {count} times; it can be placed once, so none is drawn and the map keeps its own.");
+                ListPlacement::Refused
+            } else if source == from {
+                crate::build::cli_output::log_warn_problem!("[{from}] `style:levels` names this page's own map, which shows its table already; the list is not drawn.");
+                ListPlacement::Refused
+            } else if !maps.contains(&source) {
+                crate::build::cli_output::log_warn_problem!("[{from}] `style:levels` places the list of '{source}' with no map of it on the page, so its rows open nothing.");
+                ListPlacement::Alone
+            } else {
+                ListPlacement::Apart
+            };
+            (source, placement)
+        })
+        .collect();
+}
+
+/// `![[/places/|style:map]]`: the whole site's map. Nothing on a root page
+/// that already draws that map itself, and `None` when the target is not the
+/// place root.
 pub(super) fn render_place_root(
     parsed: &ParsedMarker<'_>,
     ordinal: usize,
@@ -44,12 +86,12 @@ pub(super) fn render_place_root(
     if target.trim_matches('/') != maps.namespace() || !target.ends_with('/') {
         return None;
     }
-    let host_is_root = docs
+    let host_draws_it = docs
         .iter()
         .find(|d| d.source_path.as_deref() == Some(from))
-        .is_some_and(|d| maps.is_explorer_root_for_doc(d));
-    if host_is_root {
-        return None;
+        .is_some_and(|d| maps.draws_own_root_map_for_doc(d));
+    if host_draws_it {
+        return Some(String::new());
     }
     let svg = maps.render_root_map_embed(docs.iter(), from, ordinal)?;
     Some(place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref()))
@@ -69,9 +111,15 @@ pub(super) fn render(
         if model.rows.is_empty() {
             return String::new();
         }
-        let host_lang = docs.iter().find(|d| d.source_path.as_deref() == Some(from.as_str())).map_or(doc.lang, |d| d.lang);
-        let place = if path == from { Place::OwnPage } else { Place::Embedded };
-        return render(model, &doc.title, doc.date.as_deref(), host_lang, place);
+        let host = docs.iter().find(|d| d.source_path.as_deref() == Some(from.as_str()));
+        let place = if path == from {
+            Place::OwnPage
+        } else if host.and_then(|h| h.country_lists.get(&path)) == Some(&ListPlacement::Apart) {
+            Place::EmbeddedListApart(&doc.url_path)
+        } else {
+            Place::Embedded
+        };
+        return render(model, &doc.title, doc.date.as_deref(), host.map_or(doc.lang, |d| d.lang), place);
     }
     if let Some((doc, maps)) = target.zip(maps) {
         if let Some(svg) = maps.render_article_map(&doc.location, doc.route, &doc.url_path, &from, ordinal) {
@@ -80,6 +128,23 @@ pub(super) fn render(
     }
     crate::build::cli_output::log_warn_problem!("map embed '{}' has no resolved document with coordinate-bearing locations", path);
     format!(r#"<div class="moss-embed-missing">Map unavailable: {}</div>"#, html_escape(&path))
+}
+
+/// `![[Risk levels|style:levels]]`: a country map's list, where the page puts it.
+pub(super) fn render_levels(parsed: &ParsedMarker<'_>, docs: &[ParsedDocument]) -> String {
+    let path = marker_decode(parsed.path);
+    let from = marker_decode(parsed.from);
+    let missing = || format!(r#"<div class="moss-embed-missing">Levels unavailable: {}</div>"#, html_escape(&path));
+    let map = docs.iter().find(|d| d.source_path.as_deref() == Some(path.as_str())).and_then(|d| d.country_map.as_ref().map(|m| (d, m)));
+    let Some((doc, model)) = map.filter(|_| !path.ends_with('/')) else {
+        crate::build::cli_output::log_warn_problem!("[{from}] `style:levels` names '{path}', which is not a country map page");
+        return missing();
+    };
+    let host = docs.iter().find(|d| d.source_path.as_deref() == Some(from.as_str()));
+    match host.and_then(|h| h.country_lists.get(&path)) {
+        Some(ListPlacement::Apart | ListPlacement::Alone) => crate::build::place_map::country_map::render::list(model, host.map_or(doc.lang, |h| h.lang), &doc.url_path),
+        _ => missing(),
+    }
 }
 
 #[cfg(test)]
@@ -196,4 +261,36 @@ mod tests {
         assert!(docs[1].html_content.contains("moss-embed-missing"));
         assert!(!docs[1].html_content.contains("data-moss-place-embed"));
     }
+
+    fn marker(style: &str, target: &str, from: &str) -> String {
+        use moss_core::resolve::embed_renderer::folder_list::{classify_folder_segments, emit_marker, marker_encode};
+        emit_marker(&marker_encode(target), &marker_encode(from), &classify_folder_segments(&format!("style:{style}")))
+    }
+
+    fn placed(from: &str, body: &[(&str, &str)], hero: &[(&str, &str)]) -> ParsedDocument {
+        let html = |markers: &[(&str, &str)]| markers.iter().map(|(style, target)| marker(style, target, from)).collect::<Vec<_>>().join("\n<p>Between.</p>\n");
+        let mut doc = ParsedDocument { html_content: html(body), hero_html: (!hero.is_empty()).then(|| html(hero)), ..Default::default() };
+        record_placements(&mut doc, from);
+        doc
+    }
+
+    #[test]
+    fn a_list_beside_its_map_is_placed_apart_wherever_the_two_are_written() {
+        let body = placed("home.md", &[("map", "risk.md"), ("levels", "risk.md")], &[]);
+        assert_eq!(body.country_lists.get("risk.md"), Some(&ListPlacement::Apart));
+        assert!(!body.has_own_map_embed);
+        let hero = placed("home.md", &[("levels", "risk.md")], &[("map", "risk.md")]);
+        assert_eq!(hero.country_lists.get("risk.md"), Some(&ListPlacement::Apart), "a map in the hero counts as on the page");
+    }
+
+    #[test]
+    fn a_list_with_no_map_stands_alone_and_a_misplaced_one_is_refused() {
+        assert_eq!(placed("home.md", &[("levels", "risk.md")], &[]).country_lists.get("risk.md"), Some(&ListPlacement::Alone));
+        let twice = placed("home.md", &[("map", "risk.md"), ("levels", "risk.md"), ("levels", "risk.md")], &[]);
+        assert_eq!(twice.country_lists.get("risk.md"), Some(&ListPlacement::Refused), "two lists would share one id");
+        let own = placed("risk.md", &[("map", "risk.md"), ("levels", "risk.md")], &[]);
+        assert_eq!(own.country_lists.get("risk.md"), Some(&ListPlacement::Refused), "its own page shows the table");
+        assert!(own.has_own_map_embed);
+    }
+
 }

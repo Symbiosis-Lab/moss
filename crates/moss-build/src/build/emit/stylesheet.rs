@@ -2,8 +2,7 @@
 //! actually needs.
 //!
 //! One emit family, one owner — `blocking.rs` gates, this module assembles,
-//! per NORTH-STAR's interception rule ("new emit family → `emit/`-shaped
-//! module, never more code in `blocking.rs`").
+//! so `blocking.rs` gains no code per family.
 //!
 //! ## The gate is declared, never inferred
 //!
@@ -60,7 +59,7 @@ pub struct CssPartial {
 
 /// Every optional partial, in the order they are concatenated after core.
 ///
-/// A registration table in the NORTH-STAR pattern-glossary #2 sense: one
+/// A registration table: one
 /// table per family, with a totality test beside it
 /// (`stylesheet_tests::every_partial_file_has_a_row`), explicitly not a
 /// macro engine.
@@ -74,6 +73,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         name: "forms",
         source: include_str!("../../assets/css/site/forms.css"),
         gate: |a| a.forms,
+    },
+    CssPartial {
+        name: "selection",
+        source: include_str!("../../assets/css/site/selection.css"),
+        gate: |a| a.selection_tools || a.selection_comments,
     },
     CssPartial {
         name: "search",
@@ -94,6 +98,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         name: "vertical",
         source: include_str!("../../assets/css/site/vertical.css"),
         gate: |a| a.vertical,
+    },
+    CssPartial {
+        name: "map-controls",
+        source: include_str!("../../assets/css/site/map-controls.css"),
+        gate: |a| a.places_explorer || a.country_map,
     },
     CssPartial {
         name: "places-explorer",

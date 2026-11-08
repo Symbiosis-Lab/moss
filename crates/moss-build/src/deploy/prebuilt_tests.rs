@@ -543,3 +543,16 @@ async fn only_moss_internal_hashed_files_differing_is_not_a_removal() {
 
     assert!(!err.contains("Nothing published"), "{err}");
 }
+
+/// A prebuilt tree's `.well-known/` files are listed for upload like any other
+/// file; only the build's own `.moss-*` sidecars are not addresses.
+#[test]
+fn a_prebuilt_manifest_lists_files_under_well_known() {
+    let tmp = tempfile::TempDir::new().expect("temp dir");
+    std::fs::create_dir_all(tmp.path().join(".well-known")).expect("create .well-known");
+    std::fs::write(tmp.path().join(".well-known/atproto-did"), b"did:plc:abcdefghijklmnopqrstuvwx\n").expect("write did");
+    std::fs::write(tmp.path().join("index.html"), b"<html></html>").expect("write page");
+
+    let manifest = build_manifest_from_dir(tmp.path()).expect("build_manifest_from_dir");
+    assert!(manifest.contains_key(".well-known/atproto-did"), "{:?}", manifest.keys().collect::<Vec<_>>());
+}

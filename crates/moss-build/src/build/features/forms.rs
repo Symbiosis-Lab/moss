@@ -75,7 +75,7 @@ fn render_field(form: &str, f: &FormField, lang: Language) -> String {
         ),
         kind => {
             let control = match kind {
-                FieldKind::Textarea => format!(r#"<textarea class="moss-input" rows="5"{attr}></textarea>"#),
+                FieldKind::Textarea => format!(r#"<textarea class="moss-input moss-input--boxed" rows="5"{attr}></textarea>"#),
                 FieldKind::Select => {
                     let options = f
                         .choices

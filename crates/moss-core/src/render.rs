@@ -4,7 +4,7 @@
 //! inputs (`TitleParams`, `&AssetSnapshot`, source URL). Pure functions:
 //! no I/O, no async, no Tauri primitives. Consumed by moss-build's
 //! markdown pipeline (the wikilink-embed dispatcher) and by moss-core's own
-//! shortcode renderers (Phase 2E v5 PR3).
+//! shortcode renderers.
 pub mod audio;
 pub mod iframe;
 pub mod image;

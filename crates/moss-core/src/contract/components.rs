@@ -304,7 +304,7 @@ const CORE: &[ComponentEntry] = &[
         description: "Retired: the additional co-class on `.moss-cards[data-layout=\"list\"]` had no matching rules in the default CSS once `children_style: summary` collapsed into the list-layout block, and its lingering emission broke themes that hid the class (e.g. a site theme's `.moss/theme/style.css` keyed `display: none` on it, erasing folder-embed listings). Theme authors targeting summary listings should use `.moss-cards[data-layout=\"list\"]` directly.",
     },
     // -------------------------------------------------------------------
-    // Cards family — current emitted vocabulary (pre-Phase 1c collapsing).
+    // Cards family — current emitted vocabulary.
     // Three parallel layouts: grid, list, minimal. Each has its own
     // container + instance + sub-classes.
     // -------------------------------------------------------------------
@@ -319,7 +319,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-cards[data-layout=grid]`.",
+        description: "Retired — collapsed into `.moss-cards[data-layout=grid]`.",
     },
     ComponentEntry {
         class: "moss-cards-list",
@@ -332,7 +332,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-cards[data-layout=list]`.",
+        description: "Retired — collapsed into `.moss-cards[data-layout=list]`.",
     },
     ComponentEntry {
         class: "moss-cards-minimal-year-group",
@@ -434,6 +434,55 @@ const CORE: &[ComponentEntry] = &[
         status: Status::Confirmed,
         since: "1",
         description: "Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover=\"quote\"` when a sibling card in the same listing has a cover and this one doesn't.",
+    },
+    ComponentEntry {
+        class: "moss-marquee-track",
+        kind: "instance",
+        parent: "moss-card-pictures",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-marquee-track"><div class="moss-marquee-set">...</div><div class="moss-marquee-set" aria-hidden="true" inert>...</div></div>"#,
+        example_markdown: "![[work/|style:summary,pictures:5,motion:marquee]]",
+        status: Status::Confirmed,
+        since: "0.22",
+        description: "The strip that slides sideways: inside a `.moss-card-pictures[data-motion=\"marquee\"]` (`motion:marquee`) or a `.moss-gallery[data-motion=\"marquee\"]` (`:::gallery marquee`). It holds two `.moss-marquee-set`s and is translated by one set's width, so the loop has no seam. Written once as markup; the stylesheet and marquee.js decide whether it moves, and a strip whose set is narrower than its box does not.",
+    },
+    ComponentEntry {
+        class: "moss-marquee-control",
+        kind: "container",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<button type="button" class="moss-marquee-control">Pause motion</button>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0.22",
+        description: "The one button on a page that pauses and resumes every sliding strip, so a reader can stop the motion for good (WCAG 2.2.2). Added by marquee.js before the first strip that moves, never by the build; its label switches between \"Pause motion\" and \"Play motion\" and the choice is remembered across pages. Hidden when no strip moves, under prefers-reduced-motion and in print. A theme may restyle it but should keep it visible.",
+    },
+    ComponentEntry {
+        class: "moss-marquee-set",
+        kind: "instance",
+        parent: "moss-marquee-track",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-marquee-set" aria-hidden="true" inert>...</div>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0.22",
+        description: "One copy of a marquee's pictures. The first is the real strip; the second carries `aria-hidden` and `inert`, empty alt text and no links a reader can reach, and is not drawn at all while the strip is still.",
+    },
+    ComponentEntry {
+        class: "moss-card-pictures",
+        kind: "instance",
+        parent: "moss-card",
+        data_attrs: &[DataAttr {
+            name: "data-motion",
+            values: &["marquee"],
+            default: "",
+            description: "`marquee` from `motion:marquee` (or `children_motion: marquee`): the strip slides sideways in a loop, its pictures in a `.moss-marquee-track`.",
+        }],
+        example_html: r#"<div class="moss-card-pictures"><div class="moss-card-cover"><img src="..." /></div><div class="moss-card-cover"><img src="..." /></div></div>"#,
+        example_markdown: "![[work/|style:summary,pictures:5]]",
+        status: Status::Confirmed,
+        since: "0.22",
+        description: "A strip of the page's own pictures in a summary row, in place of the single `.moss-card-cover`, when the listing says `pictures:N` (or `children_pictures: N`) and the page has more than one picture. Each picture is a `.moss-card-cover`. One row of equal columns on a wide screen; a sideways scroll row below 48rem.",
     },
     ComponentEntry {
         class: "moss-card-no-cover",
@@ -543,7 +592,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "A declared field with `card = true`, drawn on a listing card or row of a page that has a value for it, in the meta after the date and the term credits, in the fields' declaration order. Plain text, never a link. `data-field` is the field's name; `data-value` is the slug of a choice's key in config (the text is its label), as on a placed choice, and for any other type the text itself, so `.moss-card:has(.moss-card-field[data-field=\"mark\"][data-value=\"wanted\"])` selects the cards of one value.",
+        description: "A declared field with `card = true`, drawn on a listing card or row of a page that has a value for it, in the meta after the date and the term credits, in the fields' declaration order. Never a link; a text value keeps inline emphasis (`<em>`, `<strong>`, `<code>`) and drops a markdown link's target. `data-field` is the field's name; `data-value` is the slug of a choice's key in config (the text is its label), as on a placed choice, and for any other type the text itself without markup, so `.moss-card:has(.moss-card-field[data-field=\"mark\"][data-value=\"wanted\"])` selects the cards of one value.",
     },
     ComponentEntry {
         class: "moss-credit-role",
@@ -675,7 +724,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=grid]`).",
+        description: "Retired — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=grid]`).",
     },
     ComponentEntry {
         class: "moss-card-grid-cover",
@@ -686,7 +735,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-cover`.",
+        description: "Retired — collapsed into `.moss-card-cover`.",
     },
     ComponentEntry {
         class: "moss-card-grid-no-cover",
@@ -697,7 +746,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-no-cover`.",
+        description: "Retired — collapsed into `.moss-card-no-cover`.",
     },
     ComponentEntry {
         class: "moss-card-grid-content",
@@ -708,7 +757,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-content`.",
+        description: "Retired — collapsed into `.moss-card-content`.",
     },
     ComponentEntry {
         class: "moss-card-grid-kicker",
@@ -719,7 +768,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-kicker`.",
+        description: "Retired — collapsed into `.moss-card-kicker`.",
     },
     ComponentEntry {
         class: "moss-card-grid-title",
@@ -730,7 +779,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-title`.",
+        description: "Retired — collapsed into `.moss-card-title`.",
     },
     ComponentEntry {
         class: "moss-card-grid-meta",
@@ -741,7 +790,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-meta`.",
+        description: "Retired — collapsed into `.moss-card-meta`.",
     },
     ComponentEntry {
         class: "moss-card-list",
@@ -752,7 +801,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=list]`).",
+        description: "Retired — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=list]`).",
     },
     ComponentEntry {
         class: "moss-card-list-row",
@@ -763,7 +812,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-row`.",
+        description: "Retired — collapsed into `.moss-card-row`.",
     },
     ComponentEntry {
         class: "moss-card-list-cover",
@@ -774,7 +823,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-cover`.",
+        description: "Retired — collapsed into `.moss-card-cover`.",
     },
     ComponentEntry {
         class: "moss-card-list-body",
@@ -785,7 +834,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-body`.",
+        description: "Retired — collapsed into `.moss-card-body`.",
     },
     ComponentEntry {
         class: "moss-card-list-head",
@@ -796,7 +845,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-body`.",
+        description: "Retired — collapsed into `.moss-card-body`.",
     },
     ComponentEntry {
         class: "moss-card-list-kicker",
@@ -807,7 +856,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-kicker`.",
+        description: "Retired — collapsed into `.moss-card-kicker`.",
     },
     ComponentEntry {
         class: "moss-card-list-title",
@@ -818,7 +867,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-title`.",
+        description: "Retired — collapsed into `.moss-card-title`.",
     },
     ComponentEntry {
         class: "moss-card-list-meta",
@@ -829,7 +878,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-meta`.",
+        description: "Retired — collapsed into `.moss-card-meta`.",
     },
     ComponentEntry {
         class: "moss-card-list-description",
@@ -840,7 +889,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card-description`.",
+        description: "Retired — collapsed into `.moss-card-description`.",
     },
     ComponentEntry {
         class: "moss-card-minimal",
@@ -853,7 +902,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=minimal]`).",
+        description: "Retired — collapsed into `.moss-card` (with parent `.moss-cards[data-layout=minimal]`).",
     },
     ComponentEntry {
         class: "moss-folder-item",
@@ -976,8 +1025,7 @@ const CORE: &[ComponentEntry] = &[
     },
     // -------------------------------------------------------------------
     // Callouts — Obsidian-style admonitions. Type variant goes on the
-    // container as `.callout-<type>`. Phase 1c may collapse into
-    // `.moss-callout[data-type]`.
+    // container as `.callout-<type>`.
     // -------------------------------------------------------------------
     ComponentEntry {
         class: "moss-callout",
@@ -1012,6 +1060,22 @@ const CORE: &[ComponentEntry] = &[
         description: "Obsidian-compat class co-emitted on every callout for theme parity. Type lives on `data-type` (v1).",
     },
     ComponentEntry {
+        class: "moss-accordion",
+        kind: "container",
+        parent: "",
+        data_attrs: &[DataAttr {
+            name: "data-accordion",
+            values: &[],
+            default: "",
+            description: "The group's name, generated from the page and the line the fence opens on. Every folded callout directly inside carries it as its `<details name>`, so the browser closes the others when one opens.",
+        }],
+        example_html: r#"<div class="moss-accordion" data-accordion="moss-accordion-1a2b3c4d-3"><details class="callout" data-type="faq" name="moss-accordion-1a2b3c4d-3">...</details></div>"#,
+        example_markdown: "::: {accordion}\n\n> [!faq]- First question\n> Answer.\n\n> [!faq]- Second question\n> Answer.\n\n:::",
+        status: Status::Confirmed,
+        since: "0.22",
+        description: "A fenced div written `::: {accordion}`: the folded callouts directly inside it open one at a time. Callouts outside the fence, and in another fence, are not part of the group.",
+    },
+    ComponentEntry {
         class: "callout-title",
         kind: "instance",
         parent: "moss-callout",
@@ -1042,7 +1106,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!note]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=note]`.",
+        description: "Retired — type lives on `.callout[data-type=note]`.",
     },
     ComponentEntry {
         class: "callout-info",
@@ -1053,7 +1117,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!info]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=info]`.",
+        description: "Retired — type lives on `.callout[data-type=info]`.",
     },
     ComponentEntry {
         class: "callout-tip",
@@ -1064,7 +1128,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!tip]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=tip]`.",
+        description: "Retired — type lives on `.callout[data-type=tip]`.",
     },
     ComponentEntry {
         class: "callout-warning",
@@ -1075,7 +1139,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!warning]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=warning]`.",
+        description: "Retired — type lives on `.callout[data-type=warning]`.",
     },
     ComponentEntry {
         class: "callout-pending",
@@ -1086,7 +1150,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "> [!pending]\n> Body",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — type lives on `.callout[data-type=pending]`.",
+        description: "Retired — type lives on `.callout[data-type=pending]`.",
     },
     // -------------------------------------------------------------------
     // Embeds — `![[file.ext]]` shortcode renderers (audio, video, pdf,
@@ -1126,7 +1190,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[clip.mp4|loop]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Base class on every typed embed. Kind on `data-type` (v1), including `audio` and `video`. Ambient video: add `data-loop` via `![[clip.mp4|loop]]`. `.moss-embed-audio` and `.moss-embed-video` still ride alongside as co-classes on the element (see their own entries) — `.moss-embed-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` are the ones retired in Phase 1c, collapsed into `data-type`.",
+        description: "Base class on every typed embed. Kind on `data-type` (v1), including `audio` and `video`. Ambient video: add `data-loop` via `![[clip.mp4|loop]]`. `.moss-embed-audio` and `.moss-embed-video` still ride alongside as co-classes on the element (see their own entries) — `.moss-embed-pdf` / `-notebook` / `-table` / `-iframe` / `-3d` are the retired ones, collapsed into `data-type`.",
     },
     ComponentEntry {
         class: "moss-derived",
@@ -1204,7 +1268,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[track.mp3]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Co-class alongside `.moss-embed` on every audio element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=audio]` rather than this class, so it is a hook for themes, not a style dependency.",
+        description: "Co-class alongside `.moss-embed` on every audio element — kept, unlike the other kind co-classes, which collapsed into `data-type`. The default CSS keys off `[data-type=audio]` rather than this class, so it is a hook for themes, not a style dependency.",
     },
     ComponentEntry {
         class: "moss-embed-video",
@@ -1215,7 +1279,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[clip.mp4]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Co-class alongside `.moss-embed` on every video element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency. Its `poster` is the video's 800-pixel thumbnail (`clip.thumb.jpg`); inside a `:::hero` it is `clip.poster.jpg` instead, the same frame at the video's own size (up to 1920x1080), once the build has cut it, because a hero shows the poster across the whole window until the video plays.",
+        description: "Co-class alongside `.moss-embed` on every video element — kept, unlike the other kind co-classes, which collapsed into `data-type`. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency. Its `poster` is the video's 800-pixel thumbnail (`clip.thumb.jpg`); inside a `:::hero` it is `clip.poster.jpg` instead, the same frame at the video's own size (up to 1920x1080), once the build has cut it, because a hero shows the poster across the whole window until the video plays.",
     },
     ComponentEntry {
         class: "moss-embed-pdf",
@@ -1226,7 +1290,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[paper.pdf]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=pdf]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=pdf]`.",
     },
     ComponentEntry {
         class: "moss-embed-iframe",
@@ -1237,7 +1301,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[page.html]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=iframe]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=iframe]`.",
     },
     ComponentEntry {
         class: "moss-embed-notebook",
@@ -1248,7 +1312,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[analysis.ipynb]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=notebook]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=notebook]`.",
     },
     ComponentEntry {
         class: "moss-embed-ipynb",
@@ -1270,7 +1334,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[data.csv]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=table]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=table]`.",
     },
     ComponentEntry {
         class: "moss-embed-3d",
@@ -1281,7 +1345,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "![[model.glb]]",
         status: Status::Retired,
         since: "0",
-        description: "Retired in Phase 1c — collapsed to `.moss-embed[data-type=3d]`.",
+        description: "Retired — collapsed to `.moss-embed[data-type=3d]`.",
     },
     ComponentEntry {
         class: "moss-embed-error",
@@ -1436,6 +1500,28 @@ const CORE: &[ComponentEntry] = &[
         description: "Text content slot inside `.moss-hero` — text laid ON the image. For text ABOUT the image, see `.moss-hero-caption`.",
     },
     ComponentEntry {
+        class: "moss-links",
+        kind: "instance",
+        parent: "p",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-links"><a href="/book/">Book now</a></p>"#,
+        example_markdown: "[Book now](book.md)\n",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Marks a paragraph made only of links, with nothing between them but spaces and line breaks (a link around a picture does not count): a row of buttons or a call to action, which CSS alone cannot tell from a sentence holding a link. moss draws nothing for it; it is a hook for themes. `.moss-links > a` is each link of the row and `.moss-links > a:only-child` is a lone call to action.",
+    },
+    ComponentEntry {
+        class: "moss-hero-actions",
+        kind: "instance",
+        parent: "moss-hero-content",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-hero-actions"><a href="/visit/">Plan a visit</a></p>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "A paragraph of a hero's words that holds nothing but links: the hero's call to action, each link drawn as a button. A link inside a sentence stays a text link in the words' colour, underlined.",
+    },
+    ComponentEntry {
         class: "moss-hero-captions",
         kind: "standalone",
         parent: "",
@@ -1477,7 +1563,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg dark=closing-night.jpg align=top}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; the hero's `max-height=` caps it (emitted as `--moss-hero-max-height`), and the crop keeps the side away from the words (`align=top` keeps the foot) unless `image=` names a position, both of which the ink measurement follows. On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). With `align=top` the words start `clamp(8px, 2vw, 24px)` below its top edge and its display heading sets at a line height of 1.08, and a link in the words is a button of weight 500 in the text colour, with its border, on the page colour at 80% (inverted on hover), so it reads on any picture whatever ink the words take. A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`); the words that sit in ink on that faded top take the theme's own page text colour and page colour (the darker of the two as the dark ink), not fixed inks.",
+        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; the hero's `max-height=` caps it (emitted as `--moss-hero-max-height`), and the crop keeps the side away from the words (`align=top` keeps the foot) unless `image=` names a position, both of which the ink measurement follows. On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). With `align=top` the words start `clamp(8px, 2vw, 24px)` below its top edge and its display heading sets at a line height of 1.08, and a link in the words' row of links (`.moss-hero-actions`) is a button of weight 500 in the text colour, with its border, on the page colour at 80% (inverted on hover), so it reads on any picture whatever ink the words take. With no words it keeps its `data-align`, `data-fade` and credit. A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`); the words that sit in ink on that faded top take the theme's own page text colour and page colour (the darker of the two as the dark ink), not fixed inks.",
     },
     ComponentEntry {
         class: "moss-hero-credit",
@@ -1594,7 +1680,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: ":::grid {collage}\n![A picture](a.jpg)\n+++\n> Communication is health.\n\n*[Source](https://example.org/)*\n+++\n![Another](b.jpg)\n:::\n",
         status: Status::Confirmed,
         since: "0.20",
-        description: "A grid cell whose whole content is a blockquote followed by one italic line: the quote, with the line as its source in the `<figcaption>`. Only the source line links. Its words use `--moss-font-quote`. Matched only in a grid cell (a collage or a plain grid); in running prose the same shape stays a blockquote and a paragraph.",
+        description: "A grid cell whose whole content is a blockquote followed by one italic line: the quote, with the line as its source in the `<figcaption>`. Only the source line links. Its words use `--moss-font-quote`. Matched only in a grid cell (a collage or a plain grid); in running prose the same shape stays a blockquote and a paragraph. When the source line links to an `http` or `https` address, the `<blockquote>` carries it as `cite`, and the page's structured data lists it under `citation`; a prose quotation whose last paragraph starts with an em dash and links the same way gets the same two.",
     },
     ComponentEntry {
         class: "no-viewer",
@@ -1706,6 +1792,28 @@ const CORE: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "1",
         description: "A list of the page's declared fields whose `place` is `facts`: one `<div data-field>` per field in declaration order, with the field's label in `<dt>` and its value in `<dd>`. A row for a `choice` field also carries `data-value`, the slug of the choice's key as written in config. On a wide screen the list sits in the right margin beside the title; on a narrow, vertical, full-width or sidebar page, or one with sidenotes, it stays in the flow. Emitted only on a page that has a value for such a field.",
+    },
+    ComponentEntry {
+        class: "moss-field-end",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<section class="moss-field-end" data-field="next"><h2 class="moss-field-end-label">next project</h2><div class="moss-cards-container"><div class="moss-cards" data-layout="list"><a href="/harbour-pavilion/" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Can a pier be a room?</h3></div></div></a></div></div></section>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The section a page field of type `page` or `pages` draws when its `place` is `end`: after the page's body, inside the article and before comments and series navigation. A `<h2 class=\"moss-field-end-label\">` carries the field's label, then one summary card per linked page that resolves, headlined by the linked page's own opening heading when it has one that differs from its title, with `pictures` of its pictures as a strip. Emitted only on a page that has a value for the field.",
+    },
+    ComponentEntry {
+        class: "moss-field-end-label",
+        kind: "instance",
+        parent: "moss-field-end",
+        data_attrs: &[],
+        example_html: r#"<h2 class="moss-field-end-label">next project</h2>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The heading of a `moss-field-end` section: the field's `label`, or its name capitalised when it has none.",
     },
     ComponentEntry {
         class: "moss-align-end",
@@ -1825,7 +1933,7 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-kind",
                 values: &["link", "friend", "card"],
                 default: "card",
-                description: "v1 grid-card variant. Today expressed via co-emitted classes (`.link-card`, `.friend-card`, `.no-cards`); Phase 1c collapses to this `data-kind` attribute.",
+                description: "v1 grid-card variant. Expressed through this `data-kind` attribute, which replaced the classes `.link-card`, `.friend-card` and `.no-cards`.",
             },
             DataAttr {
                 name: "data-cover-color",
@@ -1908,6 +2016,12 @@ const CORE: &[ComponentEntry] = &[
                 default: "",
                 description: "`rows` from `:::gallery rows`: justified rows where each item's flex-grow is its image ratio and every item in a row shares one height. Absent for the default grid.",
             },
+            DataAttr {
+                name: "data-motion",
+                values: &["marquee"],
+                default: "",
+                description: "`marquee` from `:::gallery marquee`: one row at a fixed height that slides sideways in a loop. The items sit in a `.moss-marquee-track` as two `.moss-marquee-set`s, the second a hidden copy. Without the script, or for a reader who asks for less motion, it is the ordinary grid.",
+            },
         ],
         example_html: r#"<div class="moss-gallery" data-width="page">
   <div class="moss-gallery-item">...</div>
@@ -1937,7 +2051,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: ":::gallery\nphoto.jpg\n*Dusk, [the quay](quay/)*\n:::\n",
         status: Status::Confirmed,
         since: "0.17",
-        description: "The visible caption of a gallery item: the italic line under the image in `:::gallery`, inline markdown so it may hold a link. It sits under the image link, never inside it, and the full-screen viewer shows it, links and credit included, as the large view's caption. An item without the line has none, and `:::gallery rows` keeps the caption under its item.",
+        description: "The visible caption of a gallery item: the italic line under the image in `:::gallery`, inline markdown so it may hold a link. It sits under the image link, never inside it, and the full-screen viewer shows it, links and credit included, as the large view's caption. An item without the line has none, and `:::gallery rows` keeps the caption under its item. Under a line of several pictures in running text, the italic line captions the whole row and follows the gallery.",
     },
     ComponentEntry {
         class: "moss-gallery-link",
@@ -2521,6 +2635,17 @@ const CORE: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "0",
         description: "Horizontal flex row of equal-flex `.moss-field` children. Form-row layout helper shipped in the default theme.",
+    },
+    ComponentEntry {
+        class: "moss-input--boxed",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<textarea class="moss-input moss-input--boxed"></textarea>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0",
+        description: "A text field with a full border. While focused it takes the accent on its own edge instead of an outline.",
     },
     ComponentEntry {
         class: "moss-input-feedback",
@@ -3126,6 +3251,28 @@ const CORE: &[ComponentEntry] = &[
         status: Status::Confirmed,
         since: "1",
         description: "One foot-credit line, rendered as inline markdown exactly like `.moss-byline-row`.",
+    },
+    ComponentEntry {
+        class: "moss-syndication",
+        kind: "container",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-syndication" hidden><span class="moss-syndication-label">Also on</span> <a href="https://bsky.app/profile/ana.example/post/3k" rel="syndication" class="u-syndication">Bluesky</a> · <a href="https://matters.town/a/abc123" rel="syndication" class="u-syndication">Matters</a></p>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "1",
+        description: "The copies of an article on other sites, at the end of the article in a `hidden` element, so nothing is drawn and tools that pair copies with originals still read them: one `rel=\"syndication\"` link (class `u-syndication`) per address in the `syndicated` frontmatter list, named by platform (the bare host when the platform is unknown) and separated by a middle dot. Absent when the list is absent, empty or holds no http(s) address, and on folder pages.",
+    },
+    ComponentEntry {
+        class: "moss-syndication-label",
+        kind: "instance",
+        parent: "moss-syndication",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-syndication-label">Also on</span>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "1",
+        description: "The element's label, in the page's language, hidden with it.",
     },
     ComponentEntry {
         class: "site-name",

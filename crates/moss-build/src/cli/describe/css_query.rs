@@ -48,7 +48,7 @@ fn fixed_sheets() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Every stylesheet the query scans: the fixed set plus each registered partial.
-fn sheets() -> Vec<(String, &'static str)> {
+pub(crate) fn sheets() -> Vec<(String, &'static str)> {
     fixed_sheets()
         .into_iter()
         .map(|(n, c)| (n.to_string(), c))
@@ -112,6 +112,9 @@ fn shipping_note(sheet: &str) -> &'static str {
         "site/callouts.css" => "shipped only when some page has a callout",
         "site/forms.css" => "shipped only when some page has a :::form",
         "site/search.css" => "shipped only when [site].search is on (off by default)",
+        "site/selection.css" => {
+            "shipped only when [site].selection_tools is on (off by default) or the comments service is"
+        }
         "site/sidenotes.css" => {
             "shipped only when some page defines a footnote; the rules themselves \
              render nothing below a 76rem viewport"
@@ -121,6 +124,7 @@ fn shipping_note(sheet: &str) -> &'static str {
         "site/places-explorer.css" => {
             "shipped only when the site has a place-typed namespace root with the explorer on"
         }
+        "site/map-controls.css" => "shipped when some page carries a places explorer or a country map (the zoom controls both share)",
         "site/country-map.css" => "shipped only when some page is a country map (`country_map:` in its frontmatter)",
         "site/colophon-credit.css" => "shipped only when [site].credit is set and the colophon is on",
         "site/map-layers.css" => "shipped only when the site declares [map.layers]",

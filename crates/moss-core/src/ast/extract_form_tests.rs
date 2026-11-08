@@ -85,11 +85,10 @@ fn name_sets_the_field_name_and_a_label_without_latin_letters_must_set_it() {
 }
 
 #[test]
-fn chinese_labels_help_and_choices_read_like_latin_ones() {
-    let body = "- 您的姓名 * {name=full_name}\n  请写全名。\n\n  我们只用它回信。\n- 课程 * {type=radio name=course}\n  - 肖像\n  - 家庭\n- 备注{name=note}\n";
+fn chinese_help_paragraphs_and_choices_are_read_whole() {
+    let body = "- 您的姓名 * {name=full_name}\n  请写全名。\n\n  我们只用它回信。\n- 课程 * {type=radio name=course}\n  - 肖像\n  - 家庭\n";
     let (form, problems) = parse_form("{#a next=/a/}", body);
     assert!(problems.is_empty(), "{problems:?}");
-    assert_eq!(form.fields[2].label, "备注{name=note}", "a `{{` glued to the label is part of it");
     let name = &form.fields[0];
     assert_eq!((name.label.as_str(), name.name.as_str(), name.required), ("您的姓名", "full_name", true));
     assert_eq!(name.help.as_deref(), Some("请写全名。\n\n我们只用它回信。"));

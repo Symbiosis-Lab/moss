@@ -72,16 +72,7 @@ fn theme_color_dark_matches_token_dark_bg() {
             "dark --moss-color-bg token must be #1c1914 (got {}); update tokens.json if changed intentionally",
             dark
         );
-    // Also verify the processor emits it (not the old wrong literal).
-    // Build a minimal shell template and process it.
-    let shell = concat!(
-        r#"<meta name="theme-color" content="{theme_color_light}" media="(prefers-color-scheme: light)">"#,
-        "\n",
-        r#"<meta name="theme-color" content="{theme_color_dark}" media="(prefers-color-scheme: dark)">"#
-    );
-    let replaced_dark = shell
-        .replace("{theme_color_light}", _light)
-        .replace("{theme_color_dark}", dark);
+    let replaced_dark = ShellProcessor::new().process(ShellType::Page, make_test_vars(false));
     assert!(
         replaced_dark.contains("content=\"#1c1914\""),
         "emitted dark theme-color must be #1c1914, got: {}",
@@ -91,6 +82,51 @@ fn theme_color_dark_matches_token_dark_bg() {
         !replaced_dark.contains("content=\"#1a1816\""),
         "stale wrong dark value #1a1816 must NOT appear in emitted meta"
     );
+}
+
+#[test]
+fn fixed_color_scheme_sets_root_attributes_and_unconditional_theme_color() {
+    use crate::build::page::color_scheme::ColorScheme;
+    use moss_core::contract::tokens::{bg_colors, load_tokens};
+    let tokens = load_tokens().expect("tokens.json must parse");
+    let (light, dark) = bg_colors(&tokens);
+    for (scheme, name, color) in [
+        (ColorScheme::Light, "light", light),
+        (ColorScheme::Dark, "dark", dark),
+    ] {
+        let mut vars = make_test_vars(false);
+        vars.color_scheme = scheme;
+        let html = ShellProcessor::new().process(ShellType::Page, vars);
+        let root = html.lines().find(|line| line.starts_with("<html ")).expect("html root");
+        assert!(!html.contains("localStorage"), "fixed pages need no pre-paint script");
+        assert!(root.contains(&format!(r#"data-theme="{name}""#)), "{root}");
+        assert!(root.contains(&format!(r#"data-moss-color-scheme="{name}""#)), "{root}");
+        assert!(root.contains(&format!(r#"style="color-scheme: {name}""#)), "{root}");
+        assert_eq!(html.matches(r#"<meta name="theme-color""#).count(), 1);
+        assert!(html.contains(&format!(r#"<meta name="theme-color" content="{color}">"#)), "{html}");
+    }
+}
+
+#[test]
+fn default_and_auto_color_scheme_leave_root_unfixed() {
+    use crate::build::page::color_scheme::ColorScheme;
+    for scheme in [None, Some(ColorScheme::Auto)] {
+        let mut vars = make_test_vars(false);
+        if let Some(scheme) = scheme {
+            vars.color_scheme = scheme;
+        }
+        let html = ShellProcessor::new().process(ShellType::Page, vars);
+        let root = html.lines().find(|line| line.starts_with("<html ")).expect("html root");
+        let pre_paint = SHELL_TEMPLATE.lines().find(|line| line.contains("<script>var t=")).unwrap();
+        assert!(html.contains(pre_paint), "auto pages keep the pre-paint script unchanged");
+        assert!(!root.contains("data-theme="), "{root}");
+        assert!(!root.contains("data-moss-color-scheme="), "{root}");
+        assert!(!root.contains("color-scheme:"), "{root}");
+        assert_eq!(html.matches(r#"<meta name="theme-color""#).count(), 2);
+        for name in ["light", "dark"] {
+            assert!(html.contains(&format!(r#"media="(prefers-color-scheme: {name})""#)), "{html}");
+        }
+    }
 }
 
 /// Shorthand: substitute with an empty value map (every lowercase token is
@@ -667,21 +703,19 @@ fn test_css_nav_right_edge_aligns_toggles_when_it_wraps() {
 }
 
 #[test]
-fn test_css_nav_split_name_alone_on_row_one_then_links_and_toggles() {
+fn test_css_nav_split_name_and_toggles_on_row_one_then_links() {
     // `data-nav-split` (set by nav-split.ts on a plain-site-name masthead that
-    // has to wrap) re-stacks the nav: the site name takes row 1 by itself, and
-    // row 2 holds the links followed by the toggles at the end edge.
-    // `display: contents` is what lifts the two groups out of .nav-right so
-    // they can be ordered independently — flex wrapping alone can never float
-    // the later sibling back up.
+    // has to wrap) re-stacks the nav: the site name and the toggles share row
+    // 1, and the links take row 2 alone. `display: contents` lifts the two
+    // groups out of .nav-right so they can be ordered independently; flex
+    // wrapping alone can never float a later sibling back up. Where the
+    // groups actually land is the nav-split-order render gate's concern.
     let right = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-right")
         .expect("split .nav-right rule should exist");
     let left = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-left")
         .expect("split .nav-left rule should exist");
     let links = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-links")
         .expect("split .nav-links rule should exist");
-    let icons = get_css_rule(DEFAULT_CSS, ".nav-content[data-nav-split] .nav-icons")
-        .expect("split .nav-icons rule should exist");
 
     assert!(
         right.contains("display: contents"),
@@ -689,21 +723,14 @@ fn test_css_nav_split_name_alone_on_row_one_then_links_and_toggles() {
         right
     );
     assert!(
-        left.contains("flex: 1 1 100%"),
-        "split .nav-left takes all of row 1 so the site name sits alone there, got: {}",
+        left.contains("flex: 1 1 0"),
+        "split .nav-left fills row 1 beside the toggles, got: {}",
         left
     );
     assert!(
-        links.contains("order: 1")
-            && links.contains("flex: 1 1 0")
-            && links.contains("justify-content: flex-start"),
-        "split links open row 2 packed at the start edge, got: {}",
+        links.contains("order: 1") && links.contains("flex: 1 1 100%"),
+        "split links come after the toggles, on a row of their own, got: {}",
         links
-    );
-    assert!(
-        icons.contains("order: 2") && icons.contains("margin-inline-start: auto"),
-        "icons must follow links and push to row 2's end edge, got: {}",
-        icons
     );
 }
 
@@ -1631,6 +1658,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         lightbox: String::new(),
         robots_meta: None,
         colophon: true,
+        color_scheme: Default::default(),
         colophon_credit: None,
     }
 }
@@ -3649,8 +3677,8 @@ fn a_built_page_ships_no_blueprint_placeholder() {
 /// half the share/copy bar ended up off the left of a phone screen.
 #[test]
 fn the_selection_popover_is_not_centred_by_a_transform() {
-    let rule = get_css_rule(DEFAULT_CSS, ".sel-popover")
-        .expect("site.css must style .sel-popover");
+    let rule = get_css_rule(include_str!("../../assets/css/site/selection.css"), ".sel-popover")
+        .expect("selection.css must style .sel-popover");
     assert!(
         !rule.contains("transform"),
         ".sel-popover must carry no transform — `left` is its real left edge, \

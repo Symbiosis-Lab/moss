@@ -1,0 +1,392 @@
+/* moss Design System — Shared Modal System
+ *
+ * The full BaseModal component family: button COLOR variants, the backdrop +
+ * centered container chrome, the shared title/body/actions content classes,
+ * and the confirm-dialog variants (reverify + delete-confirm with its
+ * reference list).
+ *
+ * Lives in shared/ and is @imported by BOTH the app shell AND the editor
+ * webview, so every webview that mounts a BaseModal gets identical chrome.
+ * Shared UI belongs in the shared layer: a modal styled only in the shell's
+ * own stylesheet renders unstyled in the editor webview (no backdrop, no
+ * card, and an in-flow block that shoves the editor layout aside).
+ *
+ * Structural pieces intentionally stay in primitives.css (the `.moss-btn` base
+ * shape, `.moss-stack`, `.moss-text--muted`). Shell-only modals stay in the
+ * shell's own stylesheet (`.moss-modal--settings` + its canvas backdrop,
+ * `.moss-modal--publish`, `.first-publish-*`) — the editor never mounts them.
+ *
+ * `--z-modal` comes from shared/tokens.css, which every webview entry point
+ * imports — so the whole --z-* scale is in scope wherever this sheet is.
+ *
+ * Font sizes are literal rem (like `.moss-modal-title`/`-body` above) rather
+ * than `--moss-size-*` tokens: the app's tokens.css doesn't define that scale
+ * (only the site-build tokens.json does), so an unfallback'd token here would
+ * resolve to invalid and the declaration would be dropped.
+ */
+
+/* ============================================================
+   Button color variants — the structural `.moss-btn` base (padding, radius,
+   font, focus ring) lives in primitives.css; these add only colors.
+   ============================================================ */
+
+/* Primary button — dark fill, inverted text (the emphasized "default" action) */
+.moss-btn-primary {
+  background: var(--moss-color-text);
+  color: var(--moss-color-bg);
+}
+.moss-btn-primary:hover {
+  background: #3c3330;
+}
+[data-theme="dark"] .moss-btn-primary:hover {
+  background: #b4b0aa;
+}
+.moss-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Secondary button — outlined, muted text (quiet / escape actions) */
+.moss-btn-secondary {
+  color: var(--moss-color-text-secondary);
+  background: transparent;
+  border: 1px solid var(--moss-border-medium);
+}
+.moss-btn-secondary:hover {
+  border-color: var(--moss-color-muted);
+  background: var(--moss-color-surface);
+}
+.moss-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Danger button — same shape as primary but using the danger palette. moss
+   confirm-dialogs wear exactly ONE danger button (the emphasized destructive
+   commit); everything else stays quiet. */
+.moss-btn-danger {
+  background: var(--moss-color-danger);
+  color: var(--moss-pill-filled-text);
+}
+.moss-btn-danger:hover {
+  background: var(--moss-color-danger-hover);
+}
+.moss-btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   BaseModal — backdrop scrim + centered container
+   ============================================================ */
+.moss-modal-backdrop {
+  position: fixed;
+  /* inset: 0 covers the full webview including any titlebar stripe. */
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: var(--z-modal);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.moss-modal-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* View-zone overlay (SHELL only): while an action panel occupies the left zone
+   the scrim must cover the ENTIRE preview region, flush to the divider seam —
+   with no undarkened strip of preview hugging the divider.
+
+   The base `.moss-modal-backdrop { inset: 0 }` already achieves that in BOTH
+   placement models, so the backdrop deliberately gets NO left override:
+     • Tiled (editor): the preview webview is origin-tiled to
+       the seam and the shell `body` is inset to the visible band
+       (`width: calc(100% - --preview-width-inset)` + `contain: layout`, in the app shell's stylesheet),
+       so `body`'s left edge sits AT the seam and `--action-panel-width` is 0.
+       `inset: 0` (contained by `body`) paints the full visible band, flush to the seam.
+     • Inset-left (browser-panel / plugin login): the preview stays full-window and
+       `--action-panel-width` insets the content; `body` is full-window, so `inset: 0`
+       spans the window — but the opaque panel webview occludes its own
+       [0, --action-panel-width) zone, so the scrim only paints the preview region,
+       again flush to the seam.
+   A former `left: calc(--action-panel-width + --moss-divider-width)` inset (design
+   C1, meant to keep the divider grabbable under the scrim) pushed the scrim one
+   `--moss-divider-width` past the seam, leaving that strip of preview undarkened.
+   The divider is not a valued drag target under a focus-trapped modal, so full
+   coverage wins over grabbability.
+
+   Only the DIALOG BOX still gets an override: it re-centers into the visible
+   preview region and caps its width so a wide dialog never overflows the region
+   (the "matters login cut off on the left/right" fix). The recenter is by HALF
+   the panel inset only — no `--moss-divider-width` bias (that was the sibling of
+   the backdrop's stale inset). In the tiled case `--action-panel-width` is 0, so
+   this collapses to the base `left: 50%`. Gated behind `body.moss-action-panel-open`,
+   a class only ever set on the shell body — inert in the editor webview, where the
+   base `left: 50%` centering stands. */
+body.moss-action-panel-open .moss-modal {
+  left: calc(50% + var(--action-panel-width) / 2);
+  max-width: calc(100% - var(--action-panel-width) - 32px);
+}
+
+.moss-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.95);
+  background: var(--moss-color-bg);
+  border: 1px solid var(--moss-border-light);
+  /* One shape: every modal reads the window's own radius (24px) rather than
+     a bespoke literal. */
+  border-radius: var(--moss-window-radius);
+  box-shadow: var(--moss-elevation-3);
+  z-index: calc(var(--z-modal) + 1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.moss-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* Reduced motion jump-cuts the modal itself, as it does every other
+   transition: the end state (opacity 1, scale 1) still applies on the
+   `.visible` toggle, only the animated path between the two states is
+   removed. */
+@media (prefers-reduced-motion: reduce) {
+  .moss-modal-backdrop,
+  .moss-modal {
+    transition: none;
+  }
+}
+
+/* ============================================================
+   Shared modal content classes — the `.moss-stack` root (set per-modal) owns
+   the vertical rhythm; these just set type + the action row.
+   ============================================================ */
+.moss-modal-title {
+  /* Margin is owned by the .moss-stack container (its `> *` reset kills the UA
+     <h2> margin); here we just size the type so it isn't UA-sized (2em). */
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--moss-color-text);
+}
+.moss-modal-body {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  /* no colour: inherits, so `.moss-text--muted` composes cleanly */
+}
+.moss-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--moss-space-xs);
+}
+/* A labelled checkbox row ("Don't show this again"): the whole label is the hit
+   area; the box sits on the first line of text when the label wraps. */
+.moss-modal-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--moss-space-xs);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.moss-modal-check input {
+  flex: none;
+  margin: 0.25em 0 0;
+  accent-color: var(--moss-color-accent);
+}
+
+/* ============================================================
+   The shared confirm/alert shape — every short "are you sure" or error
+   dialog reads this ONE class (ReverifyConfirmModal, DeleteConfirmModal,
+   VersionsRestoreModal) instead of three near-duplicates that had drifted
+   apart despite each file's own comment claiming parity with the others:
+   reverify's 32px padding was a literal, delete-confirm and
+   versions-restore both read var(--moss-space-xl) (48px). Consolidated onto
+   32px (--moss-space-lg), the value two of the three already used.
+   ============================================================ */
+.moss-modal--confirm {
+  width: min(90%, 480px);
+  padding: var(--moss-space-lg);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* PublishPreflightModal — an occurrence report, not a second modal system.
+   It keeps every fact on one flat row: authored reference, source location,
+   then the quiet navigation intent. The existing confirm frame owns chrome. */
+.moss-modal--publish-preflight {
+  /* The dialog is a bounded frame: only the occurrence list may scroll.
+     min-block-size: 0 lets the grid child shrink below its content height
+     when a desktop window is made short. */
+  display: flex;
+  flex-direction: column;
+  max-height: min(80vh, 42rem);
+  min-height: 0;
+  overflow: hidden;
+}
+.moss-publish-preflight {
+  --moss-stack-space: var(--moss-space-sm);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.moss-publish-preflight-rows {
+  display: grid;
+  gap: var(--moss-space-xs);
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.moss-publish-preflight-row {
+  display: grid;
+  gap: var(--moss-space-2xs);
+  padding: var(--moss-space-sm);
+  border: 1px solid var(--moss-border-light);
+  /* The row sits inside the 24px modal frame; one-third keeps the nested
+     corner visibly concentric without introducing a one-off radius token. */
+  border-radius: calc(var(--moss-window-radius) / 3);
+  background: var(--moss-color-surface);
+}
+.moss-publish-preflight-reference {
+  overflow-wrap: break-word;
+  color: var(--moss-color-text);
+  font-family: var(--moss-font-mono);
+  font-size: 0.8125rem;
+}
+.moss-publish-preflight-source {
+  display: flex;
+  gap: var(--moss-space-xs);
+  min-width: 0;
+  color: var(--moss-color-text-secondary);
+  font-size: 0.8125rem;
+}
+.moss-publish-preflight-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.moss-publish-preflight-cause {
+  /* Wraps rather than truncates: a moved page's cause names the new address,
+     the one value an author needs to write the redirect. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.moss-publish-preflight-open {
+  justify-self: start;
+  min-height: 40px;
+  text-decoration: underline;
+  text-underline-position: from-font;
+  text-decoration-skip-ink: auto;
+}
+.moss-publish-preflight-open:focus-visible {
+  outline: none;
+  box-shadow: var(--moss-focus-ring);
+}
+
+/* ============================================================
+   ReverifyConfirmModal — shell-only in practice, but kept beside its
+   delete-confirm sibling so the two confirm dialogs live together.
+   ============================================================ */
+/* Its four states (confirm/sending/sent/error) vary a lot in content
+   height, and `rerender()` swaps content with no height transition — a
+   floor keeps the dialog from visibly shrinking on every state change. */
+.moss-modal--reverify {
+  min-height: 260px;
+}
+.moss-reverify-modal {
+  --moss-stack-space: var(--moss-space-sm);
+}
+
+/* ============================================================
+   DeleteConfirmModal — the EDITOR webview's one delete surface: it opens in
+   the click's frame asking "Move X to Trash?" while the reference scan runs,
+   and becomes the link disclosure in place when the scan finds any.
+   Reuses the shared title/body/actions classes, the `.moss-inline-status`
+   badge for the scan's status line, and the `.moss-stack` rhythm; only the
+   stacked action row and the reference list are bespoke — geometry comes
+   from `.moss-modal--confirm`, carried alongside this modifier.
+   ============================================================ */
+.moss-delete-confirm-modal {
+  --moss-stack-space: var(--moss-space-sm);
+}
+/* Stack the three action buttons full-width. Unlike the shell's 2-button
+   reverify/publish dialogs, this dialog has THREE actions — one with a long
+   label ("Remove links and trash") — whose combined width exceeds moss's modal
+   content box, so a horizontal row would overflow (badly in the narrow editor
+   action panel). A full-width vertical stack always fits, gives large targets,
+   and reads clearly for a destructive choice. DOM order keeps Cancel first
+   (top + first-focus = safe default); the recommended danger action sits last
+   (bottom, most prominent). */
+.moss-modal--delete-confirm .moss-modal-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Reference list — an index of the inbound links about to break. Each row is
+   two lines: the referencing FILE (the scannable key, truncated) over the link
+   TEXT (a quiet monospace sub-line). Bordered surface card, scrolls when long. */
+.moss-modal-ref-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--moss-space-xs);
+  max-height: 12.5rem; /* ~4 two-line rows before scroll */
+  overflow-y: auto;
+  border: 1px solid var(--moss-border-light);
+  border-radius: 8px;
+  background: var(--moss-color-surface);
+}
+.moss-modal-ref-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--moss-space-2xs) var(--moss-space-xs);
+  border-radius: 4px;
+}
+.moss-modal-ref-item + .moss-modal-ref-item {
+  margin-block-start: var(--moss-space-2xs);
+}
+/* Filename = the solid anchor (this file exists and stays). It is the scan key,
+   so it truncates with an ellipsis rather than wrapping; the full path is on a
+   data-tooltip (set by the delete-confirm modal). */
+.moss-modal-ref-file {
+  color: var(--moss-color-text);
+  font-size: 0.875rem;
+  font-weight: var(--moss-font-weight-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Link text = the thing about to dangle. Rendered in moss's own "unresolved
+   link" ink — the same dotted, danger-tinted underline the editor draws under
+   broken wikilinks (`--link-unresolved-*` / `--moss-ref-broken`), so
+   the dialog previews the future broken links in the app's own vocabulary.
+   Falls back to danger/dotted outside the editor webview. */
+.moss-modal-ref-text {
+  color: var(--moss-color-text-secondary);
+  font-family: var(--moss-font-mono);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  padding-inline-start: var(--moss-space-sm);
+  text-decoration: underline;
+  text-decoration-style: var(--link-unresolved-decoration-style, dotted);
+  text-decoration-color: var(--moss-ref-broken, var(--moss-color-danger));
+  text-underline-offset: 2px;
+}
+.moss-modal-ref-more {
+  color: var(--moss-color-muted);
+  font-size: 0.8125rem;
+  font-style: italic;
+  padding: var(--moss-space-2xs) var(--moss-space-xs);
+  margin-block-start: var(--moss-space-2xs);
+}

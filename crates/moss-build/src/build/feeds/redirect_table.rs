@@ -253,11 +253,20 @@ pub(crate) struct Plan {
 }
 
 /// The folder move a declared line makes, when its two sides both end in `/`
-/// and name two folders of this site, neither of them the root. `Err` is a
-/// folder line that names the root while its old side is a folder holding
-/// files: moving every address of the site is not something one line should
-/// do by accident. A root line whose old side is one page's address is just
-/// that page forwarded.
+/// and name two folders of this site, the new one not containing the old one.
+/// A new folder around the old one (the site root, or an edition's root above
+/// one of its pages) would copy itself under itself. `Err` is such a line
+/// whose old side is a folder holding files, or the root itself: moving a
+/// whole tree is not something one line should do by accident. One whose old
+/// side is one page's address is just that page forwarded.
+/// Whether a folder line from `old` to `new` moves a folder: neither is the
+/// site root and `new` does not contain `old`. Takes folder addresses with or
+/// without their leading `/`, each ending in `/`.
+pub(crate) fn moves_a_folder(old: &str, new: &str) -> bool {
+    let (old, new) = (old.trim_start_matches('/'), new.trim_start_matches('/'));
+    !old.is_empty() && !old.starts_with(new)
+}
+
 fn folder_move(c: &Candidate, from: &Addr, to: &Target, old_served: bool, probe: &Probe) -> Result<Option<FolderMove>, ()> {
     let Target::Internal(t, suffix) = to else { return Ok(None) };
     if !c.declared || !c.from.trim().ends_with('/') || !c.to.trim().ends_with('/') || !suffix.is_empty() || !from.carried || t.key() == from.key() {
@@ -265,7 +274,7 @@ fn folder_move(c: &Candidate, from: &Addr, to: &Target, old_served: bool, probe:
     }
     let prefix = |a: &Addr| a.key().strip_suffix("index.html").unwrap_or_default().to_string();
     let (old, new) = (prefix(from), prefix(t));
-    if old.is_empty() || new.is_empty() {
+    if !moves_a_folder(&old, &new) {
         return if old.is_empty() || probe.holds_a_folder(from) { Err(()) } else { Ok(None) };
     }
     Ok(Some(FolderMove { from: old, to: new, old_served }))
@@ -309,7 +318,7 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Plan {
             }
             Ok(None) => {}
             Err(()) => log_warn_problem!(
-                "redirect '{}' to '{}' moves no folder: a folder line cannot name the site root (only the page itself is redirected)",
+                "redirect '{}' to '{}' moves no folder: a folder line cannot move a folder into one that contains it, such as the site root (only the page itself is redirected)",
                 from.served(),
                 to.href()
             ),
@@ -378,7 +387,7 @@ pub(crate) const RULES: [&str; 7] = [
     "Both sides are site-absolute; the new side is an address this site serves or an https:// URL.",
     "A page address (/old/ or /old) or an .html file gets a forwarding page.",
     "Any other file can only be sent to another non-HTML file of the site, and gets a copy of the file the site serves there (for a picture, the processed one), so both addresses give the same bytes; any other target is reported and does not redirect.",
-    "When both sides are folders of this site (ending in /, with no # or ?), the line also moves everything under the old folder: each page and .html file served under the new folder gets a forwarding page at the same path under the old one, and every other file a copy of the served file. A folder line naming the site root on either side moves no folder.",
+    "When both sides are folders of this site (ending in /, with no # or ?), the line also moves everything under the old folder: each page and .html file served under the new folder gets a forwarding page at the same path under the old one, and every other file a copy of the served file. A folder line naming the site root, or a new folder that contains the old one, moves no folder.",
     "An old address the site still serves keeps what it serves; a line that changes nothing is reported.",
     "An old address with capitals or spaces in a folder name cannot be a file path, so it is reported and does not redirect.",
     "No list of redirects is published: each old address answers through its own forwarding page or copy.",

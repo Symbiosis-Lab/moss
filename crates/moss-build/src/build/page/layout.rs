@@ -35,12 +35,19 @@ pub struct LayoutConfig {
     /// since 2026-08-30, explicit opt-in). Site-level for the same reason as
     /// `math`: the island is chrome, present on every breadcrumbed page or none.
     pub floating_nav: bool,
+    /// What the site asks of search engines and AI; read here for the robots
+    /// meta tag every page carries.
+    pub ai: crate::build::feeds::robots::AiSettings,
     /// `[site].colophon` — whether moss's credit line is emitted (default ON).
     pub colophon: bool,
     /// `[site].credit` — the site's own line before the colophon's mark.
     pub colophon_credit: Option<crate::build::render::credits::ColophonCredit>,
     /// `[site].header` — resolved. See `crate::build::components::nav::HeaderMode`.
     pub header: crate::build::components::nav::HeaderMode,
+    /// `[site].header_scroll` — resolved. See `crate::build::components::nav::HeaderScroll`.
+    pub header_scroll: crate::build::components::nav::HeaderScroll,
+    /// `[site].color_scheme` — automatic reader choice or a fixed palette.
+    pub color_scheme: crate::build::page::color_scheme::ColorScheme,
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
@@ -54,6 +61,8 @@ pub struct LayoutConfig {
     /// Term kinds that asked for a nav-bar entry (`[terms.<key>] nav = true`)
     /// and have a root page, one entry per edition, in config order.
     pub term_nav: Vec<crate::build::terms::TermNavEntry>,
+    /// `[site].me` as ready-to-place `<link rel="me">` tags, or `""`.
+    pub profile_links: String,
 }
 
 impl LayoutConfig {
@@ -81,13 +90,23 @@ impl LayoutConfig {
                 ..SiteAssets::default()
             },
             floating_nav: false,
+            ai: Default::default(),
             colophon: true,
+            color_scheme: Default::default(),
             colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
+            header_scroll: crate::build::components::nav::HeaderScroll::Static,
             lang_tag: "en".to_string(),
             place_maps: None,
             term_nav: Vec::new(),
+            profile_links: String::new(),
         }
+    }
+
+    /// Set the `rel="me"` head links — see [`Self::profile_links`].
+    pub fn with_profile_links(mut self, profile_links: String) -> Self {
+        self.profile_links = profile_links;
+        self
     }
 
     /// Set the term kinds that are nav-bar entries — see [`Self::term_nav`].
@@ -160,6 +179,12 @@ impl LayoutConfig {
         self
     }
 
+    /// Set what the site asks of search engines and AI.
+    pub fn with_ai(mut self, ai: crate::build::feeds::robots::AiSettings) -> Self {
+        self.ai = ai;
+        self
+    }
+
     /// Set the site-wide colophon preference (`[site].colophon`, default true)
     pub fn with_colophon(mut self, colophon: bool) -> Self {
         self.colophon = colophon;
@@ -172,9 +197,20 @@ impl LayoutConfig {
         self
     }
 
+    pub fn with_color_scheme(mut self, color_scheme: crate::build::page::color_scheme::ColorScheme) -> Self {
+        self.color_scheme = color_scheme;
+        self
+    }
+
     /// Set `[site].header` (default `HeaderMode::Brand`)
     pub fn with_header_mode(mut self, header: crate::build::components::nav::HeaderMode) -> Self {
         self.header = header;
+        self
+    }
+
+    /// Set `[site].header_scroll` (default `HeaderScroll::Static`)
+    pub fn with_header_scroll(mut self, header_scroll: crate::build::components::nav::HeaderScroll) -> Self {
+        self.header_scroll = header_scroll;
         self
     }
 

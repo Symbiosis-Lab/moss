@@ -612,6 +612,8 @@ test("past the world ceiling, the coast at a tile boundary is pixel-continuous",
     points.push({ x: edgeX - 3, y }, { x: edgeX + 3, y });
   }
   const clip = { x: Math.floor(edgeX - 20), y: Math.floor(top), width: 40, height: Math.max(1, Math.ceil(bottom - top)) };
+  // The lower samples fall where the card row, markers and labels draw over the map: a card's text would be compared across the seam instead of the coast, and pass or fail with where its glyphs happen to land.
+  await page.addStyleTag({ content: ".moss-places-viewport > :not(.moss-places-world) { visibility: hidden !important; }" });
   const png = await page.screenshot({ clip, animations: "disabled", scale: "css" });
   const localPoints = points.map((p) => ({ x: p.x - clip.x, y: p.y - clip.y }));
   const pixels = await samplePixelsAt(page, png, localPoints);
@@ -1147,4 +1149,15 @@ test("a tile's outer coverage edge carries its own fade; a shared inner edge car
     const mask = await maskOf(cell);
     expect(mask, `${cell} has every neighbour at this camera — no outer edge to fade`).toBe("none");
   }
+});
+
+test("the reset circle is out of sight and the tab order at the opening view, and appears once the view moves", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await gotoReady(page);
+  const reset = page.locator('.moss-places-controls [data-control="reset"]');
+  await expect(reset).toBeHidden();
+  await page.locator('[data-control="zoom-in"]').click();
+  await expect(reset).toBeVisible();
+  await reset.click();
+  await expect(reset).toBeHidden();
 });

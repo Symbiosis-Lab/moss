@@ -140,11 +140,9 @@ fn dispatch_in_block_children(
 
         // Descend into nested containers if any.
         //
-        // PR7a-flip-core-C (2026-05-28): the recursion now matches the
-        // visitor pattern in `visit.rs` for `Grid.cells` and `Hero.overlay`
-        // (visit.rs:140, 145). Pre-flip, this visitor missed shortcode
-        // bodies — a wikilink embed inside a `:::grid` cell or `:::hero`
-        // overlay would not be dispatched.
+        // The recursion matches the visitor pattern in `visit.rs` for
+        // `Grid.cells` and `Hero.overlay`, so a wikilink embed inside a
+        // `:::grid` cell or `:::hero` overlay is dispatched.
         match &mut blocks[i] {
             Block::BlockQuote(children)
             | Block::Callout { children, .. }
@@ -159,7 +157,7 @@ fn dispatch_in_block_children(
                 }
             }
             Block::LinkCard { children, .. } => {
-                // PR4.5 compound-link cell — descend into its block body so
+                // Compound-link cell: descend into its block body so
                 // wikilinks inside a grid LinkCard render correctly.
                 dispatch_in_block_children(children, snapshot, graph, source_path, result);
             }
@@ -620,7 +618,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // PR7a-flip-core-C (2026-05-28): shortcode-body recursion
+    // Shortcode-body recursion
     // -----------------------------------------------------------------
 
     #[test]

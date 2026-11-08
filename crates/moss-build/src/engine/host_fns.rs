@@ -1,4 +1,4 @@
-//! __TAURI__.core.invoke dispatch (report 1 §2B, report 3). The async host_invoke
+//! __TAURI__.core.invoke dispatch. The async host_invoke
 //! serializes the args object to JSON (json_stringify), hands it to the host over
 //! a Send channel (DispatchBridge), and resolves/rejects the JS Promise.
 //!
@@ -349,7 +349,7 @@ async fn dispatch_command_core(
             reply_json(&r)
         }
         "html_to_markdown" => {
-            // Fold the Phase-2 inline htmd arm back onto the ONE shared fn (B.8).
+            // Delegates to the shared `html_to_markdown`.
             let html = req_str(&args, "html")?;
             let md = crate::plugins::runtime::portable::html_to_markdown(html).await?;
             reply_json(&md)
@@ -1204,6 +1204,33 @@ mod tests {
             let err = dispatch_command_test_stub(pp, None, "download_asset", &args(Some(bad))).await.expect_err(bad);
             assert!(err.contains("Invalid file name"), "{bad}: {err}");
         }
+    }
+
+    /// `download_asset` writes only inside the site folder: a target directory
+    /// that is absolute, names `.moss/`, or is a Windows drive path is refused
+    /// before anything is fetched, and nothing lands outside.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_asset_arm_refuses_a_target_outside_the_site() {
+        std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        let container = tempfile::TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        let proj = container.path().join("site");
+        let outside = container.path().join("outside");
+        std::fs::create_dir_all(proj.join(".moss/plugins/other")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let pp = proj.to_str().unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let m = server.mock("GET", "/payload").with_status(200).with_body("payload").expect(0).create_async().await;
+        let args = |dir: &str| serde_json::json!({
+            "url": format!("{}/payload", server.url()), "targetDir": dir, "timeoutMs": 5000, "filename": "x.txt"
+        }).to_string();
+
+        for bad in [outside.to_str().unwrap(), ".moss/plugins/other", "C:\\Users\\x"] {
+            let err = dispatch_command_test_stub(pp, None, "download_asset", &args(bad)).await.expect_err(bad);
+            assert!(!err.is_empty(), "{bad}");
+        }
+        assert!(!outside.join("x.txt").exists());
+        assert!(!proj.join(".moss/plugins/other/x.txt").exists());
+        m.assert_async().await;
     }
 
     /// Every plugin HTTP request carries moss's `User-Agent`, and a plugin

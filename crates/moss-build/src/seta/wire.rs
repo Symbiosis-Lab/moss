@@ -26,11 +26,35 @@ fn is_lang_tag(lang: &str) -> bool {
             .all(|p| (2..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
+/// The operating system as a person names it.
+fn os_label() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
+/// `<app> on <kind>` ("moss command line on Mac Studio"); just the app when
+/// the kind is unknown.
+pub(super) fn device_name(app: &str, kind: Option<&str>) -> String {
+    kind.map_or_else(|| app.to_string(), |kind| format!("{app} on {kind}"))
+}
+
+/// The sign-in request. `client` names this app and the kind of computer on
+/// the page the emailed link opens, so whoever reads the mail can tell
+/// whether they asked for it.
 pub(super) fn auth_request_body(email: &str, pubkey: &str, session_id: &str, lang: Option<&str>) -> serde_json::Value {
     let mut body = serde_json::json!({
         "email": email,
         "pubkey": pubkey,
         "session_id": session_id,
+        "client": {
+            "name": device_name(crate::system::app_name(), crate::system::device_kind()),
+            "version": crate::system::app_version(),
+            "os": os_label(),
+        },
     });
     if let Some(lang) = lang.filter(|l| is_lang_tag(l)) {
         body["lang"] = lang.into();

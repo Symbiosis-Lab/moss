@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hydrateSubscribeForm } from '../subscribe.js';
 
-describe('subscribe form sends scope in POST body', () => {
+describe('subscribe POST body', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -68,7 +68,21 @@ describe('subscribe form sends scope in POST body', () => {
     form.requestSubmit();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body).toEqual({ email: 'alice@example.com', scope: 'zh' });
+    expect(body).toEqual({ email: 'alice@example.com', scope: 'zh', lang: 'en' });
+  });
+
+  it.each([
+    ['zh-Hans', 'zh-hans'],
+    ['zh-TW', 'zh-hant'],
+    ['zh-CN', 'zh-hans'],
+    ['', 'en'],
+  ])('sends the bucketed <html lang> %j as lang %j', async (page, sent) => {
+    document.documentElement.lang = page;
+    const form = buildForm('');
+    hydrateSubscribeForm(form);
+    form.requestSubmit();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).lang).toBe(sent);
   });
 
   it('sends scope="" when the hidden input value is empty', async () => {

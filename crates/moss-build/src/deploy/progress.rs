@@ -270,7 +270,7 @@ mod tests {
     use super::*;
 
     /// Compile-time proof the `specta::Type` derive is present on both the
-    /// deploy stage stream and its envelope (Step 3 Phase 3: they become typed
+    /// deploy stage stream and its envelope (they are typed
     /// bindings feeding `nextPublishStage`, not raw JSON).
     #[test]
     fn deploy_progress_is_specta_typed() {

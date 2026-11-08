@@ -96,6 +96,16 @@ pub struct ArticleInfo {
     /// Stable note identity: 8 random hex chars minted once and stored in frontmatter — NOT derived from the path, and unrecoverable once lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+
+    /// The channels this page's copies go to, cascade applied. Absent when
+    /// neither the page nor a folder names any; empty for `syndicate: false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syndicate: Option<Vec<String>>,
+
+    /// A post with no title of its own, so `title` holds its opening words: a
+    /// copy of it is its text, not a titled article.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub untitled: bool,
 }
 
 /// Mapping from URL path to article source information
@@ -540,6 +550,8 @@ pub fn build_article_map(
             date: doc.date.clone(),
             tags,
             uid: doc.uid.clone(),
+            syndicate: doc.syndicate.clone(),
+            untitled: doc.untitled,
         };
         map.articles.insert(pretty_url, article_info);
     }

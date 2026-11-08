@@ -48,7 +48,7 @@ export interface ProcessContext extends BaseContext {
 }
 
 /**
- * Context for on_deploy hook (deployer plugins)
+ * Context for the deploy hook (deployer plugins)
  *
  * @category Hook contexts
  */
@@ -170,6 +170,65 @@ export interface ArticleInfo {
   url_path: string;
   date?: string;
   tags: string[];
+}
+
+/**
+ * One post of a copy, ready to post: plain text, with every address in it, in
+ * order, for networks that mark links up.
+ *
+ * @category Copies
+ */
+export interface CopyPart {
+  text: string;
+  links: string[];
+}
+
+/** A copy's id and address on its network. @category Copies */
+export interface CopyRef {
+  id: string;
+  url: string;
+}
+
+/**
+ * The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or
+ * `find_copy` receives, already shaped to the limits its manifest declares
+ * under `contributes.channel.syndication`.
+ *
+ * @category Copies
+ */
+export interface CopyJob {
+  op: "publish" | "update" | "delete" | "find";
+  channel: string;
+  /** The same on every send of this post to this channel, on every computer. */
+  idempotency_key: string;
+  /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
+  post: { url: string; source_path: string; title: string; lang?: string | null; date?: string | null; tags?: string[] };
+  /** Absent for a delete, whose page is gone. */
+  form?: "short" | "thread" | "long" | "teaser" | "handoff";
+  parts?: CopyPart[];
+  teaser?: { title: string; description: string; url: string; cover?: string | null } | null;
+  article?: { title: string; html: string; description?: string | null; cover?: string | null } | null;
+  /** The copy already on the network (for an update, delete or lookup), or the draft a hand-off left there. */
+  previous?: (CopyRef & { parts?: CopyRef[] }) | null;
+  /** The channel's resolved settings. */
+  config: Record<string, unknown>;
+}
+
+/**
+ * A copy hook's answer, in {@link HookResult.copy}: the copy's id and address;
+ * or, with `success: false`, why the network refused; or a hand-off, a copy
+ * the author posts by hand (`text` to paste at `open_url`) or a draft on the
+ * network for the author to publish (empty `text`, the draft's `id`).
+ *
+ * @category Copies
+ */
+export interface CopyOutcome {
+  id?: string;
+  url?: string;
+  /** A thread's later parts, in order. */
+  parts?: CopyRef[];
+  handoff?: { text: string; open_url?: string; id?: string };
+  refused?: { cause: "auth" | "content" | "rate" | "network" | "unknown"; message?: string };
 }
 
 /**

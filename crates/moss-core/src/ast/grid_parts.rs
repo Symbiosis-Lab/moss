@@ -441,11 +441,18 @@ fn render_quote<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, quote: &Bl
     out.push('>');
     let from = out.len();
     super::render::render_blocks_with_meta(hooks, out, std::slice::from_ref(quote), &[]);
+    // Attributes the quote's own rendering cannot know: a cite from the source
+    // line (a dash line of its own was cited while rendering), and `lang` on
+    // the quote alone, so the source line is not read as Japanese.
+    let mut attrs = String::new();
+    if let Some(cite) = super::quote_source::grid_source_cite(quote, source) {
+        attrs.push_str(&format!(" cite=\"{}\"", super::hooks::escape_attr(&cite.href)));
+    }
     if matches!(script, Some(Cjk::Japanese)) {
-        // On the quote alone, so the source line after it is not read as Japanese.
-        if let Some(at) = out.get(from..).and_then(|quote| quote.find("<blockquote")) {
-            out.insert_str(from + at + "<blockquote".len(), r#" lang="ja""#);
-        }
+        attrs.push_str(r#" lang="ja""#);
+    }
+    if let Some(at) = out.get(from..).and_then(|quote| quote.find("<blockquote")) {
+        out.insert_str(from + at + "<blockquote".len(), &attrs);
     }
     out.push_str("<figcaption>");
     out.push_str(&super::render::render_inlines_html(hooks, source));

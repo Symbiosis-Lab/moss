@@ -157,7 +157,7 @@ declare function reportProgress(phase: string, current: number, total: number, m
 declare function reportError(error: string, context?: string, fatal?: boolean): Promise<void>;
 /**
  * `PluginHook` mirrors the closed Rust enum in
- * the app's plugin types module. The router (T1) cross-products
+ * moss's plugin types. moss cross-products
  * `PluginHook × TriggerContext` to pick a UI surface for the task.
  * Plugin authors pick the hook that matches what they're doing; they
  * do NOT pick the surface (the router owns that).
@@ -191,7 +191,7 @@ type EscapeSpec = "cancel" | `resend:${string}` | `recheck:${string}` | `downloa
  */
 type AdvisoryScope = "File" | "Config" | "Environment" | "Remote" | "Account";
 /**
- * How serious the plugin proposes an advisory is. moss CLAMPS this (R13): a
+ * How serious the plugin proposes an advisory is. moss CLAMPS this: a
  * `Blocking` proposal with no actionable affordance is demoted to a quiet
  * `NeedsAction` hairline dot. Mirrors the Rust `advisory::Severity`.
  * @category Messaging
@@ -232,13 +232,13 @@ type AdvisoryAction = "None" | {
  * `plugins::types::PluginAdvisory` wire shape exactly so it deserializes
  * directly into `PluginTaskLifecycle::Succeeded/Failed { advisories }`. moss
  * is the only constructor of a final `Advisory` — a plugin can never hand moss
- * one (R13).
+ * one.
  * @category Messaging
  */
 interface AdvisoryProposal {
   /** Which axis of the system this advisory is about. */
   scope: AdvisoryScope;
-  /** The severity the plugin REQUESTS. moss clamps it (R13). */
+  /** The severity the plugin REQUESTS. moss clamps it. */
   severity: AdvisorySeverity;
   /**
    * The site-relative path of the file this advisory is about, e.g.
@@ -282,7 +282,7 @@ interface StartTaskOptions {
   cancellable?: boolean;
   /**
    * Plugin-local job id referencing `contributes.jobs[id]` in the plugin's
-   * manifest (Step 3 Phase 5, §8 + R13). When set, moss looks up the declared
+   * manifest. When set, moss looks up the declared
    * descriptor (a past-tense `verb` + an amount `noun`), normalizes the verb
    * (`Verb::normalized` — moss owns capitalization/length/glyphs), and on a
    * `succeeded(receipt, count)` stamps its OWN typed `Verb` + `Amount { count,
@@ -332,7 +332,7 @@ interface TaskHandle {
    */
   awaiting(directive: string, venue: string, escape?: EscapeSpec): Promise<void>;
   /**
-   * PROPOSE an advisory on this task (Step 3 Phase 5, §8 + R13). Accumulates
+   * PROPOSE an advisory on this task. Accumulates
    * the proposal on the handle; it is flushed into the next terminal call
    * (`succeeded`/`failed`) as `advisories: PluginAdvisory[]`. moss holds the
    * severity gavel server-side: a `Blocking` proposal with no actionable
@@ -428,7 +428,7 @@ interface ProcessContext extends BaseContext {
   site_config?: Record<string, unknown>;
 }
 /**
- * Context for on_deploy hook (deployer plugins)
+ * Context for the deploy hook (deployer plugins)
  *
  * @category Hook contexts
  */
@@ -546,6 +546,87 @@ interface ArticleInfo {
   url_path: string;
   date?: string;
   tags: string[];
+}
+/**
+ * One post of a copy, ready to post: plain text, with every address in it, in
+ * order, for networks that mark links up.
+ *
+ * @category Copies
+ */
+interface CopyPart {
+  text: string;
+  links: string[];
+}
+/** A copy's id and address on its network. @category Copies */
+interface CopyRef {
+  id: string;
+  url: string;
+}
+/**
+ * The one copy a channel's `publish_copy`, `update_copy`, `delete_copy` or
+ * `find_copy` receives, already shaped to the limits its manifest declares
+ * under `contributes.channel.syndication`.
+ *
+ * @category Copies
+ */
+interface CopyJob {
+  op: "publish" | "update" | "delete" | "find";
+  channel: string;
+  /** The same on every send of this post to this channel, on every computer. */
+  idempotency_key: string;
+  /** The original the copy points back to; `url` is absolute, `title` empty for an untitled post. */
+  post: {
+    url: string;
+    source_path: string;
+    title: string;
+    lang?: string | null;
+    date?: string | null;
+    tags?: string[];
+  };
+  /** Absent for a delete, whose page is gone. */
+  form?: "short" | "thread" | "long" | "teaser" | "handoff";
+  parts?: CopyPart[];
+  teaser?: {
+    title: string;
+    description: string;
+    url: string;
+    cover?: string | null;
+  } | null;
+  article?: {
+    title: string;
+    html: string;
+    description?: string | null;
+    cover?: string | null;
+  } | null;
+  /** The copy already on the network (for an update, delete or lookup), or the draft a hand-off left there. */
+  previous?: (CopyRef & {
+    parts?: CopyRef[];
+  }) | null;
+  /** The channel's resolved settings. */
+  config: Record<string, unknown>;
+}
+/**
+ * A copy hook's answer, in {@link HookResult.copy}: the copy's id and address;
+ * or, with `success: false`, why the network refused; or a hand-off, a copy
+ * the author posts by hand (`text` to paste at `open_url`) or a draft on the
+ * network for the author to publish (empty `text`, the draft's `id`).
+ *
+ * @category Copies
+ */
+interface CopyOutcome {
+  id?: string;
+  url?: string;
+  /** A thread's later parts, in order. */
+  parts?: CopyRef[];
+  handoff?: {
+    text: string;
+    open_url?: string;
+    id?: string;
+  };
+  refused?: {
+    cause: "auth" | "content" | "rate" | "network" | "unknown";
+    message?: string;
+  };
 }
 /**
  * Deployment result information
@@ -685,6 +766,8 @@ interface HookResult {
   deployment?: DeploymentInfo;
   /** Setup verdict (populated by the optional `check_setup` hook) */
   setup?: SetupVerdict | LegacySetupVerdict;
+  /** A copy hook's answer (populated by `publish_copy` and its siblings) */
+  copy?: CopyOutcome | null;
 }
 /**
  * One field of a {@link SetupForm} — the same vocabulary a manifest's
@@ -992,7 +1075,7 @@ declare function getTauriCore(): TauriCore;
  *
  * Currently allow-listed (see runtime.rs `ALLOWED` constant):
  * - `MOSS_MATTERS_TEST_PROFILE` — bypasses Matters auth and switches to
- *   public-fetch mode for the named profile (T8a e2e harness).
+ *   public-fetch mode for the named profile (e2e harness).
  * - `MOSS_MATTERS_DOMAIN` — overrides the Matters domain (e.g. "matters.icu")
  *   so moss-claude.sh can target the test env without pre-seeding config.json.
  *
@@ -2301,4 +2384,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };
+export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, CopyJob, CopyOutcome, CopyPart, CopyRef, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };

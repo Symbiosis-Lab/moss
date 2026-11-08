@@ -422,7 +422,7 @@ pub fn get_bundled_plugin_icon(plugin_name: &str) -> Option<String> {
     std::str::from_utf8(icon_file.contents()).ok().map(|s| s.to_string())
 }
 
-/// Embedded bundle JS for a bundled plugin (tests + Phase-3 verification).
+/// Embedded bundle JS for a bundled plugin (tests + verification).
 /// NOTE (sdk-bundles probe R4): the EMBEDDED copy equals the installed
 /// `.moss/plugins/<name>/main.bundle.js` for fresh installs; production
 /// BundleSource reads the INSTALLED copy. Tests pin the embedded bytes.

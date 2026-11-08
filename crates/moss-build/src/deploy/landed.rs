@@ -66,7 +66,17 @@ pub async fn record_landed(
 ) -> PageChangeSummary {
     let mp = MossPaths::new(folder);
 
+    // Read before the record moves: a copy is due only for a post that was
+    // not live before.
+    let copies_before = crate::syndication::landing::Before::capture(&mp, sealed, Some(target));
+
     let summary = record_what_is_live(&mp, sealed, target, history).await;
+
+    if let Some(before) = copies_before {
+        if let Some(live) = read_live_article_mapping(&mp).await {
+            before.plan(folder, &live.article_map);
+        }
+    }
 
     ports.after_landing(folder, target, &summary).await;
 

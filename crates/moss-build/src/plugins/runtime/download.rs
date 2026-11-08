@@ -343,12 +343,9 @@ pub async fn download_asset_impl(
     if url.is_empty() {
         return Err("URL cannot be empty".to_string());
     }
-    if target_dir.is_empty() {
-        return Err("Target directory cannot be empty".to_string());
-    }
-    if target_dir.contains("..") {
-        return Err("Invalid path: directory traversal not allowed".to_string());
-    }
+    // Confined before anything is fetched: an absolute directory would replace
+    // the project root in `join`, and `.moss/` holds plugins and the identity.
+    crate::vault::fs::PluginPath::sandboxed(&target_dir)?.resolve_under(Path::new(project_path))?;
 
     if let Some(name) = &filename {
         if name.is_empty() || name == "." || name.contains(['/', '\\', '\0']) || name.contains("..") {
@@ -421,7 +418,7 @@ pub async fn download_asset_impl(
     let filename = filename.unwrap_or_else(|| derive_filename(&parsed_url, content_type.as_deref()));
     let relative_path = format!("{}/{}", target_dir.trim_end_matches('/'), filename);
 
-    let file_path = Path::new(project_path).join(&relative_path);
+    let file_path = crate::vault::fs::PluginPath::sandboxed(&relative_path)?.resolve_under(Path::new(project_path))?;
     if let Some(parent) = file_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
@@ -448,17 +445,18 @@ pub async fn download_asset_impl(
 // Full HTTP Fetch (fetch shim backend — PUT/HEAD + full header capture)
 // ============================================================================
 
-/// HTTP method variants for the richer fetch path (report 5 §1d). Adds PUT + HEAD
+/// HTTP method variants for the richer fetch path. Adds PUT + HEAD
 /// on top of GET/POST. Body is a JSON string for POST/PUT.
 pub(crate) enum FetchMethod {
     Get,
     Head,
     Post { body: String },
     Put { body: String },
+    Delete,
 }
 
 /// Full HTTP result with ALL response headers (lowercased keys) for the fetch
-/// shim's case-insensitive Headers.get (report 5 §1c: X-OAuth-Scopes at auth.ts:150).
+/// shim's case-insensitive Headers.get (X-OAuth-Scopes at auth.ts:150).
 pub(crate) struct FetchFull {
     pub status: u16,
     pub ok: bool,
@@ -487,6 +485,7 @@ pub(crate) async fn do_http_request_full(
             FetchMethod::Head => agent.head(&url_c),
             FetchMethod::Post { .. } => agent.post(&url_c).set("Content-Type", "application/json"),
             FetchMethod::Put { .. } => agent.put(&url_c).set("Content-Type", "application/json"),
+            FetchMethod::Delete => agent.delete(&url_c),
         };
         req = req.set("User-Agent", &crate::system::user_agent());
         if let Some(h) = req_headers {
@@ -502,7 +501,7 @@ pub(crate) async fn do_http_request_full(
         // this BEFORE the match below consumes `method` (Post/Put move `body` out).
         let is_head = matches!(method, FetchMethod::Head);
         let resp = match method {
-            FetchMethod::Get | FetchMethod::Head => req.call(),
+            FetchMethod::Get | FetchMethod::Head | FetchMethod::Delete => req.call(),
             FetchMethod::Post { body } | FetchMethod::Put { body } => req.send_string(&body),
         };
         match resp {

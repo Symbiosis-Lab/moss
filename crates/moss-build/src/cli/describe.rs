@@ -67,8 +67,8 @@ pub fn run(args: &[String], binary_version: &'static str) -> i32 {
 /// Arity rules:
 /// - "single": at most one plugin may be active for this hook per project
 ///   (deploy — two plugins publishing the same site would conflict).
-/// - "multiple": many plugins may coexist for this hook (process, syndicate,
-///   login are additive / independent).
+/// - "multiple": many plugins may coexist for this hook (process, the copy
+///   hooks and login are additive / independent).
 fn plugin_hooks() -> Vec<PluginHookInfo> {
     vec![
         PluginHookInfo {
@@ -85,9 +85,33 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
         },
         PluginHookInfo {
             name: "syndicate",
-            description: "POSSE-distribute published content after deployment (e.g. cross-post to Matters, RSS).",
+            description: "Being removed: the earlier way to cross-post, one call for every article. A channel posts through the copy hooks instead.",
             arity: "multiple",
             context: "SyndicateContext",
+        },
+        PluginHookInfo {
+            name: "publish_copy",
+            description: "Post one copy of a post to a channel's network once its page is live (contributes.channel.syndication); returns the copy's id and address.",
+            arity: "multiple",
+            context: "CopyJob",
+        },
+        PluginHookInfo {
+            name: "update_copy",
+            description: "Edit a posted copy after its post's source changed; optional, absent means the network cannot edit a copy.",
+            arity: "multiple",
+            context: "CopyJob",
+        },
+        PluginHookInfo {
+            name: "delete_copy",
+            description: "Remove a deleted post's copy, when the author asks; optional.",
+            arity: "multiple",
+            context: "CopyJob",
+        },
+        PluginHookInfo {
+            name: "find_copy",
+            description: "Look a copy up after a send whose outcome is unknown, or a draft left for the author to publish on the network; optional.",
+            arity: "multiple",
+            context: "CopyJob",
         },
         PluginHookInfo {
             name: "listing",
@@ -293,6 +317,17 @@ fn config_tables() -> Vec<ConfigTableInfo> {
         rules: vec![
             "A post is application/x-www-form-urlencoded, with `_next` (the form's next= path) and an empty honeypot `_hp`.",
             "The build writes the site's forms to /_moss/commerce.json whenever the site has a form or this table.",
+            "`enabled = false` turns the table off.",
+        ],
+    },
+    ConfigTableInfo {
+        name: "services.booking",
+        entry: "timezone = \"America/Los_Angeles\"",
+        description: "What the site offers for booking, published as the `booking` object of /_moss/commerce.json for a booking service to read: `endpoint`, `timezone`, `currency`, `services.<id>` (hourly: `per_hour`, `hours.min`, `hours.max`; fixed: `minutes`, `price`; then `fields`, `labels` and an optional `deposit` of `percent`, `hold_hours` and `balance_days_before`), `open.<day>` start windows, `start_every`, `notice_hours`, `horizon_days`, `cancel.full_before_hours`, `cancel.late_percent`, and `pages.book`, `pages.done`, `pages.manage`, with `pages.desk` when a service takes a deposit.",
+        rules: vec![
+            "Amounts are integer cents in `currency`, a lowercase ISO code.",
+            "A key moss does not know, or an offer that breaks a rule, is a build problem, and the offer is left out of commerce.json until it is fixed; the site's forms and other services are not affected.",
+            "Each page is a path on the site, starting with a single `/`, that the build must write.",
             "`enabled = false` turns the table off.",
         ],
     }]

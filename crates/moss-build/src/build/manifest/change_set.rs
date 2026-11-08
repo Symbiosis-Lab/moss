@@ -295,6 +295,51 @@ pub enum RemovalReason {
     Unexplained,
 }
 
+/// A site setting that stops a generated file on purpose.
+#[derive(Clone, Copy, Debug, Serialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WithdrawnBy {
+    /// AI answers are asked not to use the pages, so there is no `llms.txt`.
+    AiAnswers,
+    /// No search or AI switch is set any more, so there is no `tdmrep.json`.
+    AiSwitches,
+    /// `[site].selection_tools` is off, so there is no Share and no QR code
+    /// for its picture.
+    SelectionTools,
+}
+
+/// The generated files a build left out because the site's own settings say
+/// so. The build that left them out records this on its manifest, so the
+/// publish gate explains the generation it ships, not the config as it reads
+/// by then.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Withdrawn {
+    pub llms_txt: bool,
+    pub tdmrep_json: bool,
+    pub qr_codes: bool,
+}
+
+impl Withdrawn {
+    /// What a build with these settings leaves out: `llms.txt` while AI
+    /// answers are asked not to, `tdmrep.json` while no search or AI switch is
+    /// set, and every QR code while `[site].selection_tools` is off.
+    pub fn from_settings(ai: crate::build::feeds::robots::AiSettings, selection_tools: bool) -> Self {
+        Self { llms_txt: !ai.publishes_llms_txt(), tdmrep_json: ai.tdmrep_json().is_none(), qr_codes: !selection_tools }
+    }
+
+    /// The setting that stopped `path`, when `path` is a file one of these
+    /// generators owns and its setting is off.
+    pub fn by(self, path: &str) -> Option<WithdrawnBy> {
+        if self.llms_txt && path == ServedPath::for_llms_txt().as_str() {
+            return Some(WithdrawnBy::AiAnswers);
+        }
+        if self.tdmrep_json && path == ServedPath::for_tdmrep_json().as_str() {
+            return Some(WithdrawnBy::AiSwitches);
+        }
+        (self.qr_codes && crate::build::media::qr::is_share_qr_path(path)).then_some(WithdrawnBy::SelectionTools)
+    }
+}
+
 /// A public address the last publish served that this build will not.
 #[derive(Clone, Debug, Serialize, specta::Type, PartialEq, Eq)]
 pub struct RemovedAddress {
@@ -313,6 +358,10 @@ pub struct RemovedAddress {
     /// longer published" from "no longer produced".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// The site setting that stopped this generated file, when one did. Such
+    /// a removal is `AuthorRemoved`: the owner's act, like deleting a source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withdrawn_by: Option<WithdrawnBy>,
 }
 
 /// Why an unexplained removal happened, with the data a message needs. The
@@ -680,6 +729,8 @@ fn is_ladder_of_published_video(out: &str, current: &HashMap<String, String>) ->
 /// `AuthorRemoved` needs evidence: the recorded source of the output (a
 /// page's, or a folder file's via `asset_source_to_output`) no longer exists,
 /// and for a file, no address new to this build serves its bytes.
+/// A generated file `current`'s [`Withdrawn`] record says a site setting
+/// stopped is `AuthorRemoved` like a deleted source, naming that setting.
 /// `source_exists` answers from the site folder, not this build's source
 /// lists, since an unreadable page drops out of the build while its file is
 /// still there. Anything else is `Unexplained`, the cautious answer, and
@@ -704,6 +755,7 @@ pub fn removed_addresses(
     let asset_sources = baseline.asset_source_to_output.as_ref().map(by_output);
     let exists = |src: &&str| source_exists(src);
     let withheld = current.withheld();
+    let withdrawn = current.withdrawn();
     let files = current.files();
     // A moved folder file keeps its bytes but loses its recorded source. The
     // same bytes at an address the last publish did not serve are that file.
@@ -725,6 +777,7 @@ pub fn removed_addresses(
                 srcs.iter().filter_map(|src| current.source_to_output().get(*src)).find(|now| now.as_str() != out).cloned()
             });
             let moved_to = if is_page { renamed } else { renamed.or_else(|| arrival(out)) };
+            let withdrawn_by = if recorded.is_none() && moved_to.is_none() { withdrawn.by(out) } else { None };
             let reason = match recorded {
                 _ if withheld.contains(out) => RemovalReason::Withheld,
                 _ if moved_to.is_some() => RemovalReason::Unexplained,
@@ -732,10 +785,12 @@ pub fn removed_addresses(
                 // A calendar file exists while a page says `start:`; losing it is
                 // the author's edit of a page that is still on disk.
                 None if crate::build::feeds::calendar::is_calendar_file(out) => RemovalReason::AuthorRemoved,
+                None if withdrawn_by.is_some() => RemovalReason::AuthorRemoved,
                 _ => RemovalReason::Unexplained,
             };
             let source = recorded.and_then(|srcs| srcs.first()).map(|s| s.to_string());
-            RemovedAddress { path: out.to_string(), reason, moved_to, source }
+            let withdrawn_by = withdrawn_by.filter(|_| reason == RemovalReason::AuthorRemoved);
+            RemovedAddress { path: out.to_string(), reason, moved_to, source, withdrawn_by }
         })
         .collect();
     // A page's QR code and an image derivative have no source of their own: they go with the page or picture.

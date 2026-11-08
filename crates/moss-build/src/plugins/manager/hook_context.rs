@@ -41,6 +41,7 @@ impl_hook_context!(
     DeployContext,
     SyndicateContext,
     ConfigureDomainContext,
+    crate::syndication::job::CopyJob,
 );
 
 impl HookContext for ProcessContext {

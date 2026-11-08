@@ -1,5 +1,5 @@
-//! Emit-shaped artifact families (NORTH-STAR interception rule: "new emit
-//! family → `emit/`-shaped module, never more code in `blocking.rs`").
+//! Emit-shaped artifact families: a new emit family gets an `emit/`-shaped
+//! module, never more code in `blocking.rs`.
 //!
 //! Each submodule owns one generated-artifact family end to end — content
 //! addressing, rasterization/encoding, disk write, manifest registration —

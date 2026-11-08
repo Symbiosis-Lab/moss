@@ -43,6 +43,13 @@ pub trait CommandHost: Send + Sync {
         Some(self.root())
     }
 
+    /// Whether caller paths into the folder's `.moss/` are refused. moss keeps
+    /// its own state there (the carrier token, the site's signing key, build
+    /// output), which a caller over the network must never reach.
+    fn refuses_moss_dir(&self) -> bool {
+        false
+    }
+
     fn scope(&self) -> EditorScope {
         EditorScope::Site
     }
@@ -143,7 +150,23 @@ pub(crate) fn resolve(host: &dyn CommandHost, path: &VaultPath) -> Result<PathBu
     };
     let joined = root.join(path.as_written());
     let lexical = crate::vault::fs::validate_entry_path(root, &joined.to_string_lossy())?;
-    Ok(lexical.canonicalize().unwrap_or(lexical))
+    let resolved = lexical.canonicalize().unwrap_or(lexical);
+    if host.refuses_moss_dir() {
+        refuse_moss_internal(root, &resolved, path.as_written())?;
+    }
+    Ok(resolved)
+}
+
+/// Refuses `path` when it lies in moss's own files, judged on where it really
+/// leads: a symlinked folder is followed even for a file not created yet.
+pub(crate) fn refuse_moss_internal(root: &Path, path: &Path, as_written: &str) -> Result<(), String> {
+    let canonical = crate::vault::fs::canonicalize_allowing_missing(root, path)?;
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let relative = canonical.strip_prefix(&canonical_root).unwrap_or(&canonical);
+    if crate::build::scan::classify::is_moss_internal(relative) {
+        return Err(format!("'{as_written}' is one of moss's own files"));
+    }
+    Ok(())
 }
 
 fn lossy(p: &Path) -> String {
@@ -313,7 +336,6 @@ tier! {
     /// Reads that expose nothing beyond what the published site shows.
     public_read {
         scan_shortcodes => reads::scan_shortcodes,
-        parse_frontmatter => reads::parse_frontmatter,
         editor_resolve_asset => reads::editor_resolve_asset,
         editor_resolve_references => reads::editor_resolve_references,
         set_image_width => reads::set_image_width,
@@ -325,6 +347,7 @@ tier! {
     /// history), so they need the session credential.
     session_read {
         editor_bootstrap => reads::editor_bootstrap,
+        parse_frontmatter => reads::parse_frontmatter,
         list_directory => reads::list_directory,
         list_tree => reads::list_tree,
         get_file_info => reads::get_file_info,

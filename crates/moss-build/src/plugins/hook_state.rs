@@ -104,7 +104,7 @@ pub struct PluginHookState {
     awaiting_hooks: Arc<Mutex<HashMap<(String, String), std::collections::HashSet<u64>>>>,
     /// Currently-executing hook name per plugin.
     ///
-    /// Phase 2 watchdog fix (B2 interim): the matters `process` hook creates its
+    /// The matters `process` hook creates its
     /// task with `hook: "import"` so `apply_awaiting("matters","import",…)` fires,
     /// but the watchdog checks `is_hook_awaiting("matters","process")` —
     /// a key mismatch that kills the hook at 60 s mid-login.
@@ -201,7 +201,7 @@ impl PluginHookState {
     /// the executing hook name and mark it awaiting even when the task's UI
     /// `hook` label (e.g. "import") differs from the executing hook name
     /// (e.g. "process"). See `executing_hooks` doc-comment for the full
-    /// rationale (Phase 2 B2 interim watchdog key-mismatch fix).
+    /// rationale.
     pub fn register_executing_hook(&self, plugin_name: &str, hook_name: &str) {
         if let Ok(mut map) = self.executing_hooks.lock() {
             map.insert(plugin_name.to_string(), hook_name.to_string());
@@ -606,7 +606,7 @@ mod tests {
         );
     }
 
-    // ── watchdog key-mismatch fix (Phase 2 B2 interim) ───────────────────────
+    // ── watchdog key-mismatch fix ───────────────────────
 
     /// The matters `process` hook creates its task with `hook:"import"`.
     /// When `task.awaiting()` fires, `apply_awaiting("matters","import",…)` is

@@ -1,4 +1,4 @@
-//! Build-pipeline service containers — app-runtime side of the M6a boundary.
+//! Build-pipeline service containers — app-runtime side of the crate boundary.
 //!
 //! `BuildServices` (the container that couples the pipeline to Tauri),
 //! `BackgroundContext` (the post-preview background-work handoff), and
@@ -267,7 +267,7 @@ pub struct BuildServices {
     /// is no longer emitted by the worker that knows the number — see the
     /// `BuildTerminalBarrier` type doc for why that separation is deliberate.
     pub videos_converted: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    /// The unified Job registry (Step 3 Phase 4, R-h). A *separate* channel
+    /// The unified Job registry. A *separate* channel
     /// from `reporter`'s typed event bus.
     /// The media workers reach the registry through this `Arc` to spawn child
     /// Jobs and drive the parent Build receipt. `None` in headless mode (no
@@ -276,8 +276,7 @@ pub struct BuildServices {
     /// boundary into the media worker fine.
     pub task_registry:
         Option<std::sync::Arc<crate::tasks::TaskRegistry>>,
-    /// The parent Build Job's id, lazily minted (Step 3 Phase 4, re-architected
-    /// in the Phase-4 review fix). A shared `Arc<Mutex<Option<TaskId>>>` so every
+    /// The parent Build Job's id, lazily minted. A shared `Arc<Mutex<Option<TaskId>>>` so every
     /// worker clone of `BuildServices` points at the SAME cell. Starts `None`; the
     /// FIRST media worker that does REAL work (a conversion or an advisory) calls
     /// [`ensure_build_parent`](BuildServices::ensure_build_parent), which spawns the
@@ -287,7 +286,7 @@ pub struct BuildServices {
     /// reads this cell to drive the parent's terminal receipt on EVERY exit path —
     /// images-only, race, or supersede — instead of coupling to the video worker.
     pub build_parent: std::sync::Arc<std::sync::Mutex<Option<crate::tasks::TaskId>>>,
-    /// The page count from the render phase (Step 3 Phase 4). The Build Job's
+    /// The page count from the render phase. The Build Job's
     /// `Amount { count, noun: "pages" }` is sourced HERE: `build_inner` stashes the
     /// render-phase `html_total` (= `documents.len()`, the `html_pages` task total)
     /// into this shared atomic right after the blocking render, and the post-join
@@ -381,8 +380,7 @@ impl BuildServices {
         (svc, registry)
     }
 
-    /// Idempotent get-or-spawn for the parent Build Job (Step 3 Phase 4, review
-    /// fix — FIX 1a). Returns the cached parent `TaskId` if one was already minted
+    /// Idempotent get-or-spawn for the parent Build Job. Returns the cached parent `TaskId` if one was already minted
     /// this build, otherwise spawns the parent ONCE (`TaskScope::Preview`,
     /// `TaskKind::Build`, `TaskTone::Ambient`) and caches its id on the shared
     /// `build_parent` cell.

@@ -8,6 +8,7 @@
  * than a parallel set of explorer-only classes: this IS a `moss-card`, just
  * one that can expand a detail region (`moss-places-card-detail`) in place.
  */
+import { reducedMotion } from "../media";
 import type { Place, Work } from "./types";
 import type { PlacesStrings } from "./strings";
 
@@ -132,7 +133,7 @@ export class CardRow {
   revealSelected(selectedId: string | null): void {
     if (!selectedId) return;
     const card = this.container.querySelector<HTMLElement>(`[data-work-id="${CSS.escape(selectedId)}"]`);
-    card?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    card?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
   }
 
   private buildCard(work: Work): CardEntry {
@@ -274,8 +275,4 @@ export class CardRow {
 function openInTopWhenEmbedded(link: HTMLAnchorElement): void {
   // Read from the URL, not `data-moss-embed`: the cards are built at mount, before `embed.ts` sets that attribute.
   if (new URLSearchParams(location.search).get("embed") === "1") link.target = "_top";
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }

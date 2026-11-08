@@ -4,8 +4,8 @@ All work lands on `develop`, the default branch. Open pull requests against it.
 
 ## Ways to help
 
-- **Report a bug** in the CLI, the build engine, a package or the desktop app. The desktop app's source is private, and its bug reports belong here all the same.
-- **Comment on a proposal.** Designs for things moss does not do yet are in [docs/proposals](docs/proposals/), each with an issue.
+- **Report a bug** in the CLI, the build engine, the shared UI (`packages/moss-ui`), a package or the desktop app. The desktop app's platform-specific source is maintained separately, and its bug reports belong here all the same.
+- **Comment on a proposal.** Designs for things moss does not do yet are in [docs/proposals](docs/proposals/), those opened for public discussion link to an issue.
 - **Fix something.** Issues labelled `good first issue` are sized for a first contribution. Say in a comment that you are taking one, so two people do not do the same work.
 
 For anything larger than a fix, open an issue before you write code. A feature that arrives as a pull request with no discussion behind it will usually be closed, however good the code is.
@@ -14,9 +14,11 @@ For anything larger than a fix, open an issue before you write code. A feature t
 
 ```sh
 cargo build -p moss-cli      # the CLI, at target/debug/moss-cli
-pnpm install                 # JS tooling, and the git hooks
+pnpm install                 # JS tooling, and the git hooks (needs pnpm)
 cargo test --workspace       # from the repo root, never from inside one crate
 node scripts/ratchet.mjs check
+pnpm --filter @symbiosis-lab/moss-ui typecheck   # when you change shared UI
+pnpm --filter @symbiosis-lab/moss-ui test
 ```
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before adding or moving a file. Do not run `cargo fmt` on an existing file: the tree is not fmt-clean, and the reformatting would bury your change.

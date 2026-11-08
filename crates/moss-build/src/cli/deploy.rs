@@ -117,6 +117,9 @@ pub struct DeployFlags {
     /// `--json`, with `--dry-run`: print the dry run as JSON, every list in
     /// full, for a script or an agent.
     pub json: bool,
+    /// `--retry-copies=<channel>`: send again the copies on that channel whose
+    /// last send stopped before the network answered.
+    pub retry_copies: Vec<String>,
 }
 
 /// A parsed `moss deploy` command line.
@@ -157,6 +160,9 @@ impl DeployArgs {
                 "--accept-removals" => flags.accept_removals = true,
                 "--dry-run" => flags.dry_run = true,
                 "--json" => flags.json = true,
+                a if a.starts_with("--retry-copies=") => {
+                    flags.retry_copies.extend(a["--retry-copies=".len()..].split(',').map(str::trim).filter(|c| !c.is_empty()).map(str::to_string))
+                }
                 a if a.starts_with('-') => {
                     return Err(format!("error: unknown option '{}'\n{}", a, usage()))
                 }
@@ -278,7 +284,13 @@ pub fn publish(
     };
 
     let sink = printing();
-    runtime.block_on(dispatch(folder, route, host_ports, crate::build::PluginMode::Blocking, flags, &sink))
+    let report = runtime.block_on(dispatch(folder, route, host_ports, crate::build::PluginMode::Blocking, flags, &sink));
+    // After the publish has returned: a copy that fails never fails it.
+    if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
+        let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
+        runtime.block_on(crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, &print));
+    }
+    report
 }
 
 /// What `moss deploy` does once its process-wide setup is done: describe the
@@ -559,7 +571,7 @@ mod removed_by_author_tests {
     use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
 
     fn gone(path: &str, reason: RemovalReason, source: Option<&str>) -> RemovedAddress {
-        RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into) }
+        RemovedAddress { path: path.into(), reason, moved_to: None, source: source.map(Into::into), withdrawn_by: None }
     }
 
     /// After a publish the author reads which addresses went away because
@@ -609,6 +621,13 @@ mod removal_flag_tests {
         assert_eq!(parse(&["site"]).unwrap().flags.email, None);
         assert!(parse(&["site", "--email"]).unwrap_err().contains("needs an address"));
         assert!(parse(&["site", "--email", "nope"]).unwrap_err().contains("not an email address"));
+    }
+
+    #[test]
+    fn retry_copies_takes_channels_by_comma_or_by_repeating_the_flag() {
+        let flags = parse(&["site", "--retry-copies=bluesky, mastodon", "--retry-copies=x,"]).unwrap().flags;
+        assert_eq!(flags.retry_copies, ["bluesky", "mastodon", "x"]);
+        assert!(parse(&["site"]).unwrap().flags.retry_copies.is_empty());
     }
 
     #[test]

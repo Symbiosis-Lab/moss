@@ -131,6 +131,12 @@ importers:
 
   packages/moss-ui:
     devDependencies:
+      '@codemirror/view':
+        specifier: ^6.43.6
+        version: 6.43.12
+      jsdom:
+        specifier: ^26.1.0
+        version: 26.1.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

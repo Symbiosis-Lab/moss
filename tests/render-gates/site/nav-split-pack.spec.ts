@@ -4,8 +4,8 @@
  *
  * Three links keep row 2 mostly empty, so `justify-content` is visible: with
  * `space-between` the links spread across the row, and the gaps grow past the
- * normal link gap. The name has row 1 to itself in split mode, so it must
- * wrap within it.
+ * normal link gap. In split mode the name shares row 1 only with the
+ * toggles, so it must wrap within the room they leave.
  *
  * Run via:
  *   npx playwright test -c playwright/nav-split-pack.config.ts

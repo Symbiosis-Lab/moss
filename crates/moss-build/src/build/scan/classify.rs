@@ -463,6 +463,25 @@ pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
 /// and `email/drafts/` is auto-saved newsletter scratch.
 pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme", ".moss/places.toml"];
 
+/// Whether a folder-relative path is one of moss's own files: `.moss` itself
+/// or anything inside it (in any letter case, since a folder's file system may
+/// ignore case) that is neither on `MOSS_INTERNAL_ALLOWLIST` nor below an
+/// entry of it. `.moss` itself counts, so the folder is never copied, renamed
+/// or moved into as a whole.
+pub fn is_moss_internal(relative: &Path) -> bool {
+    let full = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("/");
+    if full != ".moss" && !full.starts_with(".moss/") {
+        return false;
+    }
+    !MOSS_INTERNAL_ALLOWLIST.iter().any(|allowed| {
+        full == *allowed || full.starts_with(&format!("{allowed}/"))
+    })
+}
+
 /// Why `is_hidden_reason` filtered an entry out of the file tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HiddenReason {

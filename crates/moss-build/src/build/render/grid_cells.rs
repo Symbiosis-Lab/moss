@@ -798,6 +798,7 @@ fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<Chil
         index.dir_overrides,
         index.typesetting,
         index.now,
+        None,
     );
     // An explicit link text wins; otherwise the linked page's own label, which
     // `props_for_document` already filled in.

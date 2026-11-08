@@ -47,7 +47,7 @@ optional job?: string;
 ```
 
 Plugin-local job id referencing `contributes.jobs[id]` in the plugin's
-manifest (Step 3 Phase 5, §8 + R13). When set, moss looks up the declared
+manifest. When set, moss looks up the declared
 descriptor (a past-tense `verb` + an amount `noun`), normalizes the verb
 (`Verb::normalized` — moss owns capitalization/length/glyphs), and on a
 `succeeded(receipt, count)` stamps its OWN typed `Verb` + `Amount { count,

@@ -762,6 +762,11 @@ impl CloudPolicy {
     pub fn is_excluded(self) -> bool {
         matches!(self, CloudPolicy::ExcludedRegenerable)
     }
+
+    /// Whether moss can make this path again: nothing here needs fetching.
+    pub fn is_regenerable(self) -> bool {
+        matches!(self, CloudPolicy::ExcludedRegenerable | CloudPolicy::SyncedRegenerable)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
