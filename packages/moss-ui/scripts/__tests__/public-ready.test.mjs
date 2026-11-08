@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { check, commentLines, loadPrivateRules, pathResolver, scanFile } from '../public-ready.mjs';
+import { check, commentBlocks, commentLines, loadPrivateRules, pathResolver, scanFile } from '../public-ready.mjs';
 
 let root;
 const put = (rel, text = '') => {
@@ -13,6 +13,7 @@ const put = (rel, text = '') => {
 };
 const TRACKED = [
   'packages/moss-ui/src/ui/shared/toast.ts',
+  'docs/README.md',
   'crates/moss-build/src/js-src/site/x.ts',
   'README.md',
   'fixtures/a/style.css',
@@ -59,24 +60,61 @@ describe('history in comments and test titles', () => {
     ['// an <h1> is H1', []],
     ['// NEL, a C1 control', []],
     ['// plain words only', []],
+    ['// second review round', ['work-history review round']],
+    ['// T3 owns this', ['plan-label T3', 'work-history T3']],
+    ['// Phase B keeps the seam visible', ['letter-plan-label Phase B']],
+    ['// B.4: keep the seam visible', ['letter-plan-label B.4']],
+    ['// split out (Task C5, step 3)', ['letter-plan-label Task C5']],
     ['// before Thread-5 the server sent none', ['plan-label Thread-5']],
     ['// per design §5a step 2', ['doc-section §5a']],
     ['// spec §Task-1.1', ['doc-section §Task-1.1']],
     ['// RFC 9110 §15.5 says so', []],
     ['// always 0 on this branch', ['history on this branch']],
     ['// out of scope for this task', ['plan-label this task']],
-    ['// see src-tauri/src/events.rs', ['unknown-path src-tauri/src/events.rs']],
-    ['// the caller in app.ts', ['unknown-path app.ts']],
+    [`// see src-${'tauri'}/src/events.rs`, [`unknown-path src-${'tauri'}/src/events.rs`]],
+    ['// the caller in app.ts', []],
     ['// the site runtime, crates/moss-build/src/js-src/site/x.ts', []],
     ['// beside shared/toast.ts, and ../../../README.md', []],
     ['// toast.ts, named alone, is the one file of that name', []],
-    ['// the rule in style.css', ['unknown-path style.css']],
+    ['// the rule in style.css', []],
     ['// fixtures/a/style.css', []],
     ["// a site's index.md and its config.toml", []],
     ['// @symbiosis-lab/moss-ui/ui/shared/toast.ts', []],
     ['// https://example.test/a/app.ts', []],
   ])('%s', (line, expected) => {
     expect(rules('src/ui/editor/x.ts', line)).toEqual(expected);
+  });
+
+  it('leaves example filenames, bare module names and function calls intact', () => {
+    expect(rules('src/ui/editor/x.ts', "// buildActivePath('post.md'), foo(), editor-main.ts and style.css")).toEqual([]);
+    expect(rules('src/ui/editor/x.ts', '// missing/module.ts')).toEqual(['unknown-path missing/module.ts']);
+  });
+
+  it('checks only what is shaped like a repository path, not a site example', () => {
+    const site = "// buildActivePath('works/post.md') maps folder/index.md to folder/index.html";
+    expect(rules('src/ui/editor/x.ts', site)).toEqual([]);
+    expect(rules('src/ui/editor/x.ts', '// `.moss/data/deployed-article-map.json` and blog/feed.json')).toEqual([]);
+    // A source extension, a top-level directory of the repository, a relative path.
+    expect(rules('src/ui/editor/x.ts', `// src-${'tauri'}/src/foo.rs`)).toEqual([`unknown-path src-${'tauri'}/src/foo.rs`]);
+    expect(rules('src/ui/editor/x.ts', '// scripts/x.mjs')).toEqual(['unknown-path scripts/x.mjs']);
+    expect(rules('src/ui/editor/x.ts', '// crates/moss-build/missing.md')).toEqual(['unknown-path crates/moss-build/missing.md']);
+    expect(rules('src/ui/editor/x.ts', '// see ./gone.md')).toEqual(['unknown-path ./gone.md']);
+  });
+
+  it('takes a markup attribute value for a URL', () => {
+    expect(rules('src/ui/preview/x.ts', '// a nested `<iframe src="./sketch.html">` in a page')).toEqual([]);
+  });
+
+  it('reads a path wrapped across two comment lines', () => {
+    const src = ['/**', ` * The middleware (\`src-${'tauri'}/src/preview/`, ' * iframe_bridge.rs`) rewrites the tag.', ' */'].join('\n');
+    expect(scanFile('src/ui/x.ts', src, null, pathResolver(TRACKED)).map((h) => `${h.line} ${h.rule} ${h.match}`))
+      .toEqual([`2 unknown-path src-${'tauri'}/src/preview/iframe_bridge.rs`]);
+  });
+
+  it('joins consecutive comment lines into one block and keeps each line number', () => {
+    const [a, b] = commentBlocks([[1, ' second review'], [2, ' round, then'], [4, ' wrapped-across-'], [5, ' * lines']]);
+    expect([a.text, a.lineAt(a.text.indexOf('round'))]).toEqual(['second review round, then', 2]);
+    expect([b.text, b.lineAt(0)]).toEqual(['wrapped-across-lines', 4]);
   });
 
   it('reads a test title as well as its comments', () => {
@@ -99,8 +137,8 @@ describe('history in comments and test titles', () => {
   });
 
   it('checks a path against the files it is given', () => {
-    put('src/ui/a.ts', '// see b.ts and gone.ts');
-    expect(check(root, { tracked: ['src/ui/a.ts', 'src/ui/b.ts'] }).hits.map((h) => `${h.rule} ${h.match}`)).toEqual(['unknown-path gone.ts']);
+    put('src/ui/a.ts', '// see ./b.ts and ./gone.ts');
+    expect(check(root, { tracked: ['src/ui/a.ts', 'src/ui/b.ts'] }).hits.map((h) => `${h.rule} ${h.match}`)).toEqual(['unknown-path ./gone.ts']);
   });
 
   it('takes a colour for a colour in a stylesheet', () => {

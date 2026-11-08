@@ -1,0 +1,634 @@
+[
+  {
+    "repo": "saadeghi/daisyui",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Business",
+      "Portfolio"
+    ],
+    "demo": "https://daisyui.com/",
+    "title": "daisyui",
+    "stars": 39877,
+    "description": "🌼 🌼 🌼 🌼 🌼  The most popular, free and open-source Tailwind CSS component library",
+    "updated_at": "2026-01-11T19:20:37Z",
+    "github_url": "https://github.com/saadeghi/daisyui"
+  },
+  {
+    "repo": "mmistakes/minimal-mistakes",
+    "ssg": [
+      "Jekyll"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio",
+      "Documentation"
+    ],
+    "demo": "https://mmistakes.github.io/minimal-mistakes/",
+    "title": "minimal-mistakes",
+    "stars": 13352,
+    "description": ":triangular_ruler: Jekyll theme for building a personal site, blog, project documentation, or portfolio.",
+    "updated_at": "2026-01-11T19:46:50Z",
+    "github_url": "https://github.com/mmistakes/minimal-mistakes"
+  },
+  {
+    "repo": "adityatelange/hugo-PaperMod",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio"
+    ],
+    "demo": "https://adityatelange.github.io/hugo-PaperMod/",
+    "title": "hugo-PaperMod",
+    "stars": 12941,
+    "description": " A fast, clean, responsive Hugo theme.",
+    "updated_at": "2026-01-11T18:06:38Z",
+    "github_url": "https://github.com/adityatelange/hugo-PaperMod"
+  },
+  {
+    "repo": "cotes2020/jekyll-theme-chirpy",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://chirpy.cotes.page/",
+    "title": "jekyll-theme-chirpy",
+    "stars": 9640,
+    "description": "A minimal, responsive, and feature-rich Jekyll theme for technical writing.",
+    "updated_at": "2026-01-11T20:29:26Z",
+    "github_url": "https://github.com/cotes2020/jekyll-theme-chirpy"
+  },
+  {
+    "repo": "just-the-docs/just-the-docs",
+    "ssg": [
+      "Jekyll"
+    ],
+    "archetype": [
+      "Documentation"
+    ],
+    "demo": "https://just-the-docs.com/",
+    "title": "just-the-docs",
+    "stars": 8783,
+    "description": "A modern, high customizable, responsive Jekyll theme for documentation with built-in search.",
+    "updated_at": "2026-01-11T20:40:38Z",
+    "github_url": "https://github.com/just-the-docs/just-the-docs"
+  },
+  {
+    "repo": "barryclark/jekyll-now",
+    "ssg": [
+      "Jekyll"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://www.jekyllnow.com/",
+    "title": "jekyll-now",
+    "stars": 8392,
+    "description": "Build a Jekyll blog in minutes, without touching the command line.",
+    "updated_at": "2026-01-10T11:26:50Z",
+    "github_url": "https://github.com/barryclark/jekyll-now"
+  },
+  {
+    "repo": "withastro/starlight",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Documentation"
+    ],
+    "demo": "https://starlight.astro.build/",
+    "title": "starlight",
+    "stars": 7700,
+    "description": "🌟 Build beautiful, accessible, high-performance documentation websites with Astro",
+    "updated_at": "2026-01-11T20:47:04Z",
+    "github_url": "https://github.com/withastro/starlight"
+  },
+  {
+    "repo": "CaiJimmy/hugo-theme-stack",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://demo.stack.jimmycai.com/",
+    "title": "hugo-theme-stack",
+    "stars": 6193,
+    "description": "Card-style Hugo theme designed for bloggers",
+    "updated_at": "2026-01-11T01:40:35Z",
+    "github_url": "https://github.com/CaiJimmy/hugo-theme-stack"
+  },
+  {
+    "repo": "daattali/beautiful-jekyll",
+    "ssg": [
+      "Jekyll"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio"
+    ],
+    "demo": "https://beautifuljekyll.com/",
+    "title": "beautiful-jekyll",
+    "stars": 5754,
+    "description": "✨ Build a beautiful and simple website in literally minutes. Demo at https://beautifuljekyll.com",
+    "updated_at": "2026-01-11T08:55:56Z",
+    "github_url": "https://github.com/daattali/beautiful-jekyll"
+  },
+  {
+    "repo": "onwidget/astrowind",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Business",
+      "Blog"
+    ],
+    "demo": "https://astrowind.vercel.app/",
+    "title": "astrowind",
+    "stars": 5340,
+    "description": "⭕️ AstroWind: A free template using Astro 5 and Tailwind CSS. Astro starter theme.",
+    "updated_at": "2026-01-11T03:16:45Z",
+    "github_url": "https://github.com/arthelokyo/astrowind"
+  },
+  {
+    "repo": "HugoBlox/theme-academic-cv",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Portfolio",
+      "Business"
+    ],
+    "demo": "https://academic-demo.netlify.app/",
+    "title": "hugo-theme-academic-cv",
+    "stars": 4755,
+    "description": "🎓 无需编写任何代码即可轻松创建漂亮的学术网站 Easily create a beautiful academic résumé or educational website using Hugo and GitHub. No code.",
+    "updated_at": "2026-01-11T18:05:06Z",
+    "github_url": "https://github.com/HugoBlox/hugo-theme-academic-cv"
+  },
+  {
+    "repo": "google/eleventy-high-performance-blog",
+    "ssg": [
+      "Eleventy"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://eleventy-high-performance-blog-sample.industrialempathy.com/",
+    "title": "eleventy-high-performance-blog",
+    "stars": 4057,
+    "description": "A high performance blog template for the 11ty static site generator.",
+    "updated_at": "2026-01-10T15:06:02Z",
+    "github_url": "https://github.com/google/eleventy-high-performance-blog"
+  },
+  {
+    "repo": "satnaing/astro-paper",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://astro-paper.pages.dev/",
+    "title": "astro-paper",
+    "stars": 4046,
+    "description": "A minimal, accessible and SEO-friendly Astro blog theme",
+    "updated_at": "2026-01-11T15:59:46Z",
+    "github_url": "https://github.com/satnaing/astro-paper"
+  },
+  {
+    "repo": "alex-shpak/hugo-book",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Documentation"
+    ],
+    "demo": "https://hugo-book-demo.netlify.app/",
+    "title": "hugo-book",
+    "stars": 3909,
+    "description": "Hugo documentation theme as simple as plain book",
+    "updated_at": "2026-01-11T18:33:39Z",
+    "github_url": "https://github.com/alex-shpak/hugo-book"
+  },
+  {
+    "repo": "poole/hyde",
+    "ssg": [
+      "Jekyll"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://hyde.getpoole.com/",
+    "title": "hyde",
+    "stars": 3863,
+    "description": "A brazen two-column theme for Jekyll.",
+    "updated_at": "2026-01-11T13:35:49Z",
+    "github_url": "https://github.com/poole/hyde"
+  },
+  {
+    "repo": "dillonzq/LoveIt",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio"
+    ],
+    "demo": "https://hugoloveit.com/",
+    "title": "LoveIt",
+    "stars": 3781,
+    "description": "❤️A clean, elegant but advanced blog theme for Hugo 一个简洁、优雅且高效的 Hugo 主题",
+    "updated_at": "2026-01-11T17:37:31Z",
+    "github_url": "https://github.com/dillonzq/LoveIt"
+  },
+  {
+    "repo": "gatsbyjs/gatsby-starter-blog",
+    "ssg": [
+      "Gatsby"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://gatsby-starter-blog-demo.netlify.app/",
+    "title": "gatsby-starter-blog",
+    "stars": 3529,
+    "description": "Gatsby starter for creating a blog",
+    "updated_at": "2026-01-10T09:28:18Z",
+    "github_url": "https://github.com/gatsbyjs/gatsby-starter-blog"
+  },
+  {
+    "repo": "kitian616/jekyll-TeXt-theme",
+    "ssg": [
+      "Jekyll"
+    ],
+    "archetype": [
+      "Blog",
+      "Documentation"
+    ],
+    "demo": "https://tianqi.name/jekyll-TeXt-theme/",
+    "title": "jekyll-TeXt-theme",
+    "stars": 3330,
+    "description": "💎 🐳 A super customizable Jekyll theme for personal site, team site, blog, project, documentation, etc.",
+    "updated_at": "2026-01-10T11:12:29Z",
+    "github_url": "https://github.com/kitian616/jekyll-TeXt-theme"
+  },
+  {
+    "repo": "poole/lanyon",
+    "ssg": [
+      "Jekyll"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://lanyon.getpoole.com/",
+    "title": "lanyon",
+    "stars": 3287,
+    "description": "A content-first, sliding sidebar theme for Jekyll.",
+    "updated_at": "2026-01-08T12:59:14Z",
+    "github_url": "https://github.com/poole/lanyon"
+  },
+  {
+    "repo": "luizdepra/hugo-coder",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Portfolio",
+      "Blog"
+    ],
+    "demo": "https://hugo-coder.netlify.app/",
+    "title": "hugo-coder",
+    "stars": 3001,
+    "description": "A minimalist blog theme for hugo.",
+    "updated_at": "2026-01-11T07:29:33Z",
+    "github_url": "https://github.com/luizdepra/hugo-coder"
+  },
+  {
+    "repo": "google/docsy",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Documentation"
+    ],
+    "demo": "https://www.docsy.dev/",
+    "title": "docsy",
+    "stars": 2887,
+    "description": "Hugo theme for open source documentation",
+    "updated_at": "2026-01-11T18:18:29Z",
+    "github_url": "https://github.com/google/docsy"
+  },
+  {
+    "repo": "panr/hugo-theme-terminal",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://themes.gohugo.io/themes/hugo-theme-terminal/",
+    "title": "hugo-theme-terminal",
+    "stars": 2635,
+    "description": "A simple, retro theme for Hugo",
+    "updated_at": "2026-01-11T14:00:32Z",
+    "github_url": "https://github.com/panr/hugo-theme-terminal"
+  },
+  {
+    "repo": "nunocoracao/blowfish",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio"
+    ],
+    "demo": "https://blowfish.page/",
+    "title": "blowfish",
+    "stars": 2528,
+    "description": "Personal Website & Blog Theme for Hugo",
+    "updated_at": "2026-01-11T19:35:25Z",
+    "github_url": "https://github.com/nunocoracao/blowfish"
+  },
+  {
+    "repo": "h-enk/doks",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Documentation"
+    ],
+    "demo": "https://getdoks.org/",
+    "title": "doks",
+    "stars": 2323,
+    "description": "Everything you need to build a stellar documentation website. Fast, accessible, and easy to use.",
+    "updated_at": "2026-01-11T17:35:52Z",
+    "github_url": "https://github.com/thuliteio/doks"
+  },
+  {
+    "repo": "imfing/hextra",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Documentation"
+    ],
+    "demo": "https://imfing.github.io/hextra/",
+    "title": "hextra",
+    "stars": 1864,
+    "description": "🔯 Modern, batteries-included Hugo theme for creating beautiful doc, blog and static websites",
+    "updated_at": "2026-01-11T20:08:00Z",
+    "github_url": "https://github.com/imfing/hextra"
+  },
+  {
+    "repo": "jpanther/congo",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio"
+    ],
+    "demo": "https://jpanther.github.io/congo/",
+    "title": "congo",
+    "stars": 1570,
+    "description": "A powerful, lightweight theme for Hugo built with Tailwind CSS.",
+    "updated_at": "2026-01-09T22:51:38Z",
+    "github_url": "https://github.com/jpanther/congo"
+  },
+  {
+    "repo": "vagr9k/gatsby-advanced-starter",
+    "ssg": [
+      "Gatsby"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://gatsby-advanced-starter-demo.netlify.app/",
+    "title": "gatsby-advanced-starter",
+    "stars": 1562,
+    "description": "A high performance skeleton starter for GatsbyJS with an advanced feature set.",
+    "updated_at": "2025-12-15T11:48:25Z",
+    "github_url": "https://github.com/Vagr9K/gatsby-advanced-starter"
+  },
+  {
+    "repo": "rhazdon/hugo-theme-hello-friend-ng",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://themes.gohugo.io/themes/hugo-theme-hello-friend-ng/",
+    "title": "hugo-theme-hello-friend-ng",
+    "stars": 1547,
+    "description": "Pretty basic theme for Hugo that covers all of the essentials. All you have to do is start typing!",
+    "updated_at": "2026-01-07T05:02:15Z",
+    "github_url": "https://github.com/rhazdon/hugo-theme-hello-friend-ng"
+  },
+  {
+    "repo": "11ty/eleventy-base-blog",
+    "ssg": [
+      "Eleventy"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://eleventy-base-blog.netlify.app/",
+    "title": "eleventy-base-blog",
+    "stars": 1477,
+    "description": "A starter repository for a blog web site using the Eleventy static site generator.",
+    "updated_at": "2026-01-11T15:35:01Z",
+    "github_url": "https://github.com/11ty/eleventy-base-blog"
+  },
+  {
+    "repo": "LekoArts/gatsby-starter-portfolio-cara",
+    "ssg": [
+      "Gatsby"
+    ],
+    "archetype": [
+      "Portfolio"
+    ],
+    "demo": "https://cara.lekoarts.de/",
+    "title": "gatsby-starter-portfolio-cara",
+    "stars": 1454,
+    "description": "Playful and Colorful One-Page portfolio featuring Parallax effects and animations. Especially designers and/or photographers will love this theme! Built with MDX and Theme UI.",
+    "updated_at": "2026-01-09T00:47:24Z",
+    "github_url": "https://github.com/LekoArts/gatsby-starter-portfolio-cara"
+  },
+  {
+    "repo": "manuelernestog/astrofy",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Portfolio",
+      "Blog"
+    ],
+    "demo": "https://astrofy-template.netlify.app/",
+    "title": "astrofy",
+    "stars": 1293,
+    "description": "Astrofy is a free and open-source template for your Personal Portfolio Website built with Astro and TailwindCSS. Create in minutes a website with Blog, CV, Project Section, Store and RSS Feed.",
+    "updated_at": "2026-01-10T16:29:20Z",
+    "github_url": "https://github.com/manuelernestog/astrofy"
+  },
+  {
+    "repo": "hugo-toha/toha",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Portfolio"
+    ],
+    "demo": "https://hugo-toha.github.io/",
+    "title": "toha",
+    "stars": 1205,
+    "description": "A Hugo theme for personal portfolio",
+    "updated_at": "2026-01-11T15:19:33Z",
+    "github_url": "https://github.com/hugo-themes/toha"
+  },
+  {
+    "repo": "LekoArts/gatsby-starter-minimal-blog",
+    "ssg": [
+      "Gatsby"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://minimal-blog.lekoarts.de/",
+    "title": "gatsby-starter-minimal-blog",
+    "stars": 1154,
+    "description": "Typography driven, feature-rich blogging theme with minimal aesthetics. Includes tags/categories support and extensive features for code blocks such as live preview, line numbers, and line highlighting.",
+    "updated_at": "2026-01-01T23:49:34Z",
+    "github_url": "https://github.com/LekoArts/gatsby-starter-minimal-blog"
+  },
+  {
+    "repo": "gurusabarish/hugo-profile",
+    "ssg": [
+      "Hugo"
+    ],
+    "archetype": [
+      "Portfolio"
+    ],
+    "demo": "https://hugo-profile.netlify.app/",
+    "title": "hugo-profile",
+    "stars": 1027,
+    "description": "A highly customizable and mobile first Hugo template for personal portfolio and blog.",
+    "updated_at": "2026-01-11T20:23:33Z",
+    "github_url": "https://github.com/gurusabarish/hugo-profile"
+  },
+  {
+    "repo": "flexdinesh/blogster",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://blogster-sleek.netlify.app/",
+    "title": "blogster",
+    "stars": 654,
+    "description": "A collection of beautiful, accessible and performant Astro blog templates.",
+    "updated_at": "2026-01-11T15:33:15Z",
+    "github_url": "https://github.com/flexdinesh/blogster"
+  },
+  {
+    "repo": "madrilene/eleventy-excellent",
+    "ssg": [
+      "Eleventy"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio"
+    ],
+    "demo": "https://eleventy-excellent.netlify.app/",
+    "title": "eleventy-excellent",
+    "stars": 563,
+    "description": "Eleventy starter based on the workflow suggested by Andy Bell's buildexcellentwebsit.es.",
+    "updated_at": "2026-01-10T20:20:44Z",
+    "github_url": "https://github.com/madrilene/eleventy-excellent"
+  },
+  {
+    "repo": "Charca/astro-blog-template",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://astro-blog-template.netlify.app/",
+    "title": "astro-blog-template",
+    "stars": 491,
+    "description": "Personal Blog Template Powered by Astro",
+    "updated_at": "2026-01-09T17:16:27Z",
+    "github_url": "https://github.com/Charca/astro-blog-template"
+  },
+  {
+    "repo": "codebushi/gatsby-starter-dimension",
+    "ssg": [
+      "Gatsby"
+    ],
+    "archetype": [
+      "Portfolio",
+      "Business"
+    ],
+    "demo": "https://gatsby-dimension.surge.sh/",
+    "title": "gatsby-starter-dimension",
+    "stars": 322,
+    "description": "Gatsby.js V2 starter template based on Dimension, designed by HTML5 UP. Check out https://codebushi.com/gatsby-starters-and-themes/ for more Gatsby starters.",
+    "updated_at": "2025-08-13T16:00:45Z",
+    "github_url": "https://github.com/codebushi/gatsby-starter-dimension"
+  },
+  {
+    "repo": "5t3ph/11ty-netlify-jumpstart",
+    "ssg": [
+      "Eleventy"
+    ],
+    "archetype": [
+      "Blog",
+      "Business"
+    ],
+    "demo": "https://11ty-netlify-jumpstart.netlify.app/",
+    "title": "11ty-netlify-jumpstart",
+    "stars": 237,
+    "description": "Quickly launch an 11ty-generated static site. Includes a minimal Sass framework, generated sitemap, and RSS feed.",
+    "updated_at": "2025-12-15T17:49:30Z",
+    "github_url": "https://github.com/5t3ph/11ty-netlify-jumpstart"
+  },
+  {
+    "repo": "web3templates/stablo-astro",
+    "ssg": [
+      "Astro"
+    ],
+    "archetype": [
+      "Blog"
+    ],
+    "demo": "https://stablo-astro.web3templates.com/",
+    "title": "stablo-astro",
+    "stars": 168,
+    "description": "Astro version of the Popular Stablo Blog Template",
+    "updated_at": "2025-11-21T15:30:36Z",
+    "github_url": "https://github.com/web3templates/stablo-astro"
+  },
+  {
+    "repo": "clenemt/eleventy-webpack",
+    "ssg": [
+      "Eleventy"
+    ],
+    "archetype": [
+      "Blog",
+      "Portfolio"
+    ],
+    "demo": "https://eleventy-webpack.netlify.app/",
+    "title": "eleventy-webpack",
+    "stars": 145,
+    "description": "A barebone Eleventy and Webpack boilerplate 🎈",
+    "updated_at": "2025-12-18T09:48:49Z",
+    "github_url": "https://github.com/clenemt/eleventy-webpack"
+  }
+]

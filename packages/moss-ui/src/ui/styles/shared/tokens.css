@@ -26,8 +26,8 @@
      Heading font stack — serif by default for editorial weight. If the two
      ever drift, surfaces like the folder-mode <h1> and the preview
      .moss-folder-title will look like two different titles for the same string.
-     Previously aliased to --moss-font-body; revised in T5/Wave2 to match
-     tokens.json's serif stack. */
+     Use tokens.json's serif stack so headings keep their editorial weight
+     independently of the body font. */
   --moss-font-heading: 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSongti', 'NSimSun', 'SimSun', 'Source Serif 4', 'Source Serif Pro', 'Times New Roman', Times, serif;
   /* [B] diverges from tokens.json: compact 3-face mono stack; site stack
      includes Cascadia Code, JetBrains Mono, Menlo, Consolas etc. */
@@ -43,8 +43,8 @@
   /* [A] MIRRORED — must match tokens.json moss-size-2xl.
      Typography scale token — kept in sync so the app-shell folder-mode
      <h1> and preview .moss-folder-title match site-rendered heading sizes.
-     Added in T5/Wave2. Extend the scale (xs, sm, lg, xl) only when an
-     app-shell consumer needs it. */
+     Extend the existing scale (xs, sm, lg, xl) only when an app-shell
+     consumer needs an additional size. */
   --moss-size-2xl: 1.625rem; /* 26px — folder-mode site header, preview .moss-folder-title */
   /* [B] diverges from tokens.json (dark): tokens.json is single-value (#2d5a2d);
      this file adds a dark variant (#4a7c4a) in the [data-theme="dark"] block below. */

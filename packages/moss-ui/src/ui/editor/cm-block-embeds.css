@@ -1,0 +1,276 @@
+/* cm-block-embeds.ts's own stylesheet: the image and media-card block widgets
+ * (drawn BELOW an embed's own source line).
+ * Tables are not a CM6 widget: they render only in the reference card.
+ *
+ * BLOCK-WIDGET VERTICAL SPACING (`.cm-lp-image-row`'s `padding-block`, never
+ * `margin-block`): CM6 measures a block's height via `getBoundingClientRect`
+ * (the border box), which does not see a vertical margin, so a margin-bearing
+ * block widget's real height silently exceeds CM6's height map — a error that
+ * accumulates down the document and eventually misplaces clicks and
+ * Arrow-Up/Down by a line.
+ * Browser regression coverage must check that widget height does not drift.
+ */
+
+/* ── Image block ──────────────────────────────────────────────────────── */
+
+.cm-lp-image { max-width: 100%; height: auto; border-radius: 4px; vertical-align: bottom; }
+
+/* Outer row: insets the block to the editor's TEXT column using the same
+   per-side inset as `.cm-line` (--moss-editor-line-inset). Block widgets are
+   children of `.cm-content` (siblings of `.cm-line`), so without this they'd
+   span the full editor width and overhang the body text. `padding-block`
+   (never `margin-block`) owns the vertical gap — see the doctrine note above. */
+.cm-lp-image-row {
+  margin-inline: var(--moss-editor-line-inset, 28px);
+  padding-block: 4px;
+}
+
+/* The image itself. The wrapper width is owned by the widget DOM: an explicit
+   `|NN%` token sets `width:NN%` (of the text column), otherwise it caps at the
+   intrinsic px (small images don't upscale). margin-inline:auto centers any
+   sub-column image within the text column. */
+.cm-lp-image-block {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  margin-inline: auto;
+  max-width: 100%;
+}
+/* A linked embed (`[![[x.png]]](/url)`) renders as ONE clickable image. Its
+   affordance is deliberately a text link's: Cmd-held pointer (.cm-link-clickable,
+   editor.css) + destination tooltip + an accent ring on hover. */
+.cm-lp-image-block--linked:hover { box-shadow: 0 0 0 2px var(--moss-color-accent-quiet); }
+
+.cm-lp-image-block img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Bottom-right corner-bracket resize handle. Hover/focus-revealed. White stroke
+   + dark drop-shadow halo = self-contrast on light AND dark images (crop-UI
+   canon). ~12px glyph in a ~22px transparent hit-area for an easy grab/touch
+   target. touch-action:none is required for the pointer drag on touch devices. */
+.cm-lp-image-handle {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: #fff;
+  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.6));
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 0.1s;
+  touch-action: none;
+}
+.cm-lp-image-handle svg { display: block; }
+.cm-lp-image-block:hover .cm-lp-image-handle,
+.cm-lp-image-handle:focus-visible {
+  opacity: 1;
+}
+.cm-lp-image-handle:active {
+  color: var(--moss-color-accent);
+  transform: scale(1.1);
+}
+
+/* Live percentage badge shown only during a drag (controller-managed DOM).
+   Non-interactive so it never steals the in-flight pointer. */
+.cm-lp-image-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* ── Media embed: native video / audio player ────────────────────────── */
+
+/* Wrapper for the playable video or audio player. Position:relative anchors the
+   corner-bracket resize handle (same as .cm-lp-image-block). Width defaults to
+   100% of the text column; an explicit |NN% token overrides that inline. */
+.cm-media-embed-player {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* <video> fills its wrapper and keeps aspect ratio. `display:block` removes the
+   inline baseline gap that browsers add below replaced elements. */
+.cm-media-embed-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: #000;
+}
+
+/* <audio> is a replaced element with a fixed UA height; stretch it to the full
+   column width so the resize percent applies meaningfully. */
+.cm-media-embed-audio {
+  display: block;
+  width: 100%;
+}
+
+/* Reveal the corner-bracket handle when hovering the player wrapper — mirrors
+   the .cm-lp-image-block:hover rule so video resize works exactly like image
+   resize. The card is listed here too: it appends the handle to ITSELF (see the
+   `resizable` branch of MediaEmbedBlockWidget.toDOM), and its parent is
+   `.cm-lp-image-row`, so neither the image-block nor the player rule reaches
+   it — a resizable pdf/video/app card had a handle that stayed at opacity 0
+   however long you hovered, hiding its only real interaction. Folder cards are
+   `resizable: false` and build no handle at all, so they are unaffected. */
+.cm-media-embed-player:hover .cm-lp-image-handle,
+.cm-media-embed-player .cm-lp-image-handle:focus-visible,
+.cm-media-embed-card:hover .cm-lp-image-handle {
+  opacity: 1;
+}
+
+/* On a CARD the handle needs a different ink than on an image. The base style
+   is white with a dark halo, which is right over a photo — unknown, arbitrary
+   pixels, so the glyph must carry its own contrast. A card is a flat, known
+   surface, and white-on-near-white measured 1.2:1 there in the light theme
+   (2.2:1 counting the halo's darkest pixel) — under the 3:1 WCAG 1.4.11 floor
+   moss holds itself to for a control boundary. Borrow the ink the kind label
+   already uses ON THIS SAME CARD, so the two are legible under identical
+   conditions in both themes and neither can drift from the other. */
+.cm-media-embed-card .cm-lp-image-handle {
+  filter: none;
+}
+/* `:not(:active)` so the press feedback above still wins. Unqualified, this
+   rule would weigh (0,2,0) — a tie with `.cm-lp-image-handle:active` that it
+   breaks by being declared later, silently taking the handle's accent flash
+   away on cards only. Excluding the state is what defers, not the specificity
+   (`:not()` in fact raises this selector to (0,3,0)). */
+.cm-media-embed-card .cm-lp-image-handle:not(:active) {
+  color: var(--moss-color-text-secondary);
+}
+
+/* ── Media embed placeholder card (resizable, 100%-width) ─────────────── */
+
+/* Block placeholder for non-image embeds (folder/app/pdf/video/html/external/
+   notebook/table). Dark bg, flex, padding;
+   fills the text column by default (width:100%) so it reads as a media block,
+   not a chip — and so the lifted resize handle (`.cm-lp-image-handle`) has a
+   percent basis. Lives inside `.cm-lp-image-row`, so it insets to the text
+   column. `position: relative` anchors the absolute handle/badge. */
+.cm-media-embed-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 8px 10px;
+  background: var(--moss-hover-overlay);
+  border-radius: 6px;
+  border: 1px solid var(--moss-border-medium);
+  /* NO cursor here — the card carries no click handler for a plain click; it
+     gets a hand cursor only via `.cm-link-clickable` (editor.css), whose
+     Cmd-held pointer rule stays the single owner of "this is followable". */
+  user-select: none;
+  overflow: hidden;
+}
+.cm-media-embed-icon { font-size: 16px; flex-shrink: 0; }
+.cm-media-embed-label {
+  font-size: 11px;
+  color: var(--moss-color-text-secondary);
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cm-media-embed-name {
+  font-size: 13px; font-weight: 500;
+  color: var(--moss-color-text);
+  min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* Folder-listing card: the target's identity on the left, the listing's
+   configuration on the right, so a column of stacked cards lines up. Single
+   row BY CONSTRUCTION — the card's own min-height/padding dominate a 16px
+   chip, which is what keeps `mediaCardHeight` (block-row-height.ts, ONE
+   constant calibrated from the FIRST card on screen, whatever kind it is)
+   correct in a document mixing folder and pdf cards. Do not let this group
+   wrap or grow taller. */
+.cm-media-embed-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+  flex-shrink: 0;
+}
+.cm-media-embed-count {
+  font-size: 11px;
+  color: var(--moss-color-text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cm-media-embed-count--empty { color: var(--moss-color-muted); }
+.cm-media-embed-chip {
+  font-size: 11px;
+  line-height: 14px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--moss-active-overlay);
+  color: var(--moss-color-text-secondary);
+  white-space: nowrap;
+}
+/* The title ellipsizes before it disappears when the panel is narrow. */
+.cm-media-embed-card--folder .cm-media-embed-name { min-width: 3em; }
+
+/* "Expand" at the end of a derived-text embed line (expand-derived/extension.ts):
+   a link a step smaller than the text and set off from the `]]` it follows. */
+.cm-expand-derived {
+  margin-inline-start: 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ── Focus-point instrument (cm/focus-point.ts) ───────────────────────── */
+
+/* Same text-column inset and `padding-block` rule as `.cm-lp-image-row`. */
+.cm-focus-point {
+  margin-inline: var(--moss-editor-line-inset, 28px);
+  padding-block: 6px;
+}
+.cm-focus-point-pic {
+  position: relative;
+  width: min(100%, 360px);
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+.cm-focus-point-pic img { display: block; width: 100%; height: 100%; pointer-events: none; }
+/* Dims what the hero crops away; its clip-path (set in JS) leaves the kept part clear. */
+.cm-focus-point-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); pointer-events: none; }
+.cm-focus-point-frame {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--moss-color-bg);
+  pointer-events: none;
+}
+.cm-focus-point-dot {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px;
+  box-sizing: border-box;
+  border: 2px solid var(--moss-color-bg);
+  border-radius: var(--moss-radius-capsule);
+  background: var(--moss-color-accent);
+  pointer-events: none;
+}
+.cm-focus-point-hint { margin-top: 4px; font-size: 12px; color: var(--moss-color-text-secondary); }

@@ -1,0 +1,313 @@
+/* Versions surface — static stylesheet companion to versions-surface.ts.
+ * All .moss-versions* rules live here so they participate in the editor's
+ * token cascade and respond to [data-theme='dark'] without runtime style
+ * injection (mirrors email-composer.css's own header note).
+ *
+ * `__caption-row` (the scope caption + the save control) is the header's only
+ * row. Every horizontal inset here reads `--moss-editor-line-inset` (defined on
+ * `.moss-editor`, inherited down into this surface since it mounts inside
+ * `#moss-editor-cm`) instead of a literal: this surface is a MODE of the editor
+ * body, so its margins are the editor content's margins, not a second,
+ * hand-picked number that drifts from the reading column when the surface is
+ * resized.
+ *
+ * `--moss-versions-head-h`/`-col`/`-gap` are declared once on `.moss-versions`
+ * and consumed by `__caption-row` and `__row` alike: a fixed-height header row,
+ * a leading column of `-col`, then `-gap`, then the flexible trailing column.
+ * The save control's "+" is one persistent `__save-toggle` (an SVG plus/cross
+ * morph, shared/plus-cross-toggle.ts).
+ *
+ * The detail screens have no header row of their own: their back link, moment
+ * and Restore sit in the editor's breadcrumb strip (`.mode-subject`,
+ * `.mode-actions` in file-tree.css), and their body starts directly under it.
+ *
+ * Recipes reused as-is, never redefined here: .pop-input (editor.css), the
+ * .moss-btn / .moss-btn-primary / .moss-btn-secondary structural+color split
+ * (primitives.css / modal.css), .moss-status-badge--green (primitives.css),
+ * .moss-link--subtle (primitives.css). No new --moss-* token.
+ */
+
+.moss-versions {
+  --moss-versions-head-h: 54px;
+  --moss-versions-col: 100px;
+  --moss-versions-gap: 24px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--moss-color-bg);
+  color: var(--moss-color-text);
+}
+
+.moss-versions__header {
+  border-bottom: 1px solid var(--moss-border-light);
+  flex-shrink: 0;
+}
+
+/* Screen one's header: the scope caption ("Versions" / "Site versions") and
+ * the save control, in the SAME two-column shape as `.moss-versions__row`
+ * below (a fixed-width leading column + a flexible trailing one) so the "+"
+ * lines up with the row names beneath it and reads as "add to THIS LIST"
+ * (design-vocabulary.md: "an add-to-a-list control sits beside the list's
+ * own name") rather than "add to THIS FILE" — the ambiguity a bare "+"
+ * beside a filename invited. Directly under the (shared) breadcrumb now
+ * that screen one's own title row is gone. Fixed-height, no vertical
+ * padding (round five, item 4) — same shape as `__title-row` above. */
+.moss-versions__caption-row {
+  display: flex;
+  align-items: center;
+  height: var(--moss-versions-head-h);
+  gap: var(--moss-versions-gap);
+  padding: 0 var(--moss-editor-line-inset);
+}
+
+.moss-versions__caption {
+  width: var(--moss-versions-col);
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--moss-color-muted);
+}
+
+/* A single flex line (round five, item 5): the toggle and the field slot sit
+ * side by side at a fixed 26px height, so opening the field extends the row
+ * RIGHTWARD instead of stacking underneath it — the old block-level slot let
+ * an opened field push the caption row from 54px to 81px. */
+.moss-versions__save-slot {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+}
+
+/* The persistent save toggle — same footprint as the old text "+", an SVG
+ * glyph morphing plus↔cross in place of it (shared/plus-cross-toggle.ts, the
+ * same morph #moss-add-plugin-button uses). One element for the whole
+ * open/closed life of the save control; only `__save-field-slot` beside it
+ * mounts and unmounts. */
+.moss-versions__save-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  /* A true circle, the same shape as #moss-add-plugin-button (the channel pill
+   * it shares its glyph-morph engine with): one "+"-that-becomes-"×" shape
+   * everywhere it appears. Square footprint: the capsule token resolves that
+   * to the same circle. */
+  border-radius: var(--moss-radius-capsule);
+  border: 1px solid var(--moss-border-medium);
+  background: var(--moss-color-bg);
+  color: var(--moss-color-text-secondary);
+  padding: 0;
+}
+.moss-versions__save-toggle:hover {
+  background: var(--moss-hover-overlay);
+  color: var(--moss-color-text);
+}
+.moss-versions__save-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--moss-focus-ring);
+}
+.moss-versions__save-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.moss-versions__save-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Grow-in rather than pop-in (design-vocabulary.md, Motion: "Morph, don't
+   * swap") — the field and its buttons are a new DOM subtree (a glyph-level
+   * morph does not fit a text input), so the closest honest equivalent is
+   * animating the shape it grows into rather than an instant appear.
+   * `transform-origin: left center` (round five, item 5) so the field
+   * visibly extends from the toggle RIGHTWARD, not from its own centre. */
+  transform-origin: left center;
+  animation: moss-versions-save-grow 120ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-versions__save-inline { animation: none; }
+}
+@keyframes moss-versions-save-grow {
+  from { opacity: 0; transform: scaleX(0.6); }
+  to { opacity: 1; transform: scaleX(1); }
+}
+.moss-versions__save-field {
+  width: 148px;
+  height: 26px;
+  box-sizing: border-box;
+  font-size: 12.5px;
+}
+.moss-versions__save-confirm {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  min-width: 0;
+  border-radius: var(--moss-radius-capsule); /* square footprint — capsule token resolves to a circle */
+  font-size: 13px;
+  line-height: 1;
+}
+
+.moss-versions__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Same leading-column/gap vars as `__caption-row`/`__title-row` above
+ * (round five, item 4) — a 12px gap after a 92px date left ~22px of air
+ * before the name, which measured as "too tight"; `-gap` widens it to 24px
+ * (gate: row-main's x minus time's right edge >= 24). */
+.moss-versions__row {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px var(--moss-editor-line-inset);
+  gap: var(--moss-versions-gap);
+  box-sizing: border-box;
+}
+
+.moss-versions__time {
+  width: var(--moss-versions-col);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--moss-color-muted);
+}
+
+.moss-versions__row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.moss-versions__name {
+  font-size: 14px;
+  color: var(--moss-color-text);
+  overflow-wrap: break-word;
+}
+.moss-versions__name--strong {
+  font-weight: 600;
+}
+
+.moss-versions__by,
+.moss-versions__summary {
+  font-size: 12px;
+  color: var(--moss-color-text-secondary);
+}
+
+.moss-versions__badge {
+  margin-inline-start: 8px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.moss-versions__empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+  padding: 0 48px;
+}
+.moss-versions__empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--moss-color-text);
+}
+.moss-versions__empty-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--moss-color-text-secondary);
+  max-width: 320px;
+}
+
+/* Screens two/three ("A page's version" / "A folder or site version").
+ * `__row`/`__by` are shared with screen one above. These screens have no
+ * header of their own: the back link, the version's moment (+ Live badge)
+ * and Restore live in the strip's title-bar layer (tree/title-bar.ts,
+ * `.mode-subject`/`.mode-subject-name`/`.mode-actions` in file-tree.css), and
+ * only what these screens add of their own follows. */
+
+.moss-versions__row--link {
+  cursor: pointer;
+}
+.moss-versions__row--link:hover {
+  background: var(--moss-hover-overlay);
+}
+
+.moss-versions__chevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--moss-color-muted);
+}
+
+/* Restore lives in `.mode-actions` now (round six) — still a `.moss-btn`,
+ * shrunk to match its 24-26px title-bar neighbours instead of the default
+ * button's 36px. */
+.moss-versions__restore {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.moss-versions__restore-error {
+  margin: 8px var(--moss-editor-line-inset) 0;
+  font-size: 12px;
+  color: var(--moss-color-danger);
+}
+
+/* The page version's body: the source as written, read-only, in the
+ * editor's own reading style (design, "A page's version") — or the
+ * not-kept message in its place. */
+.moss-versions__page-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px var(--moss-editor-line-inset) 24px;
+}
+.moss-versions__source {
+  margin: 0;
+  font-family: var(--moss-editor-reading-font);
+  font-size: var(--moss-editor-reading-size);
+  line-height: 1.85;
+  color: var(--moss-color-text);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.moss-versions__not-kept {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--moss-color-text-secondary);
+}
+
+/* "Changed since then" / "Unchanged" group labels. */
+.moss-versions__group {
+  padding: 14px var(--moss-editor-line-inset) 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--moss-color-muted);
+}
+
+/* VersionsRestoreModal (versions-restore-modal.ts) reads the shared
+ * `.moss-modal--confirm` shape (modal.css) directly now — this used to
+ * restate the same geometry as its own `.moss-modal--versions-restore`
+ * class, at a different padding (var(--moss-space-xl), 48px) than the
+ * "same shape" this comment always claimed. */
+.moss-versions-restore-modal {
+  --moss-stack-space: var(--moss-space-sm);
+}

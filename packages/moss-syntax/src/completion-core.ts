@@ -6,12 +6,10 @@
 // it safe for both to depend on, and what lets its test suite run in the
 // `node` vitest environment instead of jsdom.
 //
-// `ExtKind` is declared locally rather than imported from `../bindings` —
-// depcruise's `interim-bindings-tauri-importers` rule restricts bindings.ts
-// imports to the platform seam; neither completion source calls the RPC
-// directly; the caller (`editor-main.ts`, already seam-baselined) does, via
-// the `complete` callback below. Mirrors `crates/moss-core/src/resolve/ext_kind.rs`'s
-// `ExtKind` enum (bindings.ts's generated union has the same members).
+// `ExtKind` is declared here because this package depends on no host's
+// generated types; neither completion source calls the engine, the caller
+// does, through the `complete` callback below. Mirrors
+// `crates/moss-core/src/resolve/ext_kind.rs`'s `ExtKind` enum.
 export type ExtKind =
   | 'Image'
   | 'Iframe'
@@ -95,11 +93,9 @@ export interface WikilinkCompleteOptions {
 }
 
 /**
- * Structural subset of Rust `ResolvedAsset` (bindings.ts) that the preview card
- * needs. Mirrored here for the same reason `WikilinkCompletionItem` is — this
- * module is the shared pure DTO layer, and depcruise's bindings allowlist is
- * shrink-only, so neither this module nor `asset-preview.ts` may import
- * `../bindings`. `ResolvedAsset` is structurally assignable to this.
+ * Structural subset of Rust `ResolvedAsset` that the preview card needs,
+ * declared here for the same reason as `ExtKind`: this package depends on no
+ * host's generated types. `ResolvedAsset` is structurally assignable to this.
  * `size_bytes` is a u64 serialized to string by specta; accepted as either.
  */
 export interface AssetPreviewData {

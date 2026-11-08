@@ -1,0 +1,229 @@
+/* cm-markdown-style.ts's own stylesheet: the cm-hang/cm-hung positioning
+ * rule (owned here — cm-footnote.ts, cm-shortcode-block.ts and every
+ * hung construct in cm-markdown-style.ts only ever APPLY these two classes,
+ * assuming the rule exists in the consuming app's CSS, per the architecture:
+ * moss-syntax emits class names only), plus the mark/line classes this
+ * module's decorations reference that mossHighlight + @lezer/markdown's own
+ * styleTags don't already cover.
+ * .cm-lp-em and .cm-lp-strong are left out (mossHighlight's
+ * own tags.emphasis/tags.strong rules already give those for free) and the
+ * widget-only classes (.cm-lp-hr, .cm-lp-image*), which live in
+ * cm-block-embeds.css. There is no .cm-lp-table*: tables are not a CM6
+ * widget, rendered only in the reference card.
+ */
+
+/* ── The hang mechanism ──────────────────────────────────────────────── */
+
+/* A hung line prefix is a `cm-hang` mark absolutely positioned into the
+ * reserved `--moss-editor-hang-gutter` column, relative to its `cm-hung`
+ * line. Done with a border/pseudo-element-style absolute position, never
+ * negative `text-indent` — negative indent breaks CodeMirror's selection
+ * rectangle after a scroll (see the spec's "How each construct looks"). */
+.cm-hung { position: relative; }
+/* A line whose only content is a hung prefix (a closing fence, a lone `$$`, an
+   empty `>`) holds nothing but an absolutely positioned child, so it
+   collapses to zero height and Home/End/ArrowUp/ArrowDown skip it. Keep one
+   line box.
+   `lh` needs Safari 16.4 but tauri.conf.json allows macOS 12, so older WebKit
+   gets the same height spelled out (a heading line, whose own line-height
+   differs from the body's, is a little taller there until it updates). */
+.cm-line.cm-hung {
+  min-height: calc(var(--moss-editor-line-height) * 1em);
+  min-height: 1lh;
+}
+/* No left/right: the mark keeps its static position at the start of the
+   line's text, then moves left by its own width plus a gap, so it ends a fixed
+   gap before the TEXT COLUMN EDGE. The gap is one reading-size unit, not the
+   line's own em, so every heading's `#` and every quote's `>` end at the same
+   x (a heading's own em would push `# ` further out than `###### `). A quote's
+   text sits past its bar, so those lines add that offset as `--moss-hang-lean`
+   and the `>` is measured from the column edge, not from the quote text.
+   Left-to-right only: the translate is physical, like the margin it hangs into. */
+.cm-hang, .cm-hang-run {
+  position: absolute;
+  /* Secondary to the text: one small size on every line (a heading's
+     markers are scaled down by its own size ratio), muted, ending just
+     before the text. Scaled about the right end of the baseline so the
+     marker stays on the line's baseline at every heading size. */
+  transform: translateX(calc(-100% - 0.35 * var(--moss-editor-reading-size) - var(--moss-hang-lean, 0px))) scale(var(--moss-hang-scale, 0.8));
+  transform-origin: 100% 78%;
+  color: var(--moss-color-muted);
+  font-weight: normal;
+  white-space: pre;
+}
+/* The several indicators of one line (`> # h`) hang as one box, side by side: inside it each is an ordinary inline span. */
+.cm-hang-run > .cm-hang { position: static; transform: none; color: inherit; }
+/* A heading's or quote's indicator is also a control: it brightens on hover
+   (the tooltip names the line type) and a click opens the line-type menu
+   (cm-format-keys.ts). */
+.cm-hang[data-indicator] { cursor: pointer; }
+.cm-hang[data-indicator]:hover { color: var(--moss-color-text-secondary); }
+.cm-lp-h1 { --moss-hang-scale: calc(0.8 / 1.75); }
+.cm-lp-h2 { --moss-hang-scale: calc(0.8 / 1.45); }
+.cm-lp-h3 { --moss-hang-scale: calc(0.8 / 1.25); }
+/* The margin left of the text column is a fixed ~41px on a narrow pane, and
+   the marker is as wide as it is long (`#### ` .. `###### `). From h4 down the
+   marker shrinks with its length, so the longest still fits that margin at
+   320px instead of being clipped by the scroller. Sizes are in reading-size
+   units (0.8 = a bullet's), divided by the heading's own ratio like above. */
+.cm-lp-h4 { --moss-hang-scale: calc(0.7 / 1.1); }
+.cm-lp-h5 { --moss-hang-scale: calc(0.58 / 1); }
+.cm-lp-h6 { --moss-hang-scale: calc(0.5 / 0.9); }
+
+/* ── Headings ─────────────────────────────────────────────────────────── */
+
+.cm-lp-h1 { font-size: 1.75em; font-weight: 700; line-height: 1.3; }
+.cm-lp-h2 { font-size: 1.45em; font-weight: 700; line-height: 1.35; }
+.cm-lp-h3 { font-size: 1.25em; font-weight: 600; line-height: 1.4; }
+.cm-lp-h4 { font-size: 1.1em; font-weight: 600; line-height: 1.45; }
+.cm-lp-h5 { font-size: 1.0em; font-weight: 600; line-height: 1.5; }
+.cm-lp-h6 { font-size: 0.9em; font-weight: 600; line-height: 1.5; color: var(--moss-color-muted); }
+
+/* ── Inline formatting ────────────────────────────────────────────────── */
+
+.cm-lp-strike { text-decoration: line-through; color: var(--moss-color-muted); }
+/* No horizontal padding: it sits between the caret positions at a code span's
+   edges, so the caret there was drawn 4px apart depending on the direction it
+   arrived from. The tint hugs the glyphs instead. */
+.cm-lp-code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.9em; background: var(--moss-hover-overlay); padding: 1px 0; border-radius: 3px; }
+/* Math SOURCE spans `$…$` / `$$…$$` — highlight-only:
+   a subtle accent-tinted wash over the raw TeX, `$` delimiters included and
+   always visible. Mono face because the payload is TeX source, not prose; the
+   accent tint (vs .cm-lp-code's neutral overlay) says "the build will typeset
+   this". No glyph rendering in the editor — the preview pane shows the real
+   output. */
+.cm-lp-math { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.9em; background: color-mix(in srgb, var(--moss-color-accent) 9%, transparent); border-radius: 3px; }
+/* Every destination (a link's URL, a wikilink's page, an embed's path) is the link: link colour, a long one breaks at any character instead of pushing the line wide, underlined while ⌘ is held. The text beside it is only words, in the body colour. */
+.cm-lp-link-dest { color: var(--moss-color-accent); overflow-wrap: anywhere; }
+.cm-editor.cm-meta-held .cm-lp-link-dest { text-decoration: underline; text-decoration-color: var(--moss-border-medium); }
+.cm-lp-link-tail { font-size: 0.85em; } /* a link's `](url)`, a little smaller than its text */
+.cm-lp-link-text { color: var(--moss-color-text); }
+/* The syntax highlighter wraps its own span INSIDE a mark and its colour wins there; these let the mark's colour through (a link's text and url, a margin indicator, a list or task marker). */
+.cm-hang span, .cm-lp-link-dest span, .cm-lp-link-text span, .cm-lp-delim span, .cm-lp-list-mark span, .cm-lp-task-dash span, .cm-lp-task-x span { color: inherit; font-weight: inherit; }
+/* Muted delimiter for custom (wikilink/math/callout) syntax — the marks CM's
+   own grammar doesn't tag, alongside footnote/shortcode fences and a
+   callout `> [!`): muted but clearly legible — the same --moss-hl-punct
+   register the standard-markdown brackets get from mossHighlight, so custom
+   and standard syntax read as one language when raw. Theme-aware via tokens. */
+.cm-lp-delim { color: var(--moss-hl-punct); }
+/* A code fence's language name (the fence characters themselves are faint via
+   mossHighlight). */
+.cm-lp-fence-lang { color: var(--moss-color-accent); }
+/* A list marker (`-`, `*`, `+`, `1.`): the characters stay in the text flow at text size and normal weight, in the accent colour, so the item text follows them and a nested item's leading indent sits deeper. Wrapped rows start under the item's text (the hanging indent above), never with a negative text-indent, which breaks CM6's selection rectangles. */
+.cm-lp-list-mark { color: var(--moss-color-accent); font-weight: normal; }
+/* A footnote reference `[^1]` / `[^label]`: accent, small, raised like a superscript. */
+.cm-footnote-ref { color: var(--moss-color-accent); font-size: 0.72em; position: relative; top: -0.45em; }
+.cm-lp-done { color: var(--moss-color-muted); text-decoration: line-through; }
+/* A task's `[ ]`: dash and `x` in the accent colour, brackets faint (cm-lp-delim). The whole range is the click target that toggles it — a pointer, and a faint box outline on hover (an outline, so nothing moves). */
+.cm-lp-task-dash, .cm-lp-task-x { color: var(--moss-color-accent); }
+.cm-task-toggle { cursor: pointer; border-radius: 3px; }
+.cm-task-toggle:hover { outline: 1px solid var(--moss-border-medium); outline-offset: 1px; }
+
+/* ── Block elements ───────────────────────────────────────────────────── */
+
+/* A thematic break (`---`): the faint characters stay, and a hairline runs
+   across the rest of the line. The hairline is the line's own ::after, an
+   inline box after the text, so it starts exactly where the characters end and
+   nothing is replaced or widgeted. `overflow: hidden` keeps its long box from
+   widening the scroller; the clip-path trims it at the right edge of the text
+   column (the line box itself spans the full pane, inset by padding). */
+.moss-editor-cm .cm-line.cm-lp-rule {
+  white-space: nowrap;
+  overflow: hidden;
+  clip-path: inset(0 var(--moss-editor-line-inset, 28px) 0 0);
+}
+.moss-editor-cm .cm-line.cm-lp-rule::after {
+  content: "";
+  display: inline-block;
+  width: 100vw;
+  margin-inline-start: 0.5em;
+  vertical-align: middle;
+  border-top: 1px solid var(--moss-border-medium);
+}
+
+/* Blockquote bar. The `.cm-line` box spans the full content width (the text
+   inset lives in `.cm-line { padding-left }` = --moss-editor-line-inset, NOT on
+   `.cm-content`), so a plain `border-left` would draw the bar at the editor's
+   left edge instead of the content column. Draw it with an inset ::before pinned
+   to the content column (left: --moss-editor-line-inset, matching .cm-line
+   padding-left) — this keeps CM's full-width active-line highlight intact while
+   aligning the bar with the body-text edge. The quote TEXT is indented a further
+   12px past the bar, tracked off the same var so it follows the content spine. */
+.cm-lp-blockquote { color: var(--moss-color-text-secondary); }
+/* The text's offset past the bar, shared with callouts (editor.css) and with the hung `>`, which is measured from the column edge. */
+.cm-lp-blockquote, .cm-callout-block { --moss-quote-indent: 12px; --moss-hang-lean: var(--moss-quote-indent); }
+.moss-editor-cm .cm-line.cm-lp-blockquote { position: relative; padding-left: calc(var(--moss-editor-line-inset) + var(--moss-quote-indent)); }
+.moss-editor-cm .cm-line.cm-lp-blockquote::before {
+  content: "";
+  position: absolute;
+  /* Pin to the content column — same inset as `.cm-line { padding-left }`
+     (defined once as --moss-editor-line-inset in editor.css). */
+  left: calc(var(--moss-editor-line-inset, 28px) - var(--lp-hang, 0px));
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--moss-border-medium);
+}
+
+/* ── Hanging indent of a list item's wrapped rows ─────────────────────── */
+
+/* cm-lists.ts: every row of an item's text starts at the item's text
+   column. The line's left margin is the hang (`--lp-hang`, the first-line prefix's
+   measured width): CodeMirror reads a line's padding-left and text-indent for
+   selection rectangles but not its margin. (Not a border: Chromium snaps a
+   border to whole device pixels, a fractional margin it does not.) The right margin
+   cancels the left so the line keeps its width: the inset is a percentage of it,
+   and the quote bar and the guide resolve that percentage against the line.
+   A zero-width `cm-li-shim` box at the start of the item's prefix (indent +
+   marker) has a negative margin of the prefix's own width, so on the first row
+   the prefix sits where it always did (a continuation line's leading whitespace
+   is pulled back by its own width, at most the hang). Anything positioned from
+   the line's padding box compensates by the margin: the margin indicator, the
+   quote bar, the guide. */
+/* A prefix's tab, as wide as its stop (cm-lists.ts markTab) wherever the shim has moved it. */
+.cm-li-tab { display: inline-block; }
+/* Nested items read deeper: each indent character is `--moss-list-indent` wider (letter-spacing; a tab's own width ignores it, so cm-lists.ts adds the rest as a margin). Visual only: the file keeps its 2 or 3 spaces and Tab inserts the same. The guide's 24-space box carries the same letter-spacing, so its columns stay under the parent's marker. */
+.moss-editor-cm { --moss-list-indent: 0.6em; }
+.cm-li-ind { letter-spacing: var(--moss-list-indent); }
+/* The mark CodeMirror nests inside the tab's box: engines differ on whether a tab glyph takes letter-spacing, so it takes none and the margin carries the width. */
+.cm-li-tab .cm-li-ind { letter-spacing: 0; }
+.cm-li-shim { display: inline-block; width: 0; margin-left: calc(-1 * min(var(--lp-pfx, var(--lp-hang)), var(--lp-hang))); }
+.moss-editor-cm .cm-line.cm-li-hang { margin-left: var(--lp-hang); margin-right: calc(-1 * var(--lp-hang)); }
+/* The margins keep the line's width, so its (empty) right padding ends one hang past the content box; clipped, it does not make the scroller scroll sideways. */
+.moss-editor-cm .cm-content { overflow-x: clip; }
+.moss-editor-cm .cm-line.cm-li-hang .cm-hang, .moss-editor-cm .cm-line.cm-li-hang .cm-hang-run { --moss-hang-lean: calc(var(--moss-quote-indent, 0px) + var(--lp-hang)); }
+
+/* ── Nested-list guide ────────────────────────────────────────────────── */
+
+/* A thin line under each parent's marker, down through its block to the next
+   item at the parent's level; a blank line ends it (cm-lists.ts). cm-markdown-style.ts puts `cm-lp-guided` on every line of the
+   run and the parent's marker COLUMN into `--lp-g<depth>`; a grandchild's line carries two.
+   Columns become pixels here because the font is proportional and a decoration
+   cannot know a space's width: the ::after holds 24 spaces, so one column is
+   1/24 of its own width, whatever the font. Tab stops are 4 columns of space
+   width, so a tab counts the same. The box is out of flow (no width, no caret
+   position) and spans every wrapped row. Unset slots park off-left, clipped.
+   --lp-guide-origin is where the line's text starts; the line's hanging-indent margin
+   (below) moves its padding box right, so the box starts that much further left. */
+.moss-editor-cm .cm-line.cm-lp-guided { position: relative; --lp-guide-origin: var(--moss-editor-line-inset); }
+.moss-editor-cm .cm-line.cm-lp-guided.cm-lp-blockquote { --lp-guide-origin: calc(var(--moss-editor-line-inset) + var(--moss-quote-indent)); }
+.moss-editor-cm .cm-line.cm-lp-guided::after {
+  content: "                        ";
+  white-space: pre;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--lp-guide-origin) - var(--lp-hang, 0px));
+  color: transparent;
+  letter-spacing: var(--moss-list-indent);
+  pointer-events: none;
+  --lp-line: linear-gradient(var(--moss-border-light), var(--moss-border-light));
+  background-image: var(--lp-line), var(--lp-line), var(--lp-line), var(--lp-line), var(--lp-line);
+  background-repeat: no-repeat;
+  background-size: 1px 100%;
+  background-position-y: 0;
+  background-position-x:
+    calc(var(--lp-g0, -99) * 100% / 24 + 0.2em), calc(var(--lp-g1, -99) * 100% / 24 + 0.2em),
+    calc(var(--lp-g2, -99) * 100% / 24 + 0.2em), calc(var(--lp-g3, -99) * 100% / 24 + 0.2em),
+    calc(var(--lp-g4, -99) * 100% / 24 + 0.2em);
+}
