@@ -12,6 +12,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 
 const CHECKS = [
   'generate-landing-locales.test.mjs',
+  'landing-copy.test.mjs',
   'check-landing-url-boundaries.mjs',
   'check-landing-cold-bottom.mjs',
   'check-landing-beacon.mjs',

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { escapeHtml as escaped, missingStaticCopy } from './landing-copy.mjs';
 
 const source = new URL('../site/index.html', import.meta.url);
 const html = await readFile(source, 'utf8');
@@ -9,10 +10,6 @@ const catalogSource = runtime.match(/  const en = \{[\s\S]+?  const catalogs=/)?
 if (!catalogSource) throw new Error('Could not read landing locale catalogs');
 const { en, hans, hant } = Function(catalogSource)();
 const catalogs = { 'zh-hans': hans, 'zh-hant': hant };
-
-function escaped(value) {
-  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
-}
 
 function localize(sourceHtml, locale) {
   let result = sourceHtml.replace('<html lang="en">', `<html lang="${locale}">`);
@@ -42,10 +39,8 @@ function localize(sourceHtml, locale) {
 <link rel="alternate" hreflang="x-default" href="https://mosspub.com/">
 <!-- landing-discovery:end -->`;
   result = result.replace(/<!-- landing-discovery:start -->[\s\S]*?<!-- landing-discovery:end -->/, discovery);
-  const required = ['title', 'description', 'intro', 'h1', 'b1', 'h2', 'b2', 'h3', 'b3', 'h4', 'b4', 'betaCta', 'start', 'editor', 'theme', 'media', 'requestType', 'plugin', 'registry', 'closeH', 'closeB', 'download', 'macNote', 'soon', 'install', 'copy', 'betaH', 'betaB', 'email', 'request', 'privacy'];
-  for (const key of required) {
-    if (!result.includes(target[key]) && !result.includes(escaped(target[key]))) throw new Error(`${locale} static copy missing ${key}`);
-  }
+  const missing = missingStaticCopy(result, target);
+  if (missing.length) throw new Error(`${locale} static copy missing ${missing.join(', ')}`);
   // Translations may change text and localized doc URLs, never app selectors,
   // install commands, or external destinations.
   const selectors = value => [...value.matchAll(/\b(?:class|id)="[^"]*"/g)].map(match => match[0]).sort();
