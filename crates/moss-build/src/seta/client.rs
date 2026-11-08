@@ -818,12 +818,9 @@ impl MossSetaClient {
         Ok(())
     }
 
-    /// Request a destructive re-verify magic link.
-    ///
-    /// POSTs `/auth/request` with `mode='re_verify'` + `site_id`. The server
-    /// sends an email that, when confirmed, replaces the active authorization
-    /// for the site with the caller's pubkey — revoking every other device/
-    /// folder currently linked to that site.
+    /// Request a sign-in link with `mode='re_verify'` + `site_id`. The server
+    /// treats it as an ordinary sign-in of the caller's pubkey; it revokes no
+    /// other key.
     pub async fn request_reverify(
         &self,
         email: &str,
