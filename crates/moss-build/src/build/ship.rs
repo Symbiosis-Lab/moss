@@ -112,8 +112,8 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 // path, when one is known to back this entry's exact bytes.
 // ---------------------------------------------------------------------------
 
-/// Where [`ship_phase`] and [`drop_absent_outputs`] read one entry's bytes from.
-enum ShipRead<'a> {
+/// Where one entry's bytes are read from (see [`resolve_ship_source`]).
+pub(crate) enum ShipRead<'a> {
     /// A file: the CAS blob backing a live `staged_oid`, or `stage_path` itself
     /// when there is none (or its CAS blob has since been collected).
     Path(PathBuf),
@@ -122,12 +122,13 @@ enum ShipRead<'a> {
     Held(&'a [u8]),
 }
 
-/// The one place [`ship_phase`] and [`drop_absent_outputs`] read `rel_path`'s
-/// bytes from: held bytes, else the CAS blob backing a live `staged_oid`, else
+/// The one place [`ship_phase`], [`drop_absent_outputs`] and the post-seal
+/// reference scan (`degrade::shipped_references`) read `rel_path`'s bytes
+/// from: held bytes, else the CAS blob backing a live `staged_oid`, else
 /// `stage_path` itself.
 ///
-/// Both callers MUST route every presence check and every subsequent read
-/// through this SAME resolved value, and neither may recompute it separately.
+/// Every caller MUST route every presence check and every subsequent read
+/// through this SAME resolved value, and none may recompute it separately.
 /// A presence check that asks the CAS while the read that follows targets the
 /// stage path (or vice versa) can answer "present" from one and then read the
 /// other, genuinely-absent, one — moving the failure a few lines down instead
@@ -135,7 +136,7 @@ enum ShipRead<'a> {
 /// helper would reintroduce. See the module docs for the race this exists to
 /// close: between a build sealing a path's hash and shipping its bytes, a
 /// second concurrent build can rewrite the mutable stage copy.
-fn resolve_ship_source<'a>(
+pub(crate) fn resolve_ship_source<'a>(
     rel_path: &str,
     stage_path: &Path,
     sealed: &'a SealedManifest,
@@ -716,7 +717,7 @@ pub(crate) fn prune_orphaned_webp_before_ship(
         // Fail closed. An unreadable page shrinks the reference set, and a
         // smaller reference set authorizes MORE deletion — so a single
         // eviction or mid-flight write could delete every variant only that
-        // page referenced (an earlier incident: 525 files deleted, 207 images 404-ing).
+        // page referenced.
         // Skipping costs this generation some upload bytes; deleting wrongly
         // costs the site. The verdict is deliberately left untouched: a prune
         // that did not run has judged nothing, and writing an empty or partial
@@ -768,9 +769,6 @@ pub(crate) fn prune_orphaned_webp_before_ship(
         .collect();
     verdict.extend(removed_keys.iter().cloned());
     sealed.set_pruned_image_outputs(verdict);
-    // The keys travel out so `degrade` can strip the `<source>` elements that
-    // pointed at them. An unshipped file whose reference survives in HTML is a
-    // live 404, and `<picture>` renders it blank rather than falling back.
     removed_keys
 }
 

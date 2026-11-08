@@ -67,8 +67,8 @@
 //!    `gallery/assets/x.webp`; by suffixes alone it reads as
 //!    `assets/x.webp`, matches nothing, and a live reference is deleted.
 
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 /// File extensions scanned for embedded image references.
 ///
@@ -80,8 +80,7 @@ use std::path::Path;
 /// below needs no format-specific change to cover them.
 const SCAN_EXTENSIONS: &[&str] = &["html", "xml", "json", "js", "txt", "css", "svg", "ipynb"];
 
-/// What one walk of `stage_dir` learned: the reference set, and whether it is
-/// complete.
+/// What one scan learned: the reference set, and whether it is complete.
 ///
 /// The token matching above errs wide on purpose — a spurious "referenced"
 /// verdict costs bytes, never correctness. The I/O underneath it used to err
@@ -90,10 +89,9 @@ const SCAN_EXTENSIONS: &[&str] = &["html", "xml", "json", "js", "txt", "css", "s
 /// reference set authorizes MORE deletion. One unreadable page could therefore
 /// permit deleting every variant only that page referenced — and the
 /// deletion is persisted as a cross-build verdict, so recovery takes several
-/// builds. That is the mechanism behind an earlier incident on a real site
-/// (525 files deleted, 207 images 404-ing for real readers). Pruning saves
-/// bytes; deleting wrongly costs the
-/// site, so the scan reports its own blindness and the caller fails closed.
+/// builds. Pruning saves bytes; deleting wrongly costs the site, so the scan
+/// reports its own blindness and the caller fails closed.
+#[derive(Default)]
 pub struct ReferenceScan {
     pub tails: HashSet<String>,
     /// Each token resolved against the file it was found in, and nothing
@@ -193,75 +191,113 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
     // that on a plugin-authored reference. The patterns themselves live in
     // [`token_regexes`], the per-token work in [`collect_references`].
 
-    let mut referenced = HashSet::new();
-    let mut resolved_refs = HashSet::new();
-    let remembered = SCANNED.take(stage_dir).unwrap_or_default();
-    let mut kept = std::collections::HashMap::new();
-    let (files, mut unreadable) = walk_files(stage_dir);
-    for path in files {
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-            continue;
-        };
-        // Verified not a blind spot: `to_ascii_lowercase()` runs BEFORE the
-        // comparison, so `index.HTML` lowercases to "html" and matches the
-        // all-lowercase SCAN_EXTENSIONS list same as `index.html` would. A
-        // version of this check that compared `ext` against SCAN_EXTENSIONS
-        // without lowercasing first would silently skip an uppercase
-        // extension — that is not what this line does.
-        if !SCAN_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) {
-            continue;
+    let mut rescan = Rescan::new(&SCANNED, stage_dir);
+    rescan.read_tree(stage_dir);
+    rescan.finish()
+}
+
+/// Whether the scan reads a file of this name. The extension is lowercased
+/// first, so `index.HTML` is read like `index.html`.
+pub(crate) fn is_scanned(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| SCAN_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// One scan in progress, beside the references each file gave the last scan
+/// of the same kind. A long-lived process scans the same stage after every
+/// edit, and a file whose stat still vouches for that read is not read again.
+pub(crate) struct Rescan {
+    memo: &'static Memo,
+    stage_dir: PathBuf,
+    last: HashMap<RefsKey, FileRefs>,
+    kept: HashMap<RefsKey, FileRefs>,
+    scan: ReferenceScan,
+}
+
+impl Rescan {
+    fn new(memo: &'static Memo, stage_dir: &Path) -> Self {
+        let last = memo.take(stage_dir).unwrap_or_default();
+        Self { memo, stage_dir: stage_dir.to_path_buf(), last, kept: HashMap::new(), scan: ReferenceScan::default() }
+    }
+
+    /// A scan of what a sealed generation ships. It remembers apart from the
+    /// stage walk: the two alternate every build over different files, so one
+    /// memo would only ever hold the other's.
+    pub(crate) fn shipped(stage_dir: &Path) -> Self {
+        Self::new(&SHIPPED, stage_dir)
+    }
+
+    /// Read every scannable file under `dir`, which is the stage or a subtree
+    /// of it, each resolved against its path under the stage.
+    pub(crate) fn read_tree(&mut self, dir: &Path) {
+        let (files, unreadable) = walk_files(dir);
+        self.scan.unreadable.extend(unreadable);
+        for path in files.into_iter().filter(|p| is_scanned(p)) {
+            let doc = path.strip_prefix(&self.stage_dir).ok().and_then(|r| r.to_str()).map(|r| r.replace('\\', "/"));
+            if self.read_file(&path, doc.as_deref()).is_err() {
+                self.blind(path);
+            }
         }
-        // Two failures `read_to_string` used to conflate, kept apart because
-        // they mean opposite things for pruning. An I/O error is the scan's
-        // own blindness — the file may hold references it will never see — so
-        // it is reported and the caller declines to delete. Bytes that are not
-        // UTF-8 are not an I/O fault: nothing moss emits into a scannable
-        // extension is binary, so there is no reference to miss, and the file
-        // is skipped as before.
-        let stat = std::fs::symlink_metadata(&path).ok().map(|md| crate::build::stat::FileStat::of(&md));
-        let held = stat.as_ref().zip(remembered.get(&path)).filter(|(stat, file)| file.stat.vouches_for(stat, file.read_at));
+    }
+
+    /// Add `path`'s references, resolved against `doc`, its staging-relative
+    /// path. Bytes that are not UTF-8 add none: nothing moss emits into a
+    /// scannable extension is binary, so there is no reference to miss. A
+    /// read error is the caller's to judge (see [`Rescan::blind`]).
+    pub(crate) fn read_file(&mut self, path: &Path, doc: Option<&str>) -> std::io::Result<()> {
+        let key = (path.to_path_buf(), doc.map(str::to_owned));
+        let stat = std::fs::symlink_metadata(path).ok().map(|md| crate::build::stat::FileStat::of(&md));
+        let held = stat.as_ref().zip(self.last.remove(&key)).filter(|(stat, file)| file.stat.vouches_for(stat, file.read_at));
         if let Some((_, file)) = held {
-            referenced.extend(file.tails.iter().cloned());
-            resolved_refs.extend(file.resolved.iter().cloned());
-            kept.insert(path, file.clone());
-            continue;
+            self.scan.tails.extend(file.tails.iter().cloned());
+            self.scan.resolved.extend(file.resolved.iter().cloned());
+            self.kept.insert(key, file);
+            return Ok(());
         }
         let read_at = crate::build::stat::recording_clock();
         #[cfg(test)]
         FILES_READ.with(|n| n.set(n.get() + 1));
-        let text = match std::fs::read(&path) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(text) => text,
-                Err(_) => continue, // not text — nothing to extract
-            },
-            Err(_) => {
-                unreadable.push(path);
-                continue;
-            }
-        };
-        // Once per file, not once per token: the scanned file's own
-        // staging-relative path is what the second reading resolves against.
-        let doc = path
-            .strip_prefix(stage_dir)
-            .ok()
-            .and_then(|r| r.to_str())
-            .map(|r| r.replace('\\', "/"));
+        let bytes = std::fs::read(path)?;
         let (mut tails, mut resolved) = (HashSet::new(), HashSet::new());
-        collect_references(&text, doc.as_deref(), &mut tails, &mut resolved);
-        referenced.extend(tails.iter().cloned());
-        resolved_refs.extend(resolved.iter().cloned());
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            collect_references(text, doc, &mut tails, &mut resolved);
+        }
+        self.scan.tails.extend(tails.iter().cloned());
+        self.scan.resolved.extend(resolved.iter().cloned());
         if let Some(stat) = stat {
-            kept.insert(path, FileRefs { stat, read_at, tails: tails.into_iter().collect(), resolved: resolved.into_iter().collect() });
+            self.kept.insert(key, FileRefs { stat, read_at, tails: tails.into_iter().collect(), resolved: resolved.into_iter().collect() });
+        }
+        Ok(())
+    }
+
+    /// Add the references in bytes held in memory, which have no stat to
+    /// remember them by.
+    pub(crate) fn read_bytes(&mut self, doc: Option<&str>, bytes: &[u8]) {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            collect_references(text, doc, &mut self.scan.tails, &mut self.scan.resolved);
         }
     }
-    SCANNED.keep(stage_dir, kept);
-    ReferenceScan { tails: referenced, resolved: resolved_refs, unreadable }
+
+    /// A file the scan could not read: it may hold references the scan will
+    /// never see, so it is reported and the caller declines to delete.
+    pub(crate) fn blind(&mut self, path: PathBuf) {
+        self.scan.unreadable.push(path);
+    }
+
+    /// The scan's answer; what it read is remembered for the next scan of its
+    /// kind.
+    pub(crate) fn finish(self) -> ReferenceScan {
+        self.memo.keep(&self.stage_dir, self.kept);
+        self.scan
+    }
 }
 
-/// One scanned file's references and the stat they were read under. A
-/// long-lived process scans the same stage after every edit, and a file whose
-/// stat still vouches for that read is not read again.
-#[derive(Clone)]
+/// A file and the path its references were resolved against: one CAS blob
+/// ships under every key whose page has its bytes.
+type RefsKey = (PathBuf, Option<String>);
+
+/// One scanned file's references and the stat they were read under.
 struct FileRefs {
     stat: crate::build::stat::FileStat,
     read_at: Option<u64>,
@@ -275,7 +311,9 @@ thread_local! {
     pub(crate) static FILES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-static SCANNED: crate::build::cache::ProcessMemo<std::collections::HashMap<std::path::PathBuf, FileRefs>> = crate::build::cache::ProcessMemo::new(crate::build::cache::ROOTS);
+type Memo = crate::build::cache::ProcessMemo<HashMap<RefsKey, FileRefs>>;
+static SCANNED: Memo = Memo::new(crate::build::cache::ROOTS);
+static SHIPPED: Memo = Memo::new(crate::build::cache::ROOTS);
 
 /// The image references in one scanned file's `text`, read both ways
 /// [`extract_referenced_tails`] reads them, and unioned the same way —
