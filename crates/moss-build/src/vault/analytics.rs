@@ -366,6 +366,33 @@ mod tests {
     }
 
     #[test]
+    fn row_kind_fields_survive_the_log_and_older_rows_still_parse() {
+        let dir = TempDir::new().unwrap();
+        let engage: EventRow = serde_json::from_str(
+            r#"{"id":7,"ts":1,"path":"/a","referrer":null,"country":null,"browser":null,
+                "os":null,"screen":null,"utmSource":"news","utmMedium":"email",
+                "utmCampaign":"spring","event":null,"visitor":"v","kind":"engage",
+                "scroll":75,"visible":"10-30s"}"#,
+        )
+        .unwrap();
+        let older: EventRow = serde_json::from_str(
+            r#"{"id":8,"ts":2,"path":"/b","referrer":null,"country":null,"browser":null,
+                "os":null,"screen":null,"utmSource":null,"utmMedium":null,"event":null}"#,
+        )
+        .expect("a row from a server without row kinds must still parse");
+        assert_eq!(older.kind, None);
+        append_events(dir.path(), &[engage, older], 8).unwrap();
+
+        let contents = read_local_events(dir.path()).unwrap().unwrap();
+        let first: serde_json::Value =
+            serde_json::from_str(contents.lines().next().unwrap()).unwrap();
+        assert_eq!(first["kind"], "engage");
+        assert_eq!(first["scroll"], 75);
+        assert_eq!(first["visible"], "10-30s");
+        assert_eq!(first["utmCampaign"], "spring");
+    }
+
+    #[test]
     fn an_absent_log_is_absent_not_an_error() {
         let dir = TempDir::new().unwrap();
         // Nothing has ever synced. This is the ONE state that may render as an
@@ -400,6 +427,10 @@ mod tests {
             utm_medium: None,
             event: None,
             visitor: None,
+            utm_campaign: None,
+            kind: None,
+            scroll: None,
+            visible: None,
         }
     }
 

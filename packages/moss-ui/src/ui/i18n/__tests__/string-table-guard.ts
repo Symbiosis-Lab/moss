@@ -55,6 +55,10 @@ const GERMAN_IDENTICAL = [
   'chip.logo.label',
   'chip.layout.label',
   'chip.jury.label',
+  'analytics.section_downloads',
+  'analytics.visible_10_30s', // units and digits only
+  'analytics.visible_30s_2m',
+  'analytics.visible_2_10m',
   'versions.back_editor',
   'analytics.col_medium',
   'progress.details',

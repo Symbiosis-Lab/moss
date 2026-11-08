@@ -136,6 +136,15 @@ pub struct EventRow {
     /// Daily visitor code, a hash the server computes per reader and day.
     /// Rows written before the server carried it have none.
     pub visitor: Option<String>,
+    #[serde(rename = "utmCampaign")]
+    pub utm_campaign: Option<String>,
+    /// `pageview`, `click`, `engage`, `out` or `download`. Absent from servers
+    /// older than row kinds; readers then take a null `event` as a pageview.
+    pub kind: Option<String>,
+    /// Engage rows only: deepest quarter of the page reached (25 to 100).
+    pub scroll: Option<u8>,
+    /// Engage rows only: time on screen as a range, such as `10-30s`.
+    pub visible: Option<String>,
 }
 
 /// Response from GET /api/sites/{id}/events (batch of raw events for delta sync).
