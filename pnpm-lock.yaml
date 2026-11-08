@@ -134,12 +134,6 @@ importers:
       '@leeoniya/ufuzzy':
         specifier: 1.0.19
         version: 1.0.19
-      '@symbiosis-lab/moss-blueprint-grid':
-        specifier: workspace:*
-        version: link:../moss-blueprint-grid
-      '@symbiosis-lab/moss-syntax':
-        specifier: workspace:*
-        version: link:../moss-syntax
     devDependencies:
       '@codemirror/autocomplete':
         specifier: ^6.20.3
@@ -186,6 +180,12 @@ importers:
       '@lezer/markdown':
         specifier: ^1.7.2
         version: 1.7.2
+      '@symbiosis-lab/moss-blueprint-grid':
+        specifier: workspace:*
+        version: link:../moss-blueprint-grid
+      '@symbiosis-lab/moss-syntax':
+        specifier: workspace:*
+        version: link:../moss-syntax
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
