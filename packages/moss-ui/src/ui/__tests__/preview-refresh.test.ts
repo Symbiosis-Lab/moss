@@ -105,46 +105,15 @@ describe("Preview refresh visual feedback", () => {
     expect(pill.classList.contains("refreshing")).toBe(true);
   });
 
-  test("repeated refresh re-triggers the flash (class removed and re-added)", async () => {
+  test("repeated refresh re-triggers the flash, however close together", async () => {
     const pill = document.querySelector(".moss-nav-pill")!;
 
-    // refresh() coalesces a second call within REFRESH_COALESCE_MS, so to
-    // exercise a genuine RE-trigger (flashPill removes then re-adds the class)
-    // the two refreshes must be spaced past that window. Drive Date.now() via
-    // fake timers (the mocked hairline fires the flash synchronously, so no real
-    // timer is involved in the flash itself).
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(1_000_000);
-      await previewManager.refresh();
-      expect(pill.classList.contains("refreshing")).toBe(true);
-      pill.classList.remove("refreshing"); // prove the next flash re-adds it
+    await previewManager.refresh();
+    expect(pill.classList.contains("refreshing")).toBe(true);
+    pill.classList.remove("refreshing"); // prove the next flash re-adds it
 
-      vi.setSystemTime(1_000_500); // past the coalesce window → applies again
-      await previewManager.refresh();
-      expect(pill.classList.contains("refreshing")).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("a second refresh within the coalesce window is skipped", async () => {
-    const pill = document.querySelector(".moss-nav-pill")!;
-
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(2_000_000);
-      await previewManager.refresh();
-      expect(pill.classList.contains("refreshing")).toBe(true);
-      pill.classList.remove("refreshing");
-
-      // Within the window → coalesced → flashPill never runs → class stays off.
-      vi.setSystemTime(2_000_100);
-      await previewManager.refresh();
-      expect(pill.classList.contains("refreshing")).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    await previewManager.refresh();
+    expect(pill.classList.contains("refreshing")).toBe(true);
   });
 
   test("refresh does not throw when the nav pill is absent", async () => {

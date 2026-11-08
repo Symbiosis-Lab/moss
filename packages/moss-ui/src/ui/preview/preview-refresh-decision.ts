@@ -9,10 +9,10 @@ import { extractPathFromUrl } from './path-matcher';
 /** What began a refresh decision — `PreviewManager.refresh()`'s own `source`
  *  values, plus `newPageWait-recheck` for the `handleFileChangeEvent` branch
  *  that reloads the awaited page directly instead of running smart-diff. */
-export type RefreshTrigger = 'file-changed' | 'build-complete' | 'other' | 'newPageWait-recheck';
+export type RefreshTrigger = 'file-changed' | 'other' | 'newPageWait-recheck';
 
 /** How a refresh decision resolved — logged once per decision so a release
- *  log, which otherwise says nothing about morph/coalescing, can name the
+ *  log, which otherwise says nothing about morph or reload, can name the
  *  broken link behind a stale pane. */
 export type RefreshOutcome =
   | 'morph-applied'
@@ -20,8 +20,6 @@ export type RefreshOutcome =
   | 'reload'
   | 'iframe-nav-fallback'
   | 'deferred(first navigation)'
-  | 'coalesced'
-  | 'trailing-armed'
   | 'skipped(no page)'
   | 'skipped(navigation pending)'
   | 'none(page unaffected)'
@@ -30,9 +28,9 @@ export type RefreshOutcome =
   | 'page-recheck';
 
 /** What a decision compared against. `action` is `getFileChangeAction`'s
- *  verdict, or a stand-in (`'recheck'`) for the newPageWait
- *  branch, which bypasses smart-diff; `'refresh'` for a direct
- *  build-complete/other call. `path` is the currentPath compared against.
+ *  verdict, `'reload-linked'` when the event named a file the page loads, or a
+ *  stand-in (`'recheck'`) for the newPageWait branch, which bypasses
+ *  smart-diff; `'refresh'` for a direct call. `path` is the currentPath compared against.
  *  `changedCount` is `changed_output_files.length`, 0 for a call with no
  *  event of its own. */
 export interface RefreshDecisionContext {
@@ -52,7 +50,8 @@ export function formatRefreshDecisionLine(
 }
 
 /** Decision context for a `refresh()` call with no smart-diff verdict of its
- *  own (`build-complete`, the redirect/rename `'other'` fallbacks). */
+ *  own (the deferred first-navigation refresh, the redirect/rename `'other'`
+ *  fallbacks). */
 export function implicitRefreshContext(currentUrl: string | null): RefreshDecisionContext {
   return { action: 'refresh', path: currentUrl ? extractPathFromUrl(currentUrl) : null, changedCount: 0 };
 }

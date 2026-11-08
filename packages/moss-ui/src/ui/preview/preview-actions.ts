@@ -83,6 +83,49 @@ export function getFileChangeAction(
 }
 
 /**
+ * The elements whose URLs a page loads. A FileChanged that names none of the
+ * shown page's own outputs may still name one of these: a stylesheet, script
+ * or image the build copied in after it showed the page.
+ */
+export const LINKED_SELECTOR =
+  'link[href],script[src],img[src],img[srcset],source[src],source[srcset],video[src],video[poster],audio[src],iframe[src],embed[src],object[data]';
+
+const URL_ATTRIBUTES = ['href', 'src', 'srcset', 'poster', 'data'];
+
+/**
+ * The site-root-relative paths (no leading slash, the form
+ * `changed_output_files` uses) of every URL in `elements`' attributes,
+ * resolved against `pageUrl`. Off-site URLs are left out, and so is what a
+ * stylesheet loads itself (`url()`, `@import`, fonts): a change to one of
+ * those refreshes the page only through its stylesheet's own change.
+ */
+export function linkedPaths(elements: ReadonlyArray<{ attributes: Record<string, string> }>, pageUrl: string): Set<string> {
+  const origin = new URL(pageUrl).origin;
+  const paths = new Set<string>();
+  for (const { attributes } of elements) {
+    for (const name of URL_ATTRIBUTES) {
+      const value = attributes[name];
+      if (!value) continue;
+      const urls = name === 'srcset' ? value.split(',').map((c) => c.trim().split(/\s+/)[0] ?? '') : [value];
+      for (const url of urls) {
+        try {
+          const resolved = new URL(url, pageUrl);
+          if (resolved.origin === origin) paths.add(decodeURIComponent(resolved.pathname).replace(/^\//, ''));
+        } catch {
+          // Not a URL: nothing it loads can have changed.
+        }
+      }
+    }
+  }
+  return paths;
+}
+
+/** Output files `event` names that are not pages: the ones a page can load. */
+export function changedNonPages(event: FileChangeEvent): string[] {
+  return (event.changed_output_files ?? []).filter((path) => !path.endsWith('.html'));
+}
+
+/**
  * Check if a file change event has any changes that might affect the preview.
  *
  * @param event - File change event from backend

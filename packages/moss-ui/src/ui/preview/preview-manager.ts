@@ -29,7 +29,7 @@ import { eventBus, Events, type DeployProgressEvent } from '../context/event-bus
 import { ProgressSeam } from './progress/progress-seam';
 import { NavigationManager, type ActivePage, type NavigationResultInfo } from "./navigation-manager";
 import { PreviewState, PreviewStatus, resolveUnshowableReason, type UnshowableReason } from "./preview-state";
-import { getFileChangeAction, decideNewPageWait, type NewPageWaitState, FileChangeEvent } from "./preview-actions";
+import { getFileChangeAction, decideNewPageWait, type NewPageWaitState, FileChangeEvent, LINKED_SELECTOR, linkedPaths, changedNonPages } from "./preview-actions";
 import { extractPathFromUrl, sourcePathToHtmlPath } from "./path-matcher";
 import { withShellMarker } from "./shell-marker";
 import { BuildSingleflight } from "./build-singleflight";
@@ -164,16 +164,8 @@ export class PreviewManager {
    * timers). Its dot is driven solely by the panel's advisory-presence callback
    * (the panel is the single owner of "is there an advisory"). */
   private readonly seam = new ProgressSeam();
-  /** Timestamp of the last refresh() that actually ran (for double-fire coalescing). */
-  private lastRefreshAt = 0;
-  /** A terminal build can finish before the first bridge has loaded. */
+  /** A FileChanged can arrive before the first bridge has loaded. */
   private refreshAfterFirstNavigation = false;
-  /**
-   * Trailing-edge follow-up for a refresh() call coalesced away by
-   * REFRESH_COALESCE_MS. At most one is ever pending — see
-   * `refresh()` for why a wall-clock window must not silently drop a call.
-   */
-  private trailingRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTargetFile: string | null = null;
   /** Preserve bridge navigation order across asynchronous Tauri invokes. */
   private previewRequirementDispatch: Promise<void> = Promise.resolve();
@@ -992,10 +984,11 @@ export class PreviewManager {
     // BuildComplete fires NO toast — videos_converted is a routine ambient
     // success; symlink-skip warnings surface on the hairline dot via a
     // BackgroundProgress advisory emitted by the Rust backend (pipeline.rs).
+    // It never refreshes the page on screen: FileChanged names every output
+    // when its bytes become servable, including what the background copies
+    // in after the show. A page still being waited for is rechecked.
     await onMossEvent("BuildComplete", (_msg) => {
-      // Reload preview to pick up background-copied assets (images, HTML, JS)
       if (this.newPageWait) this.handleFileChangeEvent(null);
-      else this.refresh('build-complete');
     });
 
     // Bug 1: drive the nav-pill hairline from the media-conversion BACKGROUND
@@ -1847,15 +1840,6 @@ export class PreviewManager {
     }
   }
 
-  /**
-   * Coalesce window for refresh(). One rebuild emits FileChanged AND
-   * BuildComplete; both call refresh(). Skip a refresh landing within this many
-   * ms of the previous one so the rapid pair becomes one morph. Kept BELOW the
-   * 250ms watcher debounce so two distinct rebuilds are never merged, yet a
-   * genuinely-later BuildComplete (after async asset encoding) still refreshes.
-   */
-  private static readonly REFRESH_COALESCE_MS = 200;
-
   /** Emit the one `[preview-refresh]` INFO line for a decision, at the point it's final. */
   private logRefreshDecision(trigger: RefreshTrigger, ctx: RefreshDecisionContext, outcome: RefreshOutcome): void {
     void info(formatRefreshDecisionLine(trigger, ctx, outcome));
@@ -1866,65 +1850,29 @@ export class PreviewManager {
    * Uses in-place reload via RPC (preserves scroll position),
    * falling back to cache-busting iframe.src for non-HTML content.
    *
+   * Every call runs: each FileChanged names an output once per change of its
+   * bytes, so two calls close together are two real changes.
+   *
    * @param source Which signal triggered this call (default `'other'` for the
-   *   redirect/rename fallback call sites). Only used to decide whether a
-   *   call coalesced away by REFRESH_COALESCE_MS is worth a trailing-edge
-   *   follow-up — see the coalescing block below.
+   *   redirect/rename fallback call sites).
    * @param diffContext The smart-diff decision behind this call, for `[preview-refresh]`.
+   * @param reloadOnly Skip the morph: a file the page loads changed under the
+   *   same URL, and a morph keeps the elements that loaded the old bytes.
    */
-  async refresh(source: 'file-changed' | 'build-complete' | 'other' = 'other', diffContext?: RefreshDecisionContext): Promise<void> {
+  async refresh(source: 'file-changed' | 'other' = 'other', diffContext?: RefreshDecisionContext, reloadOnly = false): Promise<void> {
     if (this.newPageWait) return;
     const request = this.navigationManager.getRequestRevision();
     const isCurrent = () => request === this.navigationManager.getRequestRevision();
     const ctx = diffContext ?? implicitRefreshContext(this.navigationManager.getCurrentUrl());
-    // A contentWindow exists before its bridge. Keep the terminal refresh
-    // until that bridge announces navigation, rather than sending an RPC
-    // nobody can answer and spending the morph timeout. Early preview may
-    // contain the preceding generation, so the terminal refresh is retained.
-    if (source === 'build-complete' && !this.navigationManager.getActivePage()) {
+    // A contentWindow exists before its bridge. Keep the refresh until that
+    // bridge announces navigation, rather than sending an RPC nobody can
+    // answer and spending the morph timeout: the page may have started
+    // loading before the render it would show.
+    if (source === 'file-changed' && !this.navigationManager.getActivePage()) {
       this.refreshAfterFirstNavigation = true;
       this.logRefreshDecision(source, ctx, 'deferred(first navigation)');
       return;
     }
-
-    // Coalesce the double-fire: one rebuild emits BOTH FileChanged
-    // (preview-manager listener) AND BuildComplete, each calling refresh() —
-    // two same-origin fetches, two morphs and two pill flashes per edit. Skip
-    // a refresh that lands within REFRESH_COALESCE_MS of the previous one. The
-    // window (< the 250ms watcher debounce) merges the rapid FileChanged+
-    // BuildComplete pair of a TEXT edit (1 morph), while a genuinely-later
-    // BuildComplete after async asset encoding (seconds) is NOT coalesced — so
-    // image-adding edits still get the placeholder→real-asset refresh. Distinct
-    // rebuilds are >=250ms apart (debounce) so they are never merged.
-    //
-    // A COALESCED FileChanged must not be silently lost. FileChanged carries a
-    // real smart-diff decision; BuildComplete carries none — it fires on EVERY
-    // rebuild of EVERY site (`BuildTerminalBarrier`, the single post-join
-    // point), so a plain unrelated text edit routinely produces a
-    // FileChanged+BuildComplete pair. Arming a trailing follow-up for every
-    // coalesced call would turn that routine pair into a second flash/morph
-    // ~200ms later. So only a coalesced FileChanged (or a direct 'other'
-    // caller — redirect/rename fallbacks, which also represent a real state
-    // change) arms the trailing timer; a coalesced BuildComplete-only
-    // duplicate is dropped (it never carries a diff, and a later one outside
-    // the window still refreshes). This covers the back-to-back-rebuild race:
-    // an image lands as its own rebuild, then the edit referencing it
-    // autosaves ~800ms later, and its real FileChanged can land within 200ms
-    // of the first rebuild's BuildComplete.
-    const now = Date.now();
-    const elapsed = now - this.lastRefreshAt;
-    if (elapsed < PreviewManager.REFRESH_COALESCE_MS) {
-      const arm = source !== 'build-complete' && this.trailingRefreshTimer === null;
-      if (arm) {
-        this.trailingRefreshTimer = setTimeout(() => {
-          this.trailingRefreshTimer = null;
-          if (isCurrent()) void this.refresh('file-changed', ctx);
-        }, PreviewManager.REFRESH_COALESCE_MS - elapsed);
-      }
-      this.logRefreshDecision(source, ctx, arm ? 'trailing-armed' : 'coalesced');
-      return;
-    }
-    this.lastRefreshAt = now;
 
     // A rebuild produced changes, so the hairline accompanies a morph/reload
     // is about to apply. Cancel the no-change fallback so the bar instead
@@ -1940,7 +1888,7 @@ export class PreviewManager {
     // to reload() below, so behavior never regresses when the morph misfires.
     let outcome: RefreshOutcome | undefined, morphAttempted = false;
     const yielded = this.navigationManager.isNavigationPending();
-    if (PreviewManager.isMorphEnabled()) {
+    if (PreviewManager.isMorphEnabled() && !reloadOnly) {
       morphAttempted = true;
       diagCount('preview.morph');
       if (await this.navigationManager.morph()) outcome = 'morph-applied';
@@ -2054,10 +2002,44 @@ export class PreviewManager {
     // 'redirect-home'/'update-url' log from their own handler's success
     // branch, because each has a fallback (no known URL) that calls
     // refresh() itself — logging here too would double it.
+    const nonPages = changeEvent ? changedNonPages(changeEvent) : [];
+    if ((action.type === 'none' || action.type === 'refresh') && nonPages.length > 0) {
+      void this.reloadIfLinked(nonPages, ctx, action.type === 'refresh');
+      return;
+    }
     if (action.type === 'none') this.logRefreshDecision('file-changed', ctx, 'none(page unaffected)');
 
     // Execute the action
     this.executeFileChangeAction(action, ctx);
+  }
+
+  /**
+   * Reload the page when `changed` names a file it loads: a stylesheet, a
+   * script or an image the build copied in after it showed the page. Those keep
+   * their URLs, so only a reload fetches the new bytes (the preview serves
+   * them `no-cache`); a morph would keep the elements holding the old ones,
+   * even when the same event also names the page. Otherwise the page itself
+   * is refreshed if `pageChanged`. A page save that also changes a feed or
+   * the sitemap therefore waits one bridge round trip before its morph (the
+   * RPC timeout, on a page whose bridge does not answer).
+   */
+  private async reloadIfLinked(changed: string[], ctx: RefreshDecisionContext, pageChanged: boolean): Promise<void> {
+    const pageUrl = this.navigationManager.getCurrentUrl();
+    const request = this.navigationManager.getRequestRevision();
+    let elements: Array<{ attributes: Record<string, string> }> = [];
+    try {
+      elements = (await this.navigationManager.callBridge('document.querySelectorAll', LINKED_SELECTOR)) as typeof elements;
+    } catch {
+      // No bridge (non-HTML content): nothing on screen links anything.
+    }
+    if (request !== this.navigationManager.getRequestRevision()) return;
+    const linked = pageUrl ? linkedPaths(elements, pageUrl) : new Set<string>();
+    if (!changed.some((path) => linked.has(path))) {
+      if (pageChanged) void this.refresh('file-changed', ctx);
+      else this.logRefreshDecision('file-changed', ctx, 'none(page unaffected)');
+      return;
+    }
+    void this.refresh('file-changed', { ...ctx, action: 'reload-linked' }, true);
   }
 
   /**
@@ -2129,10 +2111,6 @@ export class PreviewManager {
     this.homeGateUnlisten = null;
     this.folderHealthUnlisten?.();
     this.folderHealthUnlisten = null;
-    if (this.trailingRefreshTimer !== null) {
-      clearTimeout(this.trailingRefreshTimer);
-      this.trailingRefreshTimer = null;
-    }
     // Reset so a reused instance (window re-init) starts the next deploy's bar
     // cleanly even if a prior deploy was abandoned before complete/failed.
     this.uploadingStarted = false;
@@ -2185,7 +2163,7 @@ export class PreviewManager {
   private onNavigationResult(info: NavigationResultInfo): void {
     if (this.refreshAfterFirstNavigation) {
       this.refreshAfterFirstNavigation = false;
-      void this.refresh('build-complete');
+      void this.refresh('file-changed');
     }
     if (!this.newPageWait) return;
     // info.url is already shell-marker-stripped by NavigationManager (see

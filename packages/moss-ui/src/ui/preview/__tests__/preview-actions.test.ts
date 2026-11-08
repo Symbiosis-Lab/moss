@@ -1,10 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, test, expect } from 'vitest';
 import {
   getFileChangeAction,
   hasAnyChanges,
   decideNewPageWait,
   FileChangeEvent,
   NewPageWaitState,
+  linkedPaths,
+  changedNonPages,
 } from '../preview-actions';
 
 // Helper: bindings-generated FileChangeEvent requires all four fields
@@ -334,4 +336,40 @@ describe('the new-page wait', () => {
     });
   });
 
+});
+
+describe('linkedPaths', () => {
+  const page = 'http://localhost:3000/blog/post.html';
+
+  test('resolves every URL attribute against the page, srcset candidates included', () => {
+    const paths = linkedPaths([
+      { attributes: { rel: 'stylesheet', href: '../notes/handout.css' } },
+      { attributes: { src: '/_moss/js/theme.abc.js' } },
+      { attributes: { srcset: 'photo.w800.webp 800w, photo.w1600.webp 1600w' } },
+      { attributes: { poster: 'clip.thumb.jpg?_t=5' } },
+    ], page);
+    expect([...paths].sort()).toEqual([
+      '_moss/js/theme.abc.js',
+      'blog/clip.thumb.jpg',
+      'blog/photo.w1600.webp',
+      'blog/photo.w800.webp',
+      'notes/handout.css',
+    ]);
+  });
+
+  test('decodes percent-encoded segments, as changed_output_files are not encoded', () => {
+    const paths = linkedPaths([{ attributes: { src: '%E9%97%9C%E6%96%BC/%E9%A0%AD%E5%83%8F.webp' } }], 'http://localhost:3000/');
+    expect([...paths]).toEqual(['關於/頭像.webp']);
+  });
+
+  test('leaves out off-site URLs', () => {
+    expect(linkedPaths([{ attributes: { href: 'https://fonts.example.com/a.css' } }], page).size).toBe(0);
+  });
+});
+
+describe('changedNonPages', () => {
+  test('keeps the outputs a page can load, not pages', () => {
+    expect(changedNonPages({ changed_output_files: ['index.html', 'notes/handout.css', 'rss.xml'] } as FileChangeEvent))
+      .toEqual(['notes/handout.css', 'rss.xml']);
+  });
 });

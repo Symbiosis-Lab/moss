@@ -1374,12 +1374,11 @@ describe('PreviewManager', () => {
       expect(mockIframe.src).toBe('about:blank');
     });
 
-    test('refresh coalesces a rapid second call', async () => {
-      // One rebuild emits FileChanged AND BuildComplete; both call refresh().
-      // A second refresh within REFRESH_COALESCE_MS (200ms) must be skipped so
-      // the rapid pair becomes a single update. Morph + reload return false in
-      // this mock, so an APPLIED refresh is observable as a new `?_t=` on the
-      // iframe; a COALESCED one returns before touching the iframe.
+    test('two refreshes close together both apply: each FileChanged is its own change', async () => {
+      // The engine names each output once per change of its bytes, so a
+      // second FileChanged 100ms after the first is a second edit, not a
+      // duplicate. Morph + reload return false in this mock, so an applied
+      // refresh is observable as a new `?_t=` on the iframe.
       vi.useFakeTimers();
       try {
         mockNavState.currentUrl = 'http://localhost:3000/post.html';
@@ -1387,97 +1386,11 @@ describe('PreviewManager', () => {
 
         vi.setSystemTime(1_000_000);
         await previewManager.refresh();
-        const afterFirst = mockIframe.src;
-        expect(afterFirst).toMatch(/\?_t=1000000/); // first refresh applied
+        expect(mockIframe.src).toMatch(/\?_t=1000000/);
 
-        // Within the window → coalesced → iframe untouched.
         vi.setSystemTime(1_000_100);
         await previewManager.refresh();
-        expect(mockIframe.src).toBe(afterFirst);
-
-        // Past the window → applies again (a distinct rebuild).
-        vi.setSystemTime(1_000_300);
-        await previewManager.refresh();
-        expect(mockIframe.src).not.toBe(afterFirst);
-        expect(mockIframe.src).toMatch(/\?_t=1000300/);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    test('a coalesced FileChanged is not lost — trailing-edge refresh fires once the window closes', async () => {
-      // Residual documented at the REFRESH_COALESCE_MS guard: a back-to-back
-      // rebuild pair (an image lands as its own rebuild, then the edit
-      // referencing it autosaves ~800ms later as a second rebuild) can have
-      // the FIRST rebuild's BuildComplete apply, then the SECOND rebuild's
-      // real, content-carrying FileChanged land within 200ms of it and get
-      // coalesced away. That must not be lost forever — it must still
-      // surface once the window elapses, without requiring the caller to
-      // invoke refresh() again. Before the fix, the coalesced call just
-      // `return`s and nothing else ever re-applies it, so the preview stays
-      // stale until some LATER, unrelated edit happens to refresh outside
-      // the window.
-      vi.useFakeTimers();
-      try {
-        mockNavState.currentUrl = 'http://localhost:3000/post.html';
-        mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
-        mockIframe.src = 'http://localhost:3000';
-
-        vi.setSystemTime(1_000_000);
-        await previewManager.refresh('build-complete'); // rebuild N's phantom signal applies
-        const afterFirst = mockIframe.src;
-        expect(afterFirst).toMatch(/\?_t=1000000/);
-
-        // rebuild N+1's real FileChanged lands inside the coalesce window —
-        // coalesced exactly like the double-fire test above (iframe
-        // untouched, synchronously).
-        vi.setSystemTime(1_000_100);
-        await previewManager.refresh('file-changed');
-        expect(mockIframe.src).toBe(afterFirst);
-
-        // No THIRD call is ever made by application code — the only way the
-        // second call's update can surface is a trailing-edge refresh that
-        // preview-manager itself schedules. Advance real (faked) time past
-        // the window's close with no further refresh() calls.
-        await vi.advanceTimersByTimeAsync(150);
-
-        expect(mockIframe.src).not.toBe(afterFirst);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    test('a coalesced BuildComplete-only duplicate stays dropped — no trailing refresh (no double-flash regression)', async () => {
-      // The common case on any site with video content: dispatch_video_
-      // conversions runs on EVERY rebuild once the site has ANY video
-      // anywhere (regardless of what this edit touched), so a plain,
-      // unrelated text edit routinely produces a FileChanged+BuildComplete
-      // pair. Coalescing must NOT arm a trailing follow-up for a coalesced
-      // BuildComplete — BuildComplete carries no diff of its own, so losing
-      // a duplicate that lands milliseconds after a FileChanged that just
-      // applied is always safe. Arming one anyway would reintroduce a
-      // second flash/morph ~200ms after every such edit: a double morph, which the
-      // coalescing window exists to prevent, just spread out in time.
-      vi.useFakeTimers();
-      try {
-        mockNavState.currentUrl = 'http://localhost:3000/post.html';
-        mockIframe.src = 'http://localhost:3000';
-
-        vi.setSystemTime(1_000_000);
-        await previewManager.refresh('file-changed'); // the real edit applies
-        const afterFirst = mockIframe.src;
-        expect(afterFirst).toMatch(/\?_t=1000000/);
-
-        // The SAME rebuild's BuildComplete lands inside the window — coalesced.
-        vi.setSystemTime(1_000_100);
-        await previewManager.refresh('build-complete');
-        expect(mockIframe.src).toBe(afterFirst);
-
-        // No trailing follow-up should ever fire for this — advance well
-        // past the window and confirm the iframe never changes again.
-        await vi.advanceTimersByTimeAsync(300);
-
-        expect(mockIframe.src).toBe(afterFirst);
+        expect(mockIframe.src).toMatch(/\?_t=1000100/);
       } finally {
         vi.useRealTimers();
       }
@@ -1978,7 +1891,7 @@ describe('PreviewManager', () => {
   });
 
   // A release build logs at INFO only, and until this line existed every part
-  // of the refresh path — the smart-diff verdict, refresh()'s coalescing, and
+  // of the refresh path — the smart-diff verdict and
   // whether morph/reload/fallback actually applied — logged at DEBUG or not
   // at all. So a "preview didn't update" report from a release log could
   // never say which link broke. These tests pin the one `[preview-refresh]`
@@ -1990,17 +1903,17 @@ describe('PreviewManager', () => {
       mockNavState.currentUrl = null;
     });
 
-    test('terminal builds wait for the first bridge navigation before requesting a morph', async () => {
+    test('a FileChanged before the first bridge navigation waits for it before requesting a morph', async () => {
       const nav = (previewManager as any).navigationManager;
       const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
       nav.beginNavigation('http://localhost:8080/');
       expect(nav.getCurrentUrl()).toBe('http://localhost:8080/');
       expect(nav.getActivePage()).toBeNull();
-      await previewManager.refresh('build-complete');
-      await previewManager.refresh('build-complete');
+      await previewManager.refresh('file-changed');
+      await previewManager.refresh('file-changed');
       expect(morph).not.toHaveBeenCalled();
       expect(vi.mocked(info)).toHaveBeenCalledWith(
-        '[preview-refresh] trigger=build-complete action=refresh path=index.html changed=0 outcome=deferred(first navigation)',
+        '[preview-refresh] trigger=file-changed action=refresh path=index.html changed=0 outcome=deferred(first navigation)',
       );
       mockNavState.currentUrl = 'http://localhost:8080/';
       mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
@@ -2010,16 +1923,16 @@ describe('PreviewManager', () => {
       expect(morph).toHaveBeenCalledTimes(1);
     });
 
-    test('switching folders discards a terminal refresh from the predecessor', async () => {
-      await previewManager.refresh('build-complete');
+    test('switching folders discards a refresh waiting on the predecessor', async () => {
+      await previewManager.refresh('file-changed');
       expect((previewManager as any).refreshAfterFirstNavigation).toBe(true);
       (buildWithProgress as any).mockResolvedValue('success');
       await previewManager.startBuild('/folder/next', true);
       expect((previewManager as any).refreshAfterFirstNavigation).toBe(false);
     });
 
-    test('destroy discards a terminal refresh waiting for the first navigation', async () => {
-      await previewManager.refresh('build-complete');
+    test('destroy discards a refresh waiting for the first navigation', async () => {
+      await previewManager.refresh('file-changed');
       expect((previewManager as any).refreshAfterFirstNavigation).toBe(true);
       previewManager.destroy();
       expect((previewManager as any).refreshAfterFirstNavigation).toBe(false);
@@ -2027,6 +1940,7 @@ describe('PreviewManager', () => {
 
     test('a FileChanged affecting the current page: morph lands → outcome=morph-applied', async () => {
       mockNavState.currentUrl = 'http://localhost:3000/blog/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
       vi.spyOn((previewManager as any).navigationManager, 'morph').mockResolvedValue(true);
       const refreshSpy = vi.spyOn(previewManager, 'refresh');
 
@@ -2050,57 +1964,76 @@ describe('PreviewManager', () => {
       );
     });
 
-    test('a BuildComplete duplicate landing inside the coalesce window → outcome=coalesced', async () => {
-      // One rebuild's real FileChanged applies,
-      // then the same rebuild's BuildComplete lands milliseconds later and
-      // must be dropped silently (never a trailing follow-up of its own —
-      // see the "trailing-armed" test below for the case that DOES arm one).
-      vi.useFakeTimers();
-      try {
-        mockNavState.currentUrl = 'http://localhost:3000/post.html';
-        mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
-        vi.setSystemTime(1_000_000);
-        await previewManager.refresh('file-changed');
+    test('a FileChanged naming a stylesheet the page links reloads it, with no morph → action=reload-linked', async () => {
+      mockNavState.currentUrl = 'http://localhost:3000/blog/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
+      const nav = (previewManager as any).navigationManager;
+      const callBridge = vi.spyOn(nav, 'callBridge').mockResolvedValue([
+        // Absolute: this file's MockURL ignores a base (relative URLs are
+        // resolved in preview-actions.test.ts against the real URL).
+        { attributes: { rel: 'stylesheet', href: 'http://localhost:3000/notes/handout.css' } },
+      ]);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      vi.spyOn(nav, 'reload').mockResolvedValue(true);
 
-        vi.setSystemTime(1_000_100);
-        await previewManager.refresh('build-complete');
+      (previewManager as any).handleFileChangeEvent({ changed_output_files: ['notes/handout.css', 'sitemap.xml'] });
 
-        expect(vi.mocked(info)).toHaveBeenCalledWith(
-          '[preview-refresh] trigger=build-complete action=refresh path=post.html changed=0 outcome=coalesced',
-        );
-      } finally {
-        vi.useRealTimers();
-      }
+      await vi.waitFor(() => expect(vi.mocked(info)).toHaveBeenCalledWith(
+        '[preview-refresh] trigger=file-changed action=reload-linked path=blog/post.html changed=2 outcome=reload',
+      ));
+      expect(callBridge).toHaveBeenCalledWith('document.querySelectorAll', expect.stringContaining('link[href]'));
+      expect(morph).not.toHaveBeenCalled();
     });
 
-    test('a FileChanged duplicate landing inside the coalesce window arms a trailing refresh → outcome=trailing-armed, then resolves', async () => {
-      vi.useFakeTimers();
-      try {
-        mockNavState.currentUrl = 'http://localhost:3000/post.html';
-        vi.setSystemTime(1_000_000);
-        await previewManager.refresh('file-changed');
+    test('a FileChanged naming only files the page does not load → outcome=none(page unaffected)', async () => {
+      mockNavState.currentUrl = 'http://localhost:3000/blog/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
+      const nav = (previewManager as any).navigationManager;
+      const callBridge = vi.spyOn(nav, 'callBridge').mockResolvedValue([{ attributes: { href: 'http://localhost:3000/notes/handout.css' } }]);
+      const refreshSpy = vi.spyOn(previewManager, 'refresh');
 
-        vi.setSystemTime(1_000_100);
-        await previewManager.refresh('file-changed'); // coalesced away, but not lost
+      (previewManager as any).handleFileChangeEvent({ changed_output_files: ['rss.xml', 'sitemap.xml'] });
 
-        expect(vi.mocked(info)).toHaveBeenCalledWith(
-          '[preview-refresh] trigger=file-changed action=refresh path=post.html changed=0 outcome=trailing-armed',
-        );
+      await vi.waitFor(() => expect(vi.mocked(info)).toHaveBeenCalledWith(
+        '[preview-refresh] trigger=file-changed action=none path=blog/post.html changed=2 outcome=none(page unaffected)',
+      ));
+      expect(callBridge).toHaveBeenCalled();
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
 
-        vi.mocked(info).mockClear();
-        await vi.advanceTimersByTimeAsync(150); // past the window's close
+    test('an event naming the page and a stylesheet it loads reloads rather than morphs, so the stylesheet is fetched again', async () => {
+      mockNavState.currentUrl = 'http://localhost:3000/blog/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
+      const nav = (previewManager as any).navigationManager;
+      vi.spyOn(nav, 'callBridge').mockResolvedValue([{ attributes: { href: 'http://localhost:3000/_moss/theme/style.css' } }]);
+      const morph = vi.spyOn(nav, 'morph').mockResolvedValue(true);
+      vi.spyOn(nav, 'reload').mockResolvedValue(true);
 
-        // The trailing follow-up is itself a full decision with its own outcome.
-        expect(vi.mocked(info)).toHaveBeenCalledWith(
-          '[preview-refresh] trigger=file-changed action=refresh path=post.html changed=0 outcome=iframe-nav-fallback',
-        );
-      } finally {
-        vi.useRealTimers();
-      }
+      (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html', '_moss/theme/style.css'] });
+
+      await vi.waitFor(() => expect(vi.mocked(info)).toHaveBeenCalledWith(
+        '[preview-refresh] trigger=file-changed action=reload-linked path=blog/post.html changed=2 outcome=reload',
+      ));
+      expect(morph).not.toHaveBeenCalled();
+    });
+
+    test('an event naming the page and files it does not load morphs the page', async () => {
+      mockNavState.currentUrl = 'http://localhost:3000/blog/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
+      const nav = (previewManager as any).navigationManager;
+      vi.spyOn(nav, 'callBridge').mockResolvedValue([]);
+      vi.spyOn(nav, 'morph').mockResolvedValue(true);
+
+      (previewManager as any).handleFileChangeEvent({ changed_output_files: ['blog/post.html', 'rss.xml'] });
+
+      await vi.waitFor(() => expect(vi.mocked(info)).toHaveBeenCalledWith(
+        '[preview-refresh] trigger=file-changed action=refresh path=blog/post.html changed=2 outcome=morph-applied',
+      ));
     });
 
     test('morph fails, RPC reload lands → outcome=morph-failed→reload', async () => {
       mockNavState.currentUrl = 'http://localhost:3000/post.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
       vi.spyOn((previewManager as any).navigationManager, 'reload').mockResolvedValue(true);
 
       await previewManager.refresh('file-changed');
@@ -2113,6 +2046,7 @@ describe('PreviewManager', () => {
     test('morph cannot apply while a navigation is pending → outcome=skipped(navigation pending)', async () => {
       mockNavState.currentUrl = 'http://localhost:3000/post.html';
       mockNavState.requestedUrl = 'http://localhost:3000/other.html';
+      mockNavState.activePage = { url: mockNavState.currentUrl, sourceFile: null };
       // the real reload() reports success without acting while a navigation is pending
       vi.spyOn((previewManager as any).navigationManager, 'reload').mockResolvedValue(true);
 
@@ -2389,7 +2323,7 @@ describe('PreviewManager', () => {
       showAckSpy.mockRestore();
     });
 
-    test('build_complete listener refreshes preview to pick up background assets', async () => {
+    test('build_complete listener never refreshes the page on screen: FileChanged names late bytes', async () => {
       // BuildComplete now arrives via the typed bus on 'moss-event'.
       const mossEventCallbacks: Array<(event: any) => void> = [];
       engineOn.mockImplementation((eventName: string, callback: any) => {
@@ -2420,8 +2354,7 @@ describe('PreviewManager', () => {
         });
       }
 
-      // Preview should refresh to pick up background-copied assets (images, HTML, JS)
-      expect(refreshSpy).toHaveBeenCalled();
+      expect(refreshSpy).not.toHaveBeenCalled();
 
       refreshSpy.mockRestore();
     });
@@ -3795,7 +3728,7 @@ describe('PreviewManager', () => {
       mockNavState.currentUrl = 'http://localhost:8080/untitled/';
       mockIframe.src = mockNavState.currentUrl;
       (previewManager as any).handleFileChangeEvent({ deleted_paths: ['untitled/index.html'], changed_output_files: ['index.html'] });
-      await previewManager.refresh('build-complete');
+      await previewManager.refresh('file-changed');
       expect(mockIframe.src).toContain('/index.html');
       expect(mockIframe.src).not.toContain('/untitled/');
     });
@@ -3808,25 +3741,12 @@ describe('PreviewManager', () => {
       let finish!: (value: boolean) => void;
       vi.spyOn((previewManager as any).navigationManager, 'morph').mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
       const reload = vi.spyOn((previewManager as any).navigationManager, 'reload');
-      const oldRefresh = previewManager.refresh('build-complete');
+      const oldRefresh = previewManager.refresh('file-changed');
       (previewManager as any).handleFileChangeEvent({ deleted_paths: ['untitled/index.html'], changed_output_files: ['index.html'] });
       finish(false);
       await oldRefresh;
       expect(reload).not.toHaveBeenCalled();
       expect(mockIframe.src).toContain('/index.html');
-    });
-
-    test('queued refresh work loses authority when the author navigates', async () => {
-      vi.useFakeTimers();
-      try {
-        previewManager = new PreviewManager('moss-preview-iframe');
-        const morph = vi.spyOn((previewManager as any).navigationManager, 'morph').mockResolvedValue(true);
-        await previewManager.refresh('file-changed');
-        await previewManager.refresh('file-changed');
-        previewManager.navigateToPage('/posts/');
-        await vi.advanceTimersByTimeAsync(201);
-        expect(morph).toHaveBeenCalledTimes(1);
-      } finally { vi.useRealTimers(); }
     });
 
     test('a move during creation transfers the covered wait to its new route', () => {
@@ -3860,7 +3780,7 @@ describe('PreviewManager', () => {
         for (let i = 0; i < 5; i++) {
           (previewManager as any).handleFileChangeEvent({ changed_output_files: ['other/index.html'] });
         }
-        await previewManager.refresh('build-complete');
+        await previewManager.refresh('file-changed');
         await vi.advanceTimersByTimeAsync(20_001);
         expect((previewManager as any).newPageWait).not.toBeNull();
         expect(mockOverlay.classList.contains('visible')).toBe(true);
