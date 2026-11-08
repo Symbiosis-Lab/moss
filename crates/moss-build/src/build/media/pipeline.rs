@@ -23,6 +23,7 @@
 //! final `hashes.json`, both happen later, only through the build's permitted
 //! sweep (`pipeline::sweep_staging`), never from this worker.
 
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::moss_paths::MossPaths;
 use crate::types::{content::SiteHashes, services::BackgroundContext};
 use std::collections::{HashMap, HashSet};
@@ -526,7 +527,7 @@ pub(crate) fn html_deletions(
 ) -> (bool, Vec<String>) {
     let held: HashSet<String> = structure.evicted_paths.iter()
         .filter_map(|path| path.strip_prefix(folder_path).ok())
-        .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+        .map(logical_path)
         .collect();
     let current: HashSet<&str> = structure.html_files.iter().map(|file| file.path.as_str()).collect();
     let deleted = previous.sources.keys().any(|key| is_html_path(key) && !key.starts_with(".moss/")
@@ -906,7 +907,7 @@ fn register_alias_source(
     mut blob: impl FnMut(&Path, &str) -> Result<Option<(String, crate::build::stat::FileStat)>, String>,
 ) {
     let Ok(rel) = path.strip_prefix(source_root) else { return };
-    let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+    let rel = logical_path(rel);
     if let Ok(Some((oid, stat))) = blob(path, &rel) {
         site_hashes.sources.insert(rel.clone(), crate::build::types::SourceMetadata::from_stat(oid, stat));
         live_source_keys.insert(rel);
@@ -1057,7 +1058,7 @@ impl AssetCopy {
                 source_root.to_path_buf()
             }),
             converter_bases: ctx.image_items.iter().filter(|item| item.owns_source_base()).map(|item| item.source_path.clone()).collect(),
-            html_paths: html_files.iter().map(|file| source_root.join(&file.path)).collect(),
+            html_paths: html_files.iter().map(|file| on_disk(source_root, &file.path)).collect(),
             prev_hashes_mtime_secs: std::fs::metadata(paths.hashes()).ok()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1127,7 +1128,7 @@ pub(crate) fn stage_source_html(
         if let Some(entry) = ctx.previous_hashes.sources.get(&file.path) {
             site_hashes.sources.insert(file.path.clone(), entry.clone());
         }
-        let path = Path::new(&ctx.source_path).join(&file.path);
+        let path = on_disk(Path::new(&ctx.source_path), &file.path);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) => copy_asset_entry(ctx, &mut copy, &path, meta.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref()),
             Err(e) => log::info!("[background-assets] Cannot stat {}: {e}", path.display()),
@@ -1209,11 +1210,11 @@ fn copy_asset_entry(
         return;
     }
 
-    // Normalize `\`→`/`: relative_path feeds `/`-form comparisons (blocking
-    // keys, prev-source asset cache, live-source prune map) — un-normalized
-    // Windows backslashes miss every match (re-hash/re-copy + duplicate-copy).
+    // The scan's logical path, `/`-separated and composed (NFC): it is
+    // compared with blocking keys, the prev-source asset cache and the
+    // live-source prune map, all keyed that way. Reads use `file_path`.
     let relative_path = match file_path.strip_prefix(source_root) {
-        Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
+        Ok(rel) => logical_path(rel),
         Err(_) => return,
     };
 
@@ -1228,7 +1229,7 @@ fn copy_asset_entry(
     // `scan.rs` does for pages via `evicted_paths`.
     if let Some(real) = crate::build::icloud::icloud_stub_target(file_path) {
         if let Ok(rel) = real.strip_prefix(source_root) {
-            let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+            let rel = logical_path(rel);
             run.live_asset_keys.insert(resolve_path_with_overrides(&rel, &ctx.dir_overrides));
             run.live_source_keys.insert(rel.clone());
             crate::build::cloud_readiness::request_download(&real);
@@ -1435,11 +1436,11 @@ pub(crate) fn copy_deferred_assets(
     let mut site_hashes = ctx.previous_hashes.clone();
     let mut copy = html.copy;
     let mut run = AssetWalkTally { stats: html.stats, ..Default::default() };
-    let layer_sources: Vec<_> = crate::config::map_layers::declared_sources(source_root).iter().map(|s| source_root.join(s)).collect();
+    let layer_sources = crate::config::map_layers::declared_sources(source_root);
     for entry in WalkDir::new(source_root)
         .sort_by(crate::build::scan::path_collision::nfc_name_order)
         .into_iter()
-        .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources).is_none())
+        .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, source_root, &layer_sources).is_none())
     {
         let entry = match entry {
             Ok(e) => e,
@@ -1480,7 +1481,7 @@ pub(crate) fn copy_deferred_assets(
             let stub_target = crate::build::icloud::icloud_stub_target(file_path);
             let effective = stub_target.as_deref().unwrap_or(file_path);
             let relative_path = match effective.strip_prefix(&moss_assets_dir) {
-                Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
+                Ok(rel) => logical_path(rel),
                 Err(_) => continue,
             };
 

@@ -30,6 +30,7 @@
 
 use crate::build::cli_output::log_warn_problem;
 use crate::build::manifest::PendingManifest;
+use crate::build::scan::path_collision::on_disk;
 use crate::build::served_path::ServedPath;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -169,7 +170,7 @@ impl Probe<'_> {
     /// The old side of a line is a folder holding more than its own page, not one page's address.
     fn holds_a_folder(&self, a: &Addr) -> bool {
         let Some(prefix) = a.key().strip_suffix("index.html").filter(|p| !p.is_empty()) else { return false };
-        self.pending.has_registered_under(prefix) || self.source_root.join(a.raw.trim_end_matches('/')).is_dir()
+        self.pending.has_registered_under(prefix) || on_disk(self.source_root, a.raw.trim_end_matches('/')).is_dir()
     }
 
     /// The address is taken. Asked after every page this build registers
@@ -183,7 +184,7 @@ impl Probe<'_> {
     fn serves(&self, a: &Addr) -> bool {
         self.pending.is_registered(a.key())
             || self.written_later.contains(a.key())
-            || [a.key(), a.raw.as_str()].iter().any(|rel| self.source_root.join(rel).is_file())
+            || [a.key(), a.raw.as_str()].iter().any(|rel| on_disk(self.source_root, rel).is_file())
     }
 
     /// Where a target stands. A target inside a language folder that this

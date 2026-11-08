@@ -32,7 +32,7 @@ pub(crate) fn proven_unresolved_source(
     let Some(source) = mapped else { return Some(PreviewSource::Generated); };
     evidence.get(source).is_some_and(|entry| matches!(entry.state,
         InputState::Read { .. } | InputState::Pending { retained: true } | InputState::ReadError { retained: true, .. }))
-        .then(|| PreviewSource::File(source.into()))
+        .then(|| PreviewSource::File(source.clone()))
 }
 
 pub(super) fn preview_readiness_for(
@@ -65,15 +65,14 @@ pub(super) fn preview_readiness_for(
     // set, every page depends on the page metadata it could not read.
     let mut source_pending = false;
     let mut source_rel = None;
-    if let PreviewSource::File(source) = &requirement.source {
-        let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
+    if let PreviewSource::File(rel) = &requirement.source {
         source_rel = Some(rel.clone());
         needed.insert(rel.clone());
-        needed.extend(embeds.get(&rel).into_iter().flat_map(|deps| deps.iter().cloned()));
-        source_pending = evidence.get(&rel).is_some_and(|entry|
+        needed.extend(embeds.get(rel).into_iter().flat_map(|deps| deps.iter().cloned()));
+        source_pending = evidence.get(rel).is_some_and(|entry|
             matches!(entry.state, InputState::Pending { .. } | InputState::ReadError { .. }));
         if let Some(output) = output {
-            if source_to_output.get(&rel).is_none_or(|mapped| mapped != output) {
+            if source_to_output.get(rel).is_none_or(|mapped| mapped != output) {
                 return if source_pending { PreviewReadiness::Pending } else { PreviewReadiness::Missing };
             }
         }

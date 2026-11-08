@@ -5,6 +5,7 @@
 //! Asset-heavy work (images, static dirs, video conversion) is deferred to
 //! `BackgroundContext` and handled by the background phase in `pipeline.rs`.
 
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::build::cloud_readiness;
 use crate::build::phase::PhaseTrace;
 use crate::build::cli_output::log_warn_problem;
@@ -694,8 +695,7 @@ pub fn generate_blocking_content_for_build(
         let focused_source = services.and_then(|s| s.session.as_ref())
             .and_then(|s| s.preview_requirement())
             .and_then(|requirement| match requirement.source {
-                crate::system::folder_session::PreviewSource::File(path) =>
-                    Some(moss_core::slug::normalize_separators(&path.to_string_lossy())),
+                crate::system::folder_session::PreviewSource::File(path) => Some(path),
                 _ => None,
             });
         let rendered: Vec<Option<(ParsedDocument, Option<(String, Option<crate::build::stat::FileStat>)>)>> = project_structure
@@ -733,7 +733,7 @@ pub fn generate_blocking_content_for_build(
                             advisories: vec![],
                         });
                     }
-                    let source_file_path = Path::new(source_path).join(&file_info.path);
+                    let source_file_path = on_disk(Path::new(source_path), &file_info.path);
 
                     // Replay the previous build's parse when
                     // this page's bytes AND every file transcluded into it are
@@ -796,7 +796,7 @@ pub fn generate_blocking_content_for_build(
                         &content,
                         &content_graph,
                         &|path| {
-                            let full_path = Path::new(source_path).join(path);
+                            let full_path = on_disk(Path::new(source_path), path);
                             if focused_source.as_deref() == Some(file_info.path.as_str())
                                 && crate::build::icloud::is_still_in_the_cloud(&full_path) {
                                 crate::build::cloud_readiness::request_download_foreground(&full_path);
@@ -2967,7 +2967,7 @@ pub fn generate_blocking_content_for_build(
             .iter()
             .chain(project_structure.evicted_paths.iter())
             .filter_map(|p| p.strip_prefix(root_path).ok())
-            .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+            .map(logical_path)
             .collect::<std::collections::BTreeSet<_>>();
         // Fires per evicted page on every build. One INFO count; paths at DEBUG.
         let mut carried = 0usize;

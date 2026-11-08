@@ -11,6 +11,7 @@ use super::job::{CopyJob, Op, PostRef, Previous};
 use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
 use super::shape::{idempotency_key, page_url, shape};
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
+use crate::build::scan::path_collision::on_disk;
 use crate::plugins::manager::copies::{CopyCall, CopyChannel};
 use crate::plugins::manager::PluginManager;
 
@@ -463,7 +464,7 @@ fn sent(record: &CopyRecord, outcome: Outcome) -> Sent {
 
 /// Add `url` to the page's `syndicated:` list, changing only that field.
 fn write_back(folder: &Path, source_path: &str, url: &str) -> Result<(), String> {
-    let path = folder.join(source_path);
+    let path = on_disk(folder, source_path);
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut list: Vec<serde_yaml::Value> = match moss_core::frontmatter::parse(&content).frontmatter.get("syndicated") {
         Some(serde_yaml::Value::Sequence(items)) => items.clone(),

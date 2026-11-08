@@ -123,3 +123,17 @@ fn map_layer_plates_are_listed_in_composed_name_order() {
     let (f, eclair) = (text.find("- `f`").expect("plate f listed"), text.find("- `e\u{301}clair`").expect("plate éclair listed"));
     assert!(f < eclair, "{text}");
 }
+
+/// A map layer's files join the source copy under their composed names, so a
+/// folder a sync client stored decomposed is copied to the same address on
+/// every machine.
+#[test]
+fn a_decomposed_map_layer_joins_the_source_copy_composed() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join(".moss")).unwrap();
+    std::fs::write(root.path().join(".moss/config.toml"), "schema_version = 6\n\n[map.layers.atlas]\nkind = \"historical\"\nsource = \"caf\u{e9}\"\n").unwrap();
+    std::fs::create_dir_all(root.path().join("cafe\u{301}")).unwrap();
+    std::fs::write(root.path().join("cafe\u{301}/cre\u{300}me.region.json"), "{}").unwrap();
+    let structure = ProjectStructure { root_path: root.path().to_string_lossy().into_owned(), ..Default::default() };
+    assert_eq!(source_files(&structure), ["caf\u{e9}/cr\u{e8}me.region.json"]);
+}

@@ -3,6 +3,7 @@
 use serde_json::Value;
 
 use super::{resolve, lossy, site_relative, site_root, CommandHost, NoArgs, VaultPath};
+use crate::build::scan::path_collision::on_disk;
 use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::editor::content::{EditorBootstrap, ParsedFrontmatter, SourceRole};
 use crate::editor::filesystem::EditorFileInfo;
@@ -351,7 +352,7 @@ pub async fn resolve_asset_url_for_file(host: &dyn CommandHost, a: FileArgs) -> 
         return Ok(None);
     };
     let overrides = crate::build::scan::article_map::ArticleMap::load(&root.join(".moss")).map(|m| m.dir_overrides).unwrap_or_default();
-    Ok(crate::editor::resolve::links::resolve_asset_url_inner(&rel.replace('\\', "/"), &hashes, &overrides))
+    Ok(crate::editor::resolve::links::resolve_asset_url_inner(&rel, &hashes, &overrides))
 }
 
 /// The pages the preview is serving now, for an address bar's suggestions.
@@ -391,7 +392,6 @@ pub struct ExpandedDerived {
 pub async fn expand_derived(host: &dyn CommandHost, a: ExpandDerivedArgs) -> Result<ExpandedDerived, String> {
     use moss_core::resolve::embeds::derived::{DerivedFragment, DerivedTable, Derivations};
     let (root, page) = site_relative(host, &a.page_path)?;
-    let page = page.replace('\\', "/");
     let root_str = root.to_str().ok_or("the site path is not valid UTF-8")?;
     let structure = crate::build::scan::scan::scan_folder_with_dedup_emit(root_str, None, None, true)?;
     let graph = crate::build::scan::scan::build_content_graph(&structure);
@@ -402,7 +402,7 @@ pub async fn expand_derived(host: &dyn CommandHost, a: ExpandDerivedArgs) -> Res
         None => DerivedFragment::Pending,
     };
     let derivations = Derivations { table: site.as_ref().map_or(&empty, |s| s.table()), reader: &read_derived };
-    let read_note = |path: &str| std::fs::read_to_string(root.join(path)).ok();
+    let read_note = |path: &str| std::fs::read_to_string(on_disk(root, path)).ok();
     let expansion = moss_core::resolve::embeds::expand::expand_page(&page, &a.content, &graph, &read_note, &derivations);
     Ok(ExpandedDerived { content: expansion.content, replaced: u32::try_from(expansion.expanded.len()).unwrap_or(u32::MAX) })
 }

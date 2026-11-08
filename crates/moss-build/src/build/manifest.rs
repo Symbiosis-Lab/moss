@@ -1045,10 +1045,7 @@ impl SealedManifest {
                 None => false,
             },
             PreviewSource::Generated => self.preview_readiness(requirement) == PreviewReadiness::Usable,
-            PreviewSource::File(source) => {
-                let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
-                self.inner.source_to_output.get(&rel) == Some(output)
-            }
+            PreviewSource::File(source) => self.inner.source_to_output.get(source) == Some(output),
         }
     }
 

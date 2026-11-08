@@ -11,6 +11,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
+use crate::build::scan::path_collision::logical_path;
+
 /// Where a pending read stands, best first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tier {
@@ -40,7 +42,7 @@ static ARRIVED: LazyLock<Mutex<HashMap<PathBuf, HashSet<String>>>> = LazyLock::n
 
 fn relative(folder: &Path, path: &Path) -> Option<String> {
     let rel = path.strip_prefix(folder).or_else(|_| path.strip_prefix(key(folder))).ok()?;
-    Some(rel.to_string_lossy().replace('\\', "/"))
+    Some(logical_path(rel))
 }
 
 /// Record files the watcher saw created, renamed in or modified under `folder`
@@ -108,7 +110,7 @@ impl Schedule {
             let mut listed_dirs = vec![decoded];
             let source = crate::editor::page_source::resolve_page_source(&url, &self.folder).ok();
             let page = source.as_ref().and_then(|p| p.source_path.as_deref()).and_then(|abs| {
-                Path::new(abs).strip_prefix(&self.folder).ok().map(|r| r.to_string_lossy().replace('\\', "/"))
+                Path::new(abs).strip_prefix(&self.folder).ok().map(logical_path)
             });
             // A folder page is `dir/index.md`, `dir/dir.md` or `dir.md`.
             if let Some(page) = page.as_ref().filter(|_| source.is_some_and(|p| p.is_dir)) {

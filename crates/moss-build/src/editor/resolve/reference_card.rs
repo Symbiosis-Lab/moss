@@ -6,6 +6,7 @@
 //! reference cache and needs no round trip.
 
 use crate::build::page::meta::resolve_page_description;
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::editor::content::{compute_heading_state_inner, parse_frontmatter_of, read_vault_text};
 use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::editor::resolve::reference_resolver::{resolve_references_batch, RefTarget};
@@ -55,7 +56,7 @@ pub fn reference_card_for(
     let link = RefTarget { text: target.to_string(), is_embed: false };
     let resolved = resolve_references_batch(&[link], from_file, &canonical_root, EditorScope::Site).remove(0);
     let source_path = resolved.resolved_path.as_deref().map(|abs| {
-        Path::new(abs).strip_prefix(&canonical_root).map_or(abs.to_string(), |rel| rel.to_string_lossy().replace('\\', "/"))
+        Path::new(abs).strip_prefix(&canonical_root).map_or(abs.to_string(), logical_path)
     });
     let anchor = resolved.anchor;
     // A resolved URL with no known source is exactly what the frontend's own
@@ -74,7 +75,7 @@ pub fn reference_card_for(
         });
     };
 
-    let content = read_vault_text(&canonical_root.join(&rel).to_string_lossy())?
+    let content = read_vault_text(&on_disk(&canonical_root, &rel).to_string_lossy())?
         .ok_or_else(|| format!("could not read {rel}"))?;
     let parsed = parse_frontmatter_of(content)?;
     let title_str = json_str(&parsed.frontmatter, "title");

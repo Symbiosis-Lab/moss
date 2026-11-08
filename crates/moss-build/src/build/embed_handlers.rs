@@ -18,6 +18,8 @@ use moss_core::resolve::embed_renderer::{CLASS_EMBED, CLASS_EMBED_NOTEBOOK};
 use moss_core::resolve::embeds::{MarkerHandler, MarkerHandlers};
 use moss_core::resolve::Diagnostic;
 
+use crate::build::scan::path_collision::on_disk;
+
 /// Construct a [`MarkerHandlers`] seeded with the built-in notebook and
 /// table resolvers.
 ///
@@ -62,7 +64,7 @@ fn render_ipynb_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
     let (path, _query) = split_query(target);
 
     // Validate that the file exists, for diagnostics.
-    let abs = site_root.join(path);
+    let abs = on_disk(site_root, path);
     if !abs.exists() {
         let msg = crate::i18n::t(lang, "notebook_not_found").replace("{}", path);
         diags.push(Diagnostic {
@@ -116,7 +118,7 @@ fn render_table_embed(target: &str, site_root: &Path, lang: crate::i18n::Languag
         }
     }
 
-    let abs = site_root.join(path);
+    let abs = on_disk(site_root, path);
     // Defer, never wait. This runs inside the rayon render fan-out while the
     // stage write guard is held, so a bounded wait here is a bounded wait on
     // the whole site publishing — one evicted CSV per page, serially, before

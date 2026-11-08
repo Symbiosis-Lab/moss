@@ -1229,7 +1229,7 @@ pub(crate) fn run_video_conversion(
 
         // Map source path through dir_overrides for all OUTPUT operations.
         // source_file below still uses the raw filesystem path for READING.
-        let source_file = project_root.join(&item);
+        let source_file = crate::build::scan::path_collision::on_disk(project_root, &item);
         let mapped_source = resolve_path_with_overrides(&item, &dir_overrides);
 
         // The whole of one video's decision. Every exit is a value, never a

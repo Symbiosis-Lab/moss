@@ -852,7 +852,7 @@ pub fn needs_plate(width: u32, height: u32) -> bool {
 pub struct PlateSource {
     file: std::path::PathBuf,
     /// `file`, relative to `source_root` — `meta.path` already IS this,
-    /// since `file` was built as `source_root.join(&meta.path)` below.
+    /// since `file` is where `meta.path` sits under `source_root`.
     /// This is what `content_hash` keys on instead of `file` itself: the
     /// same vault built from two different absolute locations (a
     /// re-checkout, or build_parity_test's two temp-dir copies) must get
@@ -908,7 +908,7 @@ pub fn plate_source(
         return None;
     }
     use sha2::{Digest, Sha256};
-    let file = source_root.join(&meta.path);
+    let file = crate::build::scan::path_collision::on_disk(source_root, &meta.path);
     // Streamed, not read whole: a plate is up to ~20 MB and this runs once per page that names it.
     let mut hasher = Sha256::new();
     std::io::copy(&mut std::fs::File::open(&file).ok()?, &mut hasher).ok()?;

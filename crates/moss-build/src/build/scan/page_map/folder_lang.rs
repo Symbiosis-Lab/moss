@@ -35,6 +35,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::build::scan::path_collision::on_disk;
 use crate::i18n::{detect, filename::parse_filename_stem, path::ancestor_lang_from_path, Language};
 
 /// One folder's cached inference result, plus the file-set identity it was
@@ -104,7 +105,7 @@ pub(crate) fn resolve_folder_languages(
     cache: &mut FolderLangCache,
     declarations: &super::frontmatter_cache::FrontmatterScanCache,
 ) -> HashMap<String, Language> {
-    let locate = |p: &str| source_path.join(p);
+    let locate = |p: &str| on_disk(source_path, p);
     let is_evicted = &crate::build::icloud::is_evicted_and_requested;
     resolve_folder_languages_with(markdown_files, &locate, is_evicted, cache, declarations)
 }

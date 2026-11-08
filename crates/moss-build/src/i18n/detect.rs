@@ -4,6 +4,7 @@
 //! and maps results to our Language enum.
 
 use super::Language;
+use crate::build::scan::path_collision::on_disk;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -324,7 +325,7 @@ fn detect_project_language(
     let texts: Vec<String> = markdown_files
         .iter()
         .filter_map(|f| {
-            let abs_path = std::path::Path::new(root_path).join(&f.path);
+            let abs_path = on_disk(std::path::Path::new(root_path), &f.path);
             if is_evicted(&abs_path) {
                 return None;
             }
@@ -502,7 +503,7 @@ fn homepage_frontmatter_lang(
     root_path: &str,
     is_evicted: &dyn Fn(&std::path::Path) -> bool,
 ) -> Option<String> {
-    let path = std::path::Path::new(root_path).join(homepage_file.unwrap_or("index.md"));
+    let path = on_disk(std::path::Path::new(root_path), homepage_file.unwrap_or("index.md"));
     crate::i18n::declared_lang_in_file(&path, is_evicted)
 }
 

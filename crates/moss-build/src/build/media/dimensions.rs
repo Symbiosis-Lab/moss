@@ -226,7 +226,7 @@ impl MediaDimensionLookup {
         if let Some(known) = lock().get(source) {
             return known.clone();
         }
-        let built = self.root.as_ref().and_then(|root| crate::build::media::decode::sniff_decode(&root.join(source)).ok()).map(|img| std::sync::Arc::new(crate::build::markdown::hero_ink::Ground::from_image(&img)));
+        let built = self.root.as_ref().and_then(|root| crate::build::media::decode::sniff_decode(&crate::build::scan::path_collision::on_disk(root, source)).ok()).map(|img| std::sync::Arc::new(crate::build::markdown::hero_ink::Ground::from_image(&img)));
         lock().insert(source.clone(), built.clone());
         built
     }

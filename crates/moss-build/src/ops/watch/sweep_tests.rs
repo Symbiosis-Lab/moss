@@ -212,13 +212,13 @@ fn navigation_promotes_only_the_resolved_requested_source() {
     promote_focused_source(&session, &mut revision);
     assert_eq!(crate::build::icloud::pretend::requests_for(&first), 0);
 
-    session.set_preview_requirement("/first/".into(), crate::system::folder_session::PreviewSource::File(PathBuf::from("posts/first.md"))).unwrap();
+    session.set_preview_requirement("/first/".into(), crate::system::folder_session::PreviewSource::File("posts/first.md".into())).unwrap();
     promote_focused_source(&session, &mut revision);
     promote_focused_source(&session, &mut revision);
     assert_eq!(crate::build::icloud::pretend::requests_for(&first), 1);
     assert_eq!(crate::build::icloud::pretend::requests_for(&second), 0);
 
-    session.set_preview_requirement("/second/".into(), crate::system::folder_session::PreviewSource::File(PathBuf::from("posts/second.md"))).unwrap();
+    session.set_preview_requirement("/second/".into(), crate::system::folder_session::PreviewSource::File("posts/second.md".into())).unwrap();
     promote_focused_source(&session, &mut revision);
     assert_eq!(crate::build::icloud::pretend::requests_for(&second), 1);
 }
@@ -1033,6 +1033,10 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
     std::fs::write(test_dir.join("footer.md"), "Made with moss.\n").unwrap();
     std::fs::create_dir_all(test_dir.join("posts")).unwrap();
     std::fs::write(test_dir.join("posts/one.md"), "# One\n").unwrap();
+    // Names a sync client wrote decomposed.
+    std::fs::create_dir_all(test_dir.join("cafe\u{301}")).unwrap();
+    std::fs::write(test_dir.join("cafe\u{301}/cre\u{300}me.md"), "# Cr\u{e8}me\n").unwrap();
+    std::fs::write(test_dir.join("cafe\u{301}/the\u{301}.csv"), "item,price\n").unwrap();
     // Deliberately ignored: canonical location is .moss/theme/style.css.
     std::fs::write(test_dir.join("style.css"), "body { margin: 0 }\n").unwrap();
     // A Finder alias whose target will not resolve: skipped from the output,

@@ -20,6 +20,8 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
 use moss_core::asset_paths::published_paths;
@@ -37,6 +39,45 @@ pub(crate) fn nfc_order(a: &str, b: &str) -> Ordering {
 /// [`nfc_order`] for a directory walk: `WalkDir::new(dir).sort_by(nfc_name_order)`.
 pub(crate) fn nfc_name_order(a: &walkdir::DirEntry, b: &walkdir::DirEntry) -> Ordering {
     nfc_order(&a.file_name().to_string_lossy(), &b.file_name().to_string_lossy())
+}
+
+/// The logical path of `rel`, a path under the site folder: `/`-separated
+/// (Windows lists `\\`) and composed (NFC), so every machine names a file
+/// alike however its disk spells an accented name. The inverse of [`on_disk`].
+pub(crate) fn logical_path(rel: impl AsRef<Path>) -> String {
+    moss_core::slug::normalize_separators(&rel.as_ref().to_string_lossy()).nfc().collect()
+}
+
+/// Where the file a composed `logical` path names sits on this disk. A Mac
+/// finds a file under either spelling of its name; Linux matches names byte
+/// for byte, so a name a sync client wrote decomposed is found by composing
+/// the names in each folder. Two folders whose names compose alike are both
+/// searched and the first match wins: a folder holding both spellings of one
+/// name resolves to whichever its listing returns first (a site holding such a
+/// pair does not build). A path nothing matches comes back as
+/// `root.join(logical)`, so the read fails as it would have.
+pub(crate) fn on_disk(root: &Path, logical: &str) -> PathBuf {
+    let direct = root.join(logical);
+    if logical.is_ascii() || direct.symlink_metadata().is_ok() {
+        return direct;
+    }
+    let mut found = vec![root.to_path_buf()];
+    for segment in logical.split('/').filter(|s| !s.is_empty()) {
+        let mut next = Vec::new();
+        for dir in &found {
+            let names: Vec<OsString> = std::fs::read_dir(dir)
+                .map(|entries| entries.flatten().map(|e| e.file_name()).collect())
+                .unwrap_or_default();
+            next.extend(spellings_of(segment, &names).map(|name| dir.join(name)));
+        }
+        found = next;
+    }
+    found.into_iter().next().unwrap_or(direct)
+}
+
+/// The names among `names` that compose to the name `segment` composes to.
+fn spellings_of<'a>(segment: &'a str, names: &'a [OsString]) -> impl Iterator<Item = &'a OsString> + 'a {
+    names.iter().filter(move |name| name.to_str().is_some_and(|name| name.nfc().eq(segment.nfc())))
 }
 
 fn is_markdown(path: &str) -> bool {
@@ -139,6 +180,28 @@ mod tests {
         assert_eq!(nfc_order("f", "e\u{301}clair"), Ordering::Less);
         assert_eq!(nfc_order("e\u{301}", "\u{e9}"), Ordering::Less);
         assert_eq!(nfc_order("\u{e9}", "e\u{301}"), Ordering::Greater);
+    }
+
+    /// Either spelling of a name finds the other; nothing else does.
+    #[test]
+    fn a_name_matches_its_other_spelling_only() {
+        let names: Vec<OsString> = ["cafe\u{301}", "caf\u{e9}s", "Caf\u{e9}", "cafe"].map(OsString::from).to_vec();
+        let found: Vec<&OsString> = spellings_of("caf\u{e9}", &names).collect();
+        assert_eq!(found, vec![&names[0]]);
+    }
+
+    /// A file stored under decomposed folder and file names is found by its
+    /// composed path, and a missing one comes back as the plain join. On a
+    /// Mac the plain join already finds it; the folder search is what Linux
+    /// needs.
+    #[test]
+    fn a_decomposed_file_is_found_by_its_composed_path() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("photos/cafe\u{301}")).unwrap();
+        std::fs::write(root.path().join("photos/cafe\u{301}/cre\u{300}me.png"), b"x").unwrap();
+        let file = on_disk(root.path(), "photos/caf\u{e9}/cr\u{e8}me.png");
+        assert_eq!(std::fs::read(&file).unwrap(), b"x");
+        assert_eq!(on_disk(root.path(), "photos/caf\u{e9}/gone.png"), root.path().join("photos/caf\u{e9}/gone.png"));
     }
 
     #[test]

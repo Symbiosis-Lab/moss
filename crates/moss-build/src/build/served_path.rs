@@ -177,8 +177,9 @@ const SEARCH_MOUNT: &str = "_moss/pagefind";
 pub const SOURCE_COPY_MOUNT: &str = "_moss/source";
 
 impl ServedPath {
-    /// Normalize a source-derived path. Slugs directory segments, preserves
-    /// the final basename verbatim. Idempotent — re-wrapping is safe.
+    /// Normalize a source-derived path. Composes it (NFC), slugs directory
+    /// segments and keeps the basename's letters and case. Idempotent —
+    /// re-wrapping is safe.
     ///
     /// Returns `Err` if the input is empty, absolute, contains `..`, or
     /// contains the reserved segment `.moss/` or `_moss/`.
@@ -191,7 +192,8 @@ impl ServedPath {
     /// Cached paths are already generated and normalized, so unlike source
     /// paths they may use moss's reserved `_moss/` namespace.
     pub(crate) fn from_cached(s: &str) -> Result<Self, ServedPathError> {
-        let normalized = Self::normalize_relative(s)?;
+        // A cached path may hold the disk's spelling.
+        let normalized = crate::build::scan::path_collision::logical_path(Self::normalize_relative(s)?);
         if normalized.split('/').any(|segment| segment == ".") {
             return Err(ServedPathError::InvalidInput("cached path contains '.' segment"));
         }
@@ -745,6 +747,14 @@ pub fn transform_for(rel_path: &str) -> ShipTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_decomposed_name_is_served_composed() {
+        let composed = "photos/caf\u{e9}/cr\u{e8}me.png";
+        assert_eq!(ServedPath::from_source("photos/cafe\u{301}/cre\u{300}me.png").unwrap().as_str(), composed);
+        assert_eq!(ServedPath::from_source(composed).unwrap().as_str(), composed);
+        assert_eq!(ServedPath::from_cached("photos/cafe\u{301}/cre\u{300}me.png").unwrap().as_str(), composed);
+    }
 
     #[test]
     fn transform_for_html_returns_strip() {

@@ -19,6 +19,7 @@ use crate::build::assets::paths::compute_binary_hash;
 use crate::build::context::BuildContext;
 use crate::build::features::html_escape;
 use crate::build::manifest::{HashBucket, PendingManifest};
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::build::served_path::{served_address, ServedPath};
 use crate::build::site_url::SiteUrl;
 use crate::build::types::ParsedDocument;
@@ -79,11 +80,11 @@ pub(crate) struct Rendered {
 fn source_files(structure: &ProjectStructure) -> Vec<String> {
     let root = Path::new(&structure.root_path);
     let layer_files = crate::config::map_layers::declared_sources(root).into_iter().flat_map(|source| {
-        walkdir::WalkDir::new(root.join(source))
+        walkdir::WalkDir::new(on_disk(root, &source))
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
-            .filter_map(|e| e.path().strip_prefix(root).ok().map(|r| moss_core::slug::normalize_separators(&r.to_string_lossy())))
+            .filter_map(|e| e.path().strip_prefix(root).ok().map(logical_path))
             .collect::<Vec<_>>()
     });
     let mut files: Vec<String> = structure
@@ -166,7 +167,7 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     for rel in source_files(inputs.structure) {
         // A file the sync client has not materialised yet is left out of this
         // edition rather than failing the build.
-        let Ok(bytes) = std::fs::read(root.join(&rel)) else { continue };
+        let Ok(bytes) = std::fs::read(on_disk(root, &rel)) else { continue };
         let Ok(served) = ServedPath::for_source_copy(&rel) else { continue };
         BuildContext::for_render(stage_dir, pending).emit(&served, &bytes, HashBucket::Files)?;
         inventory.push_str(&format!("{rel}\0{}\n", compute_binary_hash(&bytes)));
@@ -225,7 +226,7 @@ fn layer_sections(root: &Path) -> String {
         out.push_str(&format!(
             "\n## Map layer `{source}`\n\nA historical map the site draws under its places. For each plate, `<id>.annotation.json` is its georeference (control points tying the scan to places on the earth), the image is the part of the scan the site uses, and `<id>.region.json` says which part, at what scale, where it came from and under what rights.\n\n"
         ));
-        let mut regions: Vec<_> = walkdir::WalkDir::new(root.join(&source))
+        let mut regions: Vec<_> = walkdir::WalkDir::new(on_disk(root, &source))
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file() && e.file_name().to_string_lossy().ends_with(".region.json"))

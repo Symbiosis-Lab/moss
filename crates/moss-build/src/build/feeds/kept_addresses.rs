@@ -24,6 +24,7 @@ use crate::build::assets::paths::{compute_binary_hash, compute_binary_hash_file}
 use crate::build::cli_output::log_warn_problem;
 use crate::build::feeds::redirect_table::FolderMove;
 use crate::build::manifest::{backfill, change_set, published_record, SealedManifest};
+use crate::build::scan::path_collision::on_disk;
 use crate::build::served_path::{is_public_address, served_address};
 use crate::moss_paths::MossPaths;
 use std::collections::{BTreeMap, HashMap};
@@ -204,7 +205,7 @@ fn write_kept(mp: &MossPaths, stage_dir: &Path, from: &str, to: &str, raw: Optio
         crate::build::io_utils::write_output(&dst, html.as_bytes()).map_err(|e| e.to_string())?;
         return Ok(compute_binary_hash(html.as_bytes()));
     }
-    let in_folder = |rel: &str| Some(mp.project_root().join(rel)).filter(|p| p.is_file());
+    let in_folder = |rel: &str| Some(on_disk(mp.project_root(), rel)).filter(|p| p.is_file());
     let staged = Some(stage_dir.join(to)).filter(|p| p.is_file());
     let source = staged.or_else(|| in_folder(to)).or_else(|| raw.and_then(in_folder)).unwrap_or_else(|| mp.project_root().join(to));
     crate::build::io_utils::copy_output(&source, &dst).map_err(|e| e.to_string())?;

@@ -707,6 +707,15 @@ fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifes
     vanished_keys(&baseline.files, &current.files()).map(|out| (out, page_outputs.contains(out))).collect()
 }
 
+/// A path the last publish served under a decomposed spelling that this build
+/// serves composed: the same file, now addressed one way on every machine.
+/// No copy can keep the old spelling answering, since a Mac disk holds the
+/// two spellings as one name.
+fn composes_to_served(out: &str, files: &HashMap<String, String>) -> bool {
+    let composed = crate::build::scan::path_collision::logical_path(out);
+    composed != out && files.contains_key(&composed)
+}
+
 /// A video's ladder file (its master playlist, a rung's playlist or segment
 /// file, an audio group's) is a regenerated rendition, never an address an
 /// author hands out. While the video itself is still published, whatever name
@@ -770,7 +779,7 @@ pub fn removed_addresses(
     };
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
-        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, &files))
+        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, &files) && !composes_to_served(out, &files))
         .map(|(out, is_page)| {
             let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
             let renamed = recorded.and_then(|srcs| {

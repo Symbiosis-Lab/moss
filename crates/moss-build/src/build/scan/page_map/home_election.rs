@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::build::scan::path_collision::on_disk;
 use crate::types::content::FileInfo;
 
 fn parent_dir(path: &str) -> &str {
@@ -56,7 +57,7 @@ pub(crate) fn elect_homes(
         markdown_files,
         root,
         reserved,
-        &|p| source_path.join(p),
+        &|p| on_disk(source_path, p),
         &crate::build::icloud::is_evicted_and_requested,
     )
 }

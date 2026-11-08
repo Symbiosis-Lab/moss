@@ -62,7 +62,7 @@ pub fn resolve_color_source_path(
         return Some(output_root.join(thumb));
     }
 
-    let source_path = source_root.join(clean);
+    let source_path = crate::build::scan::path_collision::on_disk(source_root, clean);
     if source_path.exists() {
         Some(source_path)
     } else {

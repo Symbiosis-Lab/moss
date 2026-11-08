@@ -67,7 +67,7 @@ pub(crate) fn rung_collision_map(
                     &m.path,
                     dir_overrides,
                 ),
-                Path::new(&project_structure.root_path).join(&m.path),
+                crate::build::scan::path_collision::on_disk(Path::new(&project_structure.root_path), &m.path),
             )
         })
         .collect()

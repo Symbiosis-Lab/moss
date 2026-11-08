@@ -70,7 +70,7 @@ fn decision_of(value: &Value) -> Decision {
 pub fn decisions_in(root: &Table) -> BTreeMap<String, Decision> {
     root.get(TABLE)
         .and_then(Value::as_table)
-        .map(|t| t.iter().map(|(k, v)| (k.clone(), decision_of(v))).collect())
+        .map(|t| t.iter().map(|(k, v)| (crate::build::scan::path_collision::logical_path(k), decision_of(v))).collect())
         .unwrap_or_default()
 }
 
@@ -109,6 +109,13 @@ pub fn set_folder_decision(site: &MossPaths, folder: &Path, decision: Decision) 
         .ok_or_else(|| format!("{} is outside the site", folder.display()))?;
     let path = site.config();
     let mut managed = load_managed_toml(&path)?;
+    // A key written by hand may spell the same folder decomposed.
+    if let Some(t) = managed.root.get_mut(TABLE).and_then(Value::as_table_mut) {
+        let spellings: Vec<String> = t.keys().filter(|k| **k != key && crate::build::scan::path_collision::logical_path(k) == key).cloned().collect();
+        for spelling in spellings {
+            t.remove(&spelling);
+        }
+    }
     match decision {
         Decision::Undecided => {
             if let Some(t) = managed.root.get_mut(TABLE).and_then(Value::as_table_mut) {

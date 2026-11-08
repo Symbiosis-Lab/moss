@@ -66,6 +66,23 @@ fn undecided_removes_the_key() {
 }
 
 #[test]
+fn undecided_removes_a_key_written_decomposed() {
+    let (_d, site) = site_with(Some("[derive]\n\"cafe\u{301}/\" = false\n"));
+    set_folder_decision(&site, &PathBuf::from("caf\u{e9}"), Decision::Undecided).unwrap();
+    assert_eq!(folder_decision(&site, &PathBuf::from("caf\u{e9}")), Decision::Undecided);
+    assert!(!config_text(&site).contains("[derive]"), "{}", config_text(&site));
+}
+
+#[test]
+fn a_decision_replaces_a_key_written_decomposed() {
+    let (_d, site) = site_with(Some("[derive]\n\"cafe\u{301}/\" = false\n"));
+    set_folder_decision(&site, &PathBuf::from("caf\u{e9}"), Decision::Show(vec!["pdf-pages".into()])).unwrap();
+    let text = config_text(&site);
+    assert!(!text.contains("cafe\u{301}"), "{text}");
+    assert_eq!(folder_decision(&site, &PathBuf::from("caf\u{e9}")), Decision::Show(vec!["pdf-pages".into()]));
+}
+
+#[test]
 fn a_folder_outside_the_site_is_refused() {
     let (_d, site) = site_with(None);
     assert!(set_folder_decision(&site, Path::new("/elsewhere/else"), Decision::Keep).is_err());
@@ -167,4 +184,13 @@ fn renaming_a_folder_through_the_rename_engine_carries_its_decision_and_undo_res
     crate::editor::rename_plan::undo_applied(&root, &applied).unwrap();
     assert_eq!(folder_decision(&site, &PathBuf::from("reports")), Decision::Keep);
     assert_eq!(folder_decision(&site, &PathBuf::from("papers")), Decision::Undecided);
+}
+
+/// A folder's decision is found whichever way the disk and the config spell
+/// an accented name.
+#[test]
+fn a_decision_is_found_under_either_spelling() {
+    let (_d, site) = site_with(Some("[derive]\n\"cafe\u{301}/\" = [\"pdf-pages\"]\n"));
+    std::fs::create_dir_all(site.project_root().join("cafe\u{301}")).unwrap();
+    assert_eq!(folder_decision(&site, &PathBuf::from("caf\u{e9}")), Decision::Show(vec!["pdf-pages".into()]));
 }

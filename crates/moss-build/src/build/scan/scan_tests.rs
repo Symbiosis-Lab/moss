@@ -3062,3 +3062,32 @@ fn the_scan_refuses_two_sources_published_under_one_name() {
         assert!(refusal.contains(&format!("rename `{first}` or `{second}`, which are both published as `{name}`")), "{refusal}");
     }
 }
+
+/// A file a sync client stored under a decomposed name is named by its
+/// composed path from the scan on, so every machine addresses it alike.
+#[test]
+fn a_decomposed_name_is_scanned_as_its_composed_path() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("cafe\u{301}")).unwrap();
+    fs::write(dir.path().join("cafe\u{301}/cre\u{300}me.md"), "# Page\n").unwrap();
+    fs::write(dir.path().join("cafe\u{301}/notes.txt"), "x").unwrap();
+    let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+    assert_eq!(found.markdown_files[0].path, "caf\u{e9}/cr\u{e8}me.md");
+    assert_eq!(found.other_files[0].path, "caf\u{e9}/notes.txt");
+    assert_eq!(found.dirs, vec!["caf\u{e9}"]);
+}
+
+/// A map layer's source folder is left out of the site whichever way the disk
+/// spells its name and the config writes it.
+#[test]
+fn a_decomposed_map_layer_source_is_left_out() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".moss")).unwrap();
+    fs::write(dir.path().join(".moss/config.toml"), "schema_version = 6\n\n[map.layers.atlas]\nkind = \"historical\"\nsource = \"caf\u{e9}\"\n").unwrap();
+    fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
+    fs::create_dir_all(dir.path().join("cafe\u{301}")).unwrap();
+    fs::write(dir.path().join("cafe\u{301}/plate.md"), "# Plate\n").unwrap();
+    let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+    let pages: Vec<&str> = found.markdown_files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(pages, ["index.md"]);
+}

@@ -25,6 +25,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::build::manifest::SealedManifest;
+use crate::build::scan::path_collision::on_disk;
 use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::build::watch::{source_metadata_verdict, SourceVerdict};
@@ -85,7 +86,7 @@ impl SourceTree {
             if walked_rels.contains(rel.as_str()) || changed.contains(rel) {
                 continue;
             }
-            let abs = vault_root.join(rel);
+            let abs = on_disk(vault_root, rel);
             let changed_or_gone = std::fs::metadata(&abs).map_or(true, |md| {
                 matches!(source_metadata_verdict(meta, &md, &abs, baseline.captured_at), SourceVerdict::Changed)
             });
@@ -95,14 +96,14 @@ impl SourceTree {
         }
 
         let cloud_only: Vec<_> = changed.iter().filter(|rel| !baseline.sources.contains_key(*rel))
-            .map(|rel| vault_root.join(rel)).filter(|abs| is_still_in_the_cloud(abs)).collect();
+            .map(|rel| on_disk(vault_root, rel)).filter(|abs| is_still_in_the_cloud(abs)).collect();
         if !cloud_only.is_empty() {
             crate::build::cloud_readiness::fetch::bring_local(vault_root, cloud_only, &wait(), retry, say)?;
         }
 
         let mut sources = baseline.sources;
         for rel in &changed {
-            let abs = vault_root.join(rel);
+            let abs = on_disk(vault_root, rel);
             // It keeps its recorded hash: reading it would block until the provider
             // delivers it. Said aloud, since it may hold an edit not yet downloaded.
             if sources.contains_key(rel) && is_still_in_the_cloud(&abs) {
@@ -162,7 +163,7 @@ fn theme_source_keys(vault_root: &Path) -> Vec<String> {
         .filter_map(|entry| {
             let path = crate::build::icloud::icloud_stub_target(entry.path()).unwrap_or_else(|| entry.path().to_path_buf());
             let rel = path.strip_prefix(&dir).ok()?;
-            Some(format!(".moss/theme/{}", moss_core::slug::normalize_separators(&rel.to_string_lossy())))
+            Some(format!(".moss/theme/{}", crate::build::scan::path_collision::logical_path(rel)))
         })
         .collect()
 }

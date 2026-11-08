@@ -80,7 +80,7 @@ pub(crate) fn url_collision_diagnostic(project_root: &std::path::Path, file_path
     let Ok(relative) = file_path.strip_prefix(project_root) else {
         return Vec::new();
     };
-    let key = relative.to_string_lossy().replace('\\', "/");
+    let key = crate::build::scan::path_collision::logical_path(relative);
     let map = match crate::build::scan::article_map::ArticleMap::load(
         &project_root.join(".moss"),
     ) {
@@ -149,6 +149,17 @@ mod url_collision_tests {
         assert_eq!(diags[0].severity, 2);
         assert!(diags[0].message.contains("繪本組"), "{}", diags[0].message);
         assert!(diags[0].message.contains("awards/comics-2/"), "{}", diags[0].message);
+    }
+
+    #[test]
+    fn a_page_the_disk_spells_decomposed_finds_its_composed_map_key() {
+        let dir = vault_with_collision();
+        let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+        let collision = map.url_collisions.remove("評選/散文組/散文組.md").unwrap();
+        map.url_collisions.insert("caf\u{e9}/menu.md".to_string(), collision);
+        map.save(&dir.path().join(".moss")).unwrap();
+        let file = dir.path().join("cafe\u{301}/menu.md");
+        assert_eq!(super::url_collision_diagnostic(dir.path(), &file).len(), 1);
     }
 
     #[test]

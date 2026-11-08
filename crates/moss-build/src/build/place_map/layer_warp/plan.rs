@@ -75,7 +75,7 @@ fn plan_layer(layer: &MapLayer, site_root: &Path, spots: &[(&String, (f64, f64))
     if layer.kind != LayerKind::Historical {
         return empty;
     }
-    let mut plates = load_plates(&site_root.join(&layer.source));
+    let mut plates = load_plates(&crate::build::scan::path_collision::on_disk(site_root, &layer.source));
     if plates.is_empty() {
         log_note!("map layer {} has no plates in {}", layer.name, layer.source);
         return empty;

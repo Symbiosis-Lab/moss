@@ -43,10 +43,7 @@ pub fn slugify_dir_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
-    // Normalize `\`→`/` so Windows backslash paths split into segments correctly
-    // (otherwise the whole path is one leaf and the separator/case round-trips
-    // into the output URL). moss treats `\` as a path separator everywhere.
-    let path = moss_core::slug::normalize_separators(path);
+    let path = crate::build::scan::path_collision::logical_path(path);
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return String::new();

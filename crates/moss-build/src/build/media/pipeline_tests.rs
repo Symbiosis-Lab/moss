@@ -213,6 +213,59 @@ fn copy_deferred_assets_preserves_directory_symlink() {
     assert_eq!(through_alias, b"<h1>app</h1>");
 }
 
+/// The manifest a copy seals for a site whose `resources/app` folder is linked
+/// from `cafe\u{301}/link` by `make_link(target, link)`.
+#[cfg(unix)]
+fn sealed_with_a_link_in_a_decomposed_folder(make_link: impl Fn(&Path, &Path)) -> crate::build::manifest::SealedManifest {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = tmp.path().join("source");
+    let moss = tmp.path().join(".moss");
+    let staging = moss.join("build/site-stage");
+    for dir in [&source.join("resources/app"), &source.join("cafe\u{301}"), &staging, &moss.join("cache/objects")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(source.join("resources/app/index.html"), b"<h1>app</h1>").unwrap();
+    make_link(&source.join("resources/app"), &source.join("cafe\u{301}/link"));
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: staging,
+        moss_dir: moss,
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+    let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    drained_sealed(rx)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_in_a_folder_the_disk_spells_decomposed_is_published() {
+    let sealed = sealed_with_a_link_in_a_decomposed_folder(|_, link| std::os::unix::fs::symlink("../resources/app", link).unwrap());
+    assert!(sealed.files().contains_key("caf\u{e9}/link"), "{:?}", sealed.files().keys().collect::<Vec<_>>());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_finder_alias_in_a_folder_the_disk_spells_decomposed_is_published() {
+    use core_foundation::{base::TCFType, data::CFData, url::CFURL};
+    use core_foundation_sys::url::{kCFURLBookmarkCreationSuitableForBookmarkFile, CFURLCreateBookmarkData, CFURLWriteBookmarkDataToFile};
+    let write_alias = |target: &Path, alias: &Path| {
+        let target = CFURL::from_path(target, true).unwrap();
+        let alias = CFURL::from_path(alias, false).unwrap();
+        // SAFETY: both URLs are live for the block; the bookmark is taken under
+        // the Create Rule, and a null error out-pointer is allowed.
+        unsafe {
+            let data = CFURLCreateBookmarkData(std::ptr::null(), target.as_concrete_TypeRef(),
+                kCFURLBookmarkCreationSuitableForBookmarkFile, std::ptr::null(), std::ptr::null(), std::ptr::null_mut());
+            assert!(!data.is_null());
+            let data = CFData::wrap_under_create_rule(data);
+            assert_ne!(CFURLWriteBookmarkDataToFile(data.as_concrete_TypeRef(), alias.as_concrete_TypeRef(), 0, std::ptr::null_mut()), 0);
+        }
+    };
+    let sealed = sealed_with_a_link_in_a_decomposed_folder(write_alias);
+    assert!(sealed.files().contains_key("caf\u{e9}/link"), "{:?}", sealed.files().keys().collect::<Vec<_>>());
+}
+
 /// Integration test: a preserved symlink registers a manifest entry
 /// under MODE_SYMLINK so the deploy uploader will ship it as a symlink
 /// to seta. Without this, the symlink would be silently dropped from

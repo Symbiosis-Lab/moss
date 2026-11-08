@@ -29,6 +29,7 @@ use std::path::Path;
 use crate::build::feeds::redirects;
 use crate::build::manifest::{change_set, change_set::PublishedSnapshot, live_baseline, published_record, SealedManifest};
 use crate::build::scan::article_map::ArticleMap;
+use crate::build::scan::path_collision::on_disk;
 use crate::deploy::change_record::{self, PageChangeSummary};
 use crate::deploy::history::HistoryStore;
 use crate::moss_paths::MossPaths;
@@ -270,7 +271,7 @@ async fn stamp_published_uids(folder: &Path, sealed: &SealedManifest) -> Stamps 
 /// the build or already names the uid.
 fn stamp_one(root: &Path, source_path: &str, uid: &str, published_hash: &str) -> Result<Option<String>, String> {
     use crate::build::cloud_readiness::{probe_input, Found};
-    let path = root.join(source_path);
+    let path = on_disk(root, source_path);
     let read = || match probe_input(&path) {
         Ok(Found::Bytes(bytes)) => Ok(bytes),
         Ok(Found::InCloud) => Err("it is still in the cloud".to_string()),

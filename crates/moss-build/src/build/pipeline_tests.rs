@@ -3525,6 +3525,25 @@ fn html_deletions_spares_the_pages_the_seal_forwards_again() {
         "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes");
 }
 
+/// A page in the cloud under a decomposed name is the composed source the
+/// last build recorded: it is offline, not deleted, and its page stays.
+#[test]
+fn html_deletions_holds_an_evicted_page_whatever_its_spelling() {
+    let folder = TempDir::new().unwrap();
+    let folder_path = folder.path().to_string_lossy().to_string();
+    let mut previous = SiteHashes::default();
+    previous.files.insert("caf\u{e9}/a.html".to_string(), "100644:hash".to_string());
+    previous.sources.insert("caf\u{e9}/a.html".to_string(), Default::default());
+    let structure = crate::types::content::ProjectStructure {
+        evicted_paths: vec![folder.path().join("cafe\u{301}/a.html")],
+        ..Default::default()
+    };
+    let (deleted, stale) = crate::build::media::pipeline::html_deletions(&previous, &PendingManifest::new(SiteHashes::default()),
+        &structure, &folder_path, &Default::default(), &Default::default());
+    assert!(!deleted);
+    assert_eq!(stale, Vec::<String>::new());
+}
+
 #[test]
 fn remove_stale_html_keeps_a_case_only_rename_and_removes_a_distinct_file() {
     use std::collections::HashSet;

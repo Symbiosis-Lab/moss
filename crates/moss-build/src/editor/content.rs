@@ -359,7 +359,7 @@ fn keep_version(file_path: &str, bytes: &[u8]) -> Result<Option<String>, String>
 fn site_page(file_path: &str) -> Option<(crate::vault_root::VaultRoot, String)> {
     let path = std::path::Path::new(file_path);
     let site = crate::vault_root::VaultRoot::find_containing(path)?;
-    let rel = moss_core::slug::normalize_separators(&path.strip_prefix(site.path()).ok()?.to_string_lossy());
+    let rel = crate::build::scan::path_collision::logical_path(path.strip_prefix(site.path()).ok()?);
     Some((site, rel))
 }
 
@@ -719,6 +719,22 @@ mod tests {
             displaced_event(&file.to_string_lossy(), &outcome),
             Some(crate::types::events::MossEvent::OutsideEditKept { path, version_id }) if &version_id == id && path == "notes/harbour.md"
         ));
+    }
+
+    #[test]
+    fn an_outside_edit_to_a_page_the_disk_spells_decomposed_is_kept_under_its_composed_path() {
+        let theirs = "Theirs.\n";
+        let (dir, _) = site_with_page(theirs);
+        let file = dir.path().join("cafe\u{301}").join("menu.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, theirs).unwrap();
+
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "Mine.\n", &content_hash(theirs.as_bytes()), true).unwrap();
+
+        assert!(matches!(
+            displaced_event(&file.to_string_lossy(), &outcome),
+            Some(crate::types::events::MossEvent::OutsideEditKept { path, .. }) if path == "caf\u{e9}/menu.md"
+        ), "{outcome:?}");
     }
 
     #[test]

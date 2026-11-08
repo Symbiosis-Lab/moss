@@ -1205,6 +1205,16 @@ fn path_to_relative_key_strips_folder_and_normalizes_slashes() {
     assert_eq!(rel, "posts/a.md");
 }
 
+/// A watch key matches the scan's: composed, whatever the disk spells.
+#[test]
+fn path_to_relative_key_composes_a_decomposed_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("cafe\u{301}");
+    fs::create_dir_all(&sub).unwrap();
+    let p = gate_write_file(&sub, "a.md", b"x");
+    assert_eq!(path_to_relative_key(dir.path(), &p).as_deref(), Some("caf\u{e9}/a.md"));
+}
+
 #[cfg(unix)]
 #[test]
 fn path_to_relative_key_names_a_missing_file_in_a_folder_reached_through_a_symlink() {

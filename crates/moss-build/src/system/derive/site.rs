@@ -24,6 +24,7 @@ use moss_core::content_graph::ContentGraph;
 use moss_core::resolve::embeds::derived::{extension_of, DerivedFragment, DerivedTable};
 use moss_core::resolve::md_extract::{extract_md_references, RefSyntax};
 
+use crate::build::scan::path_collision::on_disk;
 use crate::build::ports::reporter::BuildReporter;
 use crate::build::progress::PipelineEvent;
 use crate::moss_paths::MossPaths;
@@ -205,7 +206,7 @@ impl DerivedSite {
         let Some(entry) = self.registry.for_extension(&extension_of(path)) else {
             return Slot::Failed("no plugin reads this kind of file".into());
         };
-        let input = self.root.join(path);
+        let input = on_disk(&self.root, path);
         if let Some(outcome) = derive::lookup_cached(&self.paths, entry, &input) {
             return Slot::Outcome(outcome);
         }
@@ -237,7 +238,7 @@ impl DerivedSite {
         for page in pages {
             // The build's own non-waiting probe: a page still in the cloud is
             // skipped here and deferred by the render, not downloaded.
-            let Ok(Some(text)) = crate::build::cloud_readiness::probe_input_to_string(&self.root.join(page)) else {
+            let Ok(Some(text)) = crate::build::cloud_readiness::probe_input_to_string(&on_disk(&self.root, page)) else {
                 continue;
             };
             if !text.contains("![") {
@@ -277,7 +278,7 @@ impl DerivedSite {
         let misses: Vec<Demand> = demands
             .into_iter()
             .filter(|d| {
-                let input = self.root.join(&d.path);
+                let input = on_disk(&self.root, &d.path);
                 derive::lookup_cached(&self.paths, &d.entry, &input).is_none()
                     && !(adopting && derive::remembered(&d.entry, &input).is_some())
             })
@@ -382,7 +383,7 @@ fn read_all(
         if let Some(failure) = unavailable.get(&id) {
             report_failure(&job.path, failure);
             if remember {
-                derive::remember_failure(&job.entry, &root.join(&job.path), failure);
+                derive::remember_failure(&job.entry, &on_disk(root, &job.path), failure);
             }
             results.push((job.path.clone(), Err(failure.clone())));
         }
@@ -392,12 +393,12 @@ fn read_all(
     let total = runnable.len();
     report_progress(reporter, &noun, 0, total);
     let batch: Vec<DeriveJob<'_>> =
-        runnable.iter().map(|d| DeriveJob { entry: &d.entry, input: root.join(&d.path) }).collect();
+        runnable.iter().map(|d| DeriveJob { entry: &d.entry, input: on_disk(root, &d.path) }).collect();
     // New or changed bytes have no earlier result to show; a read repeated
     // for a changed plugin does, unless the file just arrived again.
     let arrived: Vec<bool> = runnable
         .iter()
-        .map(|d| derive::lookup_previous(paths, &d.entry, &root.join(&d.path)).is_none() || priority::arrived_in_session(root, &d.path, &d.pages))
+        .map(|d| derive::lookup_previous(paths, &d.entry, &on_disk(root, &d.path)).is_none() || priority::arrived_in_session(root, &d.path, &d.pages))
         .collect();
     let schedule = Arc::new(Schedule::new(root, runnable.iter().map(|d| d.pages.clone()).collect(), arrived));
     let derived = derive::derive_batch_by(paths, &batch, remember, stop, Arc::new(move |job| schedule.tier(job)), |done, total| {

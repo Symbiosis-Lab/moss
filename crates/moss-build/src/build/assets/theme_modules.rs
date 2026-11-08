@@ -45,7 +45,7 @@ impl ThemeModules {
                 continue;
             }
             let Ok(rel) = entry.path().strip_prefix(theme_dir) else { continue };
-            let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+            let rel = crate::build::scan::path_collision::logical_path(rel);
             let is_js = rel.ends_with(".js") || rel.ends_with(".mjs");
             if !is_js || rel == "script.js" || ServedPath::for_theme_script_hashed(&rel, "").is_err() {
                 continue;

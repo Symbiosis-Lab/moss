@@ -2,6 +2,7 @@
 //!
 //! The editor requests each image by its source path via `moss-source://`.
 use crate::build::scan::classify::{left_out, left_out_of_site};
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use moss_core::content_graph::{normalize_path, ContentGraph};
 use moss_core::resolve::editor::{RefTarget, ResolveInput};
 use moss_core::resolve::editor::files::named_folders;
@@ -20,7 +21,7 @@ fn site_listing(root: &Path) -> (Vec<String>, Vec<String>) {
     let walk = walkdir::WalkDir::new(root).into_iter().filter_entry(|e| left_out_of_site(e).is_none());
     for entry in walk.flatten() {
         let Ok(rel) = entry.path().strip_prefix(root) else { continue; };
-        let rel = rel.to_string_lossy().replace('\\', "/");
+        let rel = logical_path(rel);
         if entry.file_type().is_file() { files.push(rel); }
         else if entry.file_type().is_dir() && !rel.is_empty() { directories.push(rel); }
     }
@@ -54,7 +55,12 @@ pub(super) fn reference_input(root: &Path, scope: EditorScope, from: &str, targe
     }
 }
 
+/// The page a reference is written in, as the listing above names it.
 pub(super) fn compute_from_source(from_file: &Path, canonical_root: &Path) -> String {
+    logical_path(from_source_as_listed(from_file, canonical_root))
+}
+
+fn from_source_as_listed(from_file: &Path, canonical_root: &Path) -> String {
     // The editor passes a PROJECT-ROOT-RELATIVE path (e.g. "News/post.md", from
     // `getCurrentEntry().path`). A relative path IS already the root-relative
     // source — return it directly. Do NOT fall through to the canonicalize-parent
@@ -62,7 +68,7 @@ pub(super) fn compute_from_source(from_file: &Path, canonical_root: &Path) -> St
     // project root), fail, and collapse to the basename — making the engine treat
     // the file as root-level so `./assets/X` resolves as Literal (warning lost).
     if from_file.is_relative() {
-        return from_file.to_string_lossy().replace('\\', "/");
+        return from_file.to_string_lossy().into_owned();
     }
 
     let file_name = from_file
@@ -78,7 +84,7 @@ pub(super) fn compute_from_source(from_file: &Path, canonical_root: &Path) -> St
     if let Some(parent) = parent_canon {
         match parent.strip_prefix(canonical_root) {
             Ok(rel_parent) => {
-                let rel_parent_str = rel_parent.to_string_lossy().replace('\\', "/");
+                let rel_parent_str = rel_parent.to_string_lossy();
                 if rel_parent_str.is_empty() {
                     file_name
                 } else {
@@ -93,7 +99,7 @@ pub(super) fn compute_from_source(from_file: &Path, canonical_root: &Path) -> St
     } else {
         // Parent doesn't exist either; try lexical strip_prefix as last resort.
         match from_file.strip_prefix(canonical_root) {
-            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+            Ok(rel) => rel.to_string_lossy().into_owned(),
             Err(_) => file_name,
         }
     }
@@ -108,7 +114,7 @@ fn offers_original(width: Option<u32>, rung_widths: &[u32]) -> bool {
 /// The width and height are the source's even when `moss-source://` answers
 /// with a built rung, so the editor's image box does not change when the bytes do.
 pub(super) fn enrich(mut asset: ResolvedAsset, root: &Path) -> Option<ResolvedAsset> {
-    let absolute = root.join(&asset.absolute_path);
+    let absolute = on_disk(root, &asset.absolute_path);
     let meta = std::fs::metadata(&absolute).ok()?;
     if asset.mime_type.starts_with("image/") {
         if let Some((width, height)) = crate::build::scan::scan::extract_image_dimensions(&absolute) {
@@ -572,6 +578,27 @@ mod tests {
         assert_eq!(mime_for_path(Path::new("x.ogg")), "audio/ogg",  "ogg must be audio/ogg");
         assert_eq!(mime_for_path(Path::new("x.aac")), "audio/aac",  "aac must be audio/aac");
         assert_eq!(mime_for_path(Path::new("x.m4a")), "audio/mp4",  "m4a must be audio/mp4");
+    }
+
+    #[test]
+    fn a_photo_the_disk_spells_decomposed_is_requested_by_its_composed_path() {
+        let dir = scratch_root();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("cafe\u{301}")).unwrap();
+        std::fs::write(root.join("cafe\u{301}/beach.png"), b"x").unwrap();
+        let r = resolve_asset("beach.png", &root.join("cafe\u{301}/post.md"), root, EditorScope::Site).unwrap();
+        assert_eq!(r.request_url, "/caf\u{e9}/beach.png");
+    }
+
+    #[test]
+    fn a_page_named_decomposed_is_read_from_its_composed_path() {
+        let dir = scratch_root();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("cafe\u{301}")).unwrap();
+        let page = root.join("cafe\u{301}/post.md");
+        std::fs::write(&page, b"x").unwrap();
+        assert_eq!(compute_from_source(&page, &root), "caf\u{e9}/post.md");
+        assert_eq!(compute_from_source(Path::new("cafe\u{301}/post.md"), &root), "caf\u{e9}/post.md");
     }
 
     #[test]
