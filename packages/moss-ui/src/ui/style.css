@@ -1646,6 +1646,17 @@ body.starter-picker-active .moss-preview-container.action-panel-open.mobile-mode
   opacity: 0.4;
 }
 
+/* Keyboard focus: the seam at full accent, at once, replaces the strip's
+   outline (a 32px box around an invisible strip would point at nothing). */
+.moss-webview-divider:focus-visible {
+  outline: none;
+}
+.moss-webview-divider:focus-visible::after {
+  background: var(--moss-color-accent);
+  opacity: 1;
+  transition-delay: 0ms;
+}
+
 .moss-webview-divider.dragging::after {
   background: var(--moss-color-accent);
   opacity: 0.6;
