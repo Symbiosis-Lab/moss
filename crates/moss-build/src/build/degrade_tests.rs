@@ -90,7 +90,8 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     );
     let mut sealed = pending.seal();
 
-    repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    let (_, rewritten) = repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    assert_eq!(rewritten, ["index.html"], "the page the preview is serving was rewritten, and the caller is told");
 
     let on_disk = std::fs::read_to_string(stage.join("index.html")).unwrap();
     assert!(

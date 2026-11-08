@@ -43,6 +43,7 @@ async fn a_build_moves_an_old_tree_into_the_split_layout_before_writing() {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     })
     .await
     .expect("build");

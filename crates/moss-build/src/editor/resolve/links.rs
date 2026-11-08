@@ -487,6 +487,7 @@ mod tests {
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         }));
         assert!(result.is_ok(), "pipeline run failed: {:?}", result);
 
@@ -529,6 +530,7 @@ mod tests {
                 server_port: None,
                 admission_epoch: None,
                 live_port: None,
+                rename_pairs: Vec::new(),
             })).unwrap();
 
             let map = ArticleMap::load(&folder_path.join(".moss")).unwrap();

@@ -55,6 +55,7 @@ fn build(files: &[(&str, &str)]) -> (Site, PathBuf, usize) {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
     .expect("build succeeds");
     let problems = take_cli_problems();

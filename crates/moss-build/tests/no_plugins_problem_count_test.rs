@@ -30,6 +30,7 @@ fn build_once(files: &[(&str, &str)], plugins: PluginMode) -> usize {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
     .expect("the build must succeed");
     take_cli_problems()

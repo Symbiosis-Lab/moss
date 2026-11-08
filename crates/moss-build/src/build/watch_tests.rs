@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::load_previous_hashes;
 use crate::build::stat::{RACY_WRITE_EPSILON_SECS, ZERO_NANOS_TRUST_AGE_SECS};
 
 /// Feature 4: File Watching - File Filtering
@@ -1625,12 +1626,12 @@ fn build_rebuild_event_resolves_flat_html_rename_to_output_pair() {
     assert!(!deleted.iter().any(|p| p == "home.html"));
 }
 
-/// decide_rebuild_event: with a fresh stash the edited page surfaces.
+/// The rebuild event: with a fresh stash the edited page surfaces.
 /// This is the primary contract test for the stale-hash race fix — it
 /// covers the full chain (stash selection → diff → event) without needing
 /// a tauri::AppHandle.
 #[test]
-fn decide_rebuild_event_with_fresh_stash_emits_changed_page() {
+fn rebuild_event_with_fresh_stash_emits_changed_page() {
     let mut prev = SiteHashes::new();
     prev.insert("research/index.html".into(), "old-hash".into());
     prev.source_to_output
@@ -1643,28 +1644,12 @@ fn decide_rebuild_event_with_fresh_stash_emits_changed_page() {
         .source_to_output
         .insert("research.md".into(), "research/index.html".into());
 
-    let event = decide_rebuild_event(Some(stash), "irrelevant", &prev, &[])
+    let event = build_rebuild_event_with_renames(&stash, &prev, &[])
         .expect("fresh stash with a changed page must emit a refresh event");
     assert_eq!(
         event.changed_output_files.as_deref(),
         Some(&["research/index.html".to_string()][..]),
         "changed page must be in changed_output_files"
-    );
-}
-
-/// decide_rebuild_event: a stale stash (equal to previous) produces no
-/// event — pinning the exact bug behavior so we know what we fixed.
-#[test]
-fn decide_rebuild_event_with_stale_stash_produces_no_event() {
-    let mut prev = SiteHashes::new();
-    prev.insert("research/index.html".into(), "same-hash".into());
-    prev.source_to_output
-        .insert("research.md".into(), "research/index.html".into());
-
-    let stale = prev.clone(); // identical to prev — simulates the racy disk re-read
-    assert!(
-        decide_rebuild_event(Some(stale), "irrelevant", &prev, &[]).is_none(),
-        "stale stash equal to prev must produce no event (documents the pre-fix bug)"
     );
 }
 
@@ -1680,7 +1665,7 @@ fn decide_rebuild_event_with_stale_stash_produces_no_event() {
 /// in `new.source_to_output` but absent from `previous`, so the event is
 /// emitted (carrying `source_creates`) regardless of the output-hash diff.
 #[test]
-fn decide_rebuild_event_emits_for_new_page_even_with_no_output_hash_diff() {
+fn rebuild_event_emits_for_new_page_even_with_no_output_hash_diff() {
     // Output files identical between builds (no `files`-set diff at all).
     let mut prev = SiteHashes::new();
     prev.insert("index.html".into(), "same-hash".into());
@@ -1698,7 +1683,7 @@ fn decide_rebuild_event_emits_for_new_page_even_with_no_output_hash_diff() {
         .source_to_output
         .insert("new-page.md".into(), "new-page/index.html".into());
 
-    let event = decide_rebuild_event(Some(stash), "irrelevant", &prev, &[])
+    let event = build_rebuild_event_with_renames(&stash, &prev, &[])
         .expect("a newly-created page must emit an event so the retry gets a trigger");
     assert_eq!(
         event.source_creates.as_deref(),
@@ -1707,45 +1692,8 @@ fn decide_rebuild_event_emits_for_new_page_even_with_no_output_hash_diff() {
     );
 }
 
-/// decide_rebuild_event: no stash → falls back to disk read. Uses a
-/// temp dir to test the fallback path without a Tauri AppHandle.
-#[test]
-fn decide_rebuild_event_fallback_to_disk_when_no_stash() {
-    // Use create_dir_all to ensure the parent exists (target/test-tmp may
-    // not exist on a fresh checkout before any cargo build).
-    let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
-        .parent()
-        .unwrap()
-        .join("target/test-tmp");
-    std::fs::create_dir_all(&parent).unwrap();
-    let dir = tempfile::TempDir::new_in(&parent).unwrap();
-    let folder = dir.path().to_str().unwrap();
-
-    // Write a hashes.json so load_previous_hashes finds something.
-    // (.moss/build.nosync/staging/ is not required by load_previous_hashes — only hashes.json is.)
-    let hashes_path = dir.path().join(".moss/build.nosync/hashes.json");
-    std::fs::create_dir_all(dir.path().join(".moss/build.nosync")).unwrap();
-    let mut disk_hashes = SiteHashes::new();
-    disk_hashes.insert("index.html".into(), "disk-hash".into());
-    std::fs::write(&hashes_path, serde_json::to_string(&disk_hashes).unwrap()).unwrap();
-
-    let mut prev = SiteHashes::new();
-    prev.insert("index.html".into(), "old-hash".into()); // differs from disk
-
-    // No stash → falls back to load_previous_hashes(folder) → disk_hashes.
-    // disk_hashes["index.html"] = "disk-hash" ≠ prev["index.html"] = "old-hash"
-    let event = decide_rebuild_event(None, folder, &prev, &[])
-        .expect("disk fallback with a changed hash must emit an event");
-    assert_eq!(
-        event.changed_output_files.as_deref(),
-        Some(&["index.html".to_string()][..])
-    );
-}
-
-
-
 /// The stash must describe what the screen shows (build.rs guards the
-/// `stash_content_hashes` call with this). A cloud-withheld build
+/// `record_content_hashes` call with this). A cloud-withheld build
 /// (`publishable == false`) and a cancelled build never switch the preview
 /// (`pipeline::run` only calls `switch_to` under `if publishable`, and the
 /// cancelled early-return precedes both arms), so stashing their hashes made
@@ -1770,113 +1718,116 @@ fn stash_only_when_the_preview_switched_to_this_build() {
 
 
 
-/// baseline_for_rebuild: when an in-memory baseline exists it is used
-/// VERBATIM and the disk `hashes.json` is NOT consulted — even if disk is
-/// poisoned with a future build's hashes (the detached-seal race). This is
-/// the core of the "no refresh" fix.
-#[test]
-fn baseline_for_rebuild_prefers_in_memory_over_poisoned_disk() {
-    // Set up a folder whose on-disk hashes.json is POISONED: it claims the
-    // page already has the value THIS rebuild will produce ("v2"), as if a
-    // late seal from a future state landed. A disk-loaded baseline would
-    // therefore make the edited page look unchanged.
-    let tmp = tempfile::tempdir().unwrap();
-    let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
-    std::fs::write(
-        folder.join(".moss/build.nosync/hashes.json"),
-        r#"{"files":{"research/index.html":"100644:v2"}}"#,
-    )
-    .unwrap();
-    let output = folder.join(".moss/build.nosync/staging");
+#[derive(Default)]
+struct HeardChanges(std::sync::Mutex<Vec<crate::types::events::FileChangeEvent>>);
 
-    // The race-free in-memory baseline holds the TRUE previous value ("v1").
-    let mut in_mem = SiteHashes::new();
-    in_mem.insert("research/index.html".into(), "100644:v1".into());
-
-    let baseline = baseline_for_rebuild(Some(in_mem), folder.to_str().unwrap(), &output);
-    assert_eq!(
-        baseline
-            .files
-            .get("research/index.html")
-            .map(String::as_str),
-        Some("100644:v1"),
-        "must use the in-memory baseline (v1), NOT the poisoned disk (v2)"
-    );
+impl crate::build::ports::reporter::BuildReporter for HeardChanges {
+    fn report(&self, event: &crate::build::progress::PipelineEvent) {
+        if let crate::build::progress::PipelineEvent::FileChanged(e) = event {
+            self.0.lock().unwrap().push(e.clone());
+        }
+    }
 }
 
-/// baseline_for_rebuild: with NO in-memory baseline, falls back to disk —
-/// preserving CLI/headless/external-build and first-rebuild behavior.
-#[test]
-fn baseline_for_rebuild_falls_back_to_disk_when_no_in_memory() {
-    let tmp = tempfile::tempdir().unwrap();
-    let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
-    std::fs::write(
-        folder.join(".moss/build.nosync/hashes.json"),
-        r#"{"files":{"index.html":"100644:disk"}}"#,
-    )
-    .unwrap();
-    let output = folder.join(".moss/build.nosync/staging");
-
-    let baseline = baseline_for_rebuild(None, folder.to_str().unwrap(), &output);
-    assert_eq!(
-        baseline.files.get("index.html").map(String::as_str),
-        Some("100644:disk"),
-        "no in-memory baseline → load from disk"
-    );
+fn plan_with(baseline: Baseline) -> (RefreshPlan, std::sync::Arc<HeardChanges>) {
+    let heard = std::sync::Arc::new(HeardChanges::default());
+    let asked = RefreshRequest { rename_pairs: Vec::new(), events: heard.clone() };
+    (RefreshPlan { baseline, asked }, heard)
 }
 
-/// End-to-end logic of the fix: a real edit (X: v1 → v2) refreshes when the
-/// baseline is the race-free in-memory previous (v1), even though a poisoned
-/// disk would have said v2 (→ the spurious action=none the user sees). This
-/// composes baseline_for_rebuild with decide_rebuild_event — the two halves
-/// the rebuild path actually runs.
+fn page_at(hash: &str) -> SiteHashes {
+    let mut hashes = SiteHashes::new();
+    hashes.insert("research/index.html".into(), format!("100644:{hash}"));
+    hashes
+}
+
+fn named(heard: &HeardChanges) -> Vec<Vec<String>> {
+    heard.0.lock().unwrap().iter().map(|e| e.changed_output_files.clone().unwrap_or_default()).collect()
+}
+
+/// The plan's baseline is the stash of the render on screen, else the disk
+/// while staging exists, else nothing.
 #[test]
-fn baseline_race_fix_emits_refresh_for_edited_page() {
-    // Prior build's race-free hashes (the in-memory baseline): X == v1.
-    let mut prev = SiteHashes::new();
-    prev.insert("research/index.html".into(), "100644:v1".into());
-    prev.source_to_output
-        .insert("research.md".into(), "research/index.html".into());
+fn a_refresh_plan_takes_the_stash_else_the_disk_else_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let folder = tmp.path().to_str().unwrap();
+    let paths = crate::moss_paths::MossPaths::new(tmp.path());
+    let asked = || RefreshRequest { rename_pairs: Vec::new(), events: crate::build::null_sink() };
 
-    // This rebuild (edit X → v2): new stash X == v2.
-    let mut new = SiteHashes::new();
-    new.insert("research/index.html".into(), "100644:v2".into());
-    new.source_to_output
-        .insert("research.md".into(), "research/index.html".into());
+    assert!(matches!(RefreshPlan::before_build(folder, &paths, asked()).baseline, Baseline::Gone));
+    std::fs::create_dir_all(paths.staging_dir()).unwrap();
+    assert!(matches!(RefreshPlan::before_build(folder, &paths, asked()).baseline, Baseline::Disk));
+    crate::system::build_records::records().record_content_hashes(folder, page_at("v1"));
+    std::fs::remove_dir_all(paths.staging_dir()).unwrap();
+    match RefreshPlan::before_build(folder, &paths, asked()).baseline {
+        Baseline::Shown(stash) => assert_eq!(stash.files.get("research/index.html").map(String::as_str), Some("100644:v1")),
+        _ => panic!("a stash is the baseline even with staging gone"),
+    }
+}
 
-    // FIXED path: baseline = the in-memory prev (v1). baseline_for_rebuild
-    // with Some(_) ignores disk entirely (the disk-fallback / poisoned-disk
-    // paths are covered by the baseline_for_rebuild_* tests above), so we
-    // pass a non-existent path to prove disk is never consulted here.
-    let baseline = baseline_for_rebuild(
-        Some(prev),
-        "irrelevant",
-        std::path::Path::new("/nonexistent"),
-    );
-    let event = decide_rebuild_event(Some(new), "irrelevant", &baseline, &[])
-        .expect("edited page must refresh when baseline is the race-free previous");
-    assert_eq!(
-        event.changed_output_files.as_deref(),
-        Some(&["research/index.html".to_string()][..]),
-        "edited page must be in changed_output_files → preview refreshes"
-    );
+/// The baseline is the stash, verbatim, even when `hashes.json` already holds
+/// this rebuild's hashes (a detached seal landed during the build); with no
+/// stash it is `hashes.json`; with staging removed by another process it is
+/// nothing, so every file the rebuild writes back is new to the preview.
+#[test]
+fn the_show_event_diffs_against_the_stash_else_hashes_json_else_nothing() {
+    let written = |_: &str| true;
+    let (plan, heard) = plan_with(Baseline::Shown(page_at("v1")));
+    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
+    assert_eq!(named(&heard), [["research/index.html"]], "the stash wins over a poisoned hashes.json");
 
-    // CONTRAST (documents the bug): a poisoned baseline that already equals
-    // THIS build's output (what a late disk seal can produce) yields no
-    // event → the spurious action=none the user experiences. (The disk
-    // fallback path also drops source_to_output, but the file-hash equality
-    // is the load-bearing case; build it as an exact clone to isolate it.)
-    let mut new2 = SiteHashes::new();
-    new2.insert("research/index.html".into(), "100644:v2".into());
-    new2.source_to_output
-        .insert("research.md".into(), "research/index.html".into());
-    let poisoned = new2.clone(); // baseline already == this build's output
-    assert!(
-        decide_rebuild_event(Some(new2), "irrelevant", &poisoned, &[]).is_none(),
-        "poisoned baseline equal to this build's output reproduces the no-refresh bug"
-    );
+    let (plan, heard) = plan_with(Baseline::Disk);
+    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
+    plan.announce(&page_at("v2"), &page_at("v1"), written, 2);
+    assert_eq!(named(&heard), [["research/index.html"]], "without a stash, hashes.json is the baseline");
+
+    let (plan, heard) = plan_with(Baseline::Gone);
+    plan.announce(&page_at("v2"), &page_at("v2"), written, 1);
+    assert_eq!(named(&heard), [["research/index.html"]], "with staging gone, everything is new");
+}
+
+/// The show-time event names a changed key only if the render had written
+/// its bytes when it was shown. A key the background writes later (here a
+/// stylesheet) is left to the seal tail; with nothing servable left to say
+/// and no source change, no event is sent.
+#[test]
+fn the_show_event_names_only_keys_whose_bytes_are_already_shown() {
+    let mut before = page_at("v1");
+    before.insert("notes/handout.css".into(), "100644:red".into());
+    let mut after = page_at("v2");
+    after.insert("notes/handout.css".into(), "100644:blue".into());
+    let (plan, heard) = plan_with(Baseline::Shown(before));
+
+    plan.announce(&after, &SiteHashes::new(), |key| key == "research/index.html", 7);
+    plan.announce(&after, &SiteHashes::new(), |_| false, 8);
+
+    let heard = heard.0.lock().unwrap();
+    assert_eq!(heard.len(), 1, "the render that wrote nothing changed sends nothing: {heard:?}");
+    assert_eq!(heard[0].changed_output_files.as_deref(), Some(&["research/index.html".to_string()][..]));
+    assert_eq!(heard[0].render_seq, Some(7));
+}
+
+/// The seal tail names what changed since the last seal and since the show:
+/// a page the render wrote and left alone after is left out, a file the
+/// background wrote is named, a page the repair rewrote is named again, and
+/// search shards never are. A first build names only the repairs; a render
+/// the show did not announce names every change.
+#[test]
+fn the_tail_names_only_bytes_that_landed_after_the_show() {
+    let mut last_seal = SiteHashes::new();
+    for (key, hash) in [("note/index.html", "v1"), ("gallery/index.html", "g1"), ("notes/handout.css", "red"), ("_moss/pagefind/a.pf_index", "s1")] {
+        last_seal.insert(key.into(), format!("100644:{hash}"));
+    }
+    let mut sealed = SiteHashes::new();
+    for (key, hash) in [("note/index.html", "v2"), ("gallery/index.html", "g2"), ("notes/handout.css", "blue"), ("_moss/pagefind/b.pf_index", "s2")] {
+        sealed.insert(key.into(), format!("100644:{hash}"));
+    }
+    let late = |key: &str| key == "notes/handout.css" || key.starts_with("_moss/pagefind/");
+    let repaired = || vec!["gallery/index.html".to_string()];
+
+    assert_eq!(changed_after_show(&sealed, Some(&last_seal), late, repaired()), ["gallery/index.html", "notes/handout.css"]);
+    assert_eq!(changed_after_show(&sealed, None, late, repaired()), ["gallery/index.html"]);
+    assert_eq!(changed_after_show(&sealed, Some(&last_seal), |_| true, repaired()), ["gallery/index.html", "note/index.html", "notes/handout.css"]);
 }
 
 /// In-memory carry-forward deletion. With the stale-hash-race fix the
@@ -1925,9 +1876,8 @@ fn build_rebuild_event_maps_source_to_output_deletion_to_deleted_paths() {
 /// (in-memory) hashes, an edited page surfaces in `changed_output_files`
 /// (→ refresh). With a STALE snapshot equal to the previous manifest —
 /// exactly what re-reading the not-yet-persisted `hashes.json` returned —
-/// the diff is empty and no event fires. The fix feeds
-/// `do_rebuild_and_notify` the in-memory hashes so the former case is what
-/// actually happens; this test pins both ends of that contract.
+/// the diff is empty and no event fires. The rebuild diffs its in-memory
+/// hashes, so the former case is what happens; this pins both ends.
 #[test]
 fn build_rebuild_event_reflects_fresh_hashes_not_stale_snapshot() {
     let mut prev = SiteHashes::new();
@@ -2677,60 +2627,6 @@ fn full_rename_flow_pretty_url_resolves_to_output_pair_and_suppresses_deletion()
     );
 }
 
-// ----- previous_hashes_for_diff -----
-
-#[test]
-fn previous_hashes_for_diff_loads_from_disk_when_output_exists() {
-    // Output dir present + populated hashes.json → loaded entries flow
-    // into the rebuild's pre/post diff baseline.
-    let tmp = tempfile::tempdir().unwrap();
-    let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build.nosync/staging")).unwrap();
-    std::fs::create_dir_all(folder.join(".moss/build.nosync")).unwrap();
-    std::fs::write(
-        folder.join(".moss/build.nosync/hashes.json"),
-        r#"{"files":{"index.html":"100644:deadbeef"}}"#,
-    )
-    .unwrap();
-
-    let output = folder.join(".moss/build.nosync/staging");
-    let h = previous_hashes_for_diff(folder.to_str().unwrap(), &output);
-    assert_eq!(
-        h.files.get("index.html").map(String::as_str),
-        Some("100644:deadbeef"),
-        "should load entries from on-disk hashes.json when output dir exists"
-    );
-}
-
-#[test]
-fn previous_hashes_for_diff_returns_empty_when_output_missing() {
-    // Output dir wiped externally (iCloud / antivirus / manual rm), but
-    // hashes.json from the previous build still on disk. Without the
-    // invariant, the rebuild's pre/post diff would compare a stale
-    // manifest against the regenerated one and conclude "no changes" —
-    // browser stays on its 404. The guard substitutes an empty manifest
-    // so the post-diff sees all files as new and emits FileChanged.
-    let tmp = tempfile::tempdir().unwrap();
-    let folder = tmp.path();
-    std::fs::create_dir_all(folder.join(".moss/build.nosync")).unwrap();
-    // hashes.json present, claims files exist…
-    std::fs::write(
-        folder.join(".moss/build.nosync/hashes.json"),
-        r#"{"files":{"index.html":"100644:deadbeef"}}"#,
-    )
-    .unwrap();
-    // …but staging/ does not.
-    let output = folder.join(".moss/build.nosync/staging");
-    assert!(!output.exists(), "test setup: staging/ should be missing");
-
-    let h = previous_hashes_for_diff(folder.to_str().unwrap(), &output);
-    assert!(
-        h.files.is_empty(),
-        "should drop on-disk hashes when output is missing, got: {:?}",
-        h.files
-    );
-}
-
 // -----------------------------------------------------------------------
 // extract_rename_pairs tests
 //
@@ -3232,6 +3128,7 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         })
     };
     let stash = || crate::system::build_records::records().content_hashes(&folder_key);
@@ -3245,9 +3142,225 @@ async fn a_page_rewritten_on_disk_between_two_real_builds_is_in_modified_paths()
     let after = stash().expect("build 2 stashes its hashes");
     wait_for_seal(&folder_key, page, &after).await;
 
-    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+    let event = build_rebuild_event_with_renames(&after, &before, &[])
         .expect("an edit on disk emits a rebuild event");
     assert_eq!(event.modified_paths, Some(vec![page.to_string()]));
+}
+
+/// A rebuild tells the preview what changed from inside the pipeline, the
+/// moment it shows the render: `FileChanged` names the edited page and
+/// the render's number, and arrives before the build reports "complete" (the
+/// rest of the build — search, map assets, the media dispatch — comes after).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watch_rebuild_sends_file_changed_when_it_shows_the_render() {
+    use crate::build::progress::PipelineEvent;
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    #[derive(Default)]
+    struct Heard(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl crate::build::ports::reporter::BuildReporter for Heard {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+        fn wants_tier1(&self) -> bool {
+            true
+        }
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("refresh-at-show-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    std::fs::write(folder.join("note.md"), "# Note\n\nfirst\n").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+    let build = |trigger: BuildTrigger, heard: std::sync::Arc<Heard>| {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: heard.clone(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                events: heard,
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+            rename_pairs: Vec::new(),
+        })
+    };
+
+    build(BuildTrigger::Full, std::sync::Arc::new(Heard::default())).await.expect("build 1");
+
+    std::fs::write(folder.join("note.md"), "# Note\n\nsecond\n").unwrap();
+    let heard = std::sync::Arc::new(Heard::default());
+    build(BuildTrigger::ContentOnly(vec![folder.join("note.md")]), heard.clone())
+        .await
+        .expect("build 2");
+
+    let events = heard.0.lock().unwrap().clone();
+    let complete = events.iter().position(|e| matches!(e, PipelineEvent::Progress { step, .. } if step == "complete"))
+        .expect("the build reports complete");
+    let changed: Vec<_> = events.iter().enumerate().filter_map(|(i, e)| match e {
+        PipelineEvent::FileChanged(fc) => Some((i, fc.clone())),
+        _ => None,
+    }).collect();
+    assert!(!changed.is_empty(), "a watch rebuild sends FileChanged: {events:?}");
+    let (at, event) = &changed[0];
+    assert_eq!(event.modified_paths, Some(vec!["note.md".to_string()]));
+    assert!(
+        event.changed_output_files.as_ref().is_some_and(|f| f.iter().any(|p| p.starts_with("note"))),
+        "{event:?}"
+    );
+    assert!(event.render_seq.is_some(), "the event carries the render it shows");
+    assert!(*at < complete, "FileChanged is sent when the render is shown, before \"complete\": {events:?}");
+}
+
+/// Each changed key reaches the client once, in the event sent when its new
+/// bytes become servable. One save changes a page and a stylesheet the asset
+/// walk copies: the show's event names the page and not the stylesheet, whose
+/// bytes are not copied yet; the seal tail's names the stylesheet and not the
+/// page, with the shown render's number.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_changed_key_is_announced_once_when_its_bytes_become_servable() {
+    announce_one_save(false).await;
+}
+
+/// The same save while the place list waits in the cloud: the seal withholds
+/// the generation, but the preview still serves this render from staging, so
+/// the tail still names the stylesheet.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_withheld_seal_still_announces_what_the_preview_serves() {
+    announce_one_save(true).await;
+}
+
+async fn announce_one_save(evict_another_page: bool) {
+    use crate::build::progress::PipelineEvent;
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    #[derive(Default)]
+    struct Heard(std::sync::Mutex<Vec<crate::types::events::FileChangeEvent>>);
+    impl crate::build::ports::reporter::BuildReporter for Heard {
+        fn report(&self, event: &PipelineEvent) {
+            if let PipelineEvent::FileChanged(e) = event {
+                self.0.lock().unwrap().push(e.clone());
+            }
+        }
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    let tmp = tempfile::Builder::new().prefix("refresh-once-").tempdir_in(&base).unwrap();
+    let folder = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(folder.join("notes")).unwrap();
+    std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
+    std::fs::write(folder.join("note.md"), "# Note\n\nfirst\n").unwrap();
+    std::fs::write(folder.join("notes/handout.css"), "p { color: red }\n").unwrap();
+    std::fs::create_dir_all(folder.join(".moss")).unwrap();
+    std::fs::write(folder.join(".moss/places.toml"), "").unwrap();
+
+    let root = crate::vault::paths::VaultRoot::resolve(&folder);
+    let folder_key = root.as_str().to_string();
+    let mp = crate::moss_paths::MossPaths::new(&folder);
+    // A registered session is the one the seal asks about when it reveals a
+    // render. Inserted rather than `register_session`, which shuts down every
+    // other registered session (a seal test's vault running beside this one);
+    // the lock keeps a test that does call it from shutting down this one.
+    let _serial = evict_another_page.then(|| crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner()));
+    let session = crate::system::folder_session::FolderSession::new(folder.clone());
+    if evict_another_page {
+        crate::system::folder_session::registry().insert(folder_key.clone(), session.clone());
+    }
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    let heard = std::sync::Arc::new(Heard::default());
+    let build = || {
+        let mut services = crate::types::services::BuildServices::headless();
+        services.session = Some(session.clone());
+        run_pipeline(PipelineConfig {
+            root: root.clone(),
+            progress: crate::build::null_sink(),
+            plugins: PluginMode::Skip,
+            watch: false,
+            start_server: false,
+            host: crate::build::ports::host::HostPorts {
+                events: heard.clone(),
+                spawner: std::sync::Arc::new(crate::build::ports::spawner::TokioSpawner),
+                services,
+                ..crate::build::ports::host::test_host_ports()
+            },
+            trigger: BuildTrigger::Full,
+            exits_after_build: false,
+            site_url_override: None,
+            server_port: None,
+            admission_epoch: None,
+            live_port: None,
+            rename_pairs: Vec::new(),
+        })
+    };
+    let names = |e: &crate::types::events::FileChangeEvent, key: &str| e.changed_output_files.as_ref().is_some_and(|f| f.iter().any(|p| p == key));
+    let names_note = |e: &crate::types::events::FileChangeEvent| e.changed_output_files.as_ref().is_some_and(|f| f.iter().any(|p| p.starts_with("note") && !p.starts_with("notes/") && p.ends_with(".html")));
+    let wait_for_tail = |key: &'static str, skip: usize| {
+        let heard = heard.clone();
+        async move {
+            for _ in 0..1500 {
+                if let Some(e) = heard.0.lock().unwrap().iter().skip(skip).find(|e| names(e, key)) {
+                    return e.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            panic!("no event named {key}: {:?}", heard.0.lock().unwrap());
+        }
+    };
+    let sealed_css = |hash_of: &str| load_previous_hashes(&folder_key).files.get("notes/handout.css").is_some_and(|h| h != hash_of);
+
+    build().await.expect("build 1");
+    for _ in 0..1500 {
+        if sealed_css("") { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(sealed_css(""), "build 1's seal persisted the stylesheet");
+    let first_css = load_previous_hashes(&folder_key).files.get("notes/handout.css").cloned();
+    heard.0.lock().unwrap().clear();
+
+    if evict_another_page {
+        session.set_preview_requirement("/note/".into(), crate::system::folder_session::PreviewSource::File("note.md".into())).unwrap();
+        std::fs::remove_file(folder.join(".moss/places.toml")).unwrap();
+        std::fs::write(folder.join(".moss/.places.toml.icloud"), "").unwrap();
+    }
+    std::fs::write(folder.join("note.md"), "# Note\n\nsecond\n").unwrap();
+    std::fs::write(folder.join("notes/handout.css"), "p { color: blue }\n").unwrap();
+    build().await.expect("build 2");
+    if evict_another_page {
+        // The place list the page does not draw is still in the cloud: shown
+        // now or revealed by the seal once its stylesheets are in staging, the
+        // render reaches the preview, and so must its late stylesheet.
+        let late = wait_for_tail("notes/handout.css", 0).await;
+        assert!(late.render_seq.is_some(), "{late:?}");
+        assert!(heard.0.lock().unwrap().iter().any(names_note), "the page reached the preview: {:?}", heard.0.lock().unwrap());
+        let kept = load_previous_hashes(&folder_key).files.get("notes/handout.css").cloned();
+        assert_eq!(kept, first_css, "the seal withheld build 2, so hashes.json keeps build 1's stylesheet");
+        crate::system::folder_session::registry().remove(&folder_key);
+        return;
+    }
+    let show = heard.0.lock().unwrap().first().cloned().expect("the show sends an event");
+    assert!(names_note(&show), "the show names the page it wrote: {show:?}");
+    assert!(!names(&show, "notes/handout.css"), "the show leaves the stylesheet, not copied yet, to the tail: {show:?}");
+    let tail = wait_for_tail("notes/handout.css", 1).await;
+    assert!(!names_note(&tail), "the tail does not name the page the show announced: {tail:?}");
+    assert_eq!(tail.render_seq, show.render_seq, "the tail carries the shown render's number");
 }
 
 /// Same producer as the page test above, for `.moss/theme/style.css` — the
@@ -3310,6 +3423,7 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         })
     };
     let stash = || crate::system::build_records::records().content_hashes(&folder_key);
@@ -3323,7 +3437,7 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     let after = stash().expect("build 2 stashes its hashes");
     wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &after).await;
 
-    let event = decide_rebuild_event(Some(after.clone()), &folder_key, &before, &[])
+    let event = build_rebuild_event_with_renames(&after.clone(), &before, &[])
         .expect("a style.css edit on disk emits a rebuild event");
     assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
 
@@ -3334,7 +3448,7 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     let third = stash().expect("build 3 stashes its hashes");
     wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &third).await;
 
-    let event = decide_rebuild_event(Some(third), &folder_key, &after, &[])
+    let event = build_rebuild_event_with_renames(&third, &after, &[])
         .expect("a font edit emits a rebuild event");
     assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
 }
@@ -3396,6 +3510,7 @@ async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modi
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         })
     };
     let stash = || crate::system::build_records::records().content_hashes(&folder_key);
@@ -3409,7 +3524,7 @@ async fn a_places_toml_file_rewritten_on_disk_between_two_real_builds_is_in_modi
     let after = stash().expect("build 2 stashes its hashes");
     wait_for_seal(&folder_key, PLACES_TOML_SOURCE_KEY, &after).await;
 
-    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+    let event = build_rebuild_event_with_renames(&after, &before, &[])
         .expect("a places.toml edit on disk emits a rebuild event");
     assert_eq!(event.modified_paths, Some(vec![PLACES_TOML_SOURCE_KEY.to_string()]));
 }

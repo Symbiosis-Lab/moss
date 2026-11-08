@@ -108,6 +108,7 @@ impl Site {
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         }))
         .expect("the build must succeed");
     }

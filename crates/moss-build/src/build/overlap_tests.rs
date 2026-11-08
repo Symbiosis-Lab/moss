@@ -257,6 +257,7 @@ impl Overlap {
             server_port: None,
             admission_epoch: Some(crate::build::ship::next_promotion_epoch()),
             live_port: None,
+            rename_pairs: Vec::new(),
         });
         tokio::time::timeout(std::time::Duration::from_secs(60), build)
             .await

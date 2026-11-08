@@ -175,7 +175,7 @@ impl BuildRecords {
     /// Retaining (not consuming) is load-bearing: the same value serves as
     /// BOTH the `new` side of the just-finished rebuild's diff and the
     /// `previous` (baseline) side of the NEXT rebuild's — see
-    /// `crate::build::watch::baseline_for_rebuild`. `None` means no build of
+    /// `crate::build::watch::RefreshPlan`. `None` means no build of
     /// this folder has finished in this process yet; callers fall back to
     /// `load_previous_hashes`.
     pub fn content_hashes(&self, folder_path: &str) -> Option<SiteHashes> {

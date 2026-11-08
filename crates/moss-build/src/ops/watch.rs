@@ -110,24 +110,21 @@ pub struct WatchConfig {
     pub cadence: tokio::sync::watch::Receiver<cadence::Cadence>,
 }
 
-/// Per-event delay passed to `notify-debouncer-full`. Lowered from 500ms to
-/// 250ms so a rebuild kicks off sooner after an editor save — the live preview
-/// should respond quickly.
+/// Per-event delay passed to `notify-debouncer-full`: every saved edit waits
+/// this long before its rebuild starts, so it is kept short.
 ///
-/// NOT a quiet period: the crate releases each raw event 250ms after that
-/// event's own arrival, so it merges only what lands inside the same drain
-/// (tick = 250/4 = 62.5ms). It coalesces the sub-millisecond burst one write
-/// emits; it does NOT coalesce two events hundreds of milliseconds apart, and
-/// raising this value would not — it would only delay both. See the
-/// `build::watch` module doc.
+/// NOT a quiet period: the crate releases each raw event this long after that
+/// event's own arrival, merging only what lands inside the same drain (tick =
+/// a quarter of it). That still holds the sub-millisecond burst one write emits
+/// and an editor's atomic save (a temp file renamed over the page) together;
+/// two events further apart than a tick were always two batches, whatever this
+/// value, and the worker's capacity-1 slot merges a batch that arrives while a
+/// build runs.
 ///
-/// CROSS-LAYER CONTRACT: the frontend's `PreviewManager.REFRESH_COALESCE_MS`
-/// (preview-manager.ts, currently 200ms) merges the FileChanged + BuildComplete
-/// pair of ONE rebuild while keeping two DISTINCT rebuilds separate — that only
-/// holds while this value stays ABOVE it (~>= 200ms). Lowering DEBOUNCE_MS below
-/// that would let two genuinely-distinct rebuilds collapse into one preview
-/// morph (the second edit's content would not show). Lower both together.
-const DEBOUNCE_MS: u64 = 250;
+/// Two rebuilds can land closer together than a client's refresh coalescing
+/// window, so a client refreshes on each FileChanged rather than coalescing
+/// by time, or the second edit would not show.
+const DEBOUNCE_MS: u64 = 50;
 
 /// [diag] energy: inter-arrival clock for rebuild triggers. A tight run of small
 /// deltas here is the file-watcher rebuild-loop signature (cloud-sync re-emit,
@@ -287,8 +284,8 @@ pub async fn start(config: WatchConfig) {
             // Adopted from: notify-debouncer-full (canonical),
             // Spacedrive crates/fs-watcher/src/platform/macos.rs
             //
-            // The debouncer thread holds each raw notify event for 250ms (a
-            // delay, not a quiet window — see DEBOUNCE_MS) and stitches
+            // The debouncer thread holds each raw notify event for DEBOUNCE_MS
+            // (a delay, not a quiet window) and stitches
             // `Modify(Name(From))` + `Modify(Name(To))` pairs into a single
             // `Modify(Name(Both))` event with `paths = [from, to]` by matching
             // inodes/file-IDs from the file-id cache.
@@ -298,7 +295,7 @@ pub async fn start(config: WatchConfig) {
 
             let mut debouncer = match new_debouncer(
                 std::time::Duration::from_millis(DEBOUNCE_MS),
-                None, // tick_rate = timeout/4 = 62.5ms
+                None, // tick_rate = timeout/4
                 move |result| {
                     let _ = tx.send(result);
                 },

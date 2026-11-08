@@ -27,7 +27,7 @@ use std::path::Path;
 /// The four sources that can leave a `<source>` pointing at nothing: a failed
 /// encode, the orphan prune, the presence pass, and a
 /// reference with no manifest entry at all. This is the only scope that sees
-/// all four (as amended 2026-09-09) — and the only one that can hand
+/// all four — and the only one that can hand
 /// them ONE reference scan, which their disjointness depends on: the prune acts
 /// on what that scan did NOT see, the fourth source on what it did. Hoisting
 /// the scan out of the prune also keeps the fourth source alive under
@@ -53,12 +53,15 @@ use std::path::Path;
 /// a generation withheld because its tree could not be read must not also
 /// rewrite the HTML the preview is serving, from a strip set that unreadable
 /// tree produced.
+///
+/// Also returns the staged pages the repair rewrote: they are bytes the
+/// preview is already serving, so the caller tells it to read them again.
 pub(crate) fn repair_staged_html(
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &Path,
     sealed: &mut SealedManifest,
     failed: HashSet<String>,
-) -> crate::build::ship::ShipVerdict {
+) -> (crate::build::ship::ShipVerdict, Vec<String>) {
     let mut unshippable = failed;
     let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
     unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
@@ -79,10 +82,8 @@ pub(crate) fn repair_staged_html(
     unshippable.extend(crate::build::ship::unregistered_referenced_variants(
         &scan, sealed, stage_dir,
     ));
-    if verdict.repairs_staging() {
-        apply_to_staging(stage_dir, sealed, &unshippable);
-    }
-    verdict
+    let rewritten = if verdict.repairs_staging() { apply_to_staging(stage_dir, sealed, &unshippable) } else { Vec::new() };
+    (verdict, rewritten)
 }
 
 /// Rewrite every sealed HTML page in `stage_dir` to drop references to image
@@ -92,20 +93,21 @@ pub(crate) fn repair_staged_html(
 /// `failed` is every site-root-relative URL that must not survive in HTML,
 /// whatever removed it. This function does not care which — a `<picture>`
 /// cannot fall back from a chosen-source 404 regardless of who deleted the
-/// file, so every source feeds one strip set (as amended 2026-09-09).
+/// file, so every source feeds one strip set.
 /// Taking a set rather than the `AssetRegistry` is what lets the removal
 /// passes downstream of the encoder participate at all.
 ///
-/// No-op, with no filesystem access, when `failed` is empty (the common case).
+/// Returns the pages it rewrote. No-op, with no filesystem access, when
+/// `failed` is empty (the common case).
 /// [`repair_staged_html`] is what assembles the set and owns the ordering this
 /// pass depends on.
 pub fn apply_to_staging(
     stage_dir: &Path,
     sealed: &mut SealedManifest,
     failed: &std::collections::HashSet<String>,
-) {
+) -> Vec<String> {
     if failed.is_empty() {
-        return;
+        return Vec::new();
     }
     let mut rewrites: HashMap<String, String> = HashMap::new();
 
@@ -179,7 +181,9 @@ pub fn apply_to_staging(
         // non-concurrent rewrite and flag every repaired page as if a race
         // had touched it.
         sealed.stamp_ship_fingerprints(stage_dir, rewritten_keys.iter().map(|s| s.as_str()));
+        return rewritten_keys.into_iter().collect();
     }
+    Vec::new()
 }
 
 #[cfg(test)]

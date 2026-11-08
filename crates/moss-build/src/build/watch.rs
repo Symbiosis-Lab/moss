@@ -16,16 +16,12 @@
 //! `notify-debouncer-full` stamps each raw event with its own arrival time
 //! (`push_event`) and releases it `DEBOUNCE_MS` later, draining a path's queue
 //! only up to the first event still too young (`debounced_events`). Nothing
-//! resets. So it merges what lands inside one drain (tick = `timeout/4` =
-//! 62.5ms) and preserves the spacing of everything else: two events 300ms
-//! apart are two rebuilds 300ms apart, and raising `DEBOUNCE_MS` only delays
-//! both. Measured against 0.3.2 — two writes 40ms apart gave two batches 63ms
-//! apart; 80ms apart gave 126ms.
-//!
-//! This said the opposite until 2026-08-31 ("a resetting 250ms quiet window;
-//! 10 plugin downloads, one rebuild"), which is why a user's paired triggers
-//! read as a debounce artefact instead of as two real disk events. Coalescing
-//! past one drain happens downstream, in the worker's capacity-1 slot.
+//! resets. So it merges what lands inside one drain (tick = `timeout/4`) and
+//! preserves the spacing of everything else: two events 300ms apart are two
+//! rebuilds 300ms apart, and raising `DEBOUNCE_MS` only delays both. Measured
+//! against 0.3.2 at a 250ms timeout: two writes 40ms apart gave two batches
+//! 63ms apart; 80ms apart gave 126ms. Coalescing past one drain happens
+//! downstream, in the worker's capacity-1 slot.
 //!
 //! The loop lives inside [`notify_debouncer_full::new_debouncer`]; our wrapper
 //! forwards its batched callback onto `trigger_rebuild_with_lock`.
@@ -51,11 +47,12 @@
 //! When the debounce timer fires, `trigger_rebuild_with_lock()` ensures:
 //! - No concurrent rebuilds (would cause "Directory not empty" errors)
 //! - At most one pending rebuild queued
-//! - Preview refreshes once per rebuild cycle, not per file change
+//! - A rebuild tells the preview what changed when it shows the render, and
+//!   again from its seal tail for what the background wrote after
 //!
 //! ## Features
 //! - Async file watching with tokio integration
-//! - A fixed 250ms per-event delay via `notify-debouncer-full` (not a quiet period)
+//! - A fixed `DEBOUNCE_MS` per-event delay via `notify-debouncer-full` (not a quiet period)
 //! - Cross-platform rename pair stitching (inode/file-id pairing)
 //! - Rebuild locking to prevent concurrent directory operations
 //! - Smart diff detection for efficient browser refresh
@@ -76,7 +73,6 @@ pub use scope::{
 };
 pub use scope::{should_watch_file, should_watch_moss_file};
 
-use super::pipeline::load_previous_hashes;
 use super::BuildTrigger;
 
 
@@ -163,67 +159,6 @@ pub fn extract_rename_pairs(
         .collect()
 }
 
-
-
-/// Pick the `previous_hashes` baseline for `do_rebuild_and_notify`'s
-/// pre/post change-detection diff.
-///
-/// The hash-diff at the end of `do_rebuild_and_notify` decides whether to
-/// emit `FileChanged` based on (pre-rebuild hashes) vs (post-rebuild
-/// hashes). The implicit assumption is that the on-disk output tree
-/// (`.moss/build.nosync/staging/`) reflects the state hashes.json describes — moss
-/// is the only writer.
-///
-/// When an external process wipes staging/ between ticks (iCloud "Optimize
-/// Mac Storage" eviction, antivirus quarantine, manual `rm`, etc.),
-/// hashes.json survives in `build/` but its referenced files are gone.
-/// Without this guard, the pre/post comparison would still match — no
-/// refresh emitted, browser stays on its 404 even though the pipeline
-/// rewrote staging/ during the rebuild.
-///
-/// Substituting `SiteHashes::default()` when output is missing makes the
-/// post-rebuild diff see "all files new" and emit the refresh.
-fn previous_hashes_for_diff(folder_path: &str, output: &Path) -> SiteHashes {
-    if output.exists() {
-        load_previous_hashes(folder_path)
-    } else {
-        log::info!(
-            "Output dir missing at rebuild start: {} — treating as full rebuild for refresh emit",
-            output.display()
-        );
-        SiteHashes::default()
-    }
-}
-
-/// Choose the baseline (`previous`) hashes for the post-rebuild change diff.
-///
-/// Prefers the PREVIOUS build's race-free in-memory content hashes (`in_memory`,
-/// the AppState stash the prior rebuild left behind) over re-reading
-/// `hashes.json` from disk. The disk file is written by a DETACHED seal+persist
-/// task (`build.rs`) that can land DURING the next rebuild; a disk-loaded
-/// baseline can therefore already contain THIS build's hashes, making the
-/// just-edited page look unchanged → omitted from `changed_output_files` →
-/// spurious `action=none` → no preview refresh (the frequent "I have to Cmd+R"
-/// bug). The `new` side of the diff was already made race-free by the
-/// 2026-05-31 stale-hash work; this closes the symmetric baseline gap flagged
-/// in that plan's §6. Falls back to disk only when no in-memory baseline exists
-/// (first rebuild after launch, or CLI/headless/external builds that never
-/// stashed). See `AppState::peek_content_hashes`.
-///
-/// Prior art (carry a race-free version in-memory rather than re-reading a
-/// disk artifact a background task may have rewritten): Vite HMR's per-module
-/// version/timestamp stamping <https://vite.dev/guide/api-hmr> and webpack's
-/// `currentHash`/`lastHash` <https://webpack.js.org/concepts/hot-module-replacement/>.
-pub fn baseline_for_rebuild(
-    in_memory: Option<SiteHashes>,
-    folder_path: &str,
-    output: &Path,
-) -> SiteHashes {
-    match in_memory {
-        Some(h) => h,
-        None => previous_hashes_for_diff(folder_path, output),
-    }
-}
 
 
 /// Compare old and new site hashes to produce a `FileChangeEvent` for the frontend.
@@ -521,7 +456,7 @@ fn identity_pairs(
 ///
 /// A pair is first dropped as stale when a markdown side is known to neither
 /// the page map nor the source hashes of its manifest (see [`pair_is_stale`]).
-fn build_rebuild_event_with_renames(
+pub fn build_rebuild_event_with_renames(
     new_hashes: &SiteHashes,
     previous_hashes: &SiteHashes,
     rename_pairs: &[(String, String)],
@@ -644,35 +579,97 @@ fn build_rebuild_event_with_renames(
     event
 }
 
-/// Select the new hashes for the refresh decision and compute the
-/// `FileChangeEvent`.
+/// The port a build tells the preview on, and the renames its watch batch saw.
+pub(crate) struct RefreshRequest {
+    pub(crate) rename_pairs: Vec<(String, String)>,
+    pub(crate) events: crate::build::ProgressSink,
+}
+
+/// What a build needs to tell the preview, at the moment it shows its render,
+/// what that render changed: the output the preview showed before it, the
+/// renames its batch saw, and the port the preview listens on.
 ///
-/// This is the testable core of the stale-hash race fix. `do_rebuild_and_notify`
-/// extracts the in-memory stash from `AppState` and calls this function so the
-/// decision can be unit-tested without a `tauri::AppHandle`.
-///
-/// **Why `stash` instead of re-reading `hashes.json`:**
-/// `hashes.json` is written by a detached seal+persist task that first awaits
-/// the entire background media phase. Re-reading it synchronously right after
-/// `run_pipeline()` returns races that write. On asset-heavy sites the read
-/// always loses → "no output changes → suppress refresh" even though the page
-/// genuinely changed. The stash carries the build's own synchronously-computed
-/// hashes, eliminating the race. Fallback to the disk read only when the stash
-/// is absent (CLI / headless / no AppState).
-pub fn decide_rebuild_event(
-    stash: Option<SiteHashes>,
-    folder_path: &str,
-    previous_hashes: &SiteHashes,
-    rename_pairs: &[(String, String)],
-) -> Option<FileChangeEvent> {
-    let new_hashes = if stash.is_some() {
-        log::debug!("[watch] refresh decision: using in-memory content hashes (stash)");
-        stash.unwrap()
-    } else {
-        log::info!("[watch] refresh decision: stash absent — falling back to disk hashes.json (CLI/headless or stash not written)");
-        load_previous_hashes(folder_path)
-    };
-    build_rebuild_event_with_renames(&new_hashes, previous_hashes, rename_pairs)
+/// Made right after the build takes the folder lock, while the stash still
+/// holds the render on screen. Prior art for carrying a version in memory
+/// rather than re-reading a file a background task rewrites: Vite HMR's
+/// per-module timestamps <https://vite.dev/guide/api-hmr> and webpack's
+/// `currentHash`/`lastHash` <https://webpack.js.org/concepts/hot-module-replacement/>.
+pub(crate) struct RefreshPlan {
+    baseline: Baseline,
+    asked: RefreshRequest,
+}
+
+/// The output the preview showed before this build.
+enum Baseline {
+    /// The stash of the render on screen. Preferred over `hashes.json`, which
+    /// a detached seal task writes during the next build, so the file can
+    /// already hold this build's hashes and read the edited page as unchanged.
+    Shown(SiteHashes),
+    /// No render stashed in this process: the build's own read of `hashes.json`.
+    Disk,
+    /// No staging dir: an outside process removed the output, so every file
+    /// is new to the preview.
+    Gone,
+}
+
+impl RefreshPlan {
+    pub(crate) fn before_build(folder_path: &str, paths: &crate::moss_paths::MossPaths, asked: RefreshRequest) -> Self {
+        let baseline = match crate::system::build_records::records().content_hashes(folder_path) {
+            Some(stash) => Baseline::Shown(stash),
+            None if paths.staging_dir().exists() => Baseline::Disk,
+            None => Baseline::Gone,
+        };
+        Self { baseline, asked }
+    }
+
+    /// Send `FileChanged` for `render`: what changed against the baseline
+    /// (`on_disk` is the build's read of `hashes.json`), with its output list
+    /// cut to the keys `written` says are already in staging. A key whose
+    /// bytes the background writes later is the seal tail's to announce.
+    /// Sends nothing when nothing is left to say.
+    pub(crate) fn announce(&self, new_hashes: &SiteHashes, on_disk: &SiteHashes, written: impl Fn(&str) -> bool, render: u64) {
+        let nothing = SiteHashes::default();
+        let (baseline, from) = match &self.baseline {
+            Baseline::Shown(stash) => (stash, "the shown render"),
+            Baseline::Disk => (on_disk, "hashes.json"),
+            Baseline::Gone => (&nothing, "nothing (no staging dir)"),
+        };
+        let event = build_rebuild_event_with_renames(new_hashes, baseline, &self.asked.rename_pairs).and_then(|mut event| {
+            let files = event.changed_output_files.take().unwrap_or_default();
+            event.set_changed_output_files(files.into_iter().filter(|key| written(key)).collect());
+            (!event.is_empty()).then_some(event)
+        });
+        match event {
+            Some(mut event) => {
+                event.render_seq = Some(render);
+                self.asked.events.report(&crate::build::progress::PipelineEvent::FileChanged(event));
+            }
+            None => log::info!("Rebuild shown with no output changes against {from} (suppressing refresh)"),
+        }
+    }
+}
+
+/// The keys a render's seal tail announces: what changed since the last
+/// sealed build and since the show (`late` says which keys were written or
+/// rewritten after the show, every key for a render the show did not
+/// announce), plus the pages the repair rewrote under the preview. Diffing
+/// against the last seal rather than the show keeps the late bytes of a
+/// render whose own tail left to a newer one. Search shards are left out, as
+/// in the show's diff (see `compute_rebuild_event`). `previous` is `None` when
+/// only the repairs count: a first build, whose preview loads everything.
+pub(crate) fn changed_after_show(
+    sealed: &SiteHashes,
+    previous: Option<&SiteHashes>,
+    late: impl Fn(&str) -> bool,
+    mut rewritten: Vec<String>,
+) -> Vec<String> {
+    if let Some(previous) = previous {
+        let is_search = crate::build::served_path::ServedPath::is_search_asset;
+        rewritten.extend(sealed.files.iter().filter(|(key, entry)| previous.files.get(*key) != Some(entry) && !is_search(key) && late(key)).map(|(key, _)| key.clone()));
+    }
+    rewritten.sort();
+    rewritten.dedup();
+    rewritten
 }
 
 // ---------------------------------------------------------------------------
@@ -854,14 +851,13 @@ fn canonical_through_missing(abs: &Path) -> std::path::PathBuf {
 /// Decide whether a watcher event with the given paths should trigger a rebuild.
 ///
 /// Consults `SiteHashes.sources` from `baseline` when given — the caller's
-/// race-free in-memory stash of the LAST build's hashes (see
-/// `AppState::peek_content_hashes`) — falling back to the on-disk manifest
+/// race-free in-memory stash of the LAST build's hashes — falling back to the on-disk manifest
 /// only when no stash exists (first rebuild after launch, CLI/headless).
 /// The disk file is written by a DETACHED seal task minutes after the build
 /// renders, so during that tail it still describes the build BEFORE last:
 /// an edit-then-undo lands the file back on the stale manifest's bytes, the
 /// disk-based gate calls it `Unchanged`, and the revert never renders. Same
-/// race `baseline_for_rebuild` closes for the refresh diff; this closes it
+/// race [`RefreshPlan`] closes for the refresh diff; this closes it
 /// for the gate.
 ///
 /// Returns `true` (caller must proceed with rebuild) if any of:

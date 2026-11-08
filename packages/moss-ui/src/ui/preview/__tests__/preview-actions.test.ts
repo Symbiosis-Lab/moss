@@ -18,6 +18,7 @@ const fce = (overrides: Partial<FileChangeEvent>): FileChangeEvent => ({
   source_deletes: null,
   source_renames: null,
   modified_paths: null,
+  render_seq: null,
   ...overrides,
 });
 

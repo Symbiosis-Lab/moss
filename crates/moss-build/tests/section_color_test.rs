@@ -43,6 +43,7 @@ fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Re
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 

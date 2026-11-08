@@ -98,11 +98,8 @@ pub(crate) fn verify_bytes(
 ///
 /// A single fresh read is not proof of anything: a torn read mid-write looks
 /// exactly like a finished rebuild's bytes, and only re-checking after a
-/// pause tells the two apart. 250ms mirrors the file watcher's own debounce
-/// window (`build/watch.rs`: "a fixed 250ms per-event delay via
-/// notify-debouncer-full") — the same "how long until a write has almost
-/// certainly settled" number this codebase already trusts elsewhere, rather
-/// than a new one invented for this check.
+/// pause tells the two apart. 250ms is long enough for a write in progress to
+/// land and short enough to go unnoticed beside an upload.
 pub(crate) const DRIFT_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// How many leading bytes to sample when checking whether a file looks like

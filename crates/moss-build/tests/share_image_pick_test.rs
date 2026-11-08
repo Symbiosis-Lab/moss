@@ -23,6 +23,7 @@ fn build(folder: &Path) -> Result<String, String> {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 

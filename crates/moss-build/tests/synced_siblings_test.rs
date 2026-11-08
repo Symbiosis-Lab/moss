@@ -34,6 +34,7 @@ async fn a_build_folds_a_conflict_sibling_into_the_state_file() {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     })
     .await
     .expect("build");

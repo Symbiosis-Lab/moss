@@ -354,6 +354,7 @@ async fn production_build_installs_one_ordered_preflight_projection_for_the_publ
         server_port: None,
         admission_epoch: Some(admission_epoch),
         live_port: None,
+        rename_pairs: Vec::new(),
     };
 
     let broken_epoch = crate::build::ship::next_promotion_epoch();
@@ -2174,6 +2175,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         })
     };
     let drained = || async {
@@ -5526,8 +5528,10 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
     let state = SiteDirectoryState::new(mp.staging_dir());
     let session = FolderSession::new(dir.clone());
     session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
-    let (cold, _, unresolved, _) = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, Some(current.clone())).unwrap();
+    let (cold, _, unresolved, cold_seal) = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, Some(current.clone())).unwrap();
     assert!(matches!(cold, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
+    assert!(first_seal.was_shown(), "a shown render records its show");
+    assert!(!cold_seal.was_shown(), "a render never shown records none, so its seal tail announces nothing");
     assert_eq!(unresolved, ["story.md"]);
     assert_eq!(*state.current_dir.read().unwrap(), current);
     assert_eq!(fs::read(current.join("index.html")).unwrap(), original_home);
@@ -7029,7 +7033,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
         return;
     }
 
-    let verdict = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
+    let (verdict, _) = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
     let promotion = crate::build::ship::materialize_and_promote(
         &sealed,
         &mp,
@@ -8026,7 +8030,7 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
         watch: false, start_server: false,
         host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
         exits_after_build: true, site_url_override: None, server_port: None,
-        admission_epoch: None, live_port: None,
+        admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
     };
     run_pipeline(config()).await.unwrap();
     let paths = crate::moss_paths::MossPaths::new(&dir);
@@ -8059,7 +8063,7 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
             let config = || PipelineConfig {
                 root: crate::vault_root::VaultRoot::resolve(&dir), progress: crate::build::null_sink(), plugins: PluginMode::Skip,
                 watch: false, start_server: false, host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
-                exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None,
+                exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             };
             let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
             assert!(run_pipeline(config()).await.is_err());
@@ -8163,6 +8167,7 @@ async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
         server_port: None,
         admission_epoch: Some(epoch),
         live_port: None,
+        rename_pairs: Vec::new(),
     };
     fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nSee [the plan](wip.md).\n").unwrap();
     fs::write(dir.join("wip.md"), "---\ntitle: Plan\ndraft: true\n---\n\nNot yet.\n").unwrap();

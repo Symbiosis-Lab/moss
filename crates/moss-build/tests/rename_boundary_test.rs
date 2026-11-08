@@ -259,6 +259,7 @@ fn build_staged(root: &std::path::Path) -> std::path::PathBuf {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
     .expect("build");
     root.join(".moss/build.nosync/staging")

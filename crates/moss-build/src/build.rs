@@ -335,6 +335,11 @@ pub struct PipelineConfig {
     /// Both fields' reasoning lives on
     /// [`ports::LivePortResolver`](crate::build::ports::LivePortResolver).
     pub live_port: Option<crate::build::ports::LivePortResolver>,
+    /// `(old, new)` source paths of the renames a watch batch saw,
+    /// project-relative with `/` separators, for the `FileChanged` the build
+    /// sends when it shows its render (through `host.events`, on every
+    /// shown render). Pairs that turn out stale are dropped there.
+    pub rename_pairs: Vec<(String, String)>,
 }
 
 impl PipelineConfig {
@@ -659,10 +664,9 @@ pub fn sample_cache_keys() -> crate::build::ports::CacheKeyInputs {
 /// The stash must describe what the screen shows. The pipeline shows this
 /// build's staging output only when `publishable` is true
 /// (`lifecycle::show_render`), and a cancelled build early-returns before it
-/// (with
-/// `publishable: false, cancelled: true`). Stashing a non-switched build's
-/// hashes poisons the baseline: the next publishable build's
-/// `changed_output_files` diff (via `peek_content_hashes`) then compares
+/// (with `publishable: false, cancelled: true`). Stashing a non-switched
+/// build's hashes poisons the baseline: the next publishable build's
+/// `changed_output_files` diff (`watch::RefreshPlan`) then compares
 /// against output the user never saw, drops pages edited before the withheld
 /// build, and the preview silently never refreshes.
 pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
@@ -1204,6 +1208,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             let cache_keys_owned = cache_keys.clone();
             let derived_owned = derived_site.clone();
             let (services, port_owned) = (services.clone(), port_owned.clone());
+            let refresh = crate::build::watch::RefreshRequest { rename_pairs: config.rename_pairs.clone(), events: config.host.events.clone() };
             // Bridge the current build.summary collector (if any) onto the
             // spawn_blocking closure's own OS thread: spawn_blocking does not
             // inherit task-locals, so without this, every PhaseTrace inside
@@ -1213,7 +1218,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             async move {
                 tokio::task::spawn_blocking(move || {
                     let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
-                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease))
+                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease), refresh)
                 }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
             }
         };
@@ -1234,12 +1239,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     crate::build::phase::record_value("cancelled", cancelled as usize);
     crate::build::phase::record_value("publishable", publishable as usize);
 
-    // Stash the build's IN-MEMORY content hashes (keyed by folder) so the file
-    // watcher's `do_rebuild_and_notify` decides the live-preview refresh from
-    // race-free in-memory data instead of re-reading the asynchronously-
-    // persisted hashes.json (which a detached seal task writes only after the
-    // background media phase — the stale-hash-race that suppressed refreshes).
-    // Uses AppState::stash_content_hashes (testable without AppHandle).
+    // Stash the build's IN-MEMORY content hashes (keyed by folder): the next
+    // watch rebuild's refresh baseline (`watch::RefreshPlan`) and admission
+    // gate read them instead of hashes.json, which a detached seal task
+    // writes only after the background media phase.
     //
     // INVARIANT (gate-soundness keystone): a FAILED build must never reach
     // this block. The `?` on the pipeline result above returns first, so the
@@ -2026,7 +2029,7 @@ async fn advertise_sealed(
     // here because it is the only thing in this phase that needs one — see
     // `degrade::repair_staged_html` for the four sources and why their order
     // is what it is.
-    let mut presence_verdict = crate::build::degrade::repair_staged_html(
+    let (mut presence_verdict, rewritten) = crate::build::degrade::repair_staged_html(
         mp,
         stage_dir,
         &mut sealed,
@@ -2065,10 +2068,10 @@ async fn advertise_sealed(
         sealed.preview_readiness_with_outputs(requirement, stage_dir)
             == crate::build::manifest::PreviewReadiness::Usable
     });
-    if active_session.is_some()
+    let revealed = active_session.is_some()
         && selected_preview_ready
-        && crate::build::lifecycle::reveal_render_if_latest(mp, render_seq)
-    {
+        && crate::build::lifecycle::reveal_render_if_latest(mp, render_seq);
+    if revealed {
         if ports.events.shell_listening()
             && crate::build::cloud_readiness::take_gate(folder_path)
         {
@@ -2162,6 +2165,22 @@ async fn advertise_sealed(
         ports.events.report(&crate::build::progress::PipelineEvent::AssetsSettled {
             changed: settled_changed,
         });
+    }
+
+    // The render's second FileChanged, with the number of the one sent when it
+    // was shown: what the background wrote after the show, and the repairs.
+    // A render revealed only now announced nothing yet, so every change counts.
+    // Staging is what the preview serves, whatever the ship verdict. A render
+    // the preview never serves sends none.
+    if sealed.was_shown() || revealed {
+        let previous = previous_hashes.as_ref().filter(|p| !p.files.is_empty());
+        let changed = watch::changed_after_show(view, previous, |key| sealed.landed_after_show(key), rewritten);
+        if !changed.is_empty() {
+            let mut event = crate::types::events::FileChangeEvent::new();
+            event.set_changed_output_files(changed);
+            event.render_seq = render_seq;
+            ports.events.report(&crate::build::progress::PipelineEvent::FileChanged(event));
+        }
     }
 
     // Everything from here down needs a materialized generation (or needs to

@@ -142,3 +142,40 @@ async fn source_announcements_respect_watch_scope_and_ignore_read_noise() {
     ).await;
     assert!(events.try_recv().is_err());
 }
+
+/// The real debouncer at the real delay: an editor's atomic save (write a temp
+/// file, rename it over the page) reaches the rebuild as ONE batch, and within
+/// 200ms of the rename. A delay of 250ms could never meet the bound.
+#[test]
+fn an_atomic_save_is_one_batch_released_within_200ms() {
+    use notify::Watcher;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let page = root.join("page.md");
+    std::fs::write(&page, "# One\n").unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut debouncer = new_debouncer(Duration::from_millis(DEBOUNCE_MS), None, move |result| {
+        let _ = tx.send((Instant::now(), result));
+    })
+    .unwrap();
+    debouncer.watcher().watch(&root, notify::RecursiveMode::NonRecursive).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    while rx.try_recv().is_ok() {}
+
+    let temp = root.join(".page.md.tmp");
+    std::fs::write(&temp, "# Two\n").unwrap();
+    std::fs::rename(&temp, &page).unwrap();
+    let saved = Instant::now();
+
+    let mut batches = Vec::new();
+    while let Ok((at, result)) = rx.recv_timeout(Duration::from_millis(600)) {
+        let events = result.expect("watcher error");
+        if events.iter().any(|e| e.paths.iter().any(|p| p.file_name() == page.file_name())) {
+            batches.push(at.saturating_duration_since(saved));
+        }
+    }
+    assert_eq!(batches.len(), 1, "one save, one batch: {batches:?}");
+    assert!(batches[0] < Duration::from_millis(200), "the save waited {:?} for its rebuild", batches[0]);
+}

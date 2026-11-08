@@ -927,7 +927,7 @@ pub fn run(
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
 ) -> Result<PipelineRunOutput, BuildStopped> {
-    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None)
+    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None, crate::build::watch::RefreshRequest { rename_pairs: Vec::new(), events: crate::build::null_sink() })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -953,6 +953,7 @@ pub(crate) fn run_leased(
     // The caller's `lifecycle::CacheWriteLease`, carried into the background
     // handle so it drops when the workers have joined.
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+    refresh: crate::build::watch::RefreshRequest,
 ) -> Result<PipelineRunOutput, BuildStopped> {
     // Track build state in the FolderSession's UiBound counter for window
     // close / CLI-wait decisions. begin_ui_bound is a no-op in headless mode.
@@ -961,7 +962,7 @@ pub(crate) fn run_leased(
     }
 
     // Use inner function pattern to ensure build state is cleared on ALL exit paths
-    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease);
+    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease, refresh);
 
     // Clear build state after build completes (success or error)
     if let Some(svc) = services {
@@ -1016,6 +1017,7 @@ fn build_inner(
     cache_keys: &crate::build::ports::CacheKeyInputs,
     derived: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+    refresh: crate::build::watch::RefreshRequest,
     // `BuildStopped`, not `String`: the gate verdict is emitted from inside this
     // function, so the error type must be able to say "not yet" for the caller
     // to raise the gate instead of reporting. See `build::outcome`.
@@ -1211,6 +1213,10 @@ fn build_inner(
     // Returned rather than dropped: how long it is held after the render is
     // the caller's to decide — see `infra::folder_lock`'s module doc.
     let folder_build_lock = crate::phase!("lock_wait", { crate::infra::folder_lock::acquire(root.path()) })?;
+    // The stash and the staging dir are read under the lock, so no other
+    // build can change them between this read and the show. The disk
+    // baseline is not read here: it is `previous_hashes`, read above.
+    let refresh = crate::build::watch::RefreshPlan::before_build(folder_path, &paths, refresh);
     // Minted under the lock, so that across processes the order of these
     // stamps is the order the builds rendered in, which is what the
     // materialize compares them by. Minted before the lock, a build could
@@ -1623,11 +1629,10 @@ fn build_inner(
         Some(prev) => *prev != cache_keys.builder,
         None => true,
     };
-    // Clone the in-memory content hashes for the watcher's refresh decision.
-    // Captured here (before any later move of `site_result`) and returned in
-    // `PipelineRunOutput::content_hashes` so `do_rebuild_and_notify` never
-    // re-reads the asynchronously-persisted hashes.json. See
-    // AppState::last_content_hashes.
+    // The in-memory content hashes: the new side of this render's refresh
+    // diff, and (returned in `PipelineRunOutput::content_hashes` and stashed)
+    // the baseline of the next. Never re-read from hashes.json, which the
+    // detached seal task writes later.
     let content_hashes_for_watch = site_result.hashes.clone();
     let missing_references_for_publish = site_result.missing_references.clone();
     let (changed, new, deleted) = (
@@ -1757,58 +1762,38 @@ fn build_inner(
         emit_cloud_gate(false, &project_structure.evicted_paths, cloud_outstanding);
     }
 
-    let render_seq: Option<u64>;
-    let announce: Option<std::path::PathBuf>;
     crate::build::phase::record_value("served_staging", usize::from(publishable));
     if has_output_changes {
         if let Some(permit) = sweep_permit.as_ref() {
             remove_stale_html(&stage_dir, &stale_html, pending.blocking_keys(), permit);
         }
-
-        // Step 5: show this render — unless this build could not read its own
-        // sources. Showing it is the moment the user sees this build's output,
-        // so an unpublishable build must not.
-        let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
-        render_seq = Some(seq);
-        announce = announced;
-
-        log::debug!(target: "timing", "[build] staging: switch_to_stage: {:?}", build_start.elapsed());
-
-        // The cloud-sync gate event is emitted once, at the end of the build,
-        // from the build's own output — see `emit_cloud_gate`.
-
-        // Asked HERE, not carried in. A build that started no server of its own
-        // may have had one come up while it ran — on the incident vault, fourteen
-        // seconds after this build was dispatched and nineteen seconds before it
-        // reached this line. See `ports::LivePortResolver`.
-        send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
-
-        // The preview rests on staging/ after step 5: its HTML has the data-source-line
-        // annotations scroll sync needs, which the clean HTML under `current` lacks.
-
-        // Emit 'initial-build-complete' with the directory actually being
-        // served — staging normally, the sealed generation when this build was
-        // withheld.
-        emit_initial_build_complete(services, announce.as_deref());
-
-    } else {
-        // No output changes — staging still holds this render; show it the same
-        // way, under the same publishable guard.
-        let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
-        render_seq = Some(seq);
-        announce = announced;
-
-        // Asked HERE, not carried in. A build that started no server of its own
-        // may have had one come up while it ran — on the incident vault, fourteen
-        // seconds after this build was dispatched and nineteen seconds before it
-        // reached this line. See `ports::LivePortResolver`.
-        send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
-
-        emit_initial_build_complete(services, announce.as_deref());
     }
-    if let Some(seq) = render_seq {
-        crate::build::phase::record_value("render", seq as usize);
+
+    // Step 5: show this render, unless this build could not read its own
+    // sources: showing it is the moment the user sees this build's output.
+    let (seq, announce) = crate::build::lifecycle::show_render(&paths, publishable);
+    let render_seq = Some(seq);
+    // A shown render tells the preview at once what it now serves; what the
+    // background writes later is the seal tail's to announce.
+    if publishable {
+        pending.note_shown();
+        // A key the show names must already be bytes in staging: one registered
+        // before it is written would be named early here and never by the tail.
+        refresh.announce(&content_hashes_for_watch, &previous_hashes, |key| pending.is_registered(key) && { debug_assert!(stage_dir.join(key).exists(), "the show names {key}, which is not in staging yet"); true }, seq);
     }
+    log::debug!(target: "timing", "[build] staging: switch_to_stage: {:?}", build_start.elapsed());
+
+    // Asked HERE, not carried in: a build that started no server of its own
+    // may have had one come up while it ran. See `ports::LivePortResolver`.
+    send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
+
+    // The preview rests on staging/ after step 5: its HTML has the
+    // data-source-line annotations scroll sync needs, which the clean HTML
+    // under `current` lacks. 'initial-build-complete' names the directory
+    // actually served: staging normally, the sealed generation when this
+    // build was withheld.
+    emit_initial_build_complete(services, announce.as_deref());
+    crate::build::phase::record_value("render", seq as usize);
 
     // === BACKGROUND PHASE (spawn, don't block) ===
     // Background work runs after preview opens.

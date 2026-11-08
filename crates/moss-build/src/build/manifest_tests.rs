@@ -1483,3 +1483,26 @@ fn output_collisions_belong_to_the_sealed_render_and_persist() {
     assert!(clean.site_hashes_view().output_collisions.is_empty());
     assert_eq!(sealed.site_hashes_view().output_collisions, vec![message]);
 }
+
+/// After the show, a registration counts as landing late only when it
+/// changes the key's entry: a re-registration with the bytes already shown is
+/// no new change, a new key or new bytes are.
+#[test]
+fn a_key_lands_after_the_show_only_when_its_entry_changes() {
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.apply_message("page/index.html".into(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashBucket::Files, None);
+    pending.apply_message("handout.css".into(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashBucket::Files, None);
+    pending.note_shown();
+    pending.apply_message("page/index.html".into(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashBucket::Files, None);
+    pending.apply_message("handout.css".into(), "cccccccccccccccccccccccccccccccc", HashBucket::Files, None);
+    pending.apply_message("photo.webp".into(), "dddddddddddddddddddddddddddddddd", HashBucket::ImageVariants, None);
+    let sealed = pending.seal();
+    assert!(sealed.was_shown());
+    assert!(!sealed.landed_after_show("page/index.html"), "the same bytes again are not a change");
+    assert!(sealed.landed_after_show("handout.css"));
+    assert!(sealed.landed_after_show("photo.webp"));
+
+    let never_shown = PendingManifest::new(SiteHashes::default()).seal();
+    assert!(!never_shown.was_shown());
+    assert!(never_shown.landed_after_show("anything"), "a render never shown announced nothing");
+}

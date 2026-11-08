@@ -372,6 +372,7 @@ fn build_with_site_url(
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 
@@ -976,6 +977,7 @@ fn build_deferred(folder_path: &str, trigger: moss_build::build::BuildTrigger) -
         server_port: Some(1),
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 

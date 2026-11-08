@@ -680,7 +680,7 @@ mod tests {
             watch: false, start_server: false,
             host: crate::build::ports::host::test_host_ports(),
             trigger: BuildTrigger::Full, exits_after_build: true,
-            site_url_override: None, server_port: None, admission_epoch: None, live_port: None,
+            site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
         }).await.expect("fixture builds");
         release.join().unwrap();
         let text = std::fs::read_to_string(crate::moss_paths::MossPaths::new(&root).profile()).unwrap();
@@ -722,7 +722,7 @@ mod tests {
                 watch: false, start_server: false,
                 host,
                 trigger: BuildTrigger::Full, exits_after_build: true,
-                site_url_override: None, server_port: None, admission_epoch: None, live_port: None,
+                site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             }).await.expect("fixture builds");
             let generation = paths.generation_dir(&paths.current_generation_id().unwrap());
             let output: std::collections::BTreeMap<_, _> = walkdir::WalkDir::new(&generation).into_iter()

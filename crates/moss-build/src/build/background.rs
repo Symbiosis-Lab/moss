@@ -142,10 +142,11 @@ impl BuildTerminalBarrier {
         );
     }
 
-    /// The typed `BuildComplete` event — the frontend's "the build finished,
-    /// refresh the preview" signal (`preview-manager.ts`). Fires on EVERY
-    /// completed build, including one with no media at all: a text-only site
-    /// still needs its preview refreshed off the new stage.
+    /// The typed `BuildComplete` event: the build job's receipt, sent once its
+    /// background work has sealed, on EVERY completed build, media or none. A
+    /// watch rebuild's refresh signal is `FileChanged`, sent when the render is
+    /// shown (`watch::RefreshPlan`) and from the seal tail for the bytes the
+    /// background wrote after it (`watch::changed_after_show`).
     ///
     /// Split from the emit so the payload is testable without a reporter that
     /// can carry it anywhere.

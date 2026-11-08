@@ -382,6 +382,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             site_url_override: run.flags.site_url_override,
             server_port: None,
             live_port: None,
+            rename_pairs: Vec::new(),
             admission_epoch: None,
         })
         .await;

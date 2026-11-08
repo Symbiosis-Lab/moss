@@ -14,7 +14,7 @@
 //!   watcher batch arrived in that whole window — the change was on disk
 //!   before one pass and the watcher stayed silent through another full
 //!   interval — the event can no longer be "in flight" (the debouncer fires
-//!   within 250ms), and the silence is the verdict. One aged strike →
+//!   within `DEBOUNCE_MS`), and the silence is the verdict. One aged strike →
 //!   recreate.
 //! - **A confessed loss is not a strike.** A rescan-flag batch
 //!   (`watcher_lost_events`) means the watcher is alive and honest about an

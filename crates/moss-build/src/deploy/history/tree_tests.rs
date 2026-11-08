@@ -81,6 +81,7 @@ fn built_fixture() -> (tempfile::TempDir, HashMap<String, String>) {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     };
     crate::infra::home::with_moss_home(|home| {
         std::fs::write(home.join("assets"), "").unwrap();

@@ -170,6 +170,7 @@ pub(crate) async fn build_and_describe(
         site_url_override: None,
         server_port: None,
         live_port: None,
+        rename_pairs: Vec::new(),
         admission_epoch: None,
     })
     .await
@@ -290,6 +291,7 @@ mod tests {
             site_url_override: None,
             server_port: None,
             live_port: None,
+            rename_pairs: Vec::new(),
             admission_epoch: None,
         })
         .await

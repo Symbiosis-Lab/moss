@@ -1051,8 +1051,13 @@ export type FileArgs = { filePath: VaultPath }
  */
 export type FileChangeEvent = { 
 /**
- * Output files whose content hash changed (relative to the staging dir).
- * This is the definitive list - frontend refreshes only if current page is here.
+ * Output files whose content hash changed (relative to the staging dir),
+ * named in the event sent when their new bytes become servable: a page
+ * the render wrote, at the show; a file the background writes (a copied
+ * asset, an image variant, a video), at the seal tail. A key can be named
+ * again: a page the tail repaired, or a key a newer render's tail lists
+ * when an older render's tail left to it. The refresh signal: a client
+ * refreshes when this names the page it shows or anything that page loads.
  */
 changed_output_files: string[] | null; 
 /**
@@ -1112,7 +1117,14 @@ source_renames: ([string, string])[] | null;
  * which emits it even when no output changed.
  * See `MossEvent::SourceContentChanged` for the pre-rebuild announcement.
  */
-modified_paths: string[] | null }
+modified_paths: string[] | null; 
+/**
+ * The render this event belongs to (`lifecycle::show_render`'s number):
+ * a render sends one event when it is shown and one from its seal tail.
+ * Nothing dedupes on it: a key named twice is a second change, or at
+ * worst a second refresh. `None` when no render was minted.
+ */
+render_seq: number | null }
 
 /**
  * One reference found in a file that points to a given target.

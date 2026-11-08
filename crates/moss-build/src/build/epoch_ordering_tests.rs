@@ -65,6 +65,7 @@ fn cfg(folder: &std::path::Path, epoch: u64) -> PipelineConfig {
         server_port: None,
         admission_epoch: Some(epoch),
         live_port: None,
+        rename_pairs: Vec::new(),
     }
 }
 

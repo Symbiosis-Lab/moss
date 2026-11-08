@@ -130,6 +130,7 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     })
     .await
     .expect("build");

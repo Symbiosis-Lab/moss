@@ -134,6 +134,7 @@ async fn build_and_serve_report_the_same_root_identity_through_every_phase() {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     })
     .await
     .expect("build");

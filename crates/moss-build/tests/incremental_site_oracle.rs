@@ -88,6 +88,7 @@ fn build_in(rt: &tokio::runtime::Runtime, root: &Path, trigger: BuildTrigger, ex
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }));
     let wall = start.elapsed();
     result.map(|_| (wall, take_log())).map_err(|e| format!("build of {folder} failed: {e}"))

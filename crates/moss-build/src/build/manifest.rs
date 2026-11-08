@@ -233,6 +233,11 @@ pub struct PendingManifest {
     /// registered again since: their bytes in the stage are the previous build's
     /// final ones. See [`carried_pages`][Self::carried_pages].
     carried_pages: HashSet<String>,
+    /// `Some` once the preview serves this render
+    /// ([`note_shown`][Self::note_shown]): the keys registered after that with
+    /// an entry other than the one they had, which are the bytes that landed
+    /// after the show. `None` for a render never shown.
+    late: Option<HashSet<String>>,
 }
 
 /// Is this `SiteHashes.sources` key in the page half?
@@ -351,6 +356,7 @@ impl PendingManifest {
             preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
+            late: None,
             carried_source_to_output,
             carried_page_meta,
             carried_page_sources,
@@ -482,6 +488,15 @@ impl PendingManifest {
 
     pub(crate) fn take_unwritten_pages(&mut self) -> std::collections::BTreeMap<String, String> {
         std::mem::take(&mut self.unwritten_pages)
+    }
+
+    /// Mark the moment the preview starts serving this render. The slot pass
+    /// has written the rendered pages by then, so every key registered so far
+    /// is bytes on disk; from here on a registration that changes a key's
+    /// entry is recorded as landing late.
+    pub(crate) fn note_shown(&mut self) {
+        debug_assert!(self.unwritten_pages.is_empty(), "a page shown before the slot pass wrote it");
+        self.late = Some(HashSet::new());
     }
 
     /// Apply a manifest registration from a pre-computed xxHash3 hex digest.
@@ -832,6 +847,11 @@ impl PendingManifest {
         } else {
             file_entry(hash)
         };
+        if let Some(late) = self.late.as_mut() {
+            if self.inner.files.get(&rel_path) != Some(&entry) {
+                late.insert(rel_path.clone());
+            }
+        }
         self.inner.files.insert(rel_path.clone(), entry);
 
         // Bucket-specific tracking: stale-cleanup sets and blocking_keys only.
@@ -924,6 +944,7 @@ impl PendingManifest {
             generation_id,
             unverified: self.unverified,
             ship_sources,
+            late: self.late,
         }
     }
 }
@@ -969,9 +990,22 @@ pub struct SealedManifest {
     /// any disagreement — see `ship::verify_ship_integrity`. Never
     /// persisted; exists only to make a seal-to-ship race audible.
     ship_sources: HashMap<String, ShipSource>,
+    /// See [`PendingManifest::late`].
+    late: Option<HashSet<String>>,
 }
 
 impl SealedManifest {
+    /// Whether the preview served this render when it was shown.
+    pub fn was_shown(&self) -> bool {
+        self.late.is_some()
+    }
+
+    /// Whether `key`'s bytes landed after the show: written or rewritten
+    /// since, or any key of a render never shown.
+    pub fn landed_after_show(&self, key: &str) -> bool {
+        self.late.as_ref().is_none_or(|late| late.contains(key))
+    }
+
     /// The generated files this build left out because a site setting says so.
     pub fn withdrawn(&self) -> change_set::Withdrawn {
         self.withdrawn

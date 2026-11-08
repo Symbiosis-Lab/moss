@@ -1554,7 +1554,7 @@ mod tests {
             );
         }
         let mut sealed = pending.seal();
-        let verdict = crate::build::degrade::repair_staged_html(
+        let (verdict, _) = crate::build::degrade::repair_staged_html(
             &mp,
             &stage,
             &mut sealed,
