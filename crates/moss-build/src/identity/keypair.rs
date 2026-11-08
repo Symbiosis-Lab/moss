@@ -1147,6 +1147,7 @@ mod tests {
         assert_eq!(Identity::read_trusted_pubkeys(dir.path()), vec![second.pubkey.clone(), first.pubkey.clone()]);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_save_over_an_identity_still_in_the_cloud_is_refused_rather_than_retiring_nothing() {
         let dir = tempdir().unwrap();

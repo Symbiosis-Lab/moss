@@ -475,7 +475,7 @@ mod tests {
             eprintln!("skipped: this disk is case-insensitive, so it cannot hold case twins");
             return;
         }
-        assert_eq!(moss_core::resolve::editor::files::spelled_out_file("a/photo.jpg", "p.md", project_graph(&root).all_files()), None);
+        assert_eq!(moss_core::resolve::editor::files::spelled_out_file("a/photo.jpg", "p.md", &site_listing(&root).0), None);
     }
 
     #[test]
