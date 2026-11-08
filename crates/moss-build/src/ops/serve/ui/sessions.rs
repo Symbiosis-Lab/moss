@@ -176,6 +176,7 @@ pub(super) fn set_cookie(secret: &str, origin: &str, max_age: u64) -> String {
 /// moss home only its owner can read.
 pub fn session_file() -> Result<PathBuf, String> {
     let home = crate::infra::home::moss_home()?;
+    // allow:raw_write the moss home is machine state outside the served folder, not build output
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
