@@ -67,8 +67,8 @@
         "crates/moss-build/src/js-src/bridge": 17,
         "crates/moss-build/src/js-src/site": 27,
         "crates/moss-build/src/plugins": 19,
-        "crates/moss-core/src": 44,
-        "crates/moss-core/src/ast": 28,
+        "crates/moss-core/src": 46,
+        "crates/moss-core/src/ast": 29,
         "crates/moss-core/src/resolve": 20,
         "crates/moss-build/src/ops/serve": 20,
         "crates/moss-build/src/js-src/site/maps/places-explorer": 18,
@@ -76,7 +76,7 @@
         "crates/moss-build/src/cli": 25,
         "crates/moss-build/src/build/components": 16,
         "crates/moss-build/src/build/emit": 18,
-        "crates/moss-build/src/assets/js": 17,
+        "crates/moss-build/src/assets/js": 18,
         "crates/moss-build/src/build/place_map": 16,
         "packages/moss-ui/src/ui/shared/ui": 18,
         "packages/moss-ui/src/ui": 20,
@@ -102,7 +102,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/Cargo.toml": 87,
+        "crates/moss-build/Cargo.toml": 86,
         "crates/moss-cli/Cargo.toml": 5,
         "crates/moss-core/Cargo.toml": 9,
         "crates/moss-bindings/Cargo.toml": 5
@@ -115,7 +115,7 @@
       "value": {
         "crates/moss-build/src/build.rs::run_pipeline_body": 450,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
-        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 750,
+        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
         "crates/moss-build/src/build/media/image.rs::run_image_conversion": 400,
