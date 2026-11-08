@@ -48,6 +48,8 @@ pub enum Owner {
 pub enum SiteAccess {
     Authorized,
     NotOwner,
+    /// The owner's key, not signed in to this site.
+    NotSignedIn,
     /// The server does not know the site, or is too old to say.
     NotFound,
 }
@@ -206,6 +208,7 @@ impl DryRun {
         out.push_str(&match &self.owner {
             Owner::Answered { site, access: SiteAccess::Authorized } => format!("Publishing: this folder's key may publish the site \"{site}\".\n"),
             Owner::Answered { site, access: SiteAccess::NotOwner } => format!("Publishing: this folder's key is not linked to the account that owns the site \"{site}\".\n"),
+            Owner::Answered { site, access: SiteAccess::NotSignedIn } => format!("Publishing: this folder isn't signed in to the site \"{site}\".\n"),
             Owner::Answered { site, access: SiteAccess::NotFound } => format!("Publishing: not known, because the server does not know the site \"{site}\".\n"),
             Owner::Unchecked { reason } => format!("Publishing: not asked, because {reason}: whether this folder's key may publish, and whether another copy published since.\n"),
         });
@@ -363,13 +366,22 @@ async fn check_locally(
     Ok(Local { ask, would_register, would_create_key, needs_verification, no_environment, not_signed_in })
 }
 
+/// What the server's one answer refuses: a copy published since this one,
+/// known before the build, and a key that may not publish the site, known
+/// only at the upload.
+struct ServerRefusals {
+    stale_copy: Option<crate::deploy::Refusal>,
+    at_upload: Option<crate::deploy::Refusal>,
+}
+
 /// Ask the server, with the owner-gated read every deploy starts with,
 /// whether this folder's key may publish its site, and with the same answer
 /// whether another copy published since this one (unless `overwrite_newer`).
-/// Returns the stale-copy refusal beside the answer.
-async fn ask_server(folder: &Path, local: &Local, overwrite_newer: bool) -> (Owner, Option<crate::deploy::Refusal>) {
+async fn ask_server(folder: &Path, local: &Local, overwrite_newer: bool) -> (Owner, ServerRefusals) {
+    use crate::deploy::{Refusal, RefusalKind};
     use crate::seta::sites::Generation;
-    let unchecked = |reason: String| (Owner::Unchecked { reason }, None);
+    let none = || ServerRefusals { stale_copy: None, at_upload: None };
+    let unchecked = |reason: String| (Owner::Unchecked { reason }, none());
     let site = match &local.ask {
         Ok(site) => site.clone(),
         Err(reason) => return unchecked(reason.to_string()),
@@ -381,35 +393,32 @@ async fn ask_server(folder: &Path, local: &Local, overwrite_newer: bool) -> (Own
     let environment = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
     let client = crate::seta::client::MossSetaClient::for_environment(&identity, &environment);
     let answered = |access| Owner::Answered { site: site.clone(), access };
+    let at_upload = |kind, text| ServerRefusals { stale_copy: None, at_upload: Some(Refusal::new(kind, text)) };
     match client.generation(&site, Some(std::time::Duration::from_secs(5))).await {
         Ok(Generation::Live(live)) => {
-            let stale = (!overwrite_newer)
+            let stale_copy = (!overwrite_newer)
                 .then(|| crate::deploy::stale_copy_against(folder, &site, &live))
                 .flatten()
-                .map(|text| crate::deploy::Refusal::new(crate::deploy::RefusalKind::StaleCopy, text));
-            (answered(SiteAccess::Authorized), stale)
+                .map(|text| Refusal::new(RefusalKind::StaleCopy, text));
+            (answered(SiteAccess::Authorized), ServerRefusals { stale_copy, at_upload: None })
         }
-        Ok(Generation::NotOwner) => (answered(SiteAccess::NotOwner), None),
-        Ok(Generation::NotFound) => (answered(SiteAccess::NotFound), None),
+        Ok(Generation::NotOwner) => (
+            answered(SiteAccess::NotOwner),
+            at_upload(RefusalKind::NotOwner, format!("Nothing published — this folder's key is not linked to the account that owns \"{site}\". Deploy with `--email <address>`, the owner's address, to be sent a sign-in link for this key.")),
+        ),
+        Ok(Generation::NotSignedIn { site: address }) => (
+            answered(SiteAccess::NotSignedIn),
+            at_upload(RefusalKind::NotSignedIn, crate::identity::verify_email::not_signed_in(folder, &address)),
+        ),
+        Ok(Generation::NotFound) => (answered(SiteAccess::NotFound), none()),
         Err(e) => unchecked(format!("the server could not be asked ({e})")),
     }
 }
 
-/// The refusal a deploy would meet first: a stale copy is known before the
-/// build, the build's own checks (`local`) after it, and a key that is not
-/// linked to the owner's account (or to any account yet) only at the upload.
-fn first_refusal(
-    stale_copy: Option<crate::deploy::Refusal>,
-    local: Option<crate::deploy::Refusal>,
-    owner: &Owner,
-) -> Option<crate::deploy::Refusal> {
-    stale_copy.or(local).or_else(|| {
-        let Owner::Answered { site, access: SiteAccess::NotOwner } = owner else { return None };
-        Some(crate::deploy::Refusal::new(
-            crate::deploy::RefusalKind::NotOwner,
-            format!("Nothing published — this folder's key is not linked to the account that owns \"{site}\". Deploy with `--email <address>`, the owner's address, to be sent a sign-in link for this key."),
-        ))
-    })
+/// The refusal a deploy would meet first: a stale copy before the build, the
+/// build's own checks (`local`) after it, the key's access at the upload.
+fn first_refusal(server: ServerRefusals, local: Option<crate::deploy::Refusal>) -> Option<crate::deploy::Refusal> {
+    server.stale_copy.or(local).or(server.at_upload)
 }
 
 /// Build the folder as a deploy would and describe the publish that would
@@ -450,7 +459,7 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
-    let (owner, stale_copy) = ask_server(folder, &local, overwrite_newer).await;
+    let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
     use crate::deploy::Refusal;
     let local_refusal = crate::deploy::removal_gate::refuse_output_collisions(&sealed).err()
         .map(|t| Refusal::new(crate::deploy::RefusalKind::OutputCollision, t))
@@ -462,7 +471,7 @@ pub async fn run_dry_run(
                 .or_else(|| crate::deploy::refuse_foreign_inputs(&sealed, folder).err().map(|t| Refusal::new(crate::deploy::RefusalKind::ForeignInputs, t)))
                 .or_else(|| crate::deploy::refuse_unresolved_inputs(&sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::UnresolvedInputs, t))),
     });
-    let refusal = first_refusal(stale_copy, local_refusal, &owner);
+    let refusal = first_refusal(server, local_refusal);
     Ok(DryRun {
         change_set,
         transfer,
@@ -522,9 +531,9 @@ pub async fn run_prebuilt_dry_run(
         }
         None => (Transfer::NoRecord, None),
     };
-    let (owner, stale_copy) = ask_server(folder, &local, overwrite_newer).await;
+    let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
     let local_refusal = local.not_signed_in.map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t)).or(refusal);
-    let refusal = first_refusal(stale_copy, local_refusal, &owner);
+    let refusal = first_refusal(server, local_refusal);
     Ok(DryRun {
         change_set: ChangeSet::default(),
         transfer,

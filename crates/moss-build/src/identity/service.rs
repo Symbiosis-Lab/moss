@@ -102,19 +102,23 @@ impl IdentityService {
     }
 
     /// The identity a sign-in sends, with its signing key loaded. A folder whose
-    /// key file is gone gets a new key here and nowhere else; `save` retires the
-    /// lost one, and the new key publishes nothing until the sign-in link sent
-    /// for it is opened.
+    /// key file is gone gets a new key; `save` retires the lost one, and the new
+    /// key publishes nothing until the sign-in link sent for it is opened.
     pub fn key_for_sign_in(&mut self) -> Result<&Identity, IdentityError> {
         match self.ensure_signing_key() {
-            Err(IdentityError::PrivateKeyNotFound) => {
-                let fresh = Identity::generate()?;
-                fresh.save(&self.project_path)?;
-                self.cached = Some(fresh);
-            }
-            other => other?,
+            Err(IdentityError::PrivateKeyNotFound) => self.own_key_for_sign_in(),
+            other => other.map(|()| self.cached.as_ref().expect("loaded above")),
         }
-        Ok(self.cached.as_ref().expect("loaded or minted above"))
+    }
+
+    /// A new key for a sign-in, the only place one is minted over a folder that
+    /// has one: for a lost key, and for a key the server says is signed in to
+    /// another site (a copy of another folder's key, which `save` keeps among
+    /// the retired keys while the folder it came from keeps using it).
+    pub fn own_key_for_sign_in(&mut self) -> Result<&Identity, IdentityError> {
+        let fresh = Identity::generate()?;
+        fresh.save(&self.project_path)?;
+        Ok(self.cached.insert(fresh))
     }
 
     /// Check if an identity exists for this project.

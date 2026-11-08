@@ -6,6 +6,7 @@
 //! `--email`, because sending a message to an address is something the caller
 //! must ask for.
 
+use crate::seta::client::NOT_OWNER;
 use std::path::Path;
 use std::time::Duration;
 
@@ -28,9 +29,14 @@ pub fn not_signed_in(folder: &Path, host: &str) -> String {
     format!("{name}{NOT_SIGNED_IN}{host}. Sign it in: moss deploy {} {SIGN_IN_FLAG}", folder.display())
 }
 
-/// The service's refusal of a key that does not own the site. A fresh key on a
-/// site that already exists gets this, not [`not_signed_in`].
-const NOT_OWNER_REFUSAL: &str = "Not authorized for this site";
+/// [`not_signed_in`] for the server's refusal of a key not signed in to the
+/// site; `None` for any other error.
+pub fn server_refusal(folder: &Path, error: &crate::seta::client::SetaError) -> Option<String> {
+    match error {
+        crate::seta::client::SetaError::NotSignedIn { site } => Some(not_signed_in(folder, site)),
+        _ => None,
+    }
+}
 
 /// Whether `message` is the refusal that `--email` can lift.
 pub fn is_unverified_refusal(message: &str) -> bool {
@@ -67,6 +73,58 @@ pub fn replaced_email_notice(old: &str, new: &str) -> String {
     format!("The address stored for this folder, {old}, is being replaced by {new}.")
 }
 
+/// What a sign-in link names: the folder's site, if it has been deployed, and
+/// the folder's own name. Never a path, which would show the person's file
+/// system to whoever the link is forwarded to.
+pub fn sign_in_folder(folder: &Path) -> crate::seta::client::SignInFolder {
+    let name = crate::vault::paths::VaultRoot::resolve(folder).name().to_string();
+    crate::seta::client::SignInFolder {
+        site_id: crate::build::site_config::site_id_for_folder(folder).ok(),
+        name: Some(name).filter(|n| !n.trim().is_empty()),
+    }
+}
+
+/// The longest wait the server may name before a sign-in request is sent
+/// again; a longer one is reported instead.
+const LONGEST_WAIT: Duration = Duration::from_secs(60);
+
+/// Ask for a sign-in link for `folder`'s key, naming the folder. A key the
+/// server says is signed in to another site is a copy of another folder's
+/// key: the folder gets one of its own and the link is asked for again, after
+/// the wait the server names, if it names one (`on_wait` is told first).
+/// Returns the identity the link signs in.
+pub async fn request_sign_in(
+    folder: &Path,
+    client: &crate::seta::client::MossSetaClient,
+    email: &str,
+    session_id: &str,
+    lang: Option<&str>,
+    on_wait: impl Fn(Duration),
+) -> Result<super::keypair::Identity, crate::seta::client::SetaError> {
+    use crate::seta::client::SetaError;
+    let identity_error = |e: super::keypair::IdentityError| SetaError::Identity(e.to_string());
+    let named = sign_in_folder(folder);
+    let mut service = super::service::IdentityService::new(folder);
+    let identity = service.key_for_sign_in().map_err(identity_error)?.clone();
+    match client.request_auth(email, &identity.pubkey, session_id, lang, &named).await {
+        Err(SetaError::KeyHasOtherSite { site }) => {
+            log::info!(target: "identity", "this folder's key is signed in to {site}; the folder signs in with a key of its own");
+            let own = service.own_key_for_sign_in().map_err(identity_error)?.clone();
+            let send = || client.request_auth(email, &own.pubkey, session_id, lang, &named);
+            match send().await {
+                Err(SetaError::TooSoon { retry_after, .. }) if retry_after <= LONGEST_WAIT => {
+                    on_wait(retry_after);
+                    tokio::time::sleep(retry_after).await;
+                    send().await?;
+                }
+                other => other?,
+            }
+            Ok(own)
+        }
+        other => other.map(|()| identity),
+    }
+}
+
 /// Polls in a row that the service answers with a 4xx before the wait is
 /// abandoned: a refusal that repeats is a decision, not a blip.
 const PERMANENT_REFUSALS: usize = 5;
@@ -85,13 +143,11 @@ pub async fn verify_folder_email(
     limit: Duration,
 ) -> Result<(), String> {
     validate_email(email)?;
-    let mut identity = super::service::IdentityService::new(folder).key_for_sign_in().map_err(|e| e.to_string())?.clone();
     let env = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
-    let client = crate::seta::client::MossSetaClient::for_environment(&identity, &env);
-
+    let client = crate::seta::client::MossSetaClient::new_for_environment(&env);
     let session_id = new_session_id();
-    client
-        .request_auth(email, &identity.pubkey, &session_id, None)
+    let waiting = |wait: Duration| eprintln!("Waiting {} s to send the sign-in link to {email}.", wait.as_secs());
+    let mut identity = request_sign_in(folder, &client, email, &session_id, None, waiting)
         .await
         .map_err(|e| format!("Could not send a sign-in link to {email}: {e}"))?;
     eprintln!("Sent a sign-in link to {email}. Open it to continue \u{2014} waiting (Ctrl-C to stop).");
@@ -216,7 +272,7 @@ where
 {
     match (attempt().await, email) {
         (Err(refusal), Some(email))
-            if is_unverified_refusal(&refusal) || (refusal.contains(NOT_OWNER_REFUSAL) && key_is_unlinked(folder).await) =>
+            if is_unverified_refusal(&refusal) || (refusal.contains(NOT_OWNER) && key_is_unlinked(folder).await) =>
         {
             verify_folder_email(folder, email, interval, limit).await?;
             attempt().await

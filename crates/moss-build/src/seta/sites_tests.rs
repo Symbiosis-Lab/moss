@@ -136,6 +136,18 @@ async fn test_generation_403_is_not_owner_and_live_generation_keeps_the_error() 
     assert!(matches!(live, Err(crate::seta::client::SetaError::Api { status: 403, .. })), "{live:?}");
 }
 
+/// seta's coded 403 is the owner's key not signed in to this site, named by
+/// its address; the same words without the code stay another owner.
+#[tokio::test]
+async fn a_coded_403_is_not_signed_in_and_names_the_address() {
+    let server = StandIn::json(403, r#"{"error":"Not authorized for this site","code":"folder_not_signed_in","site":"her-blog.mosspub.com","detail":"This folder isn't signed in to her-blog.mosspub.com."}"#).await;
+    let client = client_for(&server);
+    let result = client.generation("her-blog", None).await;
+    assert!(matches!(&result, Ok(crate::seta::sites::Generation::NotSignedIn { site }) if site == "her-blog.mosspub.com"), "{result:?}");
+    let live = client.live_generation("her-blog").await;
+    assert!(matches!(live, Err(crate::seta::client::SetaError::NotSignedIn { .. })), "{live:?}");
+}
+
 /// A proxy's 403 is not seta saying the key is another account's.
 #[tokio::test]
 async fn test_generation_403_not_in_setas_words_stays_an_error() {

@@ -442,6 +442,36 @@ pub enum SetaError {
     /// right sentence with no change.
     #[error("{}", CHALLENGE_MESSAGE)]
     Challenge { status: u16 },
+
+    /// The key belongs to the site's owner but is not signed in to this site:
+    /// `403 {code: 'folder_not_signed_in', site}`, `site` being this site's
+    /// address. A key signed in to another site gets it, and so does an
+    /// owner's key not yet signed in to any site; a sign-in naming the site
+    /// lifts both.
+    #[error("This folder isn't signed in to {site}.")]
+    NotSignedIn { site: String },
+
+    /// A sign-in naming a site, refused because the key is signed in to
+    /// another one: `409 {code: 'key_has_other_site', site}`, `site` being
+    /// that other site's address. The folder holds a copy of another folder's
+    /// key and needs one of its own.
+    #[error("This folder's key is signed in to {site}.")]
+    KeyHasOtherSite { site: String },
+
+    /// A sign-in request refused with `429` and a `Retry-After`, as seta
+    /// answers an address sent a link moments ago. Display is the server's
+    /// sentence.
+    #[error("{message}")]
+    TooSoon { retry_after: Duration, message: String },
+}
+
+/// The folder a sign-in link is for: its site, once it has one, and its own
+/// name. Both are optional on the wire; the server shows the site by its
+/// address and the name as a value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SignInFolder {
+    pub site_id: Option<String>,
+    pub name: Option<String>,
 }
 
 /// Extract the user-facing message from a moss-seta error response body.
@@ -595,6 +625,10 @@ impl SetaError {
             );
             return SetaError::Challenge { status };
         }
+        if let Some(refusal) = parse_key_binding_refusal(status, &body) {
+            log::info!(target: "seta", "request to {} refused ({}): {}", url, status, refusal);
+            return refusal;
+        }
         let message = extract_api_error_message(&body);
         // One diagnostic line per failure, the only seta failure record in
         // "Send logs" telemetry, which release builds keep from `info` up: at
@@ -606,6 +640,28 @@ impl SetaError {
         log::log!(target: "seta", level, "request to {} failed ({}): {}{}", url, status, message, ray_suffix);
         SetaError::Api { status, message }
     }
+}
+
+/// seta's 403 `error` for a key that does not own the site, from an account
+/// that is not the owner's or from no account yet.
+pub(crate) const NOT_OWNER: &str = "Not authorized for this site";
+
+/// seta's refusals of a key outside its one site, by their `code`; the
+/// `error` text beside it is for clients that predate the code.
+fn parse_key_binding_refusal(status: u16, body: &str) -> Option<SetaError> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    let site = json.get("site")?.as_str()?.to_string();
+    match (status, json.get("code")?.as_str()?) {
+        (403, "folder_not_signed_in") => Some(SetaError::NotSignedIn { site }),
+        (409, "key_has_other_site") => Some(SetaError::KeyHasOtherSite { site }),
+        _ => None,
+    }
+}
+
+/// The wait a `Retry-After` header names in seconds (the form seta sends).
+fn retry_after(response: &reqwest::Response) -> Option<Duration> {
+    let secs = response.headers().get(reqwest::header::RETRY_AFTER)?.to_str().ok()?.trim().parse().ok()?;
+    Some(Duration::from_secs(secs))
 }
 
 /// Whether seta refused because the folder's key is not yet linked to a
@@ -791,15 +847,17 @@ impl MossSetaClient {
 
     // ========== Auth Endpoints ==========
 
-    /// Request email verification via magic link. `lang` (a BCP 47-shaped tag
-    /// such as `zh-hans`) picks the language of the email; it is sent only when
-    /// it has that shape.
+    /// Request a sign-in link. `lang` (a BCP 47-shaped tag such as
+    /// `zh-hans`) picks the language of the email; it is sent only when it has
+    /// that shape. `folder` names what is being signed in, so the page the
+    /// link opens can show it, and its site is the one the key is signed in to.
     pub async fn request_auth(
         &self,
         email: &str,
         pubkey: &str,
         session_id: &str,
         lang: Option<&str>,
+        folder: &SignInFolder,
     ) -> Result<(), SetaError> {
         let url = self.secure_url("/auth/request");
 
@@ -808,44 +866,16 @@ impl MossSetaClient {
         let response = self.client
             .post(&url)
             .timeout(std::time::Duration::from_secs(15))
-            .json(&auth_request_body(email, pubkey, session_id, lang))
+            .json(&auth_request_body(email, pubkey, session_id, lang, folder))
             .send()
             .await?;
 
         if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-        Ok(())
-    }
-
-    /// Request a sign-in link with `mode='re_verify'` + `site_id`. The server
-    /// treats it as an ordinary sign-in of the caller's pubkey; it revokes no
-    /// other key.
-    pub async fn request_reverify(
-        &self,
-        email: &str,
-        pubkey: &str,
-        session_id: &str,
-        site_id: &str,
-    ) -> Result<(), SetaError> {
-        let url = self.secure_url("/auth/request");
-
-        log::debug!(target: "seta", "POST {} (re_verify) email={} site_id={}", url, email, site_id);
-
-        let response = self.client
-            .post(&url)
-            .timeout(std::time::Duration::from_secs(15))
-            .json(&{
-                let mut body = auth_request_body(email, pubkey, session_id, None);
-                body["mode"] = "re_verify".into();
-                body["site_id"] = site_id.into();
-                body
-            })
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
+            let wait = retry_after(&response);
+            return Err(match (SetaError::from_failed_response(response).await, wait) {
+                (SetaError::Api { status: 429, message }, Some(retry_after)) => SetaError::TooSoon { retry_after, message },
+                (e, _) => e,
+            });
         }
         Ok(())
     }

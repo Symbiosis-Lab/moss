@@ -970,6 +970,20 @@ mod dry_run_tests {
         assert!(refusal.text.contains("--email"), "{}", refusal.text);
     }
 
+    /// The owner's key not signed in to this site is refused with the sentence
+    /// `--email` lifts, naming the address the server gave.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_folder_not_signed_in_to_its_site_is_refused_with_the_sign_in_sentence() {
+        let body = r#"{"error":"Not authorized for this site","code":"folder_not_signed_in","site":"dry-test.example.org","detail":"This folder isn't signed in to dry-test.example.org."}"#;
+        let fx = Fixture::answered_by(false, StandIn::json(403, body).await);
+        let dry = dry_run_against(&fx).await;
+        assert_eq!(dry.owner, answered(crate::deploy::dry_run::SiteAccess::NotSignedIn));
+        let refusal = dry.refusal.as_ref().expect("a real deploy would be refused");
+        assert_eq!(refusal.kind, crate::deploy::RefusalKind::NotSignedIn);
+        assert_eq!(refusal.text, crate::identity::verify_email::not_signed_in(fx.dir.path(), "dry-test.example.org"));
+        assert!(crate::identity::verify_email::is_unverified_refusal(&refusal.text));
+    }
+
     /// The prebuilt route asks the same question and refuses the same way.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_prebuilt_dry_run_refuses_a_key_that_does_not_own_the_site() {

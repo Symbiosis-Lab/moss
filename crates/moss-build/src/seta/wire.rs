@@ -44,8 +44,15 @@ pub(super) fn device_name(app: &str, kind: Option<&str>) -> String {
 
 /// The sign-in request. `client` names this app and the kind of computer on
 /// the page the emailed link opens, so whoever reads the mail can tell
-/// whether they asked for it.
-pub(super) fn auth_request_body(email: &str, pubkey: &str, session_id: &str, lang: Option<&str>) -> serde_json::Value {
+/// whether they asked for it. `folder` adds the site and the folder's name
+/// when known.
+pub(super) fn auth_request_body(
+    email: &str,
+    pubkey: &str,
+    session_id: &str,
+    lang: Option<&str>,
+    folder: &super::client::SignInFolder,
+) -> serde_json::Value {
     let mut body = serde_json::json!({
         "email": email,
         "pubkey": pubkey,
@@ -58,6 +65,12 @@ pub(super) fn auth_request_body(email: &str, pubkey: &str, session_id: &str, lan
     });
     if let Some(lang) = lang.filter(|l| is_lang_tag(l)) {
         body["lang"] = lang.into();
+    }
+    if let Some(site_id) = &folder.site_id {
+        body["site_id"] = site_id.as_str().into();
+    }
+    if let Some(name) = &folder.name {
+        body["folder_name"] = name.as_str().into();
     }
     body
 }

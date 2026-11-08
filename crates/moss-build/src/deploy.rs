@@ -1129,7 +1129,9 @@ pub async fn register_moss_host_site(
 
 /// Turn seta's registration refusals into something a person can act on.
 fn register_failure_message(folder: &std::path::Path, site_id: &str, e: crate::seta::client::SetaError) -> String {
-    profile::seta_error(&e);
+    if let Some(refusal) = profile::profiled_refusal(folder, &e) {
+        return refusal;
+    }
     let msg = e.to_string();
     // Seta checks the key's email before its ACLs, so this is the typical
     // first publish of a new folder.

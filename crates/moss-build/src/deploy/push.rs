@@ -189,7 +189,7 @@ async fn push_site_inner_impl(
     }
     drop(probe_phase);
 
-    let diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, sealed.generation_id())).await?;
+    let diff = super::profile::sync(folder_path, client.sync_manifest(&site_id, &manifest, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {
         let url = view_site_url(&folder_path_str, &site_id, environment);
@@ -538,7 +538,7 @@ async fn push_site_inner_impl(
         sealed.generation_id(),
         manifest.len()
     );
-    let commit_result = super::profile::commit(client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
+    let commit_result = super::profile::commit(folder_path, client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
     let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Record what just went live, so the NEXT publish can say what it will

@@ -269,7 +269,7 @@ async fn push_prebuilt_inner(
         0,
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
-    let diff = super::profile::sync(client.sync_manifest(site_id, &manifest, &generation_id)).await?;
+    let diff = super::profile::sync(project_folder, client.sync_manifest(site_id, &manifest, &generation_id)).await?;
 
     if !diff.needs_commit() {
         // Complete comes from `with_publish_guard` on the way out.
@@ -423,7 +423,7 @@ async fn push_prebuilt_inner(
         &crate::infra::app_advisory::t("making_changes_live"),
     );
     // generation_id was computed above after building the manifest.
-    let commit_result = super::profile::commit(client.commit_sync(site_id, &manifest, &generation_id)).await?;
+    let commit_result = super::profile::commit(project_folder, client.commit_sync(site_id, &manifest, &generation_id)).await?;
     let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Skew detection: the server echoes its now-live generation_id.

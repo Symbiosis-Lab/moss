@@ -1,5 +1,6 @@
 //! Site registration, metadata, publish/push, and analytics endpoints for moss-seta.
 
+use super::client::NOT_OWNER;
 use bytes::Bytes;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -90,9 +91,6 @@ pub struct LiveGeneration {
     pub deployed_at: Option<i64>,
 }
 
-/// seta's refusal of a site to a key whose account does not own it.
-const NOT_THE_OWNER: &str = "Not authorized for this site";
-
 /// The owner-gated `GET /api/sites/{id}/generation`, classified once, from
 /// [`MossSetaClient::generation`].
 #[derive(Debug, PartialEq)]
@@ -101,6 +99,8 @@ pub enum Generation {
     Live(LiveGeneration),
     /// seta's own 403: the key belongs to another account, or to none.
     NotOwner,
+    /// The owner's key, not signed in to this site, named by its address.
+    NotSignedIn { site: String },
     /// A site the server does not have, or a server too old to have the route.
     NotFound,
 }
@@ -481,7 +481,8 @@ impl MossSetaClient {
         match self.generation(site_id, None).await? {
             Generation::Live(live) => Ok(live),
             Generation::NotFound => Ok(LiveGeneration::default()),
-            Generation::NotOwner => Err(SetaError::Api { status: 403, message: NOT_THE_OWNER.to_string() }),
+            Generation::NotOwner => Err(SetaError::Api { status: 403, message: NOT_OWNER.to_string() }),
+            Generation::NotSignedIn { site } => Err(SetaError::NotSignedIn { site }),
         }
     }
 
@@ -500,7 +501,8 @@ impl MossSetaClient {
             200..=299 => Ok(Generation::Live(response.json().await.map_err(|e| SetaError::Parse(e.to_string()))?)),
             404 => Ok(Generation::NotFound),
             _ => match SetaError::from_failed_response(response).await {
-                SetaError::Api { status: 403, message } if message == NOT_THE_OWNER => Ok(Generation::NotOwner),
+                SetaError::Api { status: 403, message } if message == NOT_OWNER => Ok(Generation::NotOwner),
+                SetaError::NotSignedIn { site } => Ok(Generation::NotSignedIn { site }),
                 other => Err(other),
             },
         }

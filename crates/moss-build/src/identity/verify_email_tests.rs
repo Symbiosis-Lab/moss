@@ -13,7 +13,14 @@ pub(crate) struct Seta {
     /// What `/auth/whoami` says the key belongs to; `None` is a key linked to
     /// no account, as the service answers for one.
     pub(crate) account: Arc<Mutex<Option<&'static str>>>,
+    /// Replies to the next sign-in requests, in order, as (status line,
+    /// extra header lines, body); an empty queue answers 200.
+    sign_in_replies: Arc<Mutex<std::collections::VecDeque<Reply>>>,
+    /// The body of an unverified key's 403 on `/sync`.
+    sync_refusal: Arc<Mutex<&'static str>>,
 }
+
+type Reply = (&'static str, &'static str, &'static str);
 
 impl Seta {
     pub(crate) async fn start(verify_after: usize, final_status: &'static str) -> Seta {
@@ -33,7 +40,9 @@ impl Seta {
         let log: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
         let polls = Arc::new(AtomicUsize::new(0));
         let account: Arc<Mutex<Option<&'static str>>> = Arc::default();
-        let (l, p, a) = (log.clone(), polls.clone(), account.clone());
+        let sign_in_replies: Arc<Mutex<std::collections::VecDeque<Reply>>> = Arc::default();
+        let sync_refusal = Arc::new(Mutex::new(r#"{"error":"Not authorized for this site"}"#));
+        let (l, p, a, r, sr) = (log.clone(), polls.clone(), account.clone(), sign_in_replies.clone(), sync_refusal.clone());
         tokio::spawn(async move {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -42,8 +51,11 @@ impl Seta {
                 let (method, path) = (first.next().unwrap_or("").to_string(), first.next().unwrap_or("").to_string());
                 let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
                 l.lock().unwrap().push((format!("{method} {path}"), body));
+                let mut headers = "";
                 let (code, json) = if path == "/auth/request" {
-                    ("200 OK", "{}".to_string())
+                    let (code, extra, json) = r.lock().unwrap().pop_front().unwrap_or(("200 OK", "", "{}"));
+                    headers = extra;
+                    (code, json.to_string())
                 } else if path.starts_with("/auth/status/") {
                     let n = p.fetch_add(1, Ordering::SeqCst) + 1;
                     let status = if n >= verify_after { final_status } else { "pending" };
@@ -58,7 +70,7 @@ impl Seta {
                     if p.load(Ordering::SeqCst) >= verify_after && final_status == "verified" {
                         ("200 OK", r#"{"need":[],"remove":[]}"#.to_string())
                     } else {
-                        ("403 Forbidden", r#"{"error":"Not authorized for this site"}"#.to_string())
+                        ("403 Forbidden", sr.lock().unwrap().to_string())
                     }
                 } else if path == "/auth/whoami" {
                     let email = a.lock().unwrap().map_or("null".to_string(), |e| format!("\"{e}\""));
@@ -73,13 +85,23 @@ impl Seta {
                     ("404 Not Found", "{}".to_string())
                 };
                 let resp = format!(
-                    "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{json}",
+                    "HTTP/1.1 {code}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\n\r\n{json}",
                     json.len()
                 );
                 crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
             }
         });
-        Seta { log, polls, url, account }
+        Seta { log, polls, url, account, sign_in_replies, sync_refusal }
+    }
+
+    fn reply_to_sign_in(&self, status: &'static str, headers: &'static str, body: &'static str) {
+        self.sign_in_replies.lock().unwrap().push_back((status, headers, body));
+    }
+
+    /// The bodies of the sign-in requests, in order.
+    fn sign_in_bodies(&self) -> Vec<serde_json::Value> {
+        let log = self.log.lock().unwrap();
+        log.iter().filter(|(l, _)| l == "POST /auth/request").map(|(_, b)| serde_json::from_str(b).unwrap()).collect()
     }
 
     /// Requests whose method and path are exactly `line`.
@@ -193,6 +215,9 @@ async fn with_email_it_sends_one_link_polls_through_pending_records_the_email_an
     assert_eq!(sent["pubkey"], folder.pubkey());
     let session = sent["session_id"].as_str().unwrap();
     assert!(session.len() == 64 && session.chars().all(|c| c.is_ascii_hexdigit()), "{session}");
+    let name = folder.dir.path().file_name().unwrap().to_str().unwrap();
+    assert_eq!(sent["folder_name"], name, "the link names the folder being signed in");
+    assert!(sent.get("site_id").is_none(), "a folder not yet deployed names no site: {sent}");
     assert_eq!(
         crate::identity::Identity::read_email(folder.dir.path()).as_deref(),
         Some("me@example.com"),
@@ -315,4 +340,79 @@ async fn an_unlinked_key_is_sent_a_link_only_for_a_not_the_owner_refusal() {
 
     let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), TICK, WAIT_LIMIT, refused("API error: 403 - Not authorized for this site")).await;
     assert_eq!(seta.count("POST /auth/request"), 1);
+}
+
+#[test]
+fn a_deployed_folder_names_its_site_and_never_its_path() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("Blog");
+    std::fs::create_dir(&dir).unwrap();
+    let config = crate::config::deployment::DomainDeploymentConfig { site_id: Some("her-blog".into()), ..Default::default() };
+    crate::vault::deployment_state::save_domain_config(dir.to_str().unwrap(), &config).unwrap();
+
+    let named = sign_in_folder(&dir);
+    assert_eq!(named.site_id.as_deref(), Some("her-blog"));
+    assert_eq!(named.name.as_deref(), Some("Blog"));
+    assert!(sign_in_folder(parent.path()).site_id.is_none(), "an undeployed folder names no site");
+}
+
+const KEY_HAS_OTHER_SITE: &str = r#"{"error":"This folder's key is signed in to old-blog.mosspub.com. Update moss to sign this folder in with a key of its own.","code":"key_has_other_site","site":"old-blog.mosspub.com"}"#;
+const JUST_SENT: &str = r#"{"error":"A verification email was just sent. You can request another in a moment."}"#;
+
+/// A folder copied from another one holds that folder's key, which the server
+/// has signed in to the other folder's site. The sign-in gives this folder a
+/// key of its own, keeps the copy among its retired keys, waits out the wait
+/// the server names for the address, and asks again for the new key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_copied_key_is_replaced_by_one_of_the_folders_own_and_the_link_asked_for_again() {
+    let seta = Seta::start(1, "verified").await;
+    seta.reply_to_sign_in("409 Conflict", "", KEY_HAS_OTHER_SITE);
+    seta.reply_to_sign_in("429 Too Many Requests", "Retry-After: 0\r\n", JUST_SENT);
+    let folder = Folder::new(&seta);
+    let copied = folder.pubkey();
+
+    verify_folder_email(folder.dir.path(), "me@example.com", TICK, WAIT_LIMIT).await.expect("signed in");
+
+    let own = folder.pubkey();
+    assert_ne!(own, copied);
+    let sent: Vec<String> = seta.sign_in_bodies().iter().map(|b| b["pubkey"].as_str().unwrap().to_string()).collect();
+    assert_eq!(sent, [copied.clone(), own.clone(), own]);
+    let retired = std::fs::read_to_string(folder.dir.path().join(".moss/identity/previous-keys.jsonl")).unwrap();
+    assert!(retired.contains(&copied), "{retired}");
+    assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("me@example.com"));
+}
+
+/// A wait longer than a sign-in sits out is the server's sentence, not a hang.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_wait_after_a_copied_key_is_reported() {
+    let seta = Seta::start(1, "verified").await;
+    seta.reply_to_sign_in("409 Conflict", "", KEY_HAS_OTHER_SITE);
+    seta.reply_to_sign_in("429 Too Many Requests", "Retry-After: 3600\r\n", JUST_SENT);
+    let folder = Folder::new(&seta);
+
+    let err = verify_folder_email(folder.dir.path(), "me@example.com", TICK, WAIT_LIMIT).await.expect_err("too soon");
+    assert!(err.contains("just sent"), "{err}");
+    assert_eq!(seta.count("POST /auth/request"), 2);
+}
+
+/// A publish refused because the folder isn't signed in to its site, by the
+/// owner's key signed in elsewhere or nowhere, is the sentence `--email`
+/// lifts: the link is sent without first asking whose key it is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_folder_not_signed_in_to_its_site_is_signed_in_by_email() {
+    let seta = Seta::start(1, "verified").await;
+    *seta.sync_refusal.lock().unwrap() = r#"{"error":"Not authorized for this site","code":"folder_not_signed_in","site":"my-site.mosspub.com","detail":"This folder isn't signed in to my-site.mosspub.com."}"#;
+    let folder = Folder::new(&seta);
+    let identity = crate::identity::Identity::load_for_signing(folder.dir.path()).unwrap();
+    let client = crate::seta::client::MossSetaClient::for_environment(&identity, &crate::build::site_config::resolve_environment(&folder.dir.path().to_string_lossy()));
+    let sync = || async {
+        crate::deploy::profile::sync(folder.dir.path(), client.sync_manifest("my-site", &Default::default(), "gen")).await.map(|_| ())
+    };
+
+    let err = sync().await.expect_err("not signed in");
+    assert_eq!(err, not_signed_in(folder.dir.path(), "my-site.mosspub.com"));
+
+    retrying_after_verification(folder.dir.path(), Some("me@example.com"), TICK, WAIT_LIMIT, sync).await.expect("signed in, then synced");
+    assert_eq!(seta.count("POST /auth/request"), 1);
+    assert_eq!(seta.count("GET /auth/whoami"), 0, "the refusal itself says --email lifts it");
 }

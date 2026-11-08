@@ -166,7 +166,7 @@ fn refusal_sentence(code: &str, detail: &str) -> String {
         "key_shared" => detail.to_string(),
         "no_pending_transfer" => "no transfer of this site is waiting".into(),
         "email_rate_limited" => "too many links were sent to that address; try again later".into(),
-        "Not authorized for this site" => "this folder's key does not own the site".into(),
+        crate::seta::client::NOT_OWNER => "this folder's key does not own the site".into(),
         other if detail.is_empty() => format!("the hosting service refused the transfer: {other}"),
         other => format!("the hosting service refused the transfer: {other}: {detail}"),
     }

@@ -133,7 +133,7 @@ pub(crate) fn seta_error(error: &crate::seta::client::SetaError) {
     use crate::seta::client::SetaError;
     match error {
         SetaError::SiteLimitReached { .. } => refusal("site_limit"),
-        SetaError::Api { status: 401 | 403, .. } => refusal("access"),
+        SetaError::Api { status: 401 | 403, .. } | SetaError::NotSignedIn { .. } => refusal("access"),
         SetaError::Api { status: 409, .. } => refusal("conflict"),
         SetaError::Api { status: 413, .. } => refusal("size_limit"),
         SetaError::Api { status: 422, .. } => refusal("incomplete_generation"),
@@ -141,21 +141,31 @@ pub(crate) fn seta_error(error: &crate::seta::client::SetaError) {
     }
 }
 
+/// Record a failed seta call in the profile, and return the sentence the
+/// deploy gives for it when it has one of its own (a key not signed in to
+/// the site gets the one `--email` lifts).
+pub(crate) fn profiled_refusal(folder: &std::path::Path, error: &crate::seta::client::SetaError) -> Option<String> {
+    seta_error(error);
+    crate::identity::verify_email::server_refusal(folder, error)
+}
+
 pub(crate) async fn sync(
+    folder: &std::path::Path,
     call: impl Future<Output = Result<crate::seta::sites::SyncManifestResponse, crate::seta::client::SetaError>>,
 ) -> Result<crate::seta::sites::SyncManifestResponse, String> {
     let _phase = PhaseTrace::start("sync");
-    let diff = call.await.map_err(|e| { seta_error(&e); e.to_string() })?;
+    let diff = call.await.map_err(|e| profiled_refusal(folder, &e).unwrap_or_else(|| e.to_string()))?;
     count("files_needed", diff.need.len() as u64);
     count("removed_files", diff.remove.len() as u64);
     Ok(diff)
 }
 
 pub(crate) async fn commit(
+    folder: &std::path::Path,
     call: impl Future<Output = Result<crate::seta::sites::CommitResponse, crate::seta::client::SetaError>>,
 ) -> Result<crate::seta::sites::CommitResponse, String> {
     let _phase = PhaseTrace::start("publish");
-    let result = call.await.map_err(|e| { seta_error(&e); e.to_string() })?;
+    let result = call.await.map_err(|e| profiled_refusal(folder, &e).unwrap_or_else(|| e.to_string()))?;
     count("server_files_updated", result.files_updated as u64);
     count("removed_files", result.files_removed as u64);
     Ok(result)

@@ -58,7 +58,7 @@ pub(super) enum FailureClass {
 ///
 /// | Signal | Class | Why |
 /// |---|---|---|
-/// | 429 | Backpressure | An explicit "slow down"; the request itself is fine. |
+/// | 429, `TooSoon` | Backpressure | An explicit "slow down"; the request itself is fine. |
 /// | 503 | Backpressure | Capacity, not correctness — the origin is asking for time. |
 /// | 524 | Transient | Cloudflare cut a body that outran the 125 s proxy read timeout. Retryable, but the answer is a smaller request (`upload_policy::escalate_down`), so it must not buy extra full-size replays — see the module header. |
 /// | other 5xx | Transient | A genuine origin fault; retry, but count it. |
@@ -74,6 +74,7 @@ pub(super) fn classify(error: &SetaError) -> FailureClass {
         // challenge can arrive as a 503 or a 429, the two statuses the `Api`
         // arm below would otherwise wave through as Backpressure.
         SetaError::Challenge { .. } => FailureClass::Fatal,
+        SetaError::TooSoon { .. } => FailureClass::Backpressure,
         SetaError::Api { status, .. } => match *status {
             429 | 503 => FailureClass::Backpressure,
             s if s >= 500 => FailureClass::Transient,
