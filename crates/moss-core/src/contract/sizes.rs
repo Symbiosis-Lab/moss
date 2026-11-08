@@ -106,9 +106,10 @@ pub const SIZES_BODY: &str = "auto, (min-width: 48rem) 47.25rem, 100vw";
 /// evaluating this list, which is correct in every writing mode and every
 /// layout, not just vertical-rl. The comma-separated remainder is the
 /// mandatory fallback: `auto` binds only when the `img` carries
-/// `loading="lazy"` (the HTML spec's own constraint — an eager, high-
-/// fetchpriority first card falls through to it unconditionally, same as
-/// an engine that doesn't support `auto` yet, e.g. WebKit as of 2026-09).
+/// `loading="lazy"`, so the emitter drops the `auto,` lead from an eager
+/// image (Chromium reads an eager `auto,` lead as `100vw` instead of skipping
+/// it). WebKit 26.5 honours `auto` on an `<img>` but not on a `<picture>`
+/// `<source>`, where the WebP ladder sits, so it reads this remainder too.
 /// It stays a viewport-width guess, and stays safe only because a
 /// generic <picture> `sizes` overstatement over-fetches rather than
 /// blurs — see the module doc's caveat on theme overrides.

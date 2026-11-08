@@ -5014,11 +5014,11 @@ fn test_image_compression_pipeline_end_to_end() {
     );
     // 2400×1800 fixture → srcset ladder: rungs below the deployed base
     // (2400) + base descriptor, content-column sizes for an inline markdown
-    // image. This seam test only pins the emitted HTML + the base webp on
+    // image, eager as the page's first, so without the `auto,` lead. This seam test only pins the emitted HTML + the base webp on
     // disk; rung encodes are pinned in media/image_tests.rs.
     assert!(
             html.contains(
-                r#"<source srcset="/photo.w800.webp 800w, /photo.w1200.webp 1200w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
+                r#"<source srcset="/photo.w800.webp 800w, /photo.w1200.webp 1200w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw">"#
             ),
             "Built HTML should contain <source> ladder for photo.webp (markdown image), got: {}",
             html

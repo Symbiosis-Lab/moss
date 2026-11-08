@@ -1059,30 +1059,24 @@ fn folder_card_cover_uses_card_sizes() {
 }
 
 #[test]
-fn folder_card_cover_eager_still_gets_auto_sizes() {
-    // `sizes="auto"` only binds when the img carries `loading="lazy"`
-    // (HTML spec) — an eager, high-fetchpriority card (the first card in
-    // a listing) is a browser that "doesn't support auto" as far as this
-    // attribute is concerned, so it needs no special-cased sizes string:
-    // the same `auto, <fallback>` value falls through to the fallback for
-    // it automatically, same as WebKit today. This pins that no branch in
-    // the renderer needs to vary `sizes` by `options.eager`.
+fn an_eager_image_drops_the_auto_lead() {
+    // Chromium reads an eager image's `auto,` lead as `100vw` rather than
+    // skipping to the next entry, so the first card fetched a viewport-wide rung.
     let assets = snapshot_dims("cover.jpg", 2000, 1200);
-    let html = synthesize_image_html(
-        "cover.jpg",
-        "",
-        &assets,
-        ImageContext::FolderCardCover,
-        &ImageRenderOptions {
-            eager: true,
-            ..ImageRenderOptions::default()
-        },
-    );
-    assert!(html.contains(r#"loading="eager""#), "got: {html}");
-    assert!(
-        html.contains(r#"sizes="auto, (min-width: 48rem) 24rem, 100vw""#),
-        "got: {html}"
-    );
+    let render = |eager| {
+        synthesize_image_html(
+            "cover.jpg",
+            "",
+            &assets,
+            ImageContext::FolderCardCover,
+            &ImageRenderOptions { eager, ..ImageRenderOptions::default() },
+        )
+    };
+    let eager = render(true);
+    assert!(eager.contains(r#"loading="eager""#), "got: {eager}");
+    assert!(eager.contains(r#"sizes="(min-width: 48rem) 24rem, 100vw""#), "got: {eager}");
+    let lazy = render(false);
+    assert!(lazy.contains(r#"sizes="auto, (min-width: 48rem) 24rem, 100vw""#), "got: {lazy}");
 }
 
 #[test]

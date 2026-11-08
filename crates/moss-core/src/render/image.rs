@@ -398,6 +398,12 @@ pub fn synthesize_image_html(
     // container and its `sizes=` cannot disagree about the same source.
     let scroll = scroll_treatment(src, assets, options);
     let sizes_value = sizes_for(src, assets, &context, options, scroll);
+    // `auto` binds only on a lazy image, and Chromium reads an eager image's
+    // `auto,` lead as `100vw` instead of skipping to the next entry.
+    let sizes_value = match sizes_value.strip_prefix("auto, ") {
+        Some(rest) if options.eager => std::borrow::Cow::Owned(rest.to_owned()),
+        _ => sizes_value,
+    };
     let inner = synthesize_inner(src, alt, assets, options, &sizes_value, scroll);
 
     match context {
