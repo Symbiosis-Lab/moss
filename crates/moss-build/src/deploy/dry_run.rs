@@ -67,7 +67,7 @@ pub struct DryRun {
     pub refusal: Option<crate::deploy::Refusal>,
     /// The site a first publish would register. Not registered.
     pub would_register: Option<String>,
-    /// A deploy creates a signing key when the site has none. Not created.
+    /// A first publish creates the folder's signing key. Not created.
     pub would_create_key: bool,
     /// A first publish would register a site, and this folder's key has no
     /// email recorded, so the server will most likely refuse until the key is
@@ -199,8 +199,6 @@ impl DryRun {
         }
         if let Some(site) = &self.would_register {
             out.push_str(&format!("A first publish would register the site \"{site}\" and create a signing key. Neither was done.\n"));
-        } else if self.would_create_key {
-            out.push_str("This folder's site has no signing key; a real deploy would create a new one. It was not created.\n");
         }
         if self.needs_verification {
             out.push_str("This folder's key is not linked to an email yet, so registering would need verification: a real deploy needs `--email <address>` (the account the site should belong to) to be sent a sign-in link. Nothing was sent.\n");
@@ -298,14 +296,17 @@ struct Local {
     /// Set when the folder has no site and no environment: the refusal a real
     /// deploy gives, which a dry run reports rather than stops at.
     no_environment: Option<String>,
+    /// Set when the folder has a site, or was signed in, and has no usable key:
+    /// the refusal a real deploy gives.
+    not_signed_in: Option<String>,
 }
 
 /// The checks a deploy makes before it sends anything that need nothing from
 /// the network, in the order and with the answers a deploy gives them:
 /// the plugin's setup (plugin route), the config version, whether the folder
 /// has a site (or may register one, under a valid name), and the identity
-/// files. A missing signing key is not a refusal: a deploy creates one, so the
-/// dry run says so and creates nothing.
+/// files. A first publish creates its key, so the dry run says so and creates
+/// nothing; any other folder with no usable key is refused as not signed in.
 async fn check_locally(
     folder: &Path,
     route: &DeployRoute,
@@ -317,7 +318,7 @@ async fn check_locally(
     }
     crate::build::site_config::ensure_config_current(&folder_str)?;
     if matches!(route, DeployRoute::Plugin { .. }) {
-        return Ok(Local { ask: Err("a deploy plugin publishes this folder"), would_register: None, would_create_key: false, needs_verification: false, no_environment: None });
+        return Ok(Local { ask: Err("a deploy plugin publishes this folder"), would_register: None, would_create_key: false, needs_verification: false, no_environment: None, not_signed_in: None });
     }
     let _phase = crate::build::phase::PhaseTrace::start("local_checks");
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
@@ -338,23 +339,28 @@ async fn check_locally(
     };
     // A deploy waits for a cloud-synced key to arrive before reading it; reads only.
     crate::deploy::preflight_publish_inputs(folder).await?;
-    // Read-only stand-in for `ensure_signing_key`, which creates the identity
-    // when there is none and regenerates the key when its file is missing.
+    // Read-only stand-in for what a deploy does with the identity: a first
+    // publish creates the key, any other folder without one is refused.
     use crate::identity::keypair::KeyOnDisk;
     let key = crate::identity::Identity::key_on_disk(folder);
-    let would_create_key = key == KeyOnDisk::Missing;
+    let has_identity = crate::identity::Identity::exists(folder);
+    let would_create_key = would_register.is_some() && !has_identity;
+    let not_signed_in = ((config.site_id.is_some() || has_identity) && key == KeyOnDisk::Missing).then(|| {
+        let host = crate::deploy::sign_in_host(&folder_str, config.site_id.as_deref());
+        crate::identity::verify_email::not_signed_in(folder, &host)
+    });
     let needs_verification =
         would_register.is_some() && crate::identity::Identity::read_email(folder).is_none();
     let ask = match (config.site_id, key) {
         (None, _) if would_register.is_some() => Err("the site is not registered yet"),
         (None, _) => Err("this folder has no site"),
-        (Some(_), KeyOnDisk::Missing) => Err("this folder has no signing key yet"),
+        (Some(_), KeyOnDisk::Missing) => Err("this folder isn't signed in"),
         // Loading it rewrites it, and a dry run writes nothing.
         (Some(_), KeyOnDisk::Older) => Err("a deploy first moves this folder's key to its current format"),
         (Some(_), KeyOnDisk::Newer) => Err("this folder's key was written by a newer moss"),
         (Some(site), KeyOnDisk::Current) => Ok(site),
     };
-    Ok(Local { ask, would_register, would_create_key, needs_verification, no_environment })
+    Ok(Local { ask, would_register, would_create_key, needs_verification, no_environment, not_signed_in })
 }
 
 /// Ask the server, with the owner-gated read every deploy starts with,
@@ -450,7 +456,8 @@ pub async fn run_dry_run(
         .map(|t| Refusal::new(crate::deploy::RefusalKind::OutputCollision, t))
         .or_else(|| match &local.no_environment {
             Some(text) => Some(Refusal::new(crate::deploy::RefusalKind::NoEnvironment, text.clone())),
-            None => crate::deploy::publish_refusal(&folder_str)
+            None => local.not_signed_in.clone().map(|t| Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t))
+                .or_else(|| crate::deploy::publish_refusal(&folder_str))
                 .or_else(|| crate::deploy::removal_gate::refuse_stale_generation(folder, &sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::StaleContent, t)))
                 .or_else(|| crate::deploy::refuse_foreign_inputs(&sealed, folder).err().map(|t| Refusal::new(crate::deploy::RefusalKind::ForeignInputs, t)))
                 .or_else(|| crate::deploy::refuse_unresolved_inputs(&sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::UnresolvedInputs, t))),
@@ -461,7 +468,7 @@ pub async fn run_dry_run(
         transfer,
         refusal,
         would_register: local.would_register,
-        would_create_key: local.would_create_key && !matches!(route, DeployRoute::Plugin { .. }),
+        would_create_key: local.would_create_key,
         needs_verification: local.needs_verification,
         prebuilt: false,
         kept_as_redirect: kept_as_redirect(&folder_str),
@@ -516,7 +523,8 @@ pub async fn run_prebuilt_dry_run(
         None => (Transfer::NoRecord, None),
     };
     let (owner, stale_copy) = ask_server(folder, &local, overwrite_newer).await;
-    let refusal = first_refusal(stale_copy, refusal, &owner);
+    let local_refusal = local.not_signed_in.map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t)).or(refusal);
+    let refusal = first_refusal(stale_copy, local_refusal, &owner);
     Ok(DryRun {
         change_set: ChangeSet::default(),
         transfer,

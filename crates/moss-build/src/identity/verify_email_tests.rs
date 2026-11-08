@@ -152,6 +152,26 @@ async fn a_refusal_without_email_names_the_flag_and_sends_nothing() {
     assert_eq!(seta.count("POST /auth/request"), 0, "no link may be sent without the flag");
 }
 
+/// `--email` on a folder whose key is gone signs it in with a new key: the link
+/// is sent for the new key, which is what the folder then signs with.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_email_a_folder_that_lost_its_key_signs_in_a_new_one() {
+    let seta = Seta::start(1, "verified").await;
+    let folder = Folder::new(&seta);
+    let lost = folder.pubkey();
+    std::fs::remove_file(crate::identity::keypair::key_file_path(folder.dir.path())).unwrap();
+
+    verify_folder_email(folder.dir.path(), "me@example.com", TICK, WAIT_LIMIT).await.expect("signed in");
+
+    let fresh = folder.pubkey();
+    assert_ne!(fresh, lost, "the lost key cannot be signed in");
+    let body = seta.log.lock().unwrap().iter().find(|(l, _)| l == "POST /auth/request").unwrap().1.clone();
+    let sent: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(sent["pubkey"], fresh);
+    assert_eq!(crate::identity::Identity::key_on_disk(folder.dir.path()), crate::identity::keypair::KeyOnDisk::Current);
+    assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("me@example.com"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_email_it_sends_one_link_polls_through_pending_records_the_email_and_retries() {
     let seta = Seta::start(3, "verified").await;

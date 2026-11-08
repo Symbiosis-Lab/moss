@@ -14,17 +14,27 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(3);
 /// How long a sign-in link is waited for before giving up.
 pub const WAIT_LIMIT: Duration = Duration::from_secs(15 * 60);
 
-/// The sentence a refused registration starts with. The CLI recognises a
-/// refusal by it, so the producer and the recogniser share one constant.
-pub const UNVERIFIED_REFUSAL: &str = "Identity not yet verified for an account.";
+/// [`is_unverified_refusal`] knows a sign-in refusal by these two, so the
+/// producer and the recogniser share them.
+const NOT_SIGNED_IN: &str = " isn't signed in to ";
+const SIGN_IN_FLAG: &str = "--email <address>";
+
+/// The refusal for a folder the hosting service would not accept a publish
+/// from: one never signed in, or one whose key is gone. `host` is the site's
+/// address once it has one, else the hosting service.
+pub fn not_signed_in(folder: &Path, host: &str) -> String {
+    let root = crate::vault::paths::VaultRoot::resolve(folder);
+    let name = root.name();
+    format!("{name}{NOT_SIGNED_IN}{host}. Sign it in: moss deploy {} {SIGN_IN_FLAG}", folder.display())
+}
 
 /// The service's refusal of a key that does not own the site. A fresh key on a
-/// site that already exists gets this, not [`UNVERIFIED_REFUSAL`].
+/// site that already exists gets this, not [`not_signed_in`].
 const NOT_OWNER_REFUSAL: &str = "Not authorized for this site";
 
 /// Whether `message` is the refusal that `--email` can lift.
 pub fn is_unverified_refusal(message: &str) -> bool {
-    message.starts_with(UNVERIFIED_REFUSAL)
+    message.contains(NOT_SIGNED_IN) && message.ends_with(SIGN_IN_FLAG)
 }
 
 /// A shape check, not a deliverability check: one `@`, something either side,
@@ -75,7 +85,7 @@ pub async fn verify_folder_email(
     limit: Duration,
 ) -> Result<(), String> {
     validate_email(email)?;
-    let mut identity = super::keypair::Identity::load_for_signing(folder).map_err(|e| e.to_string())?;
+    let mut identity = super::service::IdentityService::new(folder).key_for_sign_in().map_err(|e| e.to_string())?.clone();
     let env = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
     let client = crate::seta::client::MossSetaClient::for_environment(&identity, &env);
 

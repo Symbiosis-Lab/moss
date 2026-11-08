@@ -323,6 +323,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A folder that has a site, or was signed in, and has lost its sign-in key (`.moss/identity/secret-key`) is no longer given a new key on its next publish, which the hosting service would not accept for its site. `moss deploy` refuses with the command that signs it in again, `moss deploy <folder> --email <address>`, which makes the new key and signs it in; `--dry-run` reports the same refusal as `not_signed_in`. A key that is still downloading from a cloud drive is waited for, never replaced.
 - After someone subscribes, the sign-up button now turns into a round check mark one line of the confirmation tall on every site, even when the theme styles its own buttons; before, a theme's button padding or height could stretch it into an oval or a rectangle.
 - A `:::subscribe {placeholder="..."}` block keeps its own hint text even without `button="..."`; before, the page replaced it with the default "your@email.com".
 - `<meta name="theme-color">` (page heads, media pages and the defaults added to a site's own pages) takes the theme's page colour, `--moss-color-bg` as the page root sets it, following `var()` through the theme's own properties and counting a selector list that includes `:root`; it was moss's default paper whatever the theme set, so a phone's browser bar did not match the page. A faded closing picture now also reads a page colour set through `var()`, where no section changes it. The theme lint counts each selector of a list, so `:root, main {}` sets the root.

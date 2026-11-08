@@ -50,6 +50,7 @@ async fn publish_twice(prebuilt: bool) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".moss")).unwrap();
     std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"profile-test\"\n").unwrap();
+    crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
     let output = dir.path().join("output");
     std::fs::create_dir(&output).unwrap();
     std::fs::write(output.join("index.html"), "<html>private-page-content</html>").unwrap();

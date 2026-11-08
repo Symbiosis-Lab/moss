@@ -1098,17 +1098,47 @@ mod dry_run_tests {
         assert!(fx.requests().is_empty(), "a dry run must not contact the server");
     }
 
-    /// A deploy creates a signing key when the site has none, so the dry run
-    /// says that rather than refusing, and creates nothing.
+    /// A registered site whose key is gone is not signed in: a new key would be
+    /// one the hosting service has never seen. A deploy refuses before it reaches
+    /// the server and writes no key; a dry run names the same refusal.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_registered_site_with_no_key_is_told_a_deploy_would_create_one() {
+    async fn a_registered_site_that_lost_its_key_is_refused_as_not_signed_in() {
         let fx = Fixture::new(false).await;
-        std::fs::remove_dir_all(fx.dir.path().join(".moss/identity")).unwrap();
-        let report = fx.run(true).await.expect("a deploy would go on and create the key");
+        let identity = fx.dir.path().join(".moss/identity");
+        std::fs::remove_dir_all(&identity).unwrap();
+        crate::identity::Identity::generate().unwrap().save(fx.dir.path()).unwrap();
+        let pubkey = crate::identity::Identity::read_pubkey(fx.dir.path());
+        std::fs::remove_file(identity.join("secret-key")).unwrap();
+
+        let name = crate::vault::paths::VaultRoot::resolve(fx.dir.path()).name().to_string();
+        let host = crate::deploy::sign_in_host(&fx.dir.path().to_string_lossy(), Some("dry-test"));
+        assert!(host.starts_with("dry-test."), "the site's address, not the service: {host}");
+        let expected = format!("{name} isn't signed in to {host}. Sign it in: moss deploy {} --email <address>", fx.dir.path().display());
+        let err = fx.run(false).await.expect_err("a lost key must refuse");
+        assert_eq!(err, expected);
+        assert!(crate::identity::verify_email::is_unverified_refusal(&err), "--email must lift it");
+        assert_eq!(crate::identity::Identity::read_pubkey(fx.dir.path()), pubkey, "the old key stays named");
+        assert!(!identity.join("secret-key").exists(), "no new key may be written");
+        assert!(fx.requests().is_empty(), "nothing may reach the server");
+
+        let report = fx.run(true).await.expect("a dry run reports");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
-        assert!(dry.would_create_key && dry.refusal.is_none(), "{dry:?}");
-        assert!(dry.render().contains("would create a new one"), "{}", dry.render());
-        assert!(!fx.dir.path().join(".moss/identity").exists(), "the dry run must not create it");
+        let refusal = dry.refusal.as_ref().expect("a real deploy would stop here");
+        assert_eq!((refusal.kind, refusal.text.as_str()), (crate::deploy::RefusalKind::NotSignedIn, expected.as_str()));
+        assert!(!dry.would_create_key, "{dry:?}");
+    }
+
+    /// The same for a site folder with no identity at all, as a git clone has.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_registered_site_with_no_identity_is_refused_and_given_none() {
+        let fx = Fixture::new(false).await;
+        let identity = fx.dir.path().join(".moss/identity");
+        std::fs::remove_dir_all(&identity).unwrap();
+
+        let err = fx.run(false).await.expect_err("no identity must refuse");
+        assert!(err.contains(" isn't signed in to dry-test."), "{err}");
+        assert!(!identity.exists(), "no identity may be written");
+        assert!(fx.requests().is_empty(), "nothing may reach the server");
     }
 
     /// An old identity keeps its private key inside `public.json`; a deploy
@@ -1326,6 +1356,7 @@ mod profile_tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".moss")).unwrap();
         std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+        crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
         let site = dir.path().join("output");
         std::fs::create_dir(&site).unwrap();
         std::fs::write(site.join("index.html"), "<p>private-page</p>").unwrap();
@@ -1353,6 +1384,7 @@ mod profile_tests {
             let dir = tempfile::tempdir().unwrap();
             std::fs::create_dir(dir.path().join(".moss")).unwrap();
             std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+            crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
             std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\nuid: dry-home\n---\n\nHello.\n").unwrap();
             let result = dispatch(dir.path(), &route, &crate::cli::host::cli_host_ports,
                 crate::build::PluginMode::Skip, &DeployFlags { dry_run: true, ..Default::default() },

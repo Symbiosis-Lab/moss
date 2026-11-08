@@ -1373,6 +1373,7 @@ mod tests {
         std::fs::write(tmp.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
         std::fs::create_dir_all(tmp.path().join(".moss")).unwrap();
         std::fs::write(tmp.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"behind-test\"\n").unwrap();
+        crate::identity::Identity::generate().unwrap().save(tmp.path()).unwrap();
         if record {
             crate::build::manifest::published_record::save(
                 &MossPaths::new(tmp.path()),

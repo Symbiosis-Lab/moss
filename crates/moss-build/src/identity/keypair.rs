@@ -13,7 +13,7 @@
 //! - **v1 → v3**: Private key extracted from `public.json`, written to `secret-key` file,
 //!   stripped from JSON, version set to 3.
 //! - **v2 → v3**: Key was in OS keychain (now removed). If `secret-key` file doesn't exist,
-//!   the key is unrecoverable. `IdentityService::ensure_signing_key()` handles regeneration.
+//!   the key is unrecoverable, and the folder signs in again with a new one.
 
 use k256::elliptic_curve::Generate;
 use k256::schnorr::SigningKey;
@@ -38,7 +38,8 @@ fn holds_legacy_private_key(raw: &serde_json::Value) -> bool {
 /// A project's signing key as [`Identity::key_on_disk`] finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyOnDisk {
-    /// No identity, or no key in it: a deploy creates one.
+    /// No identity, or no key in it: only a first publish creates one; any
+    /// other folder is not signed in.
     Missing,
     /// A format `load` rewrites to the current one.
     Older,
@@ -99,8 +100,7 @@ pub(crate) fn save_key_to_file(path: &Path, key_bytes: &[u8]) -> Result<(), Iden
 /// [`crate::build::icloud::is_definitely_absent`] confirms is a real ENOENT —
 /// on macOS 12–13, an evicted file is a hidden `.name.icloud` stub and the
 /// real path returns ENOENT despite the key existing, which is exactly the
-/// case `ensure_signing_key()`'s caller must NOT treat as license to
-/// regenerate and overwrite the site's identity. A dataless-fail-fast
+/// case a sign-in must NOT treat as license to replace the site's identity. A dataless-fail-fast
 /// `EDEADLK` (Sonoma+) is a *different* error kind and always maps to
 /// [`IdentityError::Read`], never to `PrivateKeyNotFound`.
 ///
@@ -260,7 +260,7 @@ pub enum IdentityError {
     #[error("Failed to lock identity file: {0}")]
     Lock(std::io::Error),
 
-    #[error("Private key not found. It may need to be regenerated.")]
+    #[error("This folder's sign-in key is missing. Sign the folder in again.")]
     PrivateKeyNotFound,
 
     #[error("This identity was created with a newer version of moss.")]
@@ -302,7 +302,7 @@ impl Identity {
     ///   stripped from JSON, version set to 3.
     /// - **v2**: Key was in OS keychain (removed). If `secret-key` file exists,
     ///   use it. Otherwise, key is unrecoverable — `signing_key` will be `None`
-    ///   and `IdentityService::ensure_signing_key()` will regenerate.
+    ///   and the folder must sign in again.
     /// - **v3**: Normal load, signing key lazily loaded from `identity-key` file.
     ///
     /// Uses a file lock for atomic migration to prevent concurrent corruption.
@@ -320,7 +320,7 @@ impl Identity {
         // timeout falls through deliberately: the open below then produces the
         // real `EDEADLK`, which `IdentityError::Read` carries, and NOTHING on
         // this path may look like `PrivateKeyNotFound` — that is what would let
-        // `ensure_signing_key` mint a new keypair over a site's live identity.
+        // a sign-in mint a new keypair over a site's live identity.
         if let Err(e) = crate::build::cloud_readiness::materialize_input(
             &identity_path,
             crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
@@ -399,7 +399,7 @@ impl Identity {
                 // Key was in OS keychain, which is gone. Can't recover.
                 log::warn!(
                     "v2 identity: private key was in OS keychain (now removed). \
-                     Key file not found. Identity will need regeneration."
+                     Key file not found. The folder must sign in again."
                 );
             }
 
@@ -439,11 +439,8 @@ impl Identity {
     /// [`IdentityError::PrivateKeyNotFound`] if the key was never loaded. So
     /// every caller that builds an *authenticated* `MossSetaClient` from a
     /// project path MUST use this, not bare `load()`, or signed requests fail
-    /// with "Private key not found" even though the key exists on disk.
+    /// with a missing-key error even though the key exists on disk.
     ///
-    /// Unlike [`IdentityService::ensure_signing_key`](super::IdentityService::ensure_signing_key),
-    /// this does NOT regenerate on a missing key: minting a new pubkey would make
-    /// seta stop recognizing this account as the site's owner.
     pub fn load_for_signing(project_path: &Path) -> Result<Self, IdentityError> {
         let mut identity = Self::load(project_path)?;
         // Force the lazy read of `.moss/identity/secret-key` now, so the later
@@ -541,8 +538,8 @@ impl Identity {
     }
 
     /// What [`load`](Self::load) plus `signing_key()` would find, read
-    /// without migrating or writing anything, so a dry run can ask before
-    /// `IdentityService::ensure_signing_key` would create or regenerate a key.
+    /// without migrating or writing anything, so a dry run can say what a
+    /// deploy would find.
     pub fn key_on_disk(project_path: &Path) -> KeyOnDisk {
         if !Self::exists(project_path) {
             return KeyOnDisk::Missing;
@@ -899,13 +896,10 @@ mod tests {
         );
     }
 
-    /// Regression test for the "unreadable is not absent" invariant (design
-    /// doc §4): on macOS 12–13, an evicted iCloud file is a hidden
-    /// `.name.icloud` stub and the real path returns ENOENT — a truly-present
-    /// key must NOT be classified as `PrivateKeyNotFound` (which
-    /// `ensure_signing_key` treats as license to regenerate and overwrite
-    /// the site's permanent identity) just because the real path is
-    /// momentarily absent while its stub sibling is present.
+    /// "Unreadable is not absent": on macOS 12–13, an evicted iCloud file is a
+    /// hidden `.name.icloud` stub and the real path returns ENOENT. A present
+    /// key must NOT read as `PrivateKeyNotFound` (which a sign-in treats as
+    /// license to replace the site's identity) while its stub stands in for it.
     #[test]
     #[cfg(target_os = "macos")]
     fn load_key_from_file_with_icloud_stub_sibling_is_not_private_key_not_found() {

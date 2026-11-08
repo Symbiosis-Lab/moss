@@ -84,50 +84,37 @@ impl IdentityService {
         Ok(self.cached.as_ref())
     }
 
-    /// Ensure the signing key is loaded from `.moss/identity/secret-key` into memory.
+    /// Load the signing key from `.moss/identity/secret-key` into memory, once.
     ///
-    /// Call this only when signing is actually needed (e.g., before
-    /// publishing or making authenticated API requests).
-    ///
-    /// If the signing key file is missing (e.g., lost during v2→v3 migration),
-    /// the identity is regenerated with a new keypair.
-    ///
-    /// Returns `Ok(())` if the signing key is already loaded or was
-    /// successfully loaded/regenerated.
+    /// A key file that is confirmed gone is [`IdentityError::PrivateKeyNotFound`],
+    /// never a new key: a folder with a `public.json` was signed in, and a key
+    /// minted over it is one the hosting service has never seen, so it could
+    /// not publish the folder's site. Only [`key_for_sign_in`](Self::key_for_sign_in)
+    /// replaces a lost key. A key that cannot be read yet (still in the cloud)
+    /// is a different error and replaces nothing.
     pub fn ensure_signing_key(&mut self) -> Result<(), IdentityError> {
-        // Make sure identity is loaded first
         self.get_or_create()?;
-
-        // If signing key is already loaded, nothing to do
-        if self.cached.as_ref().map_or(false, |id| id.has_signing_key_loaded()) {
-            return Ok(());
+        let identity = self.cached.as_mut().expect("get_or_create fills the cache");
+        if !identity.has_signing_key_loaded() {
+            identity.signing_key()?;
         }
-
-        // Take identity out of cache so we can mutably access it
-        let mut identity = self.cached.take().unwrap();
-
-        match identity.signing_key() {
-            Ok(_) => {
-                self.cached = Some(identity);
-            }
-            Err(IdentityError::PrivateKeyNotFound) => {
-                log::warn!(
-                    "Signing key file not found. Regenerating identity for this project."
-                );
-                // `save` retires the old key before writing this one, so its
-                // comment moderation stays in force.
-                let new_identity = Identity::generate()?;
-                new_identity.save(&self.project_path)?;
-                self.cached = Some(new_identity);
-            }
-            Err(e) => {
-                // Put identity back before returning error
-                self.cached = Some(identity);
-                return Err(e);
-            }
-        }
-
         Ok(())
+    }
+
+    /// The identity a sign-in sends, with its signing key loaded. A folder whose
+    /// key file is gone gets a new key here and nowhere else; `save` retires the
+    /// lost one, and the new key publishes nothing until the sign-in link sent
+    /// for it is opened.
+    pub fn key_for_sign_in(&mut self) -> Result<&Identity, IdentityError> {
+        match self.ensure_signing_key() {
+            Err(IdentityError::PrivateKeyNotFound) => {
+                let fresh = Identity::generate()?;
+                fresh.save(&self.project_path)?;
+                self.cached = Some(fresh);
+            }
+            other => other?,
+        }
+        Ok(self.cached.as_ref().expect("loaded or minted above"))
     }
 
     /// Check if an identity exists for this project.
@@ -364,44 +351,62 @@ mod tests {
         );
     }
 
+    /// A folder that was signed in and lost its key is refused, never given a
+    /// new key the hosting service has not seen.
     #[test]
-    fn test_ensure_signing_key_regenerates_on_lost_signing_key() {
+    fn a_lost_key_is_refused_and_never_replaced() {
         use crate::identity::keypair::key_file_path;
 
         let dir = tempdir().unwrap();
         let mut service = IdentityService::new(dir.path());
-
-        // Create an identity normally (key stored in identity-key file)
-        let original_pubkey = service.get_or_create().unwrap().pubkey.clone();
-
-        // Simulate key loss: delete the identity-key file
-        let kf_path = key_file_path(dir.path());
-        std::fs::remove_file(&kf_path).unwrap();
-
-        // Clear the service cache so it reloads from disk
+        let original = service.get_or_create().unwrap().pubkey.clone();
+        std::fs::remove_file(key_file_path(dir.path())).unwrap();
         service.clear_cache();
 
-        // ensure_signing_key() should detect PrivateKeyNotFound and regenerate
-        service.ensure_signing_key().unwrap();
-        let identity = service.get_or_create().unwrap();
+        let err = service.ensure_signing_key().expect_err("a lost key must refuse");
+        assert!(matches!(err, IdentityError::PrivateKeyNotFound), "{err:?}");
+        assert_eq!(crate::identity::Identity::read_pubkey(dir.path()), Some(original));
+        assert!(!key_file_path(dir.path()).exists(), "no key may be written");
+    }
 
-        // New identity should have a DIFFERENT pubkey (regenerated)
-        assert_ne!(
-            identity.pubkey, original_pubkey,
-            "Should have regenerated a new identity with a different pubkey"
-        );
+    /// A sign-in is the one place a lost key is replaced; the lost one is
+    /// retired, and the new one carries no email until its link is opened.
+    #[test]
+    fn only_a_sign_in_replaces_a_lost_key_and_retires_it() {
+        use crate::identity::keypair::{key_file_path, Identity};
 
-        // New identity should have a working signing key
-        assert!(
-            identity.has_signing_key_loaded(),
-            "Regenerated identity should have signing key loaded"
-        );
+        let dir = tempdir().unwrap();
+        let mut service = IdentityService::new(dir.path());
+        let original = service.get_or_create().unwrap().pubkey.clone();
+        std::fs::remove_file(key_file_path(dir.path())).unwrap();
+        service.clear_cache();
 
-        // New identity should have email = None (forces re-verification)
-        assert!(
-            identity.email.is_none(),
-            "Regenerated identity should have no email (requires re-verification)"
-        );
+        let fresh = service.key_for_sign_in().unwrap().clone();
+        assert_ne!(fresh.pubkey, original);
+        assert!(fresh.has_signing_key_loaded() && fresh.email.is_none(), "{fresh:?}");
+        assert_eq!(Identity::load(dir.path()).unwrap().pubkey, fresh.pubkey, "saved to the folder");
+        let retired = std::fs::read_to_string(dir.path().join(".moss/identity/previous-keys.jsonl")).unwrap();
+        assert!(retired.contains(&original), "{retired}");
+
+        assert_eq!(service.key_for_sign_in().unwrap().pubkey, fresh.pubkey, "a key that is there is kept");
+    }
+
+    /// A key that exists but cannot be read yet, as one still downloading from
+    /// a cloud drive, is an error to wait out; a sign-in must not replace it.
+    #[test]
+    fn a_key_that_cannot_be_read_is_never_replaced() {
+        use crate::identity::keypair::key_file_path;
+
+        let dir = tempdir().unwrap();
+        let mut service = IdentityService::new(dir.path());
+        let original = service.get_or_create().unwrap().pubkey.clone();
+        std::fs::remove_file(key_file_path(dir.path())).unwrap();
+        std::fs::create_dir(key_file_path(dir.path())).unwrap();
+        service.clear_cache();
+
+        let err = service.key_for_sign_in().expect_err("an unreadable key must refuse");
+        assert!(!matches!(err, IdentityError::PrivateKeyNotFound), "{err:?}");
+        assert_eq!(crate::identity::Identity::read_pubkey(dir.path()), Some(original));
     }
 
     #[test]
@@ -437,33 +442,6 @@ mod tests {
         assert!(
             !identity.has_signing_key_loaded(),
             "Identity from get() should not have signing key loaded"
-        );
-    }
-
-    #[test]
-    fn test_regenerated_identity_is_persisted_to_disk() {
-        use crate::identity::keypair::{key_file_path, Identity};
-
-        let dir = tempdir().unwrap();
-        let mut service = IdentityService::new(dir.path());
-
-        // Create an identity normally
-        let original_pubkey = service.get_or_create().unwrap().pubkey.clone();
-
-        // Simulate key loss: delete the identity-key file
-        let kf_path = key_file_path(dir.path());
-        std::fs::remove_file(&kf_path).unwrap();
-
-        // Clear cache and trigger regeneration via ensure_signing_key()
-        service.clear_cache();
-        service.ensure_signing_key().unwrap();
-        let new_pubkey = service.get_or_create().unwrap().pubkey.clone();
-
-        // Verify the new identity was saved to disk
-        let loaded = Identity::load(dir.path()).unwrap();
-        assert_eq!(
-            loaded.pubkey, new_pubkey,
-            "Regenerated identity should be persisted to disk"
         );
     }
 
@@ -554,7 +532,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".moss/identity/previous-keys.jsonl")).unwrap();
         service.clear_cache();
 
-        assert!(service.ensure_signing_key().is_err(), "no new key without the old one recorded");
+        assert!(service.key_for_sign_in().is_err(), "no new key without the old one recorded");
         assert_eq!(crate::identity::Identity::read_pubkey(dir.path()), Some(original), "public.json still names the old key");
     }
 }

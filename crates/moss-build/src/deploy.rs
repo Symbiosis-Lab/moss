@@ -372,6 +372,8 @@ pub enum RefusalKind {
     NotOwner,
     /// Another copy of the folder published after this one.
     StaleCopy,
+    /// A folder with a site, or one that was signed in, has no usable key.
+    NotSignedIn,
 }
 
 impl Refusal {
@@ -762,6 +764,19 @@ fn first_publish_is_permitted(folder_str: &str) -> Result<bool, String> {
     Ok(crate::build::site_config::get_environment_field(folder_str)?.is_some())
 }
 
+/// Where a folder signs in: its site's address once it has one, else the
+/// hosting service it would register with.
+pub(crate) fn sign_in_host(folder_str: &str, site_id: Option<&str>) -> String {
+    let env = crate::build::site_config::resolve_environment(folder_str);
+    match site_id {
+        Some(id) => {
+            let url = view_site_url(folder_str, id, env);
+            url.split_once("://").map_or(url.clone(), |(_, host)| host.to_string())
+        }
+        None => env.site_suffix().trim_start_matches('.').to_string(),
+    }
+}
+
 pub async fn resolve_publish_inputs(
     folder: &std::path::Path,
     requested_site_id: Option<&str>,
@@ -806,15 +821,22 @@ pub async fn resolve_publish_inputs(
     // raw `Resource deadlock avoided` the identity-file bug was closed for.
     preflight_publish_inputs(folder).await?;
 
-    // Mint one if this folder has never published. A publish that cannot sign
-    // cannot start, so this fails before a byte is read off disk — and, on the
-    // hosted route, before the build. That ordering means a `moss deploy` that
-    // is later refused (a broken file, say) has still written `.moss/identity/`
-    // into a first-time vault. Deliberate: failing after a multi-minute build
-    // to say something knowable at t=0 is the worse trade, and it is what the
-    // prebuilt route always did.
+    // A first publish mints the folder's key here, before the build, so a
+    // `moss deploy` refused later (a broken file, say) still leaves
+    // `.moss/identity/` in a first-time vault: failing after a multi-minute
+    // build to say something knowable at t=0 is the worse trade. A folder that
+    // has a site, or was signed in, and lost its key is refused instead (see
+    // `IdentityService::ensure_signing_key`).
+    let host = sign_in_host(&folder_str, config.site_id.as_deref());
+    let not_signed_in = || crate::identity::verify_email::not_signed_in(folder, &host);
+    if config.site_id.is_some() && !crate::identity::Identity::exists(folder) {
+        return Err(not_signed_in());
+    }
     let mut service = crate::identity::service::IdentityService::new(folder);
-    service.ensure_signing_key().map_err(|e| e.to_string())?;
+    service.ensure_signing_key().map_err(|e| match e {
+        crate::identity::keypair::IdentityError::PrivateKeyNotFound => not_signed_in(),
+        e => e.to_string(),
+    })?;
     let identity = service.get_or_create().map_err(|e| e.to_string())?.clone();
 
     let site_id = match (config.site_id, requested) {
@@ -1091,7 +1113,7 @@ pub async fn register_moss_host_site(
             profile::refusal("site_limit");
             return Err(site_limit_message(limit, contact.as_deref()));
         }
-        Err(e) => return Err(register_failure_message(site_id, e)),
+        Err(e) => return Err(register_failure_message(folder, site_id, e)),
     };
 
     // NOT `unwrap_or_default()`: this read is followed by a write, so a
@@ -1106,26 +1128,13 @@ pub async fn register_moss_host_site(
 }
 
 /// Turn seta's registration refusals into something a person can act on.
-///
-/// Both sentences were the prebuilt route's alone until C4g, written inline
-/// beside a `register_site` call that route no longer makes. They are here
-/// because registration has one owner now, so both routes and both binaries
-/// get them — which the app half never had, and the CLI `--site-id` half needs
-/// most, since only the app pre-checks a name with `check_site_id_available`.
-fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) -> String {
+fn register_failure_message(folder: &std::path::Path, site_id: &str, e: crate::seta::client::SetaError) -> String {
     profile::seta_error(&e);
     let msg = e.to_string();
     // Seta checks the key's email before its ACLs, so this is the typical
     // first publish of a new folder.
     if matches!(&e, crate::seta::client::SetaError::Api { status, message } if crate::seta::client::asks_to_verify_email(*status, message)) {
-        return format!(
-            "{} This folder's key has not been linked to an email yet. \
-             Re-run with `--email <address>` to be sent a sign-in link \
-             (the address must be the account the site should belong to), \
-             or open the folder in the desktop app once to verify it there.\n\n\
-             Underlying error: {}",
-            crate::identity::verify_email::UNVERIFIED_REFUSAL, msg
-        );
+        return crate::identity::verify_email::not_signed_in(folder, &sign_in_host(&folder.to_string_lossy(), None));
     }
     if msg.contains("already taken") || msg.contains("must be fresh") {
         return format!(
