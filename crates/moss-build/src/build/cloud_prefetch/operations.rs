@@ -43,7 +43,6 @@ pub(super) fn structural_reader_loop(inner: &Arc<Inner>) {
 }
 
 pub(super) fn finish_operation(inner: &Arc<Inner>, key: OperationKey, task: Arc<OperationTask>, result: Result<Arc<crate::build::cloud_readiness::storage::StorageValue>, Arc<crate::build::cloud_readiness::StorageFailure>>) {
-        inner.done.fetch_add(1, Ordering::Relaxed);
         let mut settlement = None;
         if let Ok(mut q) = inner.queue.lock() {
             let cache = matches!(key.policy, OperationPolicy::CachePublication { .. });
@@ -51,6 +50,7 @@ pub(super) fn finish_operation(inner: &Arc<Inner>, key: OperationKey, task: Arc<
                 q.cache_in_flight.remove(&key);
                 q.background_in_flight -= 1;
             } else { q.structural_in_flight.remove(&key); }
+            q.done += 1;
             let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
             let newer_revision = task.revision.as_ref().is_some_and(|latest| {
                 let attempted = match &result {

@@ -206,6 +206,57 @@ fn a_file_can_be_handed_over_again_once_its_read_returned() {
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
+/// A finished read is counted done only together with its slot coming free,
+/// so a snapshot never sees it both done and still in flight. The test holds
+/// the queue lock while the read returns: what it sees then is what a
+/// snapshot would.
+#[test]
+fn a_read_is_counted_done_only_once_its_slot_is_free() {
+    let (m, release, seen) = gated();
+    let p = Prefetcher::with_materializer(1, m, false);
+    p.read(Path::new("/vault/a.md"));
+    assert!(wait_until(|| seen.lock().unwrap().len() == 1), "premise: the read started");
+
+    {
+        let q = p.inner.queue.lock().unwrap();
+        release.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(q.done == 0 || q.in_flight.is_empty(), "counted done while its slot is still held");
+    }
+
+    assert!(wait_until(|| p.snapshot().done == 1));
+    assert_eq!(p.snapshot().in_flight, 0);
+}
+
+/// The same for an optional cache publication, which finishes on its own path.
+#[test]
+fn a_publication_is_counted_done_only_once_its_slot_is_free() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let running = Arc::clone(&started);
+    let publish: Operation = Arc::new(move || {
+        running.store(true, Ordering::SeqCst);
+        let _ = gate.lock().unwrap().recv();
+        Ok(StorageValue::Published(0))
+    });
+    let p = Prefetcher::with_materializer(1, recording().0, false);
+    let key = OperationKey { path: "/replica/a".into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
+    p.cache_publication(key, publish).expect("queued");
+    assert!(wait_until(|| started.load(Ordering::SeqCst)), "premise: the publication started");
+
+    {
+        let q = p.inner.queue.lock().unwrap();
+        release.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(q.done == 0 || q.cache_in_flight.is_empty(), "counted done while its slot is still held");
+    }
+
+    assert!(wait_until(|| p.snapshot().done == 1));
+    assert_eq!(p.snapshot().in_flight, 0);
+}
+
 #[test]
 fn a_failed_read_leaves_no_trace_that_would_block_a_later_sweep() {
     // moss keeps no retry ledger — but it does retry, via the supervisor's
