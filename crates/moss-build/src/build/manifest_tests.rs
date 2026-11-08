@@ -997,10 +997,9 @@ fn sp(path: &str) -> crate::build::served_path::ServedPath {
     crate::build::served_path::ServedPath::from_source(path).unwrap()
 }
 
-/// A page this build never re-read (render skip, parse-cache hit, iCloud
-/// defer) keeps the hash the previous build recorded. Without the carry the
-/// page has an output mapping and no hash, which the classifier can only read
-/// as added or deleted — and a watch-loop rebuild skips most of a large site.
+/// A page this build never read (the cloud deferred it) keeps the hash the
+/// previous build recorded. Without the carry the page has an output mapping
+/// and no hash, which the classifier can only read as added or deleted.
 #[test]
 fn carry_forward_page_source_preserves_hash_for_skipped_page() {
     let mut carry = SiteHashes::default();

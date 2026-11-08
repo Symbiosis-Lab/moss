@@ -240,8 +240,8 @@ fn unmapped_output_files_count_as_assets_not_pages() {
 }
 
 /// The R1 safety valve. A page carried through a build without a source hash
-/// (render skip, parse-cache hit, iCloud defer, or a manifest predating page
-/// hashing) must not be guessed at: on a watch-loop rebuild most of a large
+/// (a cloud deferral, or a manifest predating page hashing) must not be
+/// guessed at: on a watch-loop rebuild most of a large
 /// site is skipped, so guessing "edited" or "deleted" would report most of the
 /// site. It is classified by output alone.
 #[test]

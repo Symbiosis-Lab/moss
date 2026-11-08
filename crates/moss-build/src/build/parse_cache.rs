@@ -266,7 +266,15 @@ pub(crate) fn cache_test_is_active() -> bool {
 struct FileHasher {
     root: PathBuf,
     index: Mutex<HashIndex>,
-    computed: Mutex<HashMap<String, Option<String>>>,
+    computed: Mutex<HashMap<String, Option<Hashed>>>,
+}
+
+/// A file's hash with the stat taken before the bytes were hashed, when known:
+/// together they are the manifest's record of the bytes a cached parse came from.
+#[derive(Clone)]
+struct Hashed {
+    hash: String,
+    stat: Option<FileStat>,
 }
 
 impl FileHasher {
@@ -282,6 +290,10 @@ impl FileHasher {
     /// read (a missing embed target, say — which every caller must treat as
     /// "cannot prove unchanged", i.e. a miss).
     fn hash(&self, relative_path: &str) -> Option<String> {
+        self.hashed(relative_path).map(|h| h.hash)
+    }
+
+    fn hashed(&self, relative_path: &str) -> Option<Hashed> {
         if let Some(hit) = self
             .computed
             .lock()
@@ -297,7 +309,7 @@ impl FileHasher {
         computed
     }
 
-    fn compute(&self, relative_path: &str) -> Option<String> {
+    fn compute(&self, relative_path: &str) -> Option<Hashed> {
         self.compute_with(relative_path, |abs| std::fs::read(abs).ok())
     }
 
@@ -307,14 +319,14 @@ impl FileHasher {
     /// other reader of it. Rayon's Loop A calls this from many threads; the index
     /// lock is held across a miss's read (a page is small), and a hit, the usual
     /// answer, holds it only for the lookup.
-    fn compute_with(&self, relative_path: &str, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<String> {
+    fn compute_with(&self, relative_path: &str, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<Hashed> {
         let abs = self.root.join(relative_path);
         // A hit is a stat and a lookup: stat outside the lock, so the threads
         // asking about different pages do not queue behind each other's stat.
         let stat = FileStat::of(&std::fs::metadata(&abs).ok()?);
         let mut index = self.index.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(hash) = index.lookup(relative_path, &stat) {
-            return Some(hash.to_owned());
+            return Some(Hashed { hash: hash.to_owned(), stat: Some(stat) });
         }
         index
             .hash_and_record(
@@ -325,6 +337,7 @@ impl FileHasher {
                 crate::build::icloud::is_still_in_the_cloud,
             )
             .ok()
+            .map(|hash| Hashed { hash, stat: Some(stat) })
     }
 
     /// Memoize the hash of bytes the caller has ALREADY read, without touching
@@ -344,7 +357,7 @@ impl FileHasher {
             index.update_read_at(relative_path.to_string(), &stat, hash.clone(), recorded_at);
         }
         if let Ok(mut cache) = self.computed.lock() {
-            cache.insert(relative_path.to_string(), Some(hash));
+            cache.insert(relative_path.to_string(), Some(Hashed { hash, stat }));
         }
     }
 
@@ -465,6 +478,28 @@ impl ParseSession {
             }
         }
         Some(entry.doc.clone())
+    }
+
+    /// The manifest's record of each page this build replayed from the cache:
+    /// the hash the replay was validated against, with the stat taken before
+    /// that hash. The previous manifest cannot stand in for it: until the last
+    /// build's seal writes it, it can describe older bytes than the cached parse.
+    pub fn replayed_sources(&self) -> Vec<(String, crate::build::types::SourceMetadata)> {
+        if self.shadow {
+            return Vec::new();
+        }
+        let replayed: Vec<String> = self.decisions.lock().map(|d| d.iter().filter(|(_, hit)| **hit).map(|(path, _)| path.clone()).collect()).unwrap_or_default();
+        replayed
+            .into_iter()
+            .filter_map(|path| {
+                // A hit was proved by `compute_with`, which memoizes the stat
+                // with the hash; a page missing here would be recorded at the
+                // previous manifest's hash instead of the one it rendered from.
+                let replayed = self.hasher.hashed(&path).and_then(|Hashed { hash, stat }| Some((hash, stat?)));
+                debug_assert!(replayed.is_some(), "replayed page {path} has no memoized hash and stat");
+                replayed.map(|(hash, stat)| (path, crate::build::types::SourceMetadata::from_stat(hash, stat)))
+            })
+            .collect()
     }
 
     /// Tell the session what a page's source bytes were at the moment Loop A
@@ -1223,7 +1258,7 @@ mod tests {
             let bytes = std::fs::read(abs).ok();
             std::fs::write(abs, "rewritten while it was being hashed").unwrap();
             bytes
-        });
+        }).map(|h| h.hash);
 
         assert_eq!(hash, Some(format!("{:x}", Sha256::digest(b"hello"))), "the hash is of the bytes that were read");
         let now = FileStat::of(&std::fs::metadata(&page).unwrap());
@@ -1254,7 +1289,7 @@ mod tests {
         let hash = hasher.compute_with("a.md", |abs| {
             read_called = true;
             std::fs::read(abs).ok()
-        });
+        }).map(|h| h.hash);
 
         assert!(!read_called, "the hasher read a page that is still in the cloud");
         assert_eq!(hash, None, "a page that cannot be read cannot be proven unchanged");

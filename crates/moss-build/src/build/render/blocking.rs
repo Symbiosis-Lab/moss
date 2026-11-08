@@ -240,9 +240,8 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
 /// unclassifiable at publish time, and on a watch-loop rebuild — where most of
 /// a large site is skipped — that is most of the site.
 ///
-/// A page absent from `hashes` was not read this build, which is only ever
-/// because its bytes provably did not change (parse-cache hit, render-skip carry)
-/// or could not be read (iCloud deferral). All three want the previous hash.
+/// A page absent from `hashes` was neither read nor replayed this build: the
+/// cloud deferred it, so its bytes are unknown and the previous hash stands.
 fn register_page_source(
     pending: &mut PendingManifest,
     hashes: &HashMap<String, crate::build::types::SourceMetadata>,
@@ -627,10 +626,10 @@ pub fn generate_blocking_content_for_build(
         derived.prepare(derived.demands(&pages, &content_graph), progress_sender);
     }
 
-    // Source-path → hash of the bytes this build actually read, for the pages
-    // it actually read. Absent means "skipped" (parse-cache hit, render-skip
-    // carry, iCloud deferral), which `register_page_source` turns into a
-    // carry-forward rather than a gap. See `PendingManifest::register_page_source_hash`.
+    // Source-path → hash of the bytes each page was rendered from: read this
+    // build, or replayed from the parse cache. Absent means the cloud deferred
+    // the page, which `register_page_source` turns into a carry-forward rather
+    // than a gap. See `PendingManifest::register_page_source_hash`.
     let mut page_source_hashes: HashMap<String, crate::build::types::SourceMetadata> = HashMap::new();
 
     // Evidence uses the renderer's syntax mode while retaining coordinates in
@@ -725,10 +724,8 @@ pub fn generate_blocking_content_for_build(
                     // The document returned here is a PRE-Reduce snapshot, the
                     // same shape the fresh path below produces, so the
                     // whole-corpus passes downstream cannot tell the two apart.
-                    // No bytes are read on this path, so no source hash is
-                    // produced — the registration site carries the previous
-                    // build's hash forward instead. A page with an output
-                    // mapping and no hash is unclassifiable at publish time.
+                    // Its source hash is the one the replay was validated
+                    // against (`ParseSession::replayed_sources`).
                     if let Some(cached) = parse_session.lookup(&file_info.path) {
                         return Some((cached, None));
                     }
@@ -1016,11 +1013,9 @@ pub fn generate_blocking_content_for_build(
         );
         parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
-        page_source_hashes.insert(
-            record.source_path.clone(),
-            record.source_metadata(),
-        );
+        page_source_hashes.insert(record.source_path.clone(), record.source_metadata());
     }
+    page_source_hashes.extend(parse_session.replayed_sources());
     if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
         reporter.report(&event);
     }
@@ -2076,54 +2071,14 @@ pub fn generate_blocking_content_for_build(
             }
 
             // Slot-only sources (`footer.md` and its per-language siblings) are
-            // build INPUTS: they render into every page's chrome and own no
-            // output, so both loops above — each keyed on an emitted output —
-            // skipped them and their hash never entered `sources`. The sweep's
-            // drift compare reads that map, and a walked file with no baseline
-            // entry reads as NEW, so every 2s pass judged both footers as drift,
-            // dispatched a full rebuild that could not clear them, then blamed
-            // the watcher and recreated it — twice, after which the folder
-            // degraded to sweep-only and the event-driven partial build stopped
-            // happening at all (riverbend, 2026-08-19).
-            //
-            // No `register_source_mapping`: there is no output to map, and the
-            // hash-only shape is what keeps a slot invisible to the publish
-            // classifier (it filters `sources` through `source_to_output`) and
-            // to the seal's deleted-page prune. `register_page_source` rather
-            // than a raw insert is what survives `replace_sources`.
-            //
-            // The one place a hash is read from disk rather than carried. A
-            // slot source is only in `page_source_hashes` when THIS build read
-            // it, and only carried when the previous MANIFEST held it — so a
-            // vault whose manifest already lost its footers (every riverbend
-            // vault, before the carry was fixed) would stay lost until some
-            // build happened to bypass the parse cache. Hashing the two or
-            // three slot files directly makes the entry unconditional, so the
-            // vault heals on the next build instead of on the next full parse.
-            for doc in &documents {
-                if !doc.slot_only {
-                    continue;
-                }
-                let Some(src) = doc.source_path.as_ref() else {
-                    continue;
-                };
-                if let Some(meta) = page_source_hashes.get(src) {
-                    pending.register_page_source_hash(src.clone(), meta.clone());
-                } else if pending.carry_forward_page_source(src).is_none() {
-                    let abs = source_path_buf.join(src);
-                    let (stat_before_read, bytes) = crate::build::stat::stat_then(&abs, |path| fs::read(path));
-                    match bytes {
-                        Ok(bytes) => pending
-                            .register_page_source_hash(src.clone(), source_metadata(stat_before_read, &bytes)),
-                        // Unreadable (evicted, permissions): leave it absent,
-                        // which is what the sweep already tolerates for a file
-                        // it cannot stat. Better one extra rebuild than a hash
-                        // of nothing.
-                        Err(e) => log::debug!(
-                            "slot source {src} could not be hashed for the manifest: {e}"
-                        ),
-                    }
-                }
+            // build inputs that own no output, so the loops above, keyed on an
+            // emitted output, skip them. Their hash still belongs in `sources`:
+            // the sweep's drift compare reads a walked file with no entry as new
+            // and would rebuild on every pass. No `register_source_mapping`: the
+            // hash-only shape keeps a slot out of the publish classifier and the
+            // seal's deleted-page prune.
+            for src in documents.iter().filter(|doc| doc.slot_only).filter_map(|doc| doc.source_path.as_ref()) {
+                register_page_source(pending, &page_source_hashes, src);
             }
 
             // A page's auto-generated OG card is written and registered by

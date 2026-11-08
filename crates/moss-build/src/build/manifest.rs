@@ -603,11 +603,10 @@ impl PendingManifest {
         self.inner.sources.insert(source_path, meta);
     }
 
-    /// Carry a page's source hash forward from the previous manifest, for pages
-    /// this build did not re-read: the render skip set, a parse-cache hit, or
-    /// an iCloud deferral. The bytes are unchanged by definition on all three
-    /// paths — that is *why* they were skipped — so the previous hash is the
-    /// current hash.
+    /// Carry a page's source hash forward from the previous manifest, for a
+    /// page this build neither read nor replayed because the cloud deferred it.
+    /// Its bytes are unknown, so the last recorded hash stands until a build
+    /// can read them.
     ///
     /// `source_rel` is project-relative, matching `register_source_mapping`'s
     /// key domain. Returns `None` when the previous manifest has no hash for

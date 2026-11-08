@@ -246,6 +246,38 @@ fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
     crate::build::parse_cache::reset_for_tests();
 }
 
+/// A page replayed from the parse cache is recorded at the bytes it was
+/// replayed from, even when the manifest on disk is older than the cached
+/// parse, as it is while the previous build's seal has not written it yet.
+/// That record is the watch gate's baseline: carrying the older hash would let
+/// an undo back to those exact bytes read as unchanged and never render.
+#[test]
+fn a_replayed_page_records_the_bytes_it_was_replayed_from() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let build = || build_test_full_with_gates(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build");
+    let hashes = crate::moss_paths::MossPaths::new(&dir).hashes();
+
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nfirst\n").unwrap();
+    build();
+    let before_the_edit = fs::read(&hashes).unwrap();
+    let edited = "---\ntitle: Home\n---\nsecond\n";
+    fs::write(dir.join("index.md"), edited).unwrap();
+    build();
+    fs::write(&hashes, before_the_edit).unwrap();
+    build();
+
+    let stats = crate::build::parse_cache::last_stats().expect("completed cache stats");
+    assert!(stats.eligible && !stats.missed("index.md"), "the last build must replay index.md, or this proves nothing: {stats:?}");
+    let want = crate::build::render::blocking::source_metadata(None, edited.as_bytes()).hash;
+    let recorded = load_previous_hashes(folder).sources.get("index.md").map(|m| m.hash.clone());
+    assert_eq!(recorded, Some(want), "the replayed page is recorded at the bytes it was replayed from");
+    crate::build::parse_cache::reset_for_tests();
+}
+
 /// The parse cache replays a page as its file reads, so the uid a build gives a
 /// page with none, or a duplicate, is decided afresh from the next build's
 /// whole page set and the publish record.
