@@ -25,58 +25,13 @@
 //! not as inlines, so it is never walked here.
 
 use super::super::document::Document;
-use super::super::node::{Block, Inline};
+use super::super::node::Inline;
 
 /// Rewrite every soft break in `doc` as a hard `<br>`.
 ///
 /// Call only when the site opted in (`ParseConfig::hard_line_breaks`).
 pub fn apply(doc: &mut Document) {
-    for block in &mut doc.blocks {
-        in_block(block);
-    }
-}
-
-fn in_block(block: &mut Block) {
-    match block {
-        Block::Heading { children, .. }
-        | Block::Paragraph(children)
-        | Block::DefinitionTitle(children) => in_inlines(children),
-        Block::Figure { caption, .. } => {
-            if let Some(caption) = caption {
-                in_inlines(caption);
-            }
-        }
-        Block::Callout { children, .. }
-        | Block::BlockQuote(children)
-        | Block::DefinitionList(children)
-        | Block::DefinitionDefinition(children)
-        | Block::LinkCard { children, .. }
-        | Block::FootnoteDefinition { children, .. } => {
-            for nested in children {
-                in_block(nested);
-            }
-        }
-        Block::List { items, .. } => {
-            for item in items {
-                for nested in item {
-                    in_block(nested);
-                }
-            }
-        }
-        Block::Table { rows, .. } => {
-            for row in rows {
-                for cell in row {
-                    in_inlines(cell);
-                }
-            }
-        }
-        // A soft break inside a code block is literal text the author typed,
-        // and `Shortcode` carries its own already-rendered payload.
-        Block::CodeBlock { .. }
-        | Block::Shortcode(_)
-        | Block::ThematicBreak
-        | Block::Other(_) => {}
-    }
+    super::for_each_inline_run_mut(doc, &mut in_inlines);
 }
 
 fn in_inlines(inlines: &mut Vec<Inline>) {
@@ -85,7 +40,8 @@ fn in_inlines(inlines: &mut Vec<Inline>) {
             Inline::Text(s) if s == "\n" => *inline = Inline::LineBreak,
             Inline::Emphasis(children)
             | Inline::Strong(children)
-            | Inline::Strikethrough(children) => in_inlines(children),
+            | Inline::Strikethrough(children)
+            | Inline::Mark(children) => in_inlines(children),
             Inline::Link { children, .. } => in_inlines(children),
             Inline::Text(_)
             | Inline::Image { .. }
@@ -102,6 +58,7 @@ fn in_inlines(inlines: &mut Vec<Inline>) {
 mod tests {
     use super::super::super::parser::parse;
     use super::*;
+    use crate::ast::node::Block;
 
     fn breaks(md: &str) -> Document {
         let mut doc = parse(md);
@@ -114,7 +71,7 @@ mod tests {
             .iter()
             .map(|i| match i {
                 Inline::LineBreak => 1,
-                Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) => {
+                Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) | Inline::Mark(c) => {
                     count_line_breaks(c)
                 }
                 Inline::Link { children, .. } => count_line_breaks(children),
@@ -146,6 +103,23 @@ mod tests {
                 Block::Paragraph(children) => assert_eq!(count_line_breaks(children), 0),
                 other => panic!("expected paragraph, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn soft_break_in_a_table_header_cell_is_found() {
+        // The parser never yields a newline in a cell, so build the table.
+        let mut doc = Document::from_blocks(vec![Block::Table {
+            header: vec![vec![Inline::Text("a".into()), Inline::Text("\n".into())]],
+            rows: vec![],
+            alignments: Vec::new(),
+            header_source_line: None,
+            row_source_lines: vec![],
+        }]);
+        apply(&mut doc);
+        match &doc.blocks[0] {
+            Block::Table { header, .. } => assert_eq!(count_line_breaks(&header[0]), 1),
+            other => panic!("expected table, got {other:?}"),
         }
     }
 

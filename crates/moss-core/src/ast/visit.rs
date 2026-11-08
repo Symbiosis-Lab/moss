@@ -228,7 +228,8 @@ where
         Inline::Image { src, .. } => {
             v.url(src);
         }
-        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
             for nested in children {
                 visit_urls_in_inline(nested, v);
             }

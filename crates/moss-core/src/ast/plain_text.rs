@@ -81,7 +81,8 @@ fn push_inlines(inlines: &[Inline], out: &mut String) {
             Inline::Code(c) => push_atom(out, TextAtom::Verbatim(c)),
             Inline::Emphasis(children)
             | Inline::Strong(children)
-            | Inline::Strikethrough(children) => push_inlines(children, out),
+            | Inline::Strikethrough(children)
+            | Inline::Mark(children) => push_inlines(children, out),
             // A footnote marker is a pointer, not reading text: it must not
             // shift a heading's anchor slug or leak into a description.
             Inline::FootnoteRef(_) => {}
@@ -435,6 +436,11 @@ fn render_inline_plain(inline: &Inline, index: &FootnoteIndex, out: &mut String)
             out.push_str("~~");
             render_inlines_plain(children, index, out);
             out.push_str("~~");
+        }
+        Inline::Mark(children) => {
+            out.push_str("==");
+            render_inlines_plain(children, index, out);
+            out.push_str("==");
         }
         Inline::FootnoteRef(label) => match index.number(label) {
             Some(n) => {

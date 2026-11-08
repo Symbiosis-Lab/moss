@@ -944,6 +944,11 @@ fn render_inline<H: RenderHooks + ?Sized>(
             render_inlines(hooks, out, children, fnotes);
             out.push_str("</del>");
         }
+        Inline::Mark(children) => {
+            out.push_str("<mark>");
+            render_inlines(hooks, out, children, fnotes);
+            out.push_str("</mark>");
+        }
         Inline::FootnoteRef(label) => footnotes::render_marker(hooks, out, label, fnotes),
         // GFM's shape, which is also Obsidian's: a disabled checkbox inline at
         // the head of the item. `disabled` because a published page is not an

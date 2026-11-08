@@ -342,6 +342,8 @@ A term line followed by a line starting with `: ` is a definition list, which re
 
 A page's listing picture is what its card shows in a folder listing, a grid card or a `covers:only` embed. Write `cover: photo.jpg` to choose it; with no `cover:`, moss uses the page's own first picture, the opening hero's image or else the first figure, gallery picture or grid-cell picture in the body, so a page that opens with its picture needs no `cover:` line. `cover: false` lists the page with no picture. In a grid or listing where other cards have a picture, a card with none shows its description as an italic quote in the picture's box (an empty box when the page has no description). A picture set in a sentence, a heading or a table, inside a link to another page, a vector or video, and a remote or `data:` address are not taken. The listing picture is for listings and the share image only and is not drawn in the page body: a leaf page shows only the pictures its body places, and a folder's home page, or a page that claims a name, shows a written `cover:` beside its title, which a first picture inferred from the body never does.
 
+`==text==` highlights the text as `<mark>`; the `--moss-color-highlight` token sets its background. `==` inside inline code or a link URL is never a delimiter, and a pair cannot open outside a link and close inside it. A backslash does not escape `==`.
+
 A single newline inside a paragraph is a line break (`<br>`), not a space as in plain CommonMark, so lines of an address or a verse stay on their own lines; a blank line starts a new paragraph.
 
 ### Quotations and their sources

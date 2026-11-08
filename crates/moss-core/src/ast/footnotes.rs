@@ -243,6 +243,7 @@ fn collect_refs_in_inlines(inlines: &[Inline], out: &mut Vec<String>, seen: &mut
             Inline::Emphasis(children)
             | Inline::Strong(children)
             | Inline::Strikethrough(children)
+            | Inline::Mark(children)
             | Inline::Link { children, .. } => collect_refs_in_inlines(children, out, seen),
             _ => {}
         }

@@ -197,6 +197,7 @@ fn in_inlines_at(inlines: &[Inline], mut at_boundary: bool, out: &mut Vec<String
             Inline::Emphasis(children)
             | Inline::Strong(children)
             | Inline::Strikethrough(children)
+            | Inline::Mark(children)
             | Inline::Link { children, .. } => {
                 // The first child text sits right after an opening delimiter
                 // (`*`, `[`) in source, and the next sibling right after the

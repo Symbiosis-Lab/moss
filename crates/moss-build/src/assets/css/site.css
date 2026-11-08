@@ -5122,6 +5122,18 @@ html[lang^="zh"] {
    8. UI Components
    ========================================================================== */
 
+/* ==highlight== */
+mark {
+  background: var(--moss-color-highlight);
+  color: inherit;
+}
+@media (forced-colors: active) {
+  mark {
+    background: Mark;
+    color: MarkText;
+  }
+}
+
 /* Code */
 code {
   font-family: var(--moss-font-mono);

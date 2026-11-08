@@ -855,7 +855,8 @@ where
                 walk_images_in_inline(nested, f);
             }
         }
-        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
             for nested in children {
                 walk_images_in_inline(nested, f);
             }
@@ -1017,7 +1018,8 @@ where
         Inline::Image { .. } => {
             // Image src is a Url but it's image-kind — handled by phase 1.
         }
-        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
             for nested in children {
                 walk_links_in_inline(nested, f);
             }
@@ -1046,7 +1048,8 @@ fn gather_text_inline(inline: &Inline, out: &mut String) {
     match inline {
         Inline::Text(t) => out.push_str(t),
         Inline::Code(c) => out.push_str(c),
-        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
             for nested in children {
                 gather_text_inline(nested, out);
             }

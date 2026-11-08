@@ -158,7 +158,7 @@ pub fn images_without_text(doc: &Document) -> Vec<String> {
         for i in inlines {
             match i {
                 Inline::Image { .. } => bare(i, out),
-                Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) => walk(c, out),
+                Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) | Inline::Mark(c) => walk(c, out),
                 Inline::Link { children, .. } if super::inlines_to_plain_text(children).trim().is_empty() => {
                     walk(children, out)
                 }
@@ -339,7 +339,8 @@ fn collect_images_in_inlines<'a>(inlines: &'a [Inline], out: &mut Vec<&'a Url>) 
             Inline::Link { children, .. }
             | Inline::Emphasis(children)
             | Inline::Strong(children)
-            | Inline::Strikethrough(children) => collect_images_in_inlines(children, out),
+            | Inline::Strikethrough(children)
+            | Inline::Mark(children) => collect_images_in_inlines(children, out),
             _ => {}
         }
     }

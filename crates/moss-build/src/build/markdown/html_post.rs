@@ -1553,4 +1553,11 @@ mod tests {
         );
         assert!(out.contains("a&amp;b.jpg"), "the inner <img> must be untouched: {out}");
     }
+
+    #[test]
+    fn critic_highlight_renders_as_plain_text_not_a_mark() {
+        let html = crate::build::markdown::pipeline::render_markdown_to_html("a {==critic==} z");
+        assert!(html.contains("a critic z"), "{html}");
+        assert!(!html.contains("<mark"), "{html}");
+    }
 }
