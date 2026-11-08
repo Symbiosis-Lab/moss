@@ -59,7 +59,8 @@ Make a folder with an `index.md` in it, then:
 moss build ~/blog/            # build once
 moss build ~/blog/ --serve    # build and serve a local preview
 moss list ~/blog/             # inventory every page: kind, URL, title, lang
-moss deploy ~/blog/ --site-id=my-blog   # first publish: registers my-blog.mosspub.com
+moss env production ~/blog/  # publish this folder to mosspub.com
+moss deploy ~/blog/ --site-id=my-blog --email you@example.com   # signs the folder in, then publishes my-blog.mosspub.com
 moss deploy ~/blog/           # build and publish on every later run
 ```
 
