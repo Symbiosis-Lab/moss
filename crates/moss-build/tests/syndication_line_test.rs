@@ -1,5 +1,5 @@
-//! A page's `syndicated:` copies are listed as a quiet "Also on" line at the
-//! end of the article.
+//! A page's `syndicated:` copies are marked at the end of the article for
+//! tools to read, in a hidden element: nothing visible is added.
 
 #[path = "support/site.rs"]
 mod site;
@@ -23,6 +23,9 @@ fn three_copies_are_linked_in_order_with_syndication_markup() {
     assert_eq!(line.matches("rel=\"syndication\" class=\"u-syndication\"").count(), 3, "{line}");
     let main = &html[html.find("<article").unwrap()..html.find("</article>").unwrap()];
     assert!(main.contains("moss-syndication"), "line sits inside the article");
+    assert!(html.contains("<p class=\"moss-syndication\" hidden>"), "the copies are marked, never drawn: {html}");
+    let after = &main[main.find("moss-syndication").unwrap()..];
+    assert_eq!(after.matches("<p").count(), 0, "nothing after the hidden element is drawn: {after}");
 }
 
 #[test]

@@ -3257,11 +3257,11 @@ const CORE: &[ComponentEntry] = &[
         kind: "container",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<p class="moss-syndication"><span class="moss-syndication-label">Also on</span> <a href="https://bsky.app/profile/ana.example/post/3k" rel="syndication" class="u-syndication">Bluesky</a> · <a href="https://matters.town/a/abc123" rel="syndication" class="u-syndication">Matters</a></p>"#,
+        example_html: r#"<p class="moss-syndication" hidden><span class="moss-syndication-label">Also on</span> <a href="https://bsky.app/profile/ana.example/post/3k" rel="syndication" class="u-syndication">Bluesky</a> · <a href="https://matters.town/a/abc123" rel="syndication" class="u-syndication">Matters</a></p>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "The \"Also on\" line at the end of an article, listing the other sites it was published on, one `rel=\"syndication\"` link (class `u-syndication`) per address in the `syndicated` frontmatter list, named by platform (the bare host when the platform is unknown) and separated by a middle dot. Absent when the list is absent, empty or holds no http(s) address, and on folder pages.",
+        description: "The copies of an article on other sites, at the end of the article in a `hidden` element, so nothing is drawn and tools that pair copies with originals still read them: one `rel=\"syndication\"` link (class `u-syndication`) per address in the `syndicated` frontmatter list, named by platform (the bare host when the platform is unknown) and separated by a middle dot. Absent when the list is absent, empty or holds no http(s) address, and on folder pages.",
     },
     ComponentEntry {
         class: "moss-syndication-label",
@@ -3272,7 +3272,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "The line's label, in the page's language.",
+        description: "The element's label, in the page's language, hidden with it.",
     },
     ComponentEntry {
         class: "site-name",
