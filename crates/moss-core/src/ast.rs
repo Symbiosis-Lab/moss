@@ -40,7 +40,10 @@ pub mod extract_form;
 pub mod extract_hero;
 pub mod footnotes;
 pub mod grid_parts;
-pub mod line_breaks;
+pub mod inline;
+// The old paths of the two passes that moved into `inline`; drop these
+// re-exports in the next breaking release of moss-core.
+pub use inline::{line_breaks, tags};
 pub mod link_card;
 pub mod linked_embed;
 pub mod hooks;
@@ -56,7 +59,6 @@ pub mod render;
 pub mod resolve_urls;
 pub mod shortcode;
 pub mod shortcode_extract;
-pub mod tags;
 pub mod url;
 pub mod visit;
 

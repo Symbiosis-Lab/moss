@@ -24,8 +24,8 @@
 //! Fenced code is untouched: `Block::CodeBlock` stores its body as a `String`,
 //! not as inlines, so it is never walked here.
 
-use super::document::Document;
-use super::node::{Block, Inline};
+use super::super::document::Document;
+use super::super::node::{Block, Inline};
 
 /// Rewrite every soft break in `doc` as a hard `<br>`.
 ///
@@ -100,7 +100,7 @@ fn in_inlines(inlines: &mut Vec<Inline>) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::parser::parse;
+    use super::super::super::parser::parse;
     use super::*;
 
     fn breaks(md: &str) -> Document {

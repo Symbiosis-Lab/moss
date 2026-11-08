@@ -55,9 +55,9 @@
 
 use std::collections::HashSet;
 
-use super::document::Document;
-use super::node::{Block, Inline};
-use super::shortcode::Shortcode;
+use super::super::document::Document;
+use super::super::node::{Block, Inline};
+use super::super::shortcode::Shortcode;
 
 /// Collect every inline `#tag` in `doc`, in stable document order,
 /// deduplicated case-insensitively (first-seen form wins), leading `#`
@@ -292,7 +292,7 @@ fn scan_text(text: &str, at_boundary: bool, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::parser::parse;
+    use super::super::super::parser::parse;
     use super::*;
 
     fn tags(md: &str) -> Vec<String> {
