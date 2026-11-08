@@ -7,11 +7,10 @@ use moss_build::ops::{run_headless_build, BuildArgs, HeadlessBuildRun};
 mod desktop;
 mod edit;
 mod bundle;
-mod sessions;
 
 /// Commands implemented by the windowless engine.
 const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
-    ("sessions", sessions::run),
+    ("sessions", moss_build::ops::serve::ui::sessions::run),
     ("guide", moss_build::cli::guide::run),
     ("agents", moss_build::cli::agents::run),
     ("list", moss_build::cli::list::run),

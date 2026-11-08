@@ -43,7 +43,7 @@ fn execute(args: &[String]) -> Result<i32, String> {
         return Ok(0);
     }
     let assets = crate::bundle::require_bundle()?;
-    let auth = Arc::new(SignInLink::new(crate::sessions::session_file()?, &folder)?);
+    let auth = Arc::new(SignInLink::new(moss_build::ops::serve::ui::sessions::session_file()?, &folder)?);
     // `--port` fixes the UI and puts the preview on the next port, exactly
     // there behind a public URL; without it both scan, the preview from
     // `MOSS_PREVIEW_PORT_BASE`.
