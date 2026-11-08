@@ -502,6 +502,14 @@ pub fn ladder_rungs(natural_w: u32, natural_h: u32, is_animated: bool) -> &'stat
     &LADDER[..n]
 }
 
+/// Whether the ladder stops short of a source `width` wide: its widest step
+/// is at least that wide, so every rung built for it is narrower than the
+/// source itself. A source wider than the widest step has a rung near its
+/// full display width already.
+pub fn ladder_stops_short(width: u32) -> bool {
+    LADDER.last().is_some_and(|&top| width <= top)
+}
+
 /// Rung variant URL: `photo.jpg` + 800 → `photo.w800.webp`.
 /// Same derivation style as [`to_webp`]; preserves directory prefix.
 ///
@@ -1705,6 +1713,13 @@ mod tests {
     fn a_portrait_source_is_eligible_by_its_height() {
         // 1080 px across is under the 1280 box, but 1920 px tall fills it.
         assert_eq!(video_ladder_rungs((1080, 1920)).len(), VIDEO_LADDER.len());
+    }
+
+    #[test]
+    fn the_ladder_stops_short_up_to_its_widest_step() {
+        assert!(ladder_stops_short(1200));
+        assert!(ladder_stops_short(1600));
+        assert!(!ladder_stops_short(1601));
     }
 
     #[test]

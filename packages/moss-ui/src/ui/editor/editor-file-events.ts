@@ -1,7 +1,7 @@
 //
 // The editor (action-panel) webview's SINGLE subscription point for the
 // cross-webview filesystem events. Owns ONE onMossEvent('FileChanged'), ONE
-// onMossEvent('AssetReady'), ONE onMossEvent('SourceAssetChanged'), and ONE
+// onMossEvent('SitePromoted'), ONE onMossEvent('SourceAssetChanged'), and ONE
 // onMossEvent('RawFileCreated'); fans each out to handlers registered by the
 // editor's subsystems, in a defined priority order (registry sync must run
 // before body reload). Replaces the previous N independent self-subscriptions.
@@ -10,11 +10,10 @@
 // (generation-guarded self-unsubscribe).
 import { onMossEvent as realOnMossEvent } from "../utils/moss-events";
 import type { FileChangeEvent } from '../preview/preview-actions';
-import type { AssetReady } from '@symbiosis-lab/moss-ui';
 
 type OnMossEvent = typeof realOnMossEvent;
 type FileChangedHandler = (e: FileChangeEvent) => void | Promise<void>;
-type AssetReadyHandler = (e: AssetReady) => void;
+type SitePromotedHandler = () => void;
 type SourceAssetChangedHandler = (e: { path: string }) => void;
 type RawFileCreatedHandler = (e: { paths: string[] }) => void;
 
@@ -23,14 +22,14 @@ interface Reg<H> { handler: H; priority: number; }
 /** The subset of EditorFileEvents that subsystems depend on to register handlers. */
 export interface FileEventsCoordinator {
   onFileChanged(handler: (e: FileChangeEvent) => void | Promise<void>, priority?: number): () => void;
-  onAssetReady(handler: (e: AssetReady) => void): () => void;
+  onSitePromoted(handler: () => void): () => void;
   onSourceAssetChanged(handler: (e: { path: string }) => void): () => void;
   onRawFileCreated(handler: (e: { paths: string[] }) => void): () => void;
 }
 
 export class EditorFileEvents implements FileEventsCoordinator {
   private fileChanged: Reg<FileChangedHandler>[] = [];
-  private assetReady: Array<{ handler: AssetReadyHandler }> = [];
+  private sitePromoted: Array<{ handler: SitePromotedHandler }> = [];
   private sourceAssetChanged: Array<{ handler: SourceAssetChangedHandler }> = [];
   private rawFileCreated: Array<{ handler: RawFileCreatedHandler }> = [];
   private unlisten: Array<() => void> = [];
@@ -48,10 +47,9 @@ export class EditorFileEvents implements FileEventsCoordinator {
         catch (err) { console.error('[EditorFileEvents] FileChanged handler threw:', err); }
       }
     }));
-    this.unlisten.push(await this.subscribe('AssetReady', (msg) => {
-      const e = msg.payload;
-      for (const r of [...this.assetReady]) {
-        try { r.handler(e); } catch (err) { console.error('[EditorFileEvents] AssetReady handler threw:', err); }
+    this.unlisten.push(await this.subscribe('SitePromoted', () => {
+      for (const r of [...this.sitePromoted]) {
+        try { r.handler(); } catch (err) { console.error('[EditorFileEvents] SitePromoted handler threw:', err); }
       }
     }));
     this.unlisten.push(await this.subscribe('SourceAssetChanged', (msg) => {
@@ -86,10 +84,10 @@ export class EditorFileEvents implements FileEventsCoordinator {
     return () => { this.fileChanged = this.fileChanged.filter((r) => r !== reg); };
   }
 
-  onAssetReady(handler: AssetReadyHandler): () => void {
+  onSitePromoted(handler: SitePromotedHandler): () => void {
     const reg = { handler };
-    this.assetReady.push(reg);
-    return () => { this.assetReady = this.assetReady.filter((r) => r !== reg); };
+    this.sitePromoted.push(reg);
+    return () => { this.sitePromoted = this.sitePromoted.filter((r) => r !== reg); };
   }
 
   onSourceAssetChanged(handler: SourceAssetChangedHandler): () => void {
@@ -108,7 +106,7 @@ export class EditorFileEvents implements FileEventsCoordinator {
     this.unlisten.forEach((u) => u());
     this.unlisten = [];
     this.fileChanged = [];
-    this.assetReady = [];
+    this.sitePromoted = [];
     this.sourceAssetChanged = [];
     this.rawFileCreated = [];
   }

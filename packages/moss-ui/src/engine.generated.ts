@@ -2328,7 +2328,14 @@ provenance: AssetProvenance;
  * Empty when there is no fresh rung or the host has no build; the original
  * is never listed.
  */
-rung_widths: number[] }
+rung_widths: number[]; 
+/**
+ * The ladder stopped short of this image: a rung is built, and the source
+ * is no wider than the ladder's widest step, so no rung reaches its full
+ * width. The editor may then offer the original as its widest `srcset`
+ * candidate. A camera-sized original never qualifies.
+ */
+offers_original: boolean }
 
 /**
  * One path [`restore_version`] could not carry through — a field-named struct

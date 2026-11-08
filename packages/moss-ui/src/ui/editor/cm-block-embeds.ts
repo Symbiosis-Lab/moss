@@ -240,6 +240,7 @@ function blockEmbedDecoration(
     const { img } = classification;
     widget = new ImageBlockWidget({
       url: img.url,
+      srcset: img.srcset,
       alt,
       intrinsicWidth: img.width,
       intrinsicHeight: img.height,

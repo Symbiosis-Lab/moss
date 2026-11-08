@@ -10,7 +10,7 @@ import { createResizeController, type ResizeController } from './cm-resize-contr
 import { iconFor, type MediaEmbedKind, type FolderCardDetail } from './cm-media-embed';
 import { isFollowChord } from './cm-link-nav';
 import {
-  imageRowHeight, imageCapWidth, editorColumnWidth, refreshEditorColumnWidth,
+  imageRowHeight, imageCapWidth, imageDisplayWidth, editorColumnWidth, refreshEditorColumnWidth,
   mediaRowHeight, recordVideoAspect, type MediaRowShape,
 } from './block-row-height';
 import { t } from "../i18n/index";
@@ -21,6 +21,7 @@ import { count as diagCount } from "../lib/diag";
 
 export type ResolveImageFn = (target: string) => {
   url: string;
+  srcset?: string;
   width?: number;
   height?: number;
 } | undefined;
@@ -44,6 +45,8 @@ export type SetImageWidthFn = (from: number, to: number, width: string | null) =
  */
 export interface ImageBlockWidgetOptions {
   url: string;
+  /** The built rungs to choose from, used only with both intrinsic dimensions. */
+  srcset?: string;
   alt: string;
   intrinsicWidth?: number;
   intrinsicHeight?: number;
@@ -62,6 +65,7 @@ export class ImageBlockWidget extends WidgetType {
   private rc: ResizeController | null = null;
 
   private readonly url: string;
+  private readonly srcset: string | undefined;
   private readonly alt: string;
   private readonly intrinsicWidth: number | undefined;
   private readonly intrinsicHeight: number | undefined;
@@ -74,6 +78,7 @@ export class ImageBlockWidget extends WidgetType {
   constructor(opts: ImageBlockWidgetOptions) {
     super();
     this.url = opts.url;
+    this.srcset = opts.srcset;
     this.alt = opts.alt;
     this.intrinsicWidth = opts.intrinsicWidth;
     this.intrinsicHeight = opts.intrinsicHeight;
@@ -87,9 +92,10 @@ export class ImageBlockWidget extends WidgetType {
   // `width` MUST be part of identity: without it CM6 reuses the old widget DOM
   // when only the width token changes, so a resize would not repaint. `href`
   // likewise — editing only the URL must not reuse DOM carrying a stale
-  // tooltip and a stale navigation target.
+  // tooltip and a stale navigation target. `srcset` too: a rung the build
+  // just finished must reach the <img>.
   eq(other: ImageBlockWidget): boolean {
-    return other.url === this.url && other.alt === this.alt
+    return other.url === this.url && other.srcset === this.srcset && other.alt === this.alt
       && other.width === this.width
       && other.link?.href === this.link?.href;
   }
@@ -131,6 +137,12 @@ export class ImageBlockWidget extends WidgetType {
       }
     };
 
+    if (this.srcset && this.intrinsicWidth && this.intrinsicHeight) {
+      // The width at this toDOM; a later divider drag does not re-run toDOM,
+      // so `sizes` keeps this value until the widget is rebuilt.
+      img.sizes = `${Math.round(imageDisplayWidth(this.intrinsicWidth, this.intrinsicHeight, this.width, editorColumnWidth()))}px`;
+      img.srcset = this.srcset;
+    }
     img.src = this.url;
     img.onload = onLoad;
     wrapper.appendChild(img);

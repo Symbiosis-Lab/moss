@@ -44,34 +44,28 @@ pub(super) async fn source_asset_route(
     path: String,
     query: Option<String>,
 ) -> Response {
-    use crate::editor::source_asset::serve_source_asset;
+    use crate::editor::source_asset::{serve_source_asset, SourceAssetResponse};
 
     let site_dir = match site_dir_state.read() {
         Ok(d) => d.clone(),
-        Err(_) => return source_asset_404(),
+        Err(_) => return dress(SourceAssetResponse::not_found()),
     };
     let Some(vault) = crate::vault::paths::VaultRoot::find_containing(&site_dir) else {
-        return source_asset_404();
+        return dress(SourceAssetResponse::not_found());
     };
-
-    let r = serve_source_asset(vault.path(), &path, query.as_deref()).await;
-    Response::builder()
-        .status(r.status)
-        .header("Content-Type", r.content_type)
-        // Source bytes change whenever the user saves; the editor busts with
-        // `?_t=`, so never let an intermediary hold a stale copy.
-        .header("Cache-Control", "no-cache")
-        // Served sandboxed, so a file in the folder can't run script on the
-        // origin that shows it; it may still show its own images and media.
-        .header("Content-Security-Policy", SOURCE_CSP)
-        .header("X-Content-Type-Options", "nosniff")
-        .body(Body::from(r.body))
-        .unwrap_or_else(|_| source_asset_404())
+    dress(serve_source_asset(vault.path(), &path, query.as_deref()).await)
 }
 
-const SOURCE_CSP: &str = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'";
+/// The source-asset core's answer as an axum response, with every header the core names.
+fn dress(r: crate::editor::source_asset::SourceAssetResponse) -> Response {
+    let mut response = Response::builder().status(r.status);
+    for (name, value) in r.headers() {
+        response = response.header(name, value);
+    }
+    response.body(Body::from(r.body)).expect("status and headers come from the core and are valid")
+}
 
-fn source_asset_404() -> Response {
+fn plain_404() -> Response {
     Response::builder()
         .status(404)
         .header("Content-Type", "text/plain; charset=utf-8")
@@ -504,7 +498,7 @@ pub async fn start_server(
                             return image_original::serve_original(output, request, is_evicted)
                                 .await.unwrap_or_else(pending_image_response);
                         }
-                        return source_asset_404();
+                        return plain_404();
                     }
 
                     // Only the selected staging render can use this build's

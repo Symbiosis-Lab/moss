@@ -99,6 +99,11 @@ pub(super) fn compute_from_source(from_file: &Path, canonical_root: &Path) -> St
     }
 }
 
+/// [`ResolvedAsset::offers_original`] for a source `width` wide with `rung_widths` built.
+fn offers_original(width: Option<u32>, rung_widths: &[u32]) -> bool {
+    !rung_widths.is_empty() && width.is_some_and(moss_core::asset_paths::ladder_stops_short)
+}
+
 /// Add only host facts; classification, request URL and MIME stay core-owned.
 /// The width and height are the source's even when `moss-source://` answers
 /// with a built rung, so the editor's image box does not change when the bytes do.
@@ -113,6 +118,7 @@ pub(super) fn enrich(mut asset: ResolvedAsset, root: &Path) -> Option<ResolvedAs
     }
     asset.rung_widths = crate::editor::source_asset::built_rungs(root, &absolute)
         .into_iter().map(|(width, _)| width).collect();
+    asset.offers_original = offers_original(asset.width, &asset.rung_widths);
     asset.absolute_path = absolute.to_string_lossy().to_string();
     asset.size_bytes = meta.len();
     Some(asset)
@@ -161,6 +167,16 @@ fn read_folder_files(root: &Path, folder: &str) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 1,200 px photo has only the 800 rung, so a 2x column needs its
+    /// original; a 3,000 px photo has every rung and its original stays out.
+    #[test]
+    fn the_original_is_offered_only_where_the_ladder_stopped_short() {
+        assert!(offers_original(Some(1200), &[800]));
+        assert!(!offers_original(Some(3000), &[800, 1600]));
+        assert!(!offers_original(Some(1200), &[]), "nothing built, no srcset to join");
+        assert!(!offers_original(None, &[800]));
+    }
 
     fn scratch_root() -> tempfile::TempDir {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");

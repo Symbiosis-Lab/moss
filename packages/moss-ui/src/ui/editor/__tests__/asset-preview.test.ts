@@ -36,6 +36,8 @@ const IMAGE_ASSET: ResolvedAsset = {
   height: 600,
   size_bytes: 204800,
   provenance: 'literal' as any,
+  rung_widths: [],
+  offers_original: false,
 };
 
 // The card renderer is tested HERE, once, at the level it lives. The

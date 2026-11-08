@@ -53,12 +53,12 @@ function makeTreeRefresh(listTree: RefreshHost['commands']['listTree']) {
 }
 
 describe('EditorFileEvents', () => {
-  test('subscribes to FileChanged + AssetReady exactly once', async () => {
+  test('subscribes to FileChanged + SitePromoted exactly once', async () => {
     const bus = mockBus();
     const c = new EditorFileEvents(bus.onMossEvent as any);
     await c.start();
     expect(bus.cbs['FileChanged']?.length).toBe(1);
-    expect(bus.cbs['AssetReady']?.length).toBe(1);
+    expect(bus.cbs['SitePromoted']?.length).toBe(1);
   });
 
   test('dispatches FileChanged to registered handlers in priority order', async () => {
@@ -77,11 +77,11 @@ describe('EditorFileEvents', () => {
     const c = new EditorFileEvents(bus.onMossEvent as any);
     await c.start();
     const handler = vi.fn();
-    const off = c.onAssetReady(handler);
-    await bus.fire('AssetReady', { path: 'a.jpg', asset_type: 'image' });
+    const off = c.onSitePromoted(handler);
+    await bus.fire('SitePromoted', { generation_id: 'g1' });
     expect(handler).toHaveBeenCalledTimes(1);
     off();
-    await bus.fire('AssetReady', { path: 'a.jpg', asset_type: 'image' });
+    await bus.fire('SitePromoted', { generation_id: 'g1' });
     expect(handler).toHaveBeenCalledTimes(1);
     await c.stop();
     expect(bus.cbs['FileChanged']?.length).toBe(0);
@@ -209,7 +209,7 @@ describe('EditorFileEvents', () => {
     await c.start();
     await c.start();
     expect(bus.cbs['FileChanged']?.length).toBe(1);
-    expect(bus.cbs['AssetReady']?.length).toBe(1);
+    expect(bus.cbs['SitePromoted']?.length).toBe(1);
     expect(bus.cbs['SourceAssetChanged']?.length).toBe(1);
     expect(bus.cbs['RawFileCreated']?.length).toBe(1);
   });

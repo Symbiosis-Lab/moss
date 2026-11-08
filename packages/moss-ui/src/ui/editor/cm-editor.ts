@@ -60,15 +60,24 @@ export { MARKDOWN_EXTENSIONS } from './cm';
  *  undefined. Reads the `resolved` ResolvedAsset off the (text, is_embed:true)
  *  envelope — the SINGLE reference cache (cm-reference-resolver). Guards against
  *  envelopes without an image-mime asset (unresolved / non-image kinds) so an
- *  unguarded `.startsWith` can never crash the live-preview ViewPlugin. */
+ *  unguarded `.startsWith` can never crash the live-preview ViewPlugin.
+ *
+ *  `srcset` offers the built rungs, plus the original when the engine says so;
+ *  the bare `url` is the server's default. `bustQuery` is '' or `?_t=<n>`. */
 export function resolveCachedImage(
   env: EditorReferenceResolution | undefined,
   bustQuery = '',
-): { url: string; width?: number; height?: number } | undefined {
+): ReturnType<ResolveImageFn> {
   const a = env?.resolved;
   if (!a || typeof a.mime_type !== 'string' || !a.mime_type.startsWith('image/')) return undefined;
+  const bust = bustQuery.replace(/^\?/, '&');
+  const candidates = a.rung_widths.map((w) => `${sourceAssetUrl(a.request_url, `?w=${w}${bust}`)} ${w}w`);
+  if (a.offers_original && a.width) {
+    candidates.push(`${sourceAssetUrl(a.request_url, `?original${bust}`)} ${a.width}w`);
+  }
   return {
     url: sourceAssetUrl(a.request_url, bustQuery),
+    srcset: candidates.length ? candidates.join(', ') : undefined,
     width: a.width ?? undefined,
     height: a.height ?? undefined,
   };

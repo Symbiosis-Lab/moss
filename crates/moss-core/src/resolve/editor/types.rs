@@ -105,6 +105,11 @@ pub struct ResolvedAsset {
     /// Empty when there is no fresh rung or the host has no build; the original
     /// is never listed.
     pub rung_widths: Vec<u32>,
+    /// The ladder stopped short of this image: a rung is built, and the source
+    /// is no wider than the ladder's widest step, so no rung reaches its full
+    /// width. The editor may then offer the original as its widest `srcset`
+    /// candidate. A camera-sized original never qualifies.
+    pub offers_original: bool,
 }
 
 /// Which files a reference may search. Loose folders only search the named folders.

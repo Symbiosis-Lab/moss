@@ -51,7 +51,7 @@ export interface ReferenceResolverOptions {
   onMossEvent?: typeof onMossEvent;
   /**
    * Optional EditorFileEvents coordinator. When provided, the resolver registers
-   * its FileChanged and AssetReady handlers synchronously via the coordinator
+   * its FileChanged, SitePromoted and SourceAssetChanged handlers synchronously via the coordinator
    * instead of self-subscribing to the cross-webview bus. This de-risks
    * fallback: if absent, the existing self-subscription path is used unchanged
    * so standalone usage and existing unit tests keep working.
@@ -122,7 +122,7 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
   // ── Batch-resolve ViewPlugin ───────────────────────────────────────────────
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   let inFlight = false;
-  // A revalidation (FileChanged / SourceAssetChanged) resolves ALL current
+  // A revalidation (FileChanged / SitePromoted / SourceAssetChanged) resolves ALL current
   // targets and swaps the cache wholesale, vs a normal typing re-batch that only
   // fills UNCACHED targets. Set by the invalidation handlers, consumed by the
   // next runBatch. `revalidatePending` re-arms it if an invalidation lands while
@@ -146,12 +146,14 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
       // Also clear the resolved cache so a deleted/renamed source re-resolves to
       // not-found instead of returning a stale envelope.
       //
-      // AssetReady: a build-output variant finished encoding. The inline editor
-      // renders SOURCE bytes (moss-source://), not output variants, so AssetReady
-      // no longer drives the image cache-bust here. The subscription remains for
-      // any future AssetReady use but the bumpAssetBust call is removed.
+      // SitePromoted: a new build is current, so an image's `rung_widths` can
+      // have changed (a rung the server now vouches for, or none after an
+      // edit). Earlier events cannot carry this: FileChanged diffs before the
+      // background encoders finish, and AssetsSettled precedes the promotion
+      // the server reads rungs from. An image whose rungs did not move keeps its
+      // `srcset`, so its widget keeps its DOM.
       private unlistenFileChanged: (() => void) | null = null;
-      private unlistenAssetReady: (() => void) | null = null;
+      private unlistenSitePromoted: (() => void) | null = null;
       private unlistenSourceAssetChanged: (() => void) | null = null;
       // Used by the fallback self-subscription path (no coordinator injected).
       private pending: Array<Promise<() => void>> = [];
@@ -174,10 +176,9 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
             revalidateAll = true;
             this.scheduleBatch(view);
           });
-          this.unlistenAssetReady = opts.fileEvents.onAssetReady((_e) => {
-            // AssetReady is a build-output signal; source-image bust is now
-            // driven by SourceAssetChanged. Keep subscription alive for future
-            // AssetReady consumers; no-op for image bust.
+          this.unlistenSitePromoted = opts.fileEvents.onSitePromoted(() => {
+            revalidateAll = true;
+            this.scheduleBatch(view);
           });
           this.unlistenSourceAssetChanged = opts.fileEvents.onSourceAssetChanged((e) => {
             const path = e.path;
@@ -202,11 +203,11 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
             this.scheduleBatch(view);
           });
           p1.then((u) => { this.unlistenFileChanged = u; });
-          // AssetReady: build-output signal — no image bust here (see comment above).
-          const p2 = subscribe('AssetReady', (_msg: unknown) => {
-            // No-op for image bust. Subscription kept for future consumers.
+          const p2 = subscribe('SitePromoted', () => {
+            revalidateAll = true;
+            this.scheduleBatch(view);
           });
-          p2.then((u) => { this.unlistenAssetReady = u; });
+          p2.then((u) => { this.unlistenSitePromoted = u; });
           // SourceAssetChanged: bump bust + clear cache + RE-RESOLVE (see the
           // coordinator path above — scheduleBatch, not a bare dispatch, so the
           // image repaints with the bumped `?_t=` instead of detaching).
@@ -239,22 +240,22 @@ export function createReferenceResolver(opts: ReferenceResolverOptions): Referen
         if (this.usingCoordinator) {
           // Coordinator path: unregister fns are synchronous, call directly.
           this.unlistenFileChanged?.();
-          this.unlistenAssetReady?.();
+          this.unlistenSitePromoted?.();
           this.unlistenSourceAssetChanged?.();
         } else {
           // Self-subscription fallback path: may race with a pending promise.
           this.unlistenFileChanged?.();
-          this.unlistenAssetReady?.();
+          this.unlistenSitePromoted?.();
           this.unlistenSourceAssetChanged?.();
           // If destroy runs before a subscribe() promise resolved, unlisten as
           // soon as it does — only for the slot that is still pending, so we never
           // call an already-resolved unlisten twice.
           if (!this.unlistenFileChanged) this.pending[0]?.then((u) => u());
-          if (!this.unlistenAssetReady) this.pending[1]?.then((u) => u());
+          if (!this.unlistenSitePromoted) this.pending[1]?.then((u) => u());
           if (!this.unlistenSourceAssetChanged) this.pending[2]?.then((u) => u());
         }
         this.unlistenFileChanged = null;
-        this.unlistenAssetReady = null;
+        this.unlistenSitePromoted = null;
         this.unlistenSourceAssetChanged = null;
         this.pending = [];
       }

@@ -119,7 +119,7 @@ describe('createReferenceResolver', () => {
         fileChangedHandler = h;
         return () => {};
       },
-      onAssetReady: () => () => {},
+      onSitePromoted: () => () => {},
       onSourceAssetChanged: () => () => {},
     };
     const resolver = createReferenceResolver({
@@ -210,6 +210,8 @@ function resolvedImageEnvelope(target: string): EditorReferenceResolution {
       height: 600,
       size_bytes: 204800,
       provenance: 'literal' as any,
+      rung_widths: [],
+      offers_original: false,
     },
     url: null,
     anchor: null,
@@ -307,18 +309,43 @@ describe('createReferenceResolver — SourceAssetChanged → image repaint', () 
     view.destroy();
     container.remove();
   });
+
+  test('without a coordinator, a promoted build re-resolves too', async () => {
+    const cbs: Record<string, Array<(m: any) => void>> = {};
+    const onMossEvent = vi.fn(async (kind: string, cb: (m: any) => void) => {
+      (cbs[kind] ??= []).push(cb);
+      return () => {};
+    });
+    const batch: BatchResolveReferencesFn = vi.fn().mockResolvedValue([]);
+    const resolver = createReferenceResolver({
+      batchResolve: batch, getFromFile: () => '/x/p.md', debounceMs: 10,
+      onMossEvent: onMossEvent as any,
+    });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const view = makeView('![[x.jpg]]', resolver.extension, container);
+    await new Promise((r) => setTimeout(r, 40));
+    const calls = (batch as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+
+    cbs['SitePromoted'][0]({ payload: { generation_id: 'g2' } });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect((batch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBeGreaterThan(calls);
+    view.destroy();
+    container.remove();
+  });
 });
 
 // ── coordinator wiring ────────────────────────────────────
 
 describe('createReferenceResolver — coordinator wiring', () => {
-  test('registers FileChanged + AssetReady + SourceAssetChanged on the injected coordinator', async () => {
+  test('registers FileChanged + SitePromoted + SourceAssetChanged on the injected coordinator', async () => {
     const fc: any[] = [];
-    const ar: any[] = [];
+    const sp: any[] = [];
     const sac: any[] = [];
     const fileEvents = {
       onFileChanged: (h: any) => { fc.push(h); return () => {}; },
-      onAssetReady: (h: any) => { ar.push(h); return () => {}; },
+      onSitePromoted: (h: any) => { sp.push(h); return () => {}; },
       onSourceAssetChanged: (h: any) => { sac.push(h); return () => {}; },
     };
     const mockOnMossEvent = vi.fn(); // must NOT be called when fileEvents is provided
@@ -335,7 +362,7 @@ describe('createReferenceResolver — coordinator wiring', () => {
     const view = makeView('![[x.jpg]]', resolver.extension, container);
 
     expect(fc.length).toBe(1);
-    expect(ar.length).toBe(1);
+    expect(sp.length).toBe(1);
     expect(sac.length).toBe(1);
     expect(mockOnMossEvent).not.toHaveBeenCalled();
 
@@ -348,7 +375,7 @@ describe('createReferenceResolver — coordinator wiring', () => {
     const fc: Array<() => void> = [];
     const fileEvents = {
       onFileChanged: (h: any) => { fc.push(h); return () => {}; },
-      onAssetReady: (_h: any) => () => {},
+      onSitePromoted: (_h: any) => () => {},
       onSourceAssetChanged: (_h: any) => () => {},
     };
     const batch: BatchResolveReferencesFn = vi.fn().mockImplementation(async (targets: any[]) =>
@@ -387,7 +414,7 @@ describe('createReferenceResolver — coordinator wiring', () => {
     const sac: Array<(e: any) => void> = [];
     const fileEvents = {
       onFileChanged: (_h: any) => () => {},
-      onAssetReady: (_h: any) => () => {},
+      onSitePromoted: (_h: any) => () => {},
       onSourceAssetChanged: (h: any) => { sac.push(h); return () => {}; },
     };
     const batch: BatchResolveReferencesFn = vi.fn().mockImplementation(async (targets: any[]) =>
@@ -440,7 +467,7 @@ describe('createReferenceResolver — coordinator wiring', () => {
     const sac: Array<(e: any) => void> = [];
     const fileEvents = {
       onFileChanged: (_h: any) => () => {},
-      onAssetReady: (_h: any) => () => {},
+      onSitePromoted: (_h: any) => () => {},
       onSourceAssetChanged: (h: any) => { sac.push(h); return () => {}; },
     };
     // Backend state machine: before the "move" the target is broken; after it,
@@ -474,18 +501,21 @@ describe('createReferenceResolver — coordinator wiring', () => {
     container.remove();
   });
 
-  test('coordinator AssetReady handler is a no-op (does not bump bust)', async () => {
-    // AssetReady is a build-output signal; source-image bust is now driven by
-    // SourceAssetChanged. Firing the coordinator's AssetReady handler must NOT
-    // bump the per-asset bust token.
+  test('a promoted build re-resolves, so an image picks up the rungs it can now be served from', async () => {
     __resetAssetBustForTests();
-    const ar: Array<(e: any) => void> = [];
+    const promoted: Array<() => void> = [];
     const fileEvents = {
       onFileChanged: (_h: any) => () => {},
-      onAssetReady: (h: any) => { ar.push(h); return () => {}; },
+      onSitePromoted: (h: any) => { promoted.push(h); return () => {}; },
       onSourceAssetChanged: (_h: any) => () => {},
     };
-    const batch: BatchResolveReferencesFn = vi.fn().mockResolvedValue([]);
+    let rungs: number[] = [];
+    const batch: BatchResolveReferencesFn = vi.fn().mockImplementation(async (targets: any[]) =>
+      targets.map((t) => ({
+        ...envelope(t.text, t.is_embed, { kind: 'image' }),
+        resolved: { request_url: '/x.jpg', mime_type: 'image/jpeg', width: 4000, height: 3000, rung_widths: rungs },
+      })),
+    );
     const resolver = createReferenceResolver({
       batchResolve: batch,
       getFromFile: () => '/x/p.md',
@@ -495,11 +525,15 @@ describe('createReferenceResolver — coordinator wiring', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const view = makeView('![[x.jpg]]', resolver.extension, container);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(resolver.resolvedCache.get('x.jpg', true)?.resolved?.rung_widths).toEqual([]);
 
-    // Coordinator passes payload directly (no .payload wrapper)
-    ar[0]({ path: 'assets/x.jpg', asset_type: 'image' });
-    // AssetReady must NOT bump the bust token.
-    expect(assetBustQuery('/assets/x.jpg')).toBe('');
+    rungs = [800, 1600];
+    promoted[0]();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(resolver.resolvedCache.get('x.jpg', true)?.resolved?.rung_widths).toEqual([800, 1600]);
+    // New rung URLs are new identities already; the source's bust is untouched.
+    expect(assetBustQuery('/x.jpg')).toBe('');
 
     view.destroy();
     container.remove();
@@ -507,11 +541,11 @@ describe('createReferenceResolver — coordinator wiring', () => {
 
   test('destroy() calls coordinator unregister fns', async () => {
     const unregisterFC = vi.fn();
-    const unregisterAR = vi.fn();
+    const unregisterSP = vi.fn();
     const unregisterSAC = vi.fn();
     const fileEvents = {
       onFileChanged: (_h: any) => unregisterFC,
-      onAssetReady: (_h: any) => unregisterAR,
+      onSitePromoted: (_h: any) => unregisterSP,
       onSourceAssetChanged: (_h: any) => unregisterSAC,
     };
     const batch: BatchResolveReferencesFn = vi.fn().mockResolvedValue([]);
@@ -526,11 +560,11 @@ describe('createReferenceResolver — coordinator wiring', () => {
     const view = makeView('![[x.jpg]]', resolver.extension, container);
 
     expect(unregisterFC).not.toHaveBeenCalled();
-    expect(unregisterAR).not.toHaveBeenCalled();
+    expect(unregisterSP).not.toHaveBeenCalled();
     expect(unregisterSAC).not.toHaveBeenCalled();
     view.destroy();
     expect(unregisterFC).toHaveBeenCalledTimes(1);
-    expect(unregisterAR).toHaveBeenCalledTimes(1);
+    expect(unregisterSP).toHaveBeenCalledTimes(1);
     expect(unregisterSAC).toHaveBeenCalledTimes(1);
 
     container.remove();

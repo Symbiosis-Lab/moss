@@ -301,7 +301,11 @@ export const mockCommands = {
       // mime-string note above is about.
       const absolutePath = '/project' + requestUrl;
       let resolved: Record<string, unknown> | null = null;
-      if (isImg) resolved = { absolute_path: absolutePath, request_url: requestUrl, mime_type: 'image/jpeg', width: 800, height: 600 };
+      // An image is unbuilt (no rungs) unless its name starts `built-`: a
+      // camera-sized photo the last build laddered, as `rung_widths` reports.
+      if (isImg) resolved = /^built-/.test(requestUrl.slice('/assets/'.length))
+        ? { absolute_path: absolutePath, request_url: requestUrl, mime_type: 'image/jpeg', width: 4000, height: 3000, rung_widths: [800, 1600], offers_original: false }
+        : { absolute_path: absolutePath, request_url: requestUrl, mime_type: 'image/jpeg', width: 800, height: 600, rung_widths: [], offers_original: false };
       else if (isAudio) resolved = { absolute_path: absolutePath, request_url: requestUrl, mime_type: 'audio/mpeg', width: null, height: null };
       else if (isVideo) resolved = { absolute_path: absolutePath, request_url: requestUrl, mime_type: 'video/mp4', width: null, height: null };
       else if (card) resolved = { absolute_path: absolutePath, request_url: requestUrl, mime_type: card[2], width: null, height: null };

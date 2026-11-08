@@ -74,7 +74,7 @@ pub fn asset(root_rel: &str, provenance: AssetProvenance) -> super::types::Resol
     super::types::ResolvedAsset {
         absolute_path: root_rel.to_string(), request_url: format!("/{root_rel}"),
         mime_type: mime_for_path(Path::new(root_rel)), width: None, height: None,
-        size_bytes: 0, provenance, rung_widths: Vec::new(),
+        size_bytes: 0, provenance, rung_widths: Vec::new(), offers_original: false,
     }
 }
 

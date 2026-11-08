@@ -21,7 +21,8 @@
 //!   host with no custom-scheme support, i.e. a browser or an Obsidian pane.
 //!
 //! They are adapters, not implementations: each resolves a project root its own
-//! way and dresses the shared answer in its own response type. Anything that
+//! way and dresses the shared answer, with the headers it names
+//! ([`SourceAssetResponse::headers`]), in its own response type. Anything that
 //! decides WHAT to serve belongs here, so the two carriers cannot drift.
 //! [`resolve_scoped`] is the containment boundary for both — no caller may
 //! widen it. Nothing in this file names a `tauri::` type; the scheme mount
@@ -105,7 +106,23 @@ impl SourceAssetResponse {
             body: why.as_bytes().to_vec(),
         }
     }
+
+    /// Every header a carrier sends with this answer. Source bytes change on
+    /// every save (the editor busts with `?_t=`), so nothing may cache them;
+    /// `nosniff` holds the browser to the declared type, and the sandbox keeps
+    /// a file in the folder from running script on the origin that shows it.
+    /// The browser's PDF viewer still draws a PDF under it.
+    pub fn headers(&self) -> [(&'static str, &str); 4] {
+        [
+            ("Content-Type", self.content_type.as_str()),
+            ("Cache-Control", "no-cache"),
+            ("X-Content-Type-Options", "nosniff"),
+            ("Content-Security-Policy", SANDBOXED),
+        ]
+    }
 }
+
+const SANDBOXED: &str = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'";
 
 /// Resolve and read a project-scoped SOURCE file, or the built rung that stands
 /// in for it (see the module header) — the whole behaviour behind both mounts
@@ -278,6 +295,18 @@ async fn read_source_asset(file: std::path::PathBuf) -> std::io::Result<Vec<u8>>
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn every_answer_is_held_to_its_type_and_sandboxed() {
+        let answer = |content_type: &str| SourceAssetResponse { status: 200, content_type: content_type.to_string(), body: Vec::new() };
+        for r in [answer("image/svg+xml"), answer("application/pdf"), SourceAssetResponse::not_found()] {
+            let headers = r.headers();
+            assert!(headers.contains(&("Content-Type", r.content_type.as_str())));
+            assert!(headers.contains(&("X-Content-Type-Options", "nosniff")), "{}", r.content_type);
+            assert!(headers.contains(&("Cache-Control", "no-cache")), "{}", r.content_type);
+            assert!(headers.iter().any(|(name, v)| *name == "Content-Security-Policy" && v.starts_with("sandbox;")), "{}", r.content_type);
+        }
+    }
 
     #[test]
     fn resolves_nested_source_file_and_rejects_escape() {

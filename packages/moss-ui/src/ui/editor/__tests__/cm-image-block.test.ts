@@ -310,3 +310,34 @@ describe('an embed inside a `:::` fence is its source line only', () => {
     expect(out.filter((d) => d.block)).toHaveLength(1);
   });
 });
+
+describe('image block rungs', () => {
+  const opts = { url: 'http://x/p.jpg', alt: '', intrinsicWidth: 4000, intrinsicHeight: 3000, intraLineOffset: 0 };
+  const srcset = 'http://x/p.jpg?w=800 800w, http://x/p.jpg?w=1600 1600w';
+
+  test('the browser chooses among the built rungs for the width the picture is drawn at', () => {
+    const img = new ImageBlockWidget({ ...opts, srcset, width: '50%' }).toDOM().querySelector('img')!;
+    expect(img.getAttribute('srcset')).toBe(srcset);
+    // Half the column, capped so the picture stays within the height cap.
+    expect(img.getAttribute('sizes')).toBe(`${Math.round(Math.min(544 / 2, IMAGE_HEIGHT_CAP * 4 / 3))}px`);
+    expect(img.getAttribute('src')).toBe('http://x/p.jpg');
+  });
+
+  test('no srcset without both dimensions, since the drawn width is then unknown', () => {
+    const img = new ImageBlockWidget({ ...opts, srcset, intrinsicHeight: undefined }).toDOM().querySelector('img')!;
+    expect(img.hasAttribute('srcset')).toBe(false);
+    expect(img.hasAttribute('sizes')).toBe(false);
+  });
+
+  test('a rung landing changes the widget identity, so the <img> is rebuilt', () => {
+    expect(new ImageBlockWidget(opts).eq(new ImageBlockWidget({ ...opts, srcset }))).toBe(false);
+    expect(new ImageBlockWidget({ ...opts, srcset }).eq(new ImageBlockWidget({ ...opts, srcset }))).toBe(true);
+  });
+
+  test('the resolved srcset reaches the widget', () => {
+    const state = makeState('![a](p.jpg)');
+    const set = buildImageDecorations(state, () => ({ url: 'http://x/p.jpg', srcset, width: 4000, height: 3000 }));
+    const widget = set.iter().value!.spec.widget as ImageBlockWidget;
+    expect(widget.toDOM().querySelector('img')!.getAttribute('srcset')).toBe(srcset);
+  });
+});

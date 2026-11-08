@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `==text==` renders as `<mark>` (`Inline::Mark`), coloured by the `--moss-color-highlight` token. The pass runs after parsing in `ast::inline::highlight`, beside the hard line breaks and inline `#tag` passes, which moved to `ast::inline::line_breaks` and `ast::inline::tags` (still reachable as `ast::line_breaks` and `ast::tags`).
 - `resolve::editor::ResolvedAsset::rung_widths`: the ladder widths a host with a build holds for an image and can still vouch for, narrowest first. moss-core leaves it empty.
+- `asset_paths::ladder_stops_short(width)`: whether every rung the ladder builds for a source that wide is narrower than the source, so a viewer may offer the original as its widest candidate.
+- `resolve::editor::ResolvedAsset::offers_original`: set by a host with a build when a rung is built and the ladder stops short of the source, so the editor may offer the original as its widest `srcset` candidate. moss-core leaves it false.
 
 ## [0.22.0] - 2026-11-07
 

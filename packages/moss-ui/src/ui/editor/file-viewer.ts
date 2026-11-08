@@ -36,7 +36,8 @@ async function renderImage(container: HTMLElement, filePath: string, projectRoot
   content.className = 'moss-file-viewer__content moss-file-viewer__checkerboard';
 
   const img = document.createElement('img');
-  img.src = sourceAssetUrl(toRelative(filePath, projectRoot));
+  // The file itself, not a built rung: this view zooms to full size.
+  img.src = sourceAssetUrl(toRelative(filePath, projectRoot), '?original');
   img.alt = filePath.split('/').pop() ?? '';
   img.draggable = false;
 

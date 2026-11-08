@@ -79,10 +79,10 @@ const { mockListen, mockEmit, mockCommands, listenCallbacks, listenCallbacksArra
   const mockListen = vi.fn().mockImplementation(makeMossEventImpl);
 
   // ── MockEditorFileEvents ────────────────────────────────────────────────────
-  // Must stay in sync with EditorFileEvents's public interface: start/onFileChanged/onAssetReady/onRawFileCreated/stop + priority fan-out.
+  // Must stay in sync with EditorFileEvents's public interface: start/onFileChanged/onSitePromoted/onRawFileCreated/stop + priority fan-out.
   // A synchronous-start stand-in for the real EditorFileEvents coordinator.
   // start() registers a 'moss-event' listener (via the same fan-out logic as
-  // makeMossEventImpl) that fans out to all onFileChanged/onAssetReady/onRawFileCreated handlers
+  // makeMossEventImpl) that fans out to all onFileChanged/onSitePromoted/onRawFileCreated handlers
   // — just like the real class — but resolves synchronously (no listen() await
   // on the critical path) so init() does NOT yield extra microtask ticks.
   // Without this, the extra await from the real fileEvents.start() shifts init's
@@ -94,7 +94,7 @@ const { mockListen, mockEmit, mockCommands, listenCallbacks, listenCallbacksArra
   // vi.restoreAllMocks() strips the original implementation.
   const makeFileEventsImpl = () => {
     const fileChangedHandlers: Array<{ handler: Function; priority: number }> = [];
-    const assetReadyHandlers: Function[] = [];
+    const sitePromotedHandlers: Function[] = [];
     const rawFileCreatedHandlers: Function[] = [];
     return {
       start() {
@@ -105,8 +105,8 @@ const { mockListen, mockEmit, mockCommands, listenCallbacks, listenCallbacksArra
             const sorted = [...fileChangedHandlers].sort((a, b) => a.priority - b.priority);
             return Promise.all(sorted.map((r) => r.handler(inner.payload)));
           }
-          if (inner?.kind === 'AssetReady') {
-            assetReadyHandlers.forEach((h) => h(inner.payload));
+          if (inner?.kind === 'SitePromoted') {
+            sitePromotedHandlers.forEach((h) => h(inner.payload));
           }
           if (inner?.kind === 'RawFileCreated') {
             rawFileCreatedHandlers.forEach((h) => h(inner.payload));
@@ -128,11 +128,11 @@ const { mockListen, mockEmit, mockCommands, listenCallbacks, listenCallbacksArra
           if (idx >= 0) fileChangedHandlers.splice(idx, 1);
         };
       },
-      onAssetReady(handler: Function) {
-        assetReadyHandlers.push(handler);
+      onSitePromoted(handler: Function) {
+        sitePromotedHandlers.push(handler);
         return () => {
-          const idx = assetReadyHandlers.indexOf(handler);
-          if (idx >= 0) assetReadyHandlers.splice(idx, 1);
+          const idx = sitePromotedHandlers.indexOf(handler);
+          if (idx >= 0) sitePromotedHandlers.splice(idx, 1);
         };
       },
       onRawFileCreated(handler: Function) {
