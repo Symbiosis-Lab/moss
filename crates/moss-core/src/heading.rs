@@ -18,6 +18,7 @@
 //! isolation.
 
 pub mod anchor;
+pub mod anchor_rule;
 pub mod attrs;
 pub mod extract;
 pub mod opening;

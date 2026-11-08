@@ -7,6 +7,7 @@
  * Japanese in a collage. All names and text are invented.
  * Served by playwright/type-defaults.config.ts.
  */
+import { EIGHTY_WORDS } from "./gate-sites";
 import type { ScratchSiteSpec } from "./scratch-site";
 
 const svg = (w: number, h: number, fill: string): string =>
@@ -74,11 +75,11 @@ uid: "tdg00004"
 
 ## ${LONG_NAME}, 1626–1705
 
-Text.
+${EIGHTY_WORDS}
 
 ## Reign, 1558-1603
 
-Text.
+${EIGHTY_WORDS}
 
 ## Plain heading
 

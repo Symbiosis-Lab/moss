@@ -424,3 +424,11 @@ fn invalid_kind_values_keep_other_kinds_and_are_stored_not_logged() {
     assert!(!kinds[2].cards);
     assert_eq!(kinds[3].fields, ["location"]);
 }
+
+#[test]
+fn a_site_that_turned_heading_anchors_off_stays_off_without_a_warning() {
+    let config = ConfigFile::parse("[site]\nheading_anchors = false\n").unwrap();
+    assert_eq!(config.site_bool("heading_anchors"), Some(false));
+    assert!(config.unknown_site_keys().is_empty(), "{:?}", config.unknown_site_keys());
+    assert!(crate::config::site_settings::site_settings().iter().all(|s| s.name != "heading_anchors"));
+}

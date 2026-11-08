@@ -177,13 +177,13 @@ impl ConfigFile {
     /// problem, because older moss versions left keys that no code reads now.
     /// `title` gets its own line, since the site's name is the home page's `title:`.
     pub fn unknown_site_keys(&self) -> Vec<String> {
-        use crate::config::site_settings::{nearest_known_key, site_settings};
+        use crate::config::site_settings::{nearest_known_key, site_settings, UNLISTED_SITE_KEYS};
         let Some(site) = self.root.get("site").and_then(|v| v.as_table()) else {
             return Vec::new();
         };
         let known: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
         site.keys()
-            .filter(|key| !known.contains(&key.as_str()))
+            .filter(|key| !known.contains(&key.as_str()) && !UNLISTED_SITE_KEYS.contains(&key.as_str()))
             .map(|key| {
                 if key == "title" {
                     return "[site] title is not a setting in .moss/config.toml; the site's name is the `title:` of its home page".to_string();

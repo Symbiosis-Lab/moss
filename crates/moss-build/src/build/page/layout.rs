@@ -170,7 +170,7 @@ impl LayoutConfig {
         self
     }
 
-    /// Set the site-wide heading-anchor preference (`[site].heading_anchors`, default true)
+    /// Allow heading permalink marks site-wide (default true: the per-page rule decides); false turns them off
     pub fn with_heading_anchors(mut self, heading_anchors: bool) -> Self {
         self.assets.heading_anchors = heading_anchors;
         self

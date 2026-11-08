@@ -1466,10 +1466,7 @@ fn build_inner(
         // said" — and the answer is yes, the popup ships. Explicit
         // `[site].link_preview = false` turns it off.
         link_preview: site_bool("link_preview").unwrap_or(true),
-        // Default-on by key absence, same story as `math`: nothing has ever
-        // written `[site].heading_anchors`, so absence means "the author
-        // never said" — and the answer is yes, headings get the `#`.
-        // Explicit `[site].heading_anchors = false` turns it off.
+        // Only an explicit `[site].heading_anchors = false` matters; the per-page rule decides otherwise.
         heading_anchors: site_bool("heading_anchors").unwrap_or(true),
         // Default-OFF by key absence, unlike `math`: extra reading chrome is
         // asked for, not inherited, so a site that never said anything gets no

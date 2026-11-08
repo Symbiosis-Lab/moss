@@ -724,7 +724,7 @@ pub trait RenderHooks {
         source_line: Option<usize>,
         content: &str,
     ) {
-        let HeadingMarks { id, legacy_id, contents_end, contents_label } = marks;
+        let HeadingMarks { id, legacy_id, contents_end, contents_label, permalinks_off } = marks;
         out.push('<');
         out.push('h');
         out.push((b'0' + level) as char);
@@ -768,9 +768,8 @@ pub trait RenderHooks {
         // what site.css still carries as a second line of defence) is
         // excluded from the clipboard by Blink but NOT by WebKit — so on
         // Safari, and in moss's own WebKit preview, selecting a heading
-        // copied "Introduction#". Measured in both engines 2026-08-09; the
-        // heading-anchor-copy render gate pins it.
-        if let Some(id) = id.filter(|_| self.emit_heading_anchors(level)) {
+        // copied "Introduction#". The heading-anchor-copy render gate pins it.
+        if let Some(id) = id.filter(|_| !permalinks_off && self.emit_heading_anchors(level)) {
             out.push_str(r##"<a class="moss-heading-anchor" href="#"##);
             out.push_str(&escape_attr(id));
             out.push_str(r##"" aria-label=""##);
@@ -796,6 +795,8 @@ pub struct HeadingMarks<'a> {
     pub legacy_id: Option<&'a str>,
     pub contents_end: bool,
     pub contents_label: Option<&'a str>,
+    /// The page is too short for permalinks: no mark, whatever the hooks say.
+    pub permalinks_off: bool,
 }
 
 /// Default render hooks. moss-core ships this as the base implementation
@@ -927,9 +928,9 @@ impl<'a> DefaultHooks<'a> {
     /// Hooks whose headings carry no permalink anchor, for the blocks of a
     /// `:::hero` overlay and of a `:::grid` cell: a heading there is a display
     /// title, not a section a reader deep-links to, and inside a card a `#`
-    /// lands mid-tile. Suppressing outright also means a site's
-    /// `heading_anchors` setting and the anchor's localized label, which a
-    /// delegated render cannot see, can never be wrong here.
+    /// lands mid-tile. Suppressing outright also means the page-level decision
+    /// and the anchor's localized label, which a delegated render cannot see,
+    /// can never be wrong here.
     ///
     /// `assets` is the caller's snapshot, if any — the same `None`/`Some`
     /// split as [`new`](Self::new) / [`with_snapshot`](Self::with_snapshot).

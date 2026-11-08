@@ -1027,7 +1027,8 @@ pub struct SiteAssets {
     pub hero_ends: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
-    /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
+    /// Click-to-copy section permalinks. Absent `[site].heading_anchors` means
+    /// ON, and the per-page rule decides; `false` turns them off.
     pub heading_anchors: bool,
     /// `[site].selection_tools` — Share and Copy on selected text, the
     /// share-card chunk and every page's QR code. Defaults OFF.

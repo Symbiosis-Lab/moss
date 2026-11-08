@@ -10,11 +10,12 @@ use site::Site;
 
 #[test]
 fn a_de_tree_is_dressed_in_german_chrome_and_dates() {
+    let words = vec!["Wort"; 80].join(" ");
     let site = Site::new(&[
         ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
         ("de/index.md", "---\ntitle: Start\nchildren_depth: direct\n---\n\nWillkommen.\n"),
         ("de/blog/index.md", "---\ntitle: Blog\n---\n\nText.\n"),
-        ("de/blog/erster.md", "---\ntitle: Erster\ndate: 2026-10-15\n---\n\n## Anfang\n\nText.\n"),
+        ("de/blog/erster.md", format!("---\ntitle: Erster\ndate: 2026-10-15\n---\n\n## Anfang\n\n{words}\n\n## Ende\n\n{words}\n").as_str()),
         ("de/blog/zweiter.md", "---\ntitle: Zweiter\ndate: 2026-10-16\n---\n\nText.\n"),
     ]);
 

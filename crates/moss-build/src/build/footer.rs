@@ -757,11 +757,12 @@ mod tests {
     /// heading in a page body keeps it.
     #[test]
     fn heading_in_footer_slot_has_no_permalink_mark() {
+        let words = vec!["word"; 80].join(" ");
         let render = |path: &str, frontmatter: &str| {
             let empty_map = HashMap::new();
             crate::build::markdown::process_markdown_file(
                 path,
-                &format!("{frontmatter}## Contact\n\nWrite to us."),
+                &format!("{frontmatter}## Contact\n\n{words}\n\n## Visit\n\n{words}"),
                 "",
                 &empty_map,
                 false,

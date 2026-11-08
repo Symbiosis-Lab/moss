@@ -441,7 +441,8 @@ mod tests {
 
         let mut files = Vec::new();
         walk(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")), &mut files);
-        let listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+        let mut listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+        listed.extend(crate::config::site_settings::UNLISTED_SITE_KEYS);
 
         let mut missing = Vec::new();
         for file in &files {

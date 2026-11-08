@@ -367,8 +367,8 @@ pub struct SiteMarkdown<'a> {
     /// (Obsidian parity) rather than a space (CommonMark). See
     /// crates/moss-core/src/ast/line_breaks.rs.
     pub hard_line_breaks: bool,
-    /// `[site].heading_anchors`: when false, headings carry no trailing `#`
-    /// permalink anchor.
+    /// Whether the site allows heading permalink marks: absent means the
+    /// per-page rule decides, `false` turns them off.
     pub heading_anchors: bool,
     /// `[site].typesetting`. A page's own `typesetting:` wins over it
     /// (`render::config::effective_typesetting`); a vertical page's body
@@ -2138,10 +2138,8 @@ struct PipelineHooks<'a> {
     /// `crate::i18n::strings::t(lang, "permalink_section")` and the
     /// `permalink_section_label` trait override hands it back to moss-core.
     permalink_section_label: &'a str,
-    /// `[site].heading_anchors`, resolved on `SiteConfig` (absent key =>
-    /// true). Consumed by the `emit_heading_anchors` hook override below —
-    /// when false, headings render without the trailing `#` permalink
-    /// anchor.
+    /// Whether this page's headings get permalink marks, read by the
+    /// `emit_heading_anchors` override below. Ids are emitted either way.
     heading_anchors: bool,
     /// The page's effective typesetting is vertical. Handed to the delegated
     /// `DefaultHooks`, where it only changes body images' `sizes=`.

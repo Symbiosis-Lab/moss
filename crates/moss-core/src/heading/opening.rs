@@ -3,8 +3,12 @@
 const CJK_CHARS: usize = 20;
 const WORDS: usize = 8;
 
-fn is_cjk(c: char) -> bool {
-    matches!(c, '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{ac00}'..='\u{d7af}' | '\u{f900}'..='\u{faff}')
+/// Han, Hiragana, Katakana and Hangul.
+pub(crate) fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{1100}'..='\u{11ff}' | '\u{3040}'..='\u{30ff}' | '\u{3130}'..='\u{318f}' | '\u{31f0}'..='\u{31ff}'
+        | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{ac00}'..='\u{d7af}' | '\u{f900}'..='\u{faff}'
+        | '\u{20000}'..='\u{323af}')
 }
 
 /// About the first 20 characters of CJK text or 8 words of other text, with an

@@ -272,7 +272,7 @@ fn render_block<H: RenderHooks + ?Sized>(
         } => {
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);
-            let marks = HeadingMarks { id: id.as_deref(), legacy_id: legacy_id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref() };
+            let marks = HeadingMarks { id: id.as_deref(), legacy_id: legacy_id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref(), permalinks_off: fnotes.permalinks_off() };
             hooks.render_heading(out, *level, marks, meta.source_line, &content);
             out.push('\n');
         }

@@ -76,10 +76,9 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub link_preview: bool,
-    /// `[site].heading_anchors` — when true, headings get a trailing `#`
-    /// permalink anchor for deep-linking. Default ON: an absent key
-    /// resolves to `true` at the construction site. Authors who don't want
-    /// the anchor write `[site].heading_anchors = false`.
+    /// Whether the site allows heading permalink marks. An absent
+    /// `[site].heading_anchors` resolves to `true` and leaves the decision to
+    /// the per-page rule; `false` turns the marks off everywhere.
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub heading_anchors: bool,

@@ -6,6 +6,9 @@ use moss_core::contract::describe::SiteSettingInfo;
 
 use crate::infra::edit_distance::levenshtein;
 
+/// Read but not listed: `heading_anchors = false` still turns the marks off.
+pub(crate) const UNLISTED_SITE_KEYS: [&str; 1] = ["heading_anchors"];
+
 /// `[site]` table in `.moss/config.toml` — one entry per key the build reads
 /// through `site_bool` / `site_str`. The drift test in `cli::describe` fails when
 /// a key is read in code and missing here.
@@ -106,12 +109,6 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "string",
             default: Some("static"),
             description: "Whether the header stays at the top while the reader scrolls: \"static\" scrolls away with the page; \"sticky\" stays; \"hide\" stays, slides out of view once the reader scrolls down past it and slides back on any scroll up. Without JavaScript or under reduced motion \"hide\" is \"sticky\". Ignored when `header` is \"none\".",
-        },
-        SiteSettingInfo {
-            name: "heading_anchors",
-            r#type: "bool",
-            default: Some("true"),
-            description: "Give each heading a `#` link to itself. false removes the links.",
         },
         SiteSettingInfo {
             name: "implicit_figure",

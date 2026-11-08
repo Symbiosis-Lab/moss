@@ -637,32 +637,12 @@ article h6 {
   white-space: nowrap;
 }
 
-/* Section permalink anchors (moss-heading-anchor), inside body headings.
-   Revealed on hover or focus only (a tap reveals it on touch, where hover
-   sticks). Quiet at rest: a glyph smaller than the heading in a faint tone
-   mixed most of the way to the background, firming up to the accent on direct
-   hover or focus (rule below). */
-:is(h1, h2, h3, h4, h5, h6):has(> .moss-heading-anchor) {
-  position: relative;
-}
+/* Section permalink anchors (moss-heading-anchor), trailing a body heading.
+   The mark's space is always reserved and only opacity changes, so revealing
+   it never moves a line; the word joiner keeps it on the last word's line. */
 .moss-heading-anchor {
-  /* Hung in the heading's inline-start gutter, out of the line: it takes no
-     room hidden or shown, so no line wraps or moves, a no-break range keeps
-     its line, and overflow on the start side never scrolls. It stays
-     focusable. */
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: 100%;
-  /* The containing block is the heading's padding box: repeating the
-     heading's top padding puts the mark on its first line. It keeps the
-     heading's line box (only the glyph shrinks, on ::after), so the two
-     share a baseline. */
-  padding-block-start: inherit;
-  /* The gutter's own width, glyph against the heading, so the mark and its
-     inset ring stay inside the window at the page's edge. */
-  box-sizing: border-box;
-  inline-size: var(--moss-container-padding);
-  text-align: end;
+  position: relative;
+  margin-inline-start: 0.3em;
   font-weight: 400;
   color: color-mix(in oklch, var(--moss-color-text-secondary) 45%, var(--moss-color-bg));
   text-decoration: none;
@@ -674,16 +654,32 @@ article h6 {
   user-select: none;
 }
 .moss-heading-anchor::after {
-  content: "#";
-  font-size: min(0.8em, var(--moss-container-padding));
+  content: "\2060#";
+  font-size: 0.8em;
+}
+/* A 24px target centred on the glyph, whatever the heading's size. */
+.moss-heading-anchor::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  inline-size: 24px;
+  block-size: 24px;
+  translate: -50% -50%;
 }
 :is(h1, h2, h3, h4, h5, h6):hover .moss-heading-anchor,
 .moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {
   opacity: 1;
 }
+/* Touch has no hover to reveal it: show it faintly at rest. */
+@media (hover: none) {
+  .moss-heading-anchor {
+    opacity: 0.4;
+  }
+}
 .moss-heading-anchor:focus-visible {
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 .moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {

@@ -67,6 +67,7 @@ pub use document::{BlockMeta, Document};
 pub use extract_hero::{extract_hero, HeroDrawnFrom, HeroExtraction};
 pub use grid_parts::{card_parts, render_grid_parts, GridCellParts, GridParts};
 pub use extract_form::{FieldKind, FormField, FormShortcode};
+pub use crate::heading::anchor_rule::{shows_heading_anchors, wants_heading_anchors};
 pub use hooks::{DefaultHooks, RenderHooks, RequestFormFn, SubscribeFormFn};
 pub use node::{is_link_row, is_text_link_row, Block, CalloutKind, Fold, Inline};
 pub use parser::{clear_heading_ids, parse, parse_with_config, parser_options, unwrap_implicit_figures, ParseConfig};
