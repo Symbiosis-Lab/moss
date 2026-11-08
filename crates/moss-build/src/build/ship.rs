@@ -650,7 +650,7 @@ pub fn materialize_and_promote(
         // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
         // the entry's CAS blob surviving a concurrent build's GC across this
         // whole call — see `CacheWriteLease` at this function's own call sites.
-        let object_store = crate::build::cache::ObjectStore::for_site(mp);
+        let object_store = crate::build::cache::ObjectStore::for_seal(mp);
         drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref())
             .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
     } else {
@@ -821,7 +821,7 @@ pub(crate) fn reclaim_staging_now(
 /// CAS-backed entry is asked of its blob through `ObjectStore::ready_blob`,
 /// which hashes a blob it has not verified at its current stat; that read is
 /// the guard against shipping corrupt bytes, and a store built with
-/// `remembering_verified` skips it for blobs an earlier build already checked.
+/// `remembering_verified` skips it for blobs an earlier pass already checked.
 ///
 /// Read-only against `stage_dir`. The pre-render sweep removes unusable
 /// files before any producer looks and while the preview server is no longer
@@ -1656,6 +1656,34 @@ mod tests {
         assert_eq!(std::fs::read(mp.current_ptr().join("page.html")).unwrap(), b"<h1>original</h1>");
         #[cfg(unix)]
         assert_ne!(pointer(), pointer_before, "a re-copied generation must be repointed");
+    }
+
+    /// Copying a generation reads no blob the seal's presence pass already
+    /// verified at its current stat.
+    #[test]
+    fn copying_a_generation_reads_no_blob_the_presence_pass_verified() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        let oid = crate::build::cache::ObjectStore::for_site(&mp)
+            .store_bytes(b"body {}", crate::build::cache::RecordMode::Request)
+            .unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.apply_message("style.css".to_string(), "deadbeefdeadbeef", HashBucket::Files, Some(oid));
+        let mut sealed = pending.seal();
+        let reads = || crate::build::cache::blob_residency::HASH_READS.with(|count| count.get());
+        let before = reads();
+        crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, std::collections::HashSet::new());
+        assert_eq!(reads() - before, 1, "sanity: the presence pass checks the blob");
+
+        let before = reads();
+        assert_eq!(
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap(),
+            Promotion::Promoted
+        );
+        assert_eq!(reads() - before, 0, "the copy hashed a blob the presence pass verified");
+        assert_eq!(std::fs::read(mp.current_ptr().join("style.css")).unwrap(), b"body {}");
     }
 
     // ─── Seeding a generation from the last whole one ────────────

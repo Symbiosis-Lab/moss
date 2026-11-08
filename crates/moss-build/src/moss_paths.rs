@@ -434,7 +434,7 @@ impl MossPaths {
     }
 
     /// `.moss/build.nosync/cache/verified-blobs.json` — which CAS blobs the last
-    /// build read and found matching their names, keyed by absolute path and
+    /// seal pass read and found matching their names, keyed by absolute path and
     /// stat. Machine-local: the key and the inode mean nothing on another machine.
     pub fn cache_verified_blobs(&self) -> PathBuf {
         self.cache_dir().join("verified-blobs.json")

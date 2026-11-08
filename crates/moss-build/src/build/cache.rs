@@ -83,9 +83,10 @@ pub struct ObjectStore {
     base: PathBuf,
     site: Option<std::sync::Arc<crate::moss_paths::MossPaths>>,
     verified: std::sync::Arc<std::sync::Mutex<HashIndex>>,
-    /// What an earlier process verified, read by `ready_blob` when `verified`
-    /// has no answer; see [`remembering_verified`](Self::remembering_verified).
-    previous: Option<std::sync::Arc<HashIndex>>,
+    /// What an earlier pass verified, read by `ready_blob` when `verified` has
+    /// no answer, and where this pass saves; see
+    /// [`remembering_verified`](Self::remembering_verified).
+    remembered: Option<std::sync::Arc<blob_residency::Remembered>>,
 }
 
 impl ObjectStore {
@@ -94,7 +95,7 @@ impl ObjectStore {
     /// `base` is typically `.moss/cache/objects/`. The directory is created
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
-        Self { base, site: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())), previous: None }
+        Self { base, site: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())), remembered: None }
     }
 
     /// `mp`'s content-addressed object store — `.moss/cache/objects/`. Prefer this
@@ -103,6 +104,13 @@ impl ObjectStore {
         let mut store = Self::new(mp.cache_objects());
         store.site = Some(std::sync::Arc::new(crate::moss_paths::MossPaths::from_moss_dir(mp.root().to_path_buf())));
         store
+    }
+
+    /// `mp`'s store for one pass of a seal, remembering the site's verified-blob
+    /// index. The presence pass and the generation copy both open this one, so
+    /// the copy reads no blob the presence pass just verified.
+    pub(crate) fn for_seal(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_blobs())
     }
 
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
