@@ -75,7 +75,6 @@
 
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
 
 /// The held lock. Releasing is `drop`, and so is the holding process dying —
 /// the kernel clears an `flock` the moment its last descriptor closes, which
@@ -92,7 +91,7 @@ pub struct Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -163,12 +162,9 @@ pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce
         .open(&path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
 
-    match file.try_lock_exclusive() {
+    match file.try_lock() {
         Ok(()) => {}
-        // fs2's WOULD_BLOCK-shaped error, not a hardcoded ErrorKind — see
-        // `deploy::stack_activity::hold` for why a contended try-lock's
-        // error kind is platform-dependent.
-        Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
+        Err(std::fs::TryLockError::WouldBlock) => {
             if name == "build" {
                 log::info!("waiting for another moss process building this folder");
             } else {
@@ -176,7 +172,7 @@ pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce
             }
             on_wait();
             let waited = std::time::Instant::now();
-            file.lock_exclusive().map_err(|e| format!("lock {}: {e}", path.display()))?;
+            file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
             log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
         }
         Err(e) => return Err(format!("lock {}: {e}", path.display())),

@@ -131,7 +131,7 @@ fn host_key(host: &url::Host<&str>) -> String {
 /// `evil.localhost.example.com` are ordinary internet hosts and must not match.
 ///
 /// Outbound routing only, and deliberately wider than
-/// [`crate::ops::serve::trust_boundary::host_is_loopback`], which decides which
+/// [`crate::ops::serve::trust_boundary::admit_origin`], which decides which
 /// `Host:` headers the preview server will answer. Naming an extra name here
 /// only keeps a request off the user's proxy; naming one there opens the
 /// server to it. They are not twins — do not unify them.

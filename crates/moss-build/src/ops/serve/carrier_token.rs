@@ -67,12 +67,6 @@
 //! token need only be readable by the *user* who runs moss. [`publish`]'s error
 //! path names the *path*, never the bytes.
 //!
-//! One deliberate exception: `ServeConfig::announce_sign_in` prints the token in
-//! a sign-in URL to stderr, for a non-loopback (`ServeConfig::bind`) operator
-//! who has no loopback-readable file to read it from. It is the one sink this
-//! module does not otherwise allow, scoped to the one case — an explicitly
-//! configured host — where there is no local-file alternative.
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -82,10 +76,6 @@ use crate::moss_paths::MossPaths;
 /// CORS-safelisted name, so a cross-origin browser `fetch` that sets it is
 /// forced through a preflight the server never approves.
 pub const TOKEN_HEADER: &str = "x-moss-token";
-
-/// The cookie name `session_route::handle_session` sets. [`admit`] does not
-/// accept it: the site's own scripts share this origin and send its cookies.
-pub const SESSION_COOKIE: &str = "moss_token";
 
 /// The loopback-readable file the session token is published to, relative to the
 /// vault root. Under `.moss/build.nosync/` deliberately: that tree is cloud-excluded

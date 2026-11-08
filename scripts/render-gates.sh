@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run the CSS cascade / theme render gates for published-page CSS.
 #
-# Some of them build a throwaway moss site with `target/debug/moss-cli`,
+# Some of them build a throwaway moss site with `target/debug/moss-cli`
+# (built by `bash scripts/build-moss-cli.sh`: a plain cargo build leaves out
+# the browser editor, and its gate fails),
 # serve it, and assert computed styles in BOTH chromium and webkit —
 # assertions jsdom cannot make, because it does not implement @layer
 # precedence. Most build no site at all: they either serve a vite harness or

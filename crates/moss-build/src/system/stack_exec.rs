@@ -117,7 +117,7 @@ pub struct InstallLock(std::fs::File);
 
 impl Drop for InstallLock {
     fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.0);
+        let _ = self.0.unlock();
     }
 }
 
@@ -133,7 +133,7 @@ pub fn lock_install(root: &Path) -> Result<InstallLock, StackExecError> {
         .truncate(false)
         .open(&path)
         .map_err(|e| StackExecError::Obtain(format!("open {}: {e}", path.display())))?;
-    fs2::FileExt::lock_exclusive(&file)
+    file.lock()
         .map_err(|e| StackExecError::Obtain(format!("lock {}: {e}", path.display())))?;
     Ok(InstallLock(file))
 }

@@ -42,8 +42,13 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "edit",
-            args: "<path>",
-            description: "Open GUI preview in moss desktop (which `moss desktop install` provides), then open <path> directly in the editor (agent-friendly scriptable entrypoint).",
+            args: "[folder] [--serve] [--no-browser] [--port <n>] [--public-url <https origin>]",
+            description: "Open the editor in moss desktop when installed and stdin is a terminal. With --serve, without a terminal, or without desktop, build, watch and serve the editor and preview. A terminal opens a sign-in link in the default browser; --no-browser or piped stdin prints a link and QR. --port selects the UI port; --public-url names the HTTPS origin a reverse proxy serves the UI at, for another device. The folder defaults to the current directory. A second edit requests a fresh sign-in link from the live owner.",
+        },
+        CliCommandInfo {
+            name: "sessions",
+            args: "[revoke <id> | revoke --all]",
+            description: "List browser sessions (id, created, last seen, user agent), revoke one session by id, or revoke all sessions on this machine.",
         },
         CliCommandInfo {
             name: "desktop",
@@ -211,6 +216,9 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("preview", "moss preview ~/blog/                 # Open a preview window"),
     ("preview", "moss preview ~/blog/posts/article.md # Preview and navigate to the article"),
     ("edit", "moss edit ~/blog/posts/article.md    # Preview, then open the article in the editor"),
+    ("edit", "moss edit ~/blog/ --serve            # Serve the editor and sign in this browser"),
+    ("edit", "moss edit --serve --no-browser       # Print a sign-in link and QR"),
+    ("sessions", "moss sessions revoke --all          # Sign out all browser sessions"),
     // The binary that can open a preview window is the binary that opens one
     // with no arguments at all.
     ("preview", "moss                                 # Launch the app window"),

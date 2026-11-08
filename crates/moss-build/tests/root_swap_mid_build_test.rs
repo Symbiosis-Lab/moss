@@ -187,7 +187,7 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
 
     // A live preview request must serve the promoted page.
     use moss_build::ops::serve::{start_server, ServeConfig};
-    let (port, shutdown) = start_server(ServeConfig::new(served.clone(), 62_532))
+    let (port, _, shutdown) = start_server(ServeConfig::new(served.clone(), 62_532))
         .await
         .expect("server starts");
     let response = moss_build::system::proxy_reqwest::client()

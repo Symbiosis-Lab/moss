@@ -1,10 +1,4 @@
-//! The CLI's handoff to moss desktop.
-//!
-//! `moss-cli` has no window system, so `preview` and `edit` cannot run here.
-//! Today they refuse; this module turns the refusal into a handoff when the
-//! app is installed, and into a one-line hint naming how to get it when it
-//! is not. `main.rs`'s two refusal arms call `hand_off` and exit with the
-//! code it returns.
+//! Desktop discovery, handoff, and explicitly requested installation.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -99,6 +93,11 @@ pub const fn hint() -> &'static str {
 /// launch, in the app's own startup path. Detached and NOT waited on — the
 /// app outlives the CLI by design.
 pub fn hand_off(verb: &str, path: &str) -> i32 {
+    #[cfg(debug_assertions)]
+    if let Some(file) = std::env::var_os("MOSS_EDIT_EFFECTS_FILE") {
+        std::fs::write(file, format!("handoff {verb} {path}")).unwrap();
+        return 0;
+    }
     let Some(app) = locate() else {
         eprintln!("{}", hint());
         return 2;

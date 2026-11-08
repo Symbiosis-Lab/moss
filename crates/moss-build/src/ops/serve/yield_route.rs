@@ -59,6 +59,13 @@ pub(crate) async fn handle_yield(
     }
     super::trust_boundary::drain_body(request.into_body()).await;
 
+    handle_admitted_yield(kind, yield_notify)
+}
+
+pub(crate) fn handle_admitted_yield(
+    kind: super::ownership::HostKind,
+    yield_notify: Arc<tokio::sync::Notify>,
+) -> Response {
     if kind == super::ownership::HostKind::Desktop {
         return Response::builder()
             .status(http::StatusCode::CONFLICT)
@@ -96,7 +103,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn yield_without_a_token_is_401() {
         let (_vault, site_dir) = served_vault();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(InvokeCtx::standalone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64100)
@@ -119,7 +126,7 @@ mod tests {
     async fn yield_against_a_desktop_owner_is_409_and_names_the_reason() {
         let (_vault, site_dir) = served_vault();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Desktop,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64110)

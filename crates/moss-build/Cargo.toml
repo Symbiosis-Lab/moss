@@ -67,7 +67,6 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bun
 ego-tree = "0.6"
 fast_qr = { version = "0.12", default-features = false, features = ["svg"] }
 flate2 = "1"
-fs2 = "0.4.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
 # Already in the tree transitively via jieba-rs; version must keep matching
 # what Cargo.lock resolves there (`cargo tree -d` is the check).

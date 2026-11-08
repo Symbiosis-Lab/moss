@@ -28,107 +28,75 @@
 //! shipped for CVE-2018-5702. The token-free routes are read-only; the mutating
 //! carriers add a token on top (`carrier_token`).
 //!
-//! The helpers are pure and validate the **hostname only**, never the port: the
-//! preview port is dynamic (8080–8179) and is implicitly correct because the
-//! connection already arrived on the bound socket. Rebinding is a hostname attack.
-//!
-//! ## `ServeConfig::extra_hosts` — an operator-named exception
-//!
-//! When `ServeConfig::bind` opts the server into a non-loopback address,
-//! `extra_hosts` names the `Host`/`Origin` values that address is reachable
-//! as. Those hosts get the same trust loopback gets, for a reason a rebound
-//! domain never has: the operator named this one directly, when they set
-//! `ServeConfig::extra_hosts`, rather than it arriving by a DNS trick after
-//! the fact. An extra host's `Origin` is accepted over `https://` as well as
-//! `http://` — unlike loopback, which never has a TLS preview — because a
-//! reverse proxy terminating TLS in front of this plain-HTTP engine is the
-//! expected way a non-loopback bind gets reached at all.
+//! Allowed origins derive from the bound port and, for the UI listener, one
+//! optional HTTPS public origin. A request must address one of them by `Host`,
+//! and an `Origin` it carries must be that same origin.
 
 use axum::{
     body::Body,
-    http::{self, Request, StatusCode},
+    http::{self, HeaderMap, Request, StatusCode},
     middleware::Next,
     response::Response,
 };
 
-/// The three loopback hostnames every legitimate preview client sends. The app
-/// hands the iframe `http://localhost:<port>`; the CLI health check uses the
-/// `127.0.0.1` literal; `::1` is bound by the server and included for robustness
-/// even though no client emits it today. A real domain name — including one an
-/// attacker has rebound to `127.0.0.1` — is deliberately absent.
-const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+/// A full HTTPS origin (scheme, host and optional port; nothing else) that a
+/// reverse proxy serves the UI at. Checked once, where it is parsed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicOrigin(String);
 
-/// Extract the hostname from a `Host`/authority value, dropping any `:port` and
-/// the brackets around an IPv6 literal. `localhost:8080` → `localhost`,
-/// `[::1]:8080` → `::1`, `127.0.0.1` → `127.0.0.1`.
-fn host_name(value: &str) -> &str {
-    let v = value.trim();
-    if let Some(rest) = v.strip_prefix('[') {
-        // IPv6 literal: `[::1]` or `[::1]:port`. Take what's inside the brackets;
-        // a missing `]` is malformed and falls through to fail the allowlist.
-        return rest.split(']').next().unwrap_or(rest);
-    }
-    // `hostname:port` or a bare hostname (a bare hostname has no colon).
-    v.split_once(':').map(|(name, _)| name).unwrap_or(v)
-}
-
-/// True iff `host` names a loopback hostname. `None`/empty is false: HTTP/1.1
-/// requires `Host`, so a missing one is not a client we recognise.
-pub fn host_is_loopback(host: Option<&str>) -> bool {
-    match host {
-        None => false,
-        Some(h) if h.trim().is_empty() => false,
-        Some(h) => LOOPBACK_HOSTS.contains(&host_name(h)),
-    }
-}
-
-/// True iff `host` names a loopback hostname OR one of `extra_hosts` — exact
-/// match, case-insensitive, port stripped the same way loopback matching
-/// strips it. See this module's `extra_hosts` doc section for why an
-/// operator-named host earns the same trust loopback gets.
-pub fn host_is_allowed(host: Option<&str>, extra_hosts: &[String]) -> bool {
-    if host_is_loopback(host) {
-        return true;
-    }
-    match host {
-        Some(h) if !h.trim().is_empty() => {
-            let name = host_name(h);
-            extra_hosts.iter().any(|e| e.eq_ignore_ascii_case(name))
+impl PublicOrigin {
+    pub fn parse(origin: &str) -> Result<Self, String> {
+        let url = url::Url::parse(origin).map_err(|_| "invalid public URL")?;
+        if url.scheme() != "https" || url.origin().ascii_serialization() != origin {
+            return Err("public URL must be a full HTTPS origin without a path".into());
         }
-        _ => false,
+        Ok(Self(origin.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-/// True iff `origin` is safe: absent (navigations, the health check, same-origin
-/// GETs), an `http://` loopback origin (our own page), or an `http://`/`https://`
-/// origin naming one of `extra_hosts`. A present foreign origin is rejected, and
-/// the opaque `null` origin — sent by a sandboxed iframe on any page — is never
-/// allowlisted.
-pub fn origin_is_allowed(origin: Option<&str>, extra_hosts: &[String]) -> bool {
-    match origin {
-        None => true,
-        Some(o) if o.trim().is_empty() => true,
-        Some("null") => false,
-        Some(o) => {
-            let o = o.trim();
-            if let Some(authority) = o.strip_prefix("http://") {
-                let name = host_name(authority);
-                if LOOPBACK_HOSTS.contains(&name) || extra_hosts.iter().any(|e| e.eq_ignore_ascii_case(name)) {
-                    return true;
-                }
-            }
-            // No `https://` loopback preview exists, so the TLS scheme is
-            // accepted only for an operator-named extra host (see this
-            // module's `extra_hosts` doc section on why that host — unlike
-            // loopback — expects a TLS-terminating proxy in front of it).
-            if let Some(authority) = o.strip_prefix("https://") {
-                if extra_hosts.iter().any(|e| e.eq_ignore_ascii_case(host_name(authority))) {
-                    return true;
-                }
-            }
-            false
-        }
+/// Every origin a listener on `port` answers as, each with the `Host`
+/// authority that names it.
+pub(crate) fn origins(port: u16, public: Option<&PublicOrigin>) -> Vec<(String, String)> {
+    ["localhost", "127.0.0.1", "[::1]"]
+        .iter()
+        .map(|host| format!("http://{host}:{port}"))
+        .chain(public.map(|p| p.as_str().to_owned()))
+        .map(|origin| {
+            let authority = origin.split_once("://").map_or("", |(_, a)| a).to_owned();
+            (origin, authority)
+        })
+        .collect()
+}
+
+/// Why [`admit_origin`] refused a request; [`Refusal::response`] answers it.
+pub(crate) struct Refusal(StatusCode, &'static str);
+
+impl Refusal {
+    /// Drains the body first: see [`drain_body`].
+    pub(crate) async fn response(self, request: Request<Body>) -> Response {
+        drain_body(request.into_body()).await;
+        refuse(self.0, self.1)
     }
+}
+
+/// The origin a request addresses, or its refusal: `421` when its `Host` names
+/// none of `origins`, `403` when it carries an `Origin` other than that one.
+pub(crate) fn admit_origin<'a>(headers: &HeaderMap, origins: &'a [(String, String)]) -> Result<&'a str, Refusal> {
+    let host = headers.get(http::header::HOST).and_then(|v| v.to_str().ok());
+    let Some((origin, _)) = origins.iter().find(|(_, authority)| Some(authority.as_str()) == host) else {
+        return Err(Refusal(
+            StatusCode::MISDIRECTED_REQUEST,
+            "moss refuses this Host: it answers only at its own origins.",
+        ));
+    };
+    if headers.get(http::header::ORIGIN).is_some_and(|v| v.to_str().ok() != Some(origin.as_str())) {
+        return Err(Refusal(StatusCode::FORBIDDEN, "moss refuses this cross-origin request."));
+    }
+    Ok(origin)
 }
 
 /// Central middleware: reject a request whose `Host` is not loopback (`421`) or
@@ -139,30 +107,13 @@ pub fn origin_is_allowed(origin: Option<&str>, extra_hosts: &[String]) -> bool {
 /// `/__moss_health/` (whose `127.0.0.1` Host and absent Origin both pass, which
 /// is why startup readiness is not special-cased here).
 pub async fn validate_host_origin(
-    extra_hosts: std::sync::Arc<Vec<String>>,
+    origins: std::sync::Arc<Vec<(String, String)>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let headers = request.headers();
-
-    let host = headers.get(http::header::HOST).and_then(|v| v.to_str().ok());
-    if !host_is_allowed(host, &extra_hosts) {
-        drain_body(request.into_body()).await;
-        return refuse(
-            StatusCode::MISDIRECTED_REQUEST,
-            "moss preview refuses this Host — it serves loopback (or an explicitly configured host) only.",
-        );
+    if let Err(refusal) = admit_origin(request.headers(), &origins) {
+        return refusal.response(request).await;
     }
-
-    let origin = headers.get(http::header::ORIGIN).and_then(|v| v.to_str().ok());
-    if !origin_is_allowed(origin, &extra_hosts) {
-        drain_body(request.into_body()).await;
-        return refuse(
-            StatusCode::FORBIDDEN,
-            "moss preview refuses this cross-origin request.",
-        );
-    }
-
     next.run(request).await
 }
 
@@ -172,9 +123,8 @@ pub async fn validate_host_origin(
 /// risk reusing it — the unread bytes would corrupt the next request's parse.
 /// On Windows, a close with bytes still sitting in the socket's receive
 /// buffer surfaces to the client as `WSAECONNABORTED` mid-status-line, not
-/// the graceful close the same sequence gets on Unix loopback. Shared by
-/// every early-refusal gate ahead of the mutation carrier: this module's two,
-/// and `carrier_token`'s.
+/// the graceful close the same sequence gets on Unix loopback. Every
+/// early refusal ahead of a carrier drains through this.
 pub(crate) async fn drain_body(body: Body) {
     use http_body_util::{BodyExt, Limited};
     // Bounded because this collects an untrusted body with no size check of its own.
@@ -195,76 +145,41 @@ fn refuse(status: StatusCode, message: &'static str) -> Response {
 mod tests {
     use super::*;
 
+    fn admits(host: &str, origin: Option<&str>, origins: &[(String, String)]) -> Result<String, u16> {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::HOST, host.parse().unwrap());
+        if let Some(origin) = origin {
+            headers.insert(http::header::ORIGIN, origin.parse().unwrap());
+        }
+        admit_origin(&headers, origins).map(str::to_owned).map_err(|r| r.0.as_u16())
+    }
+
     #[test]
-    fn loopback_hosts_pass_regardless_of_port_or_brackets() {
-        for h in [
-            "localhost",
-            "localhost:8080",
-            "localhost:8179",
-            "127.0.0.1",
-            "127.0.0.1:8080",
-            "[::1]",
-            "[::1]:8080",
+    fn derived_origins_match_scheme_host_and_port() {
+        let public = PublicOrigin::parse("https://preview.example.test:9443").unwrap();
+        let origins = origins(8080, Some(&public));
+        for (host, origin) in [
+            ("localhost:8080", "http://localhost:8080"),
+            ("127.0.0.1:8080", "http://127.0.0.1:8080"),
+            ("[::1]:8080", "http://[::1]:8080"),
+            ("preview.example.test:9443", "https://preview.example.test:9443"),
         ] {
-            assert!(host_is_loopback(Some(h)), "should pass: {h}");
+            assert_eq!(admits(host, None, &origins), Ok(origin.to_owned()), "{host}");
+            assert_eq!(admits(host, Some(origin), &origins), Ok(origin.to_owned()), "{host}");
+        }
+        for origin in ["null", "http://127.0.0.1:8080", "http://localhost:8081", "https://localhost:8080", "https://evil.test"] {
+            assert_eq!(admits("localhost:8080", Some(origin), &origins), Err(403), "{origin}");
+        }
+        for host in ["", "localhost", "localhost:8081", "[::1]", "::1:8080", "preview.example.test", "evil.test:8080", "localhost.evil.test:8080", "127.0.0.2:8080"] {
+            assert_eq!(admits(host, None, &origins), Err(421), "{host}");
         }
     }
 
     #[test]
-    fn a_rebound_domain_is_refused_even_though_it_resolves_to_loopback() {
-        // The whole point: after DNS rebinding the socket arrives on our loopback
-        // port, but the browser still sends the attacker's hostname in Host. This
-        // is the one assertion that proves the rebinding defense.
-        assert!(!host_is_loopback(Some("evil.com")));
-        assert!(!host_is_loopback(Some("evil.com:8080")));
-        // A subdomain/suffix of a loopback name must not sneak through.
-        assert!(!host_is_loopback(Some("localhost.evil.com")));
-        assert!(!host_is_loopback(Some("127.0.0.1.evil.com")));
-        // Other loopback IPs in 127.0.0.0/8 are not on the exact allowlist.
-        assert!(!host_is_loopback(Some("127.0.0.2:8080")));
-    }
-
-    #[test]
-    fn missing_or_empty_host_is_refused() {
-        assert!(!host_is_loopback(None));
-        assert!(!host_is_loopback(Some("")));
-        assert!(!host_is_loopback(Some("   ")));
-    }
-
-    #[test]
-    fn origin_absent_passes_but_foreign_and_null_do_not() {
-        // Absent: top-level navigation, the CLI health check, same-origin GET.
-        assert!(origin_is_allowed(None, &[]));
-        assert!(origin_is_allowed(Some(""), &[]));
-        // Our own page.
-        assert!(origin_is_allowed(Some("http://localhost:8080"), &[]));
-        assert!(origin_is_allowed(Some("http://127.0.0.1:8080"), &[]));
-        assert!(origin_is_allowed(Some("http://[::1]:8080"), &[]));
-        // Foreign, opaque, and wrong-scheme origins are refused.
-        assert!(!origin_is_allowed(Some("null"), &[]));
-        assert!(!origin_is_allowed(Some("http://evil.com"), &[]));
-        assert!(!origin_is_allowed(Some("http://localhost.evil.com"), &[]));
-        assert!(!origin_is_allowed(Some("https://localhost:8080"), &[]));
-    }
-
-    #[test]
-    fn an_extra_host_is_allowed_on_host_and_origin_but_an_unlisted_one_is_not() {
-        let extra = vec!["preview.example.com".to_string()];
-        // Host: case-insensitive, port stripped, loopback still passes too.
-        assert!(host_is_allowed(Some("preview.example.com"), &extra));
-        assert!(host_is_allowed(Some("preview.example.com:9443"), &extra));
-        assert!(host_is_allowed(Some("PREVIEW.EXAMPLE.COM"), &extra));
-        assert!(host_is_allowed(Some("localhost"), &extra));
-        assert!(!host_is_allowed(Some("other.example.com"), &extra));
-        assert!(!host_is_allowed(Some("preview.example.com.evil.com"), &extra));
-        assert!(!host_is_allowed(None, &extra));
-
-        // Origin: both schemes for the extra host (a TLS-terminating proxy is
-        // the expected front door), still no https for plain loopback.
-        assert!(origin_is_allowed(Some("http://preview.example.com"), &extra));
-        assert!(origin_is_allowed(Some("https://preview.example.com"), &extra));
-        assert!(origin_is_allowed(Some("http://localhost:8080"), &extra));
-        assert!(!origin_is_allowed(Some("https://localhost:8080"), &extra));
-        assert!(!origin_is_allowed(Some("http://other.example.com"), &extra));
+    fn public_url_requires_https_origin() {
+        for origin in ["http://example.test", "https://example.test/", "https://example.test/path", "https://example.test?x", "https://example.test#x", "https://user@example.test", "https://example.test:bad", "https://example.test:65536"] {
+            assert!(PublicOrigin::parse(origin).is_err(), "{origin}");
+        }
+        assert!(PublicOrigin::parse("https://example.test:9443").is_ok());
     }
 }

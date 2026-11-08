@@ -1,5 +1,4 @@
-//! The preview server — one Axum server, two hosts (desktop GUI and headless
-//! CLI).
+//! Preview and optional UI listeners, hosted by the desktop or headless CLI.
 //!
 //! # The `/__moss/*` HTTP contract
 //!
@@ -27,12 +26,11 @@
 //!   `MossEvent` bus the desktop frontend receives over Tauri IPC (`events.rs`).
 //!   Same token gate as `/read`, minus the media-type half (a GET has no body).
 //!
-//! `POST /__moss/yield`, `GET /__moss/session` and `POST /__moss/upload` are
+//! `POST /__moss/yield` and `POST /__moss/upload` are
 //! further, unconditional endpoints outside this three-tier model —
 //! infrastructure routes like health and source, not carrier commands (see
-//! `yield_route`'s, `session_route`'s and `upload_route`'s module docs).
-//! `upload` is the one mutating infrastructure route, so unlike its two
-//! siblings it wears the mutation carrier's own token gate.
+//! `yield_route`'s and `upload_route`'s module docs).
+//! Both require the mutation carrier's token gate.
 //!
 //! ## The token
 //!
@@ -48,28 +46,23 @@
 //!
 //! ## Trust boundary
 //!
-//! The server binds loopback only (dual-stack `127.0.0.1` + `[::1]`) by
-//! default, and the OUTERMOST router layer (`trust_boundary::validate_host_origin`)
-//! refuses a `Host` that is neither loopback nor operator-named (DNS-rebinding
-//! defence) and a foreign `Origin` with 403 before any handler runs —
-//! including on the token-gated tiers, so the token is never even inspected
-//! for a foreign caller. [`ServeConfig::bind`] opts a single explicit address
-//! into reach beyond loopback, and [`ServeConfig::extra_hosts`] is what then
-//! widens the Host/Origin allowlist to match — the default stays loopback-only
-//! until both are set. Which carrier a given moss instance mounts is governed
+//! The server binds loopback only (dual-stack `127.0.0.1` + `[::1]`), and the
+//! OUTERMOST router layer (`trust_boundary::validate_host_origin`) refuses a
+//! `Host` that is not loopback (DNS-rebinding defence) and a foreign `Origin`
+//! with 403 before any handler runs — including on the token-gated tiers, so
+//! the token is never even inspected for a foreign caller. Which carrier a given moss instance mounts is governed
 //! by a one-carrier-per-instance rule: the routes exist only when the host
 //! threads an `InvokeCtx` into [`ServeConfig`].
 //!
 //! ## Module layout
 //! - `router` — Axum router construction, [`ServeConfig`]/[`start_server`], middleware stack
 //! - `port` — port availability checking, scanning, readiness verification,
-//!   and binding/driving the actual listener(s) (loopback dual-stack or
-//!   `ServeConfig::bind`'s explicit address)
+//!   and binding/driving the loopback dual-stack listeners
 //! - `invoke` — the HTTP command carrier (three tiers above)
 //! - `carrier_token` — per-session token mint/publish + the gate middleware
 //! - `trust_boundary` — Host/Origin validation (outermost layer)
 //! - `yield_route` — `POST /__moss/yield` handler + contract
-//! - `session_route` — `GET /__moss/session` token→cookie exchange
+//! - `ui` — isolated UI listener, sign-in and session admission
 //! - `upload_route` — `POST /__moss/upload` handler + contract
 //! - `events` — the SSE event carrier + headless announcer/reporter, and the
 //!   viewer-activity signal
@@ -90,23 +83,27 @@ pub(crate) mod content_wrapper;
 pub mod events;
 pub(crate) mod host_routes;
 pub(crate) mod iframe_bridge;
+mod image_original;
 pub mod invoke;
 pub mod ownership;
 pub mod placeholder;
-mod image_original;
 pub mod port;
 pub mod router;
 pub mod session;
-pub(crate) mod session_route;
 pub(crate) mod trust_boundary;
+pub mod ui;
 pub(crate) mod upload_route;
 pub(crate) mod yield_route;
 
 pub use invoke::InvokeCtx;
 pub use ownership::HostKind;
 pub use router::{start_server, ServeConfig};
+pub use ui::{UiOriginConfig, UiPort};
 
 use std::sync::Arc;
+
+/// Receives the preview port and the UI port, if any.
+pub type OnReady = Arc<dyn Fn(u16, Option<u16>) -> Result<(), String> + Send + Sync>;
 
 /// What a host decides about the headless server, as one value. `Default` is
 /// the plain loopback-only server `moss build --serve` starts.
@@ -125,15 +122,13 @@ pub struct HeadlessServe {
     pub yield_notify: Arc<tokio::sync::Notify>,
     /// See [`ServeConfig::host_routes`].
     pub host_routes: Option<axum::Router>,
-    /// See [`ServeConfig::bind`]. `None` keeps the loopback-only bind.
-    pub bind: Option<std::net::IpAddr>,
-    /// See [`ServeConfig::extra_hosts`].
-    pub extra_hosts: Vec<String>,
-    /// See [`ServeConfig::announce_sign_in`].
-    pub announce_sign_in: Option<String>,
+    /// See [`ServeConfig::ui`].
+    pub ui: Option<UiOriginConfig>,
     /// First port of the upward scan. `None` reads `MOSS_PREVIEW_PORT_BASE`
     /// (see [`port::env_port_base`]).
     pub port_base: Option<u16>,
+    /// Called only after both listeners are ready; never receives credentials.
+    pub on_ready: Option<OnReady>,
 }
 
 /// Start a preview server with no host shell — the CLI / headless
@@ -151,7 +146,7 @@ pub struct HeadlessServe {
 ///   process; the fallback cell is seeded to the initial serve dir
 ///   (current → staging → site).
 ///
-/// Returns the bound port and the server's shutdown sender. The caller OWNS
+/// Returns the preview port, optional UI port, and shared shutdown sender. The caller OWNS
 /// the sender: dropping it puts the server into graceful-shutdown mode (it
 /// stops accepting new connections while the OS backlog still completes TCP
 /// handshakes — connections accepted at the TCP level that get no HTTP
@@ -168,7 +163,7 @@ pub async fn start_server_headless(
     cli_site_dir: Option<Arc<std::sync::RwLock<std::path::PathBuf>>>,
     asset_registry: Option<Arc<crate::types::assets::AssetRegistry>>,
     serve: HeadlessServe,
-) -> Result<(u16, tokio::sync::oneshot::Sender<()>), String> {
+) -> Result<(u16, Option<u16>, tokio::sync::oneshot::Sender<()>), String> {
     let serve_dir = serve_dir_for_site_path(moss_path);
     let site_dir_state =
         cli_site_dir.unwrap_or_else(|| Arc::new(std::sync::RwLock::new(serve_dir)));
@@ -181,23 +176,22 @@ pub async fn start_server_headless(
     // recover from a chosen-source 404, and until 2026-08-29 this
     // arm passed no registry at all — so the never-404 promise held in the app
     // and not under `moss build --serve`.
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, ui_port, shutdown_tx) = start_server(ServeConfig {
         invoke: invoke_ctx,
         asset_registry,
         kind: HostKind::Cli,
         standby_on_conflict: serve.standby_on_conflict,
         yield_notify: serve.yield_notify,
         host_routes: serve.host_routes,
-        bind: serve.bind,
-        extra_hosts: serve.extra_hosts,
-        announce_sign_in: serve.announce_sign_in,
+        ui: serve.ui,
         ..ServeConfig::new(
             site_dir_state,
             serve.port_base.unwrap_or_else(port::env_port_base),
         )
     })
     .await?;
-    Ok((port, shutdown_tx))
+    if let Some(ready) = serve.on_ready { ready(port, ui_port)?; }
+    Ok((port, ui_port, shutdown_tx))
 }
 
 /// Derive the cold-start serve dir for a folder from its `.moss` directory
@@ -217,7 +211,9 @@ pub fn serve_dir_for_site_path(moss_path: &str) -> std::path::PathBuf {
 const PREVIEW_404_LOG_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 
 static PREVIEW_404_LOG: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, (Option<std::time::Instant>, usize)>>,
+    std::sync::Mutex<
+        std::collections::HashMap<std::path::PathBuf, (Option<std::time::Instant>, usize)>,
+    >,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// Which tree a 404 came from: `staging`, `current→gen <id>`, or `other`.
@@ -242,10 +238,15 @@ pub(crate) fn log_preview_404(current_dir: &std::path::Path, path: &str) {
         Some("staging" | "current") => current_dir.parent().unwrap_or(current_dir),
         _ => current_dir,
     };
-    let Ok(mut windows) = PREVIEW_404_LOG.lock() else { return };
+    let Ok(mut windows) = PREVIEW_404_LOG.lock() else {
+        return;
+    };
     let now = std::time::Instant::now();
     let entry = windows.entry(root.to_path_buf()).or_insert((None, 0));
-    if entry.0.is_some_and(|last| now.duration_since(last) < PREVIEW_404_LOG_WINDOW) {
+    if entry
+        .0
+        .is_some_and(|last| now.duration_since(last) < PREVIEW_404_LOG_WINDOW)
+    {
         entry.1 += 1;
         return;
     }
@@ -287,5 +288,4 @@ mod tests {
             "folder-switch re-key must rest on the frozen current generation, not empty /site"
         );
     }
-
 }

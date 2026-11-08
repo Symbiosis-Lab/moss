@@ -195,11 +195,20 @@ pub fn publish(event: &MossEvent) {
 /// subscription. The gap is logged so it is not invisible.
 fn event_stream(
     sub: Subscription,
+    browser: Option<super::ui::auth::BrowserSession>,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    futures::stream::unfold(sub, |mut sub| async move {
+    futures::stream::unfold((sub, browser), |(mut sub, browser)| async move {
         loop {
-            match sub.rx().recv().await {
-                Ok(json) => return Some((Ok(Event::default().data(json)), sub)),
+            if browser.as_ref().is_some_and(|b| !b.admits()) { return None; }
+            let received = tokio::select! {
+                result = sub.rx().recv() => result,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => continue,
+            };
+            match received {
+                Ok(json) => {
+                    if browser.as_ref().is_some_and(|b| !b.admits()) { return None; }
+                    return Some((Ok(Event::default().data(json)), (sub, browser)));
+                },
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     log::warn!(target: "preview", "carrier: SSE subscriber lagged, {n} events skipped");
                 }
@@ -215,14 +224,17 @@ fn event_stream(
 /// The stream ends when the session it was admitted under is retired by a
 /// folder switch: these events describe the vault, and a subscriber holding
 /// the previous vault's token must not keep reading the next one's. The
-/// browser's reconnect then re-presents its token and is 401.
-pub async fn handle_events(
+/// browser's reconnect then re-presents its token and is 401. Browser sessions
+/// are also rechecked before each event and every 30 seconds while idle;
+/// those checks do not count as activity or extend the session's lifetime.
+pub(crate) async fn handle_events(
     axum::Extension(session): axum::Extension<Arc<super::invoke::Session>>,
+    browser: Option<axum::Extension<super::ui::auth::BrowserSession>>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
-    let stream = event_stream(Subscription::open()).take_until(session.retired().clone().cancelled_owned());
+    let stream = event_stream(Subscription::open(), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned());
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 

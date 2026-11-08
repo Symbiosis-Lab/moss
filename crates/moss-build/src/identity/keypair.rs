@@ -15,7 +15,6 @@
 //! - **v2 → v3**: Key was in OS keychain (now removed). If `secret-key` file doesn't exist,
 //!   the key is unrecoverable. `IdentityService::ensure_signing_key()` handles regeneration.
 
-use fs2::FileExt;
 use k256::elliptic_curve::Generate;
 use k256::schnorr::SigningKey;
 use serde::{Deserialize, Serialize};
@@ -324,7 +323,7 @@ impl Identity {
             .open(&identity_path)
             .map_err(IdentityError::Read)?;
 
-        file.lock_exclusive().map_err(IdentityError::Lock)?;
+        file.lock().map_err(IdentityError::Lock)?;
 
         let mut contents = String::new();
         file.read_to_string(&mut contents)
@@ -410,7 +409,7 @@ impl Identity {
             identity
         };
 
-        // File lock released on drop (fs2 advisory locks are fd-scoped)
+        // File lock released on drop.
         drop(file);
 
         if identity.version > IDENTITY_VERSION {

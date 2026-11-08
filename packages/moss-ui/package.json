@@ -12,6 +12,7 @@
     "./ui/*": "./src/ui/*.ts"
   },
   "scripts": {
+    "build:browser": "node scripts/build-browser.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },

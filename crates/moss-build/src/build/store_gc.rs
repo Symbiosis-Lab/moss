@@ -218,7 +218,6 @@ impl GenerationWriteLock {
     /// finished may have unlinked it between our open and our lock, and a
     /// lock on an unlinked file protects nothing, so retry on a fresh one.
     fn take(generations_dir: &Path, gen_id: &str, wait: bool) -> std::io::Result<Take> {
-        use fs2::FileExt;
         let path = write_lock_path(generations_dir, gen_id);
         loop {
             // allow:raw_write an empty lock file, never truncated or written
@@ -234,7 +233,7 @@ impl GenerationWriteLock {
                 Err(e) => return Err(e),
             };
             let handle = same_file::Handle::from_file(file)?;
-            let attempt = || if wait { handle.as_file().lock_exclusive() } else { handle.as_file().try_lock_exclusive() };
+            let attempt = || if wait { handle.as_file().lock() } else { handle.as_file().try_lock().map_err(std::io::Error::from) };
             #[cfg(test)]
             let attempt = || INJECTED_LOCK_ERRORS.with(|q| q.borrow_mut().pop_front()).map_or_else(attempt, Err);
             let locked = loop {
@@ -246,9 +245,7 @@ impl GenerationWriteLock {
             };
             match locked {
                 Ok(()) => {}
-                // fs2's contended error, not a fixed ErrorKind: Windows reports
-                // ERROR_LOCK_VIOLATION, which std does not map to WouldBlock.
-                Err(e) if e.kind() == fs2::lock_contended_error().kind() => return Ok(Take::Busy),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(Take::Busy),
                 Err(e) if wait && !cannot_lock_here(&e) => return Err(e),
                 Err(e) => {
                     log::info!("generation {gen_id}: cannot lock {}: {e}", path.display());

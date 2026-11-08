@@ -51,7 +51,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fs2::FileExt;
 
 use crate::system::stack_exec::layout::stacks_root;
 
@@ -120,7 +119,7 @@ impl Drop for Held {
         // pid that no longer holds anything. Best-effort either way: an
         // unreadable record only costs a refusal its name.
         let _ = std::fs::remove_file(&self.holder_path);
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -186,12 +185,9 @@ impl StackActivity {
         let deadline = std::time::Instant::now() + wait;
         let mut announced = false;
         loop {
-            match file.try_lock_exclusive() {
+            match file.try_lock() {
                 Ok(()) => break,
-                // fs2's WOULD_BLOCK-shaped error, not a hardcoded ErrorKind:
-                // on Windows a contended try-lock reports ERROR_LOCK_VIOLATION,
-                // which rustc's own error-kind table never maps to WouldBlock.
-                Err(e) if e.kind() != fs2::lock_contended_error().kind() => {
+                Err(std::fs::TryLockError::Error(e)) => {
                     return Err(format!("lock {}: {e}", self.lock_path().display()));
                 }
                 Err(_) => {
@@ -246,9 +242,9 @@ impl StackActivity {
         let Ok(file) = std::fs::File::open(self.lock_path()) else {
             return false;
         };
-        match file.try_lock_exclusive() {
+        match file.try_lock() {
             Ok(()) => {
-                let _ = FileExt::unlock(&file);
+                let _ = file.unlock();
                 false
             }
             Err(_) => true,

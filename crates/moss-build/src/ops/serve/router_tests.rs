@@ -80,7 +80,7 @@ async fn test_server_starts_without_index_html() {
         result.err()
     );
 
-    let (port, shutdown_tx) = result.unwrap();
+    let (port, _, shutdown_tx) = result.unwrap();
     assert!(
         port >= 55000,
         "Should return a valid port in the test range"
@@ -112,7 +112,7 @@ async fn test_server_with_asset_registry_starts() {
     );
 
     // Clean up via graceful shutdown
-    let (_port, shutdown_tx) = result.unwrap();
+    let (_port, _, shutdown_tx) = result.unwrap();
     let _ = shutdown_tx.send(());
 }
 
@@ -124,7 +124,7 @@ async fn test_server_graceful_shutdown_frees_port() {
     let temp_dir = TempDir::new().unwrap();
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
 
-    let (port, shutdown_tx) =
+    let (port, _, shutdown_tx) =
         start_server(ServeConfig {
             ..ServeConfig::new(site_dir_state, 57000)
         })
@@ -164,7 +164,7 @@ async fn test_image_file_returns_wrapped_html() {
     std::fs::write(temp_dir.path().join("test.png"), b"PNG fake data").unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58000)
     })
     .await
@@ -217,7 +217,7 @@ async fn test_raw_param_serves_original_file() {
     std::fs::write(temp_dir.path().join("test.png"), original_bytes).unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58500)
     })
     .await
@@ -264,7 +264,7 @@ async fn test_html_file_passes_through() {
     .unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 59000)
     })
     .await
@@ -336,7 +336,7 @@ async fn cold_start_serves_generation_through_current_symlink() {
     );
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(serve_dir.clone()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 59500)
     })
     .await
@@ -384,7 +384,7 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
     .unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 61700)
     })
     .await
@@ -473,13 +473,13 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
     std::fs::write(shipped_dir.path().join("index.html"), &shipped_page).unwrap();
 
     let staging_state = Arc::new(std::sync::RwLock::new(staging_dir.path().to_path_buf()));
-    let (staging_port, staging_shutdown) = start_server(ServeConfig {
+    let (staging_port, _, staging_shutdown) = start_server(ServeConfig {
         ..ServeConfig::new(staging_state, 61800)
     })
     .await
     .expect("staging server should start");
     let shipped_state = Arc::new(std::sync::RwLock::new(shipped_dir.path().to_path_buf()));
-    let (shipped_port, shipped_shutdown) = start_server(ServeConfig {
+    let (shipped_port, _, shipped_shutdown) = start_server(ServeConfig {
         ..ServeConfig::new(shipped_state, 61900)
     })
     .await
@@ -620,7 +620,7 @@ async fn the_seal_tail_leaves_the_served_staging_tree_alone() {
     lifecycle::adopt_server(&mp, &site_dir_cell);
     let (shown, _) = lifecycle::show_render(&mp, true);
     assert!(lifecycle::promote(&mp, crate::build::ship::next_promotion_epoch(), Some(shown), "g1", true).unwrap());
-    let (port2, shutdown_tx2) = start_server(ServeConfig {
+    let (port2, _, shutdown_tx2) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_cell.clone(), 59750)
     })
     .await
@@ -695,7 +695,7 @@ async fn a_rebuild_never_parks_the_preview_on_a_generation_older_than_the_render
     }
     let (r2, _) = lifecycle::show_render(&mp, true);
 
-    let (port, shutdown_tx) = start_server(ServeConfig::new(cell.clone(), 59800)).await.expect("server");
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(cell.clone(), 59800)).await.expect("server");
     let get = |rel: &str| {
         let url = format!("http://localhost:{}/{}", port, rel);
         match ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call() {
@@ -735,7 +735,7 @@ async fn test_pdf_file_returns_unsupported_page() {
     std::fs::write(temp_dir.path().join("doc.pdf"), b"%PDF-1.4 fake").unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 59500)
     })
     .await
@@ -784,7 +784,7 @@ async fn test_sub_resource_image_not_wrapped() {
     std::fs::write(temp_dir.path().join("photo.png"), image_bytes).unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 60000)
     })
     .await
@@ -828,7 +828,7 @@ async fn serve_dir_decodes_percent_2c_to_comma_named_file() {
     std::fs::write(temp_dir.path().join("a,b.w800.webp"), image_bytes).unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 60400)
     })
     .await
@@ -878,7 +878,7 @@ async fn source_passthrough_serves_full_original_for_pending_webp() {
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file.clone());
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60100)
     })
@@ -924,7 +924,7 @@ async fn passthrough_response_forbids_caching_so_the_encoded_variant_can_replace
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file);
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60150)
     })
@@ -969,7 +969,7 @@ async fn passthrough_matches_a_percent_encoded_request_against_its_decoded_key()
     registry.set_source_passthrough("images/冬.webp".to_string(), source_file);
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60160)
     })
@@ -1012,7 +1012,7 @@ async fn passthrough_range_request_on_video_returns_206() {
     registry.set_source_passthrough("videos/clip.mp4".to_string(), source_file.clone());
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60200)
     })
@@ -1058,7 +1058,7 @@ async fn failed_variant_returns_warning_svg_despite_passthrough_registration() {
     registry.set_failed("assets/broken.webp".to_string(), crate::types::assets::Failure::encode("decode error"));
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60300)
     })
@@ -1097,7 +1097,7 @@ async fn pending_passthrough_with_deleted_source_reports_unavailable() {
     registry.set_source_passthrough("assets/gone.webp".to_string(), missing);
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60400)
     })
@@ -1136,7 +1136,7 @@ async fn a_cloud_evicted_source_is_never_opened_for_passthrough() {
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
     EVICTED.store(true, Ordering::SeqCst);
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         is_evicted: evicted,
         ..ServeConfig::new(site_dir_state, 60500)
@@ -1186,7 +1186,7 @@ async fn pending_image_wait_does_not_hold_page_requests_or_browser_slots() {
     registry.set_pending("assets/slow.webp".into(), None, None);
     registry.set_source_passthrough("assets/slow.webp".into(), source_file);
     let state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown) = start_server(ServeConfig {
+    let (port, _, shutdown) = start_server(ServeConfig {
         asset_registry: Some(registry),
         is_evicted: evicted,
         ..ServeConfig::new(state, 60880)
@@ -1230,7 +1230,7 @@ async fn old_current_image_uses_its_own_original_after_new_registry_is_cleared()
             registry
         });
         let state = Arc::new(std::sync::RwLock::new(current));
-        let (port, shutdown) = start_server(ServeConfig {
+        let (port, _, shutdown) = start_server(ServeConfig {
             asset_registry: registry,
             ..ServeConfig::new(state, 60650 + index as u16 * 10)
         }).await.unwrap();
@@ -1259,7 +1259,7 @@ async fn old_current_image_waits_for_hidden_cloud_original() {
     let state = Arc::new(std::sync::RwLock::new(current));
     let mut config = ServeConfig::new(state, 60760);
     config.is_evicted = signal_hidden_original_request;
-    let (port, shutdown) = start_server(config).await.unwrap();
+    let (port, _, shutdown) = start_server(config).await.unwrap();
     let url = format!("http://localhost:{port}/assets/cover.webp");
     let request_url = url.clone();
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
@@ -1319,7 +1319,7 @@ async fn waiting_for_hidden_original_stays_on_the_selected_generation() {
     let current = build.join("current");
     std::os::unix::fs::symlink(&first, &current).unwrap();
     let state = Arc::new(std::sync::RwLock::new(current.clone()));
-    let (port, shutdown) = start_server(ServeConfig::new(state, 60990)).await.unwrap();
+    let (port, _, shutdown) = start_server(ServeConfig::new(state, 60990)).await.unwrap();
     let arrival = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(150));
         std::fs::remove_file(&current).unwrap();
@@ -1354,7 +1354,7 @@ async fn a_readable_source_still_passes_through_when_the_probe_says_no() {
     registry.set_source_passthrough("assets/hero.webp".to_string(), source_file);
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         is_evicted: |_path| false,
         ..ServeConfig::new(site_dir_state, 60550)
@@ -1395,7 +1395,7 @@ async fn unreadable_video_passthrough_falls_back_to_the_sized_svg_not_an_image_s
     registry.set_source_passthrough("videos/clip.mp4".to_string(), missing);
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         asset_registry: Some(registry),
         ..ServeConfig::new(site_dir_state, 60450)
     })
@@ -1442,7 +1442,7 @@ async fn test_404_returns_html_with_bridge_script() {
     // Do NOT create "nonexistent.html" — this is what we're testing
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 60500)
     })
     .await
@@ -1519,7 +1519,7 @@ async fn test_moss_health_endpoint_returns_marker() {
     .unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 61000)
     })
     .await
@@ -1569,7 +1569,7 @@ async fn test_moss_health_route_wins_over_servedir() {
     std::fs::write(shadow_dir.join("index.html"), "SHADOWED-BY-USER").unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 61500)
     })
     .await
@@ -1630,10 +1630,9 @@ async fn test_bind_dual_stack_scan_skips_v6_collision() {
 
     // The bind-with-scan helper must skip `start_port` and return a
     // later port with both listeners cleanly bound.
-    let (bound_port, v4, v6) = super::super::port::bind_with_scan(None, start_port)
+    let (bound_port, v4, v6) = super::super::port::bind_with_scan(start_port)
         .await
         .expect("bind_with_scan must succeed by hopping past the IPv6-held port");
-    let v6 = v6.expect("a None bind must return a secondary IPv6 listener");
 
     assert!(
         bound_port > start_port,
@@ -1721,7 +1720,7 @@ async fn source_route_serves_vault_bytes_not_build_output() {
     std::fs::write(site_dir.join("assets/photo.txt"), b"BUILT").unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site_dir.clone()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58600)
     })
     .await
@@ -1767,7 +1766,7 @@ async fn source_route_rejects_escape_above_the_vault() {
     std::fs::write(vault_path.join("inside.txt"), b"INSIDE").unwrap();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site_dir.clone()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58700)
     })
     .await
@@ -1823,7 +1822,7 @@ async fn trust_boundary_refuses_a_rebound_host_but_serves_localhost() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(temp_dir.path().join("index.html"), b"<html>ok</html>").unwrap();
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58800)
     })
     .await
@@ -1844,7 +1843,7 @@ async fn trust_boundary_refuses_a_rebound_host_but_serves_localhost() {
 
     // Positive control: the socket and the route both work for a loopback Host.
     assert!(
-        status_line("localhost").contains("200"),
+        status_line(&format!("localhost:{port}")).contains("200"),
         "control: a loopback Host must be served; the refusal below would be vacuous otherwise"
     );
 
@@ -1865,7 +1864,7 @@ async fn trust_boundary_refuses_a_foreign_origin() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(temp_dir.path().join("index.html"), b"<html>ok</html>").unwrap();
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         ..ServeConfig::new(site_dir_state, 58900)
     })
     .await
@@ -1889,59 +1888,6 @@ async fn trust_boundary_refuses_a_foreign_origin() {
         Ok(resp) => panic!("foreign Origin must 403; got {}", resp.status()),
         Err(e) => panic!("expected a 403, got transport error: {e}"),
     }
-
-    let _ = shutdown_tx.send(());
-}
-
-/// `ServeConfig::extra_hosts` widens the trust boundary's `Host` allowlist end
-/// to end: a `Host` naming a configured extra host passes, loopback still
-/// passes alongside it, and an unlisted hostname still 421s exactly as a
-/// rebound one does today. Raw TCP for the same reason the rebind test above
-/// uses it — `ureq` manages `Host` from the URL.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_extra_host_passes_the_trust_boundary_but_an_unlisted_one_still_421s() {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-
-    let temp_dir = tempfile::TempDir::new().unwrap();
-    std::fs::write(temp_dir.path().join("index.html"), b"<html>ok</html>").unwrap();
-    let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    // `bind` is loopback itself here — only `extra_hosts` is under test, and
-    // binding elsewhere would make the test depend on the sandbox's network
-    // config rather than the Host-allowlist logic.
-    let (port, shutdown_tx) = start_server(ServeConfig {
-        bind: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-        extra_hosts: vec!["preview.example.com".to_string()],
-        ..ServeConfig::new(site_dir_state, 58950)
-    })
-    .await
-    .expect("Server should start");
-
-    let status_line = |host: &str| -> String {
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        stream
-            .write_all(
-                format!("GET /__moss_health/ HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
-                    .as_bytes(),
-            )
-            .unwrap();
-        let mut resp = String::new();
-        stream.read_to_string(&mut resp).unwrap();
-        resp.lines().next().unwrap_or("").to_string()
-    };
-
-    assert!(
-        status_line("localhost").contains("200"),
-        "control: loopback must still pass alongside a configured extra host"
-    );
-    assert!(
-        status_line("preview.example.com").contains("200"),
-        "a configured extra host must pass the Host check"
-    );
-    assert!(
-        status_line("unlisted.example.com").contains("421"),
-        "a hostname not in extra_hosts must still be refused, same as a rebound one"
-    );
 
     let _ = shutdown_tx.send(());
 }
@@ -2100,7 +2046,7 @@ async fn serve_bound(
     port: u16,
 ) -> (u16, tokio::sync::oneshot::Sender<()>, String) {
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         invoke: Some(ctx.clone()),
         ..ServeConfig::new(Arc::new(std::sync::RwLock::new(site_dir)), port)
     })
@@ -2238,7 +2184,7 @@ async fn folder_switch_retires_the_previous_vaults_token() {
     let ctx = crate::ops::serve::invoke::InvokeCtx::standalone();
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site_a.clone()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         invoke: Some(ctx.clone()),
         ..ServeConfig::new(site_dir_state.clone(), 63950)
     })
@@ -3119,7 +3065,7 @@ async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
     let site = tempfile::TempDir::new().unwrap();
     std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
     std::fs::write(site.path().join("photo.png"), b"PNG").unwrap();
-    let (port, shutdown_tx) = start_server(ServeConfig::new(
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(
         Arc::new(std::sync::RwLock::new(site.path().to_path_buf())),
         63440,
     ))
@@ -3160,7 +3106,7 @@ async fn the_shell_page_request_tells_the_derive_scheduler_what_is_on_screen() {
     std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
     std::fs::write(site.path().join("essay.html"), "<html><body>essay</body></html>").unwrap();
     std::fs::write(site.path().join("photo.png"), b"PNG").unwrap();
-    let (port, shutdown_tx) = start_server(ServeConfig::new(
+    let (port, _, shutdown_tx) = start_server(ServeConfig::new(
         Arc::new(std::sync::RwLock::new(site.path().to_path_buf())),
         63460,
     ))
@@ -3201,7 +3147,7 @@ fn host_ping_router() -> axum::Router {
 async fn host_route_answers_with_the_hosts_body() {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         host_routes: Some(host_ping_router()),
         ..ServeConfig::new(site_dir_state, 59200)
     })
@@ -3229,7 +3175,7 @@ async fn host_route_is_not_shadowed_by_a_site_file_at_the_same_path() {
     std::fs::create_dir_all(temp_dir.path().join("__moss/host")).unwrap();
     std::fs::write(temp_dir.path().join("__moss/host/ping"), b"a site author's own file").unwrap();
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         host_routes: Some(host_ping_router()),
         ..ServeConfig::new(site_dir_state, 59300)
     })
@@ -3265,7 +3211,7 @@ async fn host_route_refuses_a_rebound_host_but_serves_localhost() {
 
     let temp_dir = tempfile::TempDir::new().unwrap();
     let site_dir_state = Arc::new(std::sync::RwLock::new(temp_dir.path().to_path_buf()));
-    let (port, shutdown_tx) = start_server(ServeConfig {
+    let (port, _, shutdown_tx) = start_server(ServeConfig {
         host_routes: Some(host_ping_router()),
         ..ServeConfig::new(site_dir_state, 59400)
     })
@@ -3289,7 +3235,7 @@ async fn host_route_refuses_a_rebound_host_but_serves_localhost() {
 
     // Positive control: the socket and the host route both work for a loopback Host.
     assert!(
-        status_line("localhost").contains("200"),
+        status_line(&format!("localhost:{port}")).contains("200"),
         "control: a loopback Host must reach the host route; the refusal below would be vacuous otherwise"
     );
 

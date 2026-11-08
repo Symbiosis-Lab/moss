@@ -5,13 +5,13 @@
 //! injection, conditional-request stripping, and the HTML 404 fallback that keeps
 //! the iframe-bridge script alive on missing pages.
 
-use super::placeholder::{handle_asset_request, pending_image_response, is_image_variant_url};
-use super::image_original;
-use super::port::{verify_server_ready, MOSS_HEALTH_PATH};
 use super::asset_rewriter;
 use super::content_wrapper;
 use super::iframe_bridge::inject_iframe_bridge;
+use super::image_original;
 use super::ownership;
+use super::placeholder::{handle_asset_request, is_image_variant_url, pending_image_response};
+use super::port::{verify_server_ready, MOSS_HEALTH_PATH};
 use axum::{
     body::Body,
     http::{self, Request},
@@ -21,7 +21,6 @@ use axum::{
     Router,
 };
 use moss_core::media::html_escape;
-use std::net::IpAddr;
 use std::sync::Arc;
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
@@ -188,17 +187,8 @@ pub struct ServeConfig {
     /// `ServeDir` fallback so a host route wins over a site file at the
     /// same path. `None` merges nothing.
     pub host_routes: Option<Router>,
-    /// Explicit non-loopback bind address. `None` (default) keeps today's
-    /// loopback dual-stack bind; `Some` binds that address alone — see
-    /// `super::port::bind_with_scan` and `super::trust_boundary`'s
-    /// `extra_hosts` section for what else opting in requires.
-    pub bind: Option<IpAddr>,
-    /// `Host`/`Origin` values trusted alongside loopback when `bind` is
-    /// `Some` — the hostnames the operator named for that address.
-    pub extra_hosts: Vec<String>,
-    /// Print the one-time sign-in URL (`super::session_route::announce_line`)
-    /// to stderr at bind time. Ignored unless `bind` is `Some`.
-    pub announce_sign_in: Option<String>,
+    /// Optional UI listener, isolated from author scripts on the preview origin.
+    pub ui: Option<super::ui::UiOriginConfig>,
 }
 
 impl ServeConfig {
@@ -207,10 +197,7 @@ impl ServeConfig {
     /// port base *before* construction (tests pass a literal; the app passes
     /// [`super::port::env_port_base`]) so building a config never reads the
     /// environment.
-    pub fn new(
-        site_dir_cell: Arc<std::sync::RwLock<std::path::PathBuf>>,
-        start_port: u16,
-    ) -> Self {
+    pub fn new(site_dir_cell: Arc<std::sync::RwLock<std::path::PathBuf>>, start_port: u16) -> Self {
         Self {
             site_dir_cell,
             asset_registry: None,
@@ -221,37 +208,29 @@ impl ServeConfig {
             standby_on_conflict: false,
             yield_notify: Arc::new(tokio::sync::Notify::new()),
             host_routes: None,
-            bind: None,
-            extra_hosts: Vec::new(),
-            announce_sign_in: None,
+            ui: None,
         }
     }
 }
 
 /// Build the router (optionally with the HTTP command carrier) and spawn the
-/// dual-stack serve loop — the ONE server entry, for GUI and CLI alike.
+/// listener loops. Returns the preview port, optional UI port, and one shutdown
+/// sender for both origins.
 ///
 /// The server can start even for empty folders (no index.html): `ServeDir`
 /// returns 404 for missing files, which lets plugins with `before_build` hooks
 /// download content that a subsequent rebuild turns into pages.
 pub async fn start_server(
     config: ServeConfig,
-) -> Result<(u16, tokio::sync::oneshot::Sender<()>), String> {
-    let ServeConfig {
-        site_dir_cell: site_dir_state,
-        asset_registry,
-        invoke: invoke_ctx,
-        start_port,
-        is_evicted,
-        kind,
-        standby_on_conflict,
-        yield_notify,
-        host_routes,
-        bind,
-        extra_hosts,
-        announce_sign_in,
-    } = config;
-    let extra_hosts = Arc::new(extra_hosts);
+) -> Result<(u16, Option<u16>, tokio::sync::oneshot::Sender<()>), String> {
+    if let Some(ui) = &config.ui {
+        ui.validate(
+            &config
+                .site_dir_cell
+                .read()
+                .map_err(|_| "serve directory lock poisoned")?,
+        )?;
+    }
     // === SETUP PHASE ===
     // Note: We don't check for index.html here - the server can start even for empty folders.
     // ServeDir will return 404 for missing files, and when content is generated (e.g., by
@@ -265,17 +244,32 @@ pub async fn start_server(
     // a useless half-bind and a confusing "server failed readiness check"
     // error). If neither stack can be bound at any port in the scan range,
     // we return Err synchronously, before spawning anything.
-    let (port, listener_primary, listener_secondary) =
-        super::port::bind_with_scan(bind, start_port).await?;
+    let (port, listener_v4, listener_v6) =
+        super::port::bind_with_scan(config.start_port).await?;
+
+    let ui_listener = super::ui::bind(&config, port).await?;
+    let ui_port = ui_listener.as_ref().map(|listener| listener.port);
+
+    let mint_routes = super::ui::routes::preview_mint_router(&config, ui_port);
+
+    let ServeConfig {
+        site_dir_cell: site_dir_state,
+        asset_registry,
+        invoke: invoke_ctx,
+        is_evicted,
+        kind,
+        standby_on_conflict,
+        yield_notify,
+        host_routes,
+        ..
+    } = config;
+    let origins = Arc::new(super::trust_boundary::origins(port, None));
 
     // Create shutdown channel for graceful server termination
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     // === EXECUTION PHASE ===
     // Start server in background with dynamic directory resolution
-    let state_clone = site_dir_state.clone();
-    let registry_clone = asset_registry.clone();
-    let invoke_ctx_clone = invoke_ctx.clone();
 
     // Build the router (shared between both code paths)
     //
@@ -296,7 +290,7 @@ pub async fn start_server(
                         invoke: Option<super::invoke::InvokeCtx>,
                         is_evicted: EvictedProbe,
                         host_routes: Option<Router>,
-                        extra_hosts: Arc<Vec<String>>| {
+                        origins: Arc<Vec<(String, String)>>| {
         let state_for_viewed = state.clone();
         let registry_for_layer = registry.clone();
         // The `/__moss_health/` route is registered BEFORE `.fallback()` so it
@@ -331,22 +325,17 @@ pub async fn start_server(
                 axum::routing::post(super::comment_stub::handle_comment_stub),
             )
             // Unconditional like health/source/comments — see `yield_route`.
-            .route("/__moss/yield", axum::routing::post({
-                let (site_dir, invoke, notify) = (state.clone(), invoke.clone(), yield_notify.clone());
-                move |r: Request<Body>| async move { super::yield_route::handle_yield(invoke, site_dir, kind, notify, r).await }
-            }))
-            // Unconditional like health/source/comments/yield — see
-            // `session_route`. The token→cookie exchange for a browser tab
-            // reached via `bind`/`extra_hosts`.
-            .route("/__moss/session", axum::routing::get({
-                let (site_dir, invoke, extra_hosts) = (state.clone(), invoke.clone(), extra_hosts.clone());
-                move |axum::extract::Query(q): axum::extract::Query<super::session_route::SessionQuery>,
-                      headers: http::HeaderMap| {
-                    let (site_dir, invoke, extra_hosts) = (site_dir.clone(), invoke.clone(), extra_hosts.clone());
-                    async move { super::session_route::handle_session(invoke, site_dir, extra_hosts, q, headers).await }
-                }
-            }))
-            // Unconditional like health/source/comments/yield/session, but the
+            .route(
+                "/__moss/yield",
+                axum::routing::post({
+                    let (site_dir, invoke, notify) =
+                        (state.clone(), invoke.clone(), yield_notify.clone());
+                    move |r: Request<Body>| async move {
+                        super::yield_route::handle_yield(invoke, site_dir, kind, notify, r).await
+                    }
+                }),
+            )
+            // Unconditional like health/source/comments/yield, but the
             // one mutating infrastructure route — see `upload_route`. The gate
             // runs INSIDE the handler (same `carrier_token::admit` the
             // mutation carrier uses) rather than as a `route_layer`, because
@@ -364,10 +353,16 @@ pub async fn start_server(
                 "/__moss/upload",
                 axum::routing::post({
                     let (site_dir, invoke) = (state.clone(), invoke.clone());
-                    move |r: Request<Body>| async move { super::upload_route::handle_upload(invoke, site_dir, r).await }
+                    move |r: Request<Body>| async move {
+                        super::upload_route::handle_upload(invoke, site_dir, r).await
+                    }
                 })
-                .layer(axum::extract::DefaultBodyLimit::max(super::upload_route::TOTAL_MAX_UPLOAD_BYTES)),
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    super::upload_route::TOTAL_MAX_UPLOAD_BYTES,
+                )),
             );
+
+        if let Some(mint) = mint_routes.clone() { router = router.merge(mint); }
 
         // Read-only HTTP command carrier (`POST /__moss/invoke/*cmd`). Registered
         // BEFORE `.fallback()` (same `/__moss/` ordering rule) and only when a
@@ -700,15 +695,15 @@ pub async fn start_server(
             })
             // Outermost layer: added last, so it runs FIRST — ahead of routing,
             // ServeDir and bridge injection — and covers every route including
-            // the health check. Refuses a Host that is neither loopback nor
-            // `extra_hosts` (DNS-rebinding defense) and a foreign Origin
-            // before any handler sees the request.
+            // the health check. Refuses a Host that is not loopback
+            // (DNS-rebinding defense) and a foreign Origin before any
+            // handler sees the request.
             .layer({
-                let extra_hosts = extra_hosts.clone();
+                let origins = origins.clone();
                 middleware::from_fn(move |request, next| {
-                    let extra_hosts = extra_hosts.clone();
+                    let origins = origins.clone();
                     async move {
-                        super::trust_boundary::validate_host_origin(extra_hosts, request, next).await
+                        super::trust_boundary::validate_host_origin(origins, request, next).await
                     }
                 })
             })
@@ -726,6 +721,7 @@ pub async fn start_server(
         crate::system::app_version().to_string(),
         format!("http://127.0.0.1:{port}"),
         standby_on_conflict,
+        ui_port.map(|port| format!("http://127.0.0.1:{port}")),
     )
     .await?;
 
@@ -738,23 +734,15 @@ pub async fn start_server(
     if let Some(ctx) = &invoke_ctx {
         ctx.bind(&site_dir_state);
     }
-    let token_arc = invoke_ctx.as_ref().and_then(|ctx| ctx.token());
-    let token_str = token_arc.as_ref().map(|t| t.as_str());
-    if let Some(line) =
-        super::session_route::maybe_announce_line(bind, announce_sign_in.as_deref(), &extra_hosts, port, token_str)
-    {
-        eprintln!("{line}");
-    }
-
     // Spawn the server task. We use a helper closure to avoid duplicating the
     // serve logic — both code paths run the same axum::serve with graceful shutdown.
     let app = build_router(
-        state_clone,
-        registry_clone,
-        invoke_ctx_clone,
+        site_dir_state.clone(),
+        asset_registry,
+        invoke_ctx,
         is_evicted,
         host_routes,
-        extra_hosts.clone(),
+        origins.clone(),
     );
 
     // Both listeners were bound above. Hand them straight to `port::drive`'s
@@ -763,7 +751,18 @@ pub async fn start_server(
         // Held for exactly as long as this server runs: dropped only when
         // `drive` returns, which is after the shutdown signal fires.
         let _owner_guard = owner_guard;
-        super::port::drive(listener_primary, listener_secondary, app, shutdown_rx).await;
+        let (preview_tx, preview_rx) = tokio::sync::oneshot::channel();
+        let (ui_tx, ui_rx) = tokio::sync::oneshot::channel();
+        let shutdown = async move {
+            let _ = shutdown_rx.await;
+            let _ = preview_tx.send(());
+            let _ = ui_tx.send(());
+        };
+        tokio::join!(
+            super::port::drive(listener_v4, listener_v6, app, preview_rx),
+            super::ui::drive(ui_listener, ui_rx),
+            shutdown
+        );
     };
 
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -786,7 +785,7 @@ pub async fn start_server(
     }
 
     log::info!(target: "preview", "Preview server ready on http://localhost:{}", port);
-    Ok((port, shutdown_tx))
+    Ok((port, ui_port, shutdown_tx))
 }
 
 #[cfg(test)]

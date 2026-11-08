@@ -31,7 +31,6 @@
 
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
 
 use crate::infra::atomic_write;
 use crate::infra::folder_lock::folder_id;
@@ -66,6 +65,8 @@ pub struct OwnerRecord {
     pub kind: HostKind,
     pub version: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_url: Option<String>,
     /// ISO-8601, [`crate::system::now_iso`]'s form — the convention this
     /// crate already uses for a persisted record's timestamp (the recents
     /// list, the registry cache).
@@ -93,13 +94,13 @@ fn owner_lock_path(folder: &Path) -> Result<PathBuf, String> {
 /// the caller to report (and, for a crashed holder with a since-released
 /// lock, overwritten by this same call — see [`acquire`]'s doc).
 #[derive(Debug)]
-pub struct ExistingOwner(pub OwnerRecord);
+pub struct ExistingOwner(pub Box<OwnerRecord>);
 
 /// Folders this PROCESS currently holds the owner lock for, as a weak
 /// reference to the open file each [`OwnerGuard`] for that folder shares.
 ///
 /// `flock` is scoped to an open file description, not to a process: opening
-/// the SAME lock path a second time and calling `try_lock_exclusive` on the
+/// the SAME lock path a second time and calling `try_lock` on the
 /// new handle conflicts with the first even from the SAME process. That is
 /// the right behavior for a second OS process, which is what this module
 /// exists to catch — but a single process legitimately runs two servers
@@ -185,6 +186,10 @@ impl Drop for OwnerGuard {
 /// untracked, rather than making ownership tracking a reason a folder can't
 /// be served at all.
 pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> Result<OwnerGuard, ExistingOwner> {
+    acquire_with_ui(folder, kind, version, url, None)
+}
+
+fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, ui_url: Option<String>) -> Result<OwnerGuard, ExistingOwner> {
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let id = folder_id(&canonical);
     let record_path_for_id = record_path(&canonical).ok();
@@ -224,7 +229,7 @@ pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> R
         }
     };
 
-    match file.try_lock_exclusive() {
+    match file.try_lock() {
         Ok(()) => {
             let record = OwnerRecord {
                 folder: canonical.clone(),
@@ -232,6 +237,7 @@ pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> R
                 kind,
                 version,
                 url,
+                ui_url,
                 started_at: crate::system::now_iso(),
             };
             // `record_path_for_id` was resolved from the same `moss_home()`
@@ -250,18 +256,16 @@ pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> R
                 .insert(id.clone(), std::sync::Arc::downgrade(&file));
             Ok(OwnerGuard { _lock: Some(file), folder_id: Some(id), record_path: record_path_for_id })
         }
-        // fs2's WOULD_BLOCK-shaped error, not a hardcoded ErrorKind — see
-        // `deploy::stack_activity::hold` / `infra::folder_lock::acquire` for
-        // why a contended try-lock's error kind is platform-dependent.
-        Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
-            Err(ExistingOwner(read_record(&canonical).unwrap_or_else(|| OwnerRecord {
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Err(ExistingOwner(Box::new(read_record(&canonical).unwrap_or_else(|| OwnerRecord {
                 folder: canonical.clone(),
                 pid: 0,
                 kind: HostKind::Server,
                 version: "unknown".to_string(),
                 url: String::new(),
+                ui_url: None,
                 started_at: String::new(),
-            })))
+            }))))
         }
         Err(e) => {
             log::warn!("could not lock {}: {e}", lock_path.display());
@@ -386,12 +390,13 @@ pub async fn acquire_for_site_dir(
     version: String,
     url: String,
     standby_on_conflict: bool,
+    ui_url: Option<String>,
 ) -> Result<Option<OwnerGuard>, String> {
     let Some(folder) = resolve_vault_folder(site_dir) else {
         return Ok(None);
     };
     loop {
-        match acquire(&folder, kind, version.clone(), url.clone()) {
+        match acquire_with_ui(&folder, kind, version.clone(), url.clone(), ui_url.clone()) {
             Ok(guard) => return Ok(Some(guard)),
             Err(ExistingOwner(existing)) => {
                 if !standby_on_conflict {
@@ -679,13 +684,14 @@ mod tests {
         let lock_path = owner_lock_path(&canonical).unwrap();
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         let foreign = std::fs::OpenOptions::new().read(true).write(true).create(true).open(&lock_path).unwrap();
-        foreign.try_lock_exclusive().expect("the foreign handle must win the uncontended lock");
+        foreign.try_lock().expect("the foreign handle must win the uncontended lock");
         let foreign_record = OwnerRecord {
             folder: canonical.clone(),
             pid: 777,
             kind: HostKind::Desktop,
             version: "7.0.0".to_string(),
             url: "http://127.0.0.1:7777".to_string(),
+            ui_url: None,
             started_at: crate::system::now_iso(),
         };
         atomic_write::write_json_atomic(&record_path(&canonical).unwrap(), &foreign_record).unwrap();
@@ -750,6 +756,7 @@ mod tests {
             kind: HostKind::Cli,
             version: "0.0.0".to_string(),
             url: format!("http://127.0.0.1:{port}"),
+            ui_url: None,
             started_at: crate::system::now_iso(),
         };
         atomic_write::write_json_atomic(&record_path(&canonical).unwrap(), &record).unwrap();

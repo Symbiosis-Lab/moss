@@ -31,12 +31,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.21"
 
+# Gzips the embedded browser UI; already in the lock via moss-build.
+[build-dependencies]
+flate2 = "1"
+
 [dev-dependencies]
 tempfile = "3.0"
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "signal", "time"] }
-# Only the fixture builders in `desktop_tests.rs` still use these —
-# `install_bundle` now unpacks through `moss_build::system::tar_safe`.
-# Same version strings as moss-build's and the desktop app's, both already
-# in the lock — no new crate, no version bump.
+# Drives a served `moss edit` over HTTP in the socket tests; already in the lock
+# via moss-build.
+ureq = { version = "2", features = ["json"] }
+# Only the fixture builders in `desktop_tests.rs` and the embedded bundle's
+# gzip check use these. Same version strings as moss-build's, already in the
+# lock — no new crate, no version bump.
 flate2 = "1"
 tar = "0.4"
