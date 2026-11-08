@@ -50,7 +50,7 @@ pub fn validate_email(address: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(format!("error: '{address}' is not an email address. Pass the address of the account this site should belong to: --email=<address>"))
+        Err(format!("error: '{address}' is not an email address: --email=<address>"))
     }
 }
 
@@ -166,7 +166,7 @@ pub async fn verify_folder_email(
     if let Err(e) = identity.save(folder) {
         eprintln!("Could not record {email} in this folder ({e}); the service has it, so the publish continues.");
     }
-    eprintln!("Verified {email}.");
+    eprintln!("Signed {} in as {email}.", crate::vault::paths::VaultRoot::resolve(folder).name());
     Ok(())
 }
 

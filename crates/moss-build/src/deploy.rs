@@ -1137,11 +1137,11 @@ fn register_failure_message(folder: &std::path::Path, site_id: &str, e: crate::s
         return crate::identity::verify_email::not_signed_in(folder, &sign_in_host(&folder.to_string_lossy(), None));
     }
     if msg.contains("already taken") || msg.contains("must be fresh") {
+        let env = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
         return format!(
-            "Site ID '{}' is unavailable or this pubkey can't claim it. \
-             Try a different site_id or use a fresh project folder.\n\n\
-             Underlying error: {}",
-            site_id, msg
+            "{site_id}{} is taken, or this folder can't claim it. Choose another name: moss deploy {} --site-id=<name>",
+            env.site_suffix(),
+            folder.display()
         );
     }
     format!("Could not register the site: {}", msg)

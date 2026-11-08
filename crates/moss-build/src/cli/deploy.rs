@@ -426,7 +426,7 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
     match result {
         Ok(DeployReport::Push(PushResult::Success { url, files_uploaded, files_removed })) => {
             println!("{}", url);
-            eprintln!("published — {} uploaded, {} removed", files_uploaded, files_removed);
+            eprintln!("{}", published_line(folder_display, &url, files_uploaded, files_removed));
             eprint!("{}", removed_by_author(folder_display));
             0
         }
@@ -461,6 +461,20 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
             1
         }
     }
+}
+
+/// The line a landed publish prints on stderr: which folder went where.
+fn published_line(folder: &str, url: &str, uploaded: u32, removed: u32) -> String {
+    let name = crate::vault::paths::VaultRoot::resolve(folder).name().to_string();
+    format!("Published {name} to {url} — {uploaded} uploaded, {removed} removed")
+}
+
+#[test]
+fn a_landed_publish_names_the_folder_and_where_it_went() {
+    assert_eq!(
+        published_line("/Users/me/Sites/My Blog/", "https://my-blog.mosspub.com", 3, 1),
+        "Published My Blog to https://my-blog.mosspub.com — 3 uploaded, 1 removed"
+    );
 }
 
 /// The addresses the author deleted, named, for after a publish: what the

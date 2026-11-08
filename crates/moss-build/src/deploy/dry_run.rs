@@ -198,10 +198,10 @@ impl DryRun {
             Transfer::NotCounted => out.push_str("Transfer: not counted for a deploy plugin.\n"),
         }
         if let Some(site) = &self.would_register {
-            out.push_str(&format!("A first publish would register the site \"{site}\" and create a signing key. Neither was done.\n"));
+            out.push_str(&format!("A first publish would register the site \"{site}\". Nothing was registered.\n"));
         }
         if self.needs_verification {
-            out.push_str("This folder's key is not linked to an email yet, so registering would need verification: a real deploy needs `--email <address>` (the account the site should belong to) to be sent a sign-in link. Nothing was sent.\n");
+            out.push_str("This folder isn't signed in yet: a real deploy needs `--email <address>`. Nothing was sent.\n");
         }
         out.push_str(&match &self.owner {
             Owner::Answered { site, access: SiteAccess::Authorized } => format!("Publishing: this folder's key may publish the site \"{site}\".\n"),
