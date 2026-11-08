@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { eventBus, Events } from "../../context/event-bus";
 import { dispatchAppOp } from "../app-op-dispatch";
 import { host } from "../../host";
-import { showAck, showOrUpdateToast, showToast } from "../../shared/ui/toast/toast-manager";
+import { removeToastById, showAck, showOrUpdateToast, showToast } from "../../shared/ui/toast/toast-manager";
 
 vi.mock("../../shared/ui/toast/toast-manager", () => ({
   showAck: vi.fn(),
@@ -103,5 +103,56 @@ describe("DownloadTool (the advisory's Download button)", () => {
     dispatchAppOp("DownloadTool", { tool: 42 });
     dispatchAppOp("DownloadTool", null);
     expect(downloadTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("RunPluginProcess (an offer's Sync button)", () => {
+  const runPlugin = vi.fn();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    host.runPlugin = runPlugin;
+  });
+
+  it("names the plugin as the host does while it waits, runs and finishes", async () => {
+    runPlugin.mockImplementation(async (_plugin: string, say: (waiting: boolean, name: string) => void) => {
+      say(true, "Matters");
+      say(false, "Matters");
+      return { status: "ok", data: null };
+    });
+    dispatchAppOp("RunPluginProcess", { plugin: "matters" });
+    await vi.waitFor(() => expect(showAck).toHaveBeenCalledWith(expect.stringContaining("Matters")));
+    expect(runPlugin).toHaveBeenCalledWith("matters", expect.any(Function));
+    const shown = vi.mocked(showOrUpdateToast).mock.calls.map(([what]) => what);
+    expect(shown).toEqual([expect.stringContaining("Waiting for Matters"), expect.stringContaining("Matters")]);
+  });
+
+  it("names the plugin in the failure", async () => {
+    runPlugin.mockImplementation(async (_plugin: string, say: (waiting: boolean, name: string) => void) => {
+      say(false, "Matters");
+      return { status: "error", error: "offline" };
+    });
+    dispatchAppOp("RunPluginProcess", { plugin: "matters" });
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(vi.mocked(showToast).mock.calls[0][0].what).toMatch(/Matters.*offline/);
+    expect(showAck).not.toHaveBeenCalled();
+  });
+
+  it("clears its toast and says why when the host call itself throws", async () => {
+    runPlugin.mockImplementation(async (_plugin: string, say: (waiting: boolean, name: string) => void) => {
+      say(false, "Matters");
+      throw new Error("ipc closed");
+    });
+    dispatchAppOp("RunPluginProcess", { plugin: "matters" });
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(vi.mocked(showToast).mock.calls[0][0].what).toMatch(/Matters.*ipc closed/);
+    expect(removeToastById).toHaveBeenCalledWith("run-plugin:matters");
+  });
+
+  it("is inert in a host that cannot run plugins, and without a plugin id", () => {
+    dispatchAppOp("RunPluginProcess", { plugin: 42 });
+    expect(runPlugin).not.toHaveBeenCalled();
+    delete host.runPlugin;
+    dispatchAppOp("RunPluginProcess", { plugin: "matters" });
+    expect(showOrUpdateToast).not.toHaveBeenCalled();
   });
 });

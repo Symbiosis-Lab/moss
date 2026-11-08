@@ -49,6 +49,7 @@ import {
   groupNotices,
   noticeGroupKey,
   isAcknowledge,
+  outlivesBuildStart,
   noticeTier,
   compilingLabelInput,
   nextPageProgress,
@@ -698,6 +699,7 @@ export class ProgressPanel {
           // re-derives it, so the sweep below must not wipe it
           // the moment the author saves an unrelated file.
           sticky: isAcknowledge(adv.action),
+          lifetime: adv.lifetime,
         });
         if (!refreshed) {
           refreshed = new Set();
@@ -2522,7 +2524,7 @@ export class ProgressPanel {
    */
   private clearBuildAdvisories(): void {
     for (const [key, entry] of this.advisories) {
-      if (!entry.sticky) this.deleteAdvisory(key);
+      if (!outlivesBuildStart(entry)) this.deleteAdvisory(key);
     }
   }
 

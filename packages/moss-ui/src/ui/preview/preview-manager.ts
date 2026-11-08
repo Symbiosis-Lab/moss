@@ -95,6 +95,8 @@ export class PreviewManager {
   private cloudProviderLabel: string | null = null;
   private configReadyUnlisten: (() => void) | null = null;
   private instruments: PreviewInstruments | null = null;
+  /** Preview features are on, so editing instruments may draw on the preview. Off until the host reads the setting. */
+  private editsOnPreview = false;
   /** Unlisten for the deploy-progress→hairline wiring; removed in destroy(). */
   private deployHairlineUnlisten: (() => void) | null = null;
   private busDeployUnsub: (() => void) | null = null;
@@ -413,7 +415,7 @@ export class PreviewManager {
     this.instruments = bindPreviewInstruments(this.navigationManager, this.iframe, () => {
       const file = this.navigationManager.getActivePage()?.sourceFile;
       return file && this.folderPath ? toRelative(file, this.folderPath) : null;
-    });
+    }, () => this.editsOnPreview);
 
     // The current request owns any covered generation-publication rechecks.
     this.navigationManager.setNavigationResultListener((info) =>
@@ -755,6 +757,13 @@ export class PreviewManager {
    */
   setOnEmptyFolder(cb: () => void): void {
     this.onEmptyFolder = cb;
+  }
+
+  /** The preview-features setting; turning it off clears what an instrument drew. */
+  setEditsOnPreview(on: boolean): void {
+    if (this.editsOnPreview === on) return;
+    this.editsOnPreview = on;
+    this.instruments?.refresh();
   }
 
   /**

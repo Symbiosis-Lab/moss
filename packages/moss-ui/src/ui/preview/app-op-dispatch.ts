@@ -48,6 +48,12 @@ export function dispatchAppOp(op: AppOp, args: unknown): void {
       if (typeof tool === "string" && download) void downloadTool(download, tool);
       break;
     }
+    case "RunPluginProcess": {
+      const plugin = (args as { plugin?: unknown } | null)?.plugin;
+      const run = host.runPlugin;
+      if (typeof plugin === "string" && run) void runPlugin(run, plugin);
+      break;
+    }
     case "MoveFile":
     case "RecheckDns":
       // No producer emits these into the panel yet.
@@ -79,4 +85,25 @@ async function downloadTool(download: NonNullable<typeof host.downloadTool>, too
   showAck(t("download_tool.done", { name }));
   // The GitHub plugin's own poll picks git up, so only other tools need a rebuild.
   if (tool !== "git") eventBus.emit(Events.REBUILD_OPEN_FOLDER, {});
+}
+
+/**
+ * Sync a plugin the person chose from its offer. The toast says so while the
+ * Sync waits for a hook a build started in that plugin, so it never looks
+ * stuck; the files it writes rebuild the preview through the watcher, and its
+ * run clears the offer.
+ */
+async function runPlugin(run: NonNullable<typeof host.runPlugin>, plugin: string): Promise<void> {
+  const toastId = `run-plugin:${plugin}`;
+  let name = plugin;
+  const result = await run(plugin, (waiting, named) => {
+    name = named;
+    showOrUpdateToast(t(waiting ? "run_plugin.waiting" : "run_plugin.running", { name }), { id: toastId, persistent: true });
+  }).catch((e: unknown) => ({ status: "error" as const, error: String(e) }));
+  removeToastById(toastId);
+  if (result.status === "error") {
+    showToast({ what: t("run_plugin.failed", { name, error: result.error }), severity: "Blocking" });
+    return;
+  }
+  showAck(t("run_plugin.done", { name }));
 }
