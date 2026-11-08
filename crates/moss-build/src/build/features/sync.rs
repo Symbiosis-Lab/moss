@@ -12,7 +12,7 @@
 //!
 //! `start_background_sync` returns immediately after spawning a background
 //! Tokio task. The task does the slow network work and writes its output to the
-//! site's `.moss/data/social/comment.json` and `.moss/data/social/review.json`.
+//! site's `.moss/data/social/comment.json` and `.moss/data/social/reviews/`.
 //! The NEXT build's enhance phase reads whatever files currently exist on disk.
 //!
 //! Tradeoff: the first time a user opens a site in the app, comments are
@@ -339,25 +339,14 @@ fn refresh_comments(
 /// Review metadata: blocking network I/O, like [`refresh_comments`], that no
 /// build waits for.
 fn refresh_reviews(folder_path: &str, article_map: &HashMap<String, ArticleInfo>) {
-    let review_inputs: Vec<super::review::ReviewArticleInput> = article_map
-        .iter()
-        .filter_map(|(uid, info): (&String, &ArticleInfo)| {
-            info.review_of.as_ref().map(|review_of| super::review::ReviewArticleInput {
-                uid: uid.clone(),
-                review_of: review_of.clone(),
-                rating: info.rating,
-            })
-        })
-        .collect();
+    let mut review_inputs: Vec<String> = article_map.values().filter_map(|info| info.review_of.clone()).collect();
+    review_inputs.sort();
+    review_inputs.dedup();
     if !review_inputs.is_empty() {
         let phase_start = Instant::now();
-        match super::review::process_reviews(folder_path, &review_inputs) {
-            Ok(n) => {
-                if n > 0 {
-                    log::info!(target: "sync", "reviews: fetched metadata for {} articles in {:?}", n, phase_start.elapsed());
-                }
-            }
-            Err(e) => log::info!(target: "sync", "reviews fetch failed after {:?}: {}", phase_start.elapsed(), e),
+        let n = super::review::process_reviews(folder_path, &review_inputs);
+        if n > 0 {
+            log::info!(target: "sync", "reviews: fetched metadata for {} articles in {:?}", n, phase_start.elapsed());
         }
     }
 }

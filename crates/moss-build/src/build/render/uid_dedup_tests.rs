@@ -1,10 +1,9 @@
 //! Tests for duplicate-uid resolution.
 //!
 //! The hazard under test is not "two files share a uid" — it is "moss picked
-//! the wrong one". A rewritten uid is unrecoverable (uids are random, not
-//! derived) and it is the join key for the live comment thread and every
-//! signed moderation event, so handing it to the copy silently orphans the
-//! published note.
+//! the wrong one". A published uid is the join key for the live comment thread
+//! and every signed moderation event, so handing it to the copy silently
+//! orphans the published note.
 
 use super::*;
 use crate::build::manifest::live_baseline::{Baseline, LiveBaseline, LiveEntry, Unreadable};
@@ -44,27 +43,23 @@ fn deployed(entries: &[(&str, &str)]) -> Baseline {
 /// record) out of tests that are about the record's own answer.
 fn resolve(
     documents: &mut [ParsedDocument],
-    root: &std::path::Path,
     load: impl FnOnce() -> Baseline,
 ) -> Vec<UidReassignment> {
-    resolve_fresh(documents, root, load, |_| true).reassignments
-}
-
-/// The resolver, with `built_before` saying which paths the previous build
-/// served under the contested uid.
-fn resolve_fresh(
-    documents: &mut [ParsedDocument],
-    _root: &std::path::Path,
-    load: impl FnOnce() -> Baseline,
-    built_before: impl Fn(&str) -> bool,
-) -> UidResolution {
-    // The previous build served each such path under the uid it carries now.
+    // The previous build served every path under the uid it carries now.
     let served: HashMap<String, Option<String>> =
         documents.iter().filter_map(|d| Some((d.source_path.clone()?, d.uid.clone()))).collect();
+    resolve_fresh(documents, load, |path, uid| served.get(path).is_some_and(|u| u.as_deref() == Some(uid))).reassignments
+}
+
+/// The resolver, with `built_under` saying which paths the previous build
+/// served under which uid.
+fn resolve_fresh(
+    documents: &mut [ParsedDocument],
+    load: impl FnOnce() -> Baseline,
+    built_under: impl Fn(&str, &str) -> bool,
+) -> UidResolution {
     let baseline = std::cell::OnceCell::new();
-    resolve_duplicate_uids(documents, || baseline.get_or_init(load), |path, uid| {
-        built_before(path) && served.get(path).is_some_and(|u| u.as_deref() == Some(uid))
-    })
+    resolve_duplicate_uids(documents, || baseline.get_or_init(load), built_under)
 }
 
 /// Write a markdown file with the given uid + date frontmatter into `root`.
@@ -214,7 +209,7 @@ fn published_note_keeps_its_uid_and_the_copy_is_reassigned_without_a_write() {
         doc("posts/original.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let reassignments = resolve(&mut documents, root, || {
+    let reassignments = resolve(&mut documents, || {
         deployed(&[("posts/original.md", "aabbccdd")])
     });
 
@@ -254,7 +249,7 @@ fn falls_back_to_the_heuristic_when_the_article_map_is_absent() {
     let baseline = crate::build::manifest::live_baseline::load(&paths);
     assert_eq!(baseline, Baseline::Absent, "no record on a never-deployed vault");
 
-    let reassignments = resolve(&mut documents, root, || baseline);
+    let reassignments = resolve(&mut documents, || baseline);
 
     assert_eq!(documents[1].uid.as_deref(), Some("aabbccdd"),
         "earlier frontmatter date keeps the uid when nothing is published");
@@ -279,7 +274,7 @@ fn a_unique_uid_is_left_alone() {
     // Reading the record is a synced-folder file read that can block on a
     // provider; a build with no collision must never pay for it.
     let mut loaded = false;
-    let reassignments = resolve(&mut documents, root, || {
+    let reassignments = resolve(&mut documents, || {
         loaded = true;
         Baseline::Absent
     });
@@ -304,7 +299,7 @@ fn three_way_collision_leaves_exactly_one_holder_of_the_published_uid() {
         doc("posts/live.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let reassignments = resolve(&mut documents, root, || {
+    let reassignments = resolve(&mut documents, || {
         deployed(&[("posts/live.md", "aabbccdd")])
     });
 
@@ -340,7 +335,7 @@ fn renamed_original_keeps_the_uid_via_basename_when_the_deployed_path_is_stale()
         doc("essays/a 1.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let reassignments = resolve(&mut documents, root, || {
+    let reassignments = resolve(&mut documents, || {
         deployed(&[("posts/a.md", "aabbccdd")])
     });
 
@@ -385,7 +380,7 @@ fn a_basename_decoy_does_not_get_to_claim_the_published_file_is_safe() {
         doc("drafts/a.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let reassignments = resolve(&mut documents, root, || {
+    let reassignments = resolve(&mut documents, || {
         deployed(&[("posts/a.md", "aabbccdd")])
     });
 
@@ -418,7 +413,7 @@ fn ambiguous_basename_falls_back_to_the_heuristic_and_flags_the_live_risk() {
         doc("drafts/a.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let reassignments = resolve(&mut documents, root, || {
+    let reassignments = resolve(&mut documents, || {
         deployed(&[("posts/a.md", "aabbccdd")])
     });
 
@@ -521,9 +516,8 @@ fn an_unreadable_record_reassigns_nothing() {
     // nothing to say and the deferral stands.
     let resolution = resolve_fresh(
         &mut documents,
-        root,
         || Baseline::Unreadable(Unreadable::Withheld),
-        |_| true,
+        |_, _| true,
     );
 
     assert!(resolution.reassignments.is_empty(), "no uid may be reassigned");
@@ -556,9 +550,8 @@ fn a_corrupt_record_defers_the_same_way_a_withheld_one_does() {
 
     let resolution = resolve_fresh(
         &mut documents,
-        root,
         || Baseline::Unreadable(Unreadable::Corrupt),
-        |_| true,
+        |_, _| true,
     );
 
     assert!(resolution.reassignments.is_empty());
@@ -610,7 +603,7 @@ fn a_record_with_triples_resolves_the_collision_without_the_heuristic() {
     )
     .unwrap();
 
-    let reassignments = resolve(&mut documents, root, || {
+    let reassignments = resolve(&mut documents, || {
         crate::build::manifest::live_baseline::load(&paths)
     });
 
@@ -659,7 +652,7 @@ fn a_half_updated_record_defers_instead_of_reaching_the_heuristic() {
         Baseline::Unreadable(crate::build::manifest::live_baseline::Unreadable::Inconsistent)
     );
 
-    let resolution = resolve_fresh(&mut documents, root, || baseline, |_| true);
+    let resolution = resolve_fresh(&mut documents, || baseline, |_, _| true);
 
     assert!(
         resolution.reassignments.is_empty(),
@@ -690,9 +683,8 @@ fn a_duplicate_this_install_has_never_built_is_re_minted_without_the_record() {
 
     let resolution = resolve_fresh(
         &mut documents,
-        root,
         || Baseline::Unreadable(Unreadable::Withheld),
-        |src| src == "posts/original.md",
+        |src, _| src == "posts/original.md",
     );
 
     assert!(resolution.deferred.is_empty(), "the author must never hear about this");
@@ -725,9 +717,8 @@ fn a_collision_where_nothing_was_built_before_still_defers() {
 
     let resolution = resolve_fresh(
         &mut documents,
-        root,
         || Baseline::Unreadable(Unreadable::Withheld),
-        |_| false,
+        |_, _| false,
     );
 
     assert!(resolution.reassignments.is_empty());
@@ -822,11 +813,11 @@ mod built_under {
         let notes = || vec![doc("a.md", Some("aaaa1111")), doc("b.md", Some("aaaa1111"))];
 
         let mut first = notes();
-        assert_eq!(assign_note_ids(&mut first, &paths, |_, _| false, hash).reassignments.len(), 1);
+        assert_eq!(assign_note_ids(&mut first, || crate::build::manifest::live_baseline::load(&paths), |_, _| false, hash).reassignments.len(), 1);
         let copy_uid = first[1].uid.clone().unwrap();
         let mut second = notes();
         let built_under = |src: &str, uid: &str| src == "a.md" || (src == "b.md" && uid == copy_uid);
-        assert!(assign_note_ids(&mut second, &paths, built_under, hash).reassignments.is_empty());
+        assert!(assign_note_ids(&mut second, || crate::build::manifest::live_baseline::load(&paths), built_under, hash).reassignments.is_empty());
         assert_eq!(uids(&first), uids(&second), "both builds give the copy one uid");
     }
 }

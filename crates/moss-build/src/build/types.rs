@@ -605,11 +605,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub kind: moss_core::PageKind,
-    /// The note ID the page is built under: 8 random hex characters, NOT
-    /// derived from the path or the content, so a lost uid cannot be
-    /// recomputed, and the join key for the note's comment thread and its
-    /// signed moderation events. Its frontmatter's, else one the build assigns
-    /// (`render::uid_dedup`), which the first publish writes into the file.
+    /// The note identity this build uses: the page's own `uid:`, else the uid
+    /// a publish recorded for its path, else one derived from its composed
+    /// path and bytes (`uid_dedup::assign_note_ids`). A build never writes it
+    /// into the page; the publish that first puts it online does, since a
+    /// published uid is the join key for the page's comment thread, its signed
+    /// moderation events and its copies.
     pub uid: Option<String>,
     /// Typesetting direction: "horizontal" or "vertical" (from frontmatter)
     #[serde(skip)]

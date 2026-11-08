@@ -454,12 +454,22 @@ fn a_symlink_entry_is_never_reused_where_ship_copies_its_target() {
 }
 
 
+/// Every record kept beside a generation goes with it: its original
+/// identities, its preview-only list and its article map.
 #[test]
-fn generation_original_receipt_lifetime_follows_its_generation() {
+fn generation_receipts_lifetime_follows_their_generation() {
     let (_temp, generations) = make_generations(&["old", "current"]);
-    let receipt = crate::build::manifest::preview_originals::receipt_path(&generations, "old");
-    std::fs::write(&receipt, b"receipt").unwrap();
+    let receipts = [
+        crate::build::manifest::preview_originals::receipt_path(&generations, "old"),
+        crate::build::manifest::publish_view::receipt_path(&generations, "old"),
+        crate::build::manifest::publish_view::articles_path(&generations, "old"),
+    ];
+    for receipt in &receipts {
+        std::fs::write(receipt, b"receipt").unwrap();
+    }
     gc(&generations, &roots_of(&["current"]), 0).unwrap();
-    assert!(!receipt.exists());
+    for receipt in &receipts {
+        assert!(!receipt.exists(), "{}", receipt.display());
+    }
     assert_eq!(surviving(&generations), vec!["current"]);
 }

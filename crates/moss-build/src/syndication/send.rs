@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::job::{CopyJob, Op, PostRef, Previous};
-use super::record::{Cause, CopyOutcome, CopyRecord, Records, State};
+use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
 use super::shape::{idempotency_key, page_url, shape};
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
 use crate::plugins::manager::copies::{CopyCall, CopyChannel};
@@ -99,11 +99,12 @@ pub async fn after_live(
         return Vec::new();
     }
     let Some(_turn) = records.turn() else { return Vec::new() };
+    // Only a record from before copies kept their post reads this.
     let articles: ArticleMap = match std::fs::read(mp.article_map()).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string())) {
         Ok(map) => map,
         Err(e) => {
-            log::warn!(target: "syndication", "copies not sent: the published pages could not be read ({e})");
-            return Vec::new();
+            log::warn!(target: "syndication", "the latest build's pages could not be read ({e}); only copies that keep their post are sent");
+            ArticleMap::default()
         }
     };
     let manager = match manager() {
@@ -116,7 +117,8 @@ pub async fn after_live(
     send_in_turn(folder, &manager, &articles, opts).await
 }
 
-/// Send every due copy in the folder's records. `articles` is what is live.
+/// Send every due copy in the folder's records, each with the post its record
+/// keeps; `articles`, the latest build's, answers for a record that keeps none.
 pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &ArticleMap, opts: &SendOptions<'_>) -> Vec<Sent> {
     let Some(_turn) = Records::in_vault(&crate::moss_paths::MossPaths::new(folder)).turn() else { return Vec::new() };
     send_in_turn(folder, manager, articles, opts).await
@@ -125,18 +127,16 @@ pub async fn send_due(folder: &Path, manager: &PluginManager, articles: &Article
 /// [`send_due`] for a caller already holding the folder's turn: a second
 /// lock on it from this process would be refused, and nothing sent.
 async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &ArticleMap, opts: &SendOptions<'_>) -> Vec<Sent> {
-    let records = Records::in_vault(&crate::moss_paths::MossPaths::new(folder));
+    let mp = crate::moss_paths::MossPaths::new(folder);
+    let records = Records::in_vault(&mp);
     let channels = manager.copy_channels();
-    let by_uid: HashMap<String, &ArticleInfo> = articles
-        .articles
-        .values()
-        .filter_map(|a| Some((a.uid.clone()?, a)))
-        .collect();
+    let by_uid: HashMap<String, &ArticleInfo> = articles.articles.values().filter_map(|a| Some((a.uid.clone()?, a))).collect();
 
     // Post by post, each post's channels in the order its `syndicate:` names them.
     let mut due = records.all();
     due.sort_by_cached_key(|r| {
-        let rank = by_uid.get(&r.uid).and_then(|p| p.syndicate.as_ref()).and_then(|c| c.iter().position(|c| *c == r.channel));
+        let post = r.post.as_ref().map(|p| &p.article).or_else(|| by_uid.get(&r.uid).copied());
+        let rank = post.and_then(|p| p.syndicate.as_ref()).and_then(|c| c.iter().position(|c| *c == r.channel));
         (r.url_path.clone(), rank.unwrap_or(usize::MAX), r.channel.clone())
     });
     let site_lang = crate::build::site_config::get_site_lang(&folder.to_string_lossy()).ok().flatten();
@@ -152,7 +152,9 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         }
         let Some(channel) = channels.get(&record.channel) else { continue };
         let Some(op) = record.next_op(channel.spec.idempotent) else { continue };
-        let Some(post) = by_uid.get(&record.uid) else {
+        // A record from before copies kept their post reads the latest build.
+        let published = record.post.as_deref().cloned().or_else(|| by_uid.get(&record.uid).map(|a| PublishedPost::new(a, articles)));
+        let Some(published) = published else {
             if record.state == State::Sending {
                 mark_unconfirmed(&records, &mut record, INTERRUPTED);
                 push(sent(&record, Outcome::Unconfirmed { reason: record.reason.clone().unwrap_or_default() }));
@@ -163,7 +165,8 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
             }
             continue;
         };
-        let lang = post_lang(post, articles, site_lang.as_deref());
+        let post = &published.article;
+        let lang = published.lang.clone().or_else(|| site_lang.clone());
         // An uncertain copy is looked up before anything is sent again.
         let op = if op == Op::Find {
             match reconcile(manager, &record, channel, post, lang.clone(), opts).await {
@@ -418,13 +421,6 @@ fn mark_unconfirmed(records: &Records, record: &mut CopyRecord, reason: &str) {
     let _ = records.save(record);
 }
 
-/// The post's language: its own `lang:`, else its language edition's, else
-/// the site's.
-fn post_lang(post: &ArticleInfo, articles: &ArticleMap, site_lang: Option<&str>) -> Option<String> {
-    let own = post.frontmatter.get("lang").and_then(|l| l.as_str()).map(str::to_string);
-    let edition = Some(articles.editions.of(&post.url_path)).filter(|e| !e.is_empty());
-    own.or(edition).or_else(|| site_lang.map(str::to_string))
-}
 
 /// The job for one copy, and the hash of the copy it carries.
 fn build_job(record: &CopyRecord, channel: &CopyChannel, post: &ArticleInfo, lang: Option<String>, op: Op, site_url: &str) -> Result<(CopyJob, String), String> {
@@ -752,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_is_in_the_posts_own_language_else_its_editions_else_the_sites() {
+    fn a_copy_is_in_the_posts_own_language_else_its_editions() {
         let post = |path: &str, lang: Option<&str>| -> ArticleInfo {
             let mut fm = serde_json::json!({});
             if let Some(l) = lang {
@@ -764,9 +760,10 @@ mod tests {
             .unwrap()
         };
         let articles = ArticleMap { editions: moss_core::home::Editions::new("zh", ["de/a.md"]), ..Default::default() };
-        assert_eq!(post_lang(&post("notes/a", Some("en")), &articles, Some("zh")).as_deref(), Some("en"));
-        assert_eq!(post_lang(&post("de/a", None), &articles, Some("zh")).as_deref(), Some("de"));
-        assert_eq!(post_lang(&post("notes/a", None), &articles, Some("zh")).as_deref(), Some("zh"));
+        let lang = |p: ArticleInfo| PublishedPost::new(&p, &articles).lang;
+        assert_eq!(lang(post("notes/a", Some("en"))).as_deref(), Some("en"));
+        assert_eq!(lang(post("de/a", None)).as_deref(), Some("de"));
+        assert_eq!(lang(post("notes/a", None)), None, "a send falls back to the site's");
     }
 
     #[test]

@@ -222,6 +222,23 @@ pub(crate) fn source_metadata(stat: Option<crate::build::stat::FileStat>, bytes:
     crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat)
 }
 
+/// The publish record, for the uids a build gives pages. A record still
+/// syncing holds the publish until a build has read it, so no page is
+/// published under a uid derived without it.
+fn load_publish_record(
+    paths: &crate::moss_paths::MossPaths,
+    input_evidence: &crate::build::cloud_ledger::InputEvidence,
+) -> crate::build::manifest::live_baseline::Baseline {
+    use crate::build::manifest::live_baseline::{self, Baseline, Unreadable};
+    let baseline = live_baseline::load(paths);
+    if let Baseline::Unreadable(why @ Unreadable::Withheld) = baseline {
+        let records = paths.deploy_records_dir();
+        input_evidence.require(&records, crate::build::cloud_ledger::InputRole::GeneratedData);
+        input_evidence.read_error(&records, why.describe().to_string());
+    }
+    baseline
+}
+
 /// What the manifest remembers about a page between builds, `draft` included:
 /// that flag is how a page carried forward unrendered stays out of the publish.
 fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::content::PageMeta {
@@ -1038,7 +1055,7 @@ pub fn generate_blocking_content_for_build(
     let reduce_pre_start = std::time::Instant::now();
     let resolution = super::uid_dedup::assign_note_ids(
         &mut documents,
-        &paths,
+        || load_publish_record(&paths, &input_evidence),
         |src, uid| previous_hashes.built_under(src, uid),
         |src| page_source_hashes.get(src).map(|meta| meta.hash.clone()),
     );
@@ -2582,7 +2599,7 @@ pub fn generate_blocking_content_for_build(
     // Build and save article map for syndication support
     // This creates a mapping from URL paths to article metadata
     generated_index_urls.sort(); // HashMap iteration order above; the persisted map must be stable
-    let article_map = build_article_map(
+    let article_map = std::sync::Arc::new(build_article_map(
         &documents,
         &project_structure.dirs,
         &dir_overrides,
@@ -2590,10 +2607,13 @@ pub fn generate_blocking_content_for_build(
         &generated_index_urls,
         &term_index,
         &editions,
-    );
+    ));
     if let Err(e) = article_map.save(&moss_dir) {
         log::info!("⚠️ Failed to save article map: {}", e);
     }
+    // The publish of this render's generation reads this map, never the file
+    // above, which the next render replaces.
+    pending.record_articles(article_map.clone());
 
     // `.moss/build.nosync/inventory.json` — what `moss list` reads back. Written here
     // rather than derived from the article map because the signals that answer

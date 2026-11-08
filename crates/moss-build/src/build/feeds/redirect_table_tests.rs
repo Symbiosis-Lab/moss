@@ -485,7 +485,7 @@ fn the_pipeline_passes_the_configs_redirects_to_the_build() {
             None,
             &port,
             None,
-            Some(Box::new(|_, _, _| Ok(crate::build::enhance::ResolvedSlots::empty()))),
+            Some(Box::new(|_, _, _, _| Ok(crate::build::enhance::ResolvedSlots::empty()))),
             &ps,
             Some("https://example.com".to_string()),
             crate::build::render::IncrementalGates::default(),

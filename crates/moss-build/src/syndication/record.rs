@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::job::Op;
+use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
 use crate::moss_paths::MossPaths;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +110,13 @@ pub struct CopyRecord {
     /// links to; absent, the address the publish reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site_url: Option<String>,
+    /// The post as the publish that made this copy due (or due for an
+    /// update) published it, which is what the copy sends: a later build, a
+    /// landing on another target or a send from another computer cannot change
+    /// its text. Kept while the copy has work left. A record from before these
+    /// were kept has none and sends the latest build's post.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<Box<PublishedPost>>,
     /// The copy on the network (a thread's first part).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteRef>,
@@ -162,6 +170,7 @@ impl CopyRecord {
             source_path: source_path.to_string(),
             url_path: url_path.to_string(),
             site_url: None,
+            post: None,
             remote: None,
             parts: Vec::new(),
             hash: None,
@@ -179,6 +188,24 @@ impl CopyRecord {
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// A post as one publish published it, with the language it was published in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PublishedPost {
+    pub article: ArticleInfo,
+    /// Its own `lang:`, else its language edition's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+}
+
+impl PublishedPost {
+    /// `article` as `map`, the build it is in, publishes it.
+    pub fn new(article: &ArticleInfo, map: &ArticleMap) -> Self {
+        let own = article.frontmatter.get("lang").and_then(|l| l.as_str()).map(str::to_string);
+        let edition = Some(map.editions.of(&article.url_path)).filter(|e| !e.is_empty());
+        Self { article: article.clone(), lang: own.or(edition) }
+    }
 }
 
 /// Held while one run sends a site's copies; see [`Records::turn`].
@@ -276,7 +303,16 @@ impl Records {
         }
     }
 
+    /// Write `record`; a copy with no work left drops its post. Its channel
+    /// decides only which work a copy has, never whether.
     pub fn save(&self, record: &CopyRecord) -> Result<(), String> {
+        let settled;
+        let record = if record.post.is_some() && record.next_op(false).is_none() {
+            settled = CopyRecord { post: None, ..record.clone() };
+            &settled
+        } else {
+            record
+        };
         let path = self.path(&record.uid, &record.channel)?;
         std::fs::create_dir_all(&self.dir).map_err(|e| format!("create {}: {e}", self.dir.display()))?;
         let json = serde_json::to_string_pretty(record).map_err(|e| e.to_string())?;

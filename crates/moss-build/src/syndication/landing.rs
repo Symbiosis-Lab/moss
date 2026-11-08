@@ -1,7 +1,7 @@
 //! Planning at a landed publish: what was live before is read first, then the
 //! publish record moves, then the plan is made against the before.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use super::plan::{self, ChannelInfo, PlanInputs, Planned};
@@ -33,7 +33,12 @@ impl Before {
             .filter(|p| p.verb == change_set::PageVerb::Edited)
             .map(|p| p.source_path)
             .collect();
-        Some(Self { channels, site_url: canonical(sealed).map(str::to_string), baseline: live_baseline::load(mp), edited })
+        Some(Self {
+            channels,
+            site_url: canonical(sealed).map(str::to_string),
+            baseline: live_baseline::load(mp),
+            edited,
+        })
     }
 
     /// Decide without writing anything: what a publish of `live` would plan.
@@ -54,11 +59,12 @@ impl Before {
         &self.channels
     }
 
-    /// Plan against what just went live, and write the records.
-    pub fn plan(self, folder: &Path, live: &ArticleMap) -> Vec<Planned> {
-        let plans = self.decide(folder, live);
+    /// Write the records for `plans`, which [`Self::decide`] made against
+    /// `live`, what just went live; `unstamped` names the pages whose uid the
+    /// publish could not write, source path → why.
+    pub fn apply(self, folder: &Path, plans: Vec<plan::PostPlan>, live: Option<&ArticleMap>, unstamped: &HashMap<String, String>) -> Vec<Planned> {
         let records = Records::in_vault(&MossPaths::new(folder));
-        let planned = plan::apply(plans, &records, self.site_url.as_deref());
+        let planned = plan::apply(plans, &records, self.site_url.as_deref(), live, unstamped);
         for p in &planned {
             if let plan::Action::Skip { reason } = &p.action {
                 log::info!(target: "syndication", "{} — no copy on {}: {reason}", p.source_path, p.channel);

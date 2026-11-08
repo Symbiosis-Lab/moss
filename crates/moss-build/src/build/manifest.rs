@@ -201,6 +201,9 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
+    /// The article map this render built, which its generation's publish reads
+    /// (`publish_view::read_articles`).
+    articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
     /// Output path → how `ship_phase` should resolve these staged bytes, for
     /// entries where a producer already knows more than "read `stage_dir`".
     /// Every entry inserted here is immutable, a [`ShipSource::Cas`] or a
@@ -362,6 +365,7 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
+            articles: None,
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
             carried_pages: HashSet::new(),
@@ -399,6 +403,10 @@ impl PendingManifest {
     /// Record that `rel_path`'s output could not be verified this build.
     pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
         self.unverified.insert(rel_path, detail);
+    }
+
+    pub(crate) fn record_articles(&mut self, articles: std::sync::Arc<crate::build::scan::article_map::ArticleMap>) {
+        self.articles = Some(articles);
     }
 
     /// Keep a page's already-published HTML alive when this build could not read
@@ -942,6 +950,7 @@ impl PendingManifest {
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
+            articles: self.articles,
             ship_sources,
             late: self.late,
         }
@@ -974,6 +983,9 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
+    /// The render's own article map, written beside the generation when it is
+    /// materialized; never persisted with the manifest.
+    articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
     /// Output path → how `ship_phase` resolves this entry's bytes. An entry
     /// carries a `Cas` source or a `Fingerprint`, never both — that is a
     /// property of the map itself now, rather than two same-keyed maps kept

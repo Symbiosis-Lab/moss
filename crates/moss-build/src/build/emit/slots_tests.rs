@@ -78,7 +78,7 @@ impl Site {
                 None,
                 &port,
                 None,
-                Some(Box::new(move |_, _, _| Ok(slots))),
+                Some(Box::new(move |_, _, _, _| Ok(slots))),
                 &ps,
                 None,
                 gates,

@@ -98,7 +98,7 @@ fn a_copy_already_listed_in_syndicated_is_adopted_not_posted() {
     let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
     assert_eq!(actions(&plans)[0].2, Action::Adopt { url: "https://bsky.app/profile/a/post/1".into() });
 
-    let applied = apply(plans, &records, None);
+    let applied = apply(plans, &records, None, None, &HashMap::new());
     assert_eq!(applied.len(), 1);
     assert_eq!(records.get("aa11aa11", "bluesky").unwrap().state, State::Posted);
 }
@@ -157,7 +157,7 @@ fn a_handed_off_copy_is_adopted_once_the_author_lists_its_address() {
     let after = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["mastodon"], fm)]);
     let plans = decide(&inputs(&after), &records);
     assert_eq!(actions(&plans)[0].2, Action::Adopt { url: "https://example.social/@a/9".into() });
-    apply(plans, &records, None);
+    apply(plans, &records, None, None, &HashMap::new());
     assert_eq!(records.get("aa11aa11", "mastodon").unwrap().state, State::Posted);
 }
 
@@ -179,7 +179,19 @@ fn a_copy_is_keyed_by_the_uid_its_page_was_built_under() {
     let records = Records::at(dir.path().join("copies"));
     let m = map(vec![post("notes/copy.md", "notes/copy/", "bb22bb22", &["bluesky"], serde_json::json!({"uid": "aa11aa11"}))]);
     let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
-    apply(plans, &records, None);
+    apply(plans, &records, None, None, &HashMap::new());
     assert!(records.exists("bb22bb22", "bluesky"));
     assert!(!records.exists("aa11aa11", "bluesky"), "the original's uid belongs to the original's copies");
+}
+
+#[test]
+fn a_page_whose_uid_cannot_be_written_gets_no_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let records = Records::at(dir.path().join("copies"));
+    let m = map(vec![post("notes/missing.md", "notes/missing/", "aa11aa11", &["bluesky"], serde_json::json!({}))]);
+    let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
+    let unstamped = HashMap::from([("notes/missing.md".to_string(), "it is still in the cloud".to_string())]);
+    let applied = apply(plans, &records, None, None, &unstamped);
+    assert!(matches!(&applied[0].action, Action::Skip { reason } if reason.contains("note id") && reason.contains("cloud")));
+    assert!(!records.exists("aa11aa11", "bluesky"));
 }

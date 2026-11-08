@@ -1,13 +1,15 @@
-//! The fetched half of a link card, kept in the site folder so it syncs.
+//! What moss fetched from another site for a URL, kept in the site folder so it
+//! syncs: a link card's title, icon and picture under
+//! `.moss/data/social/links/`, a reviewed item's catalog entry under
+//! `.moss/data/social/reviews/`.
 //!
-//! A card's title, icon and picture come from another site, so two machines
-//! fetching one link can get different answers. What was fetched first is an
-//! input of the build, stored under `.moss/data/social/links/`, and every
-//! machine that syncs the folder builds the same card from it. What a build
-//! derives from the picture stays in `build.nosync`.
+//! Two machines fetching one URL can get different answers, so what was
+//! fetched first is an input of the build, and every machine that syncs the
+//! folder builds the same page from it. What a build derives from a picture
+//! stays in `build.nosync`.
 //!
-//! One file per link, named by the SHA-256 of its URL, so two machines that
-//! fetch different links write different files and a sync client has nothing
+//! One file per URL, named by the SHA-256 of the URL, so two machines that
+//! fetch different URLs write different files and a sync client has nothing
 //! to merge; only that exact name is read. A picture is named by the SHA-256
 //! of its bytes and never deleted by a build: an entry another machine wrote
 //! may name one this machine has not received yet.
@@ -38,12 +40,27 @@ pub(crate) fn url_key(url: &str) -> String {
     hex::encode(Sha256::digest(url.as_bytes()))
 }
 
-fn links_dir(moss_dir: &Path) -> PathBuf {
-    MossPaths::from_moss_dir(moss_dir.to_path_buf()).social_dir().join("links")
+/// Which kind of fetch a snapshot holds: its directory under `social/`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Kind {
+    Links,
+    Reviews,
 }
 
-fn entry_path(moss_dir: &Path, url: &str) -> PathBuf {
-    links_dir(moss_dir).join(format!("{}.json", url_key(url)))
+fn dir(moss_dir: &Path, kind: Kind) -> PathBuf {
+    let name = match kind {
+        Kind::Links => "links",
+        Kind::Reviews => "reviews",
+    };
+    MossPaths::from_moss_dir(moss_dir.to_path_buf()).social_dir().join(name)
+}
+
+fn links_dir(moss_dir: &Path) -> PathBuf {
+    dir(moss_dir, Kind::Links)
+}
+
+fn entry_path(moss_dir: &Path, kind: Kind, url: &str) -> PathBuf {
+    dir(moss_dir, kind).join(format!("{}.json", url_key(url)))
 }
 
 /// Where a `cover` name's bytes live.
@@ -70,10 +87,10 @@ pub(crate) fn is_here(path: &Path) -> bool {
     !crate::build::icloud::is_still_in_the_cloud(path) && path.exists()
 }
 
-/// What the folder holds for one link.
+/// What the folder holds for one URL.
 #[derive(Debug)]
-pub(crate) enum Entry {
-    Fetched(Fetched),
+pub(crate) enum Entry<T = Fetched> {
+    Fetched(T),
     /// Requested from the cloud. Fetching it here instead would overwrite
     /// another machine's card.
     InCloud,
@@ -81,8 +98,12 @@ pub(crate) enum Entry {
 }
 
 pub(crate) fn read(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>) -> Entry {
+    read_kind(moss_dir, Kind::Links, url, evidence)
+}
+
+pub(crate) fn read_kind<T: serde::de::DeserializeOwned>(moss_dir: &Path, kind: Kind, url: &str, evidence: Option<&InputEvidence>) -> Entry<T> {
     use crate::build::outcome::{classify_unreadable, not_yet, Unreadable};
-    let path = entry_path(moss_dir, url);
+    let path = entry_path(moss_dir, kind, url);
     let root = moss_dir.parent().unwrap_or(moss_dir);
     let read = if not_yet(root, &path) { Err(Unreadable::NotYet) } else { std::fs::read(&path).map_err(|e| classify_unreadable(root, &path, e)) };
     match read {
@@ -95,12 +116,16 @@ pub(crate) fn read(moss_dir: &Path, url: &str, evidence: Option<&InputEvidence>)
     }
 }
 
+pub(crate) fn write(moss_dir: &Path, entry: &Fetched) -> Result<(), String> {
+    write_kind(moss_dir, Kind::Links, &entry.url, entry)
+}
+
 /// Saves an entry, leaving the file alone when it already holds these bytes,
 /// so a build that fetched nothing new does not touch the synced folder.
-pub(crate) fn write(moss_dir: &Path, entry: &Fetched) -> Result<(), String> {
+pub(crate) fn write_kind<T: serde::Serialize>(moss_dir: &Path, kind: Kind, url: &str, entry: &T) -> Result<(), String> {
     let mut json = serde_json::to_string_pretty(entry).map_err(|e| e.to_string())?;
     json.push('\n');
-    let path = entry_path(moss_dir, &entry.url);
+    let path = entry_path(moss_dir, kind, url);
     if std::fs::read(&path).is_ok_and(|old| old == json.as_bytes()) {
         return Ok(());
     }
@@ -130,13 +155,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let url = "https://example.org/a";
         write(dir.path(), &entry(url, "A")).unwrap();
-        let bytes = std::fs::read(entry_path(dir.path(), url)).unwrap();
+        let bytes = std::fs::read(entry_path(dir.path(), Kind::Links, url)).unwrap();
         let text = String::from_utf8(bytes.clone()).unwrap();
         let keys: Vec<&str> = text.lines().filter_map(|l| l.trim().strip_prefix('"')?.split('"').next()).collect();
         assert_eq!(keys, ["cover", "favicon", "og_image", "title", "url"]);
         let other = tempfile::tempdir().unwrap();
         write(other.path(), &entry(url, "A")).unwrap();
-        assert_eq!(std::fs::read(entry_path(other.path(), url)).unwrap(), bytes);
+        assert_eq!(std::fs::read(entry_path(other.path(), Kind::Links, url)).unwrap(), bytes);
     }
 
     #[test]

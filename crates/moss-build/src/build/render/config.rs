@@ -277,6 +277,20 @@ pub(crate) fn resolve_comments_pref(page_value: Option<bool>, site_default: Opti
     page_value.or(site_default)
 }
 
+/// Whether a page shows its comment section once the site's comments service
+/// is on: an article unless it or `[site] comments` opts out, a folder page
+/// (the homepage among them) only when it opts in itself, so turning comments
+/// on site-wide never grows a section under every listing page. The render
+/// and a publish's uid stamp both ask this, so a page that shows comments is
+/// a page whose uid the publish writes down.
+pub(crate) fn shows_comments(page_value: Option<bool>, is_folder: bool, site_default: Option<bool>) -> bool {
+    if is_folder {
+        page_value.unwrap_or(false)
+    } else {
+        resolve_comments_pref(page_value, site_default).unwrap_or(true)
+    }
+}
+
 /// None = no preference (follow plugin default), Some(true) = opt-in, Some(false) = opt-out.
 pub(super) fn resolve_comments_attr(page_value: Option<bool>, site_default: Option<bool>) -> String {
     match resolve_comments_pref(page_value, site_default) {

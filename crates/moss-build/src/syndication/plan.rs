@@ -1,11 +1,11 @@
 //! Which copies a landed publish makes due. Local files only: no network call
 //! happens here, so planning costs a publish nothing it has to wait for.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
 
-use super::record::{CopyRecord, Records, RemoteRef, State};
+use super::record::{CopyRecord, PublishedPost, Records, RemoteRef, State};
 use crate::build::manifest::change_set::LiveEntry;
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
 
@@ -37,6 +37,14 @@ pub enum Action {
     Skip { reason: String },
 }
 
+impl Action {
+    /// Whether carrying this out writes a copy record that did not exist,
+    /// keyed by the post's uid.
+    fn starts_a_record(&self) -> bool {
+        matches!(self, Action::Due | Action::Adopt { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Planned {
     pub source_path: String,
@@ -51,6 +59,13 @@ pub struct Planned {
 pub struct PostPlan {
     pub uid: String,
     pub entries: Vec<Planned>,
+}
+
+impl PostPlan {
+    /// The post's source file, which every entry shares.
+    pub fn source_path(&self) -> Option<&str> {
+        self.entries.first().map(|e| e.source_path.as_str())
+    }
 }
 
 /// Decide, reading nothing but `inputs` and the existing records.
@@ -68,14 +83,13 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
     let mut plans = Vec::new();
     for post in articles {
         let Some(channels) = post.syndicate.as_ref().filter(|c| !c.is_empty()) else { continue };
+        let Some(uid) = post.uid.clone() else { continue };
         let entry = |channel: &str, action: Action| Planned {
             source_path: post.source_path.clone(),
             url_path: post.url_path.clone(),
             channel: channel.to_string(),
             action,
         };
-        // The uid the page was built under, which its live copy carries.
-        let uid = post.uid.clone().unwrap_or_default();
         let own: Vec<String> =
             post.frontmatter.get("syndicate").and_then(|v| super::parse_choice(v).ok()).unwrap_or_default();
         let listed = crate::build::types::syndicated_urls(post.frontmatter.get("syndicated"));
@@ -130,13 +144,22 @@ fn on_host(url: &str, domains: &[String]) -> bool {
     domains.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
-/// Carry the plan out: write the copy records.
-pub fn apply(plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>) -> Vec<Planned> {
+/// Carry the plan out: write the records. A post whose uid the publish could
+/// not write into the page (`unstamped`, source path → why) gets no new record,
+/// and says why: its next build could give it another uid. A copy made due
+/// or due for an update keeps its post as `published`, the build that went
+/// live, holds it.
+pub fn apply(plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>, published: Option<&ArticleMap>, unstamped: &HashMap<String, String>) -> Vec<Planned> {
+    let by_uid: HashMap<String, &ArticleInfo> =
+        published.into_iter().flat_map(|map| map.articles.values()).filter_map(|a| Some((a.uid.clone()?, a))).collect();
+    let post_of = |uid: &str| Some(Box::new(PublishedPost::new(by_uid.get(uid)?, published?)));
     let mut out = Vec::new();
     for mut plan in plans {
-        if plan.uid.is_empty() {
+        if let Some(e) = plan.source_path().and_then(|path| unstamped.get(path)) {
             for entry in &mut plan.entries {
-                entry.action = Action::Skip { reason: "the page has no note id".into() };
+                if entry.action.starts_a_record() {
+                    entry.action = Action::Skip { reason: format!("its note id could not be written into the page ({e})") };
+                }
             }
         }
         for entry in plan.entries {
@@ -144,6 +167,7 @@ pub fn apply(plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>) ->
                 Action::Due => {
                     let mut r = CopyRecord::due(&plan.uid, &entry.channel, &entry.source_path, &entry.url_path);
                     r.site_url = site_url.map(str::to_string);
+                    r.post = post_of(&plan.uid);
                     records.save(&r)
                 }
                 Action::Adopt { url } => {
@@ -156,6 +180,7 @@ pub fn apply(plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>) ->
                     Some(mut r) => {
                         r.update_due = true;
                         r.site_url = site_url.map(str::to_string).or(r.site_url);
+                        r.post = post_of(&plan.uid);
                         r.touch();
                         records.save(&r)
                     }

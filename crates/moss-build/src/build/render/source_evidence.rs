@@ -80,8 +80,9 @@ pub struct PublishPreflightProjection {
     pub drafts_linked: Vec<DraftLinkOccurrence>,
 }
 
-/// A freshly read source's bytes, from parsing to the cache snapshot. Evidence,
-/// hash and stat all describe these same bytes: the build never rewrites them.
+/// A fresh source's bytes as Loop A read them, between parsing and the cache
+/// snapshot. A build never writes them back, so evidence, hash and the uid
+/// derived from them all describe the file as it was read.
 pub(super) struct SourceRecord {
     pub document_index: usize,
     pub source_path: String,
@@ -101,6 +102,7 @@ impl SourceRecord {
         Self { document_index, source_path, source, stat: stat_before_read }
     }
 
+    /// The file's stat from before `source` was read.
     pub(super) fn stat(&self) -> Option<crate::build::stat::FileStat> {
         self.stat
     }
@@ -183,7 +185,6 @@ mod tests {
     use crate::build::folder_index::{NoFolderIndex, NoUrlIndex};
     use moss_core::content_graph::ContentGraphBuilder;
     use moss_core::resolve::reference::ReferenceContext;
-    use sha2::Digest;
 
     #[test]
     fn source_revision_is_a_transparent_hex_string_for_desktop_bindings() {

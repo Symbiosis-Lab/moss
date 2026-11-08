@@ -565,8 +565,14 @@ pub fn gc_old_generations(
         // pinned by a deploy, nor being indexed, removed under its write lock
         match crate::build::io_utils::remove_output_dir_all(path) {
             Ok(()) => {
-                // allow:unlink the original identities of this removed generation
-                let _ = std::fs::remove_file(crate::build::manifest::preview_originals::receipt_path(generations_dir, name));
+                for receipt in [
+                    crate::build::manifest::preview_originals::receipt_path(generations_dir, name),
+                    crate::build::manifest::publish_view::receipt_path(generations_dir, name),
+                    crate::build::manifest::publish_view::articles_path(generations_dir, name),
+                ] {
+                    // allow:unlink the records kept beside this removed generation, outside staging
+                    let _ = std::fs::remove_file(receipt);
+                }
                 lock.finish();
                 removed.push(name.to_string());
             }

@@ -1,17 +1,23 @@
-//! The publish view of a sealed manifest, and the record of which files of a
-//! generation are built for preview only.
+//! The publish view of a sealed manifest, and two records kept beside each
+//! generation, like the original-identities receipt: which of its files are
+//! built for preview only, and the article map of the render that built it.
 //!
 //! The generation directory holds draft pages so the preview can serve them,
 //! so anything that lists or reads that directory directly (a deploy plugin,
-//! the site-file commands plugins call) needs this list to leave them out.
-//! Recorded beside the generation, like the original-identities receipt.
+//! the site-file commands plugins call) needs the first to leave them out. A
+//! publish reads the second, not `build.nosync/article-map.json`, which a later
+//! render may have replaced while the generation uploaded.
 
 use super::SealedManifest;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-fn receipt_path(generations: &Path, generation: &str) -> PathBuf {
+pub(crate) fn receipt_path(generations: &Path, generation: &str) -> PathBuf {
     generations.join(format!(".{generation}.withheld.json"))
+}
+
+pub(crate) fn articles_path(generations: &Path, generation: &str) -> PathBuf {
+    generations.join(format!(".{generation}.articles.json"))
 }
 
 impl SealedManifest {
@@ -76,8 +82,20 @@ impl SealedManifest {
         let withheld: BTreeSet<&str> = self.withheld().into_iter().collect();
         let json = serde_json::to_string(&withheld).map_err(std::io::Error::other)?;
         crate::infra::atomic_write::write_atomic(&receipt_path(generations, self.generation_id()), &json)
+            .map_err(std::io::Error::other)?;
+        let Some(articles) = &self.articles else { return Ok(()) };
+        let json = serde_json::to_string(articles.as_ref()).map_err(std::io::Error::other)?;
+        crate::infra::atomic_write::write_atomic(&articles_path(generations, self.generation_id()), &json)
             .map_err(std::io::Error::other)
     }
+}
+
+/// The article map of the render that built `generation`, or `None` when the
+/// generation was sealed before these were kept, or its record cannot be read.
+pub(crate) fn read_articles(generations: &Path, generation: &str) -> Option<crate::build::scan::article_map::ArticleMap> {
+    // allow:raw_read regenerable build output under `.moss/build.nosync/`
+    let bytes = std::fs::read(articles_path(generations, generation)).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// The paths of `generation` that must not leave the machine; empty when the

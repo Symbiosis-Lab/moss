@@ -278,6 +278,26 @@ fn two_targets_disagreeing_about_a_note_yield_both_paths() {
     assert_eq!(claims["aaaa1111"].len(), 2);
 }
 
+/// Two targets whose records name different uids for one page (a stamp that
+/// failed after one publish) agree on the earliest-landed one, whichever
+/// record the folder lists first.
+#[test]
+fn the_earliest_landed_record_names_a_pages_uid() {
+    let dir = tmp();
+    let paths = MossPaths::new(dir.path());
+    let mut later = record_with_triples("moss:site-1", &[("a.md", "a/index.html", "bbbb2222")]);
+    later.published_at = "2026-09-02T00:00:00-04:00".into();
+    let mut earlier = record_with_triples("onionpress:abc.onion", &[("a.md", "a/index.html", "aaaa1111"), ("b.md", "b/index.html", "cccc3333")]);
+    earlier.published_at = "2026-09-02T03:00:00Z".into();
+    published_record::save(&paths, &later).unwrap();
+    published_record::save(&paths, &earlier).unwrap();
+
+    let Baseline::Present(live) = load(&paths) else { panic!("readable") };
+    let uids = live.uid_by_path();
+    assert_eq!(uids["a.md"], "aaaa1111");
+    assert_eq!(uids["b.md"], "cccc3333");
+}
+
 /// Until the migration has run, the old file is the only baseline a folder
 /// published by an earlier moss has — and ignoring it would miss every rename
 /// made since, which 404s for good rather than recovering on the next build.
@@ -301,20 +321,28 @@ fn the_pre_1079_snapshot_answers_while_it_is_still_the_only_baseline() {
     }
 }
 
-/// The projection a publish records, and the two things it drops: a page with
-/// no note ID (nothing to join on) and one with no source path (nothing to join
-/// it to).
+/// The projection a publish records: each published page under the uid its
+/// generation built it with, and nothing for a draft, which never goes live,
+/// or a page the seal names no uid for.
 #[test]
-fn the_recorded_projection_is_note_ids_and_nothing_else() {
-    let map: ArticleMap = serde_json::from_str(&legacy_bytes(&[
-        ("a/", "a.md", "aaaa1111"),
-        ("b/", "", "bbbb2222"),
-    ]))
-    .unwrap();
+fn the_recorded_projection_is_the_generations_published_note_ids() {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    use crate::types::content::PageMeta;
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    for (src, uid, draft) in [("a.md", Some("aaaa1111"), false), ("d.md", Some("dddd1111"), true), ("n.md", None, false)] {
+        let out = ServedPath::from_source(&format!("{}/index.html", src.trim_end_matches(".md"))).unwrap();
+        pending.register(&out, src.as_bytes(), HashBucket::Files);
+        pending.register_source_mapping(src.into(), &out);
+        pending.register_page_meta(src.into(), PageMeta { title: "T".into(), draft, uid: uid.map(Into::into), ..Default::default() });
+    }
 
-    let uids = uids_of(&map);
-    assert_eq!(uids.get("a.md").map(String::as_str), Some("aaaa1111"));
-    assert_eq!(uids.len(), 1, "a page with no source path joins to nothing");
+    let live = from_sealed(&pending.seal());
+
+    assert_eq!(live.entries.len(), 1, "{:?}", live.entries);
+    assert_eq!(live.urls_by_uid().get("aaaa1111"), Some(&"a/"));
+    assert_eq!(live.entries[0].source_path, "a.md");
+    assert_eq!(live.entries[0].title, "T");
 }
 
 // ── Migration ───────────────────────────────────────────────────────────

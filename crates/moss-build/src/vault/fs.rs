@@ -572,8 +572,9 @@ pub fn create_folder_inner(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginPath(String);
 
-/// First-party file stems under `.moss/data/social/` — `review.json` is
-/// `build::features::review`'s colophon data. `shared_social_data` refuses a
+/// First-party file stems under `.moss/data/social/` — `review.json` is the
+/// single file of review items older moss kept, which `build::features::review`
+/// moves into its per-URL store, so a plugin must not plant one. `shared_social_data` refuses a
 /// `plugin_id` matching one case-insensitively, so a plugin named "review"
 /// cannot claim the file just by legitimately matching its own id (the
 /// cross-plugin check alone would not catch that agreement). One list, so a

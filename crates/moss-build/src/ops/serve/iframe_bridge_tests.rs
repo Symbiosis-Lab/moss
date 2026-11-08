@@ -617,6 +617,7 @@ fn strip_matches_between_staging_and_a_ship_transformed_generation() {
         false,
         None,
         None,
+        None, // no input ledger
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     let staging_page = format!(
@@ -756,6 +757,7 @@ fn strip_removes_the_real_beacon_emitter_output() {
         false,
         None,
         None, // no site-wide [site] comments preference in this fixture
+        None, // no input ledger
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
@@ -1012,6 +1014,7 @@ fn build_deploy_only_fixture_pages() -> (String, String) {
         false,
         None,
         None,
+        None, // no input ledger
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     // An ordinary theme script alongside the deploy-only ones, so the

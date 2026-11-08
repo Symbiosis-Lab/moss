@@ -13,7 +13,8 @@
 //! 1. the `uid:` in its own frontmatter;
 //! 2. the uid the publish record says was live from this source path, unless
 //!    another page's frontmatter now carries it, which is how a published page
-//!    whose stamp did not land keeps its uid;
+//!    whose stamp did not land keeps its uid (where two targets' records
+//!    disagree, the earliest-landed one, so every machine picks the same);
 //! 3. the uid derived from its composed path and the hash of its bytes
 //!    ([`generate_uid`](crate::build::markdown::generate_uid)), so every
 //!    machine holding those bytes builds the page under the same key.
@@ -40,8 +41,8 @@
 //! duplicating a note. The copy carries the original's frontmatter, uid and
 //! all, so one of them has to be reassigned. The copy also carries the
 //! original's `date` verbatim, so the date cannot tell them apart, and picking
-//! wrong rewrites the uid of the *published* note, orphaning its comments
-//! server-side and invalidating its moderation history.
+//! wrong publishes the *published* note under a new uid, orphaning its
+//! comments server-side and invalidating its moderation history.
 //!
 //! ## The rule now
 //!
@@ -126,16 +127,19 @@ pub(crate) fn assign_missing(
 }
 
 /// Give every page the uid it is built under and resolve duplicates, in
-/// memory. `built_under(path, uid)` answers whether the previous build may
-/// have served that source path under that uid.
+/// memory. `load_deployed` yields the publish record and is called at most
+/// once, only when a page lacks a uid or two share one. `built_under(path,
+/// uid)` answers whether the previous build may have served that source path
+/// under that uid.
 pub(crate) fn assign_note_ids(
     documents: &mut [ParsedDocument],
-    paths: &crate::moss_paths::MossPaths,
+    load_deployed: impl FnOnce() -> Baseline,
     built_under: impl Fn(&str, &str) -> bool,
     source_hash: impl Fn(&str) -> Option<String>,
 ) -> UidResolution {
     let baseline = std::cell::OnceCell::new();
-    let deployed = || baseline.get_or_init(|| crate::build::manifest::live_baseline::load(paths));
+    let load = std::cell::Cell::new(Some(load_deployed));
+    let deployed = || baseline.get_or_init(|| load.take().map_or(Baseline::Absent, |load| load()));
     let mut taken: HashSet<String> = documents.iter().filter_map(|doc| doc.uid.clone()).collect();
     assign_missing(documents, &mut taken, || published_uids(deployed()), source_hash);
     resolve_duplicate_uids(documents, deployed, built_under)
@@ -145,7 +149,7 @@ pub(crate) fn assign_note_ids(
 /// or the record cannot be read.
 fn published_uids(baseline: &Baseline) -> HashMap<String, String> {
     match baseline {
-        Baseline::Present(live) => live.entries.iter().map(|entry| (entry.source_path.clone(), entry.uid.clone())).collect(),
+        Baseline::Present(live) => live.uid_by_path(),
         _ => HashMap::new(),
     }
 }

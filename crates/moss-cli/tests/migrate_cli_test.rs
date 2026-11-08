@@ -46,7 +46,6 @@ fn lift_apply_saves_a_version_holding_the_old_pages_then_writes() {
     std::fs::create_dir_all(&home).unwrap();
     write(&root, ".moss/config.toml", "# the site\n[site]\nlang = \"en\"\n");
     write(&root, "index.md", "---\ntitle: Home\nuid: \"a1b2c3d6\"\n---\nHello\n");
-    // With their uids written, the version's build stamps nothing into them.
     let before = "---\ntitle: \"Pier 1\"\nuid: \"a1b2c3d4\"\n---\n\n::: {.eyebrow}\nPier 1 of 2\n:::\n\nText.\n";
     write(&root, "Piers/p1.md", before);
     write(&root, "Piers/p2.md", "---\ntitle: \"Pier 2\"\nuid: \"a1b2c3d5\"\n---\n\n::: {.eyebrow}\nPier 2 of 2\n:::\n\nText.\n");

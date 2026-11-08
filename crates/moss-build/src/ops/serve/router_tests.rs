@@ -447,6 +447,7 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
         false,
         None,
         None,
+        None, // no input ledger
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(

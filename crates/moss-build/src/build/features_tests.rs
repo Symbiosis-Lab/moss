@@ -130,6 +130,7 @@ fn beacon_injected_for_moss_hosted_build() {
         false, // build, not preview
         None,  // no media lookup in this test
         None, // [site] comments unset
+        None, // no input ledger
     );
     let html = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
@@ -163,6 +164,7 @@ fn beacon_injected_during_preview_mode_independent() {
         true, // preview — beacon must still be in the slot
         None, // no media lookup in this test
         None, // [site] comments unset
+        None, // no input ledger
     );
     let html = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
@@ -188,6 +190,7 @@ fn test_comment_form_gets_inactive_class_without_endpoint() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     let html = slots.get_html("after-article", "posts/test.html");
     assert!(html.is_some());
@@ -253,6 +256,7 @@ fn folder_index_pages_default_off_articles_default_on() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     for (page, expected) in [
         ("index.html", 0),        // homepage, no frontmatter → opt-in default OFF
@@ -307,6 +311,7 @@ fn folder_index_pages_default_off_articles_default_on() {
         false,
         None,
         Some(false), // [site] comments = false
+        None, // no input ledger
     );
     for (page, expected) in [
         ("posts/test.html", 0),   // article, no frontmatter, site comments=false → OFF
@@ -339,6 +344,7 @@ fn folder_index_pages_default_off_articles_default_on() {
         false,
         None,
         Some(true), // [site] comments = true
+        None, // no input ledger
     );
     let html = site_on_slots.get_html("after-article", "index.html").unwrap_or_default();
     assert_eq!(
@@ -365,6 +371,7 @@ fn test_comment_form_inactive_zh_tooltip() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     let html = slots.get_html("after-article", "posts/test.html").unwrap();
     assert!(
@@ -418,6 +425,7 @@ fn comment_section_uses_per_page_lang_not_site_lang() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     let html = slots
         .get_html("after-article", "en/post.html")
@@ -494,6 +502,7 @@ fn subscribe_form_uses_per_page_lang_on_scoped_site() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let en_form = slots
@@ -526,6 +535,7 @@ fn test_comment_form_active_with_endpoint() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     let html = slots.get_html("after-article", "posts/test.html");
     assert!(html.is_some());
@@ -589,6 +599,7 @@ fn comments_form_renders_from_features_toggle_fallback() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     let html = slots.get_html("after-article", "posts/test.html");
     assert!(
@@ -673,6 +684,7 @@ fn comments_explicit_disabled_does_not_render() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let after_article_html = slots.get_html("after-article", "posts/test.html");
@@ -757,6 +769,7 @@ fn moss_hosted_email_channel_auto_injects_form_into_footer_end() {
         false, // build, not preview
         None,  // no media lookup in this test
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let footer_end = slots.get_html("footer-end", "index.html");
@@ -829,6 +842,7 @@ fn email_channel_without_site_id_injects_pending_form() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let html = slots.get_html("footer-end", "index.html").expect(
@@ -889,6 +903,7 @@ fn single_scope_form_covers_synthesized_pages() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     // The synthesized homepage (NOT in `pages`) must still get the form.
@@ -943,6 +958,7 @@ fn empty_site_id_renders_pending_form() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let html = slots
@@ -993,6 +1009,7 @@ fn pending_form_not_injected_when_footer_md_present() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     assert!(
         slots.get_html("footer-end", "index.html").is_none(),
@@ -1060,6 +1077,7 @@ fn email_slots_identical_across_build_modes() {
                     serving,
                     None,
                     None, // [site] comments unset
+                    None, // no input ledger
                 );
                 (
                     slots.get_html("footer-end", "index.html"),
@@ -1126,6 +1144,7 @@ fn seta_form_injects_with_site_id_but_no_deploy_method() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let footer_end = slots.get_html("footer-end", "index.html");
@@ -1193,6 +1212,7 @@ fn wired_form_renders_when_site_id_present_regardless_of_provider_config() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let footer_end = slots
@@ -1273,6 +1293,7 @@ fn moss_hosted_footer_form_scope_matches_page_top_folder() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let en_post = slots
@@ -1349,6 +1370,7 @@ fn moss_hosted_footer_form_single_lang_site_emits_empty_scope() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let root = slots
@@ -1422,6 +1444,7 @@ fn moss_hosted_email_channel_injects_form_without_api_key() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     // Form must land — moss-hosted policy says channel-presence alone
@@ -1480,6 +1503,7 @@ fn email_channel_install_injects_subscribe_assets() {
         false,
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
@@ -1554,8 +1578,7 @@ fn colophon_slot_merge_routes_cover_through_synthesizer_when_lookup_provided() {
     )
     .unwrap();
 
-    // Persist a review.json keyed by the article's uid so
-    // `load_review_data` returns Some(_).
+    // Store the item for the article's `review_of`.
     let social_dir = moss_dir.join("data").join("social");
     std::fs::create_dir_all(&social_dir).unwrap();
     let review_item = crate::build::features::review::ReviewItem {
@@ -1571,17 +1594,9 @@ fn colophon_slot_merge_routes_cover_through_synthesizer_when_lookup_provided() {
         isbn: None,
         community_rating: None,
         community_rating_count: None,
-        writer_rating: None,
         external_urls: None,
-        fetched_at: Some("2026-05-17T00:00:00Z".into()),
     };
-    let review_data = crate::build::features::review::ReviewData {
-        schema_version: "2.0.0".into(),
-        updated_at: Some("2026-05-17T00:00:00Z".into()),
-        articles: HashMap::from([("uid-review-1".to_string(), review_item)]),
-    };
-    let review_json = serde_json::to_string_pretty(&review_data).unwrap();
-    std::fs::write(social_dir.join("review.json"), &review_json).unwrap();
+    crate::build::page::link_snapshot::write_kind(&moss_dir, crate::build::page::link_snapshot::Kind::Reviews, &review_item.source_url, &review_item).unwrap();
 
     // Article that points at the review and carries a manifested cover.
     // `cover` is what `info.cover` returns — already resolved through
@@ -1630,6 +1645,7 @@ fn colophon_slot_merge_routes_cover_through_synthesizer_when_lookup_provided() {
         false,
         Some(&lookup),
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let after_title = slots
@@ -1693,20 +1709,11 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
         isbn: None,
         community_rating: None,
         community_rating_count: None,
-        writer_rating: None,
         external_urls: None,
-        fetched_at: Some("2026-05-17T00:00:00Z".into()),
     };
-    let review_data = crate::build::features::review::ReviewData {
-        schema_version: "2.0.0".into(),
-        updated_at: Some("2026-05-17T00:00:00Z".into()),
-        articles: HashMap::from([("uid-r".to_string(), review_item)]),
-    };
-    std::fs::write(
-        social_dir.join("review.json"),
-        serde_json::to_string_pretty(&review_data).unwrap(),
-    )
-    .unwrap();
+    // The single file older moss kept, keyed by uid: the build moves it first.
+    let legacy = serde_json::json!({"schemaVersion": "2.0.0", "articles": {"uid-r": review_item}});
+    std::fs::write(social_dir.join("review.json"), serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
     let mut article_map = HashMap::new();
     article_map.insert(
         "uid-r".to_string(),
@@ -1737,6 +1744,7 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
         false,
         None, // no manifest → empty AssetSnapshot; dims fall back to 800×600
         None, // [site] comments unset
+        None, // no input ledger
     );
     let after_title = slots
         .get_html("after-title", "posts/r.html")
@@ -1760,6 +1768,8 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
         "no-manifest dim fallback should land 800×600; got: {}",
         after_title
     );
+    assert!(after_title.contains("★★★☆☆"), "the article's own rating: {after_title}");
+    assert!(!social_dir.join("review.json").exists(), "the old file moved into the per-item store");
 }
 
 // ===== should_inject_subscribe_assets helper =====
@@ -1845,6 +1855,7 @@ fn analytics_present_in_both_build_modes() {
             start_server,
             None,
             None, // [site] comments unset
+            None, // no input ledger
         );
         let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
         assert!(
@@ -1892,6 +1903,7 @@ fn comments_section_present_during_preview() {
         true, // start_server = preview mode
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
@@ -1951,6 +1963,7 @@ fn moss_hosted_production_injections_absent_during_preview() {
         true, // start_server = preview mode
         None,
         None, // [site] comments unset
+        None, // no input ledger
     );
 
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
@@ -2005,6 +2018,7 @@ fn beacon_present_in_both_build_modes_for_moss_hosted() {
             start_server,
             None,
             None, // [site] comments unset
+            None, // no input ledger
         );
         let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
         assert!(
@@ -2035,6 +2049,7 @@ fn head_end_byte_identical_across_build_modes() {
             start_server,
             None,
             None, // [site] comments unset
+            None, // no input ledger
         )
         .get_html("head-end", "index.html")
         .unwrap_or_default()
@@ -2103,6 +2118,7 @@ fn footer_survives_a_build_that_could_not_read_footer_md() {
         false,
         None,
         None,
+        None, // no input ledger
     );
     assert_eq!(
         slots.get_html("footer-left", "index.html").as_deref(),
@@ -2126,6 +2142,7 @@ fn footer_survives_a_build_that_could_not_read_footer_md() {
         false,
         None,
         None,
+        None, // no input ledger
     );
     assert_eq!(
         slots.get_html("footer-left", "index.html").as_deref(),

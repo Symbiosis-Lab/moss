@@ -906,8 +906,9 @@ pub struct PipelineRunOutput {
 /// The `&str` is the site's resolved language code and the `Option<bool>`
 /// is the site-wide `[site] comments` default, both handed DOWN rather than
 /// re-derived — each is one fact a second read could tell twice, disagreeing.
+/// The input ledger is the build's own, for the inputs slots read.
 pub type SlotResolver = Box<
-    dyn FnOnce(&[ParsedDocument], &str, Option<bool>) -> Result<ResolvedSlots, String> + Send + 'static,
+    dyn FnOnce(&[ParsedDocument], &str, Option<bool>, Option<&crate::build::cloud_ledger::InputEvidence>) -> Result<ResolvedSlots, String> + Send + 'static,
 >;
 
 /// [`run_leased`] for a caller that holds no cache-write lease — tests and
@@ -1577,7 +1578,7 @@ fn build_inner(
     // rewrites those entries so all downstream artifact boundaries see the
     // final HTML bytes.
     let mut resolved_slots = match slot_resolver {
-        Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
+        Some(resolve) => resolve(&documents, &site_lang, site_comments, pending.input_evidence().as_ref())?,
         None => ResolvedSlots::empty(),
     };
     crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots, build_now);

@@ -134,6 +134,13 @@ pub struct ServicesConfig {
 }
 
 impl ServicesConfig {
+    /// The comments service, unless it is absent or `enabled = false`: comments
+    /// are opt-in on every host, and a present-but-disabled section behaves
+    /// like an absent one.
+    pub fn comments_on(&self) -> Option<&CommentsService> {
+        self.comments.as_ref().filter(|c| c.common.enabled != Some(false))
+    }
+
     /// Whether a service is effectively on. `hosted_on_moss` comes from the
     /// derived `deploy_method == "moss"` on the flat deployment view — see
     /// `domain::config::get_domain_config`. Pass it in; this type does
