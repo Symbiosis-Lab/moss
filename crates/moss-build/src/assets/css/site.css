@@ -106,7 +106,7 @@
      genuinely vertical-rl (no horizontal exception), and block-end is the
      reading-side edge there (physically left) — the same edge `border-bottom`
      names in horizontal-tb. One declaration, both writing modes. */
-  border-block-end: 1px solid var(--moss-border-strong);
+  border-block-end: 1px solid var(--moss-field-edge, var(--moss-border-strong));
   border-radius: 0;
   padding: var(--moss-space-xs, 0.5rem) 0;
   width: 100%;
@@ -114,23 +114,29 @@
   background: transparent;
   transition: border-color 0.2s ease;
 }
-.moss-input:focus {
-  border-block-end-color: var(--moss-color-text);
+/* field-focus:start */
+/* `:focus`, not `:focus-visible`: a text field matches both whenever focused.
+   Underline fields draw their resting edge through `--moss-field-edge` so a sheet outside the layers (comments, a landing's own underline) can read the focus colour. */
+.moss-input:focus,
+.comment-field:focus,
+.comment-form textarea:focus {
+  outline: none;
+  --moss-field-edge: var(--moss-focus-ring);
+  box-shadow: inset 0 -1px 0 0 var(--moss-field-edge);
 }
-.moss-input:focus-visible { outline: none; }
 @media (forced-colors: active) {
-  .moss-input:focus { border-block-end-color: Highlight; }
+  .moss-input:focus,
+  .comment-field:focus,
+  .comment-form textarea:focus { --moss-field-edge: Highlight; }
 }
+/* field-focus:end */
 
-/* A field with a full border shows focus on its own edge, never as a ring
-   around or inside it. The inset shadow doubles the 1px border to the 2px a
-   focus ring is elsewhere, without moving anything. The outline is removed with
-   `!important` because a theme's own unlayered `:focus-visible { outline }`
-   sits outside every layer and would otherwise draw a second box. The class is
-   doubled so the rule outranks a component's own border rule. */
+/* A bordered field takes the same edge on all four sides. `!important` because a
+   theme's unlayered `:focus-visible { outline }` would otherwise draw a second
+   box; the class is doubled to outrank a component's own border rule. */
 .moss-input--boxed.moss-input--boxed:focus {
-  border-color: var(--moss-color-ui-accent);
-  box-shadow: inset 0 0 0 1px var(--moss-color-ui-accent);
+  border-color: var(--moss-focus-ring);
+  box-shadow: inset 0 0 0 1px var(--moss-focus-ring);
   outline: none !important;
 }
 /* Forced colors drop the shadow; an outline just inside the border keeps 2px. */
@@ -1596,7 +1602,8 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
     width 0.45s var(--moss-ease-subscribe),
     height 0.45s var(--moss-ease-subscribe),
     padding 0.45s var(--moss-ease-subscribe),
-    border-radius 0.45s var(--moss-ease-subscribe);
+    border-radius 0.45s var(--moss-ease-subscribe),
+    overflow 0s allow-discrete;
 }
 
 /* All subscribe-specific transition rules are scoped under
@@ -1633,7 +1640,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   align-items: center;
   gap: 0.6em;
   color: var(--moss-color-muted);
-  font-size: 0.95rem;
+  font-size: var(--moss-subscribe-status-size, 0.95rem);
   opacity: 0;
   transform: translateY(6px);
   transition:
@@ -1642,8 +1649,8 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   pointer-events: none;
 }
 .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-status__icon {
-  width: 1.125em;
-  height: 1.125em;
+  width: min(1.125em, 1lh);
+  height: min(1.125em, 1lh);
   color: var(--moss-color-accent);
   flex-shrink: 0;
 }
@@ -1665,22 +1672,60 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   transform: translateY(-4px);
   pointer-events: none;
 }
-/* Pull the button out of flow and center inside the slot so the circle sits
-   where the idle button's center was. right/left:auto resets any idle
-   positioning; translate(-50%,-50%) centers on the slot's mid-point. */
+/* Out of flow and centred in the slot, where the idle button's centre was. */
 .moss-subscribe-form[data-state="success"] .moss-btn-slot .moss-btn {
   position: absolute;
   left: 50%;
   top: 50%;
   right: auto;
   transform: translate(-50%, -50%);
-  width: 2.25rem;
-  height: 2.25rem;
+  /* One status line across: size and line height come from the same sources as
+     the status text (a theme sets line height on the form, not the slot or the
+     status). The geometry is important: inside moss's layer that outranks a
+     theme's unlayered button rules, so the mark stays a circle; colour and
+     border remain the theme's. */
+  font-size: var(--moss-subscribe-status-size, 0.95rem) !important;
+  line-height: inherit !important;
+  box-sizing: border-box !important;
+  inline-size: 1lh !important;
+  block-size: 1lh !important;
+  min-inline-size: 0 !important;
+  min-block-size: 0 !important;
+  max-inline-size: none !important;
+  max-block-size: none !important;
+  aspect-ratio: 1 !important;
+  flex: none !important;
   background: var(--moss-color-accent);
   color: var(--moss-color-bg);
-  padding: 0;
-  border-radius: 50%;
+  padding: 0 !important;
+  border-radius: 50% !important;
   cursor: pointer;
+  /* Visible only once the morph ends, so the fading label never spills out of
+     the shrinking pill; the hit area below needs it. The delay is the last
+     entry of the button's transition list. */
+  overflow: visible;
+  transition-delay: 0s, 0s, 0s, 0s, 0s, 0s, 0.45s;
+}
+/* The circle is tapped to start over: a transparent hit area, 24px, and 44px
+   where the touch floor applies. */
+.moss-subscribe-form[data-state="success"] .moss-btn::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  inline-size: 24px;
+  block-size: 24px;
+  translate: -50% -50%;
+}
+@media (width < 48rem), (pointer: coarse) {
+  .moss-subscribe-form[data-state="success"] .moss-btn::before {
+    inline-size: 44px;
+    block-size: 44px;
+  }
+}
+.moss-subscribe-form[data-state="success"] .moss-btn__check svg {
+  inline-size: 0.7lh;
+  block-size: 0.7lh;
 }
 .moss-subscribe-form[data-state="success"] .moss-btn__label { opacity: 0; }
 .moss-subscribe-form[data-state="success"] .moss-btn__spinner { opacity: 0; }

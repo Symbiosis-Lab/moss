@@ -424,8 +424,9 @@ pub fn label_subscribe_input(form_html: &str, prompt_id: &str) -> String {
 /// - `site_id`: `Some(non-empty)` → wired (`action=/sites/{id}/subscribe`);
 ///   `None`/empty → pending (`action="#"` + `data-moss-pending`), shown
 ///   before first publish (subscribe.ts runs the local success animation).
-/// - `button_override`: `Some(non-empty)` emits `data-button-override="true"`
-///   so subscribe.ts leaves the author's button label (and placeholder) alone.
+/// - `placeholder_override` / `button_override`: `Some(non-empty)` emits
+///   `data-placeholder-override` / `data-button-override="true"`, each on its
+///   own, so subscribe.ts leaves that authored field alone.
 ///
 /// Public contract:
 /// - classes `moss-subscribe`, `moss-subscribe-form`
@@ -443,10 +444,14 @@ pub fn render_hosted_subscribe_form(
     let site = site_id.map(str::trim).filter(|s| !s.is_empty());
     let (action, pending_attr) =
         super::hosted_action(site.map(|id| format!("{}/sites/{}/subscribe", seta_base, html_escape(id))));
-    let override_attr = match button_override.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(_) => r#" data-button-override="true""#,
-        None => "",
+    let marker = |authored: Option<&str>, attr: &'static str| {
+        if authored.map(str::trim).is_some_and(|s| !s.is_empty()) { attr } else { "" }
     };
+    let override_attr = [
+        marker(placeholder_override, r#" data-placeholder-override="true""#),
+        marker(button_override, r#" data-button-override="true""#),
+    ]
+    .concat();
     format!(
         r#"<div class="moss-subscribe" data-state="idle">
   <form class="moss-subscribe-form" data-position="inline" data-moss-hosted="true"{pending_attr}{override_attr} method="post" action="{action}">
@@ -1135,6 +1140,15 @@ mod tests {
         assert!(!without.contains("data-button-override"), "no override → no marker: {without}");
         let empty = render_hosted_subscribe_form(Some("s"), Language::En, "", None, Some(""), "https://api.mosspub.com");
         assert!(!empty.contains("data-button-override"), "empty override → no marker: {empty}");
+    }
+
+    #[test]
+    fn test_hosted_form_placeholder_marker_is_independent() {
+        let html = render_hosted_subscribe_form(Some("s"), Language::En, "", Some("Your email address"), None, "https://api.mosspub.com");
+        assert!(html.contains(r#"data-placeholder-override="true""#), "placeholder alone → its marker: {html}");
+        assert!(!html.contains("data-button-override"), "placeholder alone → no button marker: {html}");
+        let button = render_hosted_subscribe_form(Some("s"), Language::En, "", None, Some("Join"), "https://api.mosspub.com");
+        assert!(!button.contains("data-placeholder-override"), "button alone → no placeholder marker: {button}");
     }
 
     #[test]

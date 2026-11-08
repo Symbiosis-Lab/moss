@@ -161,7 +161,7 @@ test.describe('subscribe confirmation shares the check circle row', () => {
   }
 
   for (const [lang, width, textSize] of [['zh-hans', 390], ['en', 320], ['de', 320, '20px']]) {
-    // At a larger browser text size the German copy wraps to three lines, taller than the row's minimum height.
+    // At a larger browser text size the German copy wraps to three lines.
     test(`${lang} stacked card at ${width}px${textSize ? `, ${textSize} browser text` : ''}: the message sits just above the circle, centred with it`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await page.setContent(donePage(lang, { inFooter: false }));
@@ -174,7 +174,7 @@ test.describe('subscribe confirmation shares the check circle row', () => {
       expect(message.bottom, 'the wrapped message stays inside its row').toBeLessThanOrEqual(box.bottom + 0.5);
       expect(message.bottom, 'above the circle').toBeLessThanOrEqual(circle.top + 1);
       expect(circle.top - message.bottom, 'and close to it').toBeLessThanOrEqual(24);
-      // The visible line, icon to last glyph, not the status box: under `stretch` the box spans the card while the line sits at its start.
+      // Centred on the visible line, icon to last glyph: that is what a reader sees above the circle.
       expect(Math.abs(centre(circle) - (icon.left + message.right) / 2), 'centred together').toBeLessThanOrEqual(3);
     });
   }

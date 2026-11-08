@@ -77,13 +77,17 @@ export const BUNDLES = [
  */
 const SUBSCRIBE_CSS = { from: "crates/moss-build/src/assets/css/site.css", out: "site/home/subscribe-form.css" };
 
+// The CSS between a name:start comment and its name:end comment, without comments (they stay in site.css, where they explain the rules).
+function marked(css, name) {
+  const start = css.indexOf(`/* ${name}:start`);
+  const end = css.indexOf(`/* ${name}:end */`);
+  if (start < 0 || end < start) throw new Error(`${SUBSCRIBE_CSS.from}: ${name} markers not found`);
+  return css.slice(css.indexOf("*/", start) + 2, end).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]+$\n/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function copySubscribeCss() {
   const css = readFileSync(SUBSCRIBE_CSS.from, "utf8");
-  const start = css.indexOf("/* subscribe-form:start");
-  const end = css.indexOf("/* subscribe-form:end */");
-  if (start < 0 || end < start) throw new Error(`${SUBSCRIBE_CSS.from}: subscribe-form markers not found`);
-  // Comments stay in site.css, where they explain the rules; the copy ships without them.
-  const body = css.slice(css.indexOf("*/", start) + 2, end).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]+$\n/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  const body = [marked(css, "field-focus"), marked(css, "subscribe-form")].join("\n\n");
   writeFileSync(SUBSCRIBE_CSS.out, `/* Generated from ${SUBSCRIBE_CSS.from} by scripts/build-backend-scripts.mjs; edit it there. */\n${body}\n`);
 }
 

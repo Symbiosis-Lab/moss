@@ -150,6 +150,7 @@ GATES_NOBUILD=(
   footer-subscribe-alignment
   float-mobile-collapse
   prose-spacing-ladder
+  round-marks
 )
 
 # One linear-search helper, not three copies of the same loop. No namerefs —

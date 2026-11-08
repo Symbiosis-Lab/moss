@@ -2251,7 +2251,13 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-button-override",
                 values: &["true"],
                 default: "true",
-                description: "Emitted only when the author overrides the button label (`:::subscribe{button=\"...\"}`). Signals subscribe.ts to leave the button label AND placeholder as authored instead of overwriting them with the language-default copy.",
+                description: "Emitted only when the author sets the button label (`:::subscribe{button=\"...\"}`). Signals subscribe.ts to leave the label as authored instead of overwriting it with the language-default copy.",
+            },
+            DataAttr {
+                name: "data-placeholder-override",
+                values: &["true"],
+                default: "true",
+                description: "Emitted only when the author sets the field's hint (`:::subscribe{placeholder=\"...\"}`). Signals subscribe.ts to leave the placeholder as authored instead of overwriting it with the language-default copy.",
             },
             DataAttr {
                 name: "data-moss-hosted",

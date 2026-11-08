@@ -314,6 +314,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- After someone subscribes, the sign-up button now turns into a round check mark one line of the confirmation tall on every site, even when the theme styles its own buttons; before, a theme's button padding or height could stretch it into an oval or a rectangle.
+- A `:::subscribe {placeholder="..."}` block keeps its own hint text even without `button="..."`; before, the page replaced it with the default "your@email.com".
 - `<meta name="theme-color">` (page heads, media pages and the defaults added to a site's own pages) takes the theme's page colour, `--moss-color-bg` as the page root sets it, following `var()` through the theme's own properties and counting a selector list that includes `:root`; it was moss's default paper whatever the theme set, so a phone's browser bar did not match the page. A faded closing picture now also reads a page colour set through `var()`, where no section changes it. The theme lint counts each selector of a list, so `:root, main {}` sets the root.
 - On a static place map, places whose 24 px tap targets would overlap on the narrowest drawn map share one link, named for all of them, to their shared place page, the explorer when the site has one, or the first place page, so nearby places no longer compete for the same tap. Each place keeps its own dot where it is.
 - In a loose folder (one opened without a site), following a `[[page#section]]` link in the editor now opens `page.md`; it looked for a file named `page.md#section`. On a site that has never been built, a link in the editor now opens the page it names instead of nothing.

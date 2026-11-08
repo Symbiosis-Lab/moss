@@ -43,22 +43,13 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   const lang: Lang = langBucket(document.documentElement.lang);
   const copy: SubscribeCopy = COPY[lang];
 
-  // Rust already filled the copy in server-side, but we overwrite
-  // anyway so the form matches the page's detected lang when the Rust-emitted
-  // lang doesn't match (e.g., a zh-hans article on a mixed-lang site).
-  //
-  // Exception: a `:::subscribe` shortcode may carry an author-supplied button
-  // override (e.g., `button: Request access`). The renderer marks those with
-  // `data-button-override="true"`; skip BOTH the placeholder and label
-  // overwrite for them so the author's copy survives. (All moss-hosted forms
-  // are `data-position="inline"` now — footer vs inline is a CSS concern — so
-  // the override marker, not the position, is what gates the overwrite.)
-  const hasButtonOverride = form.dataset.buttonOverride === 'true';
-  if (!hasButtonOverride) {
-    input.placeholder = copy.placeholder;
-    const labelEl = btn.querySelector<HTMLElement>('.moss-btn__label');
-    if (labelEl) labelEl.textContent = copy.label;
-  }
+  // Rust fills the copy in server-side; overwrite it so it follows the page's
+  // lang where that differs (a zh-hans article on a mixed-language site),
+  // except a field the author wrote: `:::subscribe {button="..."
+  // placeholder="..."}` marks each one it sets, independently.
+  if (form.dataset.placeholderOverride !== 'true') input.placeholder = copy.placeholder;
+  const labelEl = btn.querySelector<HTMLElement>('.moss-btn__label');
+  if (labelEl && form.dataset.buttonOverride !== 'true') labelEl.textContent = copy.label;
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

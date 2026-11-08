@@ -11,6 +11,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
+import { readFocus, focusProblem, readFieldButton, fieldButtonProblem, readMarks, markProblem, hitMisses } from '../tests/support/form-marks.mjs';
 
 const args = process.argv.slice(2);
 const shotsAt = args.includes('--shots') ? args[args.indexOf('--shots') + 1] : null;
@@ -96,6 +97,22 @@ const look = (page) => page.evaluate(() => {
   };
 });
 
+/** The mark beside the message is round and one text line across; points around the circle's centre still hit the button. */
+async function roundMark(page, where, kind, reach) {
+  const problem = markProblem(kind, await page.evaluate(readMarks, '#beta-form'));
+  if (problem) fail(`${where}: ${problem}`);
+  if (reach) {
+    const misses = await page.evaluate(hitMisses, { form: '#beta-form', reach });
+    if (misses) fail(`${where}: ${misses} of 8 points ${reach}px from the circle's centre miss the button`);
+  }
+}
+
+/** Focus is one treatment on the field's own edge, and the field and button are one height with their text on one line. */
+async function oneFocus(page, where) {
+  const problem = focusProblem(await page.evaluate(readFocus, { field: '#beta-email', ground: 'rgb(16, 17, 16)' })) || fieldButtonProblem(await page.evaluate(readFieldButton, '#beta-form'));
+  if (problem) fail(`${where}: ${problem}`);
+}
+
 /** Sends the form and returns once the request has left, so a state read after it is this send's. */
 async function submit(page, mock, answer) {
   mock.answer = answer;
@@ -156,6 +173,7 @@ try {
         const copy = COPY[locale.replace('/', '') || 'en'];
         const says = (state, key) => state.message[0] === `${key}:${copy[key]}` || fail(`${locale || 'en'}: expected "${copy[key]}", saw ${JSON.stringify(state.message)}`);
 
+        await oneFocus(page, `${locale || 'en'} idle`);
         await page.locator('#beta-email').fill('invalid');
         await page.locator('#beta-form .moss-btn').click();
         if (mock.calls.length) fail('An invalid address was posted');
@@ -179,6 +197,7 @@ try {
         if (success.check !== 1 || success.radius !== '50%' || success.label !== 0) fail(`Success is not the check circle: ${JSON.stringify(success)}`);
         if (success.status !== 1 || !success.statusInRow) fail(`The success message is not in the button's row: ${JSON.stringify(success)}`);
         says(success, 'check-email');
+        await roundMark(page, `${locale || 'en'} success`, 'circle');
         if (success.slotWidth !== loading.slotWidth) fail('The button slot moved on success');
         // tapping the circle returns to idle with an empty field, and is not counted as a sign-up
         await page.waitForTimeout(300); // the send's own beacon settles first
@@ -192,7 +211,9 @@ try {
 
         await submit(page, mock, { status: 200, body: { subscribed: true, alreadySubscribed: true } });
         await waitState(page, 'success');
-        says(await look(page), 'already-subscribed');
+        const already = await look(page);
+        says(already, 'already-subscribed');
+        await roundMark(page, `${locale || 'en'} already subscribed`, 'circle');
         await reset(page);
 
         // errors: a refusal, and a request that never answers in a way the page can read
@@ -203,6 +224,7 @@ try {
           const error = await look(page);
           if (error.label !== 1 || error.spinner !== 0 || error.status !== 1) fail(`Error state wrong for ${JSON.stringify(answer)}: ${JSON.stringify(error)}`);
           says(error, 'error');
+          await roundMark(page, `${locale || 'en'} error`, 'icon');
           if (error.statusColor === idle.statusColor) fail('The error message is not in the error colour');
           if (error.email !== EMAIL) fail('An error lost the address');
           await reset(page);
@@ -228,6 +250,22 @@ try {
         await page.close();
       }
 
+      // the same marks and focus at phone and desktop width, in both colour schemes
+      for (const width of [390, 1280]) for (const colorScheme of ['light', 'dark']) {
+        const at = `${width}px ${colorScheme}`;
+        const { page, mock } = await openForm(browser, '', { width, colorScheme });
+        await oneFocus(page, `${at} idle`);
+        await submit(page, mock, { status: 200, body: { subscribed: true, confirmationSent: true } });
+        await waitState(page, 'success');
+        await roundMark(page, `${at} success`, 'circle', width < 768 ? 21 : 11);
+        await reset(page);
+        await submit(page, mock, { status: 503, body: {} });
+        await waitState(page, 'error');
+        await roundMark(page, `${at} error`, 'icon');
+        await page.close();
+      }
+      console.log(engine.name(), 'success circle and error icon round and one line across, one focus treatment, field and button one height, at 390 and 1280 in light and dark: PASS');
+
       // motion on: the spinner turns, and the circle draws its check
       const { page, mock } = await openForm(browser, '', { reducedMotion: 'no-preference' });
       let release;
@@ -235,8 +273,27 @@ try {
       await submit(page, mock, { status: 200, body: { subscribed: true, confirmationSent: true } });
       await waitState(page, 'loading');
       if ((await look(page)).running < 1) fail(`${engine.name()}: the spinner is not turning with motion on`);
+      // mid-morph the pill is still shrinking around a label wider than it (transparent after loading, but not display:none): the pill must still clip.
+      // Sampled inside the page, 50ms after the state flips, so the timing is the page's own.
+      await page.evaluate(() => {
+        const form = document.querySelector('#beta-form');
+        new MutationObserver((_, observer) => {
+          if (form.dataset.state !== 'success') return;
+          observer.disconnect();
+          setTimeout(() => {
+            const button = form.querySelector('.moss-btn'), label = button.querySelector('.moss-btn__label');
+            const b = button.getBoundingClientRect(), l = label.getBoundingClientRect();
+            window.__morph = { spills: l.left < b.left - 0.5 || l.right > b.right + 0.5, overflow: getComputedStyle(button).overflowX };
+          }, 50);
+        }).observe(form, { attributes: true, attributeFilter: ['data-state'] });
+      });
       release(); mock.held = null;
+      await page.waitForFunction(() => window.__morph, null, { timeout: 10000 });
+      const morph = await page.evaluate(() => window.__morph);
+      if (!morph.spills) fail(`${engine.name()}: the label is no longer wider than the shrinking pill, so this sample proves nothing: ${JSON.stringify(morph)}`);
+      if (morph.overflow !== 'hidden') fail(`${engine.name()}: the label spills out of the shrinking pill (overflow ${morph.overflow})`);
       await waitState(page, 'success');
+      if ((await page.evaluate(() => getComputedStyle(document.querySelector('#beta-form .moss-btn')).overflowX)) !== 'visible') fail(`${engine.name()}: the circle's hit area is still clipped after the morph`);
       await page.waitForFunction(() => getComputedStyle(document.querySelector('#beta-form .moss-btn__check')).opacity === '1', null, { timeout: 5000 });
       console.log(engine.name(), 'motion on: spinner turning, check drawn: PASS');
       await page.close();

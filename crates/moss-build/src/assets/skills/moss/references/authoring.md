@@ -65,7 +65,9 @@ The result is a page in standard Markdown, which reads the same in any editor an
 
 To tell whether a change held, build the site before and after and compare the positions of the main blocks at a desktop, a laptop (1024 to 1280), a tablet and a phone width. Then check every built page, not only the one you changed: a selector chosen by content matches wherever that content occurs. `moss doctor --surface` lists rules that match nothing, and the class names your theme invents that moss does not write, each marked as used in pages or nowhere: a short list means the page is styled by what it is, a long one means the Markdown is carrying design.
 
-A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border. moss's search field already does: its input and result rows draw no outline whatever the theme says, so restyle the panel's border or the `.is-selected` row instead.
+A text field shows focus on its own edge, never as a ring inside or outside it, and moss draws it that way on every field it ships (subscribe, search, request and comment forms): an underlined field's underline and a boxed field's border turn `--moss-focus-ring` (the UI accent unless the theme sets it) and thicken to 2px without moving anything. To change how focus looks, set `--moss-focus-ring`; a theme that draws its own underline on a field reads `--moss-field-edge` for the underline's colour, and moss sets that on focus. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, so a field never shows two treatments at once.
+
+After a reader subscribes, the button becomes a circle one line of the confirmation across, with a check inside. The success circle's size and shape are moss's and a theme cannot change them; a theme sets its colour and border, and its size through `--moss-subscribe-status-size` and the form's line height.
 
 ### Rung 4 in detail
 

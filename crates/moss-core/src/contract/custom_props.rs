@@ -64,6 +64,8 @@ pub struct CustomProp {
 /// entry here declares fails the build. That test is the point of the table —
 /// a hook nothing declares is a hook no agent can find.
 pub const CUSTOM_PROPS: &[CustomProp] = &[
+    CustomProp { name: "--moss-subscribe-status-size", owner: "moss-subscribe-form", default: "0.95rem", description: "Font size of a subscribe form's status message; the success circle takes the same size, and a line height as tall as the message's, so the two read as one line. Set it on the form, together with the form's line height." },
+    CustomProp { name: "--moss-field-edge", owner: "moss-input", default: "var(--moss-border-strong)", description: "Colour of an underline text field's edge. moss sets it to --moss-focus-ring while the field has focus; a stylesheet that draws its own underline reads it with var(--moss-field-edge, <resting colour>) to join in the focus treatment." },
     CustomProp { name: "--moss-country-land", owner: "moss-country-map", default: "#e3dfd6 (dark: #22262a)", description: "Fill of land with no value, and of disputed land, on a country map." },
     CustomProp { name: "--moss-country-fill-low", owner: "moss-country-map", default: "#b85c22 (dark: #a2602f)", description: "Colour of the lowest level of a country map; level i of n is mixed between this and --moss-country-fill-high in OKLCH. The defaults run light to dark on the light theme and dark to light on the dark one, each step 3:1 against the land colour; keep that if you change either end." },
     CustomProp { name: "--moss-country-fill-high", owner: "moss-country-map", default: "#2b0e07 (dark: #fff6e8)", description: "Colour of the highest level on a country map; see --moss-country-fill-low." },
