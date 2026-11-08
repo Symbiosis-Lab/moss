@@ -315,8 +315,13 @@ model (dark mode, quiet chrome, `@layer` rules), see
   build does: plugins the flags allow, link previews from third-party sites), prints the pages added, edited and deleted and
   the addresses that would go offline, and stops. It uploads nothing and
   records nothing, and exits 1 where a deploy would be refused by the checks it
-  ran. It does not check what needs the server (whether another copy published
-  since), so a passing dry run is not a promise the deploy goes ahead.
+  ran. It asks the server once, with the read a deploy starts with: whether
+  this folder's key may publish its site (`Publishing:` in the text, `owner`
+  in `--json`), and whether another copy published since. Not the owner
+  refuses, with the `--email` fix; a newer publish from another copy refuses
+  unless `--overwrite-newer`; no answer (offline, a skewed clock) says why and
+  refuses nothing. The upload itself is not tried, so a passing dry run is not
+  a promise the deploy goes ahead.
 - **Refused because an address would go offline:** an address the site has
   served must not vanish unasked. When a build would stop serving one for a
   reason other than the human deleting its source (a page whose address
@@ -326,7 +331,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20
   addresses, `moss deploy <folder> --dry-run --json` lists every one, and its
   `redirects_to_add` holds the lines to paste; in that JSON, `refusal.kind` is one
-  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `removals`, `no_environment`, `foreign_inputs`;
+  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `removals`, `stale_content`, `output_collision`, `no_environment`, `foreign_inputs`, `not_owner`, `stale_copy`;
   a setup failure prints `{"error"}` instead; an `output_path` is a file of the
   build output, an `address` is what a visitor asks for; with `--prebuilt` the
   refused files are `transfer.removed_output_paths`), or pass `--accept-removals` — only when

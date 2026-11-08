@@ -35,6 +35,18 @@ fn holds_legacy_private_key(raw: &serde_json::Value) -> bool {
     raw.get("privkey").is_some()
 }
 
+/// A project's signing key as [`Identity::key_on_disk`] finds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOnDisk {
+    /// No identity, or no key in it: a deploy creates one.
+    Missing,
+    /// A format `load` rewrites to the current one.
+    Older,
+    /// A format from a newer moss, which `load` refuses.
+    Newer,
+    Current,
+}
+
 pub(crate) fn key_file_path(project_path: &Path) -> PathBuf {
     project_path.join(".moss").join("identity").join("secret-key")
 }
@@ -528,23 +540,32 @@ impl Identity {
         path.exists() || crate::build::icloud::is_still_in_the_cloud(&path)
     }
 
-    /// Does this project have a signing key a publish can use, as
-    /// [`load`](Self::load) plus `signing_key()` would find one? The key file,
-    /// or the legacy form that keeps the private key inside `public.json` and
-    /// that `load` migrates. Read-only: nothing is migrated or written, so a
-    /// dry run can ask what `IdentityService::ensure_signing_key` would find
-    /// before it would regenerate.
-    pub fn has_usable_signing_key(project_path: &Path) -> bool {
-        if key_file_path(project_path).exists() {
-            return true;
+    /// What [`load`](Self::load) plus `signing_key()` would find, read
+    /// without migrating or writing anything, so a dry run can ask before
+    /// `IdentityService::ensure_signing_key` would create or regenerate a key.
+    pub fn key_on_disk(project_path: &Path) -> KeyOnDisk {
+        if !Self::exists(project_path) {
+            return KeyOnDisk::Missing;
         }
-        crate::build::cloud_readiness::read_to_string_with_materialize_wait(
+        let raw = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
             &Self::identity_path(project_path),
             crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
         )
         .ok()
-            .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
-            .is_some_and(|raw| holds_legacy_private_key(&raw))
+            .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok());
+        if raw.as_ref().is_some_and(holds_legacy_private_key) {
+            return KeyOnDisk::Older;
+        }
+        if !key_file_path(project_path).exists() {
+            return KeyOnDisk::Missing;
+        }
+        let version = raw.as_ref().and_then(|r| r.get("version")).and_then(|v| v.as_u64());
+        match version.map(|v| v.cmp(&u64::from(IDENTITY_VERSION))) {
+            Some(std::cmp::Ordering::Less) => KeyOnDisk::Older,
+            Some(std::cmp::Ordering::Greater) => KeyOnDisk::Newer,
+            // An unreadable file is left for `load` to report.
+            _ => KeyOnDisk::Current,
+        }
     }
 
     /// The project's public key, read without touching anything on disk: no

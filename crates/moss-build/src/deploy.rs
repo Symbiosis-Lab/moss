@@ -368,6 +368,10 @@ pub enum RefusalKind {
     OutputCollision,
     NoEnvironment,
     ForeignInputs,
+    /// The server says this folder's key does not own the site.
+    NotOwner,
+    /// Another copy of the folder published after this one.
+    StaleCopy,
 }
 
 impl Refusal {
@@ -626,13 +630,7 @@ pub async fn refuse_stale_copy(
     site_id: &str,
     identity: &crate::identity::Identity,
 ) -> Result<(), String> {
-    let record = crate::config::deployment::slot_for("moss", Some(site_id)).and_then(|target| {
-        crate::build::manifest::published_record::load_for(
-            &crate::moss_paths::MossPaths::new(folder),
-            Some(&target),
-        )
-    });
-    let Some(record) = record else { return Ok(()) };
+    let Some(record) = publish_record_for(folder, site_id) else { return Ok(()) };
     let environment = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
     let client = crate::seta::client::MossSetaClient::for_environment(identity, &environment);
     let Ok(live) = client.live_generation(site_id).await else { return Ok(()) };
@@ -640,6 +638,25 @@ pub async fn refuse_stale_copy(
         Some(refusal) => { profile::refusal("stale_copy"); Err(refusal) },
         None => Ok(()),
     }
+}
+
+/// [`stale_copy_refusal`] against this folder's record of its last publish
+/// to `site_id`; `None` when there is no record.
+pub(crate) fn stale_copy_against(
+    folder: &std::path::Path,
+    site_id: &str,
+    live: &crate::seta::sites::LiveGeneration,
+) -> Option<String> {
+    stale_copy_refusal(&publish_record_for(folder, site_id)?, live)
+}
+
+fn publish_record_for(folder: &std::path::Path, site_id: &str) -> Option<crate::build::manifest::change_set::PublishedSnapshot> {
+    crate::config::deployment::slot_for("moss", Some(site_id)).and_then(|target| {
+        crate::build::manifest::published_record::load_for(
+            &crate::moss_paths::MossPaths::new(folder),
+            Some(&target),
+        )
+    })
 }
 
 #[cfg(test)]

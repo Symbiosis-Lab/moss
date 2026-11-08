@@ -90,6 +90,21 @@ pub struct LiveGeneration {
     pub deployed_at: Option<i64>,
 }
 
+/// seta's refusal of a site to a key whose account does not own it.
+const NOT_THE_OWNER: &str = "Not authorized for this site";
+
+/// The owner-gated `GET /api/sites/{id}/generation`, classified once, from
+/// [`MossSetaClient::generation`].
+#[derive(Debug, PartialEq)]
+pub enum Generation {
+    /// This key's account owns the site.
+    Live(LiveGeneration),
+    /// seta's own 403: the key belongs to another account, or to none.
+    NotOwner,
+    /// A site the server does not have, or a server too old to have the route.
+    NotFound,
+}
+
 /// One live chunked-upload session, from GET /api/sites/{id}/uploads.
 ///
 /// Wire contract (moss-seta `listUploadSessions`): `offset` is the byte count
@@ -463,19 +478,32 @@ impl MossSetaClient {
     /// which `moss deploy` compares with this folder's last publish. 404 is
     /// `LiveGeneration::default()` — nothing known, for the same reason.
     pub async fn live_generation(&self, site_id: &str) -> Result<LiveGeneration, SetaError> {
+        match self.generation(site_id, None).await? {
+            Generation::Live(live) => Ok(live),
+            Generation::NotFound => Ok(LiveGeneration::default()),
+            Generation::NotOwner => Err(SetaError::Api { status: 403, message: NOT_THE_OWNER.to_string() }),
+        }
+    }
+
+    /// The owner-gated read every deploy starts with. Only seta's own 403,
+    /// in its own words, means another owner: a 401 (a clock or signing
+    /// fault), an edge challenge or a proxy's 403 is not an answer, so each
+    /// stays an error.
+    pub async fn generation(&self, site_id: &str, timeout: Option<std::time::Duration>) -> Result<Generation, SetaError> {
         let path = format!("/api/sites/{}/generation", urlencoding::encode(site_id));
-        let response = self.signed(Method::GET, &path, Bytes::new())?.send().await?;
-        // An older seta has no such route: nothing known, deploy as usual.
-        if response.status().as_u16() == 404 {
-            log::debug!(target: "seta", "GET {} → 404, server does not support /generation endpoint", path);
-            return Ok(LiveGeneration::default());
+        let mut request = self.signed(Method::GET, &path, Bytes::new())?;
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
         }
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
+        let response = request.send().await?;
+        match response.status().as_u16() {
+            200..=299 => Ok(Generation::Live(response.json().await.map_err(|e| SetaError::Parse(e.to_string()))?)),
+            404 => Ok(Generation::NotFound),
+            _ => match SetaError::from_failed_response(response).await {
+                SetaError::Api { status: 403, message } if message == NOT_THE_OWNER => Ok(Generation::NotOwner),
+                other => Err(other),
+            },
         }
-
-        response.json().await.map_err(|e| SetaError::Parse(e.to_string()))
     }
 
     /// The custom-domain hostnames seta holds for this site

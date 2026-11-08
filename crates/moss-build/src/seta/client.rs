@@ -925,4 +925,4 @@ impl MossSetaClient {
 
 #[cfg(test)]
 #[path = "client_tests.rs"]
-pub(super) mod tests;
+pub(crate) mod tests;
