@@ -173,11 +173,7 @@ pub(super) fn require_binary_grant(
 /// so it is left out.
 fn search_dirs(path: &std::ffi::OsStr) -> Vec<std::path::PathBuf> {
     std::env::split_paths(path)
-        .chain(
-            crate::build::assets::binary_resolver::STANDARD_INSTALL_DIRS
-                .iter()
-                .map(std::path::PathBuf::from),
-        )
+        .chain(crate::build::assets::binary_resolver::standard_install_dirs())
         .filter(|dir| dir.is_absolute())
         .collect()
 }

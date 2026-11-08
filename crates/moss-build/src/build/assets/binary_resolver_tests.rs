@@ -135,9 +135,9 @@ fn test_download_available_on_macos() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn test_download_unavailable_on_linux() {
+fn test_download_on_linux() {
     assert!(!Tool::Ffmpeg.download_available());
-    assert!(!Tool::Git.download_available());
+    assert_eq!(Tool::Git.download_available(), cfg!(target_arch = "x86_64"));
 }
 
 // -------------------------------------------------------------------------
@@ -957,4 +957,33 @@ fn test_find_in_dirs_returns_none_when_binary_absent() {
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config("fakebin");
     assert!(find_in_dirs("fakebin", &[tmp.path()], &config).is_none());
+}
+
+#[test]
+fn windows_install_dirs_are_the_machine_and_per_user_git_folders() {
+    let env = |var: &str| match var {
+        "ProgramFiles" => Some(std::ffi::OsString::from("PF")),
+        "LOCALAPPDATA" => Some(std::ffi::OsString::from("LAD")),
+        _ => None,
+    };
+    let dirs = install_dirs_for("windows", env);
+    assert_eq!(
+        dirs,
+        vec![
+            ["PF", "Git", "cmd"].iter().collect::<PathBuf>(),
+            ["LAD", "Programs", "Git", "cmd"].iter().collect::<PathBuf>(),
+        ]
+    );
+}
+
+#[test]
+fn a_missing_windows_variable_drops_only_its_folder() {
+    let env = |var: &str| (var == "LOCALAPPDATA").then(|| std::ffi::OsString::from("LAD"));
+    let dirs = install_dirs_for("windows", env);
+    assert_eq!(dirs, vec![["LAD", "Programs", "Git", "cmd"].iter().collect::<PathBuf>()]);
+}
+
+#[test]
+fn linux_has_no_extra_install_dirs() {
+    assert!(install_dirs_for("linux", |_| Some("x".into())).is_empty());
 }
