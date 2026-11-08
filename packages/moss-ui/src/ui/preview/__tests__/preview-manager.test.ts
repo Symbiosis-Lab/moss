@@ -310,6 +310,8 @@ describe('PreviewManager', () => {
       mockNavState.activePage = { url: 'http://localhost/', sourceFile: '/site/index.md' };
       previewManager = new PreviewManager('moss-preview-iframe');
       (previewManager as unknown as { folderPath: string }).folderPath = '/site';
+      // Instruments draw on the preview only with preview features on (preview-instruments.test.ts covers off).
+      previewManager.setEditsOnPreview(true);
     };
     afterEach(() => { mockNavState.bridgeAnswer = null; mockNavState.activePage = null; });
 
@@ -398,6 +400,18 @@ describe('PreviewManager', () => {
         expect(guides().map((g) => g.style.left)).toEqual(['0px', '250px', '500px']);
         fire(HERO_WORDS, { path: PAGE, line: null });
         await vi.waitFor(() => expect(document.querySelector('.moss-instrument-layer')).toBeNull());
+      });
+
+      test('until the preview-features setting is read as on, a caret on a hero draws nothing, and turning it on draws the box', async () => {
+        Object.assign(mockIframe, { clientWidth: 1000, clientHeight: 600, getBoundingClientRect: () => ({ left: 50, top: 80, width: 500, height: 300 }) });
+        setup();
+        previewManager.setEditsOnPreview(false);
+        mockNavState.bridgeAnswer = (_m, sel) => ({ boundingRect: String(sel).endsWith('.moss-hero-content') ? WORDS : HERO });
+        fire(HERO_WORDS, { path: PAGE, line: 7 });
+        await new Promise((r) => setTimeout(r, 20));
+        expect(box()).toBeNull();
+        previewManager.setEditsOnPreview(true);
+        await vi.waitFor(() => expect(box()).not.toBeNull());
       });
 
       test('a hero that is not on the page draws nothing', async () => {

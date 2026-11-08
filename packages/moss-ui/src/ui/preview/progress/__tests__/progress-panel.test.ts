@@ -2343,6 +2343,21 @@ describe("ProgressPanel", () => {
       expect(panel.getAdvisories()).toHaveLength(0);
     });
 
+    it("an advisory moss keeps until its task restates it survives build-start and leaves at that task's next tick", () => {
+      // A plugin's Sync offer: save-rebuilds run no process hook, so only the
+      // plugin's next process run (or the Sync itself) speaks for it.
+      const offer = { scope: "Remote", severity: "NeedsAction", item: null, what: "3 new posts on Matters", lifetime: "UntilTaskRestates", action: { InApp: { op: "RunPluginProcess", args: { plugin: "matters" }, label: "Sync" } } };
+      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "plugin-offer-matters", message: "", current: 0, total: 0, completed: true, advisories: [offer] } });
+      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "videos", message: "", current: 1, total: 1, completed: true, advisories: [{ scope: "File", severity: "ShippedDegraded", item: "v.mov", what: "x", action: "None" }] } });
+      expect(panel.getAdvisories()).toHaveLength(2);
+
+      panel.setStage("opening");
+      expect(panel.getAdvisories().map((a) => a.reason)).toEqual(["3 new posts on Matters"]);
+
+      fireMossEvent({ kind: "BackgroundProgress", payload: { task: "plugin-offer-matters", message: "", current: 0, total: 0, completed: true, advisories: [] } });
+      expect(panel.getAdvisories()).toHaveLength(0);
+    });
+
     it("a dismissal that matches no notice clears nothing", async () => {
       fireMossEvent({ kind: "BackgroundProgress", payload: { task: "videos", message: "", current: 1, total: 1, completed: true, advisories: [{ scope: "File", severity: "ShippedDegraded", item: "v.mov", what: "x", action: "None" }] } });
       const { eventBus, Events } = await import("../../../context/event-bus");

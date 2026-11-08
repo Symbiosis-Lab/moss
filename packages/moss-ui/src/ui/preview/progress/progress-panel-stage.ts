@@ -1,5 +1,5 @@
 import type { PreviewStage } from '../preview-state';
-import type { Action, Severity, Scope } from '@symbiosis-lab/moss-ui';
+import type { Action, AdvisoryLifetime, Severity, Scope } from '@symbiosis-lab/moss-ui';
 import { t } from "../../i18n/index";
 import { hasSizeReadout } from './upload-format';
 import type { FileParts } from './upload-file';
@@ -108,6 +108,8 @@ export interface AdvisoryEntry {
    * declarative.
    */
   sticky?: boolean;
+  /** The advisory's own `lifetime`, as moss sent it. */
+  lifetime?: AdvisoryLifetime;
 }
 
 /**
@@ -720,6 +722,15 @@ export function noticeGroupKey(e: Pick<AdvisoryEntry, 'task' | 'reason'>): strin
  */
 export function isAcknowledge(action: Action | null | undefined): boolean {
   return !!action && action !== 'None' && typeof action === 'object' && 'Acknowledge' in action;
+}
+
+/**
+ * Does this advisory outlive a build start? Sticky ones do, and so does one
+ * moss marked `UntilTaskRestates`: a rebuild that does not run its task says
+ * nothing about it, and it leaves at that task's next tick.
+ */
+export function outlivesBuildStart(entry: AdvisoryEntry): boolean {
+  return !!entry.sticky || entry.lifetime === 'UntilTaskRestates';
 }
 
 /**

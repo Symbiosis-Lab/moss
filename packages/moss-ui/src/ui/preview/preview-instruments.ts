@@ -4,6 +4,11 @@
  * and draws the words box over the preview. It never writes a file; the editor
  * does every write. A crop the editor just wrote is held on the preview until
  * a rebuilt page shows it, so the picture never jumps back to the old crop.
+ *
+ * The live crop and the words box are editing on the preview, so they act only
+ * while preview features are on; otherwise the preview stays the published page
+ * and the editor's own instruments are the only way to edit. Measuring a
+ * picture's frame draws nothing and always answers.
  */
 
 import { host } from "../host";
@@ -71,11 +76,15 @@ export interface PreviewInstruments {
   destroy(): void;
 }
 
-/** `pageFile` is the previewed page's source, project-relative; an instrument acts only for a request naming that file. */
+/**
+ * `pageFile` is the previewed page's source, project-relative; an instrument acts only for a request naming that file.
+ * `editsOnPreview` reads the preview-features setting at each request, so turning it off clears what is drawn at the next one.
+ */
 export function bindPreviewInstruments(
   nav: Pick<NavigationManager, 'callBridge'>,
   iframe: HTMLIFrameElement | null,
   pageFile: () => string | null,
+  editsOnPreview: () => boolean,
 ): PreviewInstruments {
   const previewed = (path: unknown): boolean => {
     const page = pageFile();
@@ -109,6 +118,7 @@ export function bindPreviewInstruments(
       return;
     }
     if (!own.has(line)) own.set(line, objectPositionOf(await shownStyle(line)) ?? '');
+    if (!editsOnPreview()) return;
     held = hold === true ? { path, line, position, refreshes: 0 } : null;
     await setFocus(line, position);
   }
@@ -116,7 +126,7 @@ export function bindPreviewInstruments(
   /** A rebuilt page landed: let the held crop go once the page shows it, and put it back over an older page. */
   async function confirmHeld(): Promise<void> {
     const h = held;
-    if (!h) return;
+    if (!h || !editsOnPreview()) return;
     if (!previewed(h.path)) { held = null; return; }
     const style = await shownStyle(h.line);
     if (held !== h) return;
@@ -133,7 +143,7 @@ export function bindPreviewInstruments(
 
   async function refresh(): Promise<void> {
     const mine = ++generation;
-    const at = wordsAt && previewed(wordsAt.path) ? wordsAt.line : null;
+    const at = wordsAt && previewed(wordsAt.path) && editsOnPreview() ? wordsAt.line : null;
     if (at === null || !iframe) { clear(); return; }
     const hero = `[data-source-range^="${at}-"]`;
     const [heroRect, wordsRect] = await Promise.all([rectOf(hero), rectOf(`${hero} .moss-hero-content`)]);
@@ -220,6 +230,7 @@ export function bindPreviewInstruments(
     host.bus.on<HeroImageFocus>(HERO_IMAGE_FOCUS, (focus) => {
       const { path, line, position } = focus;
       if (!isLine(line) || !previewed(path) || (position !== null && !POSITION.test(position))) return;
+      if (!editsOnPreview()) return;
       focusQueue = focusQueue.then(() => applyFocus(focus));
     }),
     host.bus.on<HeroWordsAt>(HERO_WORDS, (at) => {
@@ -228,8 +239,24 @@ export function bindPreviewInstruments(
     }),
   ];
 
+  /**
+   * Preview features went off: every picture gets the crop the page had, and nothing is held. A crop
+   * the editor has just written is left alone: the rebuilt page brings it, and the old one would
+   * land over it.
+   */
+  function putBack(): void {
+    const written = held?.line;
+    held = null;
+    for (const [line, crop] of own) if (line !== written) focusQueue = focusQueue.then(() => setFocus(line, crop));
+    own.clear();
+  }
+
   return {
-    refresh: () => { void refresh(); void confirmHeld(); },
+    refresh: () => {
+      if (!editsOnPreview()) putBack();
+      void refresh();
+      void confirmHeld();
+    },
     destroy: () => {
       offs.forEach((off) => off());
       window.removeEventListener('message', onMessage);
