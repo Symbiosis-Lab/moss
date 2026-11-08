@@ -224,10 +224,8 @@ impl HostState {
 /// browser, the live webview cookie jar) reply a structured error there.
 pub struct EngineHost<'a> {
     pub app: Option<&'a dyn AppHost>,
-    /// Injected task state. `None` only where no caller can supply it (an
-    /// older test stub); the lifecycle arm then refuses rather than
-    /// inventing a registry whose tasks nobody would ever read.
-    pub state: Option<&'a HostState>,
+    /// Task registries and the run table every gate reads.
+    pub state: &'a HostState,
     pub project_path: &'a str,
     /// Name of the plugin whose QuickJS Context made this call. `None` means the
     /// caller could not be identified, which makes every gated capability deny
@@ -291,12 +289,10 @@ enum Reach<'a> {
 }
 
 /// Fails closed: only a call from a Context serving the person's runs, while
-/// one is registered, reaches the folder. Only the test stub has no `state`,
-/// and no run table to ask.
+/// one is registered, reaches the folder.
 fn reach<'a>(host: &EngineHost<'a>) -> Reach<'a> {
-    let Some(state) = host.state else { return Reach::Folder };
     match host.plugin {
-        Some(plugin) if host.asked_by == Some(AskedBy::Person) && state.hooks.running_for(plugin) == Some(AskedBy::Person) => Reach::Folder,
+        Some(plugin) if host.asked_by == Some(AskedBy::Person) && host.state.hooks.running_for(plugin) == Some(AskedBy::Person) => Reach::Folder,
         Some(plugin) => Reach::Confined(plugin),
         None => Reach::Unidentified,
     }
@@ -635,10 +631,6 @@ async fn dispatch_command_core(
         // descriptor comes from the caller's manifest snapshot, the same one
         // the grant arms read.
         "report_plugin_task_lifecycle_command" => {
-            let state = host.state.ok_or(
-                "report_plugin_task_lifecycle_command needs host task state \
-                 (not available in this test host)",
-            )?;
             let plugin_name = caller_plugin(&host, "report_plugin_task_lifecycle_command")?;
             let hook: crate::plugins::types::PluginHook =
                 serde_json::from_value(args.get("hook").cloned()
@@ -665,7 +657,7 @@ async fn dispatch_command_core(
                 |job| host.declared.and_then(|d| d.jobs.get(job).cloned()),
             );
             let id = crate::plugins::runtime::portable::report_plugin_task_lifecycle_with_descriptor(
-                state,
+                host.state,
                 host.app.is_some(),
                 resolved,
                 crate::tasks::WindowId::from("main".to_string()),
@@ -702,7 +694,7 @@ pub async fn dispatch_command(
     dispatch_command_core(
         EngineHost {
             app,
-            state: Some(state),
+            state,
             project_path,
             plugin,
             asked_by,
@@ -714,10 +706,9 @@ pub async fn dispatch_command(
     .await
 }
 
-/// AppHandle-free entry for unit tests that call one arm directly, with no
-/// engine and no `HostState`. The host dispatch task no longer routes here —
-/// it now calls the real [`dispatch_command`] with an injected
-/// `HostState` on the no-app path, so `__test_slow__` lives there instead.
+/// AppHandle-free entry for tests that call the arms. Its run table is empty, so a plugin's call is confined to the
+/// plugin's own storage; [`dispatch_command_test_stub_for_person`] asks for a
+/// person's run instead.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub async fn dispatch_command_test_stub(
     project_path: &str,
@@ -725,13 +716,33 @@ pub async fn dispatch_command_test_stub(
     cmd: &str,
     args_json: &str,
 ) -> std::result::Result<String, String> {
+    let state = HostState::standalone();
+    dispatch_command_core(
+        EngineHost { app: None, state: &state, project_path, plugin, asked_by: None, declared: None },
+        cmd,
+        args_json,
+    )
+    .await
+}
+
+/// [`dispatch_command_test_stub`] as a call from `plugin`'s run that a person
+/// started, which reaches the whole folder.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn dispatch_command_test_stub_for_person(
+    project_path: &str,
+    plugin: &str,
+    cmd: &str,
+    args_json: &str,
+) -> std::result::Result<String, String> {
+    let state = HostState::standalone();
+    let _run = state.hooks.begin_person_run(plugin).await;
     dispatch_command_core(
         EngineHost {
             app: None,
-            state: None,
+            state: &state,
             project_path,
-            plugin,
-            asked_by: None,
+            plugin: Some(plugin),
+            asked_by: Some(AskedBy::Person),
             declared: None,
         },
         cmd,
@@ -742,6 +753,20 @@ pub async fn dispatch_command_test_stub(
 
 #[cfg(test)]
 mod tests {
+    /// One state for hosts that never begin a run; a test that registers runs
+    /// builds its own.
+    fn bare<'a>(project: &'a str, plugin: Option<&'a str>) -> EngineHost<'a> {
+        static EMPTY: std::sync::OnceLock<HostState> = std::sync::OnceLock::new();
+        EngineHost {
+            app: None,
+            state: EMPTY.get_or_init(HostState::standalone),
+            project_path: project,
+            plugin,
+            asked_by: None,
+            declared: None,
+        }
+    }
+
     use super::*;
 
     // ── requires-gate: fail-closed grants for privileged commands ──
@@ -834,14 +859,7 @@ mod tests {
         plugin: &'a str,
         declared: &'a Option<Declared>,
     ) -> EngineHost<'a> {
-        EngineHost {
-            app: None,
-            state: None,
-            project_path: project,
-            plugin: Some(plugin),
-            asked_by: None,
-            declared: declared.as_ref(),
-        }
+        EngineHost { declared: declared.as_ref(), ..bare(project, Some(plugin)) }
     }
 
     /// The write arm is scoped to the KEY, not to the plugin. One plugin can
@@ -930,14 +948,7 @@ mod tests {
         .expect_err("an undiscovered plugin must refuse");
         assert!(err.contains("not in the discovered plugin set"), "{err}");
 
-        let anon = EngineHost {
-            app: None,
-            state: None,
-            project_path: project,
-            plugin: None,
-            asked_by: None,
-            declared: None,
-        };
+        let anon = bare(project, None);
         let err = secrets::require_plugin_owned_key(&anon, "anything")
             .expect_err("an unidentified caller must refuse");
         assert!(err.contains("could not be identified"), "{err}");
@@ -953,7 +964,7 @@ mod tests {
         let project = tmp.path().to_str().unwrap();
 
         // Plugin "alice" creates a key. No manifest, no `requires` — ungated.
-        let alice = EngineHost { app: None, state: None, project_path: project, plugin: Some("alice"), asked_by: None, declared: None };
+        let alice = bare(project, Some("alice"));
         let a_json = dispatch_command_core(
             alice,
             "key_get_or_create",
@@ -966,7 +977,7 @@ mod tests {
 
         // Plugin "bob" asks for the SAME name — gets a DIFFERENT key, because
         // the scope is bob, resolved from the seam, not from the args.
-        let bob = EngineHost { app: None, state: None, project_path: project, plugin: Some("bob"), asked_by: None, declared: None };
+        let bob = bare(project, Some("bob"));
         let b_json = dispatch_command_core(
             bob,
             "key_get_or_create",
@@ -979,14 +990,14 @@ mod tests {
         assert_ne!(a_pub, b_pub, "same name, different caller = different key");
 
         // bob lists — sees only bob's key, never alice's.
-        let bob = EngineHost { app: None, state: None, project_path: project, plugin: Some("bob"), asked_by: None, declared: None };
+        let bob = bare(project, Some("bob"));
         let list = dispatch_command_core(bob, "key_list", "null").await.unwrap();
         let arr: Vec<serde_json::Value> = serde_json::from_str(&list).unwrap();
         assert_eq!(arr.len(), 1, "a caller lists only its own keys");
         assert_eq!(arr[0]["publicKeyBase64"].as_str().unwrap(), b_pub);
 
         // alice signs with her key; the signature verifies under her public key.
-        let alice = EngineHost { app: None, state: None, project_path: project, plugin: Some("alice"), asked_by: None, declared: None };
+        let alice = bare(project, Some("alice"));
         let msg = b"ipns record";
         let args = format!(
             r#"{{"name":"ipns","payloadBase64":"{}"}}"#,
@@ -1002,7 +1013,7 @@ mod tests {
         assert!(VerifyingKey::from_bytes(&pk).unwrap().verify(msg, &sig).is_ok());
 
         // An unidentified caller (no plugin bound) is refused, not defaulted.
-        let anon = EngineHost { app: None, state: None, project_path: project, plugin: None, asked_by: None, declared: None };
+        let anon = bare(project, None);
         assert!(dispatch_command_core(anon, "key_list", "null").await.is_err());
     }
 
@@ -1011,14 +1022,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         plugin_with_requires(tmp.path(), "ipfs", None);
         let grants = discovered(tmp.path(), "ipfs").declared_for("ipfs");
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: Some("ipfs"),
-            asked_by: None,
-            declared: grants.as_ref(),
-        };
+        let host = EngineHost { declared: grants.as_ref(), ..bare(tmp.path().to_str().unwrap(), Some("ipfs")) };
         let err = require_binary_grant(&host, "git").expect_err("undeclared must refuse");
         assert!(err.contains("does not declare"), "{err}");
     }
@@ -1031,14 +1035,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         plugin_with_requires(tmp.path(), "gh", Some("execute_binary:git"));
         let grants = discovered(tmp.path(), "gh").declared_for("gh");
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: Some("gh"),
-            asked_by: None,
-            declared: grants.as_ref(),
-        };
+        let host = EngineHost { declared: grants.as_ref(), ..bare(tmp.path().to_str().unwrap(), Some("gh")) };
         assert!(require_binary_grant(&host, "git").is_ok());
         let planted = tmp.path().join("git");
         std::fs::write(&planted, "").unwrap();
@@ -1059,14 +1056,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         plugin_with_requires(tmp.path(), "node", Some("execute_binary:sh"));
         let grants = discovered(tmp.path(), "node").declared_for("node");
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: Some("node"),
-            asked_by: None,
-            declared: grants.as_ref(),
-        };
+        let host = EngineHost { declared: grants.as_ref(), ..bare(tmp.path().to_str().unwrap(), Some("node")) };
         assert!(require_binary_grant(&host, "/bin/sh").is_ok());
     }
 
@@ -1078,14 +1068,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         plugin_with_requires(tmp.path(), "old", Some("execute_binary"));
         let grants = discovered(tmp.path(), "old").declared_for("old");
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: Some("old"),
-            asked_by: None,
-            declared: grants.as_ref(),
-        };
+        let host = EngineHost { declared: grants.as_ref(), ..bare(tmp.path().to_str().unwrap(), Some("old")) };
         assert!(require_binary_grant(&host, "git").is_ok());
         assert!(require_binary_grant(&host, "anything-at-all").is_ok());
     }
@@ -1094,14 +1077,7 @@ mod tests {
     #[test]
     fn grant_refused_when_caller_unknown() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: None,
-            asked_by: None,
-            declared: None,
-        };
+        let host = bare(tmp.path().to_str().unwrap(), None);
         let err = require_binary_grant(&host, "git").expect_err("unknown caller must refuse");
         assert!(err.contains("could not be identified"), "{err}");
     }
@@ -1113,14 +1089,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let grants = discovered(tmp.path(), "ghost").declared_for("ghost");
         assert!(grants.is_none(), "an unloadable plugin dir must not resolve");
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: Some("ghost"),
-            asked_by: None,
-            declared: grants.as_ref(),
-        };
+        let host = EngineHost { declared: grants.as_ref(), ..bare(tmp.path().to_str().unwrap(), Some("ghost")) };
         let err = require_binary_grant(&host, "git").expect_err("unknown plugin must refuse");
         assert!(err.contains("not in the discovered plugin set"), "{err}");
     }
@@ -1138,14 +1107,7 @@ mod tests {
         plugin_with_requires(tmp.path(), "ipfs", Some("execute_binary"));
 
         let grants = registry.declared_for("ipfs");
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: Some("ipfs"),
-            asked_by: None,
-            declared: grants.as_ref(),
-        };
+        let host = EngineHost { declared: grants.as_ref(), ..bare(tmp.path().to_str().unwrap(), Some("ipfs")) };
         let err = require_binary_grant(&host, "git")
             .expect_err("a post-load rewrite must not grant a capability");
         assert!(err.contains("does not declare"), "{err}");
@@ -1156,14 +1118,7 @@ mod tests {
         )
         .unwrap()]);
         let grants = registry.declared_for("ipfs");
-        let host = EngineHost {
-            app: None,
-            state: None,
-            project_path: tmp.path().to_str().unwrap(),
-            plugin: Some("ipfs"),
-            asked_by: None,
-            declared: grants.as_ref(),
-        };
+        let host = EngineHost { declared: grants.as_ref(), ..bare(tmp.path().to_str().unwrap(), Some("ipfs")) };
         assert!(require_binary_grant(&host, "git").is_ok());
     }
 
@@ -1228,7 +1183,7 @@ mod tests {
             "targetDir": "assets",
             "timeoutMs": 5000
         }).to_string();
-        let reply = dispatch_command_test_stub(proj.path().to_str().unwrap(), None, "download_asset", &args)
+        let reply = dispatch_command_test_stub_for_person(proj.path().to_str().unwrap(), "p", "download_asset", &args)
             .await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
         assert_eq!(v["ok"], serde_json::json!(true));
@@ -1250,19 +1205,20 @@ mod tests {
             serde_json::json!({ "relativePath": rel, "dataBase64": data }).to_string()
         };
 
-        dispatch_command_test_stub(pp, None, "write_project_file_binary", &write("maps/a.jpg", &b64))
+        dispatch_command_test_stub_for_person(pp, "p", "write_project_file_binary", &write("maps/a.jpg", &b64))
             .await.unwrap();
         assert_eq!(std::fs::read(proj.path().join("maps/a.jpg")).unwrap(), bytes);
 
         for refused in [".moss/config.toml", ".moss/plugins/x/main.js", "../escape.bin", "a/../../escape.bin", "/abs.bin"] {
-            let err = dispatch_command_test_stub(pp, Some("p"), "write_project_file_binary", &write(refused, &b64))
+            let err = dispatch_command_test_stub_for_person(pp, "p", "write_project_file_binary", &write(refused, &b64))
                 .await.expect_err(refused);
             assert!(!err.contains("unknown command"), "{refused}: {err}");
+            assert!(!err.contains("only when you start it yourself") && !err.contains("could not identify"), "{refused}: refused by reach, not the path rule: {err}");
         }
         assert!(!proj.path().join(".moss/config.toml").exists());
         assert!(!proj.path().parent().unwrap().join("escape.bin").exists());
 
-        let err = dispatch_command_test_stub(pp, None, "write_project_file_binary", &write("b.bin", "not base64!!"))
+        let err = dispatch_command_test_stub_for_person(pp, "p", "write_project_file_binary", &write("b.bin", "not base64!!"))
             .await.expect_err("bad base64");
         assert!(err.contains("base64"), "{err}");
     }
@@ -1286,14 +1242,14 @@ mod tests {
             "filename": name, "headers": { "X-Probe": "1" }
         }).to_string();
 
-        let reply = dispatch_command_test_stub(pp, None, "download_asset", &args(Some("sheet-1.jpg"))).await.unwrap();
+        let reply = dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args(Some("sheet-1.jpg"))).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
         assert_eq!(v["actual_path"], "maps/sheet-1.jpg");
         assert_eq!(std::fs::read(proj.path().join("maps/sheet-1.jpg")).unwrap(), vec![9u8, 8, 7]);
         m.assert_async().await;
 
         for bad in ["../x.jpg", "a/b.jpg", "a\\b.jpg", ""] {
-            let err = dispatch_command_test_stub(pp, None, "download_asset", &args(Some(bad))).await.expect_err(bad);
+            let err = dispatch_command_test_stub_for_person(pp, "p", "download_asset", &args(Some(bad))).await.expect_err(bad);
             assert!(err.contains("Invalid file name"), "{bad}: {err}");
         }
     }
@@ -1353,7 +1309,7 @@ mod tests {
         let container = tempfile::TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
         let pp = container.path().to_str().unwrap();
         let state = HostState::standalone();
-        let host = |plugin| EngineHost { app: None, state: Some(&state), project_path: pp, plugin, asked_by: Some(AskedBy::Person), declared: None };
+        let host = |plugin| EngineHost { app: None, state: &state, project_path: pp, plugin, asked_by: Some(AskedBy::Person), declared: None };
         let write = serde_json::json!({ "relativePath": "notes/a.md", "data": "# a" }).to_string();
         let run = serde_json::json!({ "binaryPath": "git", "args": [], "workingDir": pp }).to_string();
 
@@ -1381,6 +1337,18 @@ mod tests {
     /// B.8b RED: file arms roundtrip against a temp project (write→exists→read for
     /// plugin storage; write→read for project file; list_project_files includes the
     /// written file).
+    /// A host that no person's run stands behind never reaches the folder, the
+    /// test stub included.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_plain_stub_confines_a_plugins_folder_write() {
+        let proj = tempfile::TempDir::new().unwrap();
+        let pp = proj.path().to_str().unwrap();
+        let wp = serde_json::json!({ "relativePath": "notes/a.md", "data": "# a" }).to_string();
+        let err = dispatch_command_test_stub(pp, Some("p"), "write_project_file", &wp).await.expect_err("confined");
+        assert!(err.contains("only when you start it yourself"), "{err}");
+        assert!(!proj.path().join("notes/a.md").exists());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn file_arms_roundtrip_against_a_temp_project() {
         std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
@@ -1399,7 +1367,7 @@ mod tests {
         let r = dispatch_command_test_stub(pp, Some("matters"), "read_plugin_file", &e).await.unwrap();
         assert!(r.contains("\\\"id\\\"") || r.contains("id"), "got {r}");
         let wp = serde_json::json!({ "relativePath": "notes/a.md", "data": "# hi" }).to_string();
-        dispatch_command_test_stub(pp, None, "write_project_file", &wp).await.unwrap();
+        dispatch_command_test_stub_for_person(pp, "p", "write_project_file", &wp).await.unwrap();
         let rp = serde_json::json!({ "relativePath": "notes/a.md" }).to_string();
         assert!(dispatch_command_test_stub(pp, None, "read_project_file", &rp).await.unwrap().contains("# hi"));
         let listed = dispatch_command_test_stub(pp, None, "list_project_files", "null").await.unwrap();
@@ -1544,7 +1512,7 @@ mod tests {
     /// the day QuickJS became the default engine (2026-06-13) every plugin call
     /// threw `unknown command` — which matters' `.catch(() => {})` swallowed,
     /// leaving the user an empty action panel on login cancel. An arm may
-    /// refuse for a missing app, state, args, or grant — it must never be
+    /// refuse for a missing app, args, grant or reach — it must never be
     /// unknown. The list mirrors `grep -r "\.invoke" packages/moss-api/src`;
     /// `plugin_message` is absent because the host dispatch task intercepts it
     /// before this match (plugin_engine.rs).
@@ -1583,7 +1551,7 @@ mod tests {
             "write_project_file_binary",
         ];
         for cmd in SDK_COMMANDS {
-            // Empty args: every arm parses args (or checks app/state/grants)
+            // Empty args: every arm parses args (or checks app/grants/reach)
             // before doing work, so nothing executes — the reply just proves
             // the arm exists.
             if let Err(err) = dispatch_command_test_stub("/tmp/none", None, cmd, "{}").await {
@@ -1702,7 +1670,7 @@ mod tests {
             while let Some(req) = dispatch_rx.recv().await {
                 let host = EngineHost {
                     app: Some(desk2.as_ref()),
-                    state: None,
+                    state: &HostState::standalone(),
                     project_path: "/tmp/none",
                     plugin: req.plugin.as_deref(),
                     asked_by: None,
@@ -1746,7 +1714,7 @@ mod tests {
         let desk = PanelRecorder::default();
         let host = EngineHost {
             app: Some(&desk),
-            state: None,
+            state: &HostState::standalone(),
             project_path: "/tmp/none",
             plugin: Some("p"),
             asked_by: None,
@@ -1809,7 +1777,7 @@ mod tests {
         let state = HostState::standalone();
         let host = EngineHost {
             app: None,
-            state: Some(&state),
+            state: &state,
             project_path: "/tmp/none",
             plugin: Some("matters"),
             asked_by: None,
@@ -1834,22 +1802,6 @@ mod tests {
             tasks.iter().any(|t| t.id == id),
             "the minted task must be live in the INJECTED registry, not a discarded one"
         );
-    }
-
-    /// A host with no task state at all still refuses rather than inventing a
-    /// registry whose tasks nobody could read.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn task_lifecycle_arm_refuses_without_host_state() {
-        let err = dispatch_command_test_stub(
-            "/tmp/none",
-            Some("p"),
-            "report_plugin_task_lifecycle_command",
-            r#"{"pluginName":"p","hook":"process","trigger":"background","lifecycle":{"type":"Started","label":"x","hasProgress":false,"cancellable":false}}"#,
-        )
-        .await
-        .expect_err("no host state must Err");
-        assert!(!err.contains("unknown command"), "must stay bridged; got: {err}");
-        assert!(err.contains("host task state"), "got: {err}");
     }
 
     /// B.8c: unknown command still errors with the command name in the message.
@@ -1913,7 +1865,7 @@ mod tests {
             dispatch_command_core(
                 EngineHost {
                     app,
-                    state: Some(state),
+                    state,
                     project_path: "/tmp/none",
                     plugin: Some("github"),
                     asked_by: None,
