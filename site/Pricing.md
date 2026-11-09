@@ -35,4 +35,4 @@ About one hour a month of content updates, style updates and fixes, with a 2-bus
 
 ## Paid plans open soon
 
-Every new site starts with a free trial, and we'll email you when you can subscribe. Not publishing with moss yet? Leave your email in the form at the foot of this page.
+Every site is free during the beta, and we'll email you when you can subscribe. Not publishing with moss yet? Leave your email in the form at the foot of this page.
