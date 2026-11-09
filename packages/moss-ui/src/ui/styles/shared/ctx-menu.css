@@ -50,13 +50,13 @@
 /* Two-target submenu row (CtxMenuSubmenu.action): the row chooses, the chevron
    zone drills in. A real node, not ::after, so it can take its own click. */
 .ctx-item.ctx-dual::after { content: none; }
-.ctx-chev { align-self: stretch; display: flex; align-items: center; margin: -5px -10px -5px 0; padding: 0 10px 0 8px; margin-left: auto; border-radius: 0 calc(var(--moss-radius-window) / 6) calc(var(--moss-radius-window) / 6) 0; color: var(--moss-color-muted); }
+.ctx-chev { align-self: stretch; display: flex; align-items: center; margin: -5px -10px -5px 0; padding: 0 10px 0 8px; margin-left: auto; border-radius: 0 4px 4px 0; color: var(--moss-color-muted); }
 .ctx-chev::before { content: '›'; }
 .ctx-chev:hover { background: var(--moss-hover-overlay); color: var(--moss-color-text); }
 .ctx-detail ~ .ctx-chev { margin-left: 0; }
 
 /* Checklist row (CtxMenuCheckbox): the tick box takes the label's leading slot. */
-.ctx-check::before { content: ''; flex: none; box-sizing: border-box; width: 14px; height: 14px; border: 1.5px solid var(--moss-border-medium); border-radius: calc(var(--moss-radius-window) / 6); background: transparent; }
+.ctx-check::before { content: ''; flex: none; box-sizing: border-box; width: 14px; height: 14px; border: 1.5px solid var(--moss-border-medium); border-radius: 4px; background: transparent; }
 .ctx-check[aria-checked="true"]::before { border-color: var(--moss-color-accent); background: var(--moss-color-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.2 7.4l2.4 2.4 5.2-5.4' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat; }
 
 /* A wide, tall list level (the composer's audience menu): one width for every

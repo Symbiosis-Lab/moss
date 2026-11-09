@@ -1539,7 +1539,7 @@ body.starter-picker-active .moss-preview-container.action-panel-open.mobile-mode
   left: 50%;
   top: var(--moss-safe-center-y);
   transform: translate(-50%, -50%);
-  border-radius: var(--moss-radius-window);
+  border-radius: var(--moss-window-radius);
   box-shadow: var(--moss-elevation-3);
   /* Match container background to prevent white line showing through gaps */
   background: var(--moss-color-surface);
@@ -1553,7 +1553,7 @@ body.starter-picker-active .moss-preview-container.action-panel-open.mobile-mode
   left: 50%;
   top: var(--moss-safe-center-y);
   transform: translate(-50%, -50%);
-  border-radius: var(--moss-radius-window);
+  border-radius: var(--moss-window-radius);
   box-shadow: var(--moss-elevation-3);
   background: var(--moss-color-surface);
 }
