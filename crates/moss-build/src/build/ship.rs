@@ -687,7 +687,7 @@ pub fn materialize_and_promote(
     // so the next seal of this id copies it again instead of reusing it.
     if drifted == 0 {
         write_lock.finish();
-        crate::build::lifecycle::remember_whole(mp, &gen_dir, sealed);
+        crate::build::lifecycle::remember_whole(mp, &gen_dir, sealed, copied);
     }
     Ok(if promoted { Promotion::Promoted } else { Promotion::Superseded })
 }
@@ -1777,11 +1777,16 @@ mod tests {
         mp.generations_dir().join(format!(".{gen_id}.writing"))
     }
 
-    /// Seeding writes only what differs, and the tree it leaves is the one a
-    /// full copy would: what the edit removed is gone, including directories
-    /// it emptied and a path that changed between file and directory.
-    #[test]
-    fn a_generation_seeded_from_the_last_whole_one_is_the_tree_a_full_copy_makes() {
+    /// Start as a new process does, with no record in memory, when `new_process`.
+    fn restart_if(mp: &crate::moss_paths::MossPaths, new_process: bool) {
+        if new_process {
+            crate::build::lifecycle::forget_whole(mp);
+        }
+    }
+
+    /// Promote an edit after a whole base, the in-process record of the base
+    /// forgotten first when `new_process`, and check the edit's tree.
+    fn assert_seeded_edit(new_process: bool) {
         let tmp = tempdir().unwrap();
         let mp = crate::moss_paths::MossPaths::new(tmp.path());
         // Held so a parallel test's folder lookup cannot evict this folder's record.
@@ -1795,6 +1800,7 @@ mod tests {
         std::fs::File::options().write(true).open(&staged).unwrap().set_modified(marked).unwrap();
         let base_mtime = |p: &Path| std::fs::metadata(p.join("kept.css")).unwrap().modified().unwrap();
         let in_base = base_mtime(&mp.generation_dir(base.generation_id()));
+        restart_if(&mp, new_process);
 
         let next = stage_and_seal(&mp, SEED_NEXT);
         promote_sealed(&mp, &next);
@@ -1804,6 +1810,21 @@ mod tests {
         assert!(!lock_file(&mp, next.generation_id()).exists(), "the seeded copy finished");
         let seeded = base_mtime(&gen_dir) == in_base;
         assert_eq!(seeded, crate::build::io_utils::CLONES_DIRS, "seeded exactly where a directory can be cloned");
+    }
+
+    /// Seeding writes only what differs, and the tree it leaves is the one a
+    /// full copy would: what the edit removed is gone, including directories
+    /// it emptied and a path that changed between file and directory.
+    #[test]
+    fn a_generation_seeded_from_the_last_whole_one_is_the_tree_a_full_copy_makes() {
+        assert_seeded_edit(false);
+    }
+
+    /// A one-shot build starts with no record in memory, and seeds from the
+    /// one the last copy kept beside its generation.
+    #[test]
+    fn a_new_process_seeds_from_the_record_kept_beside_the_last_whole_generation() {
+        assert_seeded_edit(true);
     }
 
     /// A copy cut off right after its seed leaves the base's outputs under the
@@ -1836,15 +1857,26 @@ mod tests {
     }
 
     /// A file edited inside the seed after it finished — by a person, or by
-    /// another process — is carried by the clone, and must be written again.
+    /// another process — is carried by the clone, and must be written again,
+    /// whether the record is this process's or the one kept beside the seed.
     #[test]
     fn a_file_edited_in_the_seed_is_shipped_again() {
+        for new_process in [false, true] {
+            assert_edited_seed_file_shipped_again(new_process);
+        }
+    }
+
+    fn assert_edited_seed_file_shipped_again(new_process: bool) {
         let tmp = tempdir().unwrap();
         let mp = crate::moss_paths::MossPaths::new(tmp.path());
         let _record = crate::build::lifecycle::lock_for(&mp);
         let base = stage_and_seal(&mp, SEED_BASE);
         promote_sealed(&mp, &base);
         std::fs::write(mp.generation_dir(base.generation_id()).join("kept.css"), b"BODY{}").unwrap();
+        restart_if(&mp, new_process);
+        if new_process && crate::build::io_utils::CLONES_DIRS {
+            assert!(crate::build::lifecycle::whole_generation(&mp).is_some(), "the kept record is what is checked");
+        }
 
         let next = stage_and_seal(&mp, SEED_NEXT);
         promote_sealed(&mp, &next);

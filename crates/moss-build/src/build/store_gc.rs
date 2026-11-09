@@ -349,13 +349,28 @@ fn dir_holds(gen_dir: &Path, files: &std::collections::HashMap<String, String>, 
 /// seeded from. Nothing stops another process, or a person, from changing a
 /// generation's files after that, so its directory's identity and each file's
 /// size and mtime are kept, and a seed that no longer matches is not trusted.
+///
+/// Saved beside the generation ([`WholeGeneration::save`]) so a later process,
+/// such as the next one-shot `moss build`, seeds from it too, under the same
+/// checks. The trade is the one a long-lived process already makes, over days
+/// instead of one process: `still_holds` compares size and mtime only, since a
+/// clone has a new inode and ctime, and the directory is moss's own
+/// `build.nosync`.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct WholeGeneration {
+    /// [`WHOLE_RECORD_VERSION`] when saved; any other is not read.
+    version: u32,
     id: String,
     dir: DirIdentity,
     files: std::collections::HashMap<String, Finished>,
 }
 
-/// One file of a [`WholeGeneration`]: its manifest entry, and its file's stat.
+/// The shape of a saved [`WholeGeneration`].
+const WHOLE_RECORD_VERSION: u32 = 1;
+
+/// One file of a [`WholeGeneration`]: its manifest entry, and its file's stat
+/// (a `SystemTime` keeps its nanoseconds through serde).
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Finished {
     entry: String,
     size: u64,
@@ -375,7 +390,39 @@ impl WholeGeneration {
                 Some((rel.clone(), Finished { entry: entry.clone(), size: meta.len(), mtime: meta.modified().ok() }))
             })
             .collect();
-        Some(Self { id: gen_id.to_string(), dir: dir_identity(gen_dir)?, files })
+        Some(Self { version: WHOLE_RECORD_VERSION, id: gen_id.to_string(), dir: dir_identity(gen_dir)?, files })
+    }
+
+    /// The generation this record is of.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Where the record of generation `id` is kept, beside it.
+    pub fn record_path(generations_dir: &Path, id: &str) -> PathBuf {
+        generations_dir.join(format!(".{id}.whole.json"))
+    }
+
+    /// Keep this record beside its generation. A failed write only costs the
+    /// next process its seed.
+    pub fn save(&self, generations_dir: &Path) {
+        let path = Self::record_path(generations_dir, &self.id);
+        // Not flushed: a record is only a hint `still_holds` re-checks, so a torn one costs a full copy.
+        let written = serde_json::to_vec(self)
+            .map_err(|e| e.to_string())
+            .and_then(|json| crate::build::io_utils::write_output(&path, &json).map_err(|e| e.to_string()));
+        if let Err(e) = written {
+            log::info!("generation {}: record not kept at {}: {e}", self.id, path.display());
+        }
+    }
+
+    /// The record [`WholeGeneration::save`] kept for generation `id`. Missing,
+    /// unreadable or of another version reads as none: the copy is then full.
+    pub fn load(generations_dir: &Path, id: &str) -> Option<Self> {
+        let bytes = std::fs::read(Self::record_path(generations_dir, id)).ok()?;
+        serde_json::from_slice::<Self>(&bytes)
+            .ok()
+            .filter(|whole| whole.version == WHOLE_RECORD_VERSION && whole.id == id)
     }
 
     /// Whether `path`, the seeded copy of `rel_path`, still holds `entry`'s
@@ -397,7 +444,7 @@ impl WholeGeneration {
 
 /// A directory's device and inode: a directory removed and made again under
 /// the same name has a different one.
-#[derive(PartialEq)]
+#[derive(PartialEq, serde::Serialize, serde::Deserialize)]
 struct DirIdentity {
     device: u64,
     inode: u64,
@@ -569,6 +616,7 @@ pub fn gc_old_generations(
                     crate::build::manifest::preview_originals::receipt_path(generations_dir, name),
                     crate::build::manifest::publish_view::receipt_path(generations_dir, name),
                     crate::build::manifest::publish_view::articles_path(generations_dir, name),
+                    WholeGeneration::record_path(generations_dir, name),
                 ] {
                     // allow:unlink the records kept beside this removed generation, outside staging
                     let _ = std::fs::remove_file(receipt);
