@@ -539,6 +539,7 @@ const otherWriters = createKeptOutsideEdit({ currentEntryId, editor: () => cmEdi
 // through the file tree — see saveActiveDocument's own guard, which is the
 // actual enforcement; this flag is only the signal it reads.
 let editorCommitLocked = false;
+let bodyFocusOwed = false;
 
 /** Folder navigation uses Rust's build-independent route and never falls back to '/'. */
 async function navigatePreviewToFolder(absPath: string, awaitingBuild: boolean): Promise<void> {
@@ -1598,7 +1599,8 @@ async function init(): Promise<void> {
     focusBody: () => {
       const view = cmEditor?.getView();
       if (!view) return;
-      view.focus();
+      if (editorCommitLocked) bodyFocusOwed = true;
+      else view.focus();
       view.dispatch({ selection: { anchor: 0 } });
     },
     onCommit: async (newText) => {
@@ -3214,8 +3216,17 @@ async function reloadExternalDocument(): Promise<void> {
  * same mechanism, a different trigger.
  */
 function setEditorCommitLock(locked: boolean): void {
+  // The freeze makes the body non-editable, and a browser then moves focus to
+  // <body>. Focus held when the freeze starts, or asked for during it, is
+  // given back when it ends, unless something else took focus meanwhile.
+  if (locked) bodyFocusOwed ||= cmEditor?.getView()?.hasFocus ?? false;
   editorCommitLocked = locked;
   cmEditor?.setReadOnly(locked, "commit");
+  if (!locked && bodyFocusOwed) {
+    bodyFocusOwed = false;
+    const active = document.activeElement;
+    if (active === null || active === document.body) cmEditor?.getView()?.focus();
+  }
 }
 
 // ── Scroll Sync ─────────────────────────────────────────────────────────

@@ -204,7 +204,7 @@ const FILE = '/Users/test/blog/posts/hello.md';
  * Boot editor-main + load the current file. Returns the wired onChange (drives
  * the editor 'dirty') and a getContent spy.
  */
-async function boot(): Promise<{ onChange: (gestureEnd?: boolean) => void }> {
+async function boot(view: object = {}): Promise<{ onChange: (gestureEnd?: boolean) => void }> {
   const initialBody = '# Hello\n\nbody';
 
   mockCommands.getProjectPath.mockResolvedValue({ status: 'ok', data: PROJECT });
@@ -222,7 +222,7 @@ async function boot(): Promise<{ onChange: (gestureEnd?: boolean) => void }> {
   MockCmEditor.mockImplementation(() => ({
     destroy: vi.fn(),
     getContent: vi.fn().mockReturnValue(initialBody),
-    getView: vi.fn().mockReturnValue({ scrollDOM: { addEventListener: vi.fn(), prepend: vi.fn() } }),
+    getView: vi.fn().mockReturnValue({ scrollDOM: { addEventListener: vi.fn(), prepend: vi.fn() }, ...view }),
     setReadOnly: vi.fn(),
     setContent: vi.fn(),
   }));
@@ -411,6 +411,66 @@ describe('saveActiveDocument refuses an autosave while the commit lock is held (
     expect(await flushDone).toBe(true);
     expect(mockCommands.saveEditorContent).toHaveBeenCalledTimes(1);
     debug.setEditorCommitLock(false);
+  });
+});
+
+describe('the commit lock gives the body its focus back when it ends', () => {
+  type Debug = { setEditorCommitLock: (locked: boolean) => void };
+  const debug = () => (window as unknown as { __moss_debug: Debug }).__moss_debug;
+  const focusableView = (hasFocus: boolean) => ({ hasFocus, focus: vi.fn(), dispatch: vi.fn() });
+
+  beforeEach(() => {
+    vi.resetModules();
+    document.body.innerHTML = '';
+    setupEditorDOM();
+    resetMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('a body focused when the lock starts is focused again when it ends', async () => {
+    const view = focusableView(true);
+    await boot(view);
+    debug().setEditorCommitLock(true);
+    expect(view.focus).not.toHaveBeenCalled();
+    debug().setEditorCommitLock(false);
+    expect(view.focus).toHaveBeenCalledTimes(1);
+  });
+
+  test('a body not focused stays unfocused', async () => {
+    const view = focusableView(false);
+    await boot(view);
+    debug().setEditorCommitLock(true);
+    debug().setEditorCommitLock(false);
+    expect(view.focus).not.toHaveBeenCalled();
+  });
+
+  test('focus that moved elsewhere during the lock is left there', async () => {
+    const view = focusableView(true);
+    await boot(view);
+    const field = document.createElement('input');
+    document.body.append(field);
+    debug().setEditorCommitLock(true);
+    field.focus();
+    debug().setEditorCommitLock(false);
+    expect(view.focus).not.toHaveBeenCalled();
+  });
+
+  test("Enter in the title during the lock focuses the body when the lock ends", async () => {
+    const heading = document.createElement('div');
+    heading.id = 'editor-heading';
+    heading.contentEditable = 'true';
+    document.body.prepend(heading);
+    mockCommands.computeHeadingState.mockResolvedValue({ status: 'ok', data: { visible: true, text: 'Hello', source: 'Filename' } });
+    const view = focusableView(false);
+    await boot(view);
+    debug().setEditorCommitLock(true);
+    heading.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(view.focus).not.toHaveBeenCalled();
+    debug().setEditorCommitLock(false);
+    expect(view.focus).toHaveBeenCalledTimes(1);
   });
 });
 
