@@ -5435,7 +5435,7 @@ fn build_test_shipped(
             .map_err(|e| format!("test seal+persist failed: {}", e))?;
         let mp = crate::moss_paths::MossPaths::new(root.path());
         let stage_dir = mp.staging_dir();
-        let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage_dir);
+        let scan = crate::build::media::orphan_prune::scan_stage(&stage_dir, None);
         let pruned =
             crate::build::ship::prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
         // Mirrors `advertise_sealed`'s `reclaim_stage_dir_when_done = true`

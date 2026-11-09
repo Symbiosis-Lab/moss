@@ -393,6 +393,12 @@ impl MossPaths {
         self.build_dir().join("cache")
     }
 
+    /// `.moss/build.nosync/cache/memo/` — what one process kept for the next
+    /// ([`crate::build::cache::MemoFile`]).
+    pub fn memo_dir(&self) -> PathBuf {
+        self.cache_dir().join("memo")
+    }
+
     /// `.moss/build.nosync/deploy/` — the per-call copies a deploy hook
     /// publishes from, and the only place a plugin's binary may point
     /// `GIT_INDEX_FILE` or a working directory inside `.moss/`.

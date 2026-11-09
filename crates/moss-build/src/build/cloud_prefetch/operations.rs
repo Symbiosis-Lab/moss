@@ -78,7 +78,16 @@ pub(super) fn finish_operation(inner: &Arc<Inner>, key: OperationKey, task: Arc<
                 if cache { q.publications.push_back((key, task.clone(), ready_at)); }
                 else { q.structural.push_back((key, task.clone(), ready_at)); }
             } else {
-                if cache { super::PUBLICATIONS_FINISHED.fetch_add(1, Ordering::Relaxed); }
+                if cache {
+                    super::PUBLICATIONS_FINISHED.fetch_add(1, Ordering::Relaxed);
+                    // A caller no longer waits for a publication's outcome, so
+                    // a failure is said here, where the publication ends.
+                    if let Err(failure) = &result {
+                        inner.publication_failures.fetch_add(1, Ordering::Relaxed);
+                        super::PUBLICATION_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        log::warn!("[cache] could not save {} to the shared cache: {failure}", key.path.display());
+                    }
+                }
                 q.operation_pending.remove(&key);
                 let complete = result.as_ref().map_or(true, |value| match value.as_ref() {
                     crate::build::cloud_readiness::storage::StorageValue::Sweep(snapshot) => !snapshot.deadline_blown && !snapshot.root_unreadable

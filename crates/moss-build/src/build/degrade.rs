@@ -70,7 +70,7 @@ pub(crate) fn repair_staged_html(
     // rather than being dropped from the manifest on the strength of a stage
     // path this generation was never going to read from anyway.
     let object_store = crate::build::cache::ObjectStore::for_seal(mp);
-    let scan = shipped_references(stage_dir, sealed, &object_store);
+    let scan = shipped_references(stage_dir, sealed, &object_store, Some(&mp.memo_dir()));
     // Pruned keys are not stripped: no page this generation ships names one,
     // so a strip could only rewrite a newer build's staged page.
     crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan);
@@ -102,10 +102,11 @@ pub(crate) fn shipped_references(
     stage_dir: &Path,
     sealed: &SealedManifest,
     object_store: &crate::build::cache::ObjectStore,
+    memo_dir: Option<&Path>,
 ) -> crate::build::media::orphan_prune::ReferenceScan {
     use crate::build::media::orphan_prune::{is_scanned, Rescan};
     use crate::build::ship::{resolve_ship_source, ShipRead};
-    let mut rescan = Rescan::shipped(stage_dir);
+    let mut rescan = Rescan::shipped(stage_dir, memo_dir);
     for (key, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(key);
         if crate::types::content::parse_entry(entry).0 == crate::types::content::MODE_SYMLINK && stage_path.is_dir() {

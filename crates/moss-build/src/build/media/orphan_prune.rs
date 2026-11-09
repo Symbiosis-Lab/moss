@@ -115,8 +115,10 @@ pub struct ReferenceScan {
 /// a plugin, theme template, or feed emits, per invariant 6.
 ///
 /// Returns a [`ReferenceScan`], not a bare set: a caller that deletes from this
-/// answer must know whether the walk could read everything.
-pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
+/// answer must know whether the walk could read everything. With `memo_dir`, a
+/// process that holds no scan of this stage starts from the one a past process
+/// kept there.
+pub(crate) fn scan_stage(stage_dir: &Path, memo_dir: Option<&Path>) -> ReferenceScan {
     // The continuation class is a NEGATED class over URL/attribute
     // delimiters, not an enumerated allowlist — every byte that isn't a
     // structural delimiter is a legal filename byte, ASCII or not. This is
@@ -190,8 +192,7 @@ pub fn extract_referenced_tails(stage_dir: &Path) -> ReferenceScan {
     // in depth — moss itself always emits lowercase, but nothing enforces
     // that on a plugin-authored reference. The patterns themselves live in
     // [`token_regexes`], the per-token work in [`collect_references`].
-
-    let mut rescan = Rescan::new(&SCANNED, stage_dir);
+    let mut rescan = Rescan::new(&SCANNED, stage_dir, memo_dir);
     rescan.read_tree(stage_dir);
     rescan.finish()
 }
@@ -208,24 +209,38 @@ pub(crate) fn is_scanned(path: &Path) -> bool {
 /// of the same kind. A long-lived process scans the same stage after every
 /// edit, and a file whose stat still vouches for that read is not read again.
 pub(crate) struct Rescan {
-    memo: &'static Memo,
+    kind: &'static Kind,
     stage_dir: PathBuf,
+    memo_dir: Option<PathBuf>,
     last: HashMap<RefsKey, FileRefs>,
     kept: HashMap<RefsKey, FileRefs>,
+    /// Whether any file was read rather than vouched for: only then is there
+    /// anything new to keep for the next process.
+    read_any: bool,
     scan: ReferenceScan,
 }
 
 impl Rescan {
-    fn new(memo: &'static Memo, stage_dir: &Path) -> Self {
-        let last = memo.take(stage_dir).unwrap_or_default();
-        Self { memo, stage_dir: stage_dir.to_path_buf(), last, kept: HashMap::new(), scan: ReferenceScan::default() }
+    fn new(kind: &'static Kind, stage_dir: &Path, memo_dir: Option<&Path>) -> Self {
+        let last = kind.memo.take(stage_dir)
+            .or_else(|| memo_dir.and_then(|dir| kind.file.read::<Vec<(RefsKey, FileRefs)>>(dir)).map(|kept| kept.into_iter().collect()))
+            .unwrap_or_default();
+        Self {
+            kind,
+            stage_dir: stage_dir.to_path_buf(),
+            memo_dir: memo_dir.map(Path::to_path_buf),
+            last,
+            kept: HashMap::new(),
+            read_any: false,
+            scan: ReferenceScan::default(),
+        }
     }
 
     /// A scan of what a sealed generation ships. It remembers apart from the
     /// stage walk: the two alternate every build over different files, so one
     /// memo would only ever hold the other's.
-    pub(crate) fn shipped(stage_dir: &Path) -> Self {
-        Self::new(&SHIPPED, stage_dir)
+    pub(crate) fn shipped(stage_dir: &Path, memo_dir: Option<&Path>) -> Self {
+        Self::new(&SHIPPED, stage_dir, memo_dir)
     }
 
     /// Read every scannable file under `dir`, which is the stage or a subtree
@@ -256,6 +271,7 @@ impl Rescan {
             return Ok(());
         }
         let read_at = crate::build::stat::recording_clock();
+        self.read_any = true;
         #[cfg(test)]
         FILES_READ.with(|n| n.set(n.get() + 1));
         let bytes = std::fs::read(path)?;
@@ -288,7 +304,10 @@ impl Rescan {
     /// The scan's answer; what it read is remembered for the next scan of its
     /// kind.
     pub(crate) fn finish(self) -> ReferenceScan {
-        self.memo.keep(&self.stage_dir, self.kept);
+        if let Some(dir) = self.memo_dir.as_deref().filter(|_| self.read_any) {
+            self.kind.file.write(dir, &self.kept.iter().collect::<Vec<_>>());
+        }
+        self.kind.memo.keep(&self.stage_dir, self.kept);
         self.scan
     }
 }
@@ -297,7 +316,10 @@ impl Rescan {
 /// ships under every key whose page has its bytes.
 type RefsKey = (PathBuf, Option<String>);
 
-/// One scanned file's references and the stat they were read under.
+/// One scanned file's references and the stat they were read under. Kept
+/// across processes too: `FileStat::vouches_for` judges the stat the same way
+/// in any process, and `read_at` is wall-clock time.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct FileRefs {
     stat: crate::build::stat::FileStat,
     read_at: Option<u64>,
@@ -311,12 +333,31 @@ thread_local! {
     pub(crate) static FILES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-type Memo = crate::build::cache::ProcessMemo<HashMap<RefsKey, FileRefs>>;
-static SCANNED: Memo = Memo::new(crate::build::cache::ROOTS);
-static SHIPPED: Memo = Memo::new(crate::build::cache::ROOTS);
+/// Forget what this process holds for `stage`, as a new process starts with
+/// nothing.
+#[cfg(test)]
+pub(crate) fn new_process(stage: &Path) {
+    SCANNED.memo.take(stage);
+    SHIPPED.memo.take(stage);
+}
+
+/// One kind of scan's memo, and the file it is kept in between processes.
+struct Kind {
+    memo: crate::build::cache::ProcessMemo<HashMap<RefsKey, FileRefs>>,
+    file: crate::build::cache::MemoFile,
+}
+
+static SCANNED: Kind = Kind {
+    memo: crate::build::cache::ProcessMemo::new(crate::build::cache::ROOTS),
+    file: crate::build::cache::MemoFile::new("references-stage", 1),
+};
+static SHIPPED: Kind = Kind {
+    memo: crate::build::cache::ProcessMemo::new(crate::build::cache::ROOTS),
+    file: crate::build::cache::MemoFile::new("references-shipped", 1),
+};
 
 /// The image references in one scanned file's `text`, read both ways
-/// [`extract_referenced_tails`] reads them, and unioned the same way —
+/// [`scan_stage`] reads them, and unioned the same way —
 /// suffixes plus resolution against `doc`, the file's site-root-relative
 /// path. For a caller asking whether one page shows an image.
 pub fn references_in(text: &str, doc: &str) -> HashSet<String> {
@@ -326,7 +367,7 @@ pub fn references_in(text: &str, doc: &str) -> HashSet<String> {
 }
 
 /// Two spellings of the same token class, differing only in whether `'` ends
-/// a token — see the discussion in [`extract_referenced_tails`]: each alone
+/// a token — see the discussion in [`scan_stage`]: each alone
 /// has a false negative the other does not, and the union of the two has
 /// neither. Compiled once per process.
 fn token_regexes() -> &'static [regex::Regex; 2] {
@@ -340,7 +381,7 @@ fn token_regexes() -> &'static [regex::Regex; 2] {
     })
 }
 
-/// One file's share of [`extract_referenced_tails`]: every token in `text`,
+/// One file's share of [`scan_stage`]: every token in `text`,
 /// into `tails` (suffixes and resolution, unioned) and `resolved`
 /// (resolution only). `doc` is the file's site-root-relative path; without
 /// it only the suffix reading is possible.
@@ -452,11 +493,12 @@ fn collect_references(
 pub fn suppressed_variants(
     stage_dir: &Path,
     previous_pruned: &HashSet<String>,
+    memo_dir: Option<&Path>,
 ) -> HashSet<String> {
     if previous_pruned.is_empty() {
         return HashSet::new(); // cold vault / first build — nothing judged yet
     }
-    let scan = extract_referenced_tails(stage_dir);
+    let scan = scan_stage(stage_dir, memo_dir);
     if !scan.unreadable.is_empty() {
         // The scan is blind to part of the tree, so "no reference here" is not
         // an answer — suppress nothing and let the producers re-make every

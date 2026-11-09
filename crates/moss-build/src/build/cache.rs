@@ -44,7 +44,7 @@ pub(crate) mod blob_residency;
 mod records;
 mod publication;
 mod process_memo;
-pub(crate) use process_memo::{KeyedMemo, ProcessMemo, ROOTS};
+pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
 
@@ -1204,6 +1204,12 @@ fn count_hit<T>(hit: Option<T>) -> Option<T> {
         HITS.fetch_add(1, Ordering::Relaxed);
     }
     hit
+}
+
+/// Record in the build how many shared-cache publications failed since the last call.
+pub(crate) fn report_publication_failures() {
+    let failed = crate::build::cloud_prefetch::PUBLICATION_FAILURES.swap(0, Ordering::Relaxed);
+    crate::build::phase::record_count("cache_publication_failures", failed as usize);
 }
 
 /// Print, at `info`, what the index did since the last call, and start over.

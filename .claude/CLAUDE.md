@@ -22,7 +22,7 @@ This is the MIT-licensed public half of moss (`moss-core`, `moss-build`, `moss-c
 
 ## Testing
 
-Always run `cargo test --workspace` from the repo root, not from inside a single crate — a plain `cargo test` in one crate's directory silently skips the others.
+On a branch, test the crate you touched, narrowed to what you changed: `cargo test -p <crate> --lib <filter>`, plus the integration tests that cover it (`--test <name>`). The full `cargo test --workspace`, run from the repo root, is the landing gate; it builds every crate's test binaries and needs tens of gigabytes of disk. A plain `cargo test` inside one crate's directory tests only that crate, so it is never the gate.
 
 Build output is checked byte-for-byte by a snapshot suite: `cargo test -p moss-build --test snapshot_tests`. Regenerate its fixtures deliberately, never to silence a failure you haven't read, with `SNAPSHOTS=overwrite cargo test -p moss-build --test snapshot_tests`.
 

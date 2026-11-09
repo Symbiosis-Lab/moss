@@ -111,12 +111,6 @@ pub struct BuildRecords {
     /// placeholder because their text was still being read. A publish waits
     /// for zero: a placeholder is not something to put on the web.
     pending_derivations: FolderSlot<usize>,
-    /// The merged redirect map (`feeds::redirects::merge_redirects`'s result)
-    /// the last build of this folder emitted stubs from. Redirect-stub bytes
-    /// are a pure function of this map, so an unchanged map means the stub
-    /// set this build would write is byte-identical to what is already
-    /// staged — see `feeds::redirects::emit_redirect_table`.
-    redirect_signature: FolderSlot<BTreeMap<String, String>>,
     /// What the last seal found going offline, and what the author accepted
     /// losing — see `refuse_publish`. One slot, because the two change
     /// together: a seal prunes the accepted set against its own list, and an
@@ -323,20 +317,6 @@ impl BuildRecords {
 
     pub fn late_redirects(&self, folder_path: &str) -> crate::build::feeds::kept_addresses::LateRedirects {
         self.late_redirects.get(&Self::key(folder_path)).unwrap_or_default()
-    }
-
-    /// Record the merged redirect map the just-finished build emitted stubs
-    /// from, so the next build in this process can tell whether it needs to
-    /// re-emit anything.
-    pub fn record_redirect_signature(&self, folder_path: &str, merged: BTreeMap<String, String>) {
-        self.redirect_signature.record(Self::key(folder_path), merged);
-    }
-
-    /// The merged redirect map the last build of `folder_path` emitted stubs
-    /// from, in this process. `None` means no build of this folder has
-    /// finished here yet — not "no redirects", which is `Some(empty)`.
-    pub fn redirect_signature(&self, folder_path: &str) -> Option<BTreeMap<String, String>> {
-        self.redirect_signature.get(&Self::key(folder_path))
     }
 }
 

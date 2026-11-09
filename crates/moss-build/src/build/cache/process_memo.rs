@@ -38,6 +38,51 @@ impl<V> ProcessMemo<V> {
     }
 }
 
+/// A process memo's value kept in a file, so the next process (a one-shot
+/// `moss build`, or the app after a restart) starts from it rather than from
+/// nothing. Only for a value that proves itself on every read, since the file
+/// outlives everything the process knew; the owner says when to write it.
+///
+/// Headed by the memo's name, its version and the binary that wrote it, since
+/// another moss may read the same files differently. The app and the command
+/// line are different binaries sharing one file, so each discards what the
+/// other wrote: switching between them costs one full pass. A missing, foreign
+/// or cut-short file reads as none, which is what a new process had before.
+pub(crate) struct MemoFile {
+    name: &'static str,
+    version: u32,
+}
+
+impl MemoFile {
+    pub(crate) const fn new(name: &'static str, version: u32) -> Self {
+        Self { name, version }
+    }
+
+    fn path(&self, dir: &Path) -> PathBuf {
+        dir.join(format!("{}.json", self.name))
+    }
+
+    fn header(&self) -> String {
+        format!("moss-memo {} {} {}\n", self.name, self.version, crate::plugins::fingerprint::builder_fingerprint())
+    }
+
+    pub(crate) fn read<T: serde::de::DeserializeOwned>(&self, dir: &Path) -> Option<T> {
+        let bytes = std::fs::read(self.path(dir)).ok()?;
+        serde_json::from_slice(bytes.strip_prefix(self.header().as_bytes())?).ok()
+    }
+
+    /// Not flushed: a torn or lost file costs the next process one full pass.
+    pub(crate) fn write<T: serde::Serialize>(&self, dir: &Path, value: &T) {
+        let mut out = self.header().into_bytes();
+        let written = serde_json::to_writer(&mut out, value)
+            .map_err(std::io::Error::other)
+            .and_then(|()| crate::build::io_utils::write_output(&self.path(dir), &out));
+        if let Err(e) = written {
+            log::debug!("memo {} not kept in {}: {e}", self.name, dir.display());
+        }
+    }
+}
+
 /// Answers a process keeps by a key that names their inputs whole: the cache
 /// that holds the answer, a content hash or stat key, and parameters. Cleared
 /// when it reaches its bound.
