@@ -22,7 +22,7 @@ pub fn run(args: &[String]) -> i32 {
 fn execute(args: &[String]) -> Result<i32, String> {
     let parsed = EditArgs::parse(args)?;
     let terminal = std::io::stdin().is_terminal();
-    if terminal && !parsed.serve && crate::desktop::locate().is_some() {
+    if hands_off(&parsed, terminal, || crate::desktop::locate().is_some()) {
         return Ok(crate::desktop::hand_off("edit", &parsed.folder));
     }
     let folder = Path::new(&parsed.folder)
@@ -106,4 +106,12 @@ fn execute(args: &[String]) -> Result<i32, String> {
             })
         }),
     });
+}
+
+/// A terminal run with moss desktop installed opens the folder there, unless a
+/// flag asks for the served editor: `--no-browser` and `--port` mean nothing
+/// to the app, so handing those off would drop them and open a window instead.
+fn hands_off(parsed: &EditArgs, terminal: bool, desktop_installed: impl FnOnce() -> bool) -> bool {
+    let wants_server = parsed.serve || parsed.no_browser || parsed.port.is_some();
+    terminal && !wants_server && desktop_installed()
 }
