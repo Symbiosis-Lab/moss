@@ -257,6 +257,44 @@ fn a_publication_is_counted_done_only_once_its_slot_is_free() {
     assert_eq!(p.snapshot().in_flight, 0);
 }
 
+/// A process about to exit waits for a slow publication, so the record it
+/// carries is on disk for the next build.
+#[test]
+fn draining_waits_for_a_slow_publication_to_land() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let landed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lands = Arc::clone(&landed);
+    let publish: Operation = Arc::new(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        lands.store(true, Ordering::SeqCst);
+        Ok(StorageValue::Published(0))
+    });
+    let p = Prefetcher::with_materializer(1, recording().0, false);
+    let key = OperationKey { path: "/replica/slow".into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
+    p.cache_publication(key, publish).expect("queued");
+    assert_eq!(p.drain_publications(Duration::from_secs(10)), 0);
+    assert!(landed.load(Ordering::SeqCst), "the drain returned before the publication landed");
+}
+
+/// One that never finishes costs the deadline, not the exit.
+#[test]
+fn draining_gives_up_at_its_deadline() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let publish: Operation = Arc::new(move || {
+        let _ = gate.lock().unwrap().recv();
+        Ok(StorageValue::Published(0))
+    });
+    let p = Prefetcher::with_materializer(1, recording().0, false);
+    let key = OperationKey { path: "/replica/stuck".into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
+    p.cache_publication(key, publish).expect("queued");
+    let started = std::time::Instant::now();
+    assert_eq!(p.drain_publications(Duration::from_millis(200)), 1);
+    assert!(started.elapsed() < Duration::from_secs(2), "the drain outlived its deadline");
+    release.send(()).unwrap();
+}
+
 #[test]
 fn a_failed_read_leaves_no_trace_that_would_block_a_later_sweep() {
     // moss keeps no retry ledger — but it does retry, via the supervisor's

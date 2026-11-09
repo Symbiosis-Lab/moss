@@ -586,6 +586,20 @@ impl Prefetcher {
         StructuralArrivals { retry_admission, completed }
     }
 
+    /// Wait up to `deadline` for the cache publications queued or being written,
+    /// retries included, to finish. How many had not.
+    pub(crate) fn drain_publications(&self, deadline: Duration) -> usize {
+        let end = Instant::now() + deadline;
+        let mut q = self.inner.queue.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            let left = q.cache_in_flight.len() + q.fifo.iter().filter(|job| matches!(job, BackgroundWork::Publication(..))).count();
+            let now = Instant::now();
+            if left == 0 || now >= end { return left; }
+            // Every finished job notifies `work`.
+            q = match self.inner.work.wait_timeout(q, end - now) { Ok((q, _)) => q, Err(e) => e.into_inner().0 };
+        }
+    }
+
     /// Queue depth and in-flight count, for the stall diagnosis.
     pub fn snapshot(&self) -> Snapshot {
         let now = Instant::now();

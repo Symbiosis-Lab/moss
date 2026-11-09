@@ -242,6 +242,12 @@ pub(crate) fn await_publication(key: OperationKey, attempt: Operation) -> Public
     await_publication_revision(key, attempt, None, 0)
 }
 
+/// A process about to exit gives its cache publications up to `deadline` to
+/// land, so the next build finds the records this one wrote. How many did not.
+pub(crate) fn drain_cache_publications(deadline: Duration) -> usize {
+    super::PREFETCH.drain_publications(deadline)
+}
+
 pub(crate) fn await_publication_revision(key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
     await_publication_in(&super::PREFETCH, key, attempt, revision, expected)
 }

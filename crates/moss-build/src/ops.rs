@@ -508,6 +508,15 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             }
         }
     });
+    use crate::build::cloud_readiness::storage::drain_cache_publications;
+    let pending = drain_cache_publications(std::time::Duration::ZERO);
+    if pending > 0 {
+        cli_eprintln!("Finishing {pending} cache record(s) in the synced folder…");
+        let unpublished = drain_cache_publications(std::time::Duration::from_secs(10));
+        if unpublished > 0 {
+            log::info!("[cache] {unpublished} cache record(s) had not landed in the synced folder at exit; the next build redoes their work");
+        }
+    }
     std::process::exit(code);
 }
 
