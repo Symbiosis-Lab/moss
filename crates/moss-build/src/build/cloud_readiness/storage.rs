@@ -252,6 +252,21 @@ pub(crate) fn drain_cache_publications(progress: &mut dyn FnMut(usize)) -> usize
     super::PREFETCH.drain_publications(crate::build::cloud_prefetch::PUBLICATION_STALL, Duration::from_secs(2), progress)
 }
 
+/// Before the app quits, let the cache records still being saved land, for at
+/// most a few seconds and only while they keep landing: a record lost at quit is
+/// work the next build redoes. Copies of stored outputs are not waited for;
+/// this computer keeps them either way. How many records did not land.
+pub fn drain_record_publications_before_exit() -> usize {
+    let left = super::PREFETCH.drain_records_for_exit(crate::build::cloud_prefetch::PUBLICATION_STALL, QUIT_DRAIN_CAP);
+    if left > 0 {
+        log::info!("[cache] {left} cache record(s) had not landed in the synced folder at quit; the next build redoes their work");
+    }
+    left
+}
+
+/// The longest quitting waits for cache records.
+const QUIT_DRAIN_CAP: Duration = Duration::from_secs(3);
+
 /// Publications this process has admitted and ended, for a progress line.
 pub(crate) fn cache_publication_counts() -> (u64, u64) {
     use std::sync::atomic::Ordering::Relaxed;
@@ -324,8 +339,16 @@ pub(crate) enum OperationPolicy {
     SourceWalk,
     WatchTargets,
     SweepWalk { budget: Option<Duration>, resume: Option<String> },
-    CachePublication { root: PathBuf },
+    CachePublication { root: PathBuf, kind: PublicationKind },
     EditorDirectory { project: PathBuf, show_internal: bool },
+}
+
+/// What a cache publication saves: a transform record, which a build that
+/// lacks it must redo, or a copy of a stored output, which this computer keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PublicationKind {
+    Record,
+    Blob,
 }
 
 pub(crate) fn managed_context(path: &Path) -> bool {
@@ -366,7 +389,7 @@ impl OperationKey {
     pub fn folder(&self) -> &Path {
         match &self.policy {
             OperationPolicy::SourceWalk | OperationPolicy::WatchTargets | OperationPolicy::SweepWalk { .. } => &self.path,
-            OperationPolicy::CachePublication { root } => root,
+            OperationPolicy::CachePublication { root, .. } => root,
             OperationPolicy::EditorDirectory { project, .. } => project,
         }
     }

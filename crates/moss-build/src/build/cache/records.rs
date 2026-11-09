@@ -313,7 +313,7 @@ impl TransformCache {
             owner.revision.fetch_add(1, Ordering::AcqRel) + 1
         };
         let path = self.record_path(source_oid);
-        let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: self.base.clone() } };
+        let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: self.base.clone(), kind: crate::build::cloud_readiness::storage::PublicationKind::Record } };
         let cache = self.clone();
         let source_oid = source_oid.to_string();
         let lease = crate::build::lifecycle::detached_cache_lease(self.objects.site.as_ref().expect("owned record has a site"));

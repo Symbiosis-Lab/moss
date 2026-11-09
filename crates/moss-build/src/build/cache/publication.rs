@@ -22,7 +22,7 @@ impl BlobPublication {
 
     pub fn publish(self) -> crate::build::cloud_readiness::storage::PublicationOutcome {
         let dest = ObjectStore::blob_path_in(&self.root, &self.oid);
-        let key = OperationKey { path: dest, policy: OperationPolicy::CachePublication { root: self.root.clone() } };
+        let key = OperationKey { path: dest, policy: OperationPolicy::CachePublication { root: self.root.clone(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } };
         let request = Arc::new(self);
         let attempt: crate::build::cloud_readiness::storage::Operation = Arc::new(move || request.run());
         crate::build::cloud_readiness::storage::await_publication(key, attempt)
@@ -90,7 +90,7 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
             Ok(StorageValue::Published(0))
         });
         for i in 0..6 {
-            pool.cache_publication(OperationKey { path: format!("/held/{i}").into(), policy: OperationPolicy::CachePublication { root: "/held".into() } }, held.clone()).unwrap();
+            pool.cache_publication(OperationKey { path: format!("/held/{i}").into(), policy: OperationPolicy::CachePublication { root: "/held".into(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } }, held.clone()).unwrap();
         }
         let started = std::time::Instant::now();
         while pool.snapshot().in_flight != 6 {
@@ -98,7 +98,7 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         for i in 6..18 {
-            pool.cache_publication(OperationKey { path: format!("/held/{i}").into(), policy: OperationPolicy::CachePublication { root: "/held".into() } }, held.clone()).unwrap();
+            pool.cache_publication(OperationKey { path: format!("/held/{i}").into(), policy: OperationPolicy::CachePublication { root: "/held".into(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } }, held.clone()).unwrap();
         }
         let dir = tempfile::tempdir().unwrap();
         let paths = crate::moss_paths::MossPaths::new(dir.path());
@@ -108,7 +108,7 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
         let job = Arc::new(BlobPublication::new(paths.cache_objects(), oid.clone(), source.clone(), crate::build::lifecycle::detached_cache_lease(&paths)));
         let dest = ObjectStore::blob_path_in(&job.root, &oid);
         let op: Operation = Arc::new(move || job.run());
-        let result = await_publication_in(&pool, OperationKey { path: dest.clone(), policy: OperationPolicy::CachePublication { root: paths.cache_objects() } }, op, None, 0, std::time::Duration::ZERO);
+        let result = await_publication_in(&pool, OperationKey { path: dest.clone(), policy: OperationPolicy::CachePublication { root: paths.cache_objects(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } }, op, None, 0, std::time::Duration::ZERO);
         assert_eq!(pool.snapshot().waiting, 12, "rejection retains no extra publication");
         assert_eq!(std::fs::read(&source).unwrap(), b"complete local asset");
         assert!(!dest.exists());

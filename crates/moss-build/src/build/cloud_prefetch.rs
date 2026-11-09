@@ -662,15 +662,23 @@ impl Prefetcher {
     /// left or none has finished for `stall`. `progress` is called at most every
     /// `every` with how many are left. How many had not landed.
     pub(crate) fn drain_publications(&self, stall: Duration, every: Duration, progress: &mut dyn FnMut(usize)) -> usize {
-        let pending = |q: &Queue| q.cache_in_flight.len() + q.publications.len();
+        self.drain_where(stall, None, &|_| true, every, progress)
+    }
+
+    /// [`drain_publications`](Self::drain_publications) for the publications
+    /// `wanted` names only, ending at `cap` as well as at the stall.
+    pub(crate) fn drain_where(&self, stall: Duration, cap: Option<Duration>, wanted: &dyn Fn(&OperationKey) -> bool, every: Duration, progress: &mut dyn FnMut(usize)) -> usize {
+        let pending = |q: &Queue| q.cache_in_flight.keys().filter(|key| wanted(key)).count() + q.publications.iter().filter(|(key, _, _)| wanted(key)).count();
         let mut q = self.inner.queue.lock().unwrap_or_else(|e| e.into_inner());
-        let (mut left, mut landed_at, mut said_at) = (pending(&q), Instant::now(), Instant::now());
+        let started = Instant::now();
+        let end = cap.map(|cap| started + cap);
+        let (mut left, mut landed_at, mut said_at) = (pending(&q), started, started);
         loop {
             let now = Instant::now();
-            if left == 0 || now >= landed_at + stall { return left; }
+            if left == 0 || now >= landed_at + stall || end.is_some_and(|end| now >= end) { return left; }
             if now >= said_at + every { progress(left); said_at = now; }
             // Every finished job notifies `work`.
-            let until = (landed_at + stall).min(said_at + every);
+            let until = end.map_or(landed_at + stall, |end| end.min(landed_at + stall)).min(said_at + every);
             q = match self.inner.work.wait_timeout(q, until.saturating_duration_since(now)) { Ok((q, _)) => q, Err(e) => e.into_inner().0 };
             let now_left = pending(&q);
             if now_left < left { landed_at = Instant::now(); }
@@ -682,10 +690,26 @@ impl Prefetcher {
     /// cache leases their closures hold, when the folder is closed. Ones already
     /// running finish.
     pub(crate) fn drop_publications_under(&self, folder: &Path) -> usize {
+        self.drop_publications_where(&|key| matches!(&key.policy, OperationPolicy::CachePublication { root, .. } if root.starts_with(folder)))
+    }
+
+    /// Before the process ends: drop the queued copies of stored outputs, which
+    /// would hold readers the records need and are lost at exit anyway, then let
+    /// the records land while they keep landing, for at most `cap`. How many
+    /// records did not land.
+    pub(crate) fn drain_records_for_exit(&self, stall: Duration, cap: Duration) -> usize {
+        let is_record = |key: &OperationKey| matches!(&key.policy, OperationPolicy::CachePublication { kind: crate::build::cloud_readiness::storage::PublicationKind::Record, .. });
+        self.drop_publications_where(&|key| !is_record(key));
+        self.drain_where(stall, Some(cap), &is_record, cap, &mut |_| {})
+    }
+
+    /// Drop the queued publications `which` names, and what their closures hold.
+    /// Ones already running finish.
+    fn drop_publications_where(&self, which: &dyn Fn(&OperationKey) -> bool) -> usize {
         let Ok(mut q) = self.inner.queue.lock() else { return 0 };
         let mut dropped = Vec::new();
         q.publications.retain(|(key, task, _)| {
-            let ours = matches!(&key.policy, OperationPolicy::CachePublication { root } if root.starts_with(folder));
+            let ours = which(key);
             if ours { dropped.push((key.clone(), task.clone())); }
             !ours
         });
