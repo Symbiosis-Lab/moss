@@ -379,6 +379,27 @@ describe("initNavIsland — the island of a site with no header", () => {
     }
   });
 
+  test("on the title line, the top place lasts until the row's top edge leaves view, measured in any layout", async () => {
+    document.body.innerHTML = `${PINNED}<main><article style="writing-mode: horizontal-tb"><h1>Title</h1><h2 id="a">One</h2><h2 id="b">Two</h2></article></main>`;
+    placeHeadings([600, 1400]);
+    // Measured while the controls stand in a column under the ruler: the box is
+    // three rows tall, each control one row (36px). The title's first line is
+    // centred at 64px, so the row's top edge there is at 46px.
+    Object.defineProperty(document.querySelector(".nav-icons")!, "offsetHeight", { value: 120 });
+    Object.defineProperty(document.querySelector(".nav-theme-btn")!, "offsetHeight", { value: 36 });
+    const line = { top: 40, height: 48, bottom: 88, left: 0, right: 100, width: 100, x: 0, y: 40 };
+    // jsdom has no Range geometry.
+    Object.defineProperty(Range.prototype, "getClientRects", { value: () => [line], configurable: true });
+    initNavIsland();
+    for (const [y, top] of [[0, true], [45, true], [47, false]] as const) {
+      Object.defineProperty(window, "scrollY", { value: y, configurable: true });
+      window.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      expect(island().hasAttribute("data-top"), `at ${y}px`).toBe(top);
+    }
+    delete (Range.prototype as Partial<Range>).getClientRects;
+  });
+
   test("the name button is labelled with the current section", async () => {
     document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
     placeHeadings([-50, 400]);

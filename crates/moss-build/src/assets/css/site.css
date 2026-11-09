@@ -4203,14 +4203,15 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(
   block-size: 1lh;
 }
 
-/* At the top, on the title's first line (nav-island.ts measures its centre) and
-   ending where the text column ends: the fixed slot's end less the bar's own
-   inset. Both are invalid until the centre is written, so a page without a
-   title keeps the bar's place.
+/* At the top, centred on the title's first line (nav-island.ts measures its
+   centre and the controls' row height) and ending where the text column ends:
+   the fixed slot's end less the bar's own inset. Both are invalid until the
+   centre is written, so a page without a title keeps the bar's place.
    allow:runtime-token --moss-nav-title-line set on body by nav-island.ts — the
-   custom property is deliberately invalid until then. */
+   custom property is deliberately invalid until then.
+   allow:runtime-token --moss-nav-row set on body by nav-island.ts, with the line. */
 .moss-nav-island[data-header="none"][data-top] + .nav-icons {
-  --_title-top: calc(var(--moss-nav-title-line) - 1.125rem);
+  --_title-top: calc(var(--moss-nav-title-line) - var(--moss-nav-row) / 2);
   --_title-end: calc(
     0 * var(--moss-nav-title-line) + max(
       var(--moss-container-padding),
