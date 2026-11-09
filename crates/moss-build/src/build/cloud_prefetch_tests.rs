@@ -375,6 +375,41 @@ fn publications_run_on_their_own_readers() {
     for _ in 0..4 { let _ = release.send(()); }
 }
 
+/// One record's publication never runs twice at once, and an attempt that a
+/// newer edit overtook while it ran is followed by one that publishes the edit.
+#[test]
+fn a_record_publication_is_single_flight_and_publishes_the_newest_edit() {
+    use crate::build::cloud_readiness::storage::{Operation, StorageValue};
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
+    let latest = Arc::new(AtomicU64::new(1));
+    let (running, peak, landed) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicU64::new(0)));
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let attempt: Operation = {
+        let (latest, running, peak, landed) = (latest.clone(), running.clone(), peak.clone(), landed.clone());
+        Arc::new(move || {
+            let revision = latest.load(Ordering::SeqCst);
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            let _ = gate.lock().unwrap().recv();
+            landed.store(revision, Ordering::SeqCst);
+            running.fetch_sub(1, Ordering::SeqCst);
+            Ok(StorageValue::Published(revision))
+        })
+    };
+    let p = Prefetcher::with_lanes(2, 4, recording().0, false);
+    let (key, _) = publication("one-record", published());
+    let first = p.cache_publication_revision(key.clone(), attempt.clone(), Some(latest.clone())).expect("taken");
+    assert!(wait_until(|| running.load(Ordering::SeqCst) == 1), "premise: the first attempt is running");
+    // A newer edit of the same record arrives while that attempt runs.
+    latest.store(2, Ordering::SeqCst);
+    let second = p.cache_publication_revision(key, attempt, Some(latest.clone())).expect("taken");
+    assert!(Arc::ptr_eq(&first, &second), "a second edit of one record joins the publication already admitted");
+    for _ in 0..4 { let _ = release.send(()); }
+    assert!(wait_until(|| landed.load(Ordering::SeqCst) == 2), "the newer edit was never published");
+    assert_eq!(peak.load(Ordering::SeqCst), 1, "two attempts of one record ran at once");
+}
+
 /// A deep queue drains at the readers' pace, not at a cost that grows with its length.
 #[test]
 fn a_deep_publication_queue_drains_quickly() {

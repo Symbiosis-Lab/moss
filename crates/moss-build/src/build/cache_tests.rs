@@ -3275,9 +3275,17 @@ fn availability_owned_record_changes_recover_without_erasing_newer_merges() {
         assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_err());
         assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some(), "optional records retain cache objects but do not own staging");
         drop(fault);
+        // A publication that started before the later merges may land first;
+        // the one that follows it carries them. Judge the record it settles on.
         let started = std::time::Instant::now();
-        while !path.is_file() && started.elapsed() < std::time::Duration::from_secs(30) { std::thread::sleep(std::time::Duration::from_millis(1)); }
-        let record: TransformRecord = serde_json::from_slice(&fs::read(&path).expect("owned record publication must retry the actual atomic write")).unwrap();
+        let record = loop {
+            let landed = fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<TransformRecord>(&bytes).ok());
+            match landed {
+                Some(record) if record.transforms.contains_key("second") && record.transforms.contains_key("third") => break record,
+                _ if started.elapsed() > std::time::Duration::from_secs(30) => panic!("owned record publication must retry the actual atomic write until it holds every merge"),
+                _ => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        };
         assert_eq!(record.source_size, 1, "owned edits preserve source metadata");
         assert_eq!(record.transforms["first"].oid, "new", "older same-entry change cannot overwrite a newer merge");
         assert_eq!(record.transforms["second"].oid, "other");
