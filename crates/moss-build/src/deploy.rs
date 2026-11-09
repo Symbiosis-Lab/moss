@@ -30,6 +30,9 @@ pub mod history;
 // completion's change set, its detected renames, and the article maps.
 // Pure — no filesystem, no network.
 pub mod change_record;
+// Publishing by writing files into a destination moss writes itself: the
+// upload order, the published-files record and the destinations.
+pub mod direct;
 // What a publish that builds its own site does AROUND the build: catch the
 // seal, and answer the app-shaped ports with nothing. Shared by `push` and
 // `plugin_push`, which is why it is not inside either.
@@ -479,6 +482,19 @@ pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
         return Some(Refusal::new(RefusalKind::PendingDerivations, derivations_refusal_text(pending)));
     }
     removal_gate::refusal_for(folder_path).map(|text| Refusal::new(RefusalKind::Removals, text))
+}
+
+/// Every refusal a sealed build can earn before the first byte leaves, in the
+/// order each publish route asks them. One sequence so the routes cannot
+/// disagree about what is publishable.
+pub(crate) fn refuse_before_upload(folder: &std::path::Path, sealed: &crate::build::manifest::SealedManifest) -> Result<(), String> {
+    use profile::gate;
+    gate("output_collisions", removal_gate::refuse_output_collisions(sealed))?;
+    gate("stale_generation", removal_gate::refuse_stale_generation(folder, sealed))?;
+    refuse_publish(&folder.to_string_lossy())?;
+    let _checks = crate::build::phase::PhaseTrace::start("local_checks");
+    gate("foreign_inputs", refuse_foreign_inputs(sealed, folder))?;
+    gate("unresolved_inputs", refuse_unresolved_inputs(sealed))
 }
 
 /// Refuse the exact generation selected for upload when it was rendered with

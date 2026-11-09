@@ -77,13 +77,7 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// here is always a genuine deploy attempt.
 pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
     super::profile::record(cx.folder_path, "seta", false, async {
-    super::profile::gate("output_collisions", super::removal_gate::refuse_output_collisions(sealed))?;
-    super::profile::gate("stale_generation", super::removal_gate::refuse_stale_generation(cx.folder_path, sealed))?;
-    crate::deploy::refuse_publish(&cx.folder_path.to_string_lossy())?;
-    let checks = crate::build::phase::PhaseTrace::start("local_checks");
-    super::profile::gate("foreign_inputs", crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path))?;
-    super::profile::gate("unresolved_inputs", crate::deploy::refuse_unresolved_inputs(sealed))?;
-    drop(checks);
+    super::refuse_before_upload(cx.folder_path, sealed)?;
     let full = uuid::Uuid::new_v4().simple().to_string();
     let deploy_id = full.get(..8).unwrap_or(&full);
     let site_id = cx.site_id;
@@ -105,13 +99,6 @@ pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> R
     );
     result
     }).await
-}
-
-/// Credit bytes the server confirmed — the upload phase's only proof that the
-/// publish is moving, and so the only place it bumps the stall clock.
-fn credit_upload_bytes(st: &progress::UploadProgressState, n: u64) {
-    st.bytes_uploaded.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
-    crate::infra::liveness::bump();
 }
 
 /// Implementation of the deploy work. **Do not call directly** — call
@@ -403,7 +390,7 @@ async fn push_site_inner_impl(
                             expected_hash,
                             &throughput,
                             self_heal_cap,
-                            Some(&move |n: u64| credit_upload_bytes(&st_bytes, n)),
+                            Some(&move |n: u64| st_bytes.credit_bytes(n)),
                         )
                         .await?;
                         if let Some(actual_hash) = healed_hash {
@@ -813,7 +800,7 @@ mod tests {
     fn upload_byte_credit_is_a_liveness_bump() {
         let st = progress::UploadProgressState::new(4096, 1, 0);
         let before = crate::infra::liveness::thread_bump_count();
-        credit_upload_bytes(&st, 1024);
+        st.credit_bytes(1024);
         assert_eq!(
             st.bytes_uploaded.load(std::sync::atomic::Ordering::Relaxed),
             1024

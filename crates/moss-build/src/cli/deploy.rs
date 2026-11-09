@@ -5,13 +5,15 @@
 //! arguments. What each supplies is a `host_ports` factory and, in the app's
 //! case, the Finder stamp that cannot cross.
 //!
-//! Three routes, and the folder decides which:
+//! Four routes, and the folder decides which:
 //! [`crate::deploy::route::DeployRoute`] reads the answer once and both
 //! binaries act on it. A **prebuilt** folder — one whose site was produced by
 //! another tool (Quire, Hugo, Jekyll, Astro), named by `--prebuilt=<dir>` or by
 //! `[deployment].prebuilt_output` — is uploaded as-is. A folder whose
 //! `[hooks] deploy` names a **plugin** is built and then handed to that plugin.
-//! Everything else takes the **moss-hosted** route, where moss builds the site
+//! A folder whose `[hooks] deploy` names a host built into moss takes the
+//! **direct** route, refused before the build while this version has no
+//! destination for it. Everything else takes the **moss-hosted** route, where moss builds the site
 //! and publishes what it sealed, registering it first if this is the folder's
 //! first publish.
 //!
@@ -315,6 +317,9 @@ async fn dispatch(
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
     crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
+    if let DeployRoute::Direct { id } = route {
+        return Err(unavailable(id));
+    }
     // Before the route's own send: a dry run is the same build with
     // everything after the gate left out, so it never reaches the match.
     if flags.dry_run {
@@ -409,7 +414,14 @@ async fn send(
                 crate::deploy::plugin_push::report_for(&published)
             })
         }
+        DeployRoute::Direct { id } => Err(unavailable(id)),
     }
+}
+
+/// Why a built-in target this version has no destination for is refused.
+/// Known at once, so asked before the build and before a dry run.
+fn unavailable(id: &str) -> String {
+    format!("this version of moss cannot publish to [hooks] deploy = \"{id}\" yet")
 }
 
 /// Turn a publish outcome into what the terminal sees and the exit code.

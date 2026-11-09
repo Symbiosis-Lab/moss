@@ -71,6 +71,7 @@ pub(crate) fn target(route: &super::route::DeployRoute) -> &'static str {
         super::route::DeployRoute::Hosted => "seta",
         super::route::DeployRoute::Prebuilt { .. } => "prebuilt",
         super::route::DeployRoute::Plugin { .. } => "plugin",
+        super::route::DeployRoute::Direct { .. } => "direct",
     }
 }
 

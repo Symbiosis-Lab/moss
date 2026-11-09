@@ -211,22 +211,13 @@ pub async fn run_plugin_deploy_inner(
     // latch. This function is the one place both callers actually converge.
     crate::build::site_config::ensure_config_current(&folder_str)?;
 
-    // The publish-preflight gate, for every plugin publish there is. It lives here
-    // rather than in each caller because "after the build, before any bytes
-    // move" is exactly where this body starts: a one-shot arrives having just
-    // run `run_pipeline`, and the app arrives after its in-flight drain and
-    // `rebuild_if_stale`. Asked any earlier on either route, a half-encoded
-    // site reads as a broken one; asked later, the bytes have already left.
-    crate::deploy::refuse_publish(&folder_str)?;
-
     // Before anything else, and before any bytes move: without a sealed
     // manifest there is no generation to check `current` against, and
-    // `current` on this path is the PREVIOUS build's tree.
+    // `current` on this path is the PREVIOUS build's tree. Then the gates,
+    // here rather than in each caller because "after the build, before any
+    // bytes move" is exactly where this body starts on both binaries.
     let sealed = super::one_shot::require_sealed(cx.sealed)?;
-    super::profile::gate("output_collisions", super::removal_gate::refuse_output_collisions(sealed))?;
-    super::profile::gate("stale_generation", super::removal_gate::refuse_stale_generation(cx.folder, sealed))?;
-    super::profile::gate("foreign_inputs", crate::deploy::refuse_foreign_inputs(sealed, cx.folder))?;
-    super::profile::gate("unresolved_inputs", crate::deploy::refuse_unresolved_inputs(sealed))?;
+    super::refuse_before_upload(cx.folder, sealed)?;
 
     // The seal's materialize phase is debounced, so `current` can lag the
     // manifest `cx.sealed` names and `require_promoted` would refuse a publish

@@ -258,6 +258,27 @@ impl DomainDeploymentConfig {
 /// back, so renaming it would strand every site already pointing at it.
 pub const MOSS_TARGET_ID: &str = "moss";
 
+/// Your own server, which moss publishes to itself over SSH rather than
+/// through a deploy plugin. Reserved now so no plugin can take the name;
+/// this version of moss cannot publish there yet.
+pub const SERVER_TARGET_ID: &str = "server";
+
+/// Every target moss publishes to itself, read by the publish route and the
+/// plugin loader, so a new built-in target is added here once. A plugin may
+/// not take any of these names.
+pub const BUILT_IN_TARGET_IDS: &[&str] = &[MOSS_TARGET_ID, SERVER_TARGET_ID];
+
+/// Whether `id` names one of [`BUILT_IN_TARGET_IDS`].
+pub fn is_built_in_target(id: &str) -> bool {
+    BUILT_IN_TARGET_IDS.contains(&id)
+}
+
+/// Whether `id` names a built-in target moss writes files into itself:
+/// every built-in but its own hosting, which has its own publish route.
+pub fn is_direct_target(id: &str) -> bool {
+    id != MOSS_TARGET_ID && is_built_in_target(id)
+}
+
 /// The slot naming one publish target: `moss:<site_id>` for moss hosting,
 /// the bare method for a plugin target. This is the ONE identity function —
 /// the state map key, the publish-record filename, and `publish_target()`
