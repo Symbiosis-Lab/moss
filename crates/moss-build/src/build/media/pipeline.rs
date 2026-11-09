@@ -829,25 +829,25 @@ fn recall_or_hash_output(
     fallback: &str,
     log_context: &str,
     transform: crate::build::served_path::ShipTransform,
+    mount: &crate::build::site_meta::mount::Mount,
 ) -> String {
-    use crate::build::served_path::ShipTransform;
     // A transformed entry's hash describes the bytes ship writes, not the
     // blob's, so it is memoized under its own key, which also carries the
-    // transform revision: bumping it must not recall a hash of old output.
-    let key = match transform {
-        ShipTransform::CopyAsIs => memo_key.to_string(),
-        ShipTransform::StripPreviewAttrs => {
-            format!("{memo_key}+ship{}", crate::build::ship::SHIP_TRANSFORM_REV)
-        }
+    // transform revision and the mount: neither may recall a hash of other output.
+    let copies = transform.copies(mount);
+    let key = if copies {
+        memo_key.to_string()
+    } else {
+        format!("{memo_key}+ship{}", crate::build::ship::shipped_key(mount))
     };
     if let Some(hash) = memo.get(&key) {
         return hash;
     }
-    let hashed = match transform {
-        ShipTransform::CopyAsIs => crate::build::assets::paths::compute_binary_hash_file(target),
-        ShipTransform::StripPreviewAttrs => std::fs::read(target).map_err(|e| e.to_string()).map(|bytes| {
-            crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(transform, &bytes))
-        }),
+    let hashed = if copies {
+        crate::build::assets::paths::compute_binary_hash_file(target)
+    } else {
+        std::fs::read(target).map_err(|e| e.to_string()).map(|bytes| crate::build::ship::apply_transform(transform, mount, &bytes))
+            .map(|shipped| crate::build::assets::paths::compute_binary_hash(&shipped))
     };
     match hashed {
         Ok(hash) => {
@@ -990,10 +990,11 @@ fn record_blob(
     hash: OutputHash,
     out_path: &crate::build::served_path::ServedPath,
     staged_oid: &str,
+    mount: &crate::build::site_meta::mount::Mount,
 ) {
     let OutputHash { memo_key, target, fallback_oid, log_context } = hash;
     let transform = crate::build::served_path::transform_for(out_path.as_str());
-    let hash = recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context, transform);
+    let hash = recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context, transform, mount);
     site_hashes.insert_file_hash(out_path, crate::types::content::file_entry(&hash));
     staged_oids.insert(out_path.as_str().to_string(), staged_oid.to_string());
 }
@@ -1396,7 +1397,7 @@ fn copy_asset_entry(
                         fallback_oid: &oid,
                         log_context: "output",
                     };
-                    record_blob(manifest_hash_memo, site_hashes, &mut run.staged_oids, hash, &out_path, &staged_oid);
+                    record_blob(manifest_hash_memo, site_hashes, &mut run.staged_oids, hash, &out_path, &staged_oid, &ctx.mount);
                     run.stats.copied += 1;
                 }
                 Err(e) => {
@@ -1537,7 +1538,7 @@ pub(crate) fn copy_deferred_assets(
                         crate::build::types::SourceMetadata::from_stat(oid.clone(), stat));
                     let hash =
                         OutputHash { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
-                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut run.staged_oids, hash, &out_path, &oid);
+                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut run.staged_oids, hash, &out_path, &oid, &ctx.mount);
                     run.stats.copied += 1;
                 }
                 Err(e) => {

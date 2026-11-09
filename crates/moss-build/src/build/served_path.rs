@@ -719,26 +719,33 @@ impl AsRef<std::path::Path> for ServedPath {
 /// How a file should be transformed when the ship pass writes it into a generation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShipTransform {
-    /// Copy the file byte-for-byte. Used for all non-HTML artifacts.
+    /// Copy the file byte-for-byte.
     CopyAsIs,
-    /// Strip preview-only source-annotation attributes before writing to the generation.
-    /// Used for `.html` / `.htm` files.
+    /// `.html` / `.htm`: strip preview-only source annotations, then put its
+    /// URLs under the site's mount.
     StripPreviewAttrs,
+    /// `.css`: put its URLs under the site's mount; a plain copy at the root.
+    MountCss,
 }
 
-/// Classify a relative path into the transform that the ship pass should apply.
-///
-/// It used to take an `annotations_present` flag, for a publish build that
-/// emitted no `data-source-*` attributes and could skip the regex. No such
-/// build exists: `emit_source_lines` (`pipeline.rs:1251`) is a literal `true`,
-/// so every caller passed `true` and the other arm was a no-op waiting to be
-/// wrong — it also skipped `ship`'s `STRIP_NO_PREVIEW_MARKER`, which is not
-/// annotation-dependent at all.
-///
-/// Public so tests can verify classification without running a full ship.
+impl ShipTransform {
+    /// True when ship can copy the file without reading it (`fs::copy` is COW
+    /// on APFS/Btrfs, and the assets are large).
+    pub fn copies(self, mount: &crate::build::site_meta::mount::Mount) -> bool {
+        match self {
+            Self::CopyAsIs => true,
+            Self::MountCss => mount.is_root(),
+            Self::StripPreviewAttrs => false,
+        }
+    }
+}
+
+/// Classify a relative path, by extension, into the transform ship applies.
 pub fn transform_for(rel_path: &str) -> ShipTransform {
     if rel_path.ends_with(".html") || rel_path.ends_with(".htm") {
         ShipTransform::StripPreviewAttrs
+    } else if rel_path.ends_with(".css") {
+        ShipTransform::MountCss
     } else {
         ShipTransform::CopyAsIs
     }
@@ -774,7 +781,7 @@ mod tests {
 
     #[test]
     fn transform_for_non_html_returns_copy() {
-        assert_eq!(transform_for("style.css"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("style.css"), ShipTransform::MountCss);
         assert_eq!(transform_for("og/home.png"), ShipTransform::CopyAsIs);
         assert_eq!(transform_for("rss.xml"), ShipTransform::CopyAsIs);
         assert_eq!(transform_for("data.json"), ShipTransform::CopyAsIs);

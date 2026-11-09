@@ -1248,6 +1248,10 @@ pub fn generate_blocking_content_for_build(
             source_path,
             site_config.site_url_override.as_deref(),
         )?;
+        // Record what this build actually resolved — the deploy guard compares
+        // it against a fresh resolution and rebuilds when they disagree. Before
+        // anything else registers: a stylesheet's hash depends on its mount.
+        pending.set_site_url(site_url.as_str());
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
         // A listing row names its page's language, so every page has its tag before any listing is drawn.
@@ -1421,10 +1425,6 @@ pub fn generate_blocking_content_for_build(
             now,
         )
     };
-
-    // Record what this build actually resolved — the deploy guard compares
-    // it against a fresh resolution and rebuilds when they disagree.
-    pending.set_site_url(site_url.as_str());
 
     // Compute CSS hash for cache busting BEFORE HTML generation
     // This ensures the preview iframe loads fresh CSS/JS after rebuilds
@@ -3358,6 +3358,7 @@ pub fn generate_blocking_content_for_build(
         staging_dir: output_dir.to_path_buf(),
         moss_dir: moss_dir.clone(),
         previous_hashes: previous_hashes.clone(),
+        mount: pending.mount(),
         start_time: std::time::Instant::now(),
         dir_overrides,
         spa_defaults,

@@ -373,11 +373,11 @@ struct SlotInjectRecord {
 
 /// The slot records this process last used for a stage, by page, so a watch
 /// rebuild re-reads none for pages whose bytes before injection are the same:
-/// the key is the transform cache's own (page, those bytes' hash, the slot set;
-/// the shipping transform cannot change within a process). A hit still has to
-/// find its blob in the store.
+/// the key is the transform cache's own (page, those bytes' hash, the slot set
+/// and the site's mount). A hit still has to find its blob in the store.
 struct SlotMemo {
-    slots_hash: String,
+    /// The slot set's hash and [`crate::build::ship::shipped_key`].
+    key: String,
     pages: std::collections::HashMap<String, (String, SlotInjectRecord)>,
 }
 
@@ -562,6 +562,8 @@ pub(crate) fn inject_slots_into_directory_cached(
     slots: &ResolvedSlots,
     // [`resolved_slots_hash`] of `slots`, which the caller needs first.
     slots_hash: &str,
+    // The site's mount: part of what a page ships as, so of its manifest hash.
+    mount: &crate::build::site_meta::mount::Mount,
     object_store: &crate::build::cache::ObjectStore,
     transform_cache: &crate::build::cache::TransformCache,
     rendered: std::collections::BTreeMap<String, String>,
@@ -582,7 +584,8 @@ pub(crate) fn inject_slots_into_directory_cached(
     // nothing changed); the rest, inject and write, scales with the DELTA.
     let mut walk_ms = std::time::Duration::ZERO;
     let t_pass = std::time::Instant::now();
-    let remembered = SLOT_MEMO.take(dir).filter(|memo| memo.slots_hash == slots_hash).map(|memo| memo.pages).unwrap_or_default();
+    let memo_key = format!("{slots_hash}:{}", crate::build::ship::shipped_key(mount));
+    let remembered = SLOT_MEMO.take(dir).filter(|memo| memo.key == memo_key).map(|memo| memo.pages).unwrap_or_default();
     let mut kept = std::collections::HashMap::new();
 
     let t_walk = std::time::Instant::now();
@@ -624,11 +627,16 @@ pub(crate) fn inject_slots_into_directory_cached(
         walk_ms += t_walk.elapsed();
         // `ship_rev` is in the key because the record stores a hash of the
         // SHIPPED bytes; see `ship::SHIP_TRANSFORM_REV`.
-        let params = serde_json::json!({
+        let mut params = serde_json::json!({
             "page_path": page_path,
             "slots_hash": slots_hash,
             "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
         });
+        // A separate key, not `shipped_key`, so a root site's records keep
+        // the key they were written under.
+        if !mount.is_root() {
+            params["mount"] = mount.as_str().into();
+        }
 
         let hit = remembered.get(&page_path).filter(|(oid, _)| *oid == source_oid).map(|(_, record)| record.clone())
             .or_else(|| transform_cache
@@ -658,12 +666,7 @@ pub(crate) fn inject_slots_into_directory_cached(
             // The manifest records the bytes the SITE will serve, which are the
             // stripped ones — computed here, from the bytes in hand, because
             // this is the last moment anything holds them.
-            let manifest_hash = crate::build::assets::paths::compute_binary_hash(
-                &crate::build::ship::apply_transform(
-                    crate::build::ship::transform_for(&page_path),
-                    injected.as_bytes(),
-                ),
-            );
+            let manifest_hash = crate::build::ship::shipped_hash(&page_path, mount, injected.as_bytes());
             let content_oid = store_failures.store(object_store, injected.as_bytes());
             // Cache only what a hit can serve whole: a record without its blob would
             // have to be a miss again anyway.
@@ -686,7 +689,7 @@ pub(crate) fn inject_slots_into_directory_cached(
         receipts.push(SlotInjectionReceipt { page_path, manifest_hash, content_oid });
     }
 
-    SLOT_MEMO.keep(dir, SlotMemo { slots_hash: slots_hash.to_string(), pages: kept });
+    SLOT_MEMO.keep(dir, SlotMemo { key: memo_key, pages: kept });
     crate::build::phase::record_count("slot_html_scanned", scanned);
     crate::build::phase::record_count("slot_html_rewritten", rewritten);
     store_failures.report();

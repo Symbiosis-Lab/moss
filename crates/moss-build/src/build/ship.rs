@@ -48,6 +48,13 @@ pub use crate::build::served_path::{transform_for, ShipTransform};
 /// key, so bumping it invalidates those records instead.
 pub const SHIP_TRANSFORM_REV: u32 = 4;
 
+/// What a cache of shipped-bytes hashes is keyed on: [`SHIP_TRANSFORM_REV`],
+/// and the mount when there is one (an author can move the site between two
+/// builds). At the root it is the revision alone, so root keys stay valid.
+pub fn shipped_key(mount: &crate::build::site_meta::mount::Mount) -> String {
+    if mount.is_root() { SHIP_TRANSFORM_REV.to_string() } else { format!("{SHIP_TRANSFORM_REV}{}", mount.as_str()) }
+}
+
 /// Strips preview-only `data-source-*` attributes from HTML.
 /// Matches: data-source-line="N", data-source-range="N-M", data-source-fm="field",
 /// data-source-file="path", data-source-none.
@@ -79,30 +86,44 @@ pub fn strip_source_annotations(html: &str) -> std::borrow::Cow<'_, str> {
     STRIP_SOURCE_LINE.replace_all(html, "")
 }
 
-/// Apply the production transform to in-memory bytes. Invalid UTF-8 in the
-/// stripping path is a no-op (input returned unchanged).
+/// Apply the production transform to in-memory bytes: what a generation ships
+/// for a staged file. Invalid UTF-8 is a no-op (input returned unchanged).
 ///
-/// The enum survives the deletion of its payload because it still names the
-/// two *I/O paths* ship takes: `CopyAsIs` never reads the file (`fs::copy` is
-/// COW on APFS/Btrfs and the assets are large), `StripPreviewAttrs` must.
+/// The stage the preview serves never carries the site's mount; it is put on
+/// here, once, so a page re-read from the stage can never be prefixed twice.
+/// Every hash of shipped bytes is therefore a hash of this function's output
+/// under the build's mount (`SiteHashes::mount`).
 ///
 /// Deliberately does NOT strip `data-moss-deploy-only`: that attribute marks
 /// a `<script>` a deployed site must still execute (the pageview beacon, the
 /// site-wide analytics tag), and it is what lets the preview server strip
 /// that same script from a page it serves out of a generation THIS transform
 /// already ran on — see `ops::serve::iframe_bridge::strip_preview_only_scripts`.
-pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
+/// The manifest hash of what a generation ships for `bytes` staged at
+/// `rel_path`: the one rule every registration of shipped bytes follows.
+pub fn shipped_hash(rel_path: &str, mount: &crate::build::site_meta::mount::Mount, bytes: &[u8]) -> String {
+    let transform = transform_for(rel_path);
+    if transform.copies(mount) {
+        return crate::build::assets::paths::compute_binary_hash(bytes);
+    }
+    crate::build::assets::paths::compute_binary_hash(&apply_transform(transform, mount, bytes))
+}
+
+pub fn apply_transform(transform: ShipTransform, mount: &crate::build::site_meta::mount::Mount, bytes: &[u8]) -> Vec<u8> {
+    if transform.copies(mount) {
+        return bytes.to_vec();
+    }
+    let Ok(s) = std::str::from_utf8(bytes) else {
+        log::debug!("[ship] {:?} file is not valid UTF-8, shipped unchanged", transform);
+        return bytes.to_vec();
+    };
     match transform {
         ShipTransform::CopyAsIs => bytes.to_vec(),
+        ShipTransform::MountCss => mount.rewrite_css(s).into_owned().into_bytes(),
         ShipTransform::StripPreviewAttrs => {
-            let Ok(s) = std::str::from_utf8(bytes) else {
-                // Not valid UTF-8 — preserve bytes as-is and log.
-                log::debug!("[ship] HTML file is not valid UTF-8, skipping strip transform");
-                return bytes.to_vec();
-            };
             let after_source = STRIP_SOURCE_LINE.replace_all(s, "");
             let after_preview = STRIP_PREVIEW_ATTR.replace_all(&after_source, "$1");
-            after_preview.into_owned().into_bytes()
+            mount.rewrite_html(&after_preview).into_owned().into_bytes()
         }
     }
 }
@@ -188,8 +209,7 @@ fn verify_ship_integrity(
     // not — same reason `apply_post_seal_rewrites`'s callers hash the
     // transformed bytes, never the staged ones). Comparing raw stage bytes
     // here would report a "mismatch" for every ordinary annotated page.
-    let shipped = apply_transform(transform_for(rel_path), &bytes);
-    let real_hash = crate::build::assets::paths::compute_binary_hash(&shipped);
+    let real_hash = shipped_hash(rel_path, &sealed.mount(), &bytes);
     let expected_hash = crate::types::content::parse_entry(sealed_entry).1;
     if real_hash == expected_hash {
         None
@@ -267,6 +287,7 @@ pub fn ship_phase(
     // must fall back to last-known-good, never be promoted or advertised.
     let mut failures = 0u32;
     let mut drifted = 0;
+    let mount = sealed.mount();
 
     for (rel_path, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(rel_path);
@@ -286,7 +307,8 @@ pub fn ship_phase(
             // nothing else): write it and skip the presence probe and audit,
             // both of which are about a stage file this entry does not read.
             ShipRead::Held(bytes) => {
-                if let Err(e) = crate::build::io_utils::write_output(&site_path, bytes) {
+                let shipped = apply_transform(transform_for(rel_path), &mount, bytes);
+                if let Err(e) = crate::build::io_utils::write_output(&site_path, &shipped) {
                     log::info!("[ship_phase] write failed for {:?}: {}", site_path, e);
                     failures += 1;
                 }
@@ -397,37 +419,35 @@ pub fn ship_phase(
             continue;
         }
 
-        match transform_for(rel_path) {
-            ShipTransform::StripPreviewAttrs => {
-                match std::fs::read(&source_path) {
-                    Ok(bytes) => {
-                        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &bytes);
-                        // `write_output` renames a fresh inode into place, so it
-                        // can neither truncate an inode shared with `source_path`
-                        // nor materialize a dataless destination.
-                        if let Err(e) = crate::build::io_utils::write_output(&site_path, &stripped) {
-                            log::info!("[ship_phase] write failed for {:?}: {}", site_path, e);
-                            failures += 1;
-                        }
-                    }
-                    Err(e) => {
-                        log::info!("[ship_phase] read failed for {:?}: {}", source_path, e);
-                        failures += 1;
-                    }
-                }
+        let transform = transform_for(rel_path);
+        if transform.copies(&mount) {
+            // `fs::copy` (COW on APFS via `fclonefileat(2)`,
+            // `copy_file_range(2)` on Linux Btrfs/XFS) rather than
+            // `fs::hard_link`: hardlinks share an inode, and a cloud
+            // provider evicting that inode turns BOTH stage and generation
+            // into 0-byte stubs. `copy_output` copies into a temp sibling and
+            // renames, so the destination is never opened with `O_TRUNC`
+            // and a cloud-evicted `site_path` cannot force materialization.
+            if let Err(e) = crate::build::io_utils::copy_output(&source_path, &site_path) {
+                log::info!("[ship_phase] copy failed for {:?}: {}", source_path, e);
+                failures += 1;
             }
-            ShipTransform::CopyAsIs => {
-                // `fs::copy` (COW on APFS via `fclonefileat(2)`,
-                // `copy_file_range(2)` on Linux Btrfs/XFS) rather than
-                // `fs::hard_link`: hardlinks share an inode, and a cloud
-                // provider evicting that inode turns BOTH stage and generation
-                // into 0-byte stubs. `copy_output` copies into a temp sibling and
-                // renames, so the destination is never opened with `O_TRUNC`
-                // and a cloud-evicted `site_path` cannot force materialization.
-                if let Err(e) = crate::build::io_utils::copy_output(&source_path, &site_path) {
-                    log::info!("[ship_phase] copy failed for {:?}: {}", source_path, e);
+            continue;
+        }
+        match std::fs::read(&source_path) {
+            Ok(bytes) => {
+                let shipped = apply_transform(transform, &mount, &bytes);
+                // `write_output` renames a fresh inode into place, so it
+                // can neither truncate an inode shared with `source_path`
+                // nor materialize a dataless destination.
+                if let Err(e) = crate::build::io_utils::write_output(&site_path, &shipped) {
+                    log::info!("[ship_phase] write failed for {:?}: {}", site_path, e);
                     failures += 1;
                 }
+            }
+            Err(e) => {
+                log::info!("[ship_phase] read failed for {:?}: {}", source_path, e);
+                failures += 1;
             }
         }
     }
@@ -977,14 +997,14 @@ mod tests {
     #[test]
     fn apply_strip_removes_data_source_line() {
         let html = r#"<p data-source-line="42">hello</p>"#;
-        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes());
         assert_eq!(std::str::from_utf8(&stripped).unwrap(), r#"<p>hello</p>"#);
     }
 
     #[test]
     fn apply_strip_removes_data_source_range() {
         let html = r#"<div data-source-range="10-20">x</div>"#;
-        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes());
         assert_eq!(std::str::from_utf8(&stripped).unwrap(), r#"<div>x</div>"#);
     }
 
@@ -992,7 +1012,7 @@ mod tests {
     fn apply_strip_removes_data_source_fm_and_none() {
         // data-source-fm has a quoted value; data-source-none is a bare attribute.
         let html = r#"<h1 data-source-fm="title">T</h1><h2 data-source-none>X</h2>"#;
-        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes());
         assert_eq!(
             std::str::from_utf8(&stripped).unwrap(),
             r#"<h1>T</h1><h2>X</h2>"#
@@ -1009,7 +1029,7 @@ mod tests {
             "data-moss-preview = \"true\"",
         ] {
             let html = format!("<body {attr} data-page=\"home\">content</body>");
-            let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+            let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes());
             assert_eq!(
                 std::str::from_utf8(&stripped).unwrap(),
                 r#"<body data-page="home">content</body>"#,
@@ -1021,7 +1041,7 @@ mod tests {
     #[test]
     fn apply_strip_preserves_preview_attribute_prefixes() {
         let html = r#"<body data-moss-preview-extra="keep" data-moss-preview="x">content</body>"#;
-        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes());
         assert_eq!(
             std::str::from_utf8(&stripped).unwrap(),
             r#"<body data-moss-preview-extra="keep">content</body>"#
@@ -1031,7 +1051,7 @@ mod tests {
     #[test]
     fn apply_strip_preserves_other_attrs() {
         let html = r#"<p class="x" data-source-line="42" id="y">hello</p>"#;
-        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes());
+        let stripped = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes());
         assert_eq!(
             std::str::from_utf8(&stripped).unwrap(),
             r#"<p class="x" id="y">hello</p>"#
@@ -1041,14 +1061,14 @@ mod tests {
     #[test]
     fn apply_copy_as_is_returns_identical() {
         let bytes = b"<html>no annotations</html>";
-        let result = apply_transform(ShipTransform::CopyAsIs, bytes);
+        let result = apply_transform(ShipTransform::CopyAsIs, &Default::default(), bytes);
         assert_eq!(result, bytes);
     }
 
     #[test]
     fn apply_strip_passes_through_invalid_utf8() {
         let bytes = &[0xFF, 0xFE, 0xFD][..];
-        let result = apply_transform(ShipTransform::StripPreviewAttrs, bytes);
+        let result = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), bytes);
         assert_eq!(result, bytes);
     }
 
@@ -1096,7 +1116,7 @@ mod tests {
     #[test]
     fn apply_transform_strips_source_annotations() {
         let html = b"<p data-source-line=\"5\">text</p>";
-        let result = apply_transform(ShipTransform::StripPreviewAttrs, html);
+        let result = apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html);
         assert_eq!(result, b"<p>text</p>".to_vec());
     }
 
@@ -1448,7 +1468,7 @@ mod tests {
         // script unmarked for a later, generation-blind server-side strip.
         let html = r#"<body data-moss-preview><script src="a.js" data-moss-deploy-only></script>x</body>"#;
         let out = std::str::from_utf8(
-            &apply_transform(ShipTransform::StripPreviewAttrs, html.as_bytes())
+            &apply_transform(ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes())
         ).unwrap().to_string();
         assert_eq!(out, r#"<body><script src="a.js" data-moss-deploy-only></script>x</body>"#);
     }
@@ -2280,7 +2300,7 @@ mod tests {
         let original = r#"<body data-moss-preview><h1>original</h1></body>"#;
         std::fs::write(stage.path().join("page.html"), original).unwrap();
 
-        let shipped_original = apply_transform(transform_for("page.html"), original.as_bytes());
+        let shipped_original = apply_transform(transform_for("page.html"), &Default::default(), original.as_bytes());
         let hash_original = crate::build::assets::paths::compute_binary_hash(&shipped_original);
         let mut pending = PendingManifest::new(SiteHashes::default());
         let sp = crate::build::served_path::ServedPath::from_source("page.html").unwrap();
@@ -2295,7 +2315,7 @@ mod tests {
         // disagrees regardless of filesystem timestamp resolution.
         let repaired = r#"<body data-moss-preview><h1>this page was repaired</h1></body>"#;
         std::fs::write(stage.path().join("page.html"), repaired).unwrap();
-        let shipped_repaired = apply_transform(transform_for("page.html"), repaired.as_bytes());
+        let shipped_repaired = apply_transform(transform_for("page.html"), &Default::default(), repaired.as_bytes());
         let new_hash = crate::build::assets::paths::compute_binary_hash(&shipped_repaired);
         let mut rewrites = std::collections::HashMap::new();
         rewrites.insert("page.html".to_string(), new_hash);

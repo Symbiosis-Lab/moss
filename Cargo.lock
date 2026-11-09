@@ -2848,6 +2848,7 @@ dependencies = [
  "color_quant",
  "core-foundation 0.9.4",
  "core-foundation-sys",
+ "cssparser 0.31.2",
  "dirs",
  "ed25519-dalek",
  "ego-tree",

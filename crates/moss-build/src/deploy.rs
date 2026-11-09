@@ -185,6 +185,27 @@ pub fn view_site_url(
 }
 
 #[cfg(test)]
+mod hosting_address_tests {
+    fn folder(site: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), format!("schema_version = 6\n\n[site]\n{site}")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn moss_hosting_refuses_an_address_with_a_path() {
+        let dir = folder("url = \"https://example.edu/~alice/\"\n");
+        let err = super::hosting_serves_this_address(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(err.contains("[site] url") && err.contains("https://example.edu/~alice/"), "{err}");
+        for ok in ["url = \"https://example.org/\"\n", "domain = \"example.org\"\n", ""] {
+            let dir = folder(ok);
+            assert!(super::hosting_serves_this_address(dir.path().to_str().unwrap()).is_ok(), "{ok}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod view_site_url_tests {
     use super::view_site_url;
     use crate::config::deployment::DomainDeploymentConfig;
@@ -760,6 +781,19 @@ mod stale_copy_tests {
 /// without entering a function that, if the gate regressed, would go on to call
 /// a real server. A test whose failure mode is the irreversible action is the
 /// wrong shape however green it is.
+fn hosting_serves_this_address(folder_str: &str) -> Result<(), String> {
+    let Some(url) = crate::build::site_config::read_project_config(folder_str)?.site_address()? else {
+        return Ok(());
+    };
+    if crate::build::site_meta::mount::Mount::of_site_url(&url).is_root() {
+        return Ok(());
+    }
+    Err(format!(
+        "[site] url in .moss/config.toml is \"{url}\", an address with a path; moss hosting serves a site at the root \
+         of its address, so every link would miss. Take the path out of url, or publish with another host."
+    ))
+}
+
 fn first_publish_is_permitted(folder_str: &str) -> Result<bool, String> {
     Ok(crate::build::site_config::get_environment_field(folder_str)?.is_some())
 }
@@ -791,6 +825,7 @@ pub async fn resolve_publish_inputs(
     // pass the gate and mint a SECOND site. A missing file is `Ok(Default)`, so
     // a genuine first publish is unaffected.
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
+    hosting_serves_this_address(&folder_str)?;
 
     // Every pure refusal first, so nothing below is paid for by a publish that
     // was never going to happen. A name the server would reject is knowable at

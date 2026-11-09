@@ -269,7 +269,7 @@ pub fn get_site_selection_tools(project_path: &str) -> Result<Option<bool>, Stri
 pub fn get_domain_config(project_path: &str) -> Result<DomainDeploymentConfig, String> {
     let state = read_deployment_state(project_path)?;
     // ONE parse of config.toml for both authored inputs: the target selector
-    // (`[hooks] deploy`) and the domain intent (`[site].domain`). The raw
+    // (`[hooks] deploy`) and the site's address (`[site].url`). The raw
     // key, deliberately NOT `plugins::discovery::get_hook_config`, which
     // injects the build-time `DEFAULT_DEPLOYER` fallback: an unconfigured
     // folder must read as "no selection" so the first publish opens the
@@ -279,7 +279,12 @@ pub fn get_domain_config(project_path: &str) -> Result<DomainDeploymentConfig, S
         .section(&["hooks", "deploy"])
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let domain = config.site_str("domain").map(str::to_string);
+    // `domain` on the view is the address's host, which every reader of it
+    // (the Host row, the DNS check, plugins) wants.
+    let domain = config
+        .site_address()?
+        .and_then(|url| crate::build::site_url::SiteUrl::parse(&url).ok())
+        .map(|url| url.host_name().to_string());
     let method = crate::config::deployment::derive_deploy_method(
         hooks_deploy.as_deref(),
         state.site_id.as_deref(),

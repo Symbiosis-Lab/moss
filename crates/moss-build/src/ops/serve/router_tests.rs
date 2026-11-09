@@ -460,6 +460,7 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
     );
     let shipped_bytes = crate::build::ship::apply_transform(
         crate::build::ship::ShipTransform::StripPreviewAttrs,
+        &Default::default(),
         staging_page.as_bytes(),
     );
     let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");

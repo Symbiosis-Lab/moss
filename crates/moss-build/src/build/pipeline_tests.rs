@@ -873,7 +873,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     let staging_html_for_hash = fs::read(test_dir.join(".moss/build.nosync/staging/index.html"))
         .expect("staging/index.html must exist after build");
     let manifest_bytes = crate::build::ship::apply_transform(
-        crate::build::ship::transform_for("index.html"),
+        crate::build::ship::transform_for("index.html"), &Default::default(),
         &staging_html_for_hash,
     );
     let expected_hash = format!("100644:{}", compute_binary_hash(&manifest_bytes));

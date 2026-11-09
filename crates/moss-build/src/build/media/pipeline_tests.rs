@@ -845,7 +845,7 @@ async fn seal_hand_written_page(builds: usize, stale_memo: bool) -> (Vec<Option<
 
     let raw = b"<html><body data-moss-preview=\"\"><p>hand written</p></body></html>";
     fs::write(source.join("page.html"), raw).unwrap();
-    let shipped = crate::build::ship::apply_transform(crate::build::served_path::ShipTransform::StripPreviewAttrs, raw);
+    let shipped = crate::build::ship::apply_transform(crate::build::served_path::ShipTransform::StripPreviewAttrs, &Default::default(), raw);
     assert_ne!(shipped.as_slice(), &raw[..], "fixture must actually change under the transform");
     let expected = crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(&shipped));
 
@@ -1883,7 +1883,7 @@ fn recall_or_hash_output_memoizes_the_real_hash() {
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let got = recall_or_hash_output(&memo, "oid-x", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let got = recall_or_hash_output(&memo, "oid-x", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
 
     assert_eq!(got, expected, "a miss must return exactly what compute_binary_hash_file returns");
     assert_eq!(
@@ -1903,7 +1903,7 @@ fn recall_or_hash_output_hit_does_not_read_the_file() {
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let first = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let first = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(first, expected);
 
     // Delete the file entirely. A second call that reads it would fail
@@ -1911,7 +1911,7 @@ fn recall_or_hash_output_hit_does_not_read_the_file() {
     // so returning the real hash here is proof the memo hit short-circuited
     // before any file I/O.
     std::fs::remove_file(&target).unwrap();
-    let second = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let second = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(second, expected, "a memo hit must not touch the (now-deleted) file");
 }
 
@@ -1924,7 +1924,7 @@ fn recall_or_hash_output_never_memoizes_the_fallback() {
     let target = tmp.path().join("missing.bin");
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let failed = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let failed = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(failed, "fallback-oid", "a hash failure must return the fallback");
     assert_eq!(memo.get("oid-z"), None, "a failed hash must never be memoized");
 
@@ -1932,7 +1932,7 @@ fn recall_or_hash_output_never_memoizes_the_fallback() {
     // is looked up again — this must be a genuine miss, not a poisoned hit.
     std::fs::write(&target, b"now it exists").unwrap();
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
-    let recovered = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let recovered = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(recovered, expected, "a subsequent successful read must record the real xxh3");
     assert_eq!(memo.get("oid-z").as_deref(), Some(expected.as_str()));
 }

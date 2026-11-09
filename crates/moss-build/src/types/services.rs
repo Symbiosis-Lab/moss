@@ -60,6 +60,9 @@ pub struct BackgroundContext {
     pub moss_dir: std::path::PathBuf,
     /// Previous outputs for incremental conversion and asset carry-forward.
     pub previous_hashes: SiteHashes,
+    /// This build's mount, for hashing what a copied `.html` or `.css` ships
+    /// as. Not `previous_hashes.mount()`: the site may have moved since.
+    pub mount: crate::build::site_meta::mount::Mount,
     /// Build start time for total_time_ms calculation in BuildComplete event
     pub start_time: std::time::Instant,
     /// Directory path overrides from folder index `url:` frontmatter.
@@ -127,6 +130,7 @@ impl BackgroundContext {
             staging_dir: std::path::PathBuf::new(),
             moss_dir: std::path::PathBuf::new(),
             previous_hashes: SiteHashes::default(),
+            mount: Default::default(),
             start_time: std::time::Instant::now(),
             dir_overrides: HashMap::new(),
             spa_defaults: None,
@@ -675,6 +679,7 @@ mod tests {
             staging_dir: std::path::PathBuf::from("/test/.moss/build.nosync/staging"),
             moss_dir: std::path::PathBuf::from("/test/.moss"),
             previous_hashes: SiteHashes::default(),
+            mount: Default::default(),
             start_time: std::time::Instant::now(),
             dir_overrides: Default::default(),
             spa_defaults: None,

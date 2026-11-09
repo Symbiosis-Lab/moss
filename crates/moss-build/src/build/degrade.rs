@@ -151,6 +151,7 @@ pub fn apply_to_staging(
         return Vec::new();
     }
     let mut rewrites: HashMap<String, String> = HashMap::new();
+    let mount = sealed.mount();
 
     for path in sealed.blocking_keys() {
         if !path.ends_with(".html") {
@@ -190,12 +191,7 @@ pub fn apply_to_staging(
             // vault holding a CMYK image (its variants settle as `Failed`, so
             // this pass runs at all). Same computation as `enhance.rs`'s
             // registration site, and for the same reason.
-            let hash = crate::build::assets::paths::compute_binary_hash(
-                &crate::build::ship::apply_transform(
-                    crate::build::ship::transform_for(path),
-                    new_html.as_bytes(),
-                ),
-            );
+            let hash = crate::build::ship::shipped_hash(path, &mount, new_html.as_bytes());
             rewrites.insert(path.clone(), hash);
         }
     }

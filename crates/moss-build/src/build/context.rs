@@ -192,6 +192,24 @@ mod tests {
         }
     }
 
+    /// A stylesheet can be held (a `[redirects]` copy of one is): at the root it
+    /// ships as held, and under a mount its manifest entry is of the mounted
+    /// bytes ship writes.
+    #[test]
+    fn a_stylesheet_can_be_held_at_the_root_and_under_a_mount() {
+        let sp = crate::build::served_path::ServedPath::from_source("old/style.css").unwrap();
+        let css = b"a{background:url(/a.png)}".to_vec();
+        for (site_url, shipped) in [("https://example.org", &b"a{background:url(/a.png)}"[..]), ("https://example.edu/~alice", &b"a{background:url(/~alice/a.png)}"[..])] {
+            let dir = tempdir().unwrap();
+            let mut manifest = PendingManifest::new(SiteHashes::default());
+            manifest.set_site_url(site_url);
+            BuildContext::for_render(dir.path(), &mut manifest).emit_held(&sp, css.clone(), HashBucket::Files).unwrap();
+            let entry = manifest.seal().files().get("old/style.css").cloned();
+            let expected = crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(shipped));
+            assert_eq!(entry, Some(expected), "{site_url}");
+        }
+    }
+
     /// `register_held` refuses a path `ship_phase` transforms, but by then the
     /// stage file was already written: a refused path left a file no manifest
     /// entry names. The refusal comes first.

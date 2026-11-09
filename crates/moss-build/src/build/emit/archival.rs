@@ -176,7 +176,7 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     let id: String = compute_binary_hash(inventory.as_bytes()).chars().take(7).collect();
     let site_url = inputs.site_url.filter(|url| url.is_deployed()).map(|url| url.as_str().to_string());
     if site_url.is_none() {
-        crate::build::cli_output::log_note!("no published site address is known ([site] domain), so the page citations name no address");
+        crate::build::cli_output::log_note!("no published site address is known ([site] url), so the page citations name no address");
     }
     let readme = readme(Path::new(&inputs.structure.root_path), &copied, inputs.documents, inputs.license.as_deref(), &inputs.date, &id);
     let served = ServedPath::from_cached(SOURCE_README).map_err(std::io::Error::other)?;

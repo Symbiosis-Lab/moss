@@ -79,6 +79,13 @@ impl SiteUrl {
             .unwrap_or(&self.0)
     }
 
+    /// The host alone, without the scheme, a port or a path.
+    pub fn host_name(&self) -> &str {
+        let host = self.host();
+        let host = host.split('/').next().unwrap_or(host);
+        host.split(':').next().unwrap_or(host)
+    }
+
     /// The scheme this site is served over — `"http"` or `"https"`.
     ///
     /// Almost every site is https, but onion sites are served over plain http
@@ -102,13 +109,8 @@ impl SiteUrl {
     /// `localhost` / `127.0.0.1` loopback used by the preview and build
     /// defaults.
     pub fn is_deployed(&self) -> bool {
-        // `host()` strips the scheme (e.g. "localhost:1420", "abc.onion",
-        // "example.com", "127.0.0.1:8080"). Strip any path then port so we
-        // compare the bare host.
-        let host = self.host();
-        let host_only = host.split('/').next().unwrap_or(host);
-        let host_only = host_only.split(':').next().unwrap_or(host_only);
-        !host_only.is_empty() && host_only != "localhost" && host_only != "127.0.0.1"
+        let host = self.host_name();
+        !host.is_empty() && host != "localhost" && host != "127.0.0.1"
     }
 }
 
@@ -121,13 +123,14 @@ pub struct ResolveInputs<'a> {
     /// `std::env::var` returns `String`; the caller would otherwise
     /// have to hold a temporary alive across this call.
     pub env_var: Option<String>,
-    /// `.moss/config.toml [site].domain` — the authored custom domain, when
-    /// set. Authored intent, so it lives in the git-tracked file; the build
-    /// never consults server state for it.
-    pub domain: Option<String>,
+    /// The authored address (`ConfigFile::site_address`: `[site].url`, or an
+    /// older folder's `[site].domain`), path included. Authored intent, so it
+    /// lives in the git-tracked file; the build never consults server state
+    /// for it.
+    pub url: Option<String>,
     /// `.moss/state.toml [deployment].site_url` — a plugin deployment's own
     /// canonical URL (e.g. an OnionPress `http://<addr>.onion`). Consulted after
-    /// `domain` (a bought custom domain still wins → the onion is an
+    /// `url` (a bought custom domain still wins → the onion is an
     /// Onion-Location alternate) and before `site_id`. Its scheme is preserved,
     /// so an http onion address stays http.
     pub site_url: Option<String>,
@@ -160,7 +163,7 @@ impl<'a> Default for ResolveInputs<'a> {
         Self {
             cli_flag: None,
             env_var: None,
-            domain: None,
+            url: None,
             site_url: None,
             site_id: None,
             cdn_active: false,
@@ -174,8 +177,8 @@ impl<'a> Default for ResolveInputs<'a> {
 ///
 ///   1. `--site-url=<url>` CLI flag (`cli_flag`)
 ///   2. `MOSS_SITE_URL=<url>` env var (`env_var`)
-///   3. `.moss/config.toml [site].domain` — the authored domain (with `www.`
-///      policy when the domain's CDN hostname is active)
+///   3. the authored address, `[site].url` (with the `www.` policy when its
+///      CDN hostname is active and it has no path)
 ///   4. `.moss/state.toml [deployment].site_url` (a plugin deploy's canonical
 ///      URL, e.g. an onion address — scheme preserved)
 ///   5. `.moss/state.toml [deployment].site_id` → `https://{id}.mosspub.com`
@@ -191,16 +194,17 @@ pub fn resolve_site_url(inputs: &ResolveInputs) -> Result<SiteUrl, SiteUrlError>
     if let Some(raw) = inputs.env_var.as_deref() {
         return SiteUrl::parse(raw);
     }
-    if let Some(domain) = inputs.domain.as_deref() {
+    if let Some(url) = inputs.url.as_deref() {
+        let url = SiteUrl::parse(url)?;
         // The canonical host follows what verification observed: `www.` once
         // the CDN hostname is active, the bare apex otherwise. See
-        // `ResolveInputs::cdn_active`.
-        let host = if inputs.cdn_active && !domain.starts_with("www.") {
-            format!("www.{}", domain)
-        } else {
-            domain.to_string()
-        };
-        return SiteUrl::from_host(&host);
+        // `ResolveInputs::cdn_active`. The CDN serves a whole host, so a site
+        // under a path keeps the host it was given.
+        let at_root = crate::build::site_meta::mount::Mount::of_site_url(url.as_str()).is_root();
+        if inputs.cdn_active && at_root && !url.host().starts_with("www.") {
+            return SiteUrl::parse(&format!("{}://www.{}", url.scheme(), url.host()));
+        }
+        return Ok(url);
     }
     // A plugin deployment's own canonical URL (e.g. an OnionPress onion
     // address). Ranked after `domain` and before `site_id`, and parsed as-is so
@@ -259,12 +263,21 @@ pub fn resolve_for_project(
     let site_suffix = crate::build::site_config::resolve_environment(project_path)
         .site_suffix()
         .to_string();
+    // Read apart from `domain_cfg`, whose read errors are survivable: a folder
+    // whose `url` and `domain` disagree must refuse the build, not fall back.
+    let url = match crate::build::site_config::read_project_config(project_path) {
+        Ok(config) => config.site_address().map_err(|e| format!("site URL: {}", e))?,
+        Err(e) => {
+            log::info!("site URL: could not read .moss/config.toml ({}); treating the site as having no address", e);
+            None
+        }
+    };
     let inputs = ResolveInputs {
         cli_flag,
         env_var,
-        domain: domain_cfg.domain,
+        url,
         // A plugin deploy's own canonical URL (e.g. an OnionPress .onion) —
-        // ranked after `domain`, before `site_id` (see resolve_site_url).
+        // ranked after `url`, before `site_id` (see resolve_site_url).
         // Resolution is shared with the deploy guard, so an onion build and
         // the publish that ships it can never disagree about this URL.
         site_url: domain_cfg.site_url,
@@ -347,7 +360,7 @@ mod tests {
             site_url: None,
             cli_flag: Some("https://from-cli.test"),
             env_var: Some("https://from-env.test".to_string()),
-            domain: Some("from-state-domain.test".to_string()),
+            url: Some("https://from-state-domain.test/".to_string()),
             site_id: Some("from-state-site-id".to_string()),
             cdn_active: false,
             preview_port: None,
@@ -363,7 +376,7 @@ mod tests {
             site_url: None,
             cli_flag: None,
             env_var: Some("https://from-env.test".to_string()),
-            domain: Some("from-state.test".to_string()),
+            url: Some("https://from-state.test/".to_string()),
             site_id: None,
             cdn_active: false,
             preview_port: None,
@@ -379,7 +392,7 @@ mod tests {
         // registrar, the host that serves is `www.` once the CDN hostname
         // went active. See ResolveInputs::cdn_active.
         let inputs = ResolveInputs {
-            domain: Some("example.com".to_string()),
+            url: Some("https://example.com/".to_string()),
             site_id: Some("ignored-when-domain-present".to_string()),
             cdn_active: true,
             ..Default::default()
@@ -395,7 +408,7 @@ mod tests {
         // unverified `www.` into canonical/og:url/RSS points every crawler at
         // a name nothing answers on yet.
         let inputs = ResolveInputs {
-            domain: Some("example.com".to_string()),
+            url: Some("https://example.com/".to_string()),
             cdn_active: false,
             ..Default::default()
         };
@@ -409,7 +422,7 @@ mod tests {
             site_url: None,
             cli_flag: None,
             env_var: None,
-            domain: None,
+            url: None,
             site_id: Some("her-blog".to_string()),
             cdn_active: false,
             preview_port: None,
@@ -425,7 +438,7 @@ mod tests {
             site_url: None,
             cli_flag: None,
             env_var: None,
-            domain: None,
+            url: None,
             site_id: None,
             cdn_active: false,
             preview_port: Some(1420),
@@ -441,7 +454,7 @@ mod tests {
             site_url: None,
             cli_flag: None,
             env_var: None,
-            domain: None,
+            url: None,
             site_id: None,
             cdn_active: false,
             preview_port: None,
@@ -457,7 +470,7 @@ mod tests {
             site_url: None,
             cli_flag: Some("not-a-url"),
             env_var: None,
-            domain: None,
+            url: None,
             site_id: None,
             cdn_active: false,
             preview_port: None,
@@ -478,7 +491,7 @@ mod tests {
             site_url: None,
             cli_flag: None,
             env_var: Some("not-a-url".to_string()),
-            domain: None,
+            url: None,
             site_id: None,
             cdn_active: false,
             preview_port: None,
@@ -498,7 +511,7 @@ mod tests {
             site_url: None,
             cli_flag: None,
             env_var: None,
-            domain: Some("www.example.com".to_string()),
+            url: Some("https://www.example.com/".to_string()),
             site_id: None,
             cdn_active: true,
             preview_port: None,
@@ -569,7 +582,7 @@ mod tests {
         // A bought custom domain outranks the onion site_url — the onion becomes
         // an Onion-Location alternate, the canonical stays on the real domain.
         let inputs = ResolveInputs {
-            domain: Some("example.com".to_string()),
+            url: Some("https://example.com/".to_string()),
             site_url: Some("http://onionaddr.onion".to_string()),
             site_id: Some("her-blog".to_string()),
             ..Default::default()
@@ -613,5 +626,39 @@ mod tests {
         crate::vault::config::save_site_str(path, "domain", "example.com").unwrap();
         let resolved = resolve_for_project(path, None).unwrap();
         assert_eq!(resolved.as_str(), "https://example.com");
+    }
+
+    // ── `[site].url` replaces `[site].domain` ──
+
+    fn folder_with_site(lines: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".moss")).unwrap();
+        std::fs::write(tmp.path().join(".moss/config.toml"), format!("schema_version = 6\n\n[site]\n{lines}")).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn url_is_the_address_path_included() {
+        let tmp = folder_with_site("url = \"https://example.edu/~alice/\"\n");
+        let path = tmp.path().to_str().unwrap();
+        crate::vault::deployment_state::record_cdn_status(path, "active").unwrap();
+        // The CDN's `www.` is for a whole host; a site under a path keeps its host.
+        assert_eq!(resolve_for_project(path, None).unwrap().as_str(), "https://example.edu/~alice");
+    }
+
+    #[test]
+    fn domain_alone_reads_as_url() {
+        let tmp = folder_with_site("domain = \"example.org\"\n");
+        assert_eq!(resolve_for_project(tmp.path().to_str().unwrap(), None).unwrap().as_str(), "https://example.org");
+    }
+
+    #[test]
+    fn url_and_domain_with_different_hosts_refuse_the_build() {
+        let tmp = folder_with_site("url = \"https://example.edu/~alice/\"\ndomain = \"example.org\"\n");
+        let err = resolve_for_project(tmp.path().to_str().unwrap(), None).unwrap_err();
+        assert!(err.contains("[site] url") && err.contains("[site] domain"), "{err}");
+        // The same host twice is one address, not a contradiction.
+        let tmp = folder_with_site("url = \"https://example.org/notes/\"\ndomain = \"example.org\"\n");
+        assert_eq!(resolve_for_project(tmp.path().to_str().unwrap(), None).unwrap().as_str(), "https://example.org/notes");
     }
 }

@@ -628,6 +628,7 @@ fn strip_matches_between_staging_and_a_ship_transformed_generation() {
     // generation directory from the SAME staged bytes.
     let shipped_bytes = crate::build::ship::apply_transform(
         crate::build::ship::ShipTransform::StripPreviewAttrs,
+        &Default::default(),
         staging_page.as_bytes(),
     );
     let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");
@@ -1027,6 +1028,7 @@ fn build_deploy_only_fixture_pages() -> (String, String) {
 
     let shipped_bytes = crate::build::ship::apply_transform(
         crate::build::ship::ShipTransform::StripPreviewAttrs,
+        &Default::default(),
         page.as_bytes(),
     );
     let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");

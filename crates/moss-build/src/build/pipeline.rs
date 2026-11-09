@@ -196,7 +196,10 @@ fn previous_route_present(
                 .is_ok_and(|bytes| format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&bytes)) == hash)
         });
         source_matches && matches_current
-            && crate::build::manifest::required_page_outputs_present(&previous.files, key, current_dir)
+            // `current` holds shipped bytes, which the root transform leaves as
+            // they are. Under a mount its references carry the prefix, so this
+            // answers no and the preview waits for the stage instead.
+            && crate::build::manifest::required_page_outputs_present(&previous.files, key, current_dir, &Default::default())
     })
 }
 

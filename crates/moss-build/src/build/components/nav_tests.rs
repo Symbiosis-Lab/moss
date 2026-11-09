@@ -706,7 +706,7 @@ fn nav_entry_names_the_page_that_owns_it() {
         "{html}"
     );
     assert!(html.contains(r#"<a href="/contact">Contact</a>"#), "no source path, no claim: {html}");
-    let shipped = crate::build::ship::apply_transform(crate::build::ship::ShipTransform::StripPreviewAttrs, html.as_bytes());
+    let shipped = crate::build::ship::apply_transform(crate::build::ship::ShipTransform::StripPreviewAttrs, &Default::default(), html.as_bytes());
     assert!(!String::from_utf8(shipped).unwrap().contains("data-source"));
 }
 

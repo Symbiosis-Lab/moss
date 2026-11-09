@@ -72,7 +72,7 @@ fn a_manifest_entry_hashes_the_shipped_page_not_the_staged_one() {
     let mut pending = PendingManifest::new(SiteHashes::default());
     let served = ServedPath::from_source("index.html").unwrap();
     pending.register(&served, staged, HashBucket::Files);
-    let shipped = apply_transform(transform_for("index.html"), staged);
+    let shipped = apply_transform(transform_for("index.html"), &Default::default(), staged);
     pending.register(&served, &shipped, HashBucket::Files);
     let sealed = pending.seal();
 

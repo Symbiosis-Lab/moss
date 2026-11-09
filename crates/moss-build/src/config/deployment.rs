@@ -92,8 +92,8 @@ pub struct DeployAddress {
 /// the server's custom-domain rows, and what the DNS-verification flow last
 /// concluded. Lives at `[deployment.observed]` in state.toml, written as a
 /// unit and deletable at any time with no loss: it drives UI confidence only,
-/// never build output (the build's domain comes from the authored
-/// `[site].domain` in config.toml).
+/// never build output (the build's address comes from the authored
+/// `[site].url` in config.toml).
 ///
 /// This replaces four fields (`dns_configured`, `dns_configured_at`,
 /// `dns_target`, and the per-target copy of `dns_target`) that were written
@@ -140,15 +140,15 @@ pub struct DomainObservation {
 /// config.toml is the user's selection, and a registered `site_id` with no
 /// hook means moss hosting. See [`derive_deploy_method`]. `domain` and the
 /// `dns_*` fields follow the same pattern since 2026-08-31: `domain` is
-/// authored in config.toml (`[site].domain`), the `dns_*` trio derives from
+/// the host of the address authored in config.toml (`[site].url`), the `dns_*` trio derives from
 /// [`DomainObservation`], and all four are dropped at write time — an
 /// authored fact must not live in a file moss rewrites wholesale, and a
 /// stored copy of either drifts from its source.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[derive(specta::Type)]
 pub struct DomainDeploymentConfig {
-    /// Custom domain for this project — the authored intent from
-    /// `[site].domain` in config.toml, filled at read time.
+    /// Custom domain for this project: the host of the address authored as
+    /// `[site].url` in config.toml, filled at read time.
     pub domain: Option<String>,
     /// Whether DNS has been configured for this domain — derived from
     /// [`DomainObservation::dns_configured`] at read time.
@@ -362,7 +362,7 @@ impl DeploymentRecord {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct DeploymentState {
     /// Legacy (read-only): the domain is authored intent and lives in
-    /// config.toml `[site].domain` since 2026-08-31 — state.toml is a file
+    /// config.toml (`[site].url`) — state.toml is a file
     /// moss rewrites wholesale, and an authored fact must not live there
     /// (a large vault baked a mosspub canonical for months because this
     /// copy was absent locally while the server had the real domain). Read
@@ -538,8 +538,8 @@ impl DeploymentState {
 
     /// Compose the flat view every caller reads: project-scoped fields plus
     /// the active target's record. `deploy_method` is the derived selector
-    /// (see [`derive_deploy_method`]); `domain` is the authored intent from
-    /// config.toml `[site].domain`, passed in by the reader that parsed that
+    /// (see [`derive_deploy_method`]); `domain` is the host of the address
+    /// authored as config.toml `[site].url`, passed in by the reader that parsed that
     /// file; the `dns_*` trio derives from [`Self::observed`]. A target the
     /// selector names that has never published reads as an empty record,
     /// exactly like a fresh folder.
@@ -666,7 +666,7 @@ pub fn reconcile_domain(authored: Option<&str>, server: &[String]) -> DomainReco
 }
 
 /// The custom-domain URL to surface for a LIVE site, when one is actually
-/// serving: requires a non-empty authored domain (`[site].domain` in
+/// serving: requires a non-empty authored domain (the host of `[site].url` in
 /// config.toml) AND an observation with `dns_configured`.
 /// Callers fall back to the mosspub subdomain URL when this returns `None`.
 ///

@@ -176,7 +176,13 @@ pub fn save_environment(project_path: &str, env: HostingEnvironment) -> Result<(
 fn save_site_value(project_path: &str, field: &str, value: Value) -> Result<(), String> {
     let config_path = Path::new(project_path).join(".moss").join("config.toml");
     let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
-    subtable(&mut root, "site")?.insert(field.to_string(), value);
+    let site = subtable(&mut root, "site")?;
+    site.insert(field.to_string(), value);
+    // `url` replaces the older `domain`: every write of it drops `domain`, so
+    // a folder never holds two addresses that could disagree.
+    if field == "url" {
+        site.remove("domain");
+    }
     write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
 }
 
@@ -190,8 +196,9 @@ pub fn save_site_bool(project_path: &str, field: &str, value: bool) -> Result<()
     save_site_value(project_path, field, Value::Boolean(value))
 }
 
-/// Set the authored domain — `[site].domain` in config.toml, the one place
-/// the build reads it from. When the domain actually changed, resets the
+/// Set the site's address to a custom domain: `[site].url = "https://<domain>/"`
+/// in config.toml (dropping an older `[site].domain`), the one place the build
+/// reads it from. When the domain actually changed, resets the
 /// observation: what was verified was verified about the OLD domain. The
 /// deployer's `dns_target` survives the reset — it describes where to point
 /// a domain (the deploy target's endpoints), not which domain points there,
@@ -205,7 +212,7 @@ pub fn set_domain_in_config(folder_path: &str, domain: &str) -> Result<(), Strin
         .domain
         .as_deref()
         != Some(domain);
-    save_site_str(folder_path, "domain", domain)?;
+    save_site_str(folder_path, "url", &format!("https://{domain}/"))?;
     if domain_changed {
         crate::vault::deployment_state::update_domain_observation(folder_path, |o| {
             o.dns_target.map(|target| crate::config::deployment::DomainObservation {
@@ -222,6 +229,17 @@ mod tests {
     use super::*;
     use crate::build::site_config::{get_environment_field, get_site_lang};
     use std::fs;
+
+    #[test]
+    fn writing_url_drops_the_older_domain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        save_site_str(path, "domain", "old.example").unwrap();
+        set_domain_in_config(path, "example.org").unwrap();
+        let config = crate::build::site_config::read_project_config(path).unwrap();
+        assert_eq!(config.site_str("url"), Some("https://example.org/"));
+        assert_eq!(config.site_str("domain"), None);
+    }
 
     #[test]
     fn save_environment_round_trips() {

@@ -467,7 +467,14 @@ impl PendingManifest {
     /// makes the deploy-time canonicalize match what's on disk regardless
     /// of source case. See `build::served_path` for design.
     pub fn register(&mut self, rel_path: &crate::build::served_path::ServedPath, bytes: &[u8], bucket: HashBucket) {
-        let hash = compute_binary_hash(bytes);
+        // Under a mount a stylesheet or page ships with its URLs prefixed, and
+        // the manifest records what ships. At the root nothing here changes.
+        let mount = self.mount();
+        let hash = if mount.is_root() {
+            compute_binary_hash(bytes)
+        } else {
+            crate::build::ship::shipped_hash(rel_path.as_str(), &mount, bytes)
+        };
         self.register_with_hash(rel_path.as_str().to_string(), &hash, bucket, None);
     }
 
@@ -654,6 +661,11 @@ impl PendingManifest {
     /// The site URL recorded by [`set_site_url`][Self::set_site_url].
     pub(crate) fn site_url(&self) -> Option<&str> {
         self.inner.site_url.as_deref()
+    }
+
+    /// See [`SiteHashes::mount`].
+    pub(crate) fn mount(&self) -> crate::build::site_meta::mount::Mount {
+        self.inner.mount()
     }
 
     /// Snapshot the accumulated hashes before the background phase seals them.
@@ -1119,6 +1131,11 @@ impl SealedManifest {
     /// manifest predates the field (pre-upgrade hashes.json).
     pub fn site_url(&self) -> Option<&str> {
         self.inner.site_url.as_deref()
+    }
+
+    /// See [`SiteHashes::mount`].
+    pub(crate) fn mount(&self) -> crate::build::site_meta::mount::Mount {
+        self.inner.mount()
     }
 
     /// The content-derived generation identity computed at seal time.

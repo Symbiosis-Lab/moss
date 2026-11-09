@@ -20,7 +20,7 @@
 //! ([`moved_folder_files`] over the live addresses), so the preview keeps
 //! serving them.
 
-use crate::build::assets::paths::{compute_binary_hash, compute_binary_hash_file};
+use crate::build::assets::paths::compute_binary_hash_file;
 use crate::build::cli_output::log_warn_problem;
 use crate::build::feeds::redirect_table::FolderMove;
 use crate::build::manifest::{backfill, change_set, published_record, SealedManifest};
@@ -147,6 +147,7 @@ pub(crate) fn moved_folder_qr_codes(moves: &[FolderMove], files: &HashMap<String
 /// report. An address the build already serves is never overwritten.
 pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest, late: &LateRedirects) -> Vec<(String, String)> {
     let files = sealed.files().into_owned();
+    let mount = sealed.mount();
     let moves = &late.folder_moves;
     let folder_files = moved_folder_files(moves, &files);
     let folder_qr = moved_folder_qr_codes(moves, &files);
@@ -175,7 +176,7 @@ pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest
             Origin::Declared { raw } => Some(raw),
             Origin::Kept => None,
         };
-        match (write_kept(mp, stage_dir, from, to, raw), raw) {
+        match (write_kept(mp, stage_dir, from, to, raw, &mount), raw) {
             (Ok(hash), raw) => {
                 rewrites.insert(from.to_string(), hash);
                 if raw.is_none() {
@@ -198,18 +199,29 @@ pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest
 /// the served file (the site folder's own when the stage has none, as for a
 /// picture copied in as it is, found at `to` or else at `raw`). Returns the
 /// hash of what was written.
-fn write_kept(mp: &MossPaths, stage_dir: &Path, from: &str, to: &str, raw: Option<&str>) -> Result<String, String> {
+fn write_kept(
+    mp: &MossPaths,
+    stage_dir: &Path,
+    from: &str,
+    to: &str,
+    raw: Option<&str>,
+    mount: &crate::build::site_meta::mount::Mount,
+) -> Result<String, String> {
     let dst = stage_dir.join(from);
     if from.ends_with(".html") {
         let html = super::redirects::generate_redirect_html(&served_address(to));
         crate::build::io_utils::write_output(&dst, html.as_bytes()).map_err(|e| e.to_string())?;
-        return Ok(compute_binary_hash(html.as_bytes()));
+        return Ok(crate::build::ship::shipped_hash(from, mount, html.as_bytes()));
     }
     let in_folder = |rel: &str| Some(on_disk(mp.project_root(), rel)).filter(|p| p.is_file());
     let staged = Some(stage_dir.join(to)).filter(|p| p.is_file());
     let source = staged.or_else(|| in_folder(to)).or_else(|| raw.and_then(in_folder)).unwrap_or_else(|| mp.project_root().join(to));
     crate::build::io_utils::copy_output(&source, &dst).map_err(|e| e.to_string())?;
-    compute_binary_hash_file(&dst)
+    if crate::build::ship::transform_for(from).copies(mount) {
+        return compute_binary_hash_file(&dst);
+    }
+    let bytes = std::fs::read(&dst).map_err(|e| e.to_string())?;
+    Ok(crate::build::ship::shipped_hash(from, mount, &bytes))
 }
 
 #[cfg(test)]

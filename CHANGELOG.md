@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### New
+
+- A site can be served under a path, such as `https://example.edu/~alice/`. `url` under `[site]` in `.moss/config.toml` is the site's address, path included: every link, picture, stylesheet and script the build publishes is put under that path, and search and link previews find their files there. `url` replaces `domain`, which is still read when `url` is absent; `moss domain link` writes `url` and removes `domain`, and a folder whose two keys name different hosts stops the build with a message naming both.
+
 ### Changed
 
 - A page with no `uid` of its own is built under the same `uid` on every machine: eight hex characters taken from a SHA-256 of its path and contents, where it was a random one kept per machine, so two machines that build or publish a new page before syncing no longer give it two uids. Two pages that claim one uid are settled by which one was published with it, then by `date:`, then by path, no longer by file creation time, which a synced copy resets. A site built with `moss build` and uploaded by another tool never has its uids written into its pages, so a page there without a `uid:` gets another one each time its text changes; give it a `uid:` of its own to keep its comments joined to it.

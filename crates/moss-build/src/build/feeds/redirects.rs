@@ -351,11 +351,9 @@ pub fn emit_redirect_table(
         let html = generate_redirect_html(&p.to.href());
         if unchanged {
             // Same bytes already on disk from a previous build in this
-            // session — re-register without rewriting or re-hashing off a
-            // fresh write, so the manifest still carries the path through
-            // `seal`.
-            let hash = compute_binary_hash(html.as_bytes());
-            pending.register_hashed(sp, &hash, crate::build::manifest::HashBucket::Files);
+            // session — re-register without rewriting, so the manifest still
+            // carries the path through `seal`.
+            pending.register(sp, html.as_bytes(), HashBucket::Files);
         } else {
             BuildContext::for_render(output_dir, pending)
                 .emit(sp, html.as_bytes(), HashBucket::Files)
@@ -1063,6 +1061,16 @@ mod tests {
             &expected_hash,
             "stub hash must equal file_entry(compute_binary_hash(redirect_html))"
         );
+
+        // A rebuild in the same process re-registers the unchanged stub without
+        // writing it; under a mount its entry is still of the bytes that ship.
+        let mut again = PendingManifest::new(SiteHashes::default());
+        again.set_site_url("https://example.edu/~alice");
+        BuildContext::for_render(&output_dir, &mut again).emit(&new_sp, b"<html>new</html>", HashBucket::Files).unwrap();
+        emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut again).unwrap();
+        let mount = crate::build::site_meta::mount::Mount::of_site_url("https://example.edu/~alice");
+        let shipped = file_entry(&crate::build::ship::shipped_hash(stub_key, &mount, expected_html.as_bytes()));
+        assert_eq!(again.seal().files().get(stub_key), Some(&shipped), "the re-registered stub names what ships under the mount");
     }
 
 

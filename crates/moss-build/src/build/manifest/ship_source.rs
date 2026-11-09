@@ -101,16 +101,16 @@ impl ShipSource {
 }
 
 impl PendingManifest {
-    /// `Err(InvalidInput)` for a path `ship_phase` would transform, `Ok` for one
-    /// that can be held. Its own function so `BuildContext::emit_held` can refuse
+    /// `Err(InvalidInput)` for a page, `Ok` for any other output, which can be
+    /// held (a held stylesheet is mounted on its way out, like a staged one). Its own function so `BuildContext::emit_held` can refuse
     /// BEFORE it writes the stage copy: a refusal after the write leaves a stage
     /// file no manifest entry names. [`register_held`][Self::register_held]
     /// asks it again, so registering directly cannot skip the guard.
     pub(crate) fn ensure_holdable(rel_path: &ServedPath) -> std::io::Result<()> {
-        if transform_for(rel_path.as_str()) != ShipTransform::CopyAsIs {
+        if transform_for(rel_path.as_str()) == ShipTransform::StripPreviewAttrs {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("{}: only a copied-as-is output can be held; ship rewrites this one", rel_path.as_str()),
+                format!("{}: a page cannot be held; ship rewrites it", rel_path.as_str()),
             ));
         }
         Ok(())
@@ -121,7 +121,7 @@ impl PendingManifest {
     /// when the seal tail gets to it. For the derived outputs a later build
     /// rewrites under the same name and that no CAS object backs.
     ///
-    /// Refuses a path `ship_phase` would transform: an `.html` entry's hash is
+    /// Refuses a page: an `.html` entry's hash is
     /// of the bytes as registered but its shipped copy is stripped of preview
     /// attributes, so holding the registered bytes would ship `data-source-*`
     /// annotations to production under a hash that agrees with them, and

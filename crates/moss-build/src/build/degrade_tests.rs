@@ -128,7 +128,7 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     // Hashing the staged bytes made deploy reject the entire upload, and a
     // hash mismatch is not a 404 — the parity gate cannot see it.
     let shipped = crate::build::ship::apply_transform(
-        crate::build::ship::transform_for("index.html"),
+        crate::build::ship::transform_for("index.html"), &Default::default(),
         on_disk.as_bytes(),
     );
     assert!(!String::from_utf8_lossy(&shipped).contains("data-moss-preview"));

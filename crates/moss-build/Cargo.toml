@@ -92,6 +92,10 @@ ring = "0.17"
 resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
 roxmltree = "0.20"
 scraper = "0.20"
+# The CSS tokenizer the site mount uses to find `url()`. Already in the tree
+# through scraper; the version must keep matching what Cargo.lock resolves
+# for it (`cargo tree -d` is the check).
+cssparser = "0.31"
 sha2 = "0.10"
 # Verifies the plugin registry's signed documents and, for `moss desktop
 # install`, the release tarball. No dependencies of its own.

@@ -239,7 +239,7 @@ pub(crate) async fn link_flow(t: &LinkTarget<'_>, input: &str, json: bool) -> Ou
     if let Err(e) = client.link_custom_domain(t.site_id, &apex).await {
         return fail(2, &e);
     }
-    // `resolve_site_url` falls back to `[site].domain`; without this write a
+    // `resolve_site_url` reads `[site].url`; without this write a
     // linked site keeps resolving og:url/canonical/sitemap to its subdomain.
     if let Err(e) = crate::vault::config::set_domain_in_config(folder, &apex) {
         return fail(2, &format!("domain linked, but failed to record it locally: {}", e));

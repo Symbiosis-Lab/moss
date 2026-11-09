@@ -594,6 +594,13 @@ impl SiteHashes {
         }
     }
 
+    /// The path the site is served under, from `site_url`: what
+    /// `ship::apply_transform` puts in front of every root-relative URL, so
+    /// every hash of shipped bytes depends on it.
+    pub fn mount(&self) -> crate::build::site_meta::mount::Mount {
+        self.site_url.as_deref().map_or_else(crate::build::site_meta::mount::Mount::root, crate::build::site_meta::mount::Mount::of_site_url)
+    }
+
     /// Insert a file hash
     pub fn insert(&mut self, path: String, hash: String) {
         self.files.insert(path, hash);

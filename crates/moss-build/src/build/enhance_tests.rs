@@ -430,7 +430,7 @@ fn inject_in_this_process(
     let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
     let mut staged = StagedLinks::load(&paths, "pages", dir);
     inject_slots_into_directory_cached(
-        dir, dir, slots, &resolved_slots_hash(slots), objects, transforms, Default::default(), &Default::default(), &mut staged,
+        dir, dir, slots, &resolved_slots_hash(slots), &Default::default(), objects, transforms, Default::default(), &Default::default(), &mut staged,
     )
     .map(|pass| pass.receipts)
 }
@@ -510,7 +510,7 @@ fn jupyterlite_html_is_left_alone_while_a_rendered_page_under_jupyter_is_filled(
     let slots = head_end_slots("<style>h1{}</style>");
 
     let receipts = inject_slots_into_directory_cached(
-        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &objects, &transforms, rendered, &Default::default(), &mut staged,
+        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &Default::default(), &objects, &transforms, rendered, &Default::default(), &mut staged,
     )
     .unwrap()
     .receipts;
@@ -577,7 +577,7 @@ fn inject_slots_receipt_hashes_the_stripped_bytes_not_the_staged_ones() {
     );
     let expected = crate::build::assets::paths::compute_binary_hash(
         &crate::build::ship::apply_transform(
-            crate::build::ship::transform_for("index.html"),
+            crate::build::ship::transform_for("index.html"), &Default::default(),
             &staged,
         ),
     );
@@ -622,7 +622,7 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
     assert_eq!(
         cold[0].manifest_hash,
         crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(
-            crate::build::ship::transform_for("index.html"),
+            crate::build::ship::transform_for("index.html"), &Default::default(),
             html.as_bytes(),
         )),
         "the hash is of what the site serves, annotations stripped"
@@ -950,7 +950,7 @@ fn an_unwritable_object_store_costs_a_page_its_oid_not_the_pass() {
         assert_eq!(
             receipt.manifest_hash,
             crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(
-                crate::build::ship::transform_for(&receipt.page_path),
+                crate::build::ship::transform_for(&receipt.page_path), &Default::default(),
                 &staged,
             )),
             "{}: the hash still describes the staged bytes",

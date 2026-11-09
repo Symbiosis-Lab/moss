@@ -30,6 +30,7 @@
 
 // Rust-owned constants (bundle mount URL + palette strings) arrive via the
 // generated module — `generate-artifacts -- search-runtime` — never hand-mirrored.
+import { BASE, siteUrl } from "./mount";
 import { BUNDLE_PATH, STRINGS, type SearchStrings } from "./search.generated";
 import { langBucket } from "./subscribe/i18n";
 import { holdPageScroll } from "./viewport";
@@ -125,17 +126,16 @@ function loadPagefind(): Promise<PagefindApi | null> {
   const attempt = indexVersion;
   // Runtime-computed specifier: keeps esbuild from resolving (and failing on)
   // a module that only exists in the published build output.
-  const specifier = new URL(BUNDLE_PATH + "pagefind.js", location.href).href;
+  const specifier = new URL(siteUrl(BUNDLE_PATH + "pagefind.js"), location.href).href;
   const url = attempt > 0 ? `${specifier}?v=${attempt}` : specifier;
   pagefindLoad = (async () => {
     try {
       const mod = (await import(/* @vite-ignore */ url)) as unknown as PagefindApi;
       // Without this, every result URL grows a phantom `/_moss/` prefix:
       // Pagefind guesses the site base from where its own bundle loaded, via
-      // `^(.*\/)_?pagefind` — matched against moss's mount `/_moss/pagefind/`
-      // the greedy group yields `/_moss/`. moss sites are built root-relative
-      // (BUNDLE_PATH is root-absolute for the same reason), so pin it.
-      await mod.options({ baseUrl: "/" });
+      // `^(.*\/)_?pagefind`, and against `/_moss/pagefind/` the greedy group
+      // yields `/_moss/`. Pin it to the site's mount instead.
+      await mod.options({ baseUrl: BASE });
       await mod.init();
       // Guarded for the same reason as the failure branch: a reindex may have
       // landed while this import was in flight, and this module's entry
