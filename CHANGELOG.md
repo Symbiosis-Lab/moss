@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- On a Mac, every full build marks the site's folder with moss's leaf in Finder, from the command line as from the app; before, only a publish from the app did. Each Mac draws the icon from its own folder icon, the icon file is kept out of iCloud Drive, Google Drive and Dropbox and out of git, an older moss icon is redrawn and an icon you set yourself is left alone.
 - A site can be served under a path, such as `https://example.edu/~alice/`. `url` under `[site]` in `.moss/config.toml` is the site's address, path included: every link, picture, stylesheet and script the build publishes is put under that path, and search and link previews find their files there. `url` replaces `domain`, which is still read when `url` is absent; `moss domain link` writes `url` and removes `domain`, and a folder whose two keys name different hosts stops the build with a message naming both.
 
 ### Changed

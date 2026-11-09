@@ -805,6 +805,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let full_build = matches!(config.trigger, BuildTrigger::Full);
     if !pass.repeat {
         crate::cli::agents::sync::sync_after_build(config.source(), full_build);
+        if full_build { crate::platform::folder_icon::mark_moss_folder(config.source()) }
     }
 
     // What to serve from the moment the server is ready, before this rebuild

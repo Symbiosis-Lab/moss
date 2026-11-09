@@ -1194,7 +1194,7 @@ fn warned_dirs() -> &'static std::sync::Mutex<std::collections::HashSet<std::pat
 }
 
 #[cfg(target_os = "macos")]
-fn exclude_from_cloud_sync(dir: &std::path::Path) {
+pub(crate) fn exclude_from_cloud_sync(dir: &std::path::Path) {
     use std::os::unix::ffi::OsStrExt;
     let (Ok(path), Ok(name)) = (
         std::ffi::CString::new(dir.as_os_str().as_bytes()),
@@ -1272,7 +1272,7 @@ pub(crate) fn has_cloud_sync_marker(_dir: &std::path::Path) -> bool {
 
 /// No-op off macOS — File Provider is an Apple subsystem.
 #[cfg(not(target_os = "macos"))]
-fn exclude_from_cloud_sync(_dir: &std::path::Path) {}
+pub(crate) fn exclude_from_cloud_sync(_dir: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {

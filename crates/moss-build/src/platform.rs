@@ -9,6 +9,8 @@
 pub mod file_coordination;
 #[cfg(target_os = "macos")]
 pub mod iopolicy;
+// A site's root folder shows moss's leaf in the file manager.
+pub mod folder_icon;
 
 /// Allow the calling thread to materialize dataless files, overriding the
 /// process-wide fail-fast policy. See [`iopolicy`] — only the dedicated

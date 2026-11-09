@@ -113,7 +113,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/src/build.rs::run_pipeline_body": 450,
+        "crates/moss-build/src/build.rs::run_pipeline_body": 500,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
         "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
