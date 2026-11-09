@@ -485,6 +485,16 @@ fn moss_copy_names() {
     }
 }
 
+#[test]
+fn sync_copy_names_of_any_entry() {
+    for name in ["cache 2", "cache (1)", "cache (conflicted copy 2026-11-09)", "cache.sync-conflict-20261109-120000-ABCDEFG"] {
+        assert!(is_sync_copy_of(name, "cache"), "{name}");
+    }
+    for name in ["cache", "cached 2", "cache-host", "cache.removed-20261030", "cache (a/b)", "cache ()"] {
+        assert!(!is_sync_copy_of(name, "cache"), "{name}");
+    }
+}
+
 fn filled_copy(root: &Path, name: &str, state: Option<&str>, dirs: usize) {
     let copy = root.join(name);
     for i in 0..dirs {

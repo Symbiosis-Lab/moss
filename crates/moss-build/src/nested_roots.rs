@@ -349,18 +349,27 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
     }
 }
 
-/// A `.moss/` under another name: a sync client's conflict copy (`.moss 2`,
-/// `.moss (1)`, `.moss (conflicted copy …)`, `.moss.sync-conflict-…`) or
-/// the set-aside moss leaves when it takes a folder's site data out of use
-/// (`.moss.removed-<date>`). Never a site marker, and never walked: a copy
-/// holds a build cache of thousands of folders, enough to exhaust the scan on
-/// its own. A name with a path separator is never one.
+/// A `.moss/` under another name: a sync client's copy of it (see
+/// [`is_sync_copy_of`]) or the set-aside moss leaves when it takes a folder's
+/// site data out of use (`.moss.removed-<date>`). Never a site marker, and
+/// never walked: a copy holds a build cache of thousands of folders, enough to
+/// exhaust the scan on its own.
 pub fn is_moss_copy(name: &str) -> bool {
+    is_sync_copy_of(name, ".moss")
+        || name.strip_prefix(".moss.removed-").is_some_and(|stamp| !stamp.is_empty() && !stamp.contains(['/', '\\']))
+}
+
+/// A sync client's copy of the entry `base`: `base 2` (Google Drive, iCloud),
+/// `base (1)` or `base (conflicted copy …)` (Dropbox), `base.sync-conflict-…`
+/// (Syncthing). OneDrive's `base-<computer>` is left out: it cannot be told
+/// from a real name such as `.moss-cache`. A name with a path separator is
+/// never a copy.
+pub fn is_sync_copy_of(name: &str, base: &str) -> bool {
     if name.contains(['/', '\\']) {
         return false;
     }
-    let Some(rest) = name.strip_prefix(".moss") else { return false };
-    if let Some(stamp) = rest.strip_prefix(".removed-").or_else(|| rest.strip_prefix(".sync-conflict-")) {
+    let Some(rest) = name.strip_prefix(base) else { return false };
+    if let Some(stamp) = rest.strip_prefix(".sync-conflict-") {
         return !stamp.is_empty();
     }
     let Some(rest) = rest.strip_prefix(' ') else { return false };
