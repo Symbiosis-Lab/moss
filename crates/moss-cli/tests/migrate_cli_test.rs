@@ -78,7 +78,7 @@ fn a_usage_error_under_json_is_json() {
 }
 
 #[test]
-fn lift_apply_on_a_page_without_a_uid_plans_from_the_file_the_build_stamped() {
+fn lift_apply_on_a_page_without_a_uid_writes_no_uid() {
     let tmp = tempfile::tempdir().unwrap();
     let (root, home) = (tmp.path().join("site"), tmp.path().join("home"));
     std::fs::create_dir_all(&home).unwrap();
@@ -87,5 +87,5 @@ fn lift_apply_on_a_page_without_a_uid_plans_from_the_file_the_build_stamped() {
     let o = migrate(&root, &home, &["--lift", "eyebrow", "--as", "stage", "--place", "eyebrow", "--apply", "--json"]);
     assert!(o.status.success(), "{}", stdout(&o));
     let page = std::fs::read_to_string(root.join("Piers/p1.md")).unwrap();
-    assert!(page.contains("\nuid: ") && page.contains("\nstage: Pier 1\n") && !page.contains(":::"), "{page}");
+    assert!(!page.contains("uid:") && page.contains("\nstage: Pier 1\n") && !page.contains(":::"), "{page}");
 }

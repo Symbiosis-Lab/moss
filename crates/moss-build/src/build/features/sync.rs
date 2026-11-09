@@ -203,6 +203,7 @@ fn comment_sync_failure_advisory(err: &CommentSyncError) -> crate::advisory::Adv
     };
     let reason = crate::infra::app_advisory::t(reason_key);
     crate::advisory::Advisory {
+        lifetime: Default::default(),
         scope: crate::advisory::Scope::Remote,
         severity: crate::advisory::Severity::NeedsAction,
         item: None,

@@ -26,5 +26,5 @@ import { defineGateConfig } from './define-gate-config';
 
 export default defineGateConfig({
   gate: 'img-fallback',
-  use: { reducedMotion: 'reduce' },
+  use: { contextOptions: { reducedMotion: 'reduce' } },
 });

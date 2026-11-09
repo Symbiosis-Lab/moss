@@ -76,9 +76,14 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
 pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
+    super::profile::record(cx.folder_path, "seta", false, async {
+    super::profile::gate("output_collisions", super::removal_gate::refuse_output_collisions(sealed))?;
+    super::profile::gate("stale_generation", super::removal_gate::refuse_stale_generation(cx.folder_path, sealed))?;
     crate::deploy::refuse_publish(&cx.folder_path.to_string_lossy())?;
-    crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path)?;
-    crate::deploy::refuse_unresolved_inputs(sealed)?;
+    let checks = crate::build::phase::PhaseTrace::start("local_checks");
+    super::profile::gate("foreign_inputs", crate::deploy::refuse_foreign_inputs(sealed, cx.folder_path))?;
+    super::profile::gate("unresolved_inputs", crate::deploy::refuse_unresolved_inputs(sealed))?;
+    drop(checks);
     let full = uuid::Uuid::new_v4().simple().to_string();
     let deploy_id = full.get(..8).unwrap_or(&full);
     let site_id = cx.site_id;
@@ -99,6 +104,7 @@ pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> R
         deploy_status_label(&result)
     );
     result
+    }).await
 }
 
 /// Credit bytes the server confirmed — the upload phase's only proof that the
@@ -142,7 +148,10 @@ async fn push_site_inner_impl(
     // are now emitted during generate_blocking_content (Gap #3 fix) so the seal
     // covers them and the generation-id is stable. No post-seal mutation of the
     // generation directory.
+    let manifest_phase = crate::build::phase::PhaseTrace::start("manifest");
     let mut manifest = sealed.files().into_owned();
+    super::profile::count("manifest_files", manifest.len() as u64);
+    drop(manifest_phase);
 
     let site_id = site_id.to_string();
 
@@ -154,13 +163,13 @@ async fn push_site_inner_impl(
     // moved access enforcement into the sync/commit endpoints themselves. This
     // pre-flight was reading a `whoami.subscription` field that no longer
     // exists, causing false `subscription_expired` errors on every deploy.
-    let client =
-        crate::seta::client::MossSetaClient::for_environment(identity, &environment);
+    let client = crate::deploy::publish_client(cx.folder_path, identity, &environment).await;
 
     // Short-circuit: if the server is already live on the generation we're
     // about to deploy, skip the whole sync/upload/commit cycle. Any Err or
     // Ok(None) from get_live_generation (404 = old server, network error, site
     // never deployed) falls through to the normal path for back-compat.
+    let probe_phase = crate::build::phase::PhaseTrace::start("live_generation");
     if let Ok(Some(live_gen)) = client.get_live_generation(&site_id).await {
         if live_gen == sealed.generation_id() {
             log::info!(
@@ -178,11 +187,9 @@ async fn push_site_inner_impl(
             });
         }
     }
+    drop(probe_phase);
 
-    let diff = client
-        .sync_manifest(&site_id, &manifest, sealed.generation_id())
-        .await
-        .map_err(|e| e.to_string())?;
+    let diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {
         let url = view_site_url(&folder_path_str, &site_id, environment);
@@ -213,11 +220,13 @@ async fn push_site_inner_impl(
     // server reports `server_total`, judges against the TRUE live file count
     // (2026-07-22: an OG-card rotation from a home-page rename false-blocked
     // a healthy publish).
-    mass_remove::check_mass_removal_for_diff(
+    let checks = crate::build::phase::PhaseTrace::start("local_checks");
+    super::profile::gate("mass_removal", mass_remove::check_mass_removal_for_diff(
         manifest.len(),
         &diff,
         std::env::var("MOSS_DEPLOY_ALLOW_MASS_REMOVE").is_ok(),
-    )?;
+    ))?;
+    drop(checks);
 
     // 8. Upload needed files
     let total = diff.need.len() as u32;
@@ -529,10 +538,8 @@ async fn push_site_inner_impl(
         sealed.generation_id(),
         manifest.len()
     );
-    let commit_result = client
-        .commit_sync(&site_id, &manifest, sealed.generation_id())
-        .await
-        .map_err(|e| e.to_string())?;
+    let commit_result = super::profile::commit(client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
+    let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Record what just went live, so the NEXT publish can say what it will
     // change instead of showing a flat file count.
@@ -703,9 +710,9 @@ async fn push_site_inner_impl(
 }
 
 
-/// The two refusals a terminal publish can be told to go past. Named fields,
-/// because two adjacent booleans compile silently when swapped and the two
-/// mean opposite things for a live site.
+/// The refusals a terminal publish can be told to go past. Named fields,
+/// because adjacent booleans compile silently when swapped and each means
+/// something different for a live site.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PublishOverrides {
     /// `--overwrite-newer`: publish over a live site another copy published
@@ -714,6 +721,22 @@ pub struct PublishOverrides {
     /// `--accept-removals`: accept losing exactly the addresses the build
     /// found going offline unasked.
     pub accept_removals: bool,
+    /// `--accept-stale-content`: accept exactly the pages this build found
+    /// rolling back to older source content.
+    pub accept_stale_content: bool,
+}
+
+impl PublishOverrides {
+    /// Called between the build and the gates that read its verdicts. Removals
+    /// are accepted earlier, inside the build's seal, so the build never
+    /// announces an address it was told to let go.
+    pub(crate) fn accept(&self, folder: &Path, sealed: Option<&SealedManifest>) {
+        let records = crate::system::build_records::records();
+        let key = folder.to_string_lossy();
+        if let (true, Some(sealed)) = (self.accept_stale_content, sealed) {
+            records.accept_stale_content(&key, super::removal_gate::stale_content(folder, sealed));
+        }
+    }
 }
 
 /// One moss-hosted publish, from a folder to a result — the build included.
@@ -754,6 +777,7 @@ pub async fn run_hosted_deploy(
     overrides: PublishOverrides,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<PushResult, String> {
+    super::profile::record(folder, "seta", false, async {
     let folder_str = folder.to_string_lossy().to_string();
 
     // Before the build, not after: a folder with no site cannot publish however
@@ -773,13 +797,11 @@ pub async fn run_hosted_deploy(
 
     let root = crate::vault::paths::VaultRoot::resolve(folder);
     let host = host_ports(&folder_str);
-    let taken = super::one_shot::build_and_seal(&root, host, plugins).await?;
+    let taken = super::one_shot::build_and_seal(&root, host, plugins, overrides.accept_removals).await?;
 
     // Only after the build: the verdict this reads is the build's own, and
     // asking before it would refuse on the previous run's answer or on none.
-    if overrides.accept_removals {
-        crate::system::build_records::records().accept_all_pending_removals(&folder_str);
-    }
+    overrides.accept(folder, taken.as_ref());
     crate::deploy::refuse_publish(&folder_str)?;
 
     let sealed = super::one_shot::require_sealed(taken)?;
@@ -795,6 +817,7 @@ pub async fn run_hosted_deploy(
         events_lock: &events_lock,
     };
     push_site_inner(&sealed, &cx).await
+    }).await
 }
 
 #[cfg(test)]
@@ -897,11 +920,8 @@ mod tests {
             let last = responses.len().saturating_sub(1);
             let mut tx = Some(tx);
             for (i, resp) in responses.into_iter().enumerate() {
-                let (stream, _) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(_) => return,
-                };
-                let raw = crate::test_mock_http_conn(stream, resp).await;
+                let (mut stream, raw) = crate::test_accept_skipping_whoami(&listener).await;
+                crate::test_respond_and_close(&mut stream, resp).await;
                 if i == last {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send(raw);
@@ -1164,6 +1184,7 @@ mod tests {
     /// `target_str` here is already the link's real current target (just read
     /// via `read_link`). A stale sealed entry must warn and ship it, not abort
     /// the whole deploy the way the old hard `return Err` did.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_drifted_symlink_target_self_heals_instead_of_failing_the_deploy() {
         let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -1369,7 +1390,7 @@ mod tests {
 
     /// `run_hosted_deploy` exactly as `moss deploy` calls it, minus plugins.
     async fn cli_deploy(folder: &Path, overwrite_newer: bool) -> Result<PushResult, String> {
-        cli_deploy_accepting(folder, PublishOverrides { overwrite_newer, accept_removals: false }).await
+        cli_deploy_accepting(folder, PublishOverrides { overwrite_newer, ..Default::default() }).await
     }
 
     async fn cli_deploy_accepting(folder: &Path, overrides: PublishOverrides) -> Result<PushResult, String> {
@@ -1552,9 +1573,44 @@ mod tests {
         ])
         .await;
 
-        let result = with_seta_url(addr, cli_deploy_accepting(folder.path(), PublishOverrides { accept_removals: true, ..Default::default() })).await;
+        let (host, mut warnings) = crate::ops::serve::events::collect_removal_warnings();
+        let result = with_seta_url(addr, run_hosted_deploy(
+            folder.path(), &host, crate::build::PluginMode::Skip, None,
+            PublishOverrides { accept_removals: true, ..Default::default() }, &progress::silent(),
+        )).await;
 
         assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+        assert!(warnings().is_empty(), "accepted removals must not ask for action");
+        let removed = crate::system::build_records::records()
+            .removed_addresses(&folder.path().to_string_lossy()).unwrap();
+        assert!(removed.iter().any(|r| r.path == "legacy-feed.xml"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)] // The server URL is process-global.
+    async fn stale_content_requires_acceptance_on_the_hosted_route() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let history = folder.path().join(".moss/history/publishes");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("2026-01-01.json"), serde_json::json!({
+            "version": 1, "published_at": "2026-01-01T00:00:00Z", "target": "moss:behind-test",
+            "generation_id": "previous", "entries": {
+                "index.md": {"mode": "100644", "hash": "previous", "source_mtime": [4000000000u64, 0]}
+            }
+        }).to_string()).unwrap();
+        let addr = mock_seta_sequence(vec![
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"ours"}"#),
+            json_200(r#"{"generation_id":"live"}"#),
+            json_200(r#"{"need":[],"remove":[]}"#),
+        ]).await;
+        let error = with_seta_url(addr, cli_deploy(folder.path(), false)).await.unwrap_err();
+        assert!(error.contains("index.md") && error.contains("--accept-stale-content"), "{error}");
+        let result = with_seta_url(addr, cli_deploy_accepting(folder.path(), PublishOverrides {
+            accept_stale_content: true, ..Default::default()
+        })).await;
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "{result:?}");
     }
 
     /// `--overwrite-newer` publishes over it: the build runs and the push
@@ -1782,6 +1838,7 @@ mod tests {
         )
         .await;
         assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");
+        assert_profile_upload_count(folder.path());
     }
 
     /// The same, through moss's own build route (`push_site_inner`). Ablated
@@ -1821,5 +1878,19 @@ mod tests {
         };
         let result = with_seta_url(addr, push_site_inner(&sealed, &cx)).await;
         assert!(matches!(result, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {result:?}");
+        assert_profile_upload_count(dir.path());
     }
+
+    fn assert_profile_upload_count(folder: &Path) {
+        let text = std::fs::read_to_string(MossPaths::new(folder).profile()).unwrap();
+        let records: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(records.len(), 1, "one profile per deploy, including nested drivers");
+        assert_eq!(records[0]["kind"], "deploy");
+        let counts = &records[0]["counts"];
+        assert_eq!(counts["files_uploaded"], 1);
+        assert_eq!(counts["files_needed"], 1);
+        assert!(counts["files_needed"].as_u64().unwrap() <= counts["manifest_files"].as_u64().unwrap());
+        assert_eq!(counts["server_files_updated"], 1039, "server site total stays separate");
+    }
+
 }

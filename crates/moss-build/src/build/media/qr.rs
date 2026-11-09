@@ -269,6 +269,33 @@ pub fn generate_qr_svg(url: &str) -> Result<String, String> {
     Ok(svg)
 }
 
+/// `text` as a QR code drawn in half-block characters, two module rows per
+/// line, with the standard four-module quiet zone. Dark modules are spaces,
+/// so the code reads the right way round on a dark terminal background.
+pub fn terminal_qr(text: &str) -> Result<String, String> {
+    let code = QRBuilder::new(text)
+        .ecl(ECL::M)
+        .build()
+        .map_err(|_| "the link is too long for a QR code".to_string())?;
+    let size = code.size as isize;
+    let dark = |x: isize, y: isize| {
+        (0..size).contains(&x) && (0..size).contains(&y) && code[y as usize][x as usize].value()
+    };
+    let mut out = String::new();
+    for y in (-4..size + 4).step_by(2) {
+        for x in -4..size + 4 {
+            out.push(match (dark(x, y), dark(x, y + 1)) {
+                (false, false) => '█',
+                (true, false) => '▄',
+                (false, true) => '▀',
+                (true, true) => ' ',
+            });
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

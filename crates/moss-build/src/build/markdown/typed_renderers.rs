@@ -326,6 +326,13 @@ pub(crate) fn render_hero_html_typed(
     } else {
         format!(r#"{cover_attr} style="{}""#, section_style.join("; "))
     };
+    // `header=over` lays the site header on the picture, so the header's ink is
+    // measured whether or not the hero has words.
+    let header_ink_attrs = match (&resolved_image, args.header.as_deref() == Some("over")) {
+        (Some(light), true) if !hero_href_is_video(light) => crate::build::markdown::hero_ink::header_ink_attributes(media_lookup, light, dark_href, frame),
+        _ => String::new(),
+    };
+    let header_attr = format!("{header_attr}{header_ink_attrs}");
     let panel_attr = if args.panel.as_deref() == Some("none") { r#" data-panel="none""# } else { "" };
     let overlay_attr = if laid_over { format!("{overlay_attr}{fade_attr}{panel_attr}{ink_attrs}") } else { String::new() };
     let pair_attr = |v: &str| if dark_href.is_some() { format!(" data-hero-variant=\"{v}\"") } else { String::new() };

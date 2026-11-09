@@ -1,6 +1,6 @@
 # @symbiosis-lab/moss-ui
 
-The moss UI: its typed contract with the moss engine, and the UI code every host of moss shares. Public source, not published to npm. The editor and preview are not in it yet.
+The moss UI: its typed contract with the moss engine, and the UI code every host of moss shares. Public source, not published to npm.
 
 ## The contract
 
@@ -21,6 +21,14 @@ Today `src/ui/` holds the UI's foundations: the strings and their locales (`i18n
 ```ts
 import { t } from '@symbiosis-lab/moss-ui/ui/i18n/index';
 import '@symbiosis-lab/moss-ui/ui/styles/shared/tokens.css';
+```
+
+## The browser UI
+
+`src/browser/` is the UI `moss edit --serve` serves: an entry page holding two frames of its origin, the shell (the chrome and the preview) and the editor, as the desktop app shows them in two webviews. The entry page joins the frames with one `MessageChannel`, so the bus between them stays inside the tab. Each frame fills the host record from `src/browser/host.ts`, which reaches the engine over the HTTP carrier with the browser's session cookie, before the UI's modules load. `editor.html` is the one copy of the editor's page: another host loads it with its own host script in place of `editor.ts`.
+
+```sh
+pnpm --filter @symbiosis-lab/moss-ui build:browser   # writes dist-browser/, which moss-cli embeds
 ```
 
 ## Tests and checks

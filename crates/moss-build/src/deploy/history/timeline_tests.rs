@@ -7,6 +7,7 @@ use super::*;
 use crate::build::manifest::change_set::PageVerb;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -21,7 +22,7 @@ fn seed_page(vault: &Path, pending: &mut PendingManifest, src: &str, out: &str, 
     pending.register_source_mapping(src.to_string(), &sp);
     pending.register_page_source_hash(
         src.to_string(),
-        SourceMetadata { hash: hash_of(bytes), size: bytes.len() as u64, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: hash_of(bytes), stat: FileStat::whole_second(bytes.len() as u64, 1) },
     );
 }
 
@@ -31,7 +32,7 @@ fn publish(history_root: &Path, vault: &Path, pages: &[(&str, &str, &[u8])], pub
         seed_page(vault, &mut pending, src, out, bytes);
     }
     let sealed = pending.seal();
-    record::snapshot(history_root, vault, &sealed, "moss:test", published_at).unwrap();
+    record::snapshot(history_root, vault, &SourceTree::from_sealed(&sealed), "moss:test", published_at).unwrap();
 }
 
 // ── page_timeline ──────────────────────────────────────────────────────────
@@ -82,7 +83,7 @@ fn page_timeline_always_includes_manual_and_restore_records() {
     let mut pending = PendingManifest::new(SiteHashes::default());
     seed_page(&vault, &mut pending, "a.md", "a/index.html", b"v1"); // unchanged
     let sealed = pending.seal();
-    record::snapshot_manual(&history_root, &vault, &sealed, "moss:test", Some("A checkpoint".to_string())).unwrap();
+    record::snapshot_manual(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", Some("A checkpoint".to_string())).unwrap();
 
     // A manual save of an UNRELATED page — a.md did not change, and this
     // save's subject (if it had one) is not a.md, yet it must still appear.
@@ -143,7 +144,7 @@ fn site_version_pages_reports_edited_added_and_deleted_since_and_the_unchanged_r
     seed_page(&vault, &mut pending, "new.md", "new/index.html", b"new");
     let current = pending.seal();
 
-    let result = site_version_pages(&history_root, &id, &current).unwrap();
+    let result = site_version_pages(&history_root, &id, &SourceTree::from_sealed(&current)).unwrap();
 
     let mut changed = result.changed_since.clone();
     changed.sort_by(|a, b| a.source_path.cmp(&b.source_path));
@@ -166,7 +167,7 @@ fn site_version_pages_errors_for_an_unknown_id() {
     let history_root = dir.path().join("history");
     let current = PendingManifest::new(SiteHashes::default()).seal();
 
-    let err = site_version_pages(&history_root, "no-such-id", &current).unwrap_err();
+    let err = site_version_pages(&history_root, "no-such-id", &SourceTree::from_sealed(&current)).unwrap_err();
     assert!(err.contains("no such version"), "{err}");
 }
 
@@ -219,6 +220,6 @@ fn a_kept_outside_edit_has_no_site_version_pages() {
     let history_root = dir.path().join("history");
     let id = record::snapshot_displaced(&history_root, "a.md", b"x").unwrap();
 
-    let err = site_version_pages(&history_root, &id, &PendingManifest::new(SiteHashes::default()).seal()).unwrap_err();
+    let err = site_version_pages(&history_root, &id, &SourceTree::from_sealed(&PendingManifest::new(SiteHashes::default()).seal())).unwrap_err();
     assert!(err.contains("not a site version"), "{err}");
 }

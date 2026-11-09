@@ -2,7 +2,7 @@
 
 use super::adapter_host::AdapterHost;
 use super::bundled::discover_plugins;
-use super::hook_state::PluginHookState;
+use super::hook_state::{AskedBy, PluginHookState};
 use super::setup::{SetupContext, SetupVerdict};
 use super::types::*;
 use engine_adapter::PluginEngine;
@@ -13,6 +13,8 @@ pub mod copies;
 pub mod engine_adapter;
 pub mod listing;
 mod hook_context;
+#[cfg(test)]
+mod build_run_tests;
 #[cfg(test)]
 mod site_config_plugin_tests;
 pub mod signal_route;
@@ -344,6 +346,26 @@ impl PluginManager {
             .and_then(|name| self.find_plugin_by_name(&name))
     }
 
+    /// What a build's run of the plugin found for the person to start
+    /// (`HookResult::offer`). Nothing stores it: the app keeps it until the
+    /// plugin's next process run restates it, and its action runs the hook as
+    /// the person's own act.
+    pub(crate) fn plugin_offer_advisory(plugin: &Plugin, title: String) -> crate::advisory::Advisory {
+        use crate::advisory::{Action, Advisory, AdvisoryLifetime, AppOp, Scope, Severity};
+        Advisory {
+            lifetime: AdvisoryLifetime::UntilTaskRestates,
+            scope: Scope::Remote,
+            severity: Severity::NeedsAction,
+            item: None,
+            what: title,
+            action: Action::InApp {
+                op: AppOp::RunPluginProcess,
+                args: serde_json::json!({ "plugin": plugin.manifest.name }),
+                label: crate::infra::app_advisory::t("plugin_offer_sync"),
+            },
+        }
+    }
+
     /// Build an advisory for a plugin process-hook sync failure.
     ///
     /// Scope: Remote — the hook ran but reported a sync failure, typically a
@@ -354,6 +376,7 @@ impl PluginManager {
     pub(crate) fn plugin_hook_failure_advisory(plugin_name: &str, err: &str) -> crate::advisory::Advisory {
         use crate::advisory::{Action, Advisory, Scope, Severity};
         Advisory {
+            lifetime: Default::default(),
             scope: Scope::Remote,
             severity: Severity::NeedsAction,
             item: None,
@@ -411,24 +434,29 @@ impl PluginManager {
             // BackgroundProgress advisory. Suppress the advisory for Login-capable
             // plugins; they self-report via their own PanelTask.
             let has_login = plugin.manifest.capabilities.contains(&Capability::Login);
-            if let Err(e) = self.execute_plugin_javascript(
+            let asked_by = AskedBy::of(context.trigger);
+            match self.execute_plugin_javascript(
                 plugin,
                 Capability::Process.hook_name(),
-                &context_json
+                &context_json,
+                asked_by,
             ).await {
-                log::warn!(target: "plugin", "⚠️ Plugin '{}' process hook failed: {}", plugin.manifest.name, e);
-                if !has_login {
-                    let advisory = Self::plugin_hook_failure_advisory(&plugin.manifest.name, &e);
-                    self.host.reporter.report(
-                        &crate::build::progress::PipelineEvent::BackgroundProgress {
-                            task: format!("plugin-process-{}", plugin.manifest.name),
-                            current: 0,
-                            total: 1,
-                            message: advisory.what.clone(),
-                            completed: true,
-                            advisories: vec![advisory],
-                        },
-                    );
+                Ok(result) => self.restate_offer(plugin, asked_by, result),
+                Err(e) => {
+                    log::warn!(target: "plugin", "⚠️ Plugin '{}' process hook failed: {}", plugin.manifest.name, e);
+                    if !has_login {
+                        let advisory = Self::plugin_hook_failure_advisory(&plugin.manifest.name, &e);
+                        self.host.reporter.report(
+                            &crate::build::progress::PipelineEvent::BackgroundProgress {
+                                task: format!("plugin-process-{}", plugin.manifest.name),
+                                current: 0,
+                                total: 1,
+                                message: advisory.what.clone(),
+                                completed: true,
+                                advisories: vec![advisory],
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -462,11 +490,38 @@ impl PluginManager {
             .map_err(|e| format!("Failed to serialize context: {}", e))?;
 
         // Execute the hook
-        self.execute_plugin_javascript(
+        let asked_by = AskedBy::of(context.trigger);
+        let result = self.execute_plugin_javascript(
             &plugin,
             Capability::Process.hook_name(),
             &context_json,
-        ).await
+            asked_by,
+        ).await?;
+        self.restate_offer(&plugin, asked_by, result);
+        Ok(())
+    }
+
+    /// Every run of a plugin's process hook re-states its offer on the
+    /// plugin's own `plugin-offer-<name>` task: a build's run with what it
+    /// found, the person's run with nothing, which clears the offer its Sync
+    /// answered. The app keeps the offer across rebuilds that run no process
+    /// hook and drops it at this task's next tick.
+    fn restate_offer(&self, plugin: &Plugin, asked_by: AskedBy, result: Option<HookResult>) {
+        // A build's run that returned nothing (skipped while the person's run
+        // was busy, or a hook with no result) says nothing about the offer.
+        if asked_by == AskedBy::Build && result.is_none() {
+            return;
+        }
+        let offer = result.and_then(|r| r.offer).filter(|_| asked_by == AskedBy::Build);
+        let advisories: Vec<_> = offer.map(|o| Self::plugin_offer_advisory(plugin, o.title)).into_iter().collect();
+        self.host.reporter.report(&crate::build::progress::PipelineEvent::BackgroundProgress {
+            task: format!("plugin-offer-{}", plugin.manifest.name),
+            current: 0,
+            total: 0,
+            message: advisories.first().map(|a| a.what.clone()).unwrap_or_default(),
+            completed: true,
+            advisories,
+        });
     }
 
     /// Dispatch a named plugin export by hook name — public entry point for
@@ -488,7 +543,7 @@ impl PluginManager {
         hook_name: &str,
         context_json: &str,
     ) -> Result<(), String> {
-        self.execute_plugin_javascript(plugin, hook_name, context_json).await
+        self.execute_plugin_javascript(plugin, hook_name, context_json, AskedBy::Person).await.map(|_| ())
     }
 
 
@@ -576,7 +631,7 @@ impl PluginManager {
             // Matters), so it never kills a slow user. Syndication used to
             // carry a 900s wall-clock cap on top; it was removed deliberately.
             // Non-critical — continue on failure, but log the error.
-            if let Err(e) = self.execute_plugin_javascript(plugin, Capability::Syndicate.hook_name(), &context_json).await {
+            if let Err(e) = self.execute_plugin_javascript(plugin, Capability::Syndicate.hook_name(), &context_json, AskedBy::Person).await {
                 log::warn!(target: "plugin", "Syndication hook '{}' failed: {}", plugin.manifest.name, e);
             }
         }
@@ -693,7 +748,8 @@ impl PluginManager {
         plugin: &Plugin,
         hook_name: &str,
         context_json: &str,
-    ) -> Result<(), String> {
+        asked_by: AskedBy,
+    ) -> Result<Option<HookResult>, String> {
         let hook_state = &self.host.state.hooks;
 
         // --- Singleflight: deduplicate concurrent dispatch of the same hook ---
@@ -715,7 +771,10 @@ impl PluginManager {
         // True retirement of purpose 1 = pass the hook context per-call instead
         // of via a Context global (same dispatch spine as
         // per-Context serialization; see execute_plugin_javascript_with_result).
-        let singleflight_key = format!("{}::{}", plugin.manifest.name, hook_name);
+        //
+        // Keyed by who asked too: a Sync the person clicks must not quietly
+        // take the result of a build's run, which may not write the folder.
+        let singleflight_key = format!("{}::{}::{:?}", plugin.manifest.name, hook_name, asked_by);
         let (is_first, mut rx) = hook_state.in_flight_hooks.try_start(&singleflight_key);
 
         if !is_first {
@@ -730,7 +789,7 @@ impl PluginManager {
             let _ = rx.changed().await;
             return match rx.borrow().clone() {
                 Some(result) => result,
-                None => Ok(()), // Aborted — treat as no-op
+                None => Ok(None), // Aborted — treat as no-op
             };
         }
 
@@ -747,7 +806,7 @@ impl PluginManager {
             singleflight_key.clone(),
         );
 
-        match self.run_hook(plugin, hook_name, context_json, &hook_state).await {
+        match self.run_hook(plugin, hook_name, context_json, &hook_state, asked_by).await {
             // Parse/dispatch failure: the JS never ran. Guard drop aborts the
             // key; waiters treat the closed channel as a no-op, exactly as if
             // the key had never been registered.
@@ -755,7 +814,7 @@ impl PluginManager {
             // The select! loop produced a verdict (success or timeout) —
             // disarm the guard and share it with any waiters.
             HookRun::Finished(result) => {
-                let result = result.map(|_| ());
+                let result = result.map(|(hook_result, _)| hook_result);
                 sf_guard.disarm();
                 hook_state.in_flight_hooks.complete(&singleflight_key, result.clone());
                 result
@@ -794,7 +853,7 @@ impl PluginManager {
         hook_name: &str,
         context_json: &str,
     ) -> Result<Option<HookResult>, String> {
-        match self.run_hook(plugin, hook_name, context_json, &self.host.state.hooks).await {
+        match self.run_hook(plugin, hook_name, context_json, &self.host.state.hooks, AskedBy::Person).await {
             HookRun::NeverRan(e) => Err(e),
             HookRun::Finished(result) => result.map(|(hook_result, _)| hook_result),
         }
@@ -819,8 +878,22 @@ impl PluginManager {
         hook_name: &str,
         context_json: &str,
         hook_state: &PluginHookState,
+        asked_by: AskedBy,
     ) -> HookRun {
         use tokio::time::Duration;
+
+        // Held until the hook ends; the host-call arms read it to decide where
+        // this plugin may write.
+        let _run = match asked_by {
+            AskedBy::Person => hook_state.begin_person_run(&plugin.manifest.name).await,
+            AskedBy::Build => match hook_state.try_begin_build_run(&plugin.manifest.name) {
+                Some(run) => run,
+                None => {
+                    log::info!(target: "plugin", "{}: skipped its {hook_name} hook for this build; a hook the person started is running", plugin.manifest.name);
+                    return HookRun::Finished(Ok((None, None)));
+                }
+            },
+        };
 
         // Parse context JSON to send as structured data
         let mut context: serde_json::Value = match serde_json::from_str(context_json) {
@@ -863,6 +936,7 @@ impl PluginManager {
             context,
             project_path: self.project_path.clone(),
             moss_dir: format!("{}/.moss", self.project_path),
+            asked_by,
         };
         if let Err(e) = self.engine.dispatch_hook(invocation, sink).await {
             // Unregister the executing hook so a stale entry can't survive a
@@ -1047,6 +1121,7 @@ mod tests {
             deployment: None,
             setup: None,
             copy: None,
+            offer: None,
         };
         let with_message = CompletionResult {
             success: false,

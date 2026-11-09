@@ -308,6 +308,8 @@ mod tests {
                 lang: "en".into(),
             },
             site_files: vec!["index.html".to_string()],
+            site_dir: String::new(),
+            index_file: String::new(),
             config: HashMap::new(),
             domain: None,
         };

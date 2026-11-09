@@ -22,6 +22,7 @@ fn build(folder: &Path, trigger: moss_build::build::BuildTrigger) -> Result<Stri
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 

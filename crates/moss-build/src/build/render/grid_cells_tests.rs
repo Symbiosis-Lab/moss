@@ -109,7 +109,7 @@ impl<'a> Page<'a> {
     /// Render `md`'s body with collection cards applied.
     fn cards(&self, md: &str) -> String {
         let mut plan = plan_of(md);
-        apply_collection_cards(&mut plan, &self.index());
+        apply_collection_cards(&mut plan, &self.index(), false);
         plan.to_html()
     }
 
@@ -118,14 +118,14 @@ impl<'a> Page<'a> {
     fn summary(&self, md: &str) -> String {
         let mut plan = plan_of(md);
         apply_summary_grids(&mut plan, &self.index());
-        apply_collection_cards(&mut plan, &self.index());
+        apply_collection_cards(&mut plan, &self.index(), false);
         plan.to_html()
     }
 
     /// Render `md`'s body with cover colours applied, in pipeline order.
     fn cover_colors(&self, md: &str) -> String {
         let mut plan = plan_of(md);
-        apply_collection_cards(&mut plan, &self.index());
+        apply_collection_cards(&mut plan, &self.index(), false);
         apply_cell_cover_colors(&mut plan, &self.index());
         plan.to_html()
     }
@@ -145,7 +145,7 @@ fn root_with_image(rel: &str, rgb: [u8; 3]) -> tempfile::TempDir {
 /// Both grid passes in pipeline order, the way `resolve_grid_cells` runs them.
 fn both_passes(md: &str, page: &Page<'_>, link_meta: Option<&HashMap<String, LinkMeta>>) -> String {
     let mut plan = plan_of(md);
-    apply_collection_cards(&mut plan, &page.index());
+    apply_collection_cards(&mut plan, &page.index(), false);
     apply_link_previews(&mut plan, &page.index(), link_meta);
     plan.to_html()
 }
@@ -377,6 +377,40 @@ fn a_uniformly_coverless_grid_keeps_the_plain_placeholder() {
         "when no cell has a cover the plain placeholder stays: {html}"
     );
     assert!(!html.contains(r#"data-cover="quote""#), "got: {html}");
+}
+
+/// A page has one eager, high-priority image. Two would split a phone's link
+/// between the hero and a card below the fold, and an eager card loses the
+/// `sizes="auto"` that only binds lazily, so it fetches a viewport-wide rung.
+#[test]
+fn a_hero_keeps_the_pages_one_eager_image_from_its_grid_cards() {
+    let card = make_doc("Ink Study", "works/ink-study/index.html", Some("ink.jpg"));
+    let render = |body_claims_eager: bool| {
+        let home = ParsedDocument {
+            body_plan: Some(plan_of(":::grid 2\n[Ink Study](works/ink-study/)\n:::\n")),
+            body_claims_eager,
+            ..make_doc("Home", "index.html", None)
+        };
+        let docs = vec![home.clone(), card.clone()];
+        let overrides = HashMap::new();
+        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &overrides, None);
+        resolve_page_body(&home, &docs, None, &overrides, "", &lookup, None, crate::build::folder_embed::upcoming::now()).to_html()
+    };
+    let without_hero = render(false);
+    assert!(without_hero.contains(r#"loading="eager""#), "{without_hero}");
+    let with_hero = render(true);
+    assert!(with_hero.contains("moss-card") && !with_hero.contains(r#"loading="eager""#), "{with_hero}");
+}
+
+#[test]
+fn only_the_first_covered_card_on_the_page_is_eager_however_many_grids() {
+    let docs = vec![
+        make_doc("Ink Study", "works/ink-study/index.html", Some("ink.jpg")),
+        make_doc("Brush Study", "works/brush-study/index.html", Some("brush.jpg")),
+    ];
+    let md = ":::grid 2\n[Ink Study](works/ink-study/)\n:::\n\n:::grid 2\n[Brush Study](works/brush-study/)\n:::\n";
+    let html = Page::new("index.html", &docs).cards(md);
+    assert_eq!(html.matches(r#"loading="eager""#).count(), 1, "{html}");
 }
 
 /// The ONE-renderer falsifier for the plain `:::grid` card, the twin of
@@ -865,7 +899,7 @@ fn every_external_cell_is_reported_for_prewarm_even_with_a_manual_title() {
     let mut plan = plan_of(
         ":::grid 3\n<https://a.example/>\n+++\n[Manual](https://b.example/)\nDesc.\n+++\n[Local](local/)\n:::\n",
     );
-    apply_collection_cards(&mut plan, &page.index());
+    apply_collection_cards(&mut plan, &page.index(), false);
     let mut urls = external_urls_needing_fetch(&plan);
     urls.sort();
     assert_eq!(
@@ -1026,7 +1060,7 @@ fn cjk_prose_immediately_before_a_grid_builds_and_places_the_grid_correctly() {
               :::grid 1\n[文字](writings/)\n:::\n\n之後的段落。\n";
 
     let mut plan = plan_of(md);
-    apply_collection_cards(&mut plan, &page.index());
+    apply_collection_cards(&mut plan, &page.index(), false);
     apply_link_previews(&mut plan, &page.index(), None);
     let (lead, trailer) = plan.split_at_lede();
 

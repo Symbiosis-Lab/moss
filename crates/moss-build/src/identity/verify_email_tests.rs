@@ -10,6 +10,9 @@ pub(crate) struct Seta {
     pub(crate) log: Arc<Mutex<Vec<(String, String)>>>,
     pub(crate) polls: Arc<AtomicUsize>,
     pub(crate) url: String,
+    /// What `/auth/whoami` says the key belongs to; `None` is a key linked to
+    /// no account, as the service answers for one.
+    pub(crate) account: Arc<Mutex<Option<&'static str>>>,
 }
 
 impl Seta {
@@ -29,7 +32,8 @@ impl Seta {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let log: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
         let polls = Arc::new(AtomicUsize::new(0));
-        let (l, p) = (log.clone(), polls.clone());
+        let account: Arc<Mutex<Option<&'static str>>> = Arc::default();
+        let (l, p, a) = (log.clone(), polls.clone(), account.clone());
         tokio::spawn(async move {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -50,7 +54,15 @@ impl Seta {
                         _ => ("500 Internal Server Error", r#"{"error":"upstream down"}"#.to_string()),
                     }
                 } else if path.ends_with("/sync") {
-                    ("200 OK", r#"{"need":[],"remove":[]}"#.to_string())
+                    // A key no sign-in has verified is not the site's owner.
+                    if p.load(Ordering::SeqCst) >= verify_after && final_status == "verified" {
+                        ("200 OK", r#"{"need":[],"remove":[]}"#.to_string())
+                    } else {
+                        ("403 Forbidden", r#"{"error":"Not authorized for this site"}"#.to_string())
+                    }
+                } else if path == "/auth/whoami" {
+                    let email = a.lock().unwrap().map_or("null".to_string(), |e| format!("\"{e}\""));
+                    ("200 OK", format!(r#"{{"pubkey":"pk","email":{email}}}"#))
                 } else if path == "/api/sites" {
                     if p.load(Ordering::SeqCst) >= verify_after && final_status == "verified" {
                         ("200 OK", r#"{"id":"my-site"}"#.to_string())
@@ -67,7 +79,7 @@ impl Seta {
                 crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
             }
         });
-        Seta { log, polls, url }
+        Seta { log, polls, url, account }
     }
 
     /// Requests whose method and path are exactly `line`.
@@ -270,4 +282,17 @@ async fn verifying_over_a_stored_address_replaces_it() {
     verify_folder_email(folder.dir.path(), "ada@example.test", TICK, Duration::from_secs(2)).await.unwrap();
 
     assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("ada@example.test"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unlinked_key_is_sent_a_link_only_for_a_not_the_owner_refusal() {
+    let seta = Seta::start(1, "verified").await;
+    let folder = Folder::new(&seta);
+    let refused = |message: &'static str| move || async move { Err::<(), String>(message.to_string()) };
+
+    let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), TICK, WAIT_LIMIT, refused("HTTP request failed: connection refused")).await;
+    assert_eq!(seta.count("POST /auth/request"), 0, "a refusal for another reason sends nothing");
+
+    let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), TICK, WAIT_LIMIT, refused("API error: 403 - Not authorized for this site")).await;
+    assert_eq!(seta.count("POST /auth/request"), 1);
 }

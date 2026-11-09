@@ -1,0 +1,2001 @@
+/* moss Editor — Redesigned layout: nav-surface → divider → chip-bar → editor → footer
+ * CSS ported from the 2026-03 editor prototype, using moss design tokens where
+ * available. */
+
+@import "../styles/shared/tokens.css";
+@import "../styles/editor-tokens.css";
+@import "../styles/shared/primitives.css";
+@import "../styles/shared/progress.css";
+@import "../styles/shared/modal.css";
+@import "../styles/shared/tooltip.css";
+@import "../styles/shared/ctx-menu.css";
+@import "../styles/shared/toast.css";
+@import "../styles/shared/inline-status.css";
+/* The collapsed-pane edge affordance, shared byte-for-byte with the shell's
+   style.css: the editor owns the RIGHT edge (edge-restore.ts) while it is
+   full-width, the shell owns the left one. One sheet, so the two cannot drift. */
+@import "../styles/shared/edge-restore.css";
+@import './file-tree.css';
+@import './cm-markdown-style.css';
+@import './cm-block-embeds.css';
+/* The moss-syntax package exports its shared CM6 stylesheet from
+   packages/moss-syntax/src/cm6/cm-shortcode-block.css. Both bundlers and
+   the selector ratchet resolve this package import through its exports. */
+@import '@symbiosis-lab/moss-syntax/cm6/cm-shortcode-block.css';
+@import './folder-mode/folder-mode.css';
+@import './versions.css';
+
+/* ── Reset ────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Thin scrollbar — transparent track, subtle thumb */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.25); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.5); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: var(--moss-color-text);
+  background: var(--moss-color-bg);
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+/* ── Editor CTA primitive ─────────────────────────────────────────────────
+   ONE button primitive for every editor-webview empty-state / pane-state CTA
+   ("one obvious way"), lifted from the former folder-page-empty pane so every CTA composes the same
+   token-driven flat button instead of falling through to native browser chrome
+   (the rgb(192,192,192) gray "Create home file" bug). All tokens resolve in the
+   editor webview scope (editor-tokens.css overrides + shared tokens.css).
+   Apply via `class="moss-editor-cta"` (compose with a BEM modifier if a caller
+   needs extra layout, but the chrome lives here). */
+.moss-editor-cta {
+  appearance: none;
+  font: inherit;
+  padding: .5rem 1rem;
+  border: 1px solid var(--moss-border-medium);
+  border-radius: 6px;
+  background: var(--moss-color-surface);
+  color: var(--moss-color-text);
+  cursor: pointer;
+  transition: background .1s, border-color .1s, transform .05s;
+}
+.moss-editor-cta:hover {
+  background: var(--moss-hover-overlay);
+  border-color: var(--moss-color-muted);
+}
+.moss-editor-cta:active {
+  transform: translateY(1px);
+}
+.moss-editor-cta:focus-visible {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: 2px;
+}
+
+/* ── Editor root ──────────────────────────────────────────────────────── */
+
+/* --moss-editor-line-inset: the READING column's horizontal inset. Consumed by
+   the CM body (`.cm-line`), the inline title (`.editor-heading`), and the
+   blockquote bar (cm-markdown-style.css) / image (cm-block-embeds.css)
+   decorations — so all of them share one source of truth. Defined on
+   .moss-editor (the common ancestor). Fullscreen-agnostic. Applied to both
+   sides so the column stays symmetric.
+
+   NOT consumed by the nav surface. That is CHROME and stays pinned to the
+   16px spine (`.nav-grid` builds it from --ft-tl + --ft-base) at every width.
+   Below the measure threshold the reading inset resolves to that same 16px,
+   so chrome and text share one edge; above the threshold they deliberately
+   diverge. The chip bar left the chrome list with Amendment III (editor-modes
+   doc): mounted markdown re-parents it into the CM scroller as document
+   content, where `.cm-scroller > .chip-bar` below gives it the full inset so
+   the chips share the reading column's edge like the heading does.
+
+   MEASURE CAP. The inset is `max(spine, half the slack)`, so it
+   grows past the spine once the surface is wider than --moss-editor-measure,
+   centering a capped reading column. Below that threshold the max() resolves to
+   exactly the spine and every surface renders as it did before — which is why
+   the split action panel (~420px, far under the ~714px measure) is unchanged
+   and only full-width / document mode sees the cap engage.
+
+   WHY THE INSET AND NOT `max-width` ON A BOX. Capping `.cm-content` (or
+   centering it with `margin-inline: auto`) would be the obvious move and is
+   wrong here, twice over:
+     1. The comment gutter is a flex sibling of `.cm-content` in `.cm-scroller`,
+        collapsed to height 0 and painting its glyphs by CM6's per-line
+        coordinates (see the `.cm-gutters` note below). It does not move with
+        `.cm-content`, so centering the content box slides the text out from
+        under its own gutter glyphs.
+     2. `.cm-line` — not `.cm-content` — is deliberately where the inset lives so
+        selection and active-line backgrounds paint full-bleed across the pane.
+        A box cap would clip both to the measure.
+   Insetting each line keeps `.cm-content` full-width, so the gutter, the
+   full-bleed highlights, and CM6's coordinate system are all untouched.
+
+   The `100%` resolves per use site, against each consumer's containing block —
+   `.cm-line` against `.cm-content`, and `.editor-heading` and `.chip-bar`
+   against `.cm-scroller`. All three are the same full surface
+   width, so the three stay mutually aligned. Do NOT move this declaration onto
+   a narrower ancestor, and do NOT read it from JS with
+   `getComputedStyle().getPropertyValue()` — an unregistered custom property
+   returns the unresolved `max(...)` string, not px. Measure a real `.cm-line`'s
+   `paddingLeft` instead (see refreshEditorColumnWidth in block-row-height.ts). */
+.moss-editor {
+  display: flex; flex-direction: column; height: 100vh; width: 100%;
+  /* Font-stable, not a raw `em`: `em` resolves against each
+     CONSUMING element's own font-size, and --moss-editor-hang-gutter is
+     consumed by both `.cm-line` (17px) and `.editor-heading` (1.75x that) —
+     a raw `2.5em` gave them two different insets instead of one shared
+     column (confirmed via editor-measure.spec.ts's "inline title and body
+     share one reading column" gate, red by 31.875px before this fix). */
+  --moss-editor-hang-gutter: calc(1.5 * var(--moss-editor-reading-size));
+  /* The hang gutter is part of the inset for every consumer, so the title,
+     body text, images and the hung prefixes of headings, lists and quotes
+     all share one text column, and a hung prefix always has room in the
+     margin to its left. */
+  --moss-editor-line-inset: max(
+    calc(var(--moss-editor-spine) + var(--moss-editor-hang-gutter)),
+    calc((100% - var(--moss-editor-measure)) / 2)
+  );
+}
+
+/* ── Nav surface: titlebar + tree ────────────────────────────────────── */
+
+/* min-height: 0 defeats the flexbox `min-height: auto` trap: a flex item's
+ * default min-height is its CONTENT size, which would override the explicit
+ * height the drag controller sets and stop the panel collapsing when the tree
+ * body is tall (the rows stay visible while the height "shrinks"). With
+ * min-height: 0 the set height is honored and overflow: hidden clips the body. */
+.nav-surface { flex-shrink: 0; min-height: 0; background: var(--moss-color-surface); overflow: hidden; display: flex; flex-direction: column; transition: height .15s cubic-bezier(.4,0,.2,1); position: relative; }
+
+/* Outer container for the file-tree panel. Flex column: row 1 = breadcrumb
+ * strip (--moss-titlebar-height), row 2 = scrolling tree body. NO column
+ * grid — indentation is fixed (--ft-indent) per row, applied in file-tree.css.
+ * Horizontal insets live on the CONTENT (strip padding / row padding-left),
+ * NOT here, so the strip's hairline reaches both panel edges.
+ *
+ * Fixed-indent contract: bc-seg[d]
+ * and tree-row[d] icons both sit at --ft-tl + --ft-base + d*--ft-indent, so the
+ * spine aligns by construction, and the playwright/fixtures/file-tree-fixed-indent
+ * harness (WebKit-verified) checks it. */
+.nav-grid {
+  display: flex;
+  flex-direction: column;
+  --ft-indent: 64px;   /* fallback step for tree depths beyond the active path */
+  /* Per-segment LEGIBLE floor: icon + roughly six characters. A crumb is either
+     this wide or it hides its label entirely (.seg.bc.is-iconified) — there is
+     no middle rung, because the old 40px floor bought about two characters and
+     a row of "ab…" stubs tells the reader nothing a row of icons wouldn't.
+     file-tree.ts reads this var; keep its readPxVar default in step. */
+  --ft-seg-min: 72px;
+  --ft-base: 8px;
+  --ft-row-h: 28px;    /* tree row height; ALSO the connector-rail's icon-center inset (file-tree.css) */
+  /* Spine origin = the shared traffic-light inset (tokens.css), which collapses
+     to 0 in fullscreen. Alias keeps the --ft-* spine vocabulary below intact;
+     file-tree.ts reads the canonical --moss-traffic-light-inset (concrete px)
+     directly, NOT this var() alias (getComputedStyle would return the literal
+     "var(...)" string). */
+  --ft-tl: var(--moss-traffic-light-inset);
+  --ft-pr: 14px;   /* right gutter */
+  flex: 1;
+  min-height: 0;
+}
+
+/* Fullscreen: the traffic lights are hidden, so --ft-tl collapses to 0 and the
+   spine origin would fall to just --ft-base (8px) — 8px left of the chip/CM6
+   content spine (16px). Restore the alignment by raising --ft-base to 16px so
+   the first breadcrumb glyph (and, coupled to it, every tree row + the connector
+   rail, which all sit at --ft-tl + --ft-base + offset) lands on the 16px spine.
+   Rides on --ft-base, NOT --moss-traffic-light-inset: that token stays a
+   semantically-honest 0 in fullscreen (file-tree.ts's spine allocator reads it
+   as the concrete reserved-inset width; see fullscreen-inset.spec.ts). JS reads
+   --ft-base via getComputedStyle, so this override stays in sync. */
+body.fullscreen-mode .nav-grid { --ft-base: 16px; }
+
+.nav-body {
+  /* Flex column so rows shrink-wrap their content (icon+name) instead of
+   * stretching to full block width — that makes .seg:hover / .seg.selected
+   * paint a PILL around icon+name, not a full-width row bar.
+   * The per-row depth indent lives in each seg's margin-inline-start
+   * (file-tree.css), which stays transparent (outside the background box).
+   * `gap: 1px` (already present) now applies as inter-row spacing. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;     /* the ONLY scroll container */
+  scrollbar-width: thin;
+  position: relative;
+  gap: 1px;
+}
+
+/* inset-inline-end, not `right`: the breadcrumb strip reserves room for this
+   cluster through --ft-pr, which it applies as the LOGICAL padding-inline-end.
+   Mixing a physical offset here with a logical reservation there would, under
+   RTL, carve the gap out of one side while the buttons sat on the other. */
+.nav-right { display: flex; align-items: center; gap: 8px; position: absolute; inset-inline-end: 14px; top: 0; height: var(--moss-titlebar-height); z-index: 2; }
+
+/* This webview draws the Windows caption itself only in full-width/document
+   mode — split and preview-only leave it to the preview webview, unchanged
+   body.owns-caption is the STATE half of that gate
+   (utils/fullscreen-class.ts's applyCaptionOwnerClass, toggled live by
+   editor-layout-btn.ts's editor:full-width-changed listener and seeded once
+   at boot for document mode, which never fires that event). own-titlebar
+   .controls-trailing alone is the PLATFORM half — true for this webview on
+   every Windows boot regardless of state — so without owns-caption too this
+   row would paint behind the preview's own row in split mode. display:none
+   hides the whole row (not just the buttons inside, whose own visibility
+   toggle lives in primitives.css and is platform-only): a hidden
+   ancestor keeps it out of the hit-test with no separate gating needed,
+   the same reasoning the preview's row already relies on. */
+.nav-caption {
+  display: none;
+}
+body.own-titlebar.controls-trailing.owns-caption .nav-caption {
+  display: block;
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  /* Explicit, not shrink-to-fit: every button inside is itself position:absolute
+     (removed from flow so their own right:0/46/92 offsets work), so an
+     auto-width block here would resolve to a ZERO-width box — invisible to
+     hit-testing and to any geometry check even though it looks right on
+     screen. Same reserved-zone width .nav-right's widened reserve already
+     assumes (--moss-caption-zone-width, tokens.css: 3 * --moss-caption-btn-w). */
+  width: var(--moss-caption-zone-width);
+  height: var(--moss-titlebar-height);
+  z-index: var(--z-panel); /* above .nav-right's raw 2 (the panel tier, tokens.css, is 20) — same reason .moss-titlebar's row needs no z-index of its own, this IS the row's positioned ancestor */
+}
+
+/* .nav-right sits beside the window buttons, not under them: this row IS the
+   title row, the only place the 138px caption zone is reserved. */
+body.own-titlebar.controls-trailing.owns-caption .nav-right {
+  inset-inline-end: calc(8px + var(--moss-caption-zone-width, 0px));
+}
+
+/* Versions mode's chrome hide (editor-main.ts hideEditorChromeForSurface):
+ * #nav-right/#nav-caption fade rather than pop, keeping their boxes —
+ * unlike `.nav-body`/`#editor-heading`, which still go to `display: none`
+ * and must release their space — so the breadcrumb strip's own width
+ * allocation (navReserve, tree/*.ts) stays untouched while they're hidden. */
+.is-chrome-faded {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms;
+}
+
+/* The save-status anchor is taken OUT of the button row's flow, and that is a
+   correctness rule rather than a cosmetic one. A failed save leaves a badge here
+   that has no max-width and does not go away; in flow it would widen .nav-right
+   and push the buttons left, and the breadcrumb reservation is measured from
+   those buttons. The reservation feeds offset[], which is what tree-row
+   indentation is measured from — so a save failure would shift the ENTIRE file
+   tree sideways and leave it shifted. Out of flow, the badge grows leftward over
+   the crumbs (which is what it does today) and moves nothing.
+
+   The badge overlapping the crumbs is still wrong, and the fix for it is moving
+   document-level status out of the titlebar entirely, into the bottom bar's
+   doc-state cluster — not a reservation wide enough to contain it, which would
+   spend the breadcrumb's width on a state that is usually absent. */
+.nav-right > [data-inline-task-anchor] {
+  position: absolute;
+  inset-inline-end: 100%;
+  margin-inline-end: 8px;
+  display: flex;
+  align-items: center;
+  /* Without this the badge is unreadable. Its containing block is .nav-right —
+     the button cluster, which is itself absolute — and `inset-inline-end: 100%`
+     puts the badge's right edge at that cluster's LEFT edge, so shrink-to-fit
+     resolves the available width to ~0 and the label wraps one word per line.
+     max-content lets it grow leftward instead, which is where the room is. */
+  width: max-content;
+}
+
+/* The label carries backend error text, so its length is not ours to predict.
+   Growing leftward without a bound runs it off the left edge of `.nav-surface`,
+   which clips — and because the text starts at its left, what disappears is the
+   BEGINNING: "Save failed: …" goes, the tail of a path stays. Truncate at the
+   end instead, where an ellipsis says so. 24ch fits inside the room a 390px
+   panel leaves (~296px) in both engines.
+
+   The bound follows the ANCHOR, not the titlebar. When the anchor moved into
+   the doc-state cluster, this rule stayed scoped to `.nav-right` and the badge
+   became unbounded in its new home — where its width is not merely a looks
+   problem, because the cluster reports that width to the insert bar as a
+   reserve at BOTH edges. A 250px `Failed: Permission denied (os error 13)`
+   therefore subtracted ~500px from a 390px pane and the insert bar was clamped
+   to nothing: the whole toolbar vanished at the exact moment a save failed.
+   Anywhere the anchor can land needs the bound. */
+/* A flex item's default `min-width: auto` refuses to shrink below its content,
+   so without this chain the cluster's max-width is simply overflowed.
+
+   `display: flex` on the badge is the load-bearing line, and it is not
+   cosmetic. `.moss-inline-status` ships as `inline-flex`, whose width is
+   shrink-to-fit with a floor at its own min-content — and its min-content is
+   the 24ch label below, ~188px. So under the cluster's cap the badge did not
+   ellipsize at all: it kept its full width, hung 104px past the anchor, and the
+   `overflow: hidden` on this very rule scissored it at a hard edge, MID-GLYPH,
+   with no ellipsis to say so. That is the failure the `.nav-right` comment
+   above was written to prevent, reintroduced one box further in. Block-level
+   flex takes the width its parent gives it, which is what lets the label
+   shrink and the ellipsis appear where the user can see it. */
+.doc-state-cluster > [data-inline-task-anchor],
+.doc-state-cluster .moss-inline-status {
+  min-width: 0;
+  overflow: hidden;
+}
+.doc-state-cluster .moss-inline-status {
+  display: flex;
+}
+
+.nav-right > [data-inline-task-anchor] .moss-inline-status__label,
+.doc-state-cluster > [data-inline-task-anchor] .moss-inline-status__label {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-state-cluster > [data-inline-task-anchor] .moss-inline-status__label {
+  min-width: 0;
+}
+
+/* ── Layout toggle button ────────────────────────────────────────────── */
+
+.editor-layout-btn { cursor: pointer; color: var(--moss-color-muted); display: flex; align-items: center; padding: 4px; border-radius: 4px; transition: color .15s, background .15s; background: none; border: none; }
+.editor-layout-btn:hover { background: var(--moss-hover-overlay); color: var(--moss-color-text); }
+
+/* Untitled-first create: persistent ＋ (and its ▾ menu caret) left of the
+   layout button. Same resting treatment as .editor-layout-btn. */
+.editor-create-btn { cursor: pointer; color: var(--moss-color-muted); display: flex; align-items: center; padding: 4px; border-radius: 4px; transition: color .15s, background .15s; background: none; border: none; }
+.editor-create-btn:hover { background: var(--moss-hover-overlay); color: var(--moss-color-text); }
+.editor-create-caret { padding: 4px 2px; margin-left: -6px; }
+
+
+/* ── Divider (drag handle) ───────────────────────────────────────────── */
+
+/* Rest = a 1px --moss-border-medium seam, same weight as every pane seam;
+   the 12px element is the invisible hit zone (margin pulls it back so layout
+   sees 1px). Hover reveals a 2px accent line after a ~150ms dwell (so a
+   pointer pass-through never strobes); drag reveals immediately. The
+   ns-resize cursor is instant either way — the cursor, not dots or a resting
+   highlight, is the affordance. See design-vocabulary.md "Dividers". */
+.divider { height: 12px; margin: -5.5px 0; flex-shrink: 0; background: transparent; cursor: ns-resize; position: relative; z-index: 10; }
+.divider::after { content: ''; position: absolute; left: 0; right: 0; top: 5.5px; height: 1px; background: var(--moss-border-medium); pointer-events: none; transition: background .15s, height .15s, top .15s; transition-delay: 150ms; }
+.divider:hover::after, .divider.dragging::after { background: var(--moss-color-accent); height: 2px; top: 5px; }
+.divider.dragging::after { transition-delay: 0ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .divider::after { transition: none; } /* jump-cut; hover/drag reveal states stay */
+}
+
+/* ── Chip bar ────────────────────────────────────────────────────────── */
+
+/* TWO-BOX LAYOUT — DO NOT COLLAPSE. ────────────────────────────────────
+   The chip bar is a priority+/overflow-menu toolbar. Its load-bearing
+   invariant is: the trailing "+" / "+N" control is ALWAYS reachable.
+   That invariant is enforced *structurally*, not by measurement:
+
+     .chip-bar  →  .chip-track (flex:1 1 auto, clips)  +  .chip-unified-btn (flex:0 0 auto)
+
+   Chips live and clip inside .chip-track. The button is a SEPARATE flex box
+   with first claim on width (flex:0 0 auto), so chip content can never push
+   it off-screen. This is the same separation Fluent UI OverflowSet, GitHub
+   Primer ActionBar, and macOS NSToolbar all use.
+
+   Do NOT move chips back onto .chip-bar directly, do NOT give the button
+   flex-shrink, and do NOT re-introduce a pixel "reserve" for the button —
+   any of those re-collapses the two boxes and lets a wide promoted chip clip
+    the more menu. The button's reachability must stay a
+    layout invariant, never a width prediction. */
+/* Site-wide scope note — one muted line above the document for `.moss/`
+   inputs. Same band as the chip bar so the two never stack. */
+.preview-note { flex-shrink: 0; padding: 8px 16px; font-size: 12px; color: var(--moss-color-text-secondary); border-bottom: 1px solid var(--moss-border-light); }
+.preview-note[hidden] { display: none; }
+
+.chip-bar { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--moss-color-surface); border-bottom: 1px solid var(--moss-border-light); position: relative; }
+
+/* Content region: takes all width left after the button (flex:1 1 auto),
+   may shrink to zero (min-width:0), and clips its own overflow. Overflow
+   chips are hidden whole (display:none) by measureOverflow — never sliced —
+   so this clip is a safety net, not the demotion mechanism. */
+.chip-track { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; overflow: hidden; }
+
+/* The whole chip bar is a control surface — chips open an edit popover on
+   click, the "+" adds a property, and a double-click on empty bar area
+   collapses the tree. None of it is selectable text: a double-click must never
+   word-select the "+" glyph or a chip label. Apply to the bar AND every
+   descendant explicitly — WebKit/WKWebView word-selects the text node under the
+   cursor, ignoring user-select on ancestors, and needs the -webkit- prefix for
+   full effect. Edit popovers mount at document.body (overlay.ts), so this never
+   reaches their inputs. */
+.chip-bar, .chip-bar * { user-select: none; -webkit-user-select: none; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 16px; font-size: 14px; cursor: pointer; white-space: nowrap; flex-shrink: 0; background: var(--moss-color-bg); border: 1px solid var(--moss-border-light); color: var(--moss-color-text); transition: all .1s; height: 32px; line-height: 20px; box-sizing: border-box; }
+/* Hover carries a wash, not just a hairline shift — on a 32px labeled chip a
+   border-light→medium change is invisible (same failure as the catalog chips,
+   editor.css .insert-bar-pill note). States stay ordered: rest < hover < on. */
+.chip:hover { border-color: var(--moss-border-medium); background: var(--moss-hover-overlay); }
+.chip.on { border-color: var(--moss-border-medium); background: var(--moss-active-overlay); }
+/* Read-only chip for a slot file (`footer.md`), whose frontmatter is inert —
+   nothing in the bar is editable, so the pill must not look clickable. Keeps
+   `.chip`'s geometry so the bar's height and rhythm are unchanged when
+   switching between a slot file and an ordinary page. */
+.chip--static { cursor: default; color: var(--moss-color-muted); background: transparent; }
+.chip--static:hover { border-color: var(--moss-border-light); background: transparent; }
+/* Provisional chip (transactional add): exists only in the UI until its
+   first commit — dismissing it leaves the file untouched. Ghosted like the
+   create flow's Untitled placeholder (muted text), dashed border to say
+   "not yet real". Committing swaps it for the ordinary chip styling. */
+.chip--provisional { border-style: dashed; background: transparent; }
+.chip--provisional .chip-key,
+.chip--provisional .chip-bool-label,
+.chip--provisional .chip-icon { color: var(--moss-color-muted); }
+
+/* A field the last build had a complaint about — today, a `url:` that another
+   file already claims. Tinted rather than outlined in red: the page IS
+   published, just not at the address its author asked for, and a chip that
+   reads as broken would be a stronger claim than the facts support. The full
+   sentence is on the tooltip (`data-tooltip`, set by chip-diagnostics.ts).
+   `.chip--error` is the same shape at full strength, for the severity-1
+   diagnostics `validateContent` already produces (wrong type, missing
+   required field) now that something finally renders them. */
+.chip--diagnostic { border-color: var(--moss-error, #c85450); background: var(--moss-error-subtle, rgba(200, 84, 80, 0.1)); }
+.chip--diagnostic .chip-key { color: var(--moss-error, #c85450); }
+.chip--diagnostic:hover { border-color: var(--moss-error, #c85450); background: var(--moss-error-subtle, rgba(200, 84, 80, 0.16)); }
+.chip--error .chip-accent, .chip--error .chip-value { color: var(--moss-error, #c85450); }
+
+.chip-icon { color: var(--moss-color-muted); display: flex; align-items: center; }
+.chip-key { color: var(--moss-color-muted); font-weight: 500; font-size: 12px; }
+.chip-sep { width: 1px; height: 14px; background: var(--moss-border-light); margin: 0 1px; }
+.chip-accent { color: var(--moss-color-text); font-weight: 600; }
+/* The chip itself is white-space:nowrap+inline-flex, so the value span needs explicit
+   display:inline-block + max-width to clip with an ellipsis instead of growing the chip. */
+.chip-value { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.chip-value-mono { font-family: ui-monospace, monospace; font-size: 11px; }
+.chip-value-empty { color: var(--moss-color-muted); font-style: italic; }
+.chip-value-suggested { color: var(--moss-color-muted); }
+.chip-tag-sep { color: var(--moss-color-muted); }
+
+/* The trailing button is pushed to the edge by .chip-track's flex:1 1 auto —
+   no spacer needed. flex:0 0 auto keeps it from ever shrinking or being
+   clipped (the structural half of the two-box invariant above). */
+.chip-unified-btn { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; border-radius: var(--moss-radius-capsule); font-size: 14px; font-weight: 500; cursor: pointer; user-select: none; white-space: nowrap; background: var(--moss-color-bg); border: 1px solid var(--moss-border-light); color: var(--moss-color-muted); transition: all .1s; box-sizing: border-box; padding: 0 10px; }
+.chip-unified-btn:hover { border-color: var(--moss-border-medium); }
+.chip-unified-btn.on { border-color: var(--moss-border-medium); background: var(--moss-hover-overlay); }
+/* .round is a square footprint (32x32); the capsule token above already
+   resolves that to a circle, so no separate radius override is needed. */
+.chip-unified-btn.round { padding: 0; width: 32px; }
+
+.chip.bool-on { background: var(--moss-accent-light); border-color: rgba(45, 90, 45, 0.25); }
+.chip.bool-on .chip-icon { color: var(--moss-color-accent); }
+.chip.bool-on .chip-key { color: var(--moss-color-accent); }
+.chip.bool-on .chip-bool-label { color: var(--moss-color-accent); font-weight: 500; }
+.chip.bool-off { background: var(--moss-color-bg); }
+.chip.bool-off .chip-icon { color: var(--moss-color-muted); opacity: .5; }
+.chip.bool-off .chip-bool-label { color: var(--moss-color-muted); }
+
+[data-theme="dark"] .chip.bool-on { border-color: rgba(74, 124, 74, 0.35); }
+
+/* ── Editor heading (filename = article heading) ──────────────────── */
+
+/*
+ * Heading element behavior:
+ *
+ * The heading is moved into CM6's `.cm-scroller` (as a sibling preceding
+ * `.cm-content`) at mount time. This makes the heading scroll together
+ * with the markdown body — they share CM6's native scroll surface, so
+ * the user gets "heading scrolls away as I scroll the body" without any
+ * synthetic transform tricks.
+ *
+ * Why this approach (vs. an outer-wrapper that disables CM6's scroller):
+ *   CM6 reads scrollTop directly from `view.scrollDOM` for `scrollIntoView`
+ *   (line 3397 of @codemirror/view), focus-restore (line 5182), and scroll
+ *   listeners (line 4879). If we disable `.cm-scroller`'s scroll those
+ *   paths break. Putting the heading INSIDE `.cm-scroller` keeps CM6's
+ *   scroll model intact while still making the heading scroll with the
+ *   body — best of both worlds.
+ *
+ * CM6 only manages `.cm-content`'s children (decorations, line widgets);
+ * `.cm-scroller`'s child set is ours to control. CM6's coordinate system
+ * is anchored at `.cm-content`'s top (line 6073 of @codemirror/view),
+ * which naturally sits below our prepended heading — so scroll-sync,
+ * line-block lookups, and viewport virtualization all keep working.
+ *
+ * Layout — `.cm-scroller` is `display: flex !important; flex-direction: row;
+ * align-items: flex-start !important` by CM6 default
+ * (in @codemirror/view). With the heading prepended
+ * as a flex row item, it would get a narrow column width beside
+ * `.cm-content`, and CJK characters would stack one-per-line.
+ *
+ * Three coordinated overrides make the heading sit above CM6 content:
+ *
+ *   1. `.cm-scroller { flex-direction: column }` — stack heading above
+ *      content along the main axis.
+ *   2. `.cm-content { align-self: stretch }` — make the text column fill the
+ *      scroller's width. It has to be `align-self` on the CHILD: CM6 writes
+ *      `align-items: flex-start !important` on `.cm-scroller`, and an
+ *      `align-items: stretch` of ours there is a normal declaration, so it
+ *      loses — silently, because a cross-axis `flex-start` only shows up as a
+ *      fit-content box, which looks fine until something measures it. That is
+ *      exactly what happened: `.cm-line`'s inset is a percentage of
+ *      `.cm-content`, so a shrink-wrapped content box made the measure cap
+ *      resolve to the bare spine and the reading column hugged the left edge
+ *      on any document with no line wider than the measure. `align-self` is a
+ *      different property from `align-items`, so the child's plain declaration
+ *      wins over the parent's `!important` — nothing here needs `!important`.
+ *   3. `.cm-content { min-height: auto; flex: 1 1 auto }` — CM6's
+ *      default `min-height: 100%` (index.js:6776) would resolve to the
+ *      full scroller height regardless of flex direction (containing
+ *      block resolution, not main-axis), forcing a permanent ~60px
+ *      overflow scrollbar on every doc once a heading is present.
+ *      Switching `.cm-content` to flex-grow with auto min-height lets
+ *      it claim the remaining column space (scroller_height − heading)
+ *      without forcing overflow. The click-below-last-line affordance
+ *      is preserved by `flex-grow: 1` filling the column.
+ *
+ * Gutter coexistence (the comment gutter, cm-comment.ts): a CM6 gutter is a
+ * flex child of `.cm-scroller`. In the default row layout it sits as a narrow
+ * column BESIDE `.cm-content`; under our column override it instead stacks as
+ * a full-height block (its intrinsic main-axis size is the whole document
+ * height) BETWEEN the heading and the text — i.e. a screenful of blank above
+ * the body, and the comment glyphs displaced far above their lines. We keep
+ * the column layout (it's what makes the heading stack + the click-below-last-
+ * line fill work) and instead collapse the gutter's main-axis size to 0 while
+ * letting its markers overflow. The gutter stays a flex item at the content's
+ * top (height 0 ⇒ it adds no vertical offset), so CM6's per-line glyph
+ * positions still land on their lines. See `.cm-gutters` rule below.
+ */
+.moss-editor-cm .cm-scroller {
+  flex-direction: column;
+}
+.moss-editor-cm .cm-content {
+  min-height: auto;
+  flex: 1 1 auto;
+  /* Full pane width — see override 2 above. Without it the reading column is
+     never centred, because its inset is a percentage of this box. */
+  align-self: stretch;
+}
+/* The inline title is the same reading column and needs the same full-width
+   box: shrink-wrapped, the text is still positioned correctly (its padding
+   percentage resolves against the SCROLLER, not itself) but the clickable
+   box stops at the text, so a click in the right margin of the title line
+   misses it. */
+.moss-editor-cm .cm-scroller > .editor-heading {
+  align-self: stretch;
+}
+/* Frontmatter chips are DOCUMENT CONTENT (design doc Amendment III): the bar
+   re-parents into the scroller above the H1 by the heading's own pattern
+   (scrollDOM.prepend + onBeforeDestroy rescue in editor-main.ts) and scrolls
+   away with the text — no pinned band exists, so no mode or visibility toggle
+   can ever reflow the column. Inside the scroller the band costume comes off:
+   same reading-column inset as the title, no surface, no hairline. */
+.moss-editor-cm .cm-scroller > .chip-bar {
+  align-self: stretch;
+  flex: none;
+  background: transparent;
+  border-bottom: none;
+  padding: 14px var(--moss-editor-line-inset) 0;
+}
+/* Collapse the gutter's column height so it doesn't stack as a tall empty
+ * block above the body (see `.cm-scroller` note above). `min-height: 0
+ * !important` is required to beat CM6's inline `min-height: <docHeight>px`
+ * (re-set on every measure pass); `overflow: visible` lets the comment glyphs
+ * paint outside the now-zero-height box, aligned with their source lines.
+ *
+ * Keeping the glyphs CLICKABLE takes two things, because collapsing the box
+ * makes `.cm-content` (next flex sibling) occupy the same vertical band:
+ *   - `z-index: 1` lifts the gutter subtree above `.cm-content` so the glyph,
+ *     not the content line, is the topmost element at that point. (The
+ *     zero-height box has no hit area of its own, so uncommented-line margin
+ *     clicks still fall through to `.cm-content` and place the cursor.)
+ *   - `.cm-gutter { overflow: visible }` un-clips the INNER column, which CM6
+ *     ships as `overflow: hidden`; with the outer box at height 0 that hidden
+ *     overflow would clip the glyph's hit region to nothing (it would paint
+ *     but be un-hittable → open-comment-popover dead).
+ *
+ * Caveat — this assumes ONE gutter (the comment gutter). If a second gutter
+ * (line numbers, etc.) is ever added, re-audit the z-index stacking between
+ * the overlapping zero-height gutter columns and extend the clickability gate
+ * (editor-heading-gutter-gap.spec.ts only exercises the comment gutter). */
+.moss-editor-cm .cm-scroller .cm-gutters {
+  min-height: 0 !important;
+  height: 0;
+  overflow: visible;
+  z-index: 1;
+}
+.moss-editor-cm .cm-scroller .cm-gutter {
+  overflow: visible;
+}
+
+.editor-heading {
+  /* The inline title IS the document's H1 — same face and same size as
+     `.cm-lp-h1` (cm-markdown-style.css, 1.75em), so the scale reads as one
+     document. It used to be a Georgia serif at a hard 24px, which made the
+     title both a different voice from the body AND *smaller* than the first
+     `#` heading beneath it. */
+  font-family: var(--moss-editor-reading-font);
+  font-size: calc(1.75 * var(--moss-editor-reading-size));
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  color: var(--moss-color-text);
+  /* Share the body's content inset (--moss-editor-line-inset) so the inline
+     title sits on the same left edge as `.cm-line` — one reading column,
+     aligned to the chip/traffic-light content spine. */
+  padding: 18px var(--moss-editor-line-inset) 12px;
+  margin: 0;
+  outline: none;
+  cursor: text;
+  word-break: break-word;
+  /* No background or border on hover/focus — the heading reads as the
+     first line of the article, like Obsidian's inline title. The I-beam
+     cursor (set above) is the only affordance signaling editability. */
+}
+.editor-heading[data-empty="true"] { display: none; }
+/* Untitled-first create session: the heading starts blank with ghost text
+   ("Untitled") until the author types the title (create-flow.ts). */
+.editor-heading[data-create-placeholder]:empty::before {
+  content: attr(data-create-placeholder);
+  color: var(--moss-color-muted);
+}
+
+.editor-heading-error {
+  color: var(--moss-error, #e53e3e);
+  font-size: 12px;
+  /* Left-align with the inline title it validates (the content spine). */
+  padding: 0 var(--moss-editor-line-inset) 8px;
+}
+
+/* Invalid-YAML frontmatter banner (BUG 3): shown above the chip bar when a
+   malformed `---...---` block fails to parse, so the blank chip form is
+   explained instead of silently misleading. */
+.fm-error-banner {
+  color: var(--moss-error, #c85450);
+  background: var(--moss-error-subtle, rgba(200, 84, 80, 0.1));
+  border-left: 3px solid var(--moss-error, #c85450);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 32px;
+  word-break: break-word;
+}
+
+/* ── Popover ─────────────────────────────────────────────────────────── */
+
+.pop { position: fixed; z-index: var(--z-overlay); background: var(--moss-color-bg); border-radius: 8px; padding: 10px 12px; box-shadow: var(--moss-elevation-2); border: 1px solid var(--moss-border-light); min-width: 220px; max-width: 320px; }
+.pop-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.pop-title { font-size: 11px; font-weight: 600; color: var(--moss-color-muted); text-transform: uppercase; letter-spacing: .03em; }
+.pop-x { cursor: pointer; font-size: 14px; color: var(--moss-color-muted); line-height: 1; padding: 2px 4px; border-radius: 3px; }
+.pop-x:hover { background: var(--moss-hover-overlay); }
+.pop-input { width: 100%; border: 1px solid var(--moss-border-light); border-radius: 4px; padding: 5px 8px; font-size: 12px; color: var(--moss-color-text); outline: none; background: var(--moss-color-bg); font-family: inherit; }
+.pop-input:focus { border-color: var(--moss-color-accent); }
+.pop-input.mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+
+/* Asset Browse button — the "pick it from my disk" escape hatch beside every
+   asset search.
+   The word is visible rather than hovered: both mounts are floating overlays,
+   where data-tooltip is forbidden, so the glyph never carries the meaning
+   alone. Quiet at rest, accent on hover — an escape, not the main verb. */
+.pop-field { position: relative; }
+.pop-input--has-browse { padding-right: 74px; }
+.asset-browse { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 2px 5px; border-radius: 4px; cursor: pointer; color: var(--moss-color-text-secondary); font-family: inherit; font-size: 11px; line-height: 1; white-space: nowrap; }
+.asset-browse:hover { color: var(--moss-color-accent); background: var(--moss-hover-overlay); }
+.asset-browse:focus-visible { outline: 1px solid var(--moss-color-ui-accent); outline-offset: 1px; }
+.asset-browse svg { flex: none; }
+.asset-browse-label { overflow: hidden; text-overflow: ellipsis; }
+.asset-browse--inset { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); max-width: 70px; }
+/* Intrinsic width, deliberately NOT `width: 100%`. A full-width button reads
+   as a menu row rather than the quiet escape it is — and with its own padding
+   it came out wider than a completion row, so the strip, not the results, was
+   deciding how wide the tooltip is. Caught by the asset-browse-strip gate. */
+.asset-browse--strip { padding: 4px 8px; }
+.pop-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.pop-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: var(--moss-color-surface); border: 1px solid var(--moss-border-light); border-radius: 12px; font-size: 12px; color: var(--moss-color-text-secondary); }
+.pop-tag-x { cursor: pointer; color: var(--moss-color-muted); font-size: 13px; line-height: 1; }
+.pop-tag-x:hover { color: var(--moss-color-text); }
+
+/* Union editor (Children / Series) — a segmented choice [On] [Off] [Folder…]
+   that owns the field; the folder picker is revealed only for the third
+   segment. The popover opens on the selected segment, never in the folder
+   input, so its datalist cannot cover the choice. */
+.pop-union-row { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--moss-border-light); border-radius: var(--moss-border-radius); background: var(--moss-color-bg); }
+.pop-union-seg { padding: 2px 12px; border: 0; border-radius: calc(var(--moss-border-radius) - 2px); background: transparent; color: var(--moss-color-text-secondary); font: inherit; font-size: 12px; line-height: 1.5; white-space: nowrap; cursor: pointer; }
+.pop-union-seg:hover { color: var(--moss-color-text); }
+.pop-union-seg.is-on { background: var(--moss-accent-light); color: var(--moss-color-accent); font-weight: 500; }
+.pop-union-seg:focus-visible { outline: 2px solid var(--moss-color-accent); outline-offset: 1px; }
+.pop-union-picker { margin-top: 8px; }
+.pop-union-picker.is-hidden { display: none; }
+.pop-union-list { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* File-picker (cover) live search dropdown — sits in-flow below the input,
+   inside the already-positioned .pop (no separate fixed-position layer). */
+.pop-file-picker-list { margin-top: 6px; max-height: 180px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--moss-border-light); border-radius: 6px; scrollbar-width: thin; }
+.pop-file-picker-list:empty { display: none; border: none; }
+.pop-file-picker-item { display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; cursor: pointer; font-size: 12px; }
+.pop-file-picker-item:hover, .pop-file-picker-item.is-highlighted { background: var(--moss-hover-overlay); }
+.pop-file-picker-label { color: var(--moss-color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.pop-file-picker-detail { color: var(--moss-color-muted); font-size: 11px; flex-shrink: 0; }
+.pop-file-picker-empty { padding: 6px 8px; font-size: 12px; color: var(--moss-color-muted); }
+
+/* ── Unified dropdown ────────────────────────────────────────────────── */
+
+.omenu { position: fixed; z-index: var(--z-overlay); background: var(--moss-color-bg); border-radius: 10px; padding: 6px; box-shadow: var(--moss-elevation-2); border: 1px solid var(--moss-border-light); min-width: 260px; max-width: 380px; max-height: 380px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.omenu-search { width: 100%; border: 1px solid var(--moss-border-light); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--moss-color-text); outline: none; background: var(--moss-color-bg); font-family: inherit; margin-bottom: 4px; box-sizing: border-box; }
+.omenu-search:focus { border-color: var(--moss-color-accent); }
+.omenu-group { font-size: 10px; font-weight: 600; color: var(--moss-color-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px 4px; }
+.orow { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 14px; transition: background .1s; }
+.orow:hover { background: var(--moss-hover-overlay); }
+/* Keyboard focus stays in the search box (aria-activedescendant model), so
+   the row Enter would activate is marked by a class, not :focus. Accent-tinted
+   rather than the plain hover wash so the two are told apart when the pointer
+   rests on one row while the keyboard has selected another. */
+.omenu:focus { outline: none; }
+.orow.orow-active { background: var(--moss-color-accent-quiet); }
+.orow .ok { color: var(--moss-color-muted); width: 85px; font-weight: 500; font-size: 12px; flex-shrink: 0; }
+/* min-width:0 is required: a flex item's default min-width is `auto` (= its content's
+   intrinsic width), which defeats `overflow:hidden` and lets long values overflow the
+   menu. Forcing min-width:0 lets `text-overflow: ellipsis` actually clip. */
+.orow .ov { color: var(--moss-color-text); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+/* Add rows stack a head line (+ glyph, label) over an optional detail line —
+   mirrors .cm-slash-menu-item/-label/-detail: bold label, muted 11px detail,
+   2px gap, always present when chip.<key>.detail exists rather than
+   sometimes-blank. The already-set-field rows above (.orow, not .orow-add)
+   keep their single-line shape — they show the field's current VALUE, which
+   is more useful there than a description of its meaning. */
+.orow-add { display: flex; flex-direction: column; align-items: stretch; gap: 2px; color: var(--moss-color-muted); font-size: 13px; }
+.orow-add-head { display: flex; align-items: center; }
+.orow-add .oadd-plus { opacity: 0.5; margin-right: 4px; }
+.orow-add-label { flex-shrink: 0; }
+.orow-add-auto { margin-left: auto; padding-left: 12px; font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orow-add-detail { font-size: 11px; color: var(--moss-color-text-secondary); white-space: normal; }
+.osep { border-top: 1px solid var(--moss-border-light); margin: 4px 8px; }
+
+/* ── CM6 editor ──────────────────────────────────────────────────────── */
+/* CM6 relies on contenteditable for the text cursor (no explicit cursor:text
+   in its CSS). WKWebView on macOS periodically resets cursor to arrow via
+   NSCursor resetCursorRects (wry#175, tauri#1526, worsened in Sonoma).
+   Explicit cursor:text resists the reset. */
+
+/* --moss-editor-line-inset (defined on .moss-editor above) is the per-`.cm-line`
+   text inset — applied on `.cm-line`, NOT on .cm-content, so CM's full-width
+   active-line highlight is preserved. */
+/* position: relative makes this the containing block for the bottom chrome
+ * (.insert-bar, and the doc-state cluster beside it). Chosen over anchoring
+ * them to the viewport because this box already shrinks by .create-status's
+ * height when a create session runs, so the bar rides above the status line
+ * for free — at any status-line height, including when it wraps.
+ *
+ * The `overflow-y: auto` here does NOT scroll in practice: the CM6 editor
+ * inside is `height: 100%` and does its own scrolling in .cm-scroller, so this
+ * box never overflows and absolutely-positioned children stay pinned. That is
+ * an assumption about a box we do not fully own, so bottom-chrome-pinning.spec
+ * asserts it against a long document rather than trusting it. */
+.moss-editor-cm { flex: 1; min-height: 0; overflow-y: auto; position: relative; }
+.moss-editor-cm .cm-editor { height: 100%; background-color: var(--moss-color-bg); color: var(--moss-color-text); cursor: text; }
+/* font-size is the SAME token the measure is a multiple of (42×). Keep them
+   linked: --moss-editor-measure is font-stable only if the column and the text
+   scale together. 1.0625rem is 17px, so this is a no-op by value. */
+.moss-editor-cm .cm-scroller {
+  font-family: var(--moss-editor-reading-font);
+  font-size: var(--moss-editor-reading-size);
+  line-height: var(--moss-editor-line-height);
+  color: var(--moss-editor-body-color);
+  font-variant-ligatures: no-common-ligatures;
+}
+.moss-editor-cm .cm-content { padding: 20px 0 60px; cursor: text; }
+.moss-editor-cm .cm-line { padding-left: var(--moss-editor-line-inset); padding-right: var(--moss-editor-line-inset); }
+.moss-editor-cm .cm-focused { outline: none; }
+/* Empty-document ghost line (@codemirror/view placeholder()) — override CM6's
+ * hard-coded #888 with the theme's muted color; vanishes on first input. */
+.moss-editor-cm .cm-placeholder { color: var(--moss-color-text-secondary); }
+/* No gutter chrome (surface background / border-right): moss's only gutter is
+ * the comment gutter, collapsed to height 0 above. A surface column + border
+ * here would only ever paint as the old blank-gap artifact. Re-add
+ * intentionally if a SIZED gutter (e.g. line numbers) is ever introduced. */
+.moss-editor-cm .cm-activeLineGutter { background-color: var(--moss-hover-overlay); }
+.moss-editor-cm .cm-activeLine { background-color: var(--moss-hover-overlay); }
+
+/* Selection uses teal to match --moss-accent-light (can't use var() with !important override) */
+.moss-editor-cm .cm-selectionBackground, .moss-editor-cm .cm-focused .cm-selectionBackground { background-color: rgba(58, 122, 138, 0.15) !important; }
+
+/* Dark: without this the CM6 cursor keeps its UA default (black) and is
+   invisible on the dark editor. */
+[data-theme="dark"] .moss-editor-cm .cm-cursor, [data-theme="dark"] .moss-editor-cm .cm-cursor-primary { border-left-color: var(--moss-color-text); }
+[data-theme="dark"] .moss-editor-cm .cm-selectionBackground, [data-theme="dark"] .moss-editor-cm .cm-focused .cm-selectionBackground { background-color: rgba(90, 143, 160, 0.20) !important; }
+
+/* ── Dropdown (completion) ───────────────────────────────────────────── */
+
+.dropdown { position: fixed; z-index: var(--z-overlay); background: var(--moss-color-bg); border-radius: 8px; padding: 4px; box-shadow: var(--moss-elevation-2); min-width: 260px; max-width: 340px; max-height: 300px; overflow-y: auto; display: none; scrollbar-width: thin; }
+.dropdown.vis { display: block; }
+.dd-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: background .08s; }
+.dd-row:hover { background: var(--moss-hover-overlay); }
+.dd-row.sel { background: var(--moss-color-accent-quiet); }
+.dd-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--moss-color-surface); border-radius: 4px; font-size: 13px; color: var(--moss-color-muted); flex-shrink: 0; }
+.dd-text { flex: 1; min-width: 0; }
+.dd-name { font-size: 13px; font-weight: 500; color: var(--moss-color-text); }
+.dd-desc { font-size: 11px; color: var(--moss-color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dd-syn { font-size: 10px; color: var(--moss-border-medium); font-family: ui-monospace, monospace; flex-shrink: 0; }
+.dd-sec { font-size: 10px; color: var(--moss-color-muted); padding: 6px 10px 2px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+
+/* ── Insert bar — persistent context-adaptive bottom toolbar ─────────── */
+/* Presence = focus, contents = caret context; stillness over motion. */
+
+/* ── The bottom band: undo · redo · save badge on the left, the pill centred ──
+   Absolute, not fixed: the band is anchored inside #moss-editor-cm (which gets
+   `position: relative` for this), and that pane already shrinks by
+   .create-status's height when a create session is running. Riding that is what
+   keeps the band off the status line without a JS-set inset, and it stays
+   correct when the status line wraps.
+
+   ONE grid, so the browser divides the row instead of us. The two `1fr` tracks
+   split whatever the pill does not take, which centres it; when the pane is too
+   narrow to split evenly the left track pins at --band-cluster-min and the
+   leftover falls to the right, which slides the pill clear of the cluster.
+   Both behaviours used to be JavaScript — a pushed width, a published floor, a
+   ResizeObserver and a four-term `avail`/`symAvail`/`leftStart`/`dx`
+   calculation. Each duplicated measurement could disagree with the value
+   computed elsewhere, so the grid now owns that geometry. See editor-band.ts.
+
+   The left track's growth limit is a SHARE, not the cluster's natural width, so
+   the cluster is the one that yields: its badge label ellipsizes, which the
+   user can see, rather than the pill scissoring buttons off inside its
+   `overflow: hidden`, which the user cannot. */
+.editor-band {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  /* What the cluster will not give up: two 28px buttons, the 2px gap between
+     them, the 2px gap to where the badge would be, and its own 12px of padding.
+     A plain length rather than that arithmetic because the insert bar reads this
+     exact property to know what it may not take (a custom property is not
+     computed, so a `calc()` here would reach it as an unparsed string) — and
+     `the empty cluster is exactly --band-cluster-min wide` is a render gate,
+     which is drift protection the arithmetic never had. */
+  --band-cluster-min: 72px;
+  display: grid;
+  /* `auto` as the left track's floor means "whatever the item in it says its
+     minimum is" — and the cluster says `min-width: var(--band-cluster-min)`.
+     With no cluster there is no item, so the floor is zero and the pill centres
+     exactly. The floor therefore appears and disappears with the cluster
+     without anything having to notice, which is what the right-hand track's
+     plain `minmax(0, 1fr)` says explicitly: it is empty and stays a share.
+
+     `auto` and not `min-content`: the cluster's min-content is its
+     un-ellipsized badge (~260px at a failed save), which would hand a quarter
+     of a wide pane to an error message. And not `:has(.doc-state-cluster)`
+     either, which is the obvious way to write this and reads better — but
+     `:has()` needs WebKit 15.4 (macOS 12.3) and moss declares a minimum of
+     12.0, where the whole declaration would be dropped: the floor would
+     silently vanish while the insert bar went on subtracting it, clipping the
+     buttons' icons at a narrow pane. */
+  grid-template-columns: minmax(auto, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  /* The band spans the pane, so it must not swallow clicks meant for the text
+     under it. Its occupants re-enable themselves. */
+  pointer-events: none;
+  z-index: calc(var(--z-popup) - 10); /* over the document, under every menu and the find pill */
+}
+
+.insert-bar {
+  /* The row is explicit on BOTH occupants. Auto-placement is sparse: it never
+     moves the cursor backwards, so the one appended second — the cluster, which
+     mounts on the first edit, long after the bar — was pushed onto a second row
+     because column 1 sits behind the column the bar had just filled. */
+  grid-row: 1;
+  grid-column: 2;
+  transform: translateY(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease-in, transform 160ms ease-in;
+}
+.insert-bar.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition: opacity 220ms ease-out, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Quiet chrome. Toggled by
+   editor-quiet-chrome.ts on typing; opacity only, so no rect moves. The
+   insert bar fades as .editor-band's own descendant (opacity multiplies);
+   a descendant that sets its own pointer-events:auto (the visible bar, its
+   active page, the doc-state cluster) is not silenced by the band's `none`,
+   so each is spelled out below: a faded button must not take hover. */
+.editor-band,
+.nav-bc-strip,
+.nav-body {
+  transition: opacity 200ms ease-in;
+}
+.editor-band.moss-quiet-chrome-faded,
+.nav-bc-strip.moss-quiet-chrome-faded,
+.nav-body.moss-quiet-chrome-faded {
+  opacity: 0;
+  pointer-events: none;
+}
+.editor-band.moss-quiet-chrome-faded .insert-bar.visible,
+.editor-band.moss-quiet-chrome-faded .insert-bar-page.active,
+.editor-band.moss-quiet-chrome-faded .doc-state-cluster {
+  pointer-events: none;
+}
+
+/* ── The band's left slot: undo · redo · save status ────────────────────── */
+.doc-state-cluster {
+  grid-row: 1;
+  grid-column: 1;
+  /* Shrink-to-fit inside the track rather than stretching to fill it: the
+     cluster is a visible glass pill, so a stretched one would paint a slab
+     across the whole track on a wide pane.
+
+     `min-width` and `max-width: 100%` are what keep shrink-to-fit inside the
+     track. A grid item's automatic minimum is its MIN-CONTENT, which for this
+     box is the un-ellipsized badge — so without the pair it would sit at ~260px
+     and simply overhang into the pill's column, which is the overlap the whole
+     band exists to make impossible. The badge's ellipsis chain below is what
+     turns the cap into something the user can read.
+
+     Stating a length rather than `0` does double duty: it is also what floors
+     the band's left track, since that track is `minmax(auto, 1fr)` and `auto`
+     asks the item. So the one number lives in one place, declared by the box it
+     is about, and the floor exists only while the box does. */
+  justify-self: start;
+  /* The `0px` fallback is not decoration. This property is now load-bearing for
+     the band's left track, and an unresolvable var would compute to `auto` —
+     which for a grid item means its MIN-CONTENT, i.e. the un-ellipsized badge at
+     ~260px, overhanging into the pill. Failing to zero is the same direction the
+     old `min-width: 0` failed in. */
+  min-width: var(--band-cluster-min, 0px);
+  max-width: 100%;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--moss-pill-size);
+  padding: 0 6px;
+  border-radius: var(--moss-pill-radius);
+  background: var(--moss-glass-pill-bg);
+  -webkit-backdrop-filter: blur(var(--moss-glass-blur)) saturate(var(--moss-glass-saturate));
+  backdrop-filter: blur(var(--moss-glass-blur)) saturate(var(--moss-glass-saturate));
+  box-shadow: var(--moss-elevation-1);
+}
+.doc-state-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.doc-state-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--moss-radius-capsule); /* square footprint — capsule token resolves to a circle */
+  background: none;
+  color: var(--moss-color-text);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, opacity 150ms ease;
+}
+.doc-state-btn:hover:not(:disabled) { background: var(--moss-hover-overlay); }
+/* The disabled state is the payload, not decoration: ⌘Z already works, so what
+   the button is FOR is answering "is there anything left to undo, and did my
+   chip edit land in the same stack as my typing". It has to be unmistakable
+   without being a second colour. */
+.doc-state-btn:disabled {
+  opacity: 0.28;
+  cursor: default;
+  color: var(--moss-color-muted);
+}
+
+
+.insert-bar-pill {
+  height: var(--moss-pill-size);
+  background: var(--moss-glass-pill-bg);
+  -webkit-backdrop-filter: blur(var(--moss-glass-blur)) saturate(var(--moss-glass-saturate));
+  backdrop-filter: blur(var(--moss-glass-blur)) saturate(var(--moss-glass-saturate));
+  border-radius: var(--moss-pill-radius);
+  box-shadow: var(--moss-elevation-1);
+  position: relative;
+  overflow: hidden;
+  transition: width 300ms cubic-bezier(0.22, 1, 0.36, 1); /* nav-pill curve */
+}
+
+/* Pages stack in the pill; the active one is interactive, the others sit a
+   few px off-axis for the cross-fade slide. Width comes from the controller
+   (explicit px both sides of the width transition). */
+.insert-bar-page {
+  position: absolute;
+  left: 5px;
+  top: 0;
+  height: 100%;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(8px);
+  transition: opacity 160ms ease, transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.insert-bar-page--format { transform: translateX(-8px); }
+.insert-bar-page.active { opacity: 1; pointer-events: auto; transform: translateX(0); }
+
+.insert-bar-pill button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--moss-radius-capsule); /* the capsule radius keeps every button rounded */
+  color: var(--moss-color-text-secondary);
+  cursor: pointer;
+  flex: none;
+}
+.insert-bar-pill button:hover { background: var(--moss-hover-overlay); color: var(--moss-color-text); }
+.insert-bar-pill button svg { width: 19px; height: 19px; display: block; }
+.insert-bar-sep { width: 1px; height: 19px; background: var(--moss-border-medium); margin: 0 4px; flex: none; }
+
+/* Measurement wrapper for the catalog page's fixed lead — fitWidth reserves its
+   real width so the scrolling chip list gets the room that is actually left.
+   Layout-neutral: the page is already a flex row and this carries the same
+   alignment, so the rendered result is identical to the flat siblings it
+   replaced. `flex: none` keeps it from being squeezed by the chip list. */
+.insert-bar-lead { display: flex; align-items: center; gap: 1px; flex: none; }
+
+.insert-bar-chips {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to right, transparent, black 14px, black calc(100% - 14px), transparent);
+}
+.insert-bar-chips::-webkit-scrollbar { display: none; }
+
+.insert-bar-pill button.insert-bar-chip {
+  width: auto;
+  /* Wider than the icon-only base's 9px: at 28px tall the capsule's
+     half-height is 14px, and this variant carries a text label that a
+     tighter pad would crowd against the rounded ends. */
+  padding: 0 14px;
+  gap: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.insert-bar-pill button.insert-bar-chip svg { width: 16px; height: 16px; }
+/* The 6% hover overlay reads on a 28px icon but disappears under a wide
+   labeled chip, so hovered chips need this explicit background. */
+.insert-bar-pill button.insert-bar-chip:hover { background: var(--moss-active-overlay); }
+@media (prefers-reduced-motion: reduce) {
+  .insert-bar, .insert-bar-pill, .insert-bar-page { transition: none !important; }
+}
+
+/* ── Context menu ──────────────────────────────────────────────────────
+   Rules live in ../styles/shared/ctx-menu.css (imported above) — shared
+    with the shell webview. */
+
+/* ── Untitled-first status line (create-flow.ts) ─────────────────────────
+   "New page in {folder} · {filename} · Undo" under the editor, visible from
+   create until the first body edit. Makes date-prefix inference visible. */
+.create-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--moss-color-muted); padding: 7px 14px; border-top: 1px solid var(--moss-border-light); }
+.create-status[hidden] { display: none; }
+.create-status b { color: var(--moss-color-text); font-weight: 500; }
+.create-status .create-status-fname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: var(--moss-hover-overlay); border-radius: 4px; padding: 1px 6px; color: var(--moss-color-text); }
+.create-status .moss-link { font-size: 12px; }
+.ctx-shortcut { margin-left: auto; font-size: 10px; color: var(--moss-color-muted); }
+
+/* ── File search dropdown ────────────────────────────────────────────── */
+
+.fsearch { min-width: 280px; max-width: 360px; }
+.fsearch-input { width: 100%; border: 1px solid var(--moss-border-light); border-radius: 4px; padding: 5px 8px 5px 28px; font-size: 12px; color: var(--moss-color-text); outline: none; background: var(--moss-color-bg); font-family: inherit; }
+.fsearch-input:focus { border-color: var(--moss-color-accent); }
+.fsearch-results { max-height: 200px; overflow-y: auto; margin-top: 6px; scrollbar-width: thin; }
+.fsearch-row { padding: 6px 8px; border-radius: 4px; cursor: pointer; transition: background .08s; }
+/* Keyboard selection accent-tinted, pointer hover washed — same split as
+   .orow/.orow-active, so the two are told apart when they land on different rows. */
+.fsearch-row:hover { background: var(--moss-hover-overlay); }
+.fsearch-row.selected { background: var(--moss-color-accent-quiet); }
+.fsearch-name { font-size: 12px; font-weight: 500; color: var(--moss-color-text); }
+.fsearch-path { font-size: 10px; color: var(--moss-color-muted); margin-top: 1px; }
+.fsearch-hl { color: var(--moss-color-text); font-weight: 600; }
+.fsearch-empty { padding: 8px; font-size: 11px; color: var(--moss-color-muted); text-align: center; }
+
+
+/* ── Inline rename ───────────────────────────────────────────────────── */
+
+.rename-input { flex: 1; min-width: 0; height: 20px; padding: 0 4px; font-size: 12px; font-family: inherit; color: var(--moss-color-text); background: var(--moss-color-bg); border: 1px solid var(--moss-color-accent); border-radius: 3px; outline: none; }
+
+/* ── Date input webkit styling ───────────────────────────────────────── */
+
+.pop-input[type="date"] { font-family: inherit; color: var(--moss-color-text); }
+.pop-input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .5; border-radius: 2px; padding: 2px; }
+.pop-input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: .8; background: var(--moss-hover-overlay); }
+.pop-input[type="date"]::-webkit-inner-spin-button { display: none; }
+
+/* ── Link resolution decorations ─────────────────────────────────────── */
+
+/* Cmd/Ctrl held over any link span → pointer cursor (Obsidian-style). */
+/* cm-link-clickable is applied by moss-syntax's linkClickableExtension. */
+.cm-editor.cm-meta-held .cm-link-clickable { cursor: pointer; }
+/* ...but only over a reference's destination (its URL, page or path): the
+   brackets, text, label and alt text inside the same node are inert
+   (cm-link-nav.ts, `hitSiteAt`) and keep the text cursor. */
+.cm-editor.cm-meta-held .cm-ref-inert { cursor: text; }
+
+/* Footnotes follow the same chord and wear the same class — the rule above is
+   the ONLY owner of a followable cursor. It used to have a second owner here,
+   keyed on the footnote RENDER classes, which meant the hand vanished the
+   moment the marker showed its `[^1]` even though Cmd+click still followed.
+   cm-markdown-style.ts marks the reference's characters `cm-link-clickable`. */
+
+/* ── Asset resolution decorations + hover preview ────────────────────── */
+/* CSS-variable seam matches Obsidian's variable model for theme compatibility. */
+
+:root {
+  --moss-ref-broken: var(--moss-color-danger, #c85450);
+  --link-unresolved-color: var(--moss-ref-broken);
+  --link-unresolved-opacity: 0.85;
+  --link-unresolved-decoration-style: dotted;
+}
+
+/* A content problem on its exact span (cm-problems.ts). The colour says what
+   happens on publish: red stops it, amber publishes something broken or
+   wrong, dimmed is intentional (a link to a page not written yet — typing
+   toward a future page is the canonical wiki workflow). Words live in the
+   reference card, never here. */
+.cm-problem--blocks,
+.cm-problem--warns {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.cm-problem--blocks { text-decoration-color: var(--moss-color-danger); }
+.cm-problem--warns { text-decoration-color: var(--moss-warning-amber); }
+.cm-problem--draft { opacity: 0.55; }
+
+/* The problem's sentence, first in whichever card claims the reference. */
+.cm-reference-card-problem { margin: 0 0 var(--moss-space-2xs, 4px); }
+
+/* ── ChipBar asset widget (FilePicker fields: cover, logo, etc.) ─────── */
+
+.chip-bar-asset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* The widget is an inline-level box inside .chip-value's (inline-block) line
+     box. With default baseline alignment the 28px thumbnail sits on the text
+     baseline, and the line-height:20px inherited from .chip reserves the font's
+     descender space below it — pushing the thumbnail ~3.5px above the chip's
+     vertical centre. `middle` centres it in the line. */
+  vertical-align: middle;
+}
+.chip-bar-asset .asset-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;            /* default; chip-bar.ts sets cover|contain per MIME */
+  border-radius: 5px;
+  background: var(--moss-color-surface, #f4f4f4);
+  border: 1px solid var(--moss-border-light, #e6e6e2);
+  flex-shrink: 0;
+}
+.chip-bar-asset.is-unresolved .asset-thumb {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+.chip-bar-asset.is-unresolved .asset-path {
+  color: var(--link-unresolved-color);
+  opacity: var(--link-unresolved-opacity);
+  text-decoration: underline;
+  text-decoration-style: var(--link-unresolved-decoration-style);
+}
+
+/* ── Shared asset preview card (asset-preview.ts) ───────────────────────
+ * Rendered into THREE containers: the hover popover, the CM6 completion info
+ * pane, and the chip-bar file picker. The card owns only its own internal
+ * layout; each container owns its own chrome. Font sizes are literal px, not
+ * `--moss-size-*`: that scale is not defined in the editor webview (only
+ * `--moss-size-2xl` exists repo-wide) — same note as styles/shared/modal.css.
+ */
+.asset-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--moss-space-xs);
+  align-items: flex-start;
+  max-width: 320px;
+  font-size: 13px;
+  white-space: normal; /* CM6's baseTheme sets pre-line on .cm-completionInfo */
+}
+.asset-preview-thumb {
+  width: 120px;
+  height: 120px;
+  object-fit: contain; /* never crop a preview — its job is showing what the image IS */
+  border-radius: 4px;
+  background: var(--moss-color-surface);
+}
+.asset-preview-thumb--badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--moss-color-muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+/* Interactive video/audio/pdf — hover popover only. */
+.asset-preview-media {
+  width: 200px;
+  max-height: 160px;
+}
+.asset-preview-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.asset-preview-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The folder is the disambiguator for hash-named assets, so wrapping beats an
+   ellipsis; clamp at two lines. */
+.asset-preview-path {
+  color: var(--moss-color-text-secondary);
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.asset-preview-dims,
+.asset-preview-size {
+  color: var(--moss-color-muted);
+}
+
+/* Container 1 — hover popover chrome. `--moss-font-ui` is defined nowhere in
+   the repo, but the declaration is load-bearing via its fallback: the tooltip
+   lives inside .cm-editor, whose .cm-scroller baseTheme sets monospace. */
+.cm-asset-hover {
+  background: var(--moss-color-bg);
+  border: 1px solid var(--moss-border-light);
+  border-radius: 6px;
+  padding: var(--moss-space-xs);
+  font-family: var(--moss-font-ui, system-ui);
+  box-shadow: var(--moss-elevation-2);
+}
+
+/* Container 2 — CM6 completion info pane. moss styles nothing under
+   .cm-tooltip today, so without this the pane inherits CM6's baseTheme chrome
+   and reads as foreign next to the editor. editor.css wins at equal
+   specificity: style-mod mounts base themes at the top of <head>. */
+.cm-tooltip.cm-completionInfo {
+  background: var(--moss-color-bg);
+  border: 1px solid var(--moss-border-light);
+  border-radius: 6px;
+  padding: var(--moss-space-xs);
+  font-family: var(--moss-font-ui, system-ui);
+  white-space: normal;
+}
+
+/* Container 3 — the reference card (hover and click-opened). Same chrome as
+   .cm-asset-hover; a fields/actions footer (`--editable` only — "a hover card
+   is read-only; a click-opened card may host controls")
+   is added in the editable card renderer. */
+.cm-reference-card {
+  background: var(--moss-color-bg);
+  border: 1px solid var(--moss-border-light);
+  border-radius: 6px;
+  padding: var(--moss-space-xs);
+  font-family: var(--moss-font-ui, system-ui);
+  box-shadow: var(--moss-elevation-2);
+  max-width: 320px;
+  overflow-wrap: anywhere;
+}
+.cm-reference-card-title {
+  font-weight: 600;
+  margin-bottom: var(--moss-space-2xs, 4px);
+}
+.cm-reference-card-hint {
+  font-size: 11px;
+  color: var(--moss-color-muted);
+  margin-top: var(--moss-space-2xs, 4px);
+}
+.cm-reference-card-field {
+  display: block;
+  margin-top: var(--moss-space-xs);
+  font-size: 11px;
+  color: var(--moss-color-text-secondary);
+}
+.cm-reference-card-field .pop-input {
+  display: block;
+  width: 100%;
+  margin-top: var(--moss-space-2xs, 4px);
+}
+.cm-reference-card-actions {
+  display: flex;
+  gap: var(--moss-space-2xs, 4px);
+  margin-top: var(--moss-space-xs);
+}
+
+/* ── Completion row glyphs ───────────────────────────────────────────────
+ * One 18px icon box per row, the file tree's own vocabulary so the author
+ * reads the dropdown with eyes already trained on the sidebar: a chevron is a
+ * folder (accepting descends), a dot is a file, a hollow ring is a page the
+ * build generates. CM6 renders `.cm-completionIcon-<Completion.type>` and the
+ * type is the row's kind, so no per-row markup is needed. The ring alone
+ * would collide with the status-mark meaning "pending", so a generated row
+ * also carries the word in its detail column. */
+.cm-tooltip-autocomplete .cm-completionIcon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  color: var(--moss-color-text-secondary);
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+.cm-completionIcon-page::after,
+.cm-completionIcon-asset::after {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--moss-color-muted);
+  opacity: 0.5;
+}
+.cm-completionIcon-folder::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateX(-1px) rotate(-45deg);
+}
+.cm-completionIcon-generated::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--moss-color-muted);
+  box-sizing: border-box;
+}
+.cm-completionIcon-heading::after {
+  content: '#';
+  font-size: 11px;
+  color: var(--moss-color-muted);
+}
+
+/* Browse-files strip on the completion tooltip. A header ABOVE
+   the list, not an overlay on its first row: the list keeps every pixel of
+   its detail column, and the strip does not move with the result count.
+   `.cm-tooltip-autocomplete` is library-owned DOM — moss adds this node, so
+   the rule is scoped to the node rather than restyling the tooltip. */
+.cm-asset-browse-strip {
+  border-bottom: 1px solid var(--moss-border-light);
+  padding: 2px;
+  background: var(--moss-color-bg);
+}
+
+
+/* ── Callout block decorations ──────────────────────────────────────── */
+
+/* Bar AND tint both live on the inset ::before, never on the `.cm-line` itself.
+   The line box spans the whole pane (the reading inset is `.cm-line` padding,
+   see .moss-editor above), so `background` on the line bleeds past the text
+   column on both sides — badly once the measure cap engages and the inset is
+   hundreds of px. Pinning left/right to --moss-editor-line-inset makes the
+   tint start and end exactly where body text does; the 3px bar is the pseudo's
+   `border-left`, so it still sits on the body-text edge.
+   Text is indented 12px past the bar — same clearance as .cm-lp-blockquote —
+   and the class is on every line of the block always (active or not), so
+   neither reveal nor typing shifts layout. */
+.moss-editor-cm .cm-line.cm-callout-block {
+  position: relative;
+  padding-left: calc(var(--moss-editor-line-inset, 28px) + var(--moss-quote-indent, 12px));
+}
+.moss-editor-cm .cm-line.cm-callout-block::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--moss-editor-line-inset, 28px) - var(--lp-hang, 0px));
+  right: var(--moss-editor-line-inset, 28px);
+  top: 0;
+  bottom: 0;
+  border-left: 3px solid var(--cm-callout-bar-color, var(--moss-border-medium));
+  background: rgba(120, 120, 138, 0.04);
+  pointer-events: none;
+}
+.cm-callout-mark { color: var(--cm-callout-bar-color, var(--moss-border-medium)); }
+/* `[!note]` parses as a link with no destination, so the highlighter colours its
+   brackets and text inside this span; they take the callout's tint instead. */
+.cm-callout-mark span { color: inherit; text-decoration: none; }
+/* The `[!type]` label's characters stay on screen (a mark, nothing replaced),
+   tinted in the callout's own colour (`.cm-callout-mark`, per-type below). */
+
+/* ── Callout per-type colors ───────────────────────────────────────── */
+
+.cm-callout-info    { --cm-callout-bar-color: #3b82f6; }
+.cm-callout-info.cm-callout-mark { color: #3b82f6; }
+
+.cm-callout-warning { --cm-callout-bar-color: #f59e0b; }
+.cm-callout-warning.cm-callout-mark { color: #b45309; }
+
+.cm-callout-danger  { --cm-callout-bar-color: #ef4444; }
+.cm-callout-danger.cm-callout-mark { color: #ef4444; }
+
+.cm-callout-error   { --cm-callout-bar-color: #ef4444; }
+.cm-callout-error.cm-callout-mark { color: #ef4444; }
+
+.cm-callout-tip     { --cm-callout-bar-color: #10b981; }
+.cm-callout-tip.cm-callout-mark { color: #059669; }
+
+.cm-callout-note    { --cm-callout-bar-color: #6366f1; }
+.cm-callout-note.cm-callout-mark { color: #6366f1; }
+
+/* ── Percent comment (%% ... %%) decorations ────────────────────────── */
+/* Muted display: the text is visible (authors need to see/edit it) but
+   clearly subordinate so it reads as a hidden note, not prose. */
+.cm-pct-comment { opacity: 0.35; font-style: italic; }
+
+/* ── CriticMarkup decorations ──────────────────────────────────────── */
+
+/* The 3-char `{++`/`++}` markers: muted, no payload wash — same delimiter
+   treatment as .cm-lp-delim / .cm-sc-delim (revealed markup is always
+   token-highlighted; delimiters muted, payload styled). */
+.cm-criticmarkup-delim { color: var(--moss-hl-punct); }
+.cm-criticmarkup-addition { background: rgba(16, 185, 129, 0.15); text-decoration: underline; text-decoration-color: rgba(16, 185, 129, 0.5); }
+.cm-criticmarkup-deletion { background: rgba(239, 68, 68, 0.15); text-decoration: line-through; text-decoration-color: rgba(239, 68, 68, 0.7); }
+.cm-criticmarkup-highlight { background: var(--moss-editor-highlight); }
+/* A comment `{==text==}{>>note<<}`: the markup is faint (.cm-criticmarkup-delim), the note beside it faint and a little smaller. A press on either opens the comment popover. */
+.cm-comment-note-text { color: var(--moss-hl-punct); font-size: 0.85em; }
+.cm-comment-trigger { cursor: pointer; }
+.cm-criticmarkup-substitution { background: var(--moss-editor-highlight-soft); }
+.cm-criticmarkup-substitution-old { text-decoration: line-through; text-decoration-color: rgba(239, 68, 68, 0.7); }
+.cm-criticmarkup-substitution-new { text-decoration: underline; text-decoration-color: rgba(16, 185, 129, 0.5); }
+
+/* ── Dark mode ───────────────────────────────────────────────────────── */
+
+[data-theme="dark"] .pop-input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.8); }
+[data-theme="dark"] .moss-editor-cm .cm-line.cm-callout-block::before { background: rgba(120, 120, 138, 0.06); }
+[data-theme="dark"] .cm-criticmarkup-addition { background: rgba(16, 185, 129, 0.22); }
+[data-theme="dark"] .cm-criticmarkup-deletion { background: rgba(239, 68, 68, 0.22); }
+
+/* Callout typed-label dark variants (lighter colors for dark surface) */
+[data-theme="dark"] .cm-callout-tip.cm-callout-mark { color: #34d399; }
+[data-theme="dark"] .cm-callout-warning.cm-callout-mark { color: #f59e0b; }
+[data-theme="dark"] .cm-callout-info.cm-callout-mark { color: #60a5fa; }
+
+/* Drop zone indicator for images dragged onto editor */
+.moss-editor-cm.moss-drop-active {
+  outline: 2px dashed var(--moss-color-accent, #2d5a2d);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* OS-drop pane overlay hint pill — appears bottom-centred over the editor
+ * during an OS drag when the cursor is over the editor zone.
+ * Appended to document.body (not cmEl) with position:fixed so it is visible
+ * even when the editor container has overflow:auto and the document is scrolled.
+ * JS computes left/bottom from cmEl.getBoundingClientRect() — mirrors the
+ * cm-slash-menu pattern (see editor.css line ~826 + cm-slash-menu.ts:147).
+ * Created/removed by JS (routeDropIndicator / showDropZone); uses a real element
+ * (not ::after) so it can hold accessible text. */
+.moss-drop-hint {
+  position: fixed;
+  z-index: var(--z-popup);
+  pointer-events: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--moss-color-accent);
+  background: var(--moss-color-surface);
+  border: 1px solid var(--moss-color-accent);
+  padding: 3px 10px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-drop-hint { transition: none; }
+}
+
+/* Block-boundary drop indicator — horizontal line between paragraphs.
+ * Used for both OS drags (osDropCaretField) and internal tree→editor drags
+ * (blockDropCursor), both driven from cm-os-drop-caret.ts.
+ * The widget is block-level (Decoration.widget block:true), so it is a child of
+ * `.cm-content` and does NOT inherit the reading inset that lives on `.cm-line`.
+ * `margin-inline` puts it back in the text column — the caret marks a gap
+ * between two paragraphs, so it must be exactly as wide as those paragraphs, not
+ * as wide as the pane. Same technique as `.cm-lp-image-row`.
+ * No glow or box-shadow — 2px accent border-top only. */
+.cm-drop-line-indicator {
+  display: block;
+  height: 0;
+  border-top: 2px solid var(--moss-color-accent);
+  margin-inline: var(--moss-editor-line-inset, 28px);
+  pointer-events: none;
+}
+
+/* ── File Viewer (non-text files) ──────────────────────────────────── */
+
+.moss-file-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.moss-file-viewer__content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 16px;
+}
+
+.moss-file-viewer__content img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+  user-select: none;
+}
+
+.moss-file-viewer__zoom-active {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.moss-file-viewer__zoom-active img {
+  cursor: zoom-out;
+}
+
+/* Checkerboard for image transparency */
+.moss-file-viewer__checkerboard {
+  background-image:
+    linear-gradient(45deg, #e0e0e0 25%, transparent 25%),
+    linear-gradient(-45deg, #e0e0e0 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e0e0e0 75%),
+    linear-gradient(-45deg, transparent 75%, #e0e0e0 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-color: #f5f5f5;
+}
+
+/* PDF fills the entire container */
+.moss-file-viewer__pdf {
+  width: 100%;
+  flex: 1;
+  border: none;
+}
+
+/* Info bar at bottom */
+.moss-file-viewer__info {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--moss-color-muted);
+  border-top: 1px solid var(--moss-border-light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Font preview samples */
+.moss-file-viewer__font-samples {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.moss-file-viewer__font-line {
+  width: 100%;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.moss-file-viewer__font-label {
+  display: block;
+  font-size: 11px;
+  color: var(--moss-color-muted);
+  margin-bottom: 2px;
+  font-family: system-ui, sans-serif;
+}
+
+/* Binary/unknown card */
+.moss-file-viewer__binary-card {
+  text-align: center;
+  padding: 32px;
+}
+
+.moss-file-viewer__binary-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.moss-file-viewer__binary-name {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.moss-file-viewer__binary-size {
+  font-size: 12px;
+  color: var(--moss-color-muted);
+  margin-bottom: 8px;
+}
+
+.moss-file-viewer__binary-msg {
+  font-size: 12px;
+  color: var(--moss-color-muted);
+  margin-top: 8px;
+}
+
+[data-theme="dark"] .moss-file-viewer__checkerboard {
+  background-color: #2a2a2a;
+  background-image:
+    linear-gradient(45deg, #333 25%, transparent 25%),
+    linear-gradient(-45deg, #333 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #333 75%),
+    linear-gradient(-45deg, transparent 75%, #333 75%);
+}
+
+/* Just-committed confirmation — a transient, borderless moss-green ambient
+   pulse applied to whichever surface owns a value that just changed: the
+   title chip on a title write, the breadcrumb segment on a rename, a tree
+   row / the nav-surface on a file create or download. "Event, not state":
+   it fades and clears. The persistent "title is set" cue is the title chip's
+   presence, not this flash. Deliberately mirrors the preview nav-pill's
+   "build applied" flash (style.css `.moss-nav-pill.refreshing`) — same
+   `--moss-color-accent`, same 16% surface mix, same 0.6s hold-then-fade — so
+   every "moss did this" confirmation shares one calm ambient vocabulary. No
+   border (and no bright `--moss-success`): the soft background tint alone
+   carries it. Lives here because the chip bar and breadcrumb are in the
+    editor webview (loads editor.css, not style.css). */
+.moss-just-committed {
+  animation: moss-just-committed 0.6s ease-out;
+}
+
+@keyframes moss-just-committed {
+  0%, 45% {
+    background: color-mix(in srgb, var(--moss-color-accent) 16%, var(--moss-color-surface));
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-just-committed { animation: none; }
+}
+
+/* Reveal wash — "here is the field you clicked in the preview". A pointer,
+   not a confirmation: nothing changed, so it must not borrow the
+   just-committed green above, which means "moss did this". Same wash the
+   preview runs over the element the chip controls (`moss-slot-reveal`, in
+   `crates/moss-build/src/ops/serve/iframe_bridge.rs`): same quiet accent, same duration, so both ends
+   of the same gesture look like one thing. */
+.moss-revealed {
+  animation: moss-revealed 1.4s ease-out;
+}
+
+@keyframes moss-revealed {
+  from { background: var(--moss-color-accent-quiet); }
+  to { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-revealed { animation: none; }
+}
+
+/* Single-click reveal wash on source lines (cm-reveal-flash.ts) — the body
+   twin of `.moss-revealed` above: a single click in the preview scrolled the
+   editor here, nothing changed, so it uses the same quiet-accent wash and the
+   same duration. A line Decoration, mounted for REVEAL_FLASH_MS then removed. */
+.cm-reveal-flash {
+  animation: moss-revealed 1.4s ease-out;
+}
+
+/* Lines another writer changed, merged in while the person edits elsewhere
+   (or put back by Undo of a kept outside edit): the same wash, over
+   OUTSIDE_WASH_MS. */
+.cm-outside-wash {
+  animation-duration: 2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Jump-cut instead of a fade: hold the quiet accent statically; the
+     decoration's removal ends the highlight. */
+  .cm-reveal-flash {
+    animation: none;
+    background: var(--moss-color-accent-quiet);
+  }
+}
+
+/* Suppress CM6's native search panel — moss uses its own glass pill (cm-find.ts) */
+.cm-search { display: none !important; }
+
+/* ── Slash command menu ──────────────────────────────────────────────── */
+/* position:fixed — editor container has overflow:auto which clips absolute */
+.cm-slash-menu {
+  position: fixed;
+  z-index: var(--z-overlay); /* the .omenu/.pop/.dropdown menu tier */
+  background: var(--moss-color-surface);
+  border: 1px solid var(--moss-border-medium);
+  /* Match moss's rounded surfaces (pills/chips) rather than the sharper 8px
+     used by the older .pop/.dropdown menus. Token defined in styles/shared/tokens.css. */
+  border-radius: var(--moss-pill-radius);
+  box-shadow: var(--moss-elevation-2);
+  min-width: 260px; max-width: 360px;
+  padding: 4px 0;
+  /* Scroll long lists in place. max-height is set precisely in JS from the
+     space available inside the editor viewport (cm-slash-menu.ts scheduleMeasure);
+     this 60vh is only a pre-measure fallback so an over-tall list never flashes
+     past the window edge. */
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin; /* subtle scrollbar, matching .omenu/.dropdown */
+}
+.cm-slash-menu-item {
+  display: flex; flex-direction: column;
+  padding: 6px 12px; cursor: pointer; gap: 2px;
+}
+.cm-slash-menu-item:hover,
+.cm-slash-menu-item-selected { background: var(--moss-hover-overlay); }
+.cm-slash-menu-item-label { font-size: 13px; font-weight: 500; color: var(--moss-color-text); }
+.cm-slash-menu-item-detail { font-size: 11px; color: var(--moss-color-text-secondary); }
+
+/* Node-class pane-state: the one surface for every non-content node. */
+.moss-pane-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+  /* Host the animated blueprint-grid canvas: it is absolutely positioned (so
+     NOT a flex item), and `overflow: hidden` keeps it clipped to the pane. The
+     content is lifted above it with `position: relative; z-index: 1` below.
+     Same pattern as `.moss-folder-mode--empty`. */
+  position: relative;
+  overflow: hidden;
+  background-color: var(--moss-color-bg);
+}
+.moss-pane-state > #blueprint-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: block;
+  z-index: 0;
+}
+.moss-pane-state__inner { max-width: 28rem; position: relative; z-index: 1; }
+/* --moss-editor-reading-size, not the SITE token --moss-reading-size: the
+   latter is never defined in the editor webview, so it always fell through
+   to the 1.125rem fallback here. */
+.moss-pane-state__title { font-size: var(--moss-editor-reading-size, 1.125rem); margin: 0 0 0.5rem; }
+.moss-pane-state__desc { color: var(--moss-color-text-secondary); margin: 0 0 1rem; }
+
+/* Seal — scrim overlay while a channel is shipping.
+ *
+ * The scrim is the sole sealed signal, so the editor itself is not dimmed.
+ * Read-only is enforced by CM6's Compartment (editable=false), not by
+ * pointer-events; `.cm-editor.sealed` carries `position:relative` so the scrim
+ * can sit inside it.
+ *
+ * Fade is asymmetric: `.is-sealing` carries the 150ms ease-out fade-IN; the bare
+ * scrim rule carries the 200ms ease-out fade-OUT. Adding/removing `.is-sealing`
+ * from JS toggles which transition fires.
+ *
+ * `.cm-seal-scrim__status` is the "Publishing your site…" caption.
+ *
+ * The caption sits in a PILL with its own surface, at the top of the pane.
+ * Grey text centred on a wash reads as text lying inside the document; an
+ * opaque surface with a border and a shadow reads as a layer above it.
+ * Anchored to the top-right gutter: the user's attention is already in the
+ * titlebar band (they just clicked Publish), a dead-centre chip covers the
+ * paragraph being edited, and a top-CENTRED one lands on the document's H1.
+ * The pill arrives 60ms AFTER the wash: two things appearing on the same frame
+ * read as one thing. A 2px transit line at the pane's top edge carries the
+ * "not hung" signal across the ~2s deploy; it encodes no progress (no start,
+ * end, or proportion), so it cannot be misread as a second progress indicator
+ * competing with the ship ring.
+ */
+.cm-editor.sealed { position: relative; }
+
+.cm-seal-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  /* R13: was var(--moss-bg-primary), a token declared nowhere in the repo. An
+   * undefined var() with no fallback is invalid at computed-value time, so
+   * `background` resolved to `transparent` and the dim never painted — the
+   * caption read as grey text lying inside the document. */
+  background: color-mix(in srgb, var(--moss-color-bg) 50%, transparent);
+  /* no backdrop-filter — R11: below perceptual threshold, paint cost for nothing */
+  cursor: not-allowed;
+  /* The barrier is gated on .is-sealing (below): while fading OUT (no .is-sealing)
+   * the scrim is at opacity:0 but still in the DOM, and MUST NOT intercept clicks
+   * — otherwise the editor stays un-clickable after a publish. JS also sets
+   * pointer-events:none inline on unseal as belt-and-suspenders (cm-editor.ts). */
+  pointer-events: none;
+  opacity: 0;
+  /* fade-OUT: 200ms ease-out (when .is-sealing is removed) */
+  transition: opacity 0.2s ease-out;
+}
+
+.cm-seal-scrim.is-sealing {
+  opacity: 1;
+  pointer-events: all; /* sole click barrier WHILE sealing; editor below is non-editable via Compartment */
+  /* fade-IN: 150ms ease-out */
+  transition: opacity 0.15s ease-out;
+}
+
+/* Transit line — one indeterminate sweep pinned to the pane's top edge.
+ * Deliberately NOT a spinner (the channel lamps own rotation) and NOT an arc
+ * (the ship ring owns the orbit). */
+.cm-seal-scrim__transit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--moss-color-accent) 12%, transparent);
+}
+
+.cm-seal-scrim__transit::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 28%;
+  border-radius: 1px;
+  background: var(--moss-color-accent);
+  transform: translateX(-100%);
+}
+
+.cm-seal-scrim.is-sealing .cm-seal-scrim__transit::after {
+  animation: cm-seal-transit 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Travel = container width + own width = (100 + 28) / 28 ≈ 457% of own width. */
+@keyframes cm-seal-transit {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(457%); }
+}
+
+.cm-seal-scrim__status {
+  position: absolute;
+  top: var(--moss-space-md);
+  /* Top-RIGHT, not top-centre: the first line of a moss document is its
+     centred H1, and a centred pill lands squarely on it (seen in the light and
+     dark gate screenshots). The right gutter is empty in both the prose and
+     the frontmatter-chip zones, and it is where background activity lives in
+     the tools this borrows from. */
+  right: var(--moss-space-md);
+  display: flex;
+  align-items: center;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--moss-border-light);
+  border-radius: 999px;
+  background: var(--moss-color-bg);
+  box-shadow: var(--moss-elevation-2);
+  color: var(--moss-color-text-secondary);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  /* Arrives 60ms after the wash (see R13). */
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+}
+
+.cm-seal-scrim.is-sealing .cm-seal-scrim__status {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 0.18s ease-out 0.06s,
+    transform 0.18s ease-out 0.06s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The line still marks the pane as held; it just stops travelling. */
+  .cm-seal-scrim.is-sealing .cm-seal-scrim__transit::after {
+    animation: none;
+    width: 100%;
+    transform: none;
+  }
+  .cm-seal-scrim__status,
+  .cm-seal-scrim.is-sealing .cm-seal-scrim__status {
+    transform: none;
+    transition-duration: 0.01ms;
+    transition-delay: 0s;
+  }
+}
+
+/* ── Cold-start skeleton ──────────────────────────────────────────────
+ * Static markup in editor.html paints before editor-main.ts executes, so
+ * a cold open never shows a raw white pane. Tokens only — editor.html's
+ * pre-paint script sets data-theme before this stylesheet parses.
+ * Removal contract: see the editor.html comment + editor-skeleton.ts. */
+.moss-nav-skeleton {
+  /* Clone of the .nav-bc-strip box (file-tree.css): same height + hairline,
+   * pill aligned to the breadcrumb origin (--ft-tl, defined on .nav-grid;
+   * fallback covers bare test harnesses). */
+  height: var(--moss-titlebar-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding-inline-start: var(--ft-tl, 76px);
+  border-bottom: 1px solid var(--moss-border-light);
+}
+.moss-nav-skeleton::before {
+  content: '';
+  width: 120px;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--moss-border-light);
+  animation: moss-skeleton-pulse 1.4s ease-in-out infinite;
+}
+.moss-editor-skeleton {
+  padding: 44px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.moss-editor-skeleton__line {
+  height: 12px;
+  border-radius: 6px;
+  background: var(--moss-color-surface);
+  animation: moss-skeleton-pulse 1.4s ease-in-out infinite;
+}
+.moss-editor-skeleton__line--heading { width: 45%; height: 20px; margin-bottom: 8px; }
+.moss-editor-skeleton__line:nth-child(2) { width: 92%; }
+.moss-editor-skeleton__line:nth-child(3) { width: 84%; }
+.moss-editor-skeleton__line--short { width: 60%; }
+@keyframes moss-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-nav-skeleton::before,
+  .moss-editor-skeleton__line { animation: none; }
+}
+
+/* ============================================================
+   Toast notification system (shared with the main app shell).
+   The action panel has no sibling pane to account for from its
+   own perspective, so centering is simply 50% of its own window
+   width (same rationale as launcher.css).
+   KEEP IN SYNC with the toast block in style.css and launcher.css
+   (and vice versa).
+   ============================================================ */
+
+/* --moss-border-radius and the --z-* scale both live in tokens.css (imported
+   above), so the toast rules below need no local restating of either. */

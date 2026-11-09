@@ -1397,6 +1397,41 @@ fn test_second_scan_reads_the_lqip_the_background_phase_wrote() {
     fs::remove_dir_all(&temp_dir).ok();
 }
 
+/// A rescan in the same process reads no metadata record for an image whose
+/// stat has not moved, and reads it again once the file changes.
+#[test]
+fn a_rescan_reuses_an_unchanged_images_metadata_and_rereads_a_changed_one() {
+    let temp_dir = std::env::temp_dir().join(format!("moss_test_meta_memo_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let png_path = temp_dir.join("photo.png");
+    create_solid_color_png(&png_path, 64, 48, [200, 200, 200]);
+    let dir_str = temp_dir.to_string_lossy().to_string();
+    let mp = crate::moss_paths::MossPaths::new(&temp_dir);
+
+    let built = scan_folder_with_dedup_emit(&dir_str, None, None, false).unwrap();
+    let color = built.image_files[0].dominant_color.clone();
+    assert!(color.is_some(), "a build scan resolves the dominant color");
+
+    // With the records gone, only what the process kept can answer.
+    fs::remove_dir_all(mp.cache_transforms()).ok();
+    fs::remove_dir_all(mp.cache_objects()).ok();
+    let preview = scan_folder_with_dedup_emit(&dir_str, None, None, true).unwrap();
+    assert_eq!(preview.image_files[0].dominant_color, color, "an unchanged image's metadata is reused, not re-read");
+
+    // Same size, mtime restored to the nanosecond, same inode: only the ctime
+    // tells this file from the one the memo read.
+    let darker = temp_dir.join("darker.png");
+    create_solid_color_png(&darker, 64, 48, [40, 40, 40]);
+    FileStat::rewrite_in_place_keeping_mtime(&png_path, &fs::read(&darker).unwrap());
+    fs::remove_file(&darker).unwrap();
+    let rebuilt = scan_folder_with_dedup_emit(&dir_str, None, None, false).unwrap();
+    assert!(rebuilt.image_files[0].dominant_color.is_some());
+    assert_ne!(rebuilt.image_files[0].dominant_color, color, "a changed image is read again");
+
+    fs::remove_dir_all(&temp_dir).ok();
+}
+
 // =========================================================================
 // is_animated sniffing on the scan path (responsive-image-variants Task 9)
 //
@@ -1941,6 +1976,7 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
     let json_bytes = serde_json::to_vec(&stale).unwrap();
     let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
     let old_entry = TransformEntry {
+        validation: None,
         oid: meta_oid,
         size: json_bytes.len() as u64,
         params: serde_json::json!({}),
@@ -1967,7 +2003,7 @@ fn a_version_5_media_meta_entry_is_not_reused() {
     let stale = CachedMediaMeta { dimensions: None, dominant_color: None, lqip_data_uri: None, is_animated: false };
     let json_bytes = serde_json::to_vec(&stale).unwrap();
     let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
-    let old_entry = TransformEntry { oid: meta_oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": 5 }) };
+    let old_entry = TransformEntry { validation: None, oid: meta_oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": 5 }) };
     let record = TransformRecord {
         source_oid: hash.to_string(),
         source_size: 1,
@@ -2818,7 +2854,7 @@ fn media_metadata_is_not_written_over_a_record_that_cannot_be_read() {
         .merge(hash, 10, crate::build::cache::RecordMode::Wait, |record| {
             record.transforms.insert(
                 "image/webp".to_string(),
-                crate::build::cache::TransformEntry { oid: "w".into(), size: 1, params: serde_json::Value::Null },
+                crate::build::cache::TransformEntry { validation: None, oid: "w".into(), size: 1, params: serde_json::Value::Null },
             );
         })
         .unwrap();

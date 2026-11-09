@@ -18,7 +18,7 @@ cascade:
 ```
 
 - `syndicate:` names channels, the ids under `[channels.<id>]` in `.moss/config.toml`. One post opts out with `syndicate: false` or names its own list; leaving a channel out of a post's own list is how a post skips that channel, and adding it back undoes the skip. `email` in the list names the site's newsletter, which the app sends; it is not a channel and moss posts nothing for it.
-- After a copy is posted, moss adds its address to the post's `syndicated:` list, the field moss already reads to label comment links. Only the `syndicated:` and `uid:` lines change; the rest of the file stays as written. A file whose frontmatter moss cannot edit in place (the simplified `key: value` dialect, a duplicated key) keeps its bytes, and moss reports that the address was recorded only in its own record.
+- After a copy is posted, moss adds its address to the post's `syndicated:` list, the field moss already reads to label comment links. Only the `syndicated:` line changes; the rest of the file stays as written. A file whose frontmatter moss cannot edit in place (the simplified `key: value` dialect, a duplicated key) keeps its bytes, and moss reports that the address was recorded only in its own record.
 - A post goes out when it first goes live. Naming a channel for a folder does not post the folder's earlier posts: a post that was already live (on any publish target) before the channel was named for it goes out only if its own file names the channel.
 - Credentials never enter the folder. They live in moss's secret store, outside the site, entered in the app's own credential prompt or, headless, with `moss plugin secret set <plugin> <key>`, which reads the value from standard input.
 
@@ -90,7 +90,7 @@ A network where the author finishes an article in its own editor hands off a dra
 
 moss keeps one record per copy, in `.moss/deploy/copies/`, beside the records of what was published. One small file per copy, not one shared file, because the folder is often synced by a cloud client, and a sync conflict on one shared file would drop entries; a dropped *posted* entry is a repost. The records travel with the folder, so a second computer publishing it sees what the first one posted.
 
-A record is keyed by the post's note id (the `uid:` moss keeps through renames) and the channel. It holds the copy's id and address, the hash of the content it was posted from, and its state. A post is planned only once its `uid:` is in its file: a post with no frontmatter gets one at planning, in the same write that later carries `syndicated:`, and if that write fails the post is reported and not planned, since a page with no stored note id gets a new one at every build.
+A record is keyed by the post's note id (the `uid:` moss keeps through renames) and the channel. It holds the copy's id and address, the hash of the content it was posted from, and its state. The key is the uid the post was built under, which the publish that puts it online writes into its file (creating a frontmatter block if it has none); a post whose stamp did not land keeps that uid through the publish record, so its records stay keyed the same.
 
 | State | moss does |
 |---|---|

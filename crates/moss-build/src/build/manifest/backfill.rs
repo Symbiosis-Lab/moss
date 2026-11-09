@@ -274,21 +274,12 @@ static MEMO: LazyLock<Memo<PathBuf, FileSet>> = LazyLock::new(Memo::default);
 /// cost is bounded at the port (single attempt, short timeout), not here.
 static SERVER_MEMO: LazyLock<Memo<String, (usize, usize)>> = LazyLock::new(Memo::default);
 
-/// The one-slot cache behind [`MEMO`] and [`SERVER_MEMO`]. A type rather than
-/// a bare static so its hit and eviction behaviour is testable without a
-/// process-global; generic over key and value because the two memoized
-/// questions differ only in what they ask, not in how the answer is kept.
-///
-/// One slot, not a map: only the folder in the foreground asks, so a second
-/// key evicts the first and pays one recomputation — cheaper than pinning
-/// answers per folder for the whole session.
-///
-/// The doubled `Option` is the point: the outer one is "this key has been
-/// tried", the inner one is "and it worked". A failure is remembered too
-/// (with its time, so it expires — see [`FAILURE_RETRY_AFTER`]), and that is
-/// the load-bearing half: without a negative entry every seal re-pays the
-/// full cost of re-failing.
-struct Memo<K, V> {
+/// A one-slot cache: a second key evicts the first and pays one
+/// recomputation, which suits callers that ask about the folder in the
+/// foreground. The doubled `Option` is "this key was tried" and "it worked";
+/// a failure is remembered too and expires after [`FAILURE_RETRY_AFTER`], so
+/// a failing question is not re-paid on every call.
+pub(crate) struct Memo<K, V> {
     slot: Mutex<Option<(K, Option<V>, Option<std::time::Instant>)>>,
 }
 
@@ -310,7 +301,7 @@ impl<K, V> Default for Memo<K, V> {
 const FAILURE_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl<K: PartialEq + Clone, V: Clone> Memo<K, V> {
-    fn get(&self, key: &K) -> Option<Option<V>> {
+    pub(crate) fn get(&self, key: &K) -> Option<Option<V>> {
         let guard = self.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (_, value, failed_at) = guard.as_ref().filter(|(k, _, _)| k == key)?;
         if failed_at.is_some_and(|t| t.elapsed() >= FAILURE_RETRY_AFTER) {
@@ -319,7 +310,7 @@ impl<K: PartialEq + Clone, V: Clone> Memo<K, V> {
         Some(value.clone())
     }
 
-    fn put(&self, key: &K, value: &Option<V>) {
+    pub(crate) fn put(&self, key: &K, value: &Option<V>) {
         let mut guard = self.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = Some((
             key.clone(),

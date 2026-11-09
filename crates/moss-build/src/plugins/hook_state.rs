@@ -136,8 +136,38 @@ pub struct PluginHookState {
     /// This solves the __MOSS_INTERNAL_CONTEXT__ clobbering bug: the JS runtime
     /// has a single shared context global, so only one hook execution per plugin
     /// can safely run at a time.
-    pub in_flight_hooks: Arc<Singleflight<Result<(), String>>>,
+    pub in_flight_hooks: Arc<Singleflight<Result<Option<crate::plugins::types::HookResult>, String>>>,
+    /// Each plugin's hook runs under way: who asked for them, and how many.
+    /// A host call carries only the plugin's name, so a plugin never runs a
+    /// build's hook and a person's at once, or a write could not be told apart
+    /// by who asked for it. Runs by the same asker overlap freely (a
+    /// preview's `process` still running when the page emit calls `listing`).
+    runs: Arc<Mutex<HashMap<String, (AskedBy, usize)>>>,
+    run_ended: Arc<tokio::sync::Notify>,
 }
+
+/// Who asked for a hook run, which decides where in the folder it may write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskedBy {
+    /// The person: an install, a Sync, a Publish. The run may write wherever a
+    /// plugin can.
+    Person,
+    /// A build, or anything else nobody asked for at that moment. The folder
+    /// is the person's, so the run writes only inside `.moss/` (see
+    /// `host_fns::reach`) and runs no program.
+    Build,
+}
+
+impl AskedBy {
+    pub fn of(trigger: crate::plugins::types::TriggerContext) -> Self {
+        use crate::plugins::types::TriggerContext::*;
+        match trigger {
+            Background => Self::Build,
+            OnboardingFlow | SettingsManual | ManualOne => Self::Person,
+        }
+    }
+}
+
 
 impl Default for PluginHookState {
     fn default() -> Self {
@@ -155,7 +185,53 @@ impl PluginHookState {
             executing_hooks: Arc::new(Mutex::new(HashMap::new())),
             blocked: Arc::new(Mutex::new(HashMap::new())),
             in_flight_hooks: Arc::new(Singleflight::new()),
+            runs: Arc::new(Mutex::new(HashMap::new())),
+            run_ended: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    fn runs(&self) -> std::sync::MutexGuard<'_, HashMap<String, (AskedBy, usize)>> {
+        self.runs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Start a run unless the plugin is busy with one the other asker started.
+    fn try_begin_run(&self, plugin_name: &str, by: AskedBy) -> Option<RunGuard> {
+        let mut map = self.runs();
+        let (asker, count) = map.entry(plugin_name.to_string()).or_insert((by, 0));
+        if *asker != by {
+            return None;
+        }
+        *count += 1;
+        Some(RunGuard { state: self.clone(), plugin_name: plugin_name.to_string() })
+    }
+
+    /// Start a run a build asked for, or `None` while the plugin is busy with
+    /// one the person asked for: the build goes on without this hook rather
+    /// than wait behind a publish.
+    pub fn try_begin_build_run(&self, plugin_name: &str) -> Option<RunGuard> {
+        self.try_begin_run(plugin_name, AskedBy::Build)
+    }
+
+    /// Start a run the person asked for, once a build's runs of the same
+    /// plugin have finished. Runs the person asked for never wait on each
+    /// other: one may start another (a login while an import waits on the
+    /// person).
+    pub async fn begin_person_run(&self, plugin_name: &str) -> RunGuard {
+        loop {
+            let ended = self.run_ended.notified();
+            tokio::pin!(ended);
+            ended.as_mut().enable();
+            if let Some(run) = self.try_begin_run(plugin_name, AskedBy::Person) {
+                return run;
+            }
+            log::info!(target: "plugin", "{plugin_name}: waiting for the hook a build started to finish");
+            ended.await;
+        }
+    }
+
+    /// Who asked for the hooks the plugin is running, if any are.
+    pub fn running_for(&self, plugin_name: &str) -> Option<AskedBy> {
+        self.runs().get(plugin_name).map(|(asker, _)| *asker)
     }
 
     /// Add an error for a plugin hook
@@ -479,6 +555,27 @@ impl Drop for HostCallGuard {
     }
 }
 
+/// Held for one hook run; on drop the plugin is free for a run the other
+/// asker is waiting to start.
+pub struct RunGuard {
+    state: PluginHookState,
+    plugin_name: String,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        let mut map = self.state.runs();
+        if let Some((_, count)) = map.get_mut(&self.plugin_name) {
+            *count -= 1;
+            if *count == 0 {
+                map.remove(&self.plugin_name);
+            }
+        }
+        drop(map);
+        self.state.run_ended.notify_waiters();
+    }
+}
+
 /// Held for as long as one of moss's own questions is on screen for this
 /// plugin. On drop the count falls and the hook's activity clock restarts, so
 /// the 60 s silence is measured from the ANSWER rather than from the question.
@@ -498,6 +595,49 @@ impl Drop for PersonWaitGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a run nobody asked for at that moment is a build's run.
+    #[test]
+    fn who_asked_follows_the_trigger() {
+        use crate::plugins::types::TriggerContext::*;
+        for (trigger, asked) in [
+            (Background, AskedBy::Build),
+            (OnboardingFlow, AskedBy::Person),
+            (SettingsManual, AskedBy::Person),
+            (ManualOne, AskedBy::Person),
+        ] {
+            assert_eq!(AskedBy::of(trigger), asked, "{trigger:?}");
+        }
+    }
+
+    /// A publish started while a build's hook of the same plugin runs waits for
+    /// it and then starts; a build's hook finding the plugin busy with the
+    /// person's runs is skipped; the person's runs never wait on each other.
+    #[tokio::test]
+    async fn a_persons_run_waits_out_a_build_run_and_a_build_run_never_waits() {
+        let state = PluginHookState::new();
+        let build = state.try_begin_build_run("p").expect("the plugin is idle");
+        let listing = state.try_begin_build_run("p").expect("a build's hooks share one reach");
+        assert_eq!(state.running_for("p"), Some(AskedBy::Build));
+        drop(listing);
+
+        let waiting = tokio::spawn({
+            let state = state.clone();
+            async move { state.begin_person_run("p").await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!waiting.is_finished(), "the publish must wait for the build's run");
+        drop(build);
+        let publish = tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap().unwrap();
+        assert_eq!(state.running_for("p"), Some(AskedBy::Person));
+
+        assert!(state.try_begin_build_run("p").is_none(), "a build's run is skipped while the person's runs");
+        let login = tokio::time::timeout(Duration::from_secs(1), state.begin_person_run("p")).await
+            .expect("the person's runs never wait on each other");
+        drop((publish, login));
+        assert_eq!(state.running_for("p"), None);
+        assert!(state.try_begin_build_run("p").is_some(), "the plugin is free again");
+    }
 
     /// A hook parked on a question MOSS asked must survive past the host-call
     /// reprieve: the modal is still on screen and the person has not answered.

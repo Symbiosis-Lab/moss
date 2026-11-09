@@ -3,7 +3,6 @@
 //! This module provides:
 //! - [`generate_slug`] — URL-safe slug from arbitrary text (titles, headings)
 //! - [`generate_uid`] — random 8-char hex UID (opaque identifier)
-//! - [`insert_uid_into_frontmatter`] — boundary-aware UID insertion into markdown frontmatter
 //! - [`resolve_duplicate_slugs`] / [`resolve_duplicate_slugs_with_lang`] — deduplication of URL paths
 
 use crate::build::types::ParsedDocument;
@@ -91,122 +90,12 @@ pub fn generate_uid(_relative_path: &str) -> String {
     format!("{:02x}{:02x}{:02x}{:02x}", bytes[0], bytes[1], bytes[2], bytes[3])
 }
 
-/// Inserts a `uid` field into a markdown file's frontmatter, in either dialect.
-///
-/// Surgical: the `uid:` line is spliced into the field text and every other byte
-/// of the file — delimiters, key order, comments, quoting, line endings — is
-/// left exactly as the author wrote it. Nothing is deserialized or re-emitted.
-///
-/// Idempotent: content that already has a `uid:` field comes back unchanged, as
-/// does content with no frontmatter.
-///
-/// WHERE the frontmatter is, is `moss_core::frontmatter::frontmatter_span`'s
-/// call, never a local scan: this writes its answer back to the author's file,
-/// so a `---` misread as a delimiter corrupts their document. That is exactly
-/// what a local copy did to a page whose body opened with `:::grid`.
-pub fn insert_uid_into_frontmatter(content: &str, uid: &str) -> String {
-    let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
-        return content.to_string();
-    };
-    // `fields` is a line-boundary range from the splitter, so both ends are
-    // char boundaries; `get` states that instead of assuming it.
-    let Some(fields) = content.get(span.fields.clone()) else {
-        return content.to_string();
-    };
-    if fields.lines().any(|line| line.trim_start().starts_with("uid:")) {
-        return content.to_string();
-    }
-
-    // Insert after the `title:` line when there is one, so the stamped file
-    // reads the way an author would have written it; otherwise after the last
-    // field. Both land on a line boundary inside `fields`.
-    //
-    // `eol` is READ off the line the new one follows, never guessed from whether
-    // the file contains a `\r\n` anywhere: a mixed-ending file would then get a
-    // `\r\n` spliced into an LF block. `replace_uid_in_frontmatter` below takes
-    // the terminator the same way.
-    let mut insert_at = span.fields.end;
-    let mut offset = span.fields.start;
-    // Fallback for an empty block (`---\r\n---\r\n`), where there is no field
-    // line to read: the opening delimiter's own terminator.
-    let opener = content.get(..span.fields.start).unwrap_or("");
-    let mut eol = if opener.ends_with("\r\n") { "\r\n" } else { "\n" };
-    for raw in fields.split_inclusive('\n') {
-        // Char-aligned: `trim_end_matches` on ASCII terminators.
-        #[allow(clippy::string_slice)]
-        let terminator = &raw[raw.trim_end_matches(['\r', '\n']).len()..];
-        if !terminator.is_empty() {
-            eol = terminator;
-        }
-        offset += raw.len();
-        if raw.trim_start().starts_with("title:") {
-            insert_at = offset;
-            break;
-        }
-    }
-    // Quote the uid to prevent YAML scientific notation misparse
-    // (e.g., `753659e7` would be parsed as float 7.53659e11 if unquoted).
-    let mut out = String::with_capacity(content.len() + uid.len() + 10);
-    // Char-aligned: `insert_at` is a line boundary within `fields`.
-    #[allow(clippy::string_slice)]
-    {
-        out.push_str(&content[..insert_at]);
-        out.push_str(&format!("uid: \"{}\"{}", uid, eol));
-        out.push_str(&content[insert_at..]);
-    }
-    out
-}
-
-/// Replaces an existing `uid:` value in frontmatter with a new one.
-///
-/// If the content has no `uid:` field in its frontmatter, returns the content
-/// unchanged. Both dialects; the body is never touched — a `uid:` line in an
-/// author's prose or code block used to be rewritten, because this scanned the
-/// whole file rather than the frontmatter.
-pub fn replace_uid_in_frontmatter(content: &str, new_uid: &str) -> String {
-    let Some(span) = moss_core::frontmatter::frontmatter_span(content) else {
-        return content.to_string();
-    };
-    let Some(fields) = content.get(span.fields.clone()) else {
-        return content.to_string();
-    };
-
-    let mut offset = span.fields.start;
-    for raw in fields.split_inclusive('\n') {
-        let line_start = offset;
-        offset += raw.len();
-        let line = raw.strip_suffix('\n').unwrap_or(raw);
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        if !line.trim_start().starts_with("uid:") {
-            continue;
-        }
-        // Preserve leading whitespace and the line's own terminator; only the
-        // key/value text is replaced. Quoted to prevent YAML scientific-notation
-        // misparse (`753659e7` → 7.53659e11) — and because the whole line goes,
-        // a previously-quoted value cannot double-quote.
-        let indent = line.strip_suffix(line.trim_start()).unwrap_or("");
-        // Char-aligned: `line_start` and `offset` are line boundaries.
-        #[allow(clippy::string_slice)]
-        let terminator = &raw[line.len()..];
-        let mut out = String::with_capacity(content.len() + new_uid.len());
-        #[allow(clippy::string_slice)]
-        {
-            out.push_str(&content[..line_start]);
-            out.push_str(indent);
-            out.push_str(&format!("uid: \"{}\"{}", new_uid, terminator));
-            out.push_str(&content[offset..]);
-        }
-        return out;
-    }
-    content.to_string()
-}
-
 /// One document that lost a URL contest, and what it lost.
 ///
 /// The repair is always an edit to the **loser's** `url:` — the keeper is
 /// named only so the author can see which pair is in conflict. Produced by
 /// [`resolve_duplicate_slugs_with_lang`] and reported at the frontmatter
-/// field, not in the log.
+/// field and as a build problem.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct UrlCollision {
     /// Source path of the file whose `url:` must change.
@@ -427,18 +316,7 @@ pub fn resolve_duplicate_slugs_with_lang(
         }
     }
 
-    let reported = root_causes(found);
-    // The author's copy of this goes on the `url` chip, where the field she
-    // has to change is; this is for the support read of an uploaded log,
-    // which is how the 河灣·週刊 report was diagnosed at all.
-    for c in &reported {
-        log::warn!(
-            target: "build",
-            "`{}` and `{}` both publish to /{} — keeping `{}` there and moving the other to /{}. Two files with one name, or folders carrying the same `url:` (a folder copied in Finder keeps the original's), do this.",
-            c.keeper, c.loser, c.wanted, c.keeper, c.moved_to,
-        );
-    }
-    reported
+    root_causes(found)
 }
 
 /// The directory part of a source path (`a/b/c.md` → `a/b`, `c.md` → ``).
@@ -473,6 +351,12 @@ fn root_causes(found: Vec<(UrlCollision, Option<String>)>) -> Vec<UrlCollision> 
         })
         .map(|(_, (c, _))| c.clone())
         .collect()
+}
+
+pub(crate) fn collision_messages(collisions: &[UrlCollision]) -> Vec<String> {
+    collisions.iter().map(|c| {
+        format!("{} and {} both publish to /{}. Give each source a unique address.", c.keeper, c.loser, c.wanted)
+    }).collect()
 }
 
 #[cfg(test)]
@@ -579,273 +463,6 @@ mod tests {
         let uid = generate_uid("posts/my-article.md");
         assert_eq!(uid.len(), 8, "uid should be 8 characters long");
         assert!(uid.chars().all(|c| c.is_ascii_hexdigit()), "uid should be hex characters only");
-    }
-
-    // =========================================================================
-    // Tests for replace_uid_in_frontmatter
-    // =========================================================================
-
-    #[test]
-    fn test_replace_uid_writes_the_quoted_form() {
-        // Same rationale as insert_uid_into_frontmatter's quoting: an
-        // unquoted digits-e-digits uid (`12e45678`) parses as a YAML float
-        // and the next build reads a 13-digit string — a silent identity
-        // flip. The replace path writes freshly MINTED uids (the duplicate
-        // resolver's losers), so it is exactly where that shape appears.
-        let content = "---\ntitle: T\nuid: aabbccdd\n---\n\nbody\n";
-        let result = replace_uid_in_frontmatter(content, "12e45678");
-        assert!(
-            result.contains(r#"uid: "12e45678""#),
-            "replace must quote the uid: {result}"
-        );
-        assert!(result.contains("\n\nbody\n"), "body preserved: {result}");
-    }
-
-    #[test]
-    fn test_replace_uid_requotes_a_quoted_line_without_doubling() {
-        // The helper replaces the whole line, so a previously-quoted uid
-        // must come back with exactly one pair of quotes.
-        let content = "---\nuid: \"aabbccdd\"\n---\nbody\n";
-        let result = replace_uid_in_frontmatter(content, "753659e7");
-        assert!(result.contains(r#"uid: "753659e7""#), "{result}");
-        assert!(!result.contains(r#""""#), "no doubled quotes: {result}");
-    }
-
-    #[test]
-    fn test_replace_uid_without_a_uid_line_is_unchanged() {
-        let content = "---\ntitle: T\n---\nbody\n";
-        assert_eq!(replace_uid_in_frontmatter(content, "12e45678"), content);
-    }
-
-    // =========================================================================
-    // Tests for insert_uid_into_frontmatter
-    // =========================================================================
-
-    /// Byte-exact, both dialects: the uid line is spliced in and NOTHING else
-    /// moves. Comments, key order, quoting style and line endings are the
-    /// author's, and a save that reflowed them would be worse than the
-    /// duplication this consolidation removed.
-    #[test]
-    fn insert_uid_is_a_splice_and_changes_nothing_else() {
-        let cases: &[(&str, &str, &str)] = &[
-            (
-                "yaml, after the title line",
-                "---\ntitle: My Article\ndate: 2024-01-15\n---\n\n# Hello\n\nBody.",
-                "---\ntitle: My Article\nuid: \"a7b3c9d2\"\ndate: 2024-01-15\n---\n\n# Hello\n\nBody.",
-            ),
-            (
-                "yaml, no title — appended after the last field",
-                "---\ndate: 2024-01-15\nweight: 5\n---\n\nBody.",
-                "---\ndate: 2024-01-15\nweight: 5\nuid: \"a7b3c9d2\"\n---\n\nBody.",
-            ),
-            (
-                "yaml comments, key order and quoting all survive",
-                "---\n# who wrote it\nauthor: 'Ada'   # trailing note\ntitle: T\ntags:\n  - a\n  - b\n---\nbody\n",
-                "---\n# who wrote it\nauthor: 'Ada'   # trailing note\ntitle: T\nuid: \"a7b3c9d2\"\ntags:\n  - a\n  - b\n---\nbody\n",
-            ),
-            (
-                "empty yaml block",
-                "---\n---\nbody\n",
-                "---\nuid: \"a7b3c9d2\"\n---\nbody\n",
-            ),
-            (
-                "simplified",
-                "nav\nlist: grid\n---\n\n# Hello",
-                "nav\nlist: grid\nuid: \"a7b3c9d2\"\n---\n\n# Hello",
-            ),
-            (
-                "simplified, after the title line",
-                "title: Hi\nnav\n---\nbody\n",
-                "title: Hi\nuid: \"a7b3c9d2\"\nnav\n---\nbody\n",
-            ),
-            (
-                "CRLF keeps its line endings",
-                "---\r\ntitle: T\r\n---\r\nbody\r\n",
-                "---\r\ntitle: T\r\nuid: \"a7b3c9d2\"\r\n---\r\nbody\r\n",
-            ),
-            (
-                // Mixed endings: the block is LF, the body has a CRLF. The eol is
-                // read off the line the new one follows, not guessed from
-                // whether the file contains a `\r\n` anywhere.
-                "mixed line endings — the block's own ending wins",
-                "---\ntitle: T\n---\nbody\r\nmore\n",
-                "---\ntitle: T\nuid: \"a7b3c9d2\"\n---\nbody\r\nmore\n",
-            ),
-            (
-                "CRLF with an empty block reads the opening delimiter's ending",
-                "---\r\n---\r\nbody\r\n",
-                "---\r\nuid: \"a7b3c9d2\"\r\n---\r\nbody\r\n",
-            ),
-            (
-                "already stamped — idempotent",
-                "---\ntitle: My Article\nuid: existing123\n---\n\nBody.",
-                "---\ntitle: My Article\nuid: existing123\n---\n\nBody.",
-            ),
-            (
-                "no frontmatter at all",
-                "# Just content\n\nNo frontmatter here.",
-                "# Just content\n\nNo frontmatter here.",
-            ),
-        ];
-        for (label, input, expected) in cases {
-            assert_eq!(&insert_uid_into_frontmatter(input, "a7b3c9d2"), expected, "{label}");
-        }
-    }
-
-    /// `replace_uid_in_frontmatter` used to scan the WHOLE file for the first
-    /// `uid:` line, so a `uid:` an author wrote in prose or inside a fenced
-    /// YAML example was rewritten instead. It is bounded to the frontmatter now.
-    #[test]
-    fn replace_uid_never_touches_the_body() {
-        let with_body_uid = "---\ntitle: T\nuid: aabbccdd\n---\n\n```yaml\nuid: dontTouchMe\n```\n";
-        assert_eq!(
-            replace_uid_in_frontmatter(with_body_uid, "753659e7"),
-            "---\ntitle: T\nuid: \"753659e7\"\n---\n\n```yaml\nuid: dontTouchMe\n```\n",
-        );
-        // Only the body has one: nothing to replace, file comes back untouched.
-        let body_only = "---\ntitle: T\n---\n\nuid: notAField\n";
-        assert_eq!(replace_uid_in_frontmatter(body_only, "753659e7"), body_only);
-        // No frontmatter at all: likewise.
-        let no_fm = "# Notes\n\nuid: notAField\n";
-        assert_eq!(replace_uid_in_frontmatter(no_fm, "753659e7"), no_fm);
-    }
-
-    /// The shape of a real, in-production `footer.md` (riverbend.mosspub.com):
-    /// no frontmatter, opens with literal HTML, and its site map is a
-    /// `:::grid 3` whose cells are separated by `---`. A live build stamped
-    /// `uid: "2af1e0f6"` in front of that first grid `---`, which rendered as a
-    /// stray `<p>uid: "2af1e0f6"</p>` at the end of the first column — and,
-    /// worse, rewrote the author's file on disk to match.
-    ///
-    /// Byte-identical is the whole assertion. Anything else means moss edited a
-    /// file it had no business editing.
-    const RIVERBEND_FOOTER: &str = concat!(
-        "<div class=\"fs-signup\">\n",
-        "<p class=\"fs-invite\">訂閱河灣，第一手收到消息。</p>\n",
-        "\n",
-        ":::subscribe {placeholder=\"你的電子郵件\" button=\"訂閱\"}\n",
-        ":::\n",
-        "\n",
-        "</div>\n",
-        "\n",
-        "<nav class=\"fs-map\" aria-label=\"網站地圖\">\n",
-        "\n",
-        ":::grid 3\n",
-        "**[[評選]]**\n",
-        "\n",
-        "- [[現正徵件]]\n",
-        "\n",
-        "---\n",
-        "\n",
-        "**[[社群]]**\n",
-        "\n",
-        "- [[活動]]\n",
-        "\n",
-        "---\n",
-        "\n",
-        "**[[關於]]**\n",
-        "\n",
-        "- [[支持我們]]\n",
-        ":::\n",
-        "\n",
-        "</nav>\n",
-    );
-
-    /// The second file the same build corrupted, and the reason to believe it
-    /// was one bug and not two: a plain README with no frontmatter, opening
-    /// with an `#` heading, whose first `---` is the thematic break under the
-    /// status list. `uid: "dd54e60c"` was spliced immediately above that break,
-    /// exactly as in the footer. Neither file's first line is a field line, so
-    /// today both are refused at the first line of the scan.
-    const RIVERBEND_README: &str = concat!(
-        "# Riverbend Review (河灣 · 週刊) → moss port\n",
-        "\n",
-        "Entrance / status board for porting https://www.riverbend.example/ (a\n",
-        "Strikingly site) to moss.\n",
-        "\n",
-        "- **The vault:** [`河灣/`](河灣/) — the moss site.\n",
-        "- **Port records:** [`archive/`](archive/) — the completed port machinery.\n",
-        "\n",
-        "---\n",
-        "\n",
-        "## To finish the site\n",
-    );
-
-    #[test]
-    fn test_insert_uid_leaves_the_two_corrupted_riverbend_files_byte_identical() {
-        // Both files were found carrying a spliced `uid:` line on disk. Whatever
-        // wrote them, nothing may write them again.
-        for (label, content) in
-            [("footer.md", RIVERBEND_FOOTER), ("README.md", RIVERBEND_README)]
-        {
-            assert_eq!(
-                &insert_uid_into_frontmatter(content, "2af1e0f6"),
-                content,
-                "{label}: a file with no frontmatter must come back byte-for-byte"
-            );
-        }
-    }
-
-    #[test]
-    fn test_insert_uid_leaves_body_openers_that_shadow_a_field_line() {
-        // Each of these opens the BODY, not frontmatter, and each is a shape
-        // that could plausibly be mistaken for a `key: value` field line and so
-        // let the scan run on to a `---` further down. The `---` in every case
-        // is a grid-cell separator, a fenced example or a thematic break —
-        // never a delimiter. Where the judgement itself lives and why each shape
-        // fails it is moss-core's business (`frontmatter_span`);
-        // what this test pins is that the *writing* path honours it, because
-        // this is the path that edits the author's file on disk.
-        let bodies: &[(&str, &str)] = &[
-            ("leading blank line", "\n<div class=\"x\">\n\n---\n\n</div>\n"),
-            ("HTML comment", "<!-- built from the site map -->\n\n---\n\ntail\n"),
-            // `Note:` looks exactly like `key: value` but for the capital N —
-            // the one thing that tells an English sentence from a field.
-            ("sentence with a colon", "Note: the deadline moved.\n\n---\n\ntail\n"),
-            // An HTML attribute value carries a colon too; the "key" here is
-            // `<div style="color`, which no field name could be.
-            ("HTML attribute colon", "<div style=\"color: red\">\n\n---\n\n</div>\n"),
-            // A directive line begins with the colons, so the text before the
-            // first `:` is empty — also not a field name.
-            ("directive on line 1", ":::grid 3\nA\n\n---\n\nB\n:::\n"),
-            // Setext: `Heading\n---` is CommonMark for an `<h2>`, and a bare
-            // word is not a known flag.
-            ("setext heading", "Introduction\n---\n\ntail\n"),
-            // A bare URL splits on the scheme colon; `https` is lowercase and
-            // alphanumeric, so only the setext `---` below it stands between
-            // this and a splice.
-            ("bare URL then dashes", "https://example.com/x\n---\n\ntail\n"),
-            // A docs page showing a YAML example: the `---` pair belongs to the
-            // example, and the intro line above it is prose.
-            ("backtick fence", "Some text.\n\n```yaml\n---\ntitle: Example\n---\n```\n\nMore.\n"),
-            ("tilde fence", "Intro.\n\n~~~yaml\n---\ntitle: Example\n---\n~~~\n\nOutro.\n"),
-            // Once body has gone by, a `---` is a thematic break. Nine of moss's
-            // own docs pages look exactly like this.
-            ("thematic break after a fence", "# Notes\n\n```sh\nmoss build\n```\n\nOlder:\n\n---\n\n## 0.1\n"),
-            // Everything above again with CRLF: byte offsets must survive the
-            // extra `\r` or the splice lands mid-line.
-            ("CRLF html opener", "<div class=\"x\">\r\n\r\n---\r\n\r\n</div>\r\n"),
-        ];
-        for (label, content) in bodies {
-            assert_eq!(
-                &insert_uid_into_frontmatter(content, "2af1e0f6"),
-                content,
-                "{label}: body opener must not be read as frontmatter"
-            );
-        }
-    }
-
-    #[test]
-    fn test_insert_uid_stamps_a_real_simplified_frontmatter_prefix() {
-        // The guard must stay narrow enough to still do its job.
-        let content = "nav\ntitle: Hi\n---\n\n# Body";
-        let result = insert_uid_into_frontmatter(content, "a7b3c9d2");
-
-        assert!(
-            result.contains(r#"uid: "a7b3c9d2""#),
-            "field lines closed by --- are frontmatter: {result}"
-        );
-        assert!(result.ends_with("---\n\n# Body"), "body untouched: {result}");
     }
 
     // =========================================================================

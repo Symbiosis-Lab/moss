@@ -7,93 +7,12 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::types::content::FileInfo;
-
-/// Directory names that are skipped entirely during scan and asset copy.
-///
-/// Historically this list also included `assets`, `images`, `static`, `public`,
-/// `img`, `css`, `js`, `fonts` — the SSG convention (Jekyll/Hugo) for "static
-/// asset" folders. That convention silently dropped media files in those folders
-/// from the variant pipeline (no .mp4 transcode, no .webp variant), so a
-/// `cover: ![[clip.MOV]]` referencing `assets/clip.MOV` would 404.
-/// We now treat them as ordinary content directories: media gets variants,
-/// raw HTML is copied as-is (no chrome injection), markdown becomes pages.
-///
-/// We also previously excluded any folder/file beginning with `_` to match
-/// Jekyll's draft convention. That silently dropped Lightroom-exported photos
-/// like `_43A2045.jpg` and Jekyll-style `_includes/` content from the build,
-/// which surprised users more than it helped them. The `.` prefix rule
-/// remains — it skips genuinely hidden files like `.git`, `.moss`, `.DS_Store`.
-pub const EXCLUDED_DIR_NAMES: &[&str] = &[
-    "node_modules",
-];
-
-/// Whether a *directory name* should be skipped during the WalkDir scan.
-///
-/// Callers must gate this on `entry.file_type().is_dir()` — `WalkDir`'s
-/// `filter_entry` is entry-agnostic and would otherwise apply this predicate
-/// to file entries, silently dropping any file matching one of these names
-/// (the original cause of the `_43A2045.jpg` bug).
-pub fn is_excluded_dir_name(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    // Special case: "." and ".." are navigation, not hidden folders
-    if lower == "." || lower == ".." {
-        return false;
-    }
-    // Hidden directories: .git, .moss, .DS_Store-as-dir, etc.
-    if lower.starts_with('.') {
-        return true;
-    }
-    EXCLUDED_DIR_NAMES.iter().any(|&n| n.to_lowercase() == lower)
-}
-
-/// Agent-instruction filenames that conventionally live at a project root.
-///
-/// Every coding agent that reads a root-anchored instruction file uses one of
-/// these exact names — `AGENTS.md` (the cross-tool convention, Codex and Gemini
-/// CLI), `CLAUDE.md`, `GEMINI.md`. They are tooling, not prose.
-///
-/// Verified 2026-08-03 on a real build: a root `AGENTS.md` published to
-/// `/agents/index.html` with an OG image and an `llms.txt` entry, because the
-/// scanner excluded only dot-prefixed entries and the filename is the title.
-/// Any moss user running a coding agent in their folder was publishing its
-/// instructions as a page.
-pub const ROOT_AGENT_CONFIG_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md", "GEMINI.md"];
-
-/// Whether a *file name* is one of the agent-instruction conventions.
-///
-/// Exact case, deliberately. Every agent convention spells these in caps;
-/// matching case-insensitively would silently unpublish an author's
-/// `Agents.md` essay, which is a worse failure than publishing a stray config
-/// file. Root-ness is the caller's half of the test — see
-/// [`left_out_of_site`].
-pub fn is_agent_config_name(name: &str) -> bool {
-    ROOT_AGENT_CONFIG_FILES.contains(&name)
-}
-
-/// Why a walk of the site folder leaves an entry out of the site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeftOut {
-    /// A directory below the root whose name [`is_excluded_dir_name`] rejects.
-    /// The root is never left out: its name is the author's choice, and a site
-    /// living in `.mysite` would otherwise have its whole walk emptied.
-    ExcludedDir,
-    /// A directory below the root with its own `.moss/`: a different site,
-    /// which the build goes around rather than absorbing its pages.
-    NestedSite,
-    /// An agent-instruction file directly in the site folder. Root only,
-    /// because `posts/agents.md` is an ordinary article about agents; only the
-    /// source root is a location tooling claims.
-    AgentInstructions,
-    /// A page whose name starts with a dot, at any depth: `posts/.draft.md`
-    /// is the author's own marker that it is not for publishing, the same
-    /// reading the file tree and the asset copy already give a dotfile. Only
-    /// pages: a dot-prefixed placeholder such as `.keeper.md.icloud` stands
-    /// for a page still in the cloud and must reach the scan.
-    HiddenFile,
-    /// A folder a `[map.layers.<name>]` table names as its `source`: the
-    /// layer's raw plates, read by the build and never published.
-    LayerSource,
-}
+pub use moss_core::source_edit::policy::{
+    HIDDEN_ENTRIES, MOSS_INTERNAL_ALLOWLIST, HiddenReason, is_hidden, is_hidden_reason,
+    SpecialFileKind, special_file_kind, is_page_source, is_page_path,
+    ROOT_AGENT_CONFIG_FILES, is_agent_config_name, FINDER_ICON_MARKER, is_os_junk_file,
+    EXCLUDED_DIR_NAMES, is_excluded_dir_name, LeftOut, compute_passthrough_roots, is_in_passthrough,
+};
 
 /// The one rule for which files belong to the site: `Some` for an entry a walk
 /// of the site folder must not read, saying why. The build's scan and every
@@ -117,16 +36,7 @@ pub fn left_out_with_layer_sources(entry: &walkdir::DirEntry, layer_sources: &[s
 /// folders itself instead of walking with `walkdir`.
 pub fn left_out(path: &Path, is_dir: bool, depth: usize) -> Option<LeftOut> {
     let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    if !is_dir {
-        if name.starts_with('.') && is_page_path(path) {
-            return Some(LeftOut::HiddenFile);
-        }
-        return (depth == 1 && is_agent_config_name(&name)).then_some(LeftOut::AgentInstructions);
-    }
-    if depth > 0 && is_excluded_dir_name(&name) {
-        return Some(LeftOut::ExcludedDir);
-    }
-    (depth > 0 && path.join(".moss").is_dir()).then_some(LeftOut::NestedSite)
+    moss_core::source_edit::policy::left_out(&name, is_dir, depth, || path.join(".moss").is_dir())
 }
 
 /// Watch-time counterpart to [`left_out_of_site`]: is `abs` a root-level
@@ -156,12 +66,6 @@ pub fn is_root_agent_config(root: &Path, abs: &Path) -> bool {
     abs.parent().is_some_and(|parent| canon(parent) == canon(root))
 }
 
-/// Finder's custom-icon carrier: the literal name `Icon` followed by a carriage
-/// return. moss writes one into every folder it publishes
-/// (`platform::stamp_published_folder`), so unlike most OS metadata this is a
-/// file *moss itself* leaves in the user's source tree.
-pub const FINDER_ICON_MARKER: &str = "Icon\r";
-
 /// Whether a *file name* is OS metadata that must never reach a live site.
 ///
 /// Single predicate for the asset walk and the file watcher, so a name can
@@ -178,103 +82,6 @@ pub fn is_os_metadata_file(name: &str) -> bool {
     // matching the on-disk name — a deploy-time ENOENT on case-sensitive
     // filesystems.
     name.starts_with('.') || is_os_junk_file(name)
-}
-
-/// Files the OS drops into a folder it has merely looked at: Finder's icon
-/// marker (which moss itself writes on every published folder) and its
-/// thumbnail cache, Windows's thumbnail cache. Not the author's, so neither
-/// the build nor the editor's file tree may show them — the scan asks through
-/// [`is_os_metadata_file`], the tree through [`is_hidden`], and a name added
-/// here vanishes from both. Until 2026-09-11 the tree kept its own copy of
-/// this list, which was missing the icon marker: after the first publish a
-/// file called `Icon` sat at the top of every vault.
-pub fn is_os_junk_file(name: &str) -> bool {
-    name == ".DS_Store" || name == FINDER_ICON_MARKER || name.eq_ignore_ascii_case("thumbs.db")
-}
-
-/// Compute the set of source-relative passthrough subtree roots.
-///
-/// A root is any non-root directory containing an `index.html` or `index.htm`.
-/// Config entries (from `[build].passthrough`) can add directory roots or exact
-/// scanned HTML files, and remove auto-detected roots (`!path` with `!` prefix).
-/// Directory roots carry a trailing `/`; exact HTML files do not.
-pub fn compute_passthrough_roots(html_files: &[FileInfo], config_entries: &[String]) -> HashSet<String> {
-    let mut roots = HashSet::new();
-
-    // Auto-detect: non-root directories that contain index.html / index.htm
-    for file in html_files {
-        let path = Path::new(&file.path);
-        let is_index = path.file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.eq_ignore_ascii_case("index.html") || n.eq_ignore_ascii_case("index.htm"))
-            .unwrap_or(false);
-        if !is_index {
-            continue;
-        }
-        if let Some(parent) = path.parent() {
-            let parent_str = parent.to_string_lossy();
-            // Skip root: parent of a root-level file is "" or "."
-            if parent_str.is_empty() || parent_str == "." {
-                continue;
-            }
-            let key = format!("{}/", parent_str.trim_end_matches('/'));
-            if !roots.contains(&key) {
-                log::debug!(
-                    "[scan] passthrough subtree auto-detected: {} (contains index.html; \
-                     add \"!{}\" to [build].passthrough in .moss/config.toml to opt out)",
-                    key,
-                    key.trim_end_matches('/')
-                );
-            }
-            roots.insert(key);
-        }
-    }
-
-    // Apply config overrides. Normalize each entry the same way an on-disk
-    // relative path would appear: no leading slash (paths are root-relative),
-    // no trailing slash before we re-add our own. A leading slash in config
-    // (e.g. "/app") would otherwise produce a root "/app/" that never matches
-    // the slash-less relative paths from `strip_prefix`, silently dropping the
-    // user's intent.
-    for entry in config_entries {
-        let (is_negation, raw) = match entry.strip_prefix('!') {
-            Some(rest) => (true, rest),
-            None => (false, entry.as_str()),
-        };
-        let normalized = raw.trim_matches('/');
-        if normalized.is_empty() {
-            // Empty or slash-only entry ("" / "/" / "!"): no meaningful root.
-            continue;
-        }
-        let is_scanned_html_file = html_files.iter().any(|file| file.path == normalized);
-        let key = if is_scanned_html_file {
-            normalized.to_string()
-        } else {
-            format!("{}/", normalized)
-        };
-        if is_negation {
-            roots.remove(&key);
-        } else {
-            roots.insert(key);
-        }
-    }
-
-    roots
-}
-
-/// Whether `relative_path` is inside any passthrough subtree root.
-///
-/// Roots are stored with trailing `/` so this is an exact prefix match
-/// that cannot accidentally match a sibling directory with a longer name
-/// (e.g. root `app/` does not match `application/file.js`).
-pub fn is_in_passthrough(relative_path: &str, passthrough_roots: &HashSet<String>) -> bool {
-    passthrough_roots.iter().any(|root| {
-        if root.ends_with('/') {
-            relative_path.starts_with(root.as_str())
-        } else {
-            relative_path == root
-        }
-    })
 }
 
 /// Whether the scanned directory `relative_path` is a section of the site, and
@@ -431,38 +238,6 @@ pub(crate) fn register_auto_index_dirs(
 // RawFileCreated flash (which must not point at a file the tree will not
 // show). It lives here, with the other classification rules.
 
-/// Hidden entries that should not appear in the file tree.
-pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
-
-/// The `.moss/` paths the tree lists when `show_internal = true`, keyed the
-/// way `is_hidden` sees them: project-root-relative, forward slashes. An
-/// entry shows when it is one of these, sits below one, or is on the way to
-/// one (`.moss/data` shows so `.moss/data/social` is reachable). Everything
-/// else under `.moss/` (state.toml, build/, cache/, identity/, plugins/,
-/// hashes.json, article-map.json, assets/) stays hidden.
-///
-/// Note: `assets/` is watcher-only (see `should_watch_moss_file` in
-/// `build::watch::scope`, which reads `infra::moss_paths::MOSS_PATH_RULES`)
-/// — it is build-managed media and not surfaced in the editor tree.
-///
-/// `data/` is listed for NOTHING. The 2026-09-04 writer audit asked of every
-/// `.moss/` path who writes it and whether a hand edit survives, and only
-/// `config.toml` and `theme/` answered "the user" then: `config.toml`, whose
-/// every in-app writer goes through the format-preserving
-/// `infra::toml_rewrite` precisely because the file is hand-written, and
-/// `theme/`, which nothing but the user ever writes. `places.toml` (the
-/// gazetteer, places build slice) joined them the same way — the app has no
-/// writer for it yet, so every byte in it is the user's own.
-/// `data/social/` was listed here until that audit and is not user-writable:
-/// the background comment sync and the matters plugin re-serialize those files
-/// wholesale, so an edit made in the editor survives only until the next sync,
-/// and an autosave landing over a fresh sync is equally unguarded. The build
-/// READING a directory is not the same question as the user writing it. Its
-/// siblings were never listed for the same reason: `subscribers.csv` is a PII
-/// list Settings edits with a real UI, `events*.json*` is the analytics stream,
-/// and `email/drafts/` is auto-saved newsletter scratch.
-pub const MOSS_INTERNAL_ALLOWLIST: &[&str] = &[".moss/config.toml", ".moss/theme", ".moss/places.toml"];
-
 /// Whether a folder-relative path is one of moss's own files: `.moss` itself
 /// or anything inside it (in any letter case, since a folder's file system may
 /// ignore case) that is neither on `MOSS_INTERNAL_ALLOWLIST` nor below an
@@ -482,95 +257,6 @@ pub fn is_moss_internal(relative: &Path) -> bool {
     })
 }
 
-/// Why `is_hidden_reason` filtered an entry out of the file tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HiddenReason {
-    /// OS/VCS/tooling noise nobody authored: junk files, `HIDDEN_ENTRIES`,
-    /// the root `.moss`/dotfile gate.
-    OsOrVcsNoise,
-    /// An entry inside `.moss/` not on `MOSS_INTERNAL_ALLOWLIST`.
-    MossInternal,
-}
-
-impl HiddenReason {
-    /// True for a reason that means "moss's curated view chose not to show
-    /// real content", as opposed to OS/VCS noise. The one place a caller
-    /// decides what counts toward a "something is filtered here" total —
-    /// see `TreeNode::hidden`.
-    pub fn is_curated(self) -> bool {
-        matches!(self, HiddenReason::MossInternal)
-    }
-}
-
-/// Return true when an entry should be filtered out of the file tree.
-///
-/// `parent_relative` is the path of the containing directory relative to the
-/// project root ("" for root, ".moss" when filtering children of `.moss/`).
-pub fn is_hidden(name: &str, parent_relative: &str, show_internal: bool) -> bool {
-    is_hidden_reason(name, parent_relative, show_internal).is_some()
-}
-
-/// Same predicate as [`is_hidden`], naming *which* rule fired instead of a
-/// bare bool — same branches, same order, no second list. Lets a caller (the
-/// tree listing's hidden-count) tell "moss's own curated filter" apart from
-/// OS/VCS noise, instead of merging every filtered entry into one number.
-pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) -> Option<HiddenReason> {
-    // Always hide these regardless of show_internal
-    if HIDDEN_ENTRIES.contains(&name) || is_os_junk_file(name) {
-        return Some(HiddenReason::OsOrVcsNoise);
-    }
-
-    // At the project root, .moss is surfaced only when show_internal is on
-    if parent_relative.is_empty() {
-        if name == ".moss" {
-            return if show_internal { None } else { Some(HiddenReason::OsOrVcsNoise) };
-        }
-        // All other dotfiles are hidden at the project root
-        if name.starts_with('.') {
-            return Some(HiddenReason::OsOrVcsNoise);
-        }
-        // Root agent-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md) are
-        // listed: editing one is how an author takes it over from moss
-        // (`cli::agents::sync::is_ours`), so the tree must reach it. They stay
-        // unpublished (`left_out_of_site`); `special_file_kind` tells the editor so.
-        return None;
-    }
-
-    // Inside .moss/ (only reached with show_internal on, since `.moss` itself
-    // is hidden otherwise): listed, below a listed path, or an ancestor of one.
-    if parent_relative == ".moss" || parent_relative.starts_with(".moss/") {
-        let full = format!("{parent_relative}/{name}");
-        let allowed = MOSS_INTERNAL_ALLOWLIST.iter().any(|allowed| {
-            full == *allowed
-                || full.starts_with(&format!("{allowed}/"))
-                || allowed.starts_with(&format!("{full}/"))
-        });
-        return if allowed { None } else { Some(HiddenReason::MossInternal) };
-    }
-
-    None
-}
-
-/// A file's role on the site, beyond being a page or an asset. The editor
-/// explains it before opening the file, so the tree says it rather than the
-/// editor guessing from names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
-#[serde(rename_all = "kebab-case")]
-pub enum SpecialFileKind {
-    /// A root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`: read by coding agents, never published.
-    AgentInstructions,
-    /// The welcome email at a language-tree root: mail, not a page.
-    WelcomeEmail,
-    /// The reserved-name footer at a language-tree root, by name only: a
-    /// `slot:` declaration in frontmatter does not make a file this kind.
-    Footer,
-    /// The site's `404.md`, shown by a host for an address that does not exist.
-    NotFound,
-    /// The `index.md` of a folder whose `index.html` is copied as-is: it holds
-    /// that document's metadata and is not what visitors read.
-    PageSettings,
-}
-
 /// The name of the HTML file a passthrough entry can pair a page's settings with.
 const INDEX_HTML: &str = "index.html";
 
@@ -585,76 +271,12 @@ const INDEX_HTML: &str = "index.html";
 /// an ordinary page at its own address).
 pub fn page_settings_dirs(project_path: &str) -> HashSet<String> {
     let config = crate::build::site_config::get_build_passthrough(project_path).unwrap_or_default();
-    let html: Vec<FileInfo> = config
-        .iter()
+    let existing: Vec<&str> = config.iter()
         .filter(|e| !e.starts_with('!'))
         .map(|e| e.trim_matches('/'))
         .filter(|p| Path::new(project_path).join(p).is_file())
-        .map(|p| FileInfo { path: p.to_string(), file_type: "html".into(), size: 0, modified: None })
         .collect();
-    let roots = compute_passthrough_roots(&html, &config);
-    let reserved = reserved_home_dirs(&html, &roots);
-    html.iter()
-        .filter(|f| roots.contains(&f.path))
-        .filter_map(|f| {
-            if f.path == INDEX_HTML {
-                Some("")
-            } else {
-                f.path.strip_suffix(&format!("/{INDEX_HTML}"))
-            }
-        })
-        .filter(|d| !reserved.contains(*d))
-        .map(str::to_string)
-        .collect()
-}
-
-/// The special role of the file at `rel_path` (project-relative, `/`
-/// separators), if any. Every kind reuses the predicate the build decides it
-/// with; `page_settings_dirs` comes from [`page_settings_dirs`], read once.
-/// Nothing inside `.moss/` is special.
-pub fn special_file_kind(rel_path: &str, page_settings_dirs: &HashSet<String>) -> Option<SpecialFileKind> {
-    if rel_path == ".moss" || rel_path.starts_with(".moss/") {
-        return None;
-    }
-    let (dir, name) = rel_path.rsplit_once('/').unwrap_or(("", rel_path));
-    if dir.is_empty() && is_agent_config_name(name) {
-        return Some(SpecialFileKind::AgentInstructions);
-    }
-    let (_, within_tree) = crate::build::footer::language_tree_split(rel_path);
-    if crate::build::footer::slot_from_filename(within_tree) == Some(crate::build::slots::Slot::Footer) {
-        return Some(SpecialFileKind::Footer);
-    }
-    if within_tree == crate::build::footer::WELCOME_EMAIL_FILE {
-        return Some(SpecialFileKind::WelcomeEmail);
-    }
-    if dir.is_empty() && is_page_path(Path::new(name)) {
-        let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-        if moss_core::frontmatter_typed::compute_url_path(name, false, None, stem)
-            == crate::build::served_path::NOT_FOUND_PAGE
-        {
-            return Some(SpecialFileKind::NotFound);
-        }
-    }
-    let is_index_page = is_page_path(Path::new(name))
-        && Path::new(name).file_stem().and_then(|s| s.to_str()).is_some_and(moss_core::home::is_index_stem);
-    (is_index_page && page_settings_dirs.contains(dir)).then_some(SpecialFileKind::PageSettings)
-}
-
-
-/// Extensions the build turns into pages.
-///
-/// The ONE definition in the repo: the scan's markdown arm calls it, and
-/// `describe_source_role` reports its verdict to the editor so the frontend
-/// never restates this list. A copy of it in TypeScript is the Rust↔TS parity
-/// trap the preview follower's slot check already avoids.
-pub fn is_page_source(extension: &str) -> bool {
-    moss_core::page_kind::PAGE_EXTENSIONS.contains(&extension)
-}
-
-/// [`is_page_source`] for a path, whatever the letter case of its extension:
-/// `Post.MD` is a page like `post.md`.
-pub fn is_page_path(path: &Path) -> bool {
-    path.extension().is_some_and(|e| is_page_source(&e.to_string_lossy().to_lowercase()))
+    moss_core::source_edit::policy::page_settings_dirs(&config, &existing)
 }
 
 /// Which bucket of `ProjectStructure` a file extension belongs to — the pure,
@@ -739,59 +361,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn os_junk_hides_at_every_level_regardless_of_the_toggle() {
-        for name in [".DS_Store", FINDER_ICON_MARKER, "Thumbs.db"] {
-            for parent in ["", "posts"] {
-                assert!(is_hidden(name, parent, false), "{name:?} in {parent:?}");
-                assert!(is_hidden(name, parent, true), "{name:?} in {parent:?} with internals shown");
-            }
-        }
-    }
-
-    // --- is_hidden: root agent-instruction files ---
-
-    #[test]
-    fn root_agent_instruction_files_are_listed_in_both_modes() {
-        for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
-            assert!(!is_hidden(name, "", false), "{name} must be reachable in the default tree");
-            assert!(!is_hidden(name, "", true));
-        }
-    }
-
-    #[test]
-    fn moss_lists_only_what_the_user_writes() {
-        for name in ["config.toml", "theme", "places.toml"] {
-            assert!(!is_hidden(name, ".moss", true), "{name} is the user's to edit");
-        }
-        for name in ["state.toml", "build.nosync", "cache", "identity", "plugins", "hashes.json", "data", "assets"] {
-            assert!(is_hidden(name, ".moss", true), "{name} is moss's own, not the author's");
-        }
-        // `data/` is gone as a row, so nothing below it can be reached either.
-        assert!(is_hidden("social", ".moss/data", true));
-        assert!(is_hidden("matters.json", ".moss/data/social", true));
-        // Below a listed path, everything shows.
-        assert!(!is_hidden("grain.png", ".moss/theme", true));
-        assert!(!is_hidden("Inter.woff2", ".moss/theme/fonts", true));
-    }
-
-    #[test]
-    fn a_nested_agents_md_is_an_ordinary_file() {
-        // `posts/AGENTS.md` is an article about agents. The scan publishes it
-        // (`left_out_of_site` is root-only for these) and so the tree
-        // shows it, in both modes.
-        assert!(!is_hidden("AGENTS.md", "posts", false));
-        assert!(!is_hidden("AGENTS.md", "posts", true));
-    }
-
-    #[test]
-    fn a_lowercase_agents_md_at_the_root_stays_visible() {
-        // Exact case, matching `is_agent_config_name`: an essay named
-        // `Agents.md` is prose, and hiding it would be the worse failure.
-        assert!(!is_hidden("Agents.md", "", false));
-        assert!(!is_hidden("agents.md", "", false));
-    }
-
-    #[test]
     fn test_pattern_matching_excluded_dirs() {
         // assets/ and images/ are now treated as ordinary content folders so
         // that media files in them (e.g. assets/cover.MOV referenced via a
@@ -822,141 +391,6 @@ mod tests {
         assert!(is_excluded_dir_name("node_modules"));
     }
 
-    #[test]
-    fn test_compute_passthrough_roots_detects_index_html() {
-        use super::*;
-        use crate::types::content::FileInfo;
-        let html_files = vec![
-            FileInfo { path: "app/index.html".to_string(), file_type: "html".to_string(), size: 0, modified: None },
-            FileInfo { path: "about.html".to_string(), file_type: "html".to_string(), size: 0, modified: None },
-        ];
-        let roots = compute_passthrough_roots(&html_files, &[]);
-        assert!(roots.contains("app/"), "should detect app/ via index.html");
-        assert!(!roots.contains(""), "root-level about.html should not create root passthrough");
-        assert_eq!(roots.len(), 1);
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_root_index_html_ignored() {
-        use super::*;
-        use crate::types::content::FileInfo;
-        let html_files = vec![
-            FileInfo { path: "index.html".to_string(), file_type: "html".to_string(), size: 0, modified: None },
-        ];
-        let roots = compute_passthrough_roots(&html_files, &[]);
-        assert!(roots.is_empty(), "root index.html must not trigger passthrough");
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_config_add() {
-        use super::*;
-        use crate::types::content::FileInfo;
-        let roots = compute_passthrough_roots(&[], &["raw-data".to_string()]);
-        assert!(roots.contains("raw-data/"), "explicit config entry should add passthrough");
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_config_adds_exact_file() {
-        use super::*;
-        use crate::types::content::FileInfo;
-        let html_files = vec![FileInfo {
-            path: "index.html".to_string(),
-            file_type: "html".to_string(),
-            size: 0,
-            modified: None,
-        }];
-        let roots = compute_passthrough_roots(&html_files, &["index.html".to_string()]);
-        assert!(roots.contains("index.html"));
-        assert!(is_in_passthrough("index.html", &roots));
-        assert!(!is_in_passthrough("index.html/child", &roots));
-        assert!(!is_in_passthrough("index.html.bak", &roots));
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_exact_file_negation() {
-        use crate::types::content::FileInfo;
-        let html_files = vec![FileInfo {
-            path: "index.html".to_string(),
-            file_type: "html".to_string(),
-            size: 0,
-            modified: None,
-        }];
-        let roots = compute_passthrough_roots(
-            &html_files,
-            &["index.html".to_string(), "!index.html".to_string()],
-        );
-        assert!(!is_in_passthrough("index.html", &roots));
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_dotted_directory_stays_directory() {
-        let roots = compute_passthrough_roots(&[], &["app.v2".to_string()]);
-        assert!(roots.contains("app.v2/"));
-        assert!(is_in_passthrough("app.v2/index.html", &roots));
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_config_negation() {
-        use super::*;
-        use crate::types::content::FileInfo;
-        let html_files = vec![
-            FileInfo { path: "app/index.html".to_string(), file_type: "html".to_string(), size: 0, modified: None },
-        ];
-        let roots = compute_passthrough_roots(&html_files, &["!app".to_string()]);
-        assert!(roots.is_empty(), "! prefix should remove auto-detected root");
-    }
-
-    #[test]
-    fn test_is_in_passthrough() {
-        use super::*;
-        let mut roots = std::collections::HashSet::new();
-        roots.insert("app/".to_string());
-        assert!(is_in_passthrough("app/image.png", &roots));
-        assert!(is_in_passthrough("app/sub/deep.js", &roots));
-        assert!(!is_in_passthrough("other/image.png", &roots));
-        assert!(!is_in_passthrough("appended/file.png", &roots), "must not prefix-match across separator");
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_config_normalizes_leading_slash() {
-        // A leading-slash config entry must still match slash-less relative
-        // paths — otherwise the user's intent is silently dropped.
-        let roots = compute_passthrough_roots(&[], &["/app".to_string()]);
-        assert!(roots.contains("app/"), "leading slash should be trimmed to app/");
-        assert!(is_in_passthrough("app/logo.png", &roots));
-    }
-
-    #[test]
-    fn test_compute_passthrough_roots_config_skips_empty_entries() {
-        use crate::types::content::FileInfo;
-        // Empty string, bare slash, and a lone "!" must not create junk roots.
-        let html_files = vec![
-            FileInfo { path: "real/index.html".to_string(), file_type: "html".to_string(), size: 0, modified: None },
-        ];
-        let roots = compute_passthrough_roots(
-            &html_files,
-            &["".to_string(), "/".to_string(), "!".to_string()],
-        );
-        assert!(roots.contains("real/"), "auto-detected root survives");
-        assert!(!roots.contains("/"), "bare slash must not become a root");
-        assert_eq!(roots.len(), 1, "no junk roots from empty entries: {:?}", roots);
-    }
-
-    /// `.mdx` reads as markdown in the editor (`file-types.ts` maps it to the
-    /// markdown language) but the build has no mdx arm, and `.markdown` is the
-    /// mirror image. That asymmetry is why the editor asks for this verdict
-    /// instead of testing extensions itself.
-    #[test]
-    fn page_sources_are_the_scan_arm_not_the_editor_language_set() {
-        assert!(is_page_source("md"));
-        assert!(is_page_source("markdown"));
-        assert!(is_page_source("mdown"));
-        assert!(is_page_source("mkd"));
-        assert!(!is_page_source("mdx"));
-        assert!(!is_page_source("html"));
-        assert!(!is_page_source("txt"));
-    }
-
     /// Pins `classify_extension` against every extension `scan.rs`'s own
     /// match block recognizes, so a bucket added there and forgotten here (or
     /// the reverse) fails immediately rather than silently drifting the way
@@ -985,66 +419,6 @@ mod tests {
         for ext in ["css", "js", "woff2", "pdf", "mp3", "unknownext", ""] {
             assert_eq!(classify_extension(ext), ScanBucket::Other, "{ext}");
         }
-    }
-
-    // --- special_file_kind ---
-
-    fn kind(rel: &str) -> Option<SpecialFileKind> {
-        special_file_kind(rel, &HashSet::new())
-    }
-
-    #[test]
-    fn agent_instructions_are_special_only_at_the_root() {
-        for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
-            assert_eq!(kind(name), Some(SpecialFileKind::AgentInstructions), "{name}");
-        }
-        assert_eq!(kind("posts/AGENTS.md"), None);
-        assert_eq!(kind("Agents.md"), None);
-    }
-
-    #[test]
-    fn welcome_email_and_footer_sit_at_a_tree_root() {
-        assert_eq!(kind("welcome-email.md"), Some(SpecialFileKind::WelcomeEmail));
-        assert_eq!(kind("fr/welcome-email.md"), Some(SpecialFileKind::WelcomeEmail));
-        assert_eq!(kind("footer.md"), Some(SpecialFileKind::Footer));
-        assert_eq!(kind("fr/footer.md"), Some(SpecialFileKind::Footer));
-        assert_eq!(kind("docs/footer.md"), None, "a non-language folder's footer.md is an ordinary page");
-        assert_eq!(kind("docs/welcome-email.md"), None);
-        assert_eq!(kind("footer-blog.md"), None);
-    }
-
-    #[test]
-    fn a_page_that_is_a_slot_only_by_frontmatter_is_not_the_footer_kind() {
-        // Decided by name alone, so a `slot:` declaration cannot make a file this kind.
-        assert_eq!(kind("closing.md"), None);
-    }
-
-    #[test]
-    fn not_found_is_the_root_404_page() {
-        assert_eq!(kind("404.md"), Some(SpecialFileKind::NotFound));
-        assert_eq!(kind("fr/404.md"), None);
-        assert_eq!(kind("docs/404.md"), None);
-        assert_eq!(kind("404.png"), None);
-        assert_eq!(kind("4040.md"), None);
-    }
-
-    #[test]
-    fn nothing_inside_moss_is_special() {
-        assert_eq!(kind(".moss/footer.md"), None);
-        assert_eq!(kind(".moss/theme/404.md"), None);
-        let dirs: HashSet<String> = [String::new(), ".moss".to_string()].into();
-        assert_eq!(special_file_kind(".moss/index.md", &dirs), None);
-    }
-
-    #[test]
-    fn page_settings_follow_the_declared_index_html_dirs() {
-        let dirs: HashSet<String> = [String::new(), "fr".to_string()].into();
-        assert_eq!(special_file_kind("index.md", &dirs), Some(SpecialFileKind::PageSettings));
-        assert_eq!(special_file_kind("fr/index.md", &dirs), Some(SpecialFileKind::PageSettings));
-        assert_eq!(special_file_kind("about/index.md", &dirs), None);
-        assert_eq!(special_file_kind("about.md", &dirs), None);
-        assert_eq!(special_file_kind("index.png", &dirs), None);
-        assert_eq!(kind("index.md"), None);
     }
 
     fn site_with_passthrough(files: &[&str], passthrough: &str) -> tempfile::TempDir {

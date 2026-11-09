@@ -371,6 +371,24 @@ struct SlotInjectRecord {
     residual: Vec<String>,
 }
 
+/// The slot records this process last used for a stage, by page, so a watch
+/// rebuild re-reads none for pages whose bytes before injection are the same:
+/// the key is the transform cache's own (page, those bytes' hash, the slot set;
+/// the shipping transform cannot change within a process). A hit still has to
+/// find its blob in the store.
+struct SlotMemo {
+    slots_hash: String,
+    pages: std::collections::HashMap<String, (String, SlotInjectRecord)>,
+}
+
+static SLOT_MEMO: crate::build::cache::ProcessMemo<SlotMemo> = crate::build::cache::ProcessMemo::new(crate::build::cache::ROOTS);
+
+/// Test-only: what a pass in a new process starts from.
+#[cfg(test)]
+pub(crate) fn forget_slot_memo(dir: &std::path::Path) {
+    SLOT_MEMO.take(dir);
+}
+
 /// What the slot pass reports about one page it scanned: the bytes the page
 /// ships as, in the two forms the manifest needs.
 ///
@@ -448,6 +466,7 @@ fn write_slot_inject_record(
         }
     };
     let entry = crate::build::cache::TransformEntry {
+        validation: None,
         oid: record_oid,
         size: json_bytes.len() as u64,
         params: params.clone(),
@@ -563,6 +582,8 @@ pub(crate) fn inject_slots_into_directory_cached(
     // nothing changed); the rest, inject and write, scales with the DELTA.
     let mut walk_ms = std::time::Duration::ZERO;
     let t_pass = std::time::Instant::now();
+    let remembered = SLOT_MEMO.take(dir).filter(|memo| memo.slots_hash == slots_hash).map(|memo| memo.pages).unwrap_or_default();
+    let mut kept = std::collections::HashMap::new();
 
     let t_walk = std::time::Instant::now();
     let staged_only: Vec<String> = walk_html_files(dir)
@@ -576,6 +597,12 @@ pub(crate) fn inject_slots_into_directory_cached(
         })
         .collect();
     walk_ms += t_walk.elapsed();
+    // A page carried unread this pass keeps its record for the pass that renders it again.
+    for receipt in &receipts {
+        if let Some(entry) = remembered.get(&receipt.page_path) {
+            kept.insert(receipt.page_path.clone(), entry.clone());
+        }
+    }
     let pages = rendered.into_iter().map(|(page_path, html)| (page_path, Some(html)));
     for (page_path, unwritten) in pages.chain(staged_only.into_iter().map(|page_path| (page_path, None))) {
         let t_walk = std::time::Instant::now();
@@ -603,14 +630,16 @@ pub(crate) fn inject_slots_into_directory_cached(
             "ship_rev": crate::build::ship::SHIP_TRANSFORM_REV,
         });
 
-        let hit = transform_cache
-            .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
-            // Present but unreadable/corrupt (or written before this shape): a miss.
-            .and_then(|record_oid| read_slot_inject_record(object_store, &record_oid))
+        let hit = remembered.get(&page_path).filter(|(oid, _)| *oid == source_oid).map(|(_, record)| record.clone())
+            .or_else(|| transform_cache
+                .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
+                // Present but unreadable/corrupt (or written before this shape): a miss.
+                .and_then(|record_oid| read_slot_inject_record(object_store, &record_oid)))
             // Its blob may have been collected since: a miss too, re-run live. A
             // receipt must never name a blob `ship_phase` would not find.
             .filter(|record| object_store.get_path(&record.content_oid).is_some());
         let (changed, manifest_hash, content_oid, injected) = if let Some(record) = hit {
+            kept.insert(page_path.clone(), (source_oid, record.clone()));
             if !record.residual.is_empty() {
                 residual_files += 1;
                 let residual: Vec<&str> = record.residual.iter().map(String::as_str).collect();
@@ -639,19 +668,14 @@ pub(crate) fn inject_slots_into_directory_cached(
             // Cache only what a hit can serve whole: a record without its blob would
             // have to be a miss again anyway.
             if let Some(oid) = &content_oid {
-                write_slot_inject_record(
-                    object_store,
-                    transform_cache,
-                    &source_oid,
-                    html.len() as u64,
-                    &params,
-                    &SlotInjectRecord {
-                        content_oid: oid.clone(),
-                        manifest_hash: manifest_hash.clone(),
-                        rewritten: changed_page,
-                        residual: residual.iter().map(|s| s.to_string()).collect(),
-                    },
-                );
+                let record = SlotInjectRecord {
+                    content_oid: oid.clone(),
+                    manifest_hash: manifest_hash.clone(),
+                    rewritten: changed_page,
+                    residual: residual.iter().map(|s| s.to_string()).collect(),
+                };
+                write_slot_inject_record(object_store, transform_cache, &source_oid, html.len() as u64, &params, &record);
+                kept.insert(page_path.clone(), (source_oid, record));
             }
             (changed_page, manifest_hash, content_oid, Some(injected))
         };
@@ -662,6 +686,9 @@ pub(crate) fn inject_slots_into_directory_cached(
         receipts.push(SlotInjectionReceipt { page_path, manifest_hash, content_oid });
     }
 
+    SLOT_MEMO.keep(dir, SlotMemo { slots_hash: slots_hash.to_string(), pages: kept });
+    crate::build::phase::record_count("slot_html_scanned", scanned);
+    crate::build::phase::record_count("slot_html_rewritten", rewritten);
     store_failures.report();
     let total = t_pass.elapsed();
     log::info!(

@@ -6,8 +6,10 @@
 //! local run too (is the folder set up to publish, is the signing key there,
 //! is the plugin's setup complete), so a dry run fails where a deploy would.
 //! Then it stops: no upload, no publish record, no acceptance, no site
-//! registered, no key created. What needs the server is not checked, and the
-//! report says so rather than promising the deploy goes ahead.
+//! registered, no key created. The server is asked once, with the read a
+//! deploy starts with: may this folder's key publish its site, and did
+//! another copy publish since this one. The upload itself is not tried, and
+//! the report says so rather than promising the deploy goes ahead.
 
 use std::path::Path;
 
@@ -29,6 +31,25 @@ pub enum Transfer {
     NoRecord,
     /// A deploy plugin sends its own way and moss counts nothing.
     NotCounted,
+}
+
+/// May this folder's key publish its site, as the server answered the one
+/// read a dry run makes.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Owner {
+    Answered { site: String, access: SiteAccess },
+    /// Nothing was asked, or no answer came; the reason says which.
+    Unchecked { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteAccess {
+    Authorized,
+    NotOwner,
+    /// The server does not know the site, or is too old to say.
+    NotFound,
 }
 
 /// An old address kept answering: `from` forwards to, or is a copy of, `to`.
@@ -62,6 +83,8 @@ pub struct DryRun {
     pub pending_removals: Vec<change_set::PendingRemoval>,
     /// The copies a publish would post to other networks, each shaped.
     pub copies: Vec<crate::syndication::preview::PreviewCopy>,
+    /// What the server said about this folder's key and site.
+    pub owner: Owner,
 }
 
 impl DryRun {
@@ -84,6 +107,7 @@ impl DryRun {
             kept_as_redirect,
             pending_removals,
             copies,
+            owner,
         } = self;
         let mut change_set = serde_json::to_value(set).expect("a change set serializes");
         if let Some(fields) = change_set.as_object_mut() {
@@ -117,6 +141,7 @@ impl DryRun {
             "needs_verification": needs_verification,
             "prebuilt": prebuilt,
             "copies": copies,
+            "owner": owner,
         })
     }
 
@@ -180,14 +205,17 @@ impl DryRun {
         if self.needs_verification {
             out.push_str("This folder's key is not linked to an email yet, so registering would need verification: a real deploy needs `--email <address>` (the account the site should belong to) to be sent a sign-in link. Nothing was sent.\n");
         }
+        out.push_str(&match &self.owner {
+            Owner::Answered { site, access: SiteAccess::Authorized } => format!("Publishing: this folder's key may publish the site \"{site}\".\n"),
+            Owner::Answered { site, access: SiteAccess::NotOwner } => format!("Publishing: this folder's key is not linked to the account that owns the site \"{site}\".\n"),
+            Owner::Answered { site, access: SiteAccess::NotFound } => format!("Publishing: not known, because the server does not know the site \"{site}\".\n"),
+            Owner::Unchecked { reason } => format!("Publishing: not asked, because {reason}: whether this folder's key may publish, and whether another copy published since.\n"),
+        });
         match &self.refusal {
             Some(r) => out.push_str(&format!("Publish check: a real deploy would be refused:\n{}\n", r.text)),
             None => out.push_str("Publish check: passes.\n"),
         }
-        out.push_str(
-            "Not run, because it needs the server: whether another copy of this folder published since this one, and the upload itself. \
-             A real deploy can still stop there.\n",
-        );
+        out.push_str("Not run: the upload itself, where a real deploy can still stop.\n");
         for c in &self.copies {
             let what = match (&c.action, &c.error, c.form) {
                 (_, Some(e), _) => format!("not postable: {e}"),
@@ -262,6 +290,8 @@ pub fn no_site_message(folder: &str) -> String {
 
 /// What the local checks found.
 struct Local {
+    /// The site to ask the server about, or why nothing is asked.
+    ask: Result<String, &'static str>,
     would_register: Option<String>,
     would_create_key: bool,
     needs_verification: bool,
@@ -287,11 +317,12 @@ async fn check_locally(
     }
     crate::build::site_config::ensure_config_current(&folder_str)?;
     if matches!(route, DeployRoute::Plugin { .. }) {
-        return Ok(Local { would_register: None, would_create_key: false, needs_verification: false, no_environment: None });
+        return Ok(Local { ask: Err("a deploy plugin publishes this folder"), would_register: None, would_create_key: false, needs_verification: false, no_environment: None });
     }
+    let _phase = crate::build::phase::PhaseTrace::start("local_checks");
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
     let mut no_environment = None;
-    let would_register = match config.site_id {
+    let would_register = match &config.site_id {
         Some(_) => None,
         None if !crate::deploy::first_publish_is_permitted(&folder_str)? => {
             no_environment = Some(no_site_message(&folder.display().to_string()));
@@ -309,33 +340,92 @@ async fn check_locally(
     crate::deploy::preflight_publish_inputs(folder).await?;
     // Read-only stand-in for `ensure_signing_key`, which creates the identity
     // when there is none and regenerates the key when its file is missing.
-    let would_create_key = !crate::identity::Identity::exists(folder)
-        || !crate::identity::Identity::has_usable_signing_key(folder);
+    use crate::identity::keypair::KeyOnDisk;
+    let key = crate::identity::Identity::key_on_disk(folder);
+    let would_create_key = key == KeyOnDisk::Missing;
     let needs_verification =
         would_register.is_some() && crate::identity::Identity::read_email(folder).is_none();
-    Ok(Local { would_register, would_create_key, needs_verification, no_environment })
+    let ask = match (config.site_id, key) {
+        (None, _) if would_register.is_some() => Err("the site is not registered yet"),
+        (None, _) => Err("this folder has no site"),
+        (Some(_), KeyOnDisk::Missing) => Err("this folder has no signing key yet"),
+        // Loading it rewrites it, and a dry run writes nothing.
+        (Some(_), KeyOnDisk::Older) => Err("a deploy first moves this folder's key to its current format"),
+        (Some(_), KeyOnDisk::Newer) => Err("this folder's key was written by a newer moss"),
+        (Some(site), KeyOnDisk::Current) => Ok(site),
+    };
+    Ok(Local { ask, would_register, would_create_key, needs_verification, no_environment })
+}
+
+/// Ask the server, with the owner-gated read every deploy starts with,
+/// whether this folder's key may publish its site, and with the same answer
+/// whether another copy published since this one (unless `overwrite_newer`).
+/// Returns the stale-copy refusal beside the answer.
+async fn ask_server(folder: &Path, local: &Local, overwrite_newer: bool) -> (Owner, Option<crate::deploy::Refusal>) {
+    use crate::seta::sites::Generation;
+    let unchecked = |reason: String| (Owner::Unchecked { reason }, None);
+    let site = match &local.ask {
+        Ok(site) => site.clone(),
+        Err(reason) => return unchecked(reason.to_string()),
+    };
+    let identity = match crate::identity::Identity::load_for_signing(folder) {
+        Ok(identity) => identity,
+        Err(e) => return unchecked(format!("the signing key could not be read ({e})")),
+    };
+    let environment = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
+    let client = crate::seta::client::MossSetaClient::for_environment(&identity, &environment);
+    let answered = |access| Owner::Answered { site: site.clone(), access };
+    match client.generation(&site, Some(std::time::Duration::from_secs(5))).await {
+        Ok(Generation::Live(live)) => {
+            let stale = (!overwrite_newer)
+                .then(|| crate::deploy::stale_copy_against(folder, &site, &live))
+                .flatten()
+                .map(|text| crate::deploy::Refusal::new(crate::deploy::RefusalKind::StaleCopy, text));
+            (answered(SiteAccess::Authorized), stale)
+        }
+        Ok(Generation::NotOwner) => (answered(SiteAccess::NotOwner), None),
+        Ok(Generation::NotFound) => (answered(SiteAccess::NotFound), None),
+        Err(e) => unchecked(format!("the server could not be asked ({e})")),
+    }
+}
+
+/// The refusal a deploy would meet first: a stale copy is known before the
+/// build, the build's own checks (`local`) after it, and a key that is not
+/// linked to the owner's account (or to any account yet) only at the upload.
+fn first_refusal(
+    stale_copy: Option<crate::deploy::Refusal>,
+    local: Option<crate::deploy::Refusal>,
+    owner: &Owner,
+) -> Option<crate::deploy::Refusal> {
+    stale_copy.or(local).or_else(|| {
+        let Owner::Answered { site, access: SiteAccess::NotOwner } = owner else { return None };
+        Some(crate::deploy::Refusal::new(
+            crate::deploy::RefusalKind::NotOwner,
+            format!("Nothing published — this folder's key is not linked to the account that owns \"{site}\". Deploy with `--email <address>`, the owner's address, to be sent a sign-in link for this key."),
+        ))
+    })
 }
 
 /// Build the folder as a deploy would and describe the publish that would
 /// follow. Skips what a deploy does that writes or sends: registering a site,
-/// creating a key, asking the server whether this copy is behind, uploading.
+/// creating a key, uploading.
 pub async fn run_dry_run(
     folder: &Path,
     route: &DeployRoute,
     requested_site_id: Option<&str>,
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     plugins: crate::build::PluginMode,
+    overwrite_newer: bool,
 ) -> Result<DryRun, String> {
     let local = check_locally(folder, route, requested_site_id).await?;
 
     let folder_str = folder.to_string_lossy().to_string();
     let _session = crate::system::folder_session::register_session(&folder_str);
-    let _denied = _session.deny_source_writes();
     let root = crate::vault::paths::VaultRoot::resolve(folder);
     // The seal already classified the build against the last publish; asking
     // again would walk the tree twice.
     let (sealed, change_set) =
-        super::one_shot::build_and_describe(&root, host_ports(&folder_str), plugins).await?;
+        super::one_shot::build_and_describe(&root, host_ports(&folder_str), plugins, false).await?;
     let sealed = super::one_shot::require_sealed(sealed)?;
     let change_set = change_set.ok_or("the build produced no change set to describe")?;
 
@@ -354,13 +444,18 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
+    let (owner, stale_copy) = ask_server(folder, &local, overwrite_newer).await;
     use crate::deploy::Refusal;
-    let refusal = match &local.no_environment {
-        Some(text) => Some(Refusal::new(crate::deploy::RefusalKind::NoEnvironment, text.clone())),
-        None => crate::deploy::publish_refusal(&folder_str)
-            .or_else(|| crate::deploy::refuse_foreign_inputs(&sealed, folder).err().map(|t| Refusal::new(crate::deploy::RefusalKind::ForeignInputs, t)))
-            .or_else(|| crate::deploy::refuse_unresolved_inputs(&sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::UnresolvedInputs, t))),
-    };
+    let local_refusal = crate::deploy::removal_gate::refuse_output_collisions(&sealed).err()
+        .map(|t| Refusal::new(crate::deploy::RefusalKind::OutputCollision, t))
+        .or_else(|| match &local.no_environment {
+            Some(text) => Some(Refusal::new(crate::deploy::RefusalKind::NoEnvironment, text.clone())),
+            None => crate::deploy::publish_refusal(&folder_str)
+                .or_else(|| crate::deploy::removal_gate::refuse_stale_generation(folder, &sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::StaleContent, t)))
+                .or_else(|| crate::deploy::refuse_foreign_inputs(&sealed, folder).err().map(|t| Refusal::new(crate::deploy::RefusalKind::ForeignInputs, t)))
+                .or_else(|| crate::deploy::refuse_unresolved_inputs(&sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::UnresolvedInputs, t))),
+    });
+    let refusal = first_refusal(stale_copy, local_refusal, &owner);
     Ok(DryRun {
         change_set,
         transfer,
@@ -372,6 +467,7 @@ pub async fn run_dry_run(
         kept_as_redirect: kept_as_redirect(&folder_str),
         pending_removals: crate::system::build_records::records().pending_removals(&folder_str),
         copies: crate::syndication::preview::for_dry_run(folder, &sealed),
+        owner,
     })
 }
 
@@ -392,10 +488,12 @@ pub async fn run_prebuilt_dry_run(
     dir: &Path,
     requested_site_id: Option<&str>,
     accept_removals: bool,
+    overwrite_newer: bool,
 ) -> Result<DryRun, String> {
     let route = DeployRoute::Prebuilt { dir: dir.to_path_buf() };
     let local = check_locally(folder, &route, requested_site_id).await?;
     if let Some(text) = local.no_environment {
+        super::profile::refusal("no_environment");
         return Err(text);
     }
     let folder_str = folder.to_string_lossy().to_string();
@@ -407,6 +505,7 @@ pub async fn run_prebuilt_dry_run(
     };
 
     let manifest = super::prebuilt::build_manifest_from_dir(dir)?;
+    super::profile::count("manifest_files", manifest.len() as u64);
     let (transfer, refusal) = match super::prebuilt::removed_against_last_publish(folder, &site_id, &manifest) {
         Some((baseline, removed)) => {
             let refusal = (!accept_removals && !removed.is_empty())
@@ -416,6 +515,8 @@ pub async fn run_prebuilt_dry_run(
         }
         None => (Transfer::NoRecord, None),
     };
+    let (owner, stale_copy) = ask_server(folder, &local, overwrite_newer).await;
+    let refusal = first_refusal(stale_copy, refusal, &owner);
     Ok(DryRun {
         change_set: ChangeSet::default(),
         transfer,
@@ -427,6 +528,7 @@ pub async fn run_prebuilt_dry_run(
         kept_as_redirect: Vec::new(),
         pending_removals: Vec::new(),
         copies: Vec::new(),
+        owner,
     })
 }
 
@@ -459,6 +561,7 @@ mod tests {
             kept_as_redirect: Vec::new(),
             pending_removals: Vec::new(),
             copies: Vec::new(),
+            owner: Owner::Unchecked { reason: "this folder has no site".into() },
         }
     }
 
@@ -483,6 +586,7 @@ mod tests {
             kept_as_redirect: Vec::new(),
             pending_removals: Vec::new(),
             copies: Vec::new(),
+            owner: Owner::Unchecked { reason: "this folder has no site".into() },
         };
 
         let text = dry.render();
@@ -529,10 +633,10 @@ mod tests {
              Transfer, measured against this folder's last publish: would upload 2 files and remove 2 files.\n\
              Also removed:\n\
              \x20 /style.1a2b3c.css\n\
+             Publishing: not asked, because this folder has no site: whether this folder's key may publish, and whether another copy published since.\n\
              Publish check: a real deploy would be refused:\n\
              Nothing published — REFUSED\n\
-             Not run, because it needs the server: whether another copy of this folder published since this one, and the upload itself. \
-             A real deploy can still stop there.\n"
+             Not run: the upload itself, where a real deploy can still stop.\n"
         );
     }
 
@@ -595,13 +699,14 @@ mod tests {
             kept_as_redirect: Vec::new(),
             pending_removals: Vec::new(),
             copies: Vec::new(),
+            owner: Owner::Unchecked { reason: "this folder has no site".into() },
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");
         assert!(text.contains("Transfer: not known, because there is no record of an earlier publish"), "{text}");
         assert!(text.contains("would register the site \"my-site\""), "{text}");
         assert!(text.contains("Publish check: passes.\n"), "{text}");
-        assert!(text.contains("Not run, because it needs the server"), "{text}");
+        assert!(text.contains("Not run: the upload itself"), "{text}");
         assert!(!text.contains("go ahead"), "{text}");
     }
 
@@ -651,7 +756,7 @@ mod tests {
         async fn run(dir: &tempfile::TempDir, accept: bool) -> DryRun {
             let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             std::env::set_var("MOSS_SETA_URL", "http://127.0.0.1:9");
-            run_prebuilt_dry_run(dir.path(), &dir.path().join("_site"), None, accept).await.unwrap()
+            run_prebuilt_dry_run(dir.path(), &dir.path().join("_site"), None, accept, false).await.unwrap()
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

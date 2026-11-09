@@ -11,7 +11,7 @@ use crate::build::place_map::world_coords::{self, east_units_per_radian, north_u
 pub(crate) const TILE_SIZE: u32 = 256;
 /// The deepest two levels are cut to this radius around a place.
 pub(crate) const NEAR_METRES: f64 = 300.0;
-const JPEG_QUALITY: u8 = 80;
+const QUALITY: u8 = 80;
 
 /// World units per tile pixel at `level`.
 pub(crate) fn units_per_pixel(level: u8) -> f64 {
@@ -208,10 +208,17 @@ fn sample_grid(plates: &[Loaded], rect: [f64; 4], longitudes: &[f64], latitudes:
     drawn.then_some(tile)
 }
 
+/// A static figure's picture as a lossy WebP. Its `<image>` loads with the
+/// page and cannot be lazy, and the JPEG encoder here keeps full-resolution
+/// chroma, so WebP at the same quality is about a fifth smaller.
+pub(crate) fn encode_crop(picture: &RgbImage) -> Vec<u8> {
+    webp::Encoder::from_rgb(picture.as_raw(), picture.width(), picture.height()).encode(f32::from(QUALITY)).to_vec()
+}
+
 /// The picture as a JPEG.
 pub(crate) fn encode(tile: &RgbImage) -> Vec<u8> {
     let mut bytes = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, QUALITY)
         .encode(tile.as_raw(), tile.width(), tile.height(), image::ExtendedColorType::Rgb8)
         .expect("an RGB buffer encodes");
     bytes

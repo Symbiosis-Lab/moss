@@ -85,22 +85,19 @@ test.describe("a year range in a heading", () => {
     expect(await page.locator("h2#plain-heading .moss-nobreak").count()).toBe(0);
   });
 
-  test("the hidden anchor takes no room, so a heading wraps as it would without it", async ({ page }) => {
-    // The anchor's room only matters on the width where the last line is just
-    // full, so sweep every width a phone-to-tablet heading wraps at.
+  test("revealing the anchor moves no line, so a heading wraps the same hovered or not", async ({ page }) => {
+    // The anchor's room is always laid out and only its opacity changes; the
+    // room only matters on the width where the last line is just full, so
+    // sweep every width a phone-to-tablet heading wraps at.
     await open(page, "/range/", 390);
     const heading = page.locator("h2").first();
     for (let width = 240; width <= 440; width += 2) {
       await page.setViewportSize({ width, height: 900 });
-      const heights = await heading.evaluate((h) => {
-        const anchor = h.querySelector<HTMLElement>(".moss-heading-anchor")!;
-        const withAnchor = h.getBoundingClientRect().height;
-        anchor.style.display = "none";
-        const without = h.getBoundingClientRect().height;
-        anchor.style.display = "";
-        return { withAnchor, without };
-      });
-      expect(heights.withAnchor, `${width}px`).toBe(heights.without);
+      await page.mouse.move(0, 0);
+      const rest = await heading.evaluate((h) => h.getBoundingClientRect().height);
+      await heading.hover();
+      const hovered = await heading.evaluate((h) => h.getBoundingClientRect().height);
+      expect(hovered, `${width}px`).toBe(rest);
     }
   });
 
@@ -111,7 +108,7 @@ test.describe("a year range in a heading", () => {
     const anchor = h.locator(".moss-heading-anchor");
     await expect.poll(() => anchor.evaluate((a) => getComputedStyle(a).opacity)).toBe("1");
     const shown = await anchor.evaluate((a) => ({ glyph: getComputedStyle(a, "::after").content, box: a.getBoundingClientRect().width }));
-    expect(shown.glyph).toBe('"#"');
+    expect(shown.glyph).toBe('"\u2060#"');
     expect(shown.box).toBeGreaterThan(0);
   });
 });

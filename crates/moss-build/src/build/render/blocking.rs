@@ -51,7 +51,7 @@ use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedA
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
 use super::html::{RenderCtx, render_page, tab_title};
-use super::source_evidence::{flatten_missing_reference_occurrences, FinalSourceRecord};
+use super::source_evidence::{flatten_missing_reference_occurrences, SourceRecord};
 
 /// # Note
 /// The caller is responsible for creating the output directory and managing
@@ -209,7 +209,7 @@ fn synthetic_folder_doc(
 ///
 /// `stat` is the file's stat taken BEFORE `bytes` were read — see
 /// [`stat_then`](crate::build::stat::stat_then), which every caller reads
-/// through — or right after moss wrote them, on the uid write-back path.
+/// through.
 /// `pub(crate)`
 /// rather than file-local: `pipeline.rs`'s places.toml registration is not
 /// inside this file (the gazetteer is read before `generate_blocking_content`
@@ -229,6 +229,7 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
         title: doc.title.clone(),
         date: doc.date.clone(),
         draft: doc.is_draft(),
+        uid: doc.uid.clone(),
     }
 }
 
@@ -239,9 +240,8 @@ fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::cont
 /// unclassifiable at publish time, and on a watch-loop rebuild — where most of
 /// a large site is skipped — that is most of the site.
 ///
-/// A page absent from `hashes` was not read this build, which is only ever
-/// because its bytes provably did not change (parse-cache hit, render-skip carry)
-/// or could not be read (iCloud deferral). All three want the previous hash.
+/// A page absent from `hashes` was neither read nor replayed this build: the
+/// cloud deferred it, so its bytes are unknown and the previous hash stands.
 fn register_page_source(
     pending: &mut PendingManifest,
     hashes: &HashMap<String, crate::build::types::SourceMetadata>,
@@ -343,6 +343,8 @@ pub fn generate_blocking_content_for_build(
     // Note: the carry-forward of files/video_outputs/image_outputs/notebook_outputs is now
     // implicit in `pending` (caller seeded it with PendingManifest::new(previous_hashes)).
     // We still need `previous_hashes` for BackgroundContext.previous_hashes.
+
+    crate::build::notebook::register_notebook_sources(pending, source_path_buf, &project_structure.notebook_files, &previous_hashes);
 
     // Create .moss directory if it doesn't exist
     if !moss_dir.exists() {
@@ -624,10 +626,10 @@ pub fn generate_blocking_content_for_build(
         derived.prepare(derived.demands(&pages, &content_graph), progress_sender);
     }
 
-    // Source-path → hash of the bytes this build actually read, for the pages
-    // it actually read. Absent means "skipped" (parse-cache hit, render-skip
-    // carry, iCloud deferral), which `register_page_source` turns into a
-    // carry-forward rather than a gap. See `PendingManifest::register_page_source_hash`.
+    // Source-path → hash of the bytes each page was rendered from: read this
+    // build, or replayed from the parse cache. Absent means the cloud deferred
+    // the page, which `register_page_source` turns into a carry-forward rather
+    // than a gap. See `PendingManifest::register_page_source_hash`.
     let mut page_source_hashes: HashMap<String, crate::build::types::SourceMetadata> = HashMap::new();
 
     // Evidence uses the renderer's syntax mode while retaining coordinates in
@@ -639,7 +641,7 @@ pub fn generate_blocking_content_for_build(
 
     // `deferred_paths` travels out of the parallel markdown pass. Missing
     // media stays attached to each document and is flattened after Loop A.
-    let (mut documents, deferred_paths, mut source_records) = {
+    let (mut documents, deferred_paths, source_records) = {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -678,7 +680,7 @@ pub fn generate_blocking_content_for_build(
                     Some(moss_core::slug::normalize_separators(&path.to_string_lossy())),
                 _ => None,
             });
-        let rendered: Vec<Option<(ParsedDocument, Option<(std::path::PathBuf, String, Option<crate::build::stat::FileStat>)>)>> = project_structure
+        let rendered: Vec<Option<(ParsedDocument, Option<(String, Option<crate::build::stat::FileStat>)>)>> = project_structure
             .markdown_files
             .par_iter()
             .map(|file_info| {
@@ -722,10 +724,8 @@ pub fn generate_blocking_content_for_build(
                     // The document returned here is a PRE-Reduce snapshot, the
                     // same shape the fresh path below produces, so the
                     // whole-corpus passes downstream cannot tell the two apart.
-                    // No bytes are read on this path, so no source hash is
-                    // produced — the registration site carries the previous
-                    // build's hash forward instead. A page with an output
-                    // mapping and no hash is unclassifiable at publish time.
+                    // Its source hash is the one the replay was validated
+                    // against (`ParseSession::replayed_sources`).
                     if let Some(cached) = parse_session.lookup(&file_info.path) {
                         return Some((cached, None));
                     }
@@ -738,6 +738,7 @@ pub fn generate_blocking_content_for_build(
                         crate::build::cloud_readiness::read_page_source(path, &deferred_mutex, &input_evidence)
                     });
                     let content = content?;
+                    if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
                     // RESOLVE phase: transform Obsidian syntax (wikilinks, embeds,
@@ -956,7 +957,7 @@ pub fn generate_blocking_content_for_build(
                     // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    Some((doc, Some((source_file_path, content, stat_before_read))))
+                    Some((doc, Some((content, stat_before_read))))
                 },
             )
             .collect();
@@ -979,90 +980,26 @@ pub fn generate_blocking_content_for_build(
                 advisories: vec![],
             });
         }
-        // Collect fresh raw sources with their documents. UID normalization,
-        // evidence and cache identity all happen after this parallel read phase
-        // has ended, so no embed reader can observe a half-written source.
+        // Collect fresh raw sources with their documents. Evidence and cache
+        // identity are taken after this parallel read phase has ended.
         let mut docs = Vec::with_capacity(rendered.len());
         let mut source_records = Vec::new();
         for (doc, source) in rendered.into_iter().flatten() {
             let source = source.zip(doc.source_path.clone());
-            let original_uid = doc.uid.clone();
             if let Some(document_index) = crate::build::scan::slug::admit_unless_reserved_device_output(&mut docs, doc) {
-                let Some(((disk_path, source, stat_before_read), source_path)) = source else {
+                let Some(((source, stat_before_read), source_path)) = source else {
                     continue;
                 };
-                source_records.push(FinalSourceRecord::fresh(
-                    document_index,
-                    source_path,
-                    disk_path,
-                    source,
-                    original_uid,
-                    stat_before_read,
-                ));
+                source_records.push(SourceRecord::fresh(document_index, source_path, source, stat_before_read));
             }
         }
         (docs, deferred_mutex.into_inner().unwrap(), source_records)
     };
 
-    // UID normalization is the final source-owning step. It completes before
-    // source evidence, cache identity, metadata, or any write observes bytes.
-    let reduce_pre_start = std::time::Instant::now();
-    let writes_allowed = services.and_then(|s| s.session.as_ref()).map_or(true, |s| s.source_writes_allowed());
-    for record in &mut source_records {
-        record.mint_missing_uid(&mut documents[record.document_index]);
+    #[cfg(test)]
+    if let Some(hook) = AFTER_THE_READS.with(|h| h.borrow_mut().take()) {
+        hook();
     }
-    let source_indices: HashMap<String, usize> = documents
-        .iter()
-        .enumerate()
-        .filter_map(|(index, doc)| doc.source_path.as_ref().map(|path| (path.clone(), index)))
-        .collect();
-    let original_uids: HashMap<String, Option<String>> = documents
-        .iter()
-        .filter_map(|doc| doc.source_path.as_ref().map(|path| (path.clone(), doc.uid.clone())))
-        .collect();
-    let mut resolution = super::uid_dedup::resolve_duplicate_uids_with(
-            &mut documents,
-            source_path_buf,
-            || crate::build::manifest::live_baseline::load(&paths),
-            |src| previous_hashes.sources.contains_key(src),
-            |reassigned_path, new_uid| {
-                let record_index = match source_records
-                    .iter()
-                    .position(|record| record.source_path == reassigned_path)
-                {
-                    Some(index) => index,
-                    None => {
-                        let Some(&document_index) = source_indices.get(reassigned_path) else {
-                            return false;
-                        };
-                        let disk_path = source_path_buf.join(reassigned_path);
-                        let (stat_before_read, source) = crate::build::stat::stat_then(&disk_path, |path| std::fs::read_to_string(path));
-                        let source = match source {
-                            Ok(source) => source,
-                            Err(error) => {
-                                log::info!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
-                                return false;
-                            }
-                        };
-                        let original_uid = original_uids
-                            .get(reassigned_path)
-                            .cloned()
-                            .unwrap_or(None);
-                        source_records.push(FinalSourceRecord::fresh(
-                            document_index,
-                            reassigned_path.to_string(),
-                            disk_path,
-                            source,
-                            original_uid,
-                            stat_before_read,
-                        ));
-                        source_records.len() - 1
-                    }
-                };
-                source_records[record_index].plan_duplicate_uid(new_uid)
-            },
-        );
-    let mut failed_uid_writes = std::collections::HashSet::new();
     let folder_index = crate::build::folder_index::NoFolderIndex;
     let url_index = crate::build::folder_index::NoUrlIndex;
     let reference_context = moss_core::resolve::reference::ReferenceContext {
@@ -1070,50 +1007,39 @@ pub fn generate_blocking_content_for_build(
         folders: &folder_index,
         urls: &url_index,
     };
-    for record in &mut source_records {
-        let written = record.write_final(writes_allowed);
-        if written && record.final_source != record.original_source {
-            input_evidence.owned_rewrite(
-                &record.disk_path,
-                record.original_source.as_bytes(),
-                record.final_source.as_bytes(),
-            );
-        }
-        if !written {
-            if !record.original_bytes_still_on_disk() {
-                input_evidence.read_error(&record.disk_path, "UID normalization could not verify source bytes".into());
-            }
-            failed_uid_writes.insert(record.source_path.clone());
-            documents[record.document_index].uid = record.original_uid.clone();
-        }
+    for record in &source_records {
         let doc = &mut documents[record.document_index];
         doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
             &record.source_path,
-            &record.final_source,
+            &record.source,
             &authored_evidence_parse_config,
             &reference_context,
         );
-        // A failed write may have left the file half-written, so its bytes are
-        // not vouched for: the hash is memoized for this build, not recorded.
-        parse_session.note_source_bytes(
-            &record.source_path,
-            record.final_source.as_bytes(),
-            record.stat().filter(|_| written),
-        );
+        parse_session.note_source_bytes(&record.source_path, record.source.as_bytes(), record.stat());
         parse_session.verify_shadow(&record.source_path, doc);
-        page_source_hashes.insert(
-            record.source_path.clone(),
-            record.source_metadata(),
-        );
+        page_source_hashes.insert(record.source_path.clone(), record.source_metadata());
     }
-    resolution.reassignments.retain(|item| !failed_uid_writes.contains(&item.reassigned_path));
-    // A deferral is not shown. `resolve_duplicate_uids` logs it; the author
-    // hears nothing, because a note ID is moss's to manage and every remedy
-    // she could be offered is one moss should have taken itself.
+    page_source_hashes.extend(parse_session.replayed_sources());
+    if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
+        reporter.report(&event);
+    }
+
+    let missing_references = flatten_missing_reference_occurrences(&documents);
+
+    // The PRE-reduce cache boundary: the passes below fold other documents'
+    // state into a parsed document.
+    parse_session.finish(&documents);
+
+    // Which uid each page is built under: its own, the published one, or a
+    // provisional one. After the snapshot above, so a replayed page never
+    // carries a uid this pass assigned; nothing here writes the author's files.
+    let reduce_pre_start = std::time::Instant::now();
+    let resolution = super::uid_dedup::assign_note_ids(&mut documents, &paths, |src| previous_hashes.sources.contains_key(src));
+    // A deferral is only logged (by `resolve_duplicate_uids`): there is nothing for the author to do.
     if !resolution.reassignments.is_empty() {
         for r in &resolution.reassignments {
             let line = format!(
-                "Duplicate note ID '{}': '{}' keeps it, '{}' was given a new one{}",
+                "Duplicate note ID '{}': '{}' keeps it, '{}' is built under a new one{}",
                 r.uid,
                 r.keeper_path,
                 r.reassigned_path,
@@ -1130,17 +1056,7 @@ pub fn generate_blocking_content_for_build(
             reporter.report(&event);
         }
     }
-    if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
-        reporter.report(&event);
-    }
     log::debug!(target: "timing", "[reduce] uid_dedup: {:?}", reduce_pre_start.elapsed());
-
-    let missing_references = flatten_missing_reference_occurrences(&documents);
-
-    // This remains the PRE-reduce cache boundary. UID normalization is the
-    // one source-owning precondition: it changes raw bytes, whereas later
-    // passes fold other documents' state into a parsed document.
-    parse_session.finish(&documents);
 
     send_progress(
         progress_sender,
@@ -1184,8 +1100,8 @@ pub fn generate_blocking_content_for_build(
     // `site_lang` was computed eagerly before the markdown loop (above) so that
     // per-document language resolution and slug deduplication agree on the same
     // site default. Reuse it here.
-    // Out here because the article map, written far below, carries these to the editor's `url` chip.
-    let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
+    // Out here because the article map, written far below, carries these to editor validation.
+    let url_collisions;
     // Reverse map (slug folder-key → original on-disk leaf name) so every
     // auto-generated folder-index TITLE/H1 preserves the author's directory
     // casing ("Writings") even though the URL slug is lowercased ("writings").
@@ -1198,6 +1114,7 @@ pub fn generate_blocking_content_for_build(
         // a warm content-only rebuild once Loop A is a cache hit.
         let reduce_start = std::time::Instant::now();
         url_collisions = resolve_duplicate_slugs_with_lang(&mut documents, site_lang);
+        pending.record_output_collisions(crate::build::scan::slug::collision_messages(&url_collisions));
         // Sync permalink with updated url_path (dedup may have changed it)
         for doc in &mut documents {
             doc.permalink = format!("/{}", doc.url_path); // allow:served-path-url-construct (page permalink synced after slug dedup, stored in ParsedDocument)
@@ -1441,7 +1358,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_ai(site_config.ai).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
+        let layout_config = layout_config.with_color_scheme(site_config.color_scheme).with_theme_color(crate::build::page::color_scheme::ThemeColor::of_theme(user_css_content.as_deref())).with_header_mode(site_config.header).with_header_scroll(site_config.header_scroll).with_term_nav(term_index.nav_entries(&site_config.term_nav));
         let layout_config = layout_config.with_place_maps(site_config.place_maps.clone()).with_profile_links(site_config.identity.head_links());
 
         // RSS feed: always generated when a real (https) URL is resolved.
@@ -1721,8 +1638,8 @@ pub fn generate_blocking_content_for_build(
     // A term card reads its members' pictures and dates, so it is set once
     // every pseudo-folder document exists.
     crate::build::terms::set_term_cards(&mut documents, &term_index);
-    super::build_shared::report_verbatim_collisions(&documents, project_structure, &dir_overrides);
-    super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
+    pending.record_output_collisions(super::build_shared::verbatim_collisions(&documents, project_structure, &dir_overrides));
+    let owned_by_documents = super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places
     // asset URL that its own map markup renders below.
@@ -1813,9 +1730,11 @@ pub fn generate_blocking_content_for_build(
     // carry-forward gate below (keyed on "was anything carried this build")
     // can see it too.
     let homepage_index_sp = ServedPath::from_source("index.html").unwrap();
+    // An authored homepage is written by the asset copy: nothing is rendered or carried there.
+    let authored_home = owned_by_documents.contains(homepage_index_sp.as_str());
     let homepage_carry_proof = documents
         .iter()
-        .find(|d| d.url_path == "index.html")
+        .find(|d| d.url_path == "index.html" && !authored_home)
         .and_then(|doc| {
             crate::build::render::incremental::CarryProof::for_document(
                 doc,
@@ -1898,7 +1817,8 @@ pub fn generate_blocking_content_for_build(
             .filter(|doc| {
                 !(doc.url_path == "index.html"
                     || (doc.kind == PageKind::Folder && doc.source_path.is_none())
-                    || doc.slot_only)
+                    || doc.slot_only
+                    || owned_by_documents.contains(&doc.url_path))
             })
             .fold((Vec::new(), Vec::new()), |(mut render, mut carry), doc| {
                 match crate::build::render::incremental::CarryProof::for_document(
@@ -1985,6 +1905,8 @@ pub fn generate_blocking_content_for_build(
         // threads is sound. Errors surface in `documents` order in the registration pass below, so
         // the first error propagated is identical to the sequential loop's.
         let render_total = to_render.len();
+        crate::build::phase::record_count("pages_rendered", render_total);
+        crate::build::phase::record_count("pages_carried", to_carry.len());
         let rendered_atomic = AtomicUsize::new(0);
         // Open question: how much of this span is per-PAGE work
         // (which a narrower render set reclaims) vs per-BUILD prelude above
@@ -2142,55 +2064,25 @@ pub fn generate_blocking_content_for_build(
                 *count += 1;
             }
 
+            // A language home an authored document owns emits nothing, but its
+            // source still maps to that address and its metadata still serves.
+            for doc in documents.iter().filter(|d| d.url_path != "index.html" && owned_by_documents.contains(&d.url_path)) {
+                let (Some(src), Ok(sp)) = (doc.source_path.as_ref(), ServedPath::from_source(&doc.url_path)) else { continue };
+                pending.register_source_mapping(src.clone(), &sp);
+                register_page_source(pending, &page_source_hashes, src);
+                pending.register_page_meta(src.clone(), page_meta_of(doc));
+                *count += 1;
+            }
+
             // Slot-only sources (`footer.md` and its per-language siblings) are
-            // build INPUTS: they render into every page's chrome and own no
-            // output, so both loops above — each keyed on an emitted output —
-            // skipped them and their hash never entered `sources`. The sweep's
-            // drift compare reads that map, and a walked file with no baseline
-            // entry reads as NEW, so every 2s pass judged both footers as drift,
-            // dispatched a full rebuild that could not clear them, then blamed
-            // the watcher and recreated it — twice, after which the folder
-            // degraded to sweep-only and the event-driven partial build stopped
-            // happening at all (riverbend, 2026-08-19).
-            //
-            // No `register_source_mapping`: there is no output to map, and the
-            // hash-only shape is what keeps a slot invisible to the publish
-            // classifier (it filters `sources` through `source_to_output`) and
-            // to the seal's deleted-page prune. `register_page_source` rather
-            // than a raw insert is what survives `replace_sources`.
-            //
-            // The one place a hash is read from disk rather than carried. A
-            // slot source is only in `page_source_hashes` when THIS build read
-            // it, and only carried when the previous MANIFEST held it — so a
-            // vault whose manifest already lost its footers (every riverbend
-            // vault, before the carry was fixed) would stay lost until some
-            // build happened to bypass the parse cache. Hashing the two or
-            // three slot files directly makes the entry unconditional, so the
-            // vault heals on the next build instead of on the next full parse.
-            for doc in &documents {
-                if !doc.slot_only {
-                    continue;
-                }
-                let Some(src) = doc.source_path.as_ref() else {
-                    continue;
-                };
-                if let Some(meta) = page_source_hashes.get(src) {
-                    pending.register_page_source_hash(src.clone(), meta.clone());
-                } else if pending.carry_forward_page_source(src).is_none() {
-                    let abs = source_path_buf.join(src);
-                    let (stat_before_read, bytes) = crate::build::stat::stat_then(&abs, |path| fs::read(path));
-                    match bytes {
-                        Ok(bytes) => pending
-                            .register_page_source_hash(src.clone(), source_metadata(stat_before_read, &bytes)),
-                        // Unreadable (evicted, permissions): leave it absent,
-                        // which is what the sweep already tolerates for a file
-                        // it cannot stat. Better one extra rebuild than a hash
-                        // of nothing.
-                        Err(e) => log::debug!(
-                            "slot source {src} could not be hashed for the manifest: {e}"
-                        ),
-                    }
-                }
+            // build inputs that own no output, so the loops above, keyed on an
+            // emitted output, skip them. Their hash still belongs in `sources`:
+            // the sweep's drift compare reads a walked file with no entry as new
+            // and would rebuild on every pass. No `register_source_mapping`: the
+            // hash-only shape keeps a slot out of the publish classifier and the
+            // seal's deleted-page prune.
+            for src in documents.iter().filter(|doc| doc.slot_only).filter_map(|doc| doc.source_path.as_ref()) {
+                register_page_source(pending, &page_source_hashes, src);
             }
 
             // A page's auto-generated OG card is written and registered by
@@ -2599,8 +2491,6 @@ pub fn generate_blocking_content_for_build(
     );
 
     // Generate index.html - either use homepage document or generate auto-index
-    // NOTE: This runs BEFORE blocking_keys snapshot so index.html is included
-    // in the blocking-phase key set and won't be deleted by stale cleanup.
     //
     // Empty-folder onboarding:
     // a synthetic homepage was pushed into `documents` earlier — just after
@@ -2618,7 +2508,7 @@ pub fn generate_blocking_content_for_build(
             // reads has moved — reuse the previous build's index.html
             // verbatim instead of re-running folder_embed's card synthesis.
             homepage_carry_proof.as_ref().expect("homepage carry has proof").register_all(pending);
-        } else {
+        } else if !authored_home {
             let _phase_home = PhaseTrace::start("render_homepage");
             let mut homepage_og_outputs = if defer_title_cards {
                 crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
@@ -2902,7 +2792,7 @@ pub fn generate_blocking_content_for_build(
         let nav_html = nav_builder.generate_navigation();
 
         let color_scheme_attrs = layout_config.color_scheme.html_attrs();
-        let theme_meta = crate::build::page::shell::theme_color_meta(layout_config.color_scheme);
+        let theme_meta = layout_config.theme_color.meta(layout_config.color_scheme);
 
         for (media_type, items) in &media_collections {
             if items.is_empty() {
@@ -3194,11 +3084,7 @@ pub fn generate_blocking_content_for_build(
         }
     }
 
-    // Decompose pending into (SiteHashes, blocking_keys) for BackgroundContext and SiteResult.
-    // `as_parts_clone` clones because `pending` is `&mut` (not owned); the owning
-    // form that would let the pipeline caller skip the clone never gained a caller
-    // and was removed, so this is the only decomposition.
-    let (site_hashes, blocking_keys) = pending.as_parts_clone();
+    let site_hashes = pending.hashes_clone();
 
     // `hashes.json` is NOT written here. The seal+persist task in `build.rs`
     // is the sole writer — it runs after deferred phases (image, video,
@@ -3238,7 +3124,7 @@ pub fn generate_blocking_content_for_build(
     // Sources:
     // * description / title  — homepage frontmatter
     // * og:* / twitter:*     — pre-rendered with the homepage's title+description
-    // * theme-color          — matches default.css `--moss-color-bg` light/dark
+    // * theme-color          — the theme's root `--moss-color-bg` (`ThemeColor`)
     // * canonical_url        — derived per-folder at injection time from `site_host`
     // * raster_favicons      — `<link rel="icon">` to the same favicon the moss
     //                           templates emit (user's `assets/favicon.{svg,png,ico}`,
@@ -3352,7 +3238,7 @@ pub fn generate_blocking_content_for_build(
             None
         };
 
-        let (tc_light, tc_dark) = crate::build::page::shell::theme_bg_colors();
+        let crate::build::page::color_scheme::ThemeColor { light: tc_light, dark: tc_dark } = &layout_config.theme_color;
         let owned = SpaDefaultsOwned {
             description: homepage_description,
             og_tags,
@@ -3446,7 +3332,6 @@ pub fn generate_blocking_content_for_build(
         previous_hashes: previous_hashes.clone(),
         start_time: std::time::Instant::now(),
         dir_overrides,
-        blocking_keys,
         spa_defaults,
         passthrough_roots: project_structure.passthrough_roots.clone(),
         search_enabled: layout_config.assets.search,
@@ -3684,6 +3569,12 @@ pub(super) fn resolve_favicon(
         used_default,
         raster_sizes,
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once after the render has read every page, before any source hash is registered.
+    pub(crate) static AFTER_THE_READS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]

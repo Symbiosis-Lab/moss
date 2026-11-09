@@ -261,7 +261,7 @@ fn token_value(tokens: &moss_core::contract::tokens::Tokens, name: &str, dark: b
 /// up, rather than being discovered afterwards.
 const TEXT_ON_BACKGROUNDS: &[(&str, &[&str])] = &[
     ("moss-color-muted", &["moss-color-bg", "moss-color-surface", "moss-code-background"]),
-    ("moss-color-text", &["moss-color-bg", "moss-color-surface"]),
+    ("moss-color-text", &["moss-color-bg", "moss-color-surface", "moss-color-highlight"]),
     ("moss-color-text-secondary", &["moss-color-bg", "moss-color-surface"]),
     // Link and heading text (site.css:152, 553, 972 and ~15 more). ui-accent
     // aliases this via var(), so it resolves to the same colour and is skipped

@@ -22,8 +22,7 @@
 //!   carrying a filename) and an optional text field `dir` naming the
 //!   project-relative target directory (defaults to the vault root).
 //! * **Auth** — the same per-vault bearer token the mutation/read carriers
-//!   check ([`super::carrier_token::admit`]), read from the header or the
-//!   session cookie. No token, a wrong token, or no carrier bound at all
+//!   check ([`super::carrier_token::admit`]), read from the header. No token, a wrong token, or no carrier bound at all
 //!   (this server was started with no [`super::invoke::InvokeCtx`]) → **401**.
 //! * **400** — a `file` part with no filename; a filename containing a path
 //!   separator or `..`; a `dir` that resolves outside the vault (absolute or
@@ -94,6 +93,13 @@ pub(crate) async fn handle_upload(
         }
     };
 
+    handle_admitted_upload(session, request).await
+}
+
+pub(crate) async fn handle_admitted_upload(
+    session: Arc<super::invoke::Session>,
+    request: Request<Body>,
+) -> Response {
     let project_root = session.vault().path().to_path_buf();
 
     let mut multipart = match Multipart::from_request(request, &()).await {
@@ -339,7 +345,7 @@ mod tests {
         let vault_root = vault.path().to_path_buf();
         std::fs::create_dir_all(vault_root.join("posts")).unwrap();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64200)
@@ -374,7 +380,7 @@ mod tests {
         let (vault, site_dir) = served_vault();
         let vault_root = vault.path().to_path_buf();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64260)
@@ -401,7 +407,7 @@ mod tests {
         let (vault, site_dir) = served_vault();
         let vault_root = vault.path().to_path_buf();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64201)
@@ -439,7 +445,7 @@ mod tests {
         let (vault, site_dir) = served_vault();
         let vault_root = vault.path().to_path_buf();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64202)
@@ -471,7 +477,7 @@ mod tests {
     async fn dir_outside_the_vault_is_400() {
         let (_vault, site_dir) = served_vault();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64203)
@@ -506,7 +512,7 @@ mod tests {
         let (vault, site_dir) = served_vault();
         let vault_root = vault.path().to_path_buf();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64210)
@@ -541,7 +547,7 @@ mod tests {
         let outside = tempfile::TempDir::new().unwrap();
         std::os::unix::fs::symlink(outside.path(), vault_root.join("link")).unwrap();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64211)
@@ -573,7 +579,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn no_token_is_401() {
         let (_vault, site_dir) = served_vault();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(InvokeCtx::standalone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64204)
@@ -602,7 +608,7 @@ mod tests {
     async fn oversized_part_is_413() {
         let (_vault, site_dir) = served_vault();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64205)
@@ -635,7 +641,7 @@ mod tests {
     async fn absolute_dir_is_400() {
         let (_vault, site_dir) = served_vault();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64206)
@@ -667,7 +673,7 @@ mod tests {
     async fn too_many_parts_is_400() {
         let (_vault, site_dir) = served_vault();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64207)
@@ -705,7 +711,7 @@ mod tests {
     async fn part_over_2mib_default_is_accepted() {
         let (_vault, site_dir) = served_vault();
         let ctx = InvokeCtx::standalone();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(ctx.clone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64208)
@@ -736,7 +742,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn comments_route_still_enforces_the_2mib_default() {
         let (_vault, site_dir) = served_vault();
-        let (port, shutdown_tx) = start_server(ServeConfig {
+        let (port, _, shutdown_tx) = start_server(ServeConfig {
             invoke: Some(InvokeCtx::standalone()),
             kind: HostKind::Cli,
             ..ServeConfig::new(Arc::new(RwLock::new(site_dir)), 64209)

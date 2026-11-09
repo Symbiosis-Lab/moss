@@ -28,12 +28,27 @@ export const config: WebdriverIO.Config = {
 
   capabilities: [
     {
+      "wdio:specs": ["./specs/plugin.e2e.ts"],
       browserName: "obsidian",
       browserVersion: "latest",
       "wdio:obsidianOptions": {
         installerVersion: "latest",
         plugins: [path.join(here, "..")],
         vault: path.join(here, "vault"),
+      },
+    },
+    {
+      "wdio:specs": ["./specs/mobile.e2e.ts"],
+      browserName: "obsidian",
+      browserVersion: "latest",
+      "wdio:obsidianOptions": {
+        installerVersion: "latest",
+        emulateMobile: true,
+        plugins: [path.join(here, "..")],
+        vault: path.join(here, "vault"),
+      },
+      "goog:chromeOptions": {
+        mobileEmulation: { deviceMetrics: { width: 390, height: 844, pixelRatio: 1 } },
       },
     },
   ],

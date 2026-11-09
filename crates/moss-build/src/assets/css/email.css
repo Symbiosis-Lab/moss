@@ -54,8 +54,8 @@
     align-items: baseline;
   }
   /* The success circle has no text to share a baseline with: centre the row
-     it shares with the confirmation. Specific enough to outrank the footer's
-     mobile row below. */
+     it shares with the confirmation. Specific enough to outrank the stacked
+     card's `align-items: stretch` below. */
   .moss-subscribe .moss-subscribe-form[data-position="inline"][data-state="success"] {
     align-items: center;
   }
@@ -65,39 +65,20 @@
     min-width: 0;
   }
 
+  /* Under 32rem the in-page card stacks the field above the button; a footer form keeps one row. */
   @media (max-width: 32rem) {
-    .moss-subscribe-form[data-position="inline"] {
+    .moss-subscribe:not(footer *) .moss-subscribe-form[data-position="inline"] {
       flex-direction: column;
       align-items: stretch;
     }
-    /* :not([data-state="success"]) on both width rules: this file's layer
-       (plugins.shortcodes) outranks site.css's shortcodes layer, so an
-       unscoped width here would beat the success state's 2.25rem circle
-       (site.css) and stretch the checkmark into a full-width oval. */
-    .moss-subscribe-form[data-position="inline"]:not([data-state="success"]) .moss-btn {
+    /* In a column, `flex: 1` would size the field's height and undercut the control size. */
+    .moss-subscribe:not(footer *) .moss-subscribe-form[data-position="inline"] .moss-input {
+      flex: none;
+    }
+    /* Not in the success state: this layer outranks site.css's, so a width here would stretch the
+       success circle into a full-width oval. */
+    .moss-subscribe:not(footer *) .moss-subscribe-form[data-position="inline"]:not([data-state="success"]) .moss-btn {
       width: 100%;
-    }
-
-    /* Footer subscribe form keeps the email input + button on ONE row on
-       mobile (input flexes, button hugs its label) — matching the default
-       auto-injected footer's pre-consolidation behavior. Only the in-page
-       `:::subscribe` card stacks to a column (it has full width to spare). */
-    footer .moss-subscribe .moss-subscribe-form[data-position="inline"] {
-      flex-direction: row;
-      align-items: baseline;
-    }
-    footer .moss-subscribe .moss-subscribe-form[data-position="inline"]:not([data-state="success"]) .moss-btn {
-      width: auto;
-    }
-
-    /* Stacked, the confirmation takes the input's row above the circle, as
-       tall as the form's own 2.5rem row so the copy centres on that line.
-       The footer form stays on one row (see above) and needs no height. */
-    .moss-subscribe-form[data-position="inline"] .moss-subscribe-status {
-      min-height: 2.5rem;
-    }
-    footer .moss-subscribe .moss-subscribe-form[data-position="inline"] .moss-subscribe-status {
-      min-height: 0;
     }
   }
 }

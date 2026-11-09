@@ -5,13 +5,19 @@
 # moss-cli has no window system in its dependency graph at all, so the same
 # recipe covers a coding agent's container and a desktop machine alike.
 #
-# Usage (run from the repo root):
+# Usage (run from the repo root, after `pnpm install --frozen-lockfile`):
 #   scripts/build-cli-release-asset.sh darwin-universal   # needs both Apple rustup targets
 #   scripts/build-cli-release-asset.sh linux-x86_64       # native build, no extra targets
+#   scripts/build-cli-release-asset.sh windows-x86_64     # native build on Windows (Git Bash)
 #
-# darwin-universal builds moss-cli twice (x86_64-apple-darwin,
-# aarch64-apple-darwin) and lipo's the two into one universal binary — the
-# standard way to ship one macOS binary for both Apple silicon and Intel.
+# Every platform builds through scripts/build-moss-cli.sh, so the binary
+# carries the browser editor's bundle: `moss edit --serve` refuses to start
+# in a binary built without it.
+#
+# darwin-universal builds moss-cli for x86_64-apple-darwin and
+# aarch64-apple-darwin in one cargo call and lipo's the two into one universal
+# binary — the standard way to ship one macOS binary for both Apple silicon
+# and Intel.
 # linux-x86_64 is a plain native build: moss-cli has no GUI toolkit
 # dependency (check crates/moss-cli/Cargo.toml — no tauri, no wry, direct or
 # transitive), so unlike a full desktop-app build it needs no GTK/WebKit dev
@@ -36,7 +42,7 @@ set -euo pipefail
 
 PLATFORM="${1:-}"
 if [ -z "$PLATFORM" ]; then
-  echo "usage: $0 <darwin-universal|linux-x86_64>" >&2
+  echo "usage: $0 <darwin-universal|linux-x86_64|windows-x86_64>" >&2
   exit 1
 fi
 
@@ -47,9 +53,8 @@ TARGET_DIR="$REPO_ROOT/target"
 case "$PLATFORM" in
   darwin-universal)
     OUT="moss-darwin-universal"
-    for TARGET in x86_64-apple-darwin aarch64-apple-darwin; do
-      cargo build --locked --profile release-optimized -p moss-cli --target "$TARGET" --target-dir "$TARGET_DIR"
-    done
+    bash "$SCRIPT_DIR/build-moss-cli.sh" --locked --profile release-optimized \
+      --target x86_64-apple-darwin --target aarch64-apple-darwin --target-dir "$TARGET_DIR"
     lipo -create -output "$OUT" \
       "$TARGET_DIR/x86_64-apple-darwin/release-optimized/moss-cli" \
       "$TARGET_DIR/aarch64-apple-darwin/release-optimized/moss-cli"
@@ -57,11 +62,16 @@ case "$PLATFORM" in
     ;;
   linux-x86_64)
     OUT="moss-linux-x86_64"
-    cargo build --locked --profile release-optimized -p moss-cli --target-dir "$TARGET_DIR"
+    bash "$SCRIPT_DIR/build-moss-cli.sh" --locked --profile release-optimized --target-dir "$TARGET_DIR"
     cp "$TARGET_DIR/release-optimized/moss-cli" "$OUT"
     ;;
+  windows-x86_64)
+    OUT="moss-windows-x86_64.exe"
+    bash "$SCRIPT_DIR/build-moss-cli.sh" --locked --profile release-optimized --target-dir "$TARGET_DIR"
+    cp "$TARGET_DIR/release-optimized/moss-cli.exe" "$OUT"
+    ;;
   *)
-    echo "unknown platform: $PLATFORM (want darwin-universal or linux-x86_64)" >&2
+    echo "unknown platform: $PLATFORM (want darwin-universal, linux-x86_64 or windows-x86_64)" >&2
     exit 1
     ;;
 esac

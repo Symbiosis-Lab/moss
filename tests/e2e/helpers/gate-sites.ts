@@ -40,6 +40,10 @@ lang = "en"
 const CONFIG_TOML_WITH_ISLAND = `${CONFIG_TOML}floating_nav = true
 `;
 
+// Eighty invented words: two sections of this much make a page long enough
+// for heading permalinks (a page shows them when two sections hold 80 words).
+export const EIGHTY_WORDS = Array.from({ length: 80 }, (_, i) => `word${i}`).join(" ");
+
 const MOSS_CSS = /\/_moss\/style\.[a-f0-9]+\.css/;
 const THEME_CSS = /\/_moss\/theme\/style\.[a-f0-9]+\.css/;
 
@@ -1308,7 +1312,11 @@ uid: "hag00101"
 
 ## Introduction
 
-Body text under the section heading.
+${EIGHTY_WORDS}
+
+## Background
+
+${EIGHTY_WORDS}
 
 :::grid 2
 ### Card title one
@@ -1327,7 +1335,24 @@ uid: "hag00102"
 
 ## Introduction
 
-Body text under the section heading.
+${EIGHTY_WORDS}
+
+## Background
+
+${EIGHTY_WORDS}
+`,
+    "short/index.md": `---
+title: A short page
+uid: "hag00104"
+---
+
+## Introduction
+
+Only a few words here.
+
+## Background
+
+Only a few more.
 `,
     "edge/index.md": `---
 title: Headings that fill their lines
@@ -1336,35 +1361,39 @@ uid: "hag00103"
 
 ## Moorings and tolls, 1626–1705
 
-Text.
+${EIGHTY_WORDS}
 
 ## The harbour committee met, 1558–1603
 
-Text.
+${EIGHTY_WORDS}
 
 ## Small boats and long arguments, 1757–1827
 
-Text.
+${EIGHTY_WORDS}
 
 ## Notes on the lighthouse keepers, 1801–1869
 
-Text.
+${EIGHTY_WORDS}
 
 ## Ledgers kept by the pilots of the, 1710–1790
 
-Text.
+${EIGHTY_WORDS}
 
 ## Almanacs of the northern channel pilots, 1844–1921
 
-Text.
+${EIGHTY_WORDS}
 
 ## A winter of boats and bitter arguments, 1900–1950
 
-Text.
+${EIGHTY_WORDS}
 
 ## Lamps, tides and the evening committee, 1688–1750
 
-Text.
+${EIGHTY_WORDS}
+
+## 港口停泊费用与过路税的历史记录以及相关的各种争议和裁决
+
+${EIGHTY_WORDS}
 `,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": null,
@@ -3616,6 +3645,50 @@ lang = "en"
   },
 };
 
+export const NAV_CURRENT_MARK_GATE: ScratchSiteSpec = {
+  name: "nav-current-mark-gate",
+  files: {
+    "index.md": `---
+title: Orchard
+uid: "ncm00101"
+---
+
+# Orchard
+
+Scratch site for the current-page nav mark render gate.
+`,
+    "Pears.md": `---
+title: Pears
+uid: "ncm00102"
+nav: true
+---
+
+# Pears
+`,
+    "Plums.md": `---
+title: Plums
+uid: "ncm00103"
+nav: true
+---
+
+# Plums
+`,
+    "Quinces.md": `---
+title: Quinces
+uid: "ncm00104"
+nav: true
+---
+
+# Quinces
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
   name: "nav-split-pack-gate",
   files: {
@@ -3782,7 +3855,13 @@ listed: false
 footer: true
 ---
 
-Some body text.
+## First
+
+${EIGHTY_WORDS}
+
+## Second
+
+${EIGHTY_WORDS}
 `,
     "over.md": `---
 title: Over

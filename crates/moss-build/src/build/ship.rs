@@ -112,8 +112,8 @@ pub fn apply_transform(transform: ShipTransform, bytes: &[u8]) -> Vec<u8> {
 // path, when one is known to back this entry's exact bytes.
 // ---------------------------------------------------------------------------
 
-/// Where [`ship_phase`] and [`drop_absent_outputs`] read one entry's bytes from.
-enum ShipRead<'a> {
+/// Where one entry's bytes are read from (see [`resolve_ship_source`]).
+pub(crate) enum ShipRead<'a> {
     /// A file: the CAS blob backing a live `staged_oid`, or `stage_path` itself
     /// when there is none (or its CAS blob has since been collected).
     Path(PathBuf),
@@ -122,12 +122,13 @@ enum ShipRead<'a> {
     Held(&'a [u8]),
 }
 
-/// The one place [`ship_phase`] and [`drop_absent_outputs`] read `rel_path`'s
-/// bytes from: held bytes, else the CAS blob backing a live `staged_oid`, else
+/// The one place [`ship_phase`], [`drop_absent_outputs`] and the post-seal
+/// reference scan (`degrade::shipped_references`) read `rel_path`'s bytes
+/// from: held bytes, else the CAS blob backing a live `staged_oid`, else
 /// `stage_path` itself.
 ///
-/// Both callers MUST route every presence check and every subsequent read
-/// through this SAME resolved value, and neither may recompute it separately.
+/// Every caller MUST route every presence check and every subsequent read
+/// through this SAME resolved value, and none may recompute it separately.
 /// A presence check that asks the CAS while the read that follows targets the
 /// stage path (or vice versa) can answer "present" from one and then read the
 /// other, genuinely-absent, one — moving the failure a few lines down instead
@@ -135,7 +136,7 @@ enum ShipRead<'a> {
 /// helper would reintroduce. See the module docs for the race this exists to
 /// close: between a build sealing a path's hash and shipping its bytes, a
 /// second concurrent build can rewrite the mutable stage copy.
-fn resolve_ship_source<'a>(
+pub(crate) fn resolve_ship_source<'a>(
     rel_path: &str,
     stage_path: &Path,
     sealed: &'a SealedManifest,
@@ -650,7 +651,7 @@ pub fn materialize_and_promote(
         // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
         // the entry's CAS blob surviving a concurrent build's GC across this
         // whole call — see `CacheWriteLease` at this function's own call sites.
-        let object_store = crate::build::cache::ObjectStore::for_site(mp);
+        let object_store = crate::build::cache::ObjectStore::for_seal(mp);
         drifted = ship_phase(stage_dir, &gen_dir, sealed, Some(&object_store), base.as_deref())
             .map_err(|e| format!("Failed to materialize generation {}: {}", sealed.generation_id(), e))?;
     } else {
@@ -716,7 +717,7 @@ pub(crate) fn prune_orphaned_webp_before_ship(
         // Fail closed. An unreadable page shrinks the reference set, and a
         // smaller reference set authorizes MORE deletion — so a single
         // eviction or mid-flight write could delete every variant only that
-        // page referenced (an earlier incident: 525 files deleted, 207 images 404-ing).
+        // page referenced.
         // Skipping costs this generation some upload bytes; deleting wrongly
         // costs the site. The verdict is deliberately left untouched: a prune
         // that did not run has judged nothing, and writing an empty or partial
@@ -768,9 +769,6 @@ pub(crate) fn prune_orphaned_webp_before_ship(
         .collect();
     verdict.extend(removed_keys.iter().cloned());
     sealed.set_pruned_image_outputs(verdict);
-    // The keys travel out so `degrade` can strip the `<source>` elements that
-    // pointed at them. An unshipped file whose reference survives in HTML is a
-    // live 404, and `<picture>` renders it blank rather than falling back.
     removed_keys
 }
 
@@ -816,16 +814,16 @@ pub(crate) fn reclaim_staging_now(
 /// happens from receipts, so an entry is normally exactly what this build
 /// wrote — but an entry can also be carried from the previous build, and
 /// between the two builds a sync client may have evicted the file, or the
-/// user may have deleted it. `output_present` is one `symlink_metadata` per
-/// entry and no read, so this costs a stat per manifest entry and cannot
-/// itself hit the eviction fault it exists to find.
+/// user may have deleted it. A stage entry costs one `symlink_metadata` and no
+/// read, so it cannot itself hit the eviction fault it exists to find. A
+/// CAS-backed entry is asked of its blob through `ObjectStore::ready_blob`,
+/// which hashes a blob it has not verified at its current stat; that read is
+/// the guard against shipping corrupt bytes, and a store built with
+/// `remembering_verified` skips it for blobs an earlier pass already checked.
 ///
-/// Read-only against `stage_dir`. It used to unlink the unusable file — a
-/// 0-byte stub or a dataless placeholder — so the next build would regenerate
-/// rather than trust it. `build::pipeline`'s pre-render sweep does that
-/// instead, keyed off the same dropped entry and still before any producer
-/// looks, but at a moment when the preview server is no longer reading
-/// staging.
+/// Read-only against `stage_dir`. The pre-render sweep removes unusable
+/// files before any producer looks and while the preview server is no longer
+/// reading staging.
 ///
 /// `_moss/math/` is the exception and keeps its entry: those PNGs
 /// are append-only and the published site still serves them, so un-promising
@@ -1466,7 +1464,7 @@ mod tests {
     }
 
     /// Which generation `current` points at — via the marker `set_current_ptr`
-    /// writes, the same source `site_dir_for_plugin` reads, rather than a
+    /// writes, the same source `require_promoted` reads, rather than a
     /// `which.txt` planted in each generation dir just for this test.
     fn served_generation(mp: &crate::moss_paths::MossPaths) -> String {
         mp.current_generation_id().unwrap()
@@ -1554,7 +1552,7 @@ mod tests {
             );
         }
         let mut sealed = pending.seal();
-        let verdict = crate::build::degrade::repair_staged_html(
+        let (verdict, _) = crate::build::degrade::repair_staged_html(
             &mp,
             &stage,
             &mut sealed,
@@ -1656,6 +1654,34 @@ mod tests {
         assert_eq!(std::fs::read(mp.current_ptr().join("page.html")).unwrap(), b"<h1>original</h1>");
         #[cfg(unix)]
         assert_ne!(pointer(), pointer_before, "a re-copied generation must be repointed");
+    }
+
+    /// Copying a generation reads no blob the seal's presence pass already
+    /// verified at its current stat.
+    #[test]
+    fn copying_a_generation_reads_no_blob_the_presence_pass_verified() {
+        let tmp = tempdir().unwrap();
+        let mp = crate::moss_paths::MossPaths::new(tmp.path());
+        let stage = mp.staging_dir();
+        std::fs::create_dir_all(&stage).unwrap();
+        let oid = crate::build::cache::ObjectStore::for_site(&mp)
+            .store_bytes(b"body {}", crate::build::cache::RecordMode::Request)
+            .unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.apply_message("style.css".to_string(), "deadbeefdeadbeef", HashBucket::Files, Some(oid));
+        let mut sealed = pending.seal();
+        let reads = || crate::build::cache::blob_residency::HASH_READS.with(|count| count.get());
+        let before = reads();
+        crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, std::collections::HashSet::new());
+        assert_eq!(reads() - before, 1, "sanity: the presence pass checks the blob");
+
+        let before = reads();
+        assert_eq!(
+            materialize_and_promote(&sealed, &mp, &stage, next_promotion_epoch(), None, ShipVerdict::Ship).unwrap(),
+            Promotion::Promoted
+        );
+        assert_eq!(reads() - before, 0, "the copy hashed a blob the presence pass verified");
+        assert_eq!(std::fs::read(mp.current_ptr().join("style.css")).unwrap(), b"body {}");
     }
 
     // ─── Seeding a generation from the last whole one ────────────

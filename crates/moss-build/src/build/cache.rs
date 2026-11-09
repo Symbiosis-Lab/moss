@@ -40,9 +40,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-mod blob_residency;
+pub(crate) mod blob_residency;
 mod records;
 mod publication;
+mod process_memo;
+pub(crate) use process_memo::{KeyedMemo, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
 
@@ -81,6 +83,10 @@ pub struct ObjectStore {
     base: PathBuf,
     site: Option<std::sync::Arc<crate::moss_paths::MossPaths>>,
     verified: std::sync::Arc<std::sync::Mutex<HashIndex>>,
+    /// What an earlier pass verified, read by `ready_blob` when `verified` has
+    /// no answer, and where this pass saves; see
+    /// [`remembering_verified`](Self::remembering_verified).
+    remembered: Option<std::sync::Arc<blob_residency::Remembered>>,
 }
 
 impl ObjectStore {
@@ -89,7 +95,7 @@ impl ObjectStore {
     /// `base` is typically `.moss/cache/objects/`. The directory is created
     /// lazily (on first write), not here.
     pub fn new(base: PathBuf) -> Self {
-        Self { base, site: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())) }
+        Self { base, site: None, verified: std::sync::Arc::new(std::sync::Mutex::new(HashIndex::new())), remembered: None }
     }
 
     /// `mp`'s content-addressed object store — `.moss/cache/objects/`. Prefer this
@@ -98,6 +104,13 @@ impl ObjectStore {
         let mut store = Self::new(mp.cache_objects());
         store.site = Some(std::sync::Arc::new(crate::moss_paths::MossPaths::from_moss_dir(mp.root().to_path_buf())));
         store
+    }
+
+    /// `mp`'s store for one pass of a seal, remembering the site's verified-blob
+    /// index. The presence pass and the generation copy both open this one, so
+    /// the copy reads no blob the presence pass just verified.
+    pub(crate) fn for_seal(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_blobs())
     }
 
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
@@ -543,7 +556,7 @@ impl ObjectStore {
         // Stat the temp instead of trusting fs::copy's return value — on
         // Windows that's CopyFileEx's progress count, which Wine reports as 0.
         let (copied, inode) = match fs::metadata(&tmp) {
-            Ok(m) => (m.len(), crate::build::stat::stat_identity(&m).1),
+            Ok(m) => (m.len(), crate::build::stat::FileStat::of(&m).inode),
             Err(e) => {
                 // allow:unlink the temp this call minted beside the target; the rename replaces the entry in place
                 let _ = fs::remove_file(&tmp);
@@ -612,6 +625,9 @@ pub struct TransformRecord {
 /// A single transform output within a [`TransformRecord`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct TransformEntry {
+    /// Successful semantic validation of this immutable blob, independent of encode parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<BlobValidation>,
     /// SHA-256 OID of the output blob.
     pub oid: String,
     /// Size of the output blob in bytes.
@@ -620,6 +636,13 @@ pub struct TransformEntry {
     /// Stored as opaque JSON so any transform can define its own config
     /// shape.
     pub params: serde_json::Value,
+}
+
+/// A validator revision and the size of the blob it accepted.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct BlobValidation {
+    pub version: u32,
+    pub size: u64,
 }
 
 /// Transform cache — records what transforms produced what outputs.
@@ -760,9 +783,17 @@ impl TransformCache {
         current_params: &serde_json::Value,
         mode: RecordMode,
     ) -> Option<TransformEntry> {
-        // 1. Record exists?
-        let record = self.get_with(source_oid, mode)?;
+        self.usable_entry(&self.get_with(source_oid, mode)?, transform, current_params)
+    }
 
+    /// [`find_cached_entry`](Self::find_cached_entry) against a record the
+    /// caller already loaded, so several transforms of one source cost one read.
+    pub fn usable_entry(
+        &self,
+        record: &TransformRecord,
+        transform: &str,
+        current_params: &serde_json::Value,
+    ) -> Option<TransformEntry> {
         // 2. Transform entry exists?
         let entry = record.transforms.get(transform)?;
 
@@ -1130,7 +1161,7 @@ impl HashIndex {
 
     /// What a miss comes to: no read of a file in the cloud, else its hash, recorded at
     /// the stat taken before the read.
-    fn hash_and_record(
+    pub(crate) fn hash_and_record(
         &mut self,
         stat: &FileStat,
         file: &Path,
@@ -1165,6 +1196,8 @@ fn count_hit<T>(hit: Option<T>) -> Option<T> {
 /// Print, at `info`, what the index did since the last call, and start over.
 pub fn report_hash_index_activity() {
     let (hits, rehashed) = (HITS.swap(0, Ordering::Relaxed), REHASHED.swap(0, Ordering::Relaxed));
+    crate::build::phase::record_count("hash_index_hits_process", hits as usize);
+    crate::build::phase::record_count("hash_index_rehashed_process", rehashed as usize);
     let line = format!("[cache] hash-index: {hits} hits, {rehashed} rehashed");
     #[cfg(test)]
     LAST_LINE.with(|last| *last.borrow_mut() = Some(line.clone()));

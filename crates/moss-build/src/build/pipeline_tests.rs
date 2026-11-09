@@ -1,5 +1,6 @@
+use super::super::media::pipeline::tests::copy_deferred_assets;
 use super::super::media::pipeline::{
-    compute_expected_dirs, copy_deferred_assets, is_image_extension,
+    compute_expected_dirs, is_image_extension,
     remove_stale_dirs, remove_stale_files, stage_copy, stage_write,
 };
 use super::super::video::{compute_video_item_fingerprint, run_video_conversion};
@@ -148,6 +149,20 @@ fn build_test_full_with_gates(
     resolved_slots: &ResolvedSlots,
     gates: crate::build::render::IncrementalGates,
 ) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>), String> {
+    build_test_with_stash(folder_path, site_dir_state, progress_sender, server_port, services, resolved_slots, gates)
+        .map(|(is_empty, missing, _)| (is_empty, missing))
+}
+
+/// `build_test_full_with_gates`, also handing back the hashes the watcher stashes.
+fn build_test_with_stash(
+    folder_path: &str,
+    site_dir_state: Option<&SiteDirectoryState>,
+    progress_sender: Option<&dyn crate::build::ports::reporter::BuildReporter>,
+    server_port: Option<u16>,
+    services: Option<&BuildServices>,
+    resolved_slots: &ResolvedSlots,
+    gates: crate::build::render::IncrementalGates,
+) -> Result<(bool, Vec<crate::build::types::MissingReferenceOccurrence>, crate::types::content::SiteHashes), String> {
     let ps = scan_folder(folder_path)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -170,7 +185,7 @@ fn build_test_full_with_gates(
             is_empty,
             bg_handle,
             build_documents: _documents,
-            content_hashes: _content_hashes,
+            content_hashes,
             missing_references,
             unresolved_inputs: _unresolved_inputs,
             cancelled: _cancelled,
@@ -207,7 +222,7 @@ fn build_test_full_with_gates(
                 }
             }
         }
-        Ok((is_empty, missing_references))
+        Ok((is_empty, missing_references, content_hashes))
     })
 }
 
@@ -245,6 +260,105 @@ fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
     crate::build::parse_cache::reset_for_tests();
 }
 
+/// A page replayed from the parse cache is recorded at the bytes it was
+/// replayed from, even when the manifest on disk is older than the cached
+/// parse, as it is while the previous build's seal has not written it yet.
+/// That record is the watch gate's baseline: carrying the older hash would let
+/// an undo back to those exact bytes read as unchanged and never render.
+#[test]
+fn a_replayed_page_records_the_bytes_it_was_replayed_from() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let build = || build_test_full_with_gates(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build");
+    let hashes = crate::moss_paths::MossPaths::new(&dir).hashes();
+
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nfirst\n").unwrap();
+    build();
+    let before_the_edit = fs::read(&hashes).unwrap();
+    let edited = "---\ntitle: Home\n---\nsecond\n";
+    fs::write(dir.join("index.md"), edited).unwrap();
+    build();
+    fs::write(&hashes, before_the_edit).unwrap();
+    build();
+
+    let stats = crate::build::parse_cache::last_stats().expect("completed cache stats");
+    assert!(stats.eligible && !stats.missed("index.md"), "the last build must replay index.md, or this proves nothing: {stats:?}");
+    let want = crate::build::render::blocking::source_metadata(None, edited.as_bytes()).hash;
+    let recorded = load_previous_hashes(folder).sources.get("index.md").map(|m| m.hash.clone());
+    assert_eq!(recorded, Some(want), "the replayed page is recorded at the bytes it was replayed from");
+    crate::build::parse_cache::reset_for_tests();
+}
+
+/// Every page entry in the watch stash is the hash of the bytes the render
+/// read, never of the file as it stands when the stash is taken. The watcher
+/// gates an event that arrived during a build against that stash, so a save
+/// landing after the read must not match it. Covers a page read fresh, a page
+/// replayed from the parse cache, and a slot source.
+#[test]
+fn the_stash_records_the_bytes_the_render_read_not_a_later_save() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    let hash = |s: &str| crate::build::render::blocking::source_metadata(None, s.as_bytes()).hash;
+    let build = || build_test_with_stash(folder, None, None, None, None, &ResolvedSlots::empty(), gates).expect("build").2;
+    let build_saving_during = |read: (&str, &str), page: &'static str, footer: &'static str| {
+        let d = dir.clone();
+        crate::build::render::blocking::AFTER_THE_READS.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                fs::write(d.join("index.md"), page).unwrap();
+                fs::write(d.join("footer.md"), footer).unwrap();
+            }))
+        });
+        let stash = build();
+        assert!(crate::build::render::blocking::AFTER_THE_READS.with(|h| h.borrow().is_none()), "the save ran inside the build");
+        let sealed = load_previous_hashes(folder);
+        for (key, map) in [("stash", &stash), ("sealed manifest", &sealed)] {
+            let recorded = |src: &str| map.sources.get(src).map(|m| m.hash.clone());
+            assert_eq!(recorded("index.md"), Some(hash(read.0)), "the {key} records the page the render read");
+            assert_eq!(recorded("footer.md"), Some(hash(read.1)), "the {key} records the footer the render read");
+        }
+    };
+
+    fs::write(dir.join("index.md"), "# Home\nfirst").unwrap();
+    fs::write(dir.join("footer.md"), "chrome one").unwrap();
+    build_saving_during(("# Home\nfirst", "chrome one"), "# Home\nsecond", "chrome two");
+
+    build();
+    build_saving_during(("# Home\nsecond", "chrome two"), "# Home\nthird", "chrome three");
+    let stats = crate::build::parse_cache::last_stats().expect("completed cache stats");
+    assert!(stats.eligible && !stats.missed("index.md") && !stats.missed("footer.md"), "the last build must replay both, or this proves nothing: {stats:?}");
+    crate::build::parse_cache::reset_for_tests();
+}
+
+/// The parse cache replays a page as its file reads, so the uid a build gives a
+/// page with none, or a duplicate, is decided afresh from the next build's
+/// whole page set and the publish record.
+#[test]
+fn the_parse_cache_never_holds_a_uid_the_build_assigned() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nA").unwrap();
+    fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopy").unwrap();
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+
+    build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
+        .expect("build");
+    let cached = crate::build::parse_cache::cached_documents();
+    crate::build::parse_cache::reset_for_tests();
+    assert_eq!(cached.len(), 3, "{cached:?}");
+    for doc in &cached {
+        let in_file = doc.raw_frontmatter.get("uid").and_then(|uid| uid.as_str());
+        assert_eq!(doc.uid.as_deref(), in_file, "{:?} is cached under a uid its file does not hold", doc.source_path);
+    }
+}
+
 #[test]
 fn reserved_output_sources_never_receive_final_source_records() {
     let (dir, _cleanup) = create_test_dir();
@@ -276,11 +390,11 @@ fn reserved_output_before_normal_source_keeps_evidence_with_the_normal_document(
         vec![("index.md", "gone.png")],
     );
     assert!(!fs::read_to_string(dir.join("con.md")).unwrap().contains("uid:"));
-    assert!(fs::read_to_string(dir.join("index.md")).unwrap().contains("uid:"));
+    assert!(!fs::read_to_string(dir.join("index.md")).unwrap().contains("uid:"), "a build writes no uid");
 }
 
 #[test]
-fn duplicate_uid_normalization_keeps_cacheable_missing_reference_evidence() {
+fn a_duplicate_uid_keeps_cacheable_missing_reference_evidence_and_both_files() {
     let _cache_store = crate::build::parse_cache::store_lock_for_tests();
     crate::build::parse_cache::reset_for_tests();
     let (dir, _cleanup) = create_test_dir();
@@ -299,13 +413,12 @@ fn duplicate_uid_normalization_keeps_cacheable_missing_reference_evidence() {
     assert_eq!(first.len(), 2);
     let a = fs::read_to_string(dir.join("a.md")).unwrap();
     let b = fs::read_to_string(dir.join("b.md")).unwrap();
-    let uid = |source: &str| source.lines().find(|line| line.starts_with("uid:")).unwrap().to_string();
-    assert_ne!(uid(&a), uid(&b), "one duplicate UID must be reassigned in its final source");
+    assert!(a.contains("uid: duplicate") && b.contains("uid: duplicate"), "a build rewrites neither duplicate");
 
     let (_, warm) = build_test_full_with_gates(
         dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates,
     )
-    .expect("cache replay after uid normalization");
+    .expect("cache replay after duplicate-uid resolution");
     assert_eq!(warm, first);
     assert!(crate::build::parse_cache::last_stats().is_some_and(|stats| stats.hits >= 2));
     crate::build::parse_cache::reset_for_tests();
@@ -330,6 +443,7 @@ async fn production_build_installs_one_ordered_preflight_projection_for_the_publ
         server_port: None,
         admission_epoch: Some(admission_epoch),
         live_port: None,
+        rename_pairs: Vec::new(),
     };
 
     let broken_epoch = crate::build::ship::next_promotion_epoch();
@@ -442,7 +556,7 @@ fn test_build_empty_folder_returns_true() {
     // Build with no content files
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
 
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert!(result.unwrap(), "Empty folder should return is_empty=true");
 }
 
@@ -469,7 +583,7 @@ fn test_build_with_site_dir_state() {
         &ResolvedSlots::empty(),
     );
 
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     // Staging/ is sole build output
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
@@ -511,7 +625,7 @@ fn test_site_stage_persists_after_empty_build() {
 
     // Build with no content (empty folder)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Even empty builds use staging — site-stage/ is created
     assert!(
@@ -535,7 +649,7 @@ fn test_site_stage_persists_after_rebuild() {
     let _ = fs::remove_dir_all(test_dir.join(".moss/build.nosync/cache"));
     let _ = fs::remove_file(test_dir.join(".moss/build.nosync/hashes.json"));
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify site-stage persists for incremental rebuilds
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
@@ -588,7 +702,7 @@ fn test_site_stage_persists_when_no_changes() {
 
     // Second build with same content (should detect no changes)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify site-stage persists
     let stage_dir = test_dir.join(".moss/build.nosync/staging");
@@ -661,7 +775,7 @@ fn test_empty_slots_leave_no_markers() {
     fs::write(test_dir.join("index.md"), "# Hello").unwrap();
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Check staging/ (sole output)
     let stage_html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
@@ -824,7 +938,7 @@ fn test_rebuild_when_site_emptied() {
 
     // First build
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     // staging/ has the output
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
@@ -866,7 +980,7 @@ fn test_rebuild_when_staging_deleted() {
 
     // First build
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 
     // Delete staging directory completely (simulates a partial cleanup)
@@ -934,7 +1048,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
     // First build
     fs::write(test_dir.join("index.md"), "# First").unwrap();
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify first content (in staging/)
     let content = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
@@ -954,7 +1068,7 @@ fn test_staging_used_for_rebuild_with_existing_content() {
 
     // Second build - should use staging pattern (site has content)
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Verify new content from site-stage (the staging directory).
     // Note: site/ is updated by ship_phase which runs synchronously before
@@ -1210,7 +1324,7 @@ fn test_html_available_immediately_after_build() {
     fs::write(test_dir.join("about/index.md"), "# About\nAbout page").unwrap();
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // All HTML files must be available immediately (in staging/)
     assert!(
@@ -1270,7 +1384,7 @@ fn test_blocking_phase_includes_essential_files() {
     fs::write(test_dir.join("assets/favicon.svg"), "<svg></svg>").unwrap();
 
     let result = build_test(folder_path, None, None, None, None, &ResolvedSlots::empty());
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     // Essential files for page rendering (in staging/)
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
@@ -2150,6 +2264,7 @@ async fn a_rebuild_sweeps_staging_only_when_the_render_on_screen_is_promoted() {
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         })
     };
     let drained = || async {
@@ -2264,8 +2379,18 @@ async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
         crate::build::cache::ObjectStore::new(mp.cache_objects()),
     );
     let first_source = crate::build::cache::ObjectStore::hash_file(&vault.join("videos/first.mov")).unwrap();
-    let first = transforms.get_with(&first_source, crate::build::cache::RecordMode::Request).expect("the first video's encode was recorded");
-    let mp4 = first.transforms["video/mp4"].oid.clone();
+    // The two encodes run side by side, so the second can reach the encoder
+    // before the first has recorded its mp4.
+    let mut mp4 = None;
+    for _ in 0..500 {
+        mp4 = transforms.get_with(&first_source, crate::build::cache::RecordMode::Request)
+            .and_then(|r| r.transforms.get("video/mp4").map(|t| t.oid.clone()));
+        if mp4.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let mp4 = mp4.expect("the first video's encode was recorded");
     // Big enough to be worth sweeping.
     for i in 0..2_048 {
         std::fs::create_dir_all(mp.cache_objects().join("zz").join(format!("{i:04}"))).unwrap();
@@ -2313,6 +2438,7 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
         services
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
+                mp4_from: crate::build::media::video::Mp4From::Nothing,
                 error: None,
                 thumb_linked: false,
                 mp4_oid: None,
@@ -2328,6 +2454,7 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
         services
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
+                mp4_from: crate::build::media::video::Mp4From::Nothing,
                 error: None,
                 thumb_linked: false,
                 mp4_oid: None,
@@ -2503,7 +2630,6 @@ fn test_is_image_extension_rejects_non_images() {
 
 #[test]
 fn test_copy_deferred_assets_accepts_event_sink() {
-    use std::collections::HashSet;
 
     let temp_dir =
         std::env::temp_dir().join(format!("moss_test_asset_ready_{}", std::process::id()));
@@ -2521,7 +2647,6 @@ fn test_copy_deferred_assets_accepts_event_sink() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output,
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2535,7 +2660,6 @@ fn test_copy_deferred_assets_accepts_event_sink() {
 
 #[test]
 fn test_copy_deferred_assets_copies_source_html_files() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -2555,15 +2679,10 @@ fn test_copy_deferred_assets_copies_source_html_files() {
     fs::create_dir_all(&output).unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-    blocking_keys.insert("interactive/my-article/index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2587,7 +2706,7 @@ fn test_copy_deferred_assets_copies_source_html_files() {
 }
 
 #[test]
-fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
+fn renamed_folder_rendered_page_takes_precedence_over_authored_html() {
     use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
@@ -2599,30 +2718,34 @@ fn test_copy_deferred_assets_skips_html_when_in_blocking_keys() {
     fs::create_dir_all(&interactive).unwrap();
     fs::write(interactive.join("sketch.html"), "<html>sketch</html>").unwrap();
 
-    fs::create_dir_all(&output).unwrap();
+    fs::create_dir_all(output.join("renamed")).unwrap();
+    fs::write(output.join("renamed/sketch.html"), "<html>rendered page</html>").unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
-    blocking_keys.insert("interactive/sketch.html".to_string());
+    blocking_keys.insert("renamed/sketch.html".to_string());
 
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
+        dir_overrides: [("interactive".to_string(), "renamed".to_string())].into(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
     {
         let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
-        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        for key in blocking_keys {
+            pending.apply_message(key, "rendered", crate::build::manifest::HashBucket::Files, None);
+        }
+        crate::build::media::pipeline::tests::stage_and_copy_assets(&ctx, &mut pending,
+            crate::build::ports::reporter::discarding(), tx, None);
     }
 
-    assert!(
-        !output.join("interactive/sketch.html").exists(),
-        "Source HTML is skipped when blocking_keys is polluted (bug behavior)"
-    );
+    assert_eq!(fs::read_to_string(output.join("renamed/sketch.html")).unwrap(),
+        "<html>rendered page</html>", "The rendered address owns the page after folder renaming");
 }
 
 #[test]
@@ -2643,13 +2766,18 @@ fn configured_passthrough_html_replaces_generated_page() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::from(["index.html".to_string()]),
         passthrough_roots: HashSet::from(["index.html".to_string()]),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
+    let blocking_keys = HashSet::from(["index.html".to_string()]);
     let (tx, _rx) = crate::build::coordinator::test_utils::build_test_coordinator();
-    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for key in blocking_keys {
+        pending.apply_message(key, "rendered", crate::build::manifest::HashBucket::Files, None);
+    }
+    crate::build::media::pipeline::tests::stage_and_copy_assets(&ctx, &mut pending,
+        crate::build::ports::reporter::discarding(), tx, None);
 
     assert_eq!(fs::read_to_string(output.join("index.html")).unwrap(), "<html>custom home</html>");
 }
@@ -2687,7 +2815,6 @@ fn configured_passthrough_directory_copies_video_verbatim() {
 
 #[test]
 fn test_stale_directory_removed_after_article_deletion() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let output = temp.path().join("output");
@@ -2708,14 +2835,10 @@ fn test_stale_directory_removed_after_article_deletion() {
         "hash123".to_string(),
     );
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("articles/active-article/index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2747,7 +2870,6 @@ fn test_stale_directory_removed_after_article_deletion() {
 
 #[test]
 fn test_stale_directory_with_stale_files_removed() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let output = temp.path().join("output");
@@ -2763,14 +2885,10 @@ fn test_stale_directory_with_stale_files_removed() {
     let mut site_hashes = SiteHashes::new();
     site_hashes.insert("index.html".to_string(), "hash".to_string());
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -2794,7 +2912,6 @@ fn test_stale_directory_with_stale_files_removed() {
 
 #[test]
 fn test_video_output_directories_preserved() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let output = temp.path().join("output");
@@ -2816,14 +2933,10 @@ fn test_video_output_directories_preserved() {
     let hashes_json = serde_json::to_string_pretty(&site_hashes).unwrap();
     fs::write(moss.join("build.nosync").join("hashes.json"), &hashes_json).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3154,13 +3267,7 @@ fn test_remove_stale_files_preserves_notebook_outputs() {
     );
 }
 
-/// `remove_stale_html` also needs notebook_outputs protection because
-/// JupyterLite's SPA shell produces dozens of `index.html` files under
-/// `jupyter/{lab,tree,doc,repl,consoles,edit,notebooks}/...` — all
-/// matching the generated-page pattern this function targets.
-///
-/// These live in `notebook_outputs`, not `blocking_keys` (background-phase
-/// emission), so the function must accept a second preserve-set.
+/// Notebook-owned HTML is protected while its deferred processing runs.
 #[test]
 fn test_remove_stale_html_preserves_notebook_outputs() {
     use std::collections::HashSet;
@@ -3188,7 +3295,10 @@ fn test_remove_stale_html_preserves_notebook_outputs() {
     notebook_outputs.insert("jupyter/lab/index.html".to_string());
     notebook_outputs.insert("jupyter/tree/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &notebook_outputs, &crate::build::lifecycle::permit_for_test());
+    let mut previous = SiteHashes::default();
+    previous.files.extend(["index.html", "jupyter/lab/index.html", "jupyter/tree/index.html", "jupyter/stale-section/index.html"].map(|key| (key.to_string(), "hash".to_string())));
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &notebook_outputs, &HashSet::new());
+    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "home kept");
     assert!(
@@ -3264,7 +3374,6 @@ fn test_compute_expected_dirs_includes_qr_directory() {
 
 #[test]
 fn test_copy_deferred_assets_cleans_staging_dir() {
-    use std::collections::HashSet;
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
     let staging = temp.path().join("site-stage");
@@ -3282,14 +3391,10 @@ fn test_copy_deferred_assets_cleans_staging_dir() {
     let mut site_hashes = SiteHashes::new();
     site_hashes.insert("index.html".to_string(), "hash1".to_string());
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("index.html".to_string());
-
     let ctx = crate::types::services::BackgroundContext {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3332,7 +3437,10 @@ fn test_remove_stale_html_deletes_orphaned_index_pages() {
     blocking_keys.insert("index.html".to_string());
     blocking_keys.insert("文字/article/index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    let mut previous = SiteHashes::default();
+    previous.files.extend(["index.html", "文字/article/index.html", "视频/old-video/index.html", "index-2.html"].map(|key| (key.to_string(), "hash".to_string())));
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
+    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists(), "current index.html kept");
     assert!(
@@ -3367,11 +3475,72 @@ fn test_remove_stale_html_preserves_non_html_files() {
     let mut blocking_keys = HashSet::new();
     blocking_keys.insert("index.html".to_string());
 
-    remove_stale_html(&dir, &blocking_keys, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
+    let mut previous = SiteHashes::default();
+    previous.files.extend(["index.html", "style.css", "photo.jpg"].map(|key| (key.to_string(), "hash".to_string())));
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &blocking_keys, &HashSet::new(), &HashSet::new());
+    remove_stale_html(&dir, &deleted, &HashSet::new(), &crate::build::lifecycle::permit_for_test());
 
     assert!(dir.join("index.html").exists());
     assert!(dir.join("style.css").exists(), "CSS preserved");
     assert!(dir.join("photo.jpg").exists(), "image preserved");
+}
+
+#[test]
+fn stale_html_keys_spares_a_preserved_symlink() {
+    use std::collections::HashSet;
+    let mut previous = SiteHashes::default();
+    previous.files.insert("link.html".to_string(), crate::types::content::symlink_entry("guide.html"));
+    previous.files.insert("gone.html".to_string(), "100644:hash".to_string());
+    let deleted = crate::build::media::pipeline::stale_html_keys(&previous, &HashSet::new(), &HashSet::new(), &HashSet::new());
+    assert_eq!(deleted, vec!["gone.html".to_string()], "the deferred walk registers symlinks after the sweep");
+}
+
+#[test]
+fn html_deletions_spares_the_pages_the_seal_forwards_again() {
+    use crate::build::feeds::{kept_addresses::{KeptCopy, LateRedirects}, redirect_table::FolderMove};
+    let folder = TempDir::new().unwrap();
+    let folder_path = folder.path().to_string_lossy().to_string();
+    let copy = |from: &str| KeptCopy { from: from.into(), to: "new.html".into(), raw: "new.html".into() };
+    let late = LateRedirects {
+        copies: vec![copy("old.html"), copy("retired.html")],
+        folder_moves: vec![FolderMove { from: "old/".into(), to: "guide/".into(), old_served: false }],
+    };
+    let mut previous = SiteHashes::default();
+    for key in ["old/extra.html", "old/orphan.html", "old/authored.html", "old.html", "retired.html", "gone.html"] {
+        previous.files.insert(key.to_string(), "100644:hash".to_string());
+    }
+    // Pages the author deleted had source records; forwarding pages never do.
+    // A source path is not its address: `Old/` is served as `old/`.
+    for key in ["Old/authored.html", "retired.html"] {
+        previous.sources.insert(key.to_string(), Default::default());
+    }
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for key in ["guide/extra.html", "guide/authored.html"] {
+        pending.apply_message(key.to_string(), "rendered", crate::build::manifest::HashBucket::Files, None);
+    }
+    let (_, mut stale) = crate::build::media::pipeline::html_deletions(&previous, &pending,
+        &crate::types::content::ProjectStructure::default(), &folder_path, &Default::default(), &late);
+    stale.sort();
+    assert_eq!(stale, ["gone.html", "old/authored.html", "old/orphan.html", "retired.html"],
+        "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes");
+}
+
+#[test]
+fn remove_stale_html_keeps_a_case_only_rename_and_removes_a_distinct_file() {
+    use std::collections::HashSet;
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path();
+    fs::write(dir.join("guide.html"), "renamed page").unwrap();
+    let live = HashSet::from(["guide.html".to_string()]);
+    let insensitive = dir.join("GUIDE.html").exists();
+    if !insensitive {
+        fs::write(dir.join("Guide.html"), "deleted page").unwrap();
+    }
+    remove_stale_html(dir, &["Guide.html".to_string()], &live, &crate::build::lifecycle::permit_for_test());
+    assert_eq!(fs::read_to_string(dir.join("guide.html")).unwrap(), "renamed page");
+    if !insensitive {
+        assert!(!dir.join("Guide.html").exists(), "a distinct file that differs only in case is still deleted");
+    }
 }
 
 #[test]
@@ -3401,7 +3570,7 @@ fn test_resolve_source_hash_uses_cached_hash_on_mtime_match() {
 
     let result =
         super::super::video::resolve_source_hash(&video_file, "video.mov", &mut hash_index);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert_eq!(result.unwrap(), "cached_hash_abc123");
 }
 
@@ -3426,7 +3595,7 @@ fn test_resolve_source_hash_rehashes_on_mtime_mismatch() {
 
     let result =
         super::super::video::resolve_source_hash(&video_file, "video.mov", &mut hash_index);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     let hash = result.unwrap();
     assert_ne!(hash, "stale_hash", "Should NOT return stale hash");
     assert_eq!(hash.len(), 64, "Should be a SHA-256 hex hash");
@@ -3445,7 +3614,7 @@ fn test_resolve_source_hash_updates_index_on_miss() {
 
     let result =
         super::super::video::resolve_source_hash(&video_file, "video.mov", &mut hash_index);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
 
     assert!(
         hash_index.entries.contains_key("video.mov"),
@@ -3571,7 +3740,6 @@ fn test_has_output_changes_true_without_carry_forward() {
 #[test]
 fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
     use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3598,7 +3766,6 @@ fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         dir_overrides,
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -3629,7 +3796,6 @@ fn test_copy_deferred_assets_maps_paths_through_dir_overrides() {
 #[test]
 fn test_copy_deferred_assets_maps_nested_dir_overrides() {
     use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3651,7 +3817,6 @@ fn test_copy_deferred_assets_maps_nested_dir_overrides() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         dir_overrides,
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -3673,8 +3838,6 @@ fn test_copy_deferred_assets_maps_nested_dir_overrides() {
 
 #[test]
 fn test_copy_deferred_assets_no_overrides_unchanged() {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3691,7 +3854,6 @@ fn test_copy_deferred_assets_no_overrides_unchanged() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3708,8 +3870,6 @@ fn test_copy_deferred_assets_no_overrides_unchanged() {
 
 #[test]
 fn test_copy_deferred_assets_skips_root_style_css() {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3724,8 +3884,6 @@ fn test_copy_deferred_assets_skips_root_style_css() {
     fs::write(output.join("style.css"), default_css).unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("style.css".to_string());
     let mut site_hashes = SiteHashes::default();
     site_hashes.insert("style.css".to_string(), "css_hash".to_string());
 
@@ -3733,7 +3891,6 @@ fn test_copy_deferred_assets_skips_root_style_css() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -3752,8 +3909,6 @@ fn test_copy_deferred_assets_skips_root_style_css() {
 
 #[test]
 fn test_copy_deferred_assets_skips_root_script_js() {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -3768,8 +3923,6 @@ fn test_copy_deferred_assets_skips_root_script_js() {
     fs::write(output.join("script.js"), default_script).unwrap();
     fs::create_dir_all(moss.join("cache").join("objects")).unwrap();
 
-    let mut blocking_keys = HashSet::new();
-    blocking_keys.insert("script.js".to_string());
     let mut site_hashes = SiteHashes::default();
     site_hashes.insert("script.js".to_string(), "js_hash".to_string());
 
@@ -3777,7 +3930,6 @@ fn test_copy_deferred_assets_skips_root_script_js() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys,
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4488,7 +4640,6 @@ fn test_user_js_root_ignored() {
 
 #[test]
 fn test_moss_assets_copied_to_output() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4506,7 +4657,6 @@ fn test_moss_assets_copied_to_output() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4527,7 +4677,6 @@ fn test_moss_assets_copied_to_output() {
 
 #[test]
 fn test_moss_assets_nested_directories() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4548,7 +4697,6 @@ fn test_moss_assets_nested_directories() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4574,7 +4722,6 @@ fn test_moss_assets_nested_directories() {
 /// picked up because the pipeline only walked `.moss/assets/` (now `.moss/theme/`).
 #[test]
 fn test_theme_video_overlay_copied_to_output() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4593,7 +4740,6 @@ fn test_theme_video_overlay_copied_to_output() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4619,7 +4765,6 @@ fn test_theme_video_overlay_copied_to_output() {
 /// but copies all other assets through verbatim under _moss/theme/.
 #[test]
 fn test_theme_walk_skips_entry_files_copies_rest() {
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -4639,7 +4784,6 @@ fn test_theme_walk_skips_entry_files_copies_rest() {
         source_path: source.to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss,
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -4959,14 +5103,13 @@ fn test_image_compression_pipeline_end_to_end() {
         "Markdown-syntax image must emit <picture> via synthesizer, got: {}",
         html
     );
-    // 2400×1800 fixture → srcset ladder (responsive-image-variants
-    // Task 3): rungs below the deployed base (2400) + base descriptor,
-    // content-column sizes for an inline markdown image. Rung ENCODES
-    // land in Tasks 4-5; this seam test only pins the emitted HTML +
-    // the base webp on disk.
+    // 2400×1800 fixture → srcset ladder: rungs below the deployed base
+    // (2400) + base descriptor, content-column sizes for an inline markdown
+    // image, eager as the page's first, so without the `auto,` lead. This seam test only pins the emitted HTML + the base webp on
+    // disk; rung encodes are pinned in media/image_tests.rs.
     assert!(
             html.contains(
-                r#"<source srcset="/photo.w800.webp 800w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
+                r#"<source srcset="/photo.w800.webp 800w, /photo.w1200.webp 1200w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw">"#
             ),
             "Built HTML should contain <source> ladder for photo.webp (markdown image), got: {}",
             html
@@ -5039,9 +5182,7 @@ fn test_image_compression_pipeline_end_to_end() {
 /// build's `load_previous_hashes` reads it back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn copy_deferred_assets_warm_cache_zero_misses() {
-    use crate::build::media::pipeline::copy_deferred_assets;
     use crate::build::coordinator::test_utils;
-    use std::collections::HashSet;
 
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -5066,7 +5207,6 @@ async fn copy_deferred_assets_warm_cache_zero_misses() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: output.clone(),
         moss_dir: moss.clone(),
-        blocking_keys: HashSet::new(),
         ..crate::types::services::BackgroundContext::for_test()
     };
 
@@ -5477,8 +5617,10 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
     let state = SiteDirectoryState::new(mp.staging_dir());
     let session = FolderSession::new(dir.clone());
     session.set_preview_requirement("/".into(), PreviewSource::File("index.md".into())).unwrap();
-    let (cold, _, unresolved, _) = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, Some(current.clone())).unwrap();
+    let (cold, _, unresolved, cold_seal) = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, Some(current.clone())).unwrap();
     assert!(matches!(cold, crate::build::ship::Promotion::Withheld(crate::build::ship::WithholdReason::SourcesDownloading)));
+    assert!(first_seal.was_shown(), "a shown render records its show");
+    assert!(!cold_seal.was_shown(), "a render never shown records none, so its seal tail announces nothing");
     assert_eq!(unresolved, ["story.md"]);
     assert_eq!(*state.current_dir.read().unwrap(), current);
     assert_eq!(fs::read(current.join("index.html")).unwrap(), original_home);
@@ -6203,7 +6345,7 @@ fn a_present_read_error_retains_html_and_blocks_the_exact_seal() {
 
 #[cfg(unix)]
 #[test]
-fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
+fn a_read_only_page_keeps_its_consumed_read_evidence() {
     use std::os::unix::fs::PermissionsExt;
     let (dir, _cleanup) = create_test_dir();
     let page = dir.join("index.md");
@@ -6213,32 +6355,180 @@ fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
     fs::set_permissions(&page, fs::Permissions::from_mode(0o644)).unwrap();
     let (_, keys, unresolved, sealed) = result.unwrap();
     assert!(keys.iter().any(|key| key == "index.html"));
-    assert!(unresolved.is_empty(), "a denied optional UID write did not change source bytes: {unresolved:?}");
+    assert!(unresolved.is_empty(), "a read-only page is still a complete read: {unresolved:?}");
     assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_ok());
 }
 
+/// A build reads the author's notes and never writes them: not a `uid:` line,
+/// not into a draft, not into a note with no frontmatter. Each page is still
+/// built under a uid, and the same one on every build.
 #[test]
-fn a_build_under_a_denied_source_write_session_leaves_every_source_byte_identical() {
-    let index = "---\ntitle: Home\n---\nHi";
-    let note = "---\ntitle: Note\n---\nShared text";
-
+fn a_build_leaves_every_source_byte_identical_and_keeps_each_pages_uid_stable() {
+    let sources = [
+        ("index.md", "---\ntitle: Home\n---\nHi"),
+        ("note.md", "---\ntitle: Note\n---\nShared text"),
+        ("draft.md", "---\ntitle: Draft\ndraft: true\n---\nWIP"),
+        ("plain.md", "No frontmatter at all."),
+    ];
     let (dir, _cleanup) = create_test_dir();
-    fs::write(dir.join("index.md"), index).unwrap();
-    fs::write(dir.join("note.md"), note).unwrap();
-    let session = crate::system::folder_session::FolderSession::new(dir.clone());
-    let _denied = session.deny_source_writes();
+    for (name, text) in sources {
+        fs::write(dir.join(name), text).unwrap();
+    }
     let folder_path = dir.to_str().unwrap();
-    let (_, keys, _, _) = build_test_with_focus(folder_path, scan_folder(folder_path).unwrap(), None, Some(session), None, None).unwrap();
-    assert!(keys.iter().any(|key| key == "index.html"));
-    assert_eq!(fs::read_to_string(dir.join("index.md")).unwrap(), index);
-    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), note);
+    let uids = || {
+        let map: crate::build::scan::article_map::ArticleMap = serde_json::from_slice(
+            &fs::read(crate::moss_paths::MossPaths::new(&dir).article_map()).unwrap(),
+        )
+        .unwrap();
+        let mut uids: Vec<(String, Option<String>)> =
+            map.articles.into_values().map(|a| (a.source_path, a.uid)).collect();
+        uids.sort();
+        uids
+    };
 
-    let (control, _control_cleanup) = create_test_dir();
-    fs::write(control.join("index.md"), index).unwrap();
-    fs::write(control.join("note.md"), note).unwrap();
-    build_test_promoted_or_withheld(control.to_str().unwrap()).unwrap();
-    assert!(fs::read_to_string(control.join("index.md")).unwrap().contains("uid:"));
-    assert!(fs::read_to_string(control.join("note.md")).unwrap().contains("uid:"));
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    for (name, text) in sources {
+        assert_eq!(fs::read_to_string(dir.join(name)).unwrap(), text, "{name} was written by a build");
+    }
+    let first = uids();
+    assert_eq!(first.len(), 3, "{first:?}");
+    assert!(first.iter().all(|(_, uid)| uid.is_some()), "every page is built under a uid: {first:?}");
+
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    assert_eq!(uids(), first, "a page's uid must not change between builds");
+}
+
+/// The first publish is where a page's uid is written: into the frontmatter of
+/// each page that went live, a new block for a note with none, and nowhere
+/// else. The record holds the stamped bytes, so the next build reads nothing as
+/// edited. A page renamed afterwards keeps the uid (it moved with the file) and
+/// its old address forwards to the new.
+#[test]
+fn the_first_publish_stamps_live_pages_and_a_later_rename_keeps_the_uid() {
+    let draft = "---\ntitle: Draft\ndraft: true\n---\nWIP";
+    let plain = "No frontmatter at all.";
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nShared text").unwrap();
+    fs::write(dir.join("draft.md"), draft).unwrap();
+    fs::write(dir.join("plain.md"), plain).unwrap();
+    let folder_path = dir.to_str().unwrap();
+    let built_uid = |source: &str| -> Option<String> {
+        let map: crate::build::scan::article_map::ArticleMap = serde_json::from_slice(
+            &fs::read(crate::moss_paths::MossPaths::new(&dir).article_map()).unwrap(),
+        )
+        .unwrap();
+        map.articles.into_values().find(|a| a.source_path == source)?.uid
+    };
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let note_uid = built_uid("note.md").expect("note.md is built under a uid");
+    let plain_uid = built_uid("plain.md").expect("plain.md is built under a uid");
+    publish(&dir, &sealed);
+
+    let file_uid = |name: &str| crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join(name)).unwrap()).uid;
+    assert_eq!(file_uid("note.md"), Some(note_uid.clone()), "the live page carries the uid it was published under");
+    assert!(file_uid("index.md").is_some(), "a published folder page is stamped too");
+    assert_eq!(fs::read_to_string(dir.join("draft.md")).unwrap(), draft, "a draft is never published, so never stamped");
+    assert_eq!(file_uid("plain.md"), Some(plain_uid), "a note with no frontmatter gets a block holding its uid");
+    assert!(fs::read_to_string(dir.join("plain.md")).unwrap().ends_with(plain), "and keeps its text");
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let record = crate::build::manifest::published_record::load_for(&crate::moss_paths::MossPaths::new(&dir), Some("moss:site-1"));
+    let changes = crate::build::manifest::change_set::classify(record.as_ref(), &rebuilt);
+    assert!(changes.classified);
+    assert_eq!(changes.edited, 0, "the stamp is not an edit: {changes:?}");
+
+    fs::rename(dir.join("note.md"), dir.join("moved.md")).unwrap();
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    assert_eq!(built_uid("moved.md"), Some(note_uid), "the uid moved with the file");
+    let stub = fs::read_to_string(dir.join(".moss/build.nosync/current/note/index.html")).unwrap();
+    assert!(stub.contains("moved"), "the old address forwards to the renamed page: {stub}");
+}
+
+/// Land `sealed` as a publish to `moss:site-1`.
+fn publish(dir: &Path, sealed: &crate::build::manifest::SealedManifest) {
+    let history_dir = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
+    tokio::runtime::Runtime::new().unwrap().block_on(crate::deploy::landed::record_landed(
+        dir,
+        sealed,
+        "moss:site-1",
+        &crate::deploy::one_shot::HeadlessDeployPorts,
+        &history,
+    ));
+}
+
+/// A duplicated note carries the original's uid; the copy is built under a new
+/// one, and the publish that puts it online replaces the copied uid in its file.
+#[test]
+fn a_duplicate_is_published_under_its_own_uid_and_its_file_follows() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("a.md"), "---\ntitle: A\nuid: \"aaaa1111\"\n---\nOriginal").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish(&dir, &sealed);
+    fs::write(dir.join("copy.md"), "---\ntitle: Copy\nuid: \"aaaa1111\"\n---\nCopied").unwrap();
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    publish(&dir, &sealed);
+
+    let file_uid = |name: &str| crate::build::markdown::parse_typed_frontmatter(&fs::read_to_string(dir.join(name)).unwrap()).uid;
+    assert_eq!(file_uid("a.md").as_deref(), Some("aaaa1111"), "the published original keeps its uid");
+    let copy = file_uid("copy.md").expect("the copy keeps a uid");
+    assert_ne!(copy, "aaaa1111", "the copy's file now holds the uid it was published under");
+}
+
+/// An edit made between the build and its publish was not published: the
+/// file is left unstamped and the record keeps the published bytes' hash, so
+/// the next change set still reads the page as edited.
+#[test]
+fn an_edit_made_before_the_publish_lands_is_still_an_edit_after_the_stamp() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText, edited").unwrap();
+
+    publish(&dir, &sealed);
+    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), "---\ntitle: Note\n---\nText, edited");
+
+    let (_, _, _, rebuilt) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    let record = crate::build::manifest::published_record::load_for(&crate::moss_paths::MossPaths::new(&dir), Some("moss:site-1"));
+    let changes = crate::build::manifest::change_set::classify(record.as_ref(), &rebuilt);
+    assert_eq!(changes.edited, 1, "{changes:?}");
+}
+
+/// A note saved with Windows line endings is the bytes the build hashed, so its
+/// first publish stamps it like any other.
+#[test]
+fn a_note_with_windows_line_endings_is_stamped() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\r\ntitle: Note\r\n---\r\nText\r\n").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    publish(&dir, &sealed);
+
+    let note = fs::read_to_string(dir.join("note.md")).unwrap();
+    assert!(crate::build::markdown::parse_typed_frontmatter(&note).uid.is_some(), "{note:?}");
+    assert!(note.ends_with("---\r\nText\r\n"), "{note:?}");
+}
+
+/// A uid the author wrote between the build and its publish is newer than the
+/// one the build saw, and the publish leaves it alone.
+#[test]
+fn a_publish_never_overwrites_a_uid_written_since_its_build() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    let edited = "---\ntitle: Note\nuid: \"bbbb2222\"\n---\nText";
+    fs::write(dir.join("note.md"), edited).unwrap();
+
+    publish(&dir, &sealed);
+
+    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), edited);
 }
 
 #[cfg(target_os = "macos")]
@@ -6550,6 +6840,27 @@ fn slot_only_sources_appear_in_sealed_sources() {
     }
 }
 
+#[test]
+fn notebook_sources_appear_in_sealed_sources() {
+    use sha2::{Digest, Sha256};
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    let notebook = br#"{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}"#;
+    fs::write(test_dir.join("index.md"), "# Home\n").unwrap();
+    fs::write(test_dir.join("lab.ipynb"), notebook).unwrap();
+
+    without_jupyterlite_assets(|| {
+        for incremental in [false, true] {
+            build_test_full_with_gates(folder_path, None, None, None, None, &ResolvedSlots::empty(),
+                crate::build::render::IncrementalGates { render_skip: incremental, parse_cache: incremental }).unwrap();
+            let hashes = load_previous_hashes(folder_path);
+            let meta = hashes.sources.get("lab.ipynb").expect("a walked notebook needs a sealed source hash");
+            assert_eq!(meta.hash, format!("{:x}", Sha256::digest(notebook)));
+            assert!(!hashes.source_to_output.contains_key("lab.ipynb"));
+        }
+    });
+}
+
 /// A Finder alias whose target will not resolve is skipped from the output,
 /// but the walk still judges it, so it needs a `sources` entry for the same
 /// reason as the slot files above.
@@ -6811,7 +7122,7 @@ fn a_presence_pass_that_cannot_read_its_tree_drops_nothing_and_ships_nothing() {
         return;
     }
 
-    let verdict = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
+    let (verdict, _) = crate::build::degrade::repair_staged_html(&mp, &stage, &mut sealed, Default::default());
     let promotion = crate::build::ship::materialize_and_promote(
         &sealed,
         &mp,
@@ -7808,7 +8119,7 @@ fn availability_pending_source_walk_preserves_current_generation_and_baseline() 
         watch: false, start_server: false,
         host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
         exits_after_build: true, site_url_override: None, server_port: None,
-        admission_epoch: None, live_port: None,
+        admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
     };
     run_pipeline(config()).await.unwrap();
     let paths = crate::moss_paths::MossPaths::new(&dir);
@@ -7841,7 +8152,7 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
             let config = || PipelineConfig {
                 root: crate::vault_root::VaultRoot::resolve(&dir), progress: crate::build::null_sink(), plugins: PluginMode::Skip,
                 watch: false, start_server: false, host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
-                exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None,
+                exits_after_build: true, site_url_override: None, server_port: None, admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
             };
             let fault = TestFault::install(&dir, &dir, StorageOperation::RootMetadata, 1000, std::time::Duration::from_millis(20));
             assert!(run_pipeline(config()).await.is_err());
@@ -7889,8 +8200,6 @@ fn a_draft_page_is_built_for_preview_and_left_out_of_what_publishes() {
     // The plugin-facing views of the generation leave it out too.
     let listed: Vec<_> = crate::plugins::project_files::list_site_files_with_sizes_impl(&dir).into_iter().map(|f| f.path).collect();
     assert!(!listed.contains(&draft_html) && listed.contains(&about_html), "{listed:?}");
-    let handed = crate::deploy::plugin_context::build_deploy_context(folder, &mp.current_ptr()).unwrap();
-    assert!(!handed.site_files.contains(&draft_html) && handed.site_files.contains(&about_html), "{:?}", handed.site_files);
     let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     let read_draft = runtime.block_on(crate::plugins::project_files::read_site_file_impl(folder, &draft_html));
     assert!(read_draft.is_err(), "a plugin must not read the draft's bytes");
@@ -7947,6 +8256,7 @@ async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
         server_port: None,
         admission_epoch: Some(epoch),
         live_port: None,
+        rename_pairs: Vec::new(),
     };
     fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nSee [the plan](wip.md).\n").unwrap();
     fs::write(dir.join("wip.md"), "---\ntitle: Plan\ndraft: true\n---\n\nNot yet.\n").unwrap();

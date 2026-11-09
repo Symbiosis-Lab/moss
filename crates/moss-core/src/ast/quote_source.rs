@@ -37,7 +37,7 @@ pub fn source_link(line: &[Inline]) -> Option<QuoteSource> {
         Inline::Link { url, children, is_wikilink: false, .. } if is_absolute_web(url.href()) => {
             Some(QuoteSource { href: url.href().to_string(), text: inlines_to_plain_text(children) })
         }
-        Inline::Emphasis(inner) | Inline::Strong(inner) | Inline::Strikethrough(inner) => source_link(inner),
+        Inline::Emphasis(inner) | Inline::Strong(inner) | Inline::Strikethrough(inner) | Inline::Mark(inner) => source_link(inner),
         _ => None,
     })
 }

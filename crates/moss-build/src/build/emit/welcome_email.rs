@@ -84,6 +84,7 @@ mod tests {
             &crate::vault::paths::VaultRoot::resolve(&root),
             host,
             PluginMode::Skip,
+            false,
         )
         .await
         .unwrap()

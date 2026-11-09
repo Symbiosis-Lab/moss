@@ -149,6 +149,8 @@ pub struct ShellVars {
     pub colophon: bool,
     /// `[site].color_scheme` — automatic reader choice or a fixed palette.
     pub color_scheme: crate::build::page::color_scheme::ColorScheme,
+    /// The site's `<meta name="theme-color">` values, read once from its theme.
+    pub theme_color: crate::build::page::color_scheme::ThemeColor,
     /// The site's own line before the mark (`[site].credit`); `None` leaves
     /// the colophon as moss writes it.
     pub colophon_credit: Option<crate::build::render::credits::ColophonCredit>,
@@ -316,22 +318,6 @@ impl ShellVars {
     }
 }
 
-/// Embedded background tokens are shared by page chrome and injected SPA defaults.
-pub(crate) fn theme_bg_colors() -> &'static (String, String) {
-    static THEME_BG: std::sync::LazyLock<(String, String)> = std::sync::LazyLock::new(|| {
-        use moss_core::contract::tokens::{bg_colors, load_tokens};
-        let t = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {}", e));
-        let (l, d) = bg_colors(&t);
-        (l.to_owned(), d.to_owned())
-    });
-    &THEME_BG
-}
-
-pub(crate) fn theme_color_meta(color_scheme: crate::build::page::color_scheme::ColorScheme) -> String {
-    let (light, dark) = theme_bg_colors();
-    color_scheme.theme_color_meta(Some(light), Some(dark))
-}
-
 /// Shell processor for centralized template variable replacement
 pub struct ShellProcessor {
     registry: ShellRegistry,
@@ -469,7 +455,7 @@ impl ShellProcessor {
             ("twitter_tags", vars.twitter_tags.unwrap_or_default()),
             ("apple_touch_icon", vars.apple_touch_icon.unwrap_or_default()),
             ("color_scheme_attrs", vars.color_scheme.html_attrs()),
-            ("theme_color_meta", theme_color_meta(vars.color_scheme).replace('\n', "\n    ")),
+            ("theme_color_meta", vars.theme_color.meta(vars.color_scheme).replace('\n', "\n    ")),
             ("schema_json_ld", vars.schema_json_ld.unwrap_or_default()),
             // User CSS link (placed after default stylesheet in <head>)
             ("user_css_link", vars.user_css_link.unwrap_or_default()),

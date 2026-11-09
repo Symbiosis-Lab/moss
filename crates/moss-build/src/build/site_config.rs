@@ -434,16 +434,9 @@ pub fn resolve_environment(project_path: &str) -> HostingEnvironment {
     HostingEnvironment::Production
 }
 
-/// Read a string field from `.moss/config.toml` under the `[site]` section.
-fn get_site_field(project_path: &str, field: &str) -> Result<Option<String>, String> {
-    Ok(read_project_config(project_path)?
-        .site_str(field)
-        .map(|s| s.to_string()))
-}
-
 /// Get the persisted site language from .moss/config.toml [site] section
 pub fn get_site_lang(project_path: &str) -> Result<Option<String>, String> {
-    get_site_field(project_path, "lang")
+    Ok(read_project_config(project_path)?.site_lang().map(str::to_string))
 }
 
 /// Read `[editor].attachment_folder` — where dropped/pasted images land.

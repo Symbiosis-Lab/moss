@@ -160,6 +160,7 @@ pub fn derive_batch_by(
     finished.into_inner().unwrap_or_else(|e| e.into_inner()).1
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "batch_tests.rs"]
 mod batch_tests;

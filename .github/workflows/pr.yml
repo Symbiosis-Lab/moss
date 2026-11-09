@@ -246,6 +246,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,aarch64-apple-ios
+      # The phone and Obsidian-mobile hosts link moss-core for these targets;
+      # a dependency that needs a platform they lack would break them silently.
+      - name: Check moss-core and its bindings for WebAssembly and iOS
+        run: |
+          cargo check -p moss-core --target wasm32-unknown-unknown
+          cargo check -p moss-core --target aarch64-apple-ios
+          cargo check -p moss-bindings --features wasm --target wasm32-unknown-unknown
+          cargo check -p moss-bindings --features ffi --target aarch64-apple-ios
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Smoke test WebAssembly exports
+        run: |
+          wasm-pack build crates/moss-bindings --release --target web --out-dir "$RUNNER_TEMP/wasm-smoke" --no-pack -- --features wasm
+          node crates/moss-bindings/tests/exports.mjs "$RUNNER_TEMP/wasm-smoke"
       - name: Verify moss-core packages cleanly
         run: |
           cargo package -p moss-core --no-verify
@@ -378,6 +398,8 @@ jobs:
       # cargo metadata only reads the manifests: no build, no network. The
       # ratchet's dependency row and the diagram check below both use it.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       # Size, marker and dependency budgets; see the header of scripts/ratchet.mjs.
       - name: Ratchet (architecture size/marker/dependency budget)
@@ -461,6 +483,13 @@ jobs:
 
       - name: Test moss-build site/bridge JS (js-src)
         run: cd crates/moss-build && npx vitest run
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build obsidian-moss wasm core
+        run: cd packages/obsidian-moss && node scripts/build-wasm.mjs
 
       - name: Typecheck obsidian-moss (source + tests)
         run: cd packages/obsidian-moss && pnpm run typecheck

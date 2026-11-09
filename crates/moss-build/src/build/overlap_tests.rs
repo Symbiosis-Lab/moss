@@ -257,6 +257,7 @@ impl Overlap {
             server_port: None,
             admission_epoch: Some(crate::build::ship::next_promotion_epoch()),
             live_port: None,
+            rename_pairs: Vec::new(),
         });
         tokio::time::timeout(std::time::Duration::from_secs(60), build)
             .await
@@ -505,6 +506,29 @@ async fn real_overlap_ships_every_generation_file_under_its_own_manifest_hash() 
     assert!(o.vault.staged(page).contains("B-BODY"), "the stage must hold B's text");
 
     assert_every_stage_shipped_entry_is_classified(&o.a);
+}
+
+/// B drops the picture from the only page that showed it. A's page still names
+/// the variant, so A's generation ships it: A's tail judges A's variants by the
+/// pages A ships, not by B's pages on the stage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_variant_the_next_build_stops_naming_ships_with_the_page_that_names_it() {
+    let o = overlap(&Edit {
+        apply: |v| v.write("posts/a.md", "---\ntitle: First Post\ndate: 2026-01-10\n---\n\nFirst post body. B-NOPIC\n"),
+        trigger: || md_only("posts/a.md"),
+        on_stage: Some(("posts/a/index.html", "B-NOPIC")),
+    })
+    .await;
+
+    let page = "posts/a/index.html";
+    assert!(!o.vault.staged(page).contains("pic."), "B's page must not name the picture");
+    let a_page = o.vault.generated(&o.a, page);
+    let named: Vec<&str> = a_page.split("srcset=\"/").skip(1).filter_map(|rest| rest.split(['"', ' ']).next()).collect();
+    assert!(!named.is_empty(), "A's page must name a variant, or this proves nothing: {a_page}");
+    for key in named {
+        assert!(o.a.files().contains_key(key), "A's page names {key}, which A's generation does not ship");
+    }
+    assert_nothing_diverges(&o);
 }
 
 /// The control: nothing edited between the two builds, so nothing may diverge. It is

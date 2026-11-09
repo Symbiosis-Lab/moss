@@ -13,6 +13,24 @@ release heading.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-08
+
+### Added
+
+- `HookResult.offer`: a `process` hook a build started returns `{ title }` ("3 new posts on Matters") for work it may not do itself; moss shows it with a Sync action that runs the hook as the person's act. Needs moss 0.15.20.
+- `DeployContext.site_dir`: an absolute path to a read-only directory holding exactly `site_files`, made for one deploy hook call and removed when it returns; `DeployContext.index_file`: a path beside it for `GIT_INDEX_FILE`. Both need moss 0.15.20.
+
+### Changed
+
+- `executeBinary`: an absolute `binaryPath` is accepted only where moss itself would find that binary (a PATH directory, a standard install directory such as `/opt/homebrew/bin`, or the path `resolve_git_path` returned); any other path is refused with a message naming the binary. A bare name, looked up on the PATH, works as before.
+- `executeBinary`: `env` accepts only `GIT_TERMINAL_PROMPT`, `COPYFILE_DISABLE` and `GIT_INDEX_FILE`; a call that sets any other variable is refused with a message naming it. `GIT_INDEX_FILE` must name a file inside the deploy scratch directory, such as `DeployContext.index_file`.
+- `executeBinary`: an absolute `workingDir` is sent as is instead of being joined onto the project path. moss refuses a working directory outside the project, or inside its `.moss/` folder other than a deploy hook's `site_dir`.
+
+### Migration
+
+- A `process` hook started by a build (`context.trigger` is `"background"`) may write only its own storage (`writePluginFile`) and its own comment-data file under `.moss/data/social/`. `writeFile`, `writeFileBinary` and `downloadAsset` anywhere else in the folder, and `executeBinary`, are refused. A plugin that imports into the folder does it when the person starts it (`context.trigger` is `"onboarding_flow"` or `"settings_manual"`), and on a build returns `offer` instead. Needs moss 0.15.20.
+- A deploy plugin that read the built site from `.moss/` (through `readFile`, a hard-coded path, or `executeBinary` with a working directory there) reads `context.site_dir` instead, and declares `min_moss_version` 0.15.20.
+
 ## [0.16.0] - 2026-11-07
 
 ### Added

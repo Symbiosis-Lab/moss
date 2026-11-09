@@ -90,7 +90,8 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     );
     let mut sealed = pending.seal();
 
-    repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    let (_, rewritten) = repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    assert_eq!(rewritten, ["index.html"], "the page the preview is serving was rewritten, and the caller is told");
 
     let on_disk = std::fs::read_to_string(stage.join("index.html")).unwrap();
     assert!(
@@ -138,3 +139,133 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     );
 }
 
+/// The presence pass asks every CAS-backed entry of its blob, and a blob is
+/// hashed unless something vouches for it at its current stat. Each build is a
+/// new process with a new store, so only the index the last seal saved can.
+#[test]
+fn the_next_seal_reads_no_blob_the_last_one_verified() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let oid = crate::build::cache::ObjectStore::for_site(&mp)
+        .store_bytes(b"stable bytes", crate::build::cache::RecordMode::Request)
+        .unwrap();
+    let seal = || {
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.apply_message("asset.bin".to_string(), "cafefacecafeface", HashBucket::Files, Some(oid.clone()));
+        pending.seal()
+    };
+    let reads = || crate::build::cache::blob_residency::HASH_READS.with(|count| count.get());
+
+    let before = reads();
+    repair_staged_html(&mp, &stage, &mut seal(), HashSet::new());
+    assert_eq!(reads() - before, 1, "the first seal checks the blob");
+
+    let mut sealed = seal();
+    repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+    assert_eq!(reads() - before, 1, "the second seal trusts the first one's check");
+    assert!(sealed.files().contains_key("asset.bin"));
+}
+
+/// The tail runs detached, so an overlapping build can render over the stage
+/// before it: here the stage's page names `b.webp` while the page this
+/// generation sealed, held in the CAS, names `a.webp`. The prune must judge
+/// `a.webp` by the page this generation ships, or the page it ships names a
+/// variant its own generation dropped.
+#[test]
+fn the_prune_reads_the_page_this_generation_ships_not_the_stage() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(stage.join("assets")).unwrap();
+
+    let sealed_page = r#"<picture><img src="assets/a.jpg" srcset="assets/a.webp"></picture>"#;
+    let oid = crate::build::cache::ObjectStore::for_site(&mp)
+        .store_bytes(sealed_page.as_bytes(), crate::build::cache::RecordMode::Request)
+        .unwrap();
+    std::fs::write(stage.join("assets/a.webp"), b"a webp bytes").unwrap();
+
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    let hash = crate::build::assets::paths::compute_binary_hash(sealed_page.as_bytes());
+    pending.apply_message("index.html".to_string(), &hash, HashBucket::Files, Some(oid));
+    pending.register(&ServedPath::from_source("assets/a.webp").unwrap(), b"a webp bytes", HashBucket::ImageVariants);
+    let mut sealed = pending.seal();
+
+    // The overlapping build's render, after this one sealed.
+    std::fs::write(stage.join("index.html"), r#"<picture><img src="assets/b.jpg" srcset="assets/b.webp"></picture>"#).unwrap();
+
+    repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+
+    assert!(
+        sealed.files().contains_key("assets/a.webp"),
+        "the sealed page names assets/a.webp, so the generation must ship it: {:?}",
+        sealed.files().keys().collect::<Vec<_>>()
+    );
+}
+
+/// This generation stopped showing `a.webp`; the overlapping build put it
+/// back. The prune drops it from this generation, and must not strip it from
+/// the newer build's staged page: a pruned key is one no page of this
+/// generation names, so stripping it only ever rewrites another generation's
+/// page, which this generation would then ship as its own.
+#[test]
+fn a_pruned_variant_is_not_stripped_from_the_next_builds_page() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(stage.join("assets")).unwrap();
+
+    let sealed_page = r#"<p>no picture</p>"#;
+    let oid = crate::build::cache::ObjectStore::for_site(&mp)
+        .store_bytes(sealed_page.as_bytes(), crate::build::cache::RecordMode::Request)
+        .unwrap();
+    std::fs::write(stage.join("assets/a.webp"), b"a webp bytes").unwrap();
+
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    let hash = crate::build::assets::paths::compute_binary_hash(sealed_page.as_bytes());
+    pending.apply_message("index.html".to_string(), &hash, HashBucket::Files, Some(oid));
+    pending.register(&ServedPath::from_source("assets/a.webp").unwrap(), b"a webp bytes", HashBucket::ImageVariants);
+    let mut sealed = pending.seal();
+    let sealed_entry = sealed.files().get("index.html").cloned();
+
+    let next_page = r#"<picture><img src="assets/a.jpg" srcset="assets/a.webp"></picture>"#;
+    std::fs::write(stage.join("index.html"), next_page).unwrap();
+
+    repair_staged_html(&mp, &stage, &mut sealed, HashSet::new());
+
+    assert!(!sealed.files().contains_key("assets/a.webp"), "no page this generation ships names it");
+    assert_eq!(std::fs::read_to_string(stage.join("index.html")).unwrap(), next_page, "the next build's page is its own");
+    assert_eq!(sealed.files().get("index.html").cloned(), sealed_entry, "this generation ships the page it sealed");
+}
+
+/// The tail's scan reads an unchanged page once, whatever the stage walk read
+/// in between: each remembers its own files, or every build would read the
+/// whole site twice. Two pages with the same bytes ship one CAS blob, and each
+/// is remembered under its own address.
+#[test]
+fn the_tail_scan_rereads_no_unchanged_page() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(stage.join("twin")).unwrap();
+    let page = r#"<img src="assets/a.jpg">"#;
+    let store = crate::build::cache::ObjectStore::for_site(&mp);
+    let oid = store.store_bytes(page.as_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+    let hash = crate::build::assets::paths::compute_binary_hash(page.as_bytes());
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    for key in ["index.html", "twin/index.html"] {
+        std::fs::write(stage.join(key), page).unwrap();
+        pending.apply_message(key.to_string(), &hash, HashBucket::Files, Some(oid.clone()));
+    }
+    let sealed = pending.seal();
+    let reads = || crate::build::media::orphan_prune::FILES_READ.with(|n| n.get());
+
+    let scan = shipped_references(&stage, &sealed, &store);
+    assert!(scan.resolved.contains("assets/a.jpg") && scan.resolved.contains("twin/assets/a.jpg"));
+    crate::build::media::orphan_prune::extract_referenced_tails(&stage);
+    let before = reads();
+    let scan = shipped_references(&stage, &sealed, &store);
+    assert_eq!(reads() - before, 0, "both pages are unchanged since the tail last read them");
+    assert!(scan.resolved.contains("assets/a.jpg") && scan.resolved.contains("twin/assets/a.jpg"), "remembered pages still count their references");
+}

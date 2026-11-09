@@ -53,6 +53,8 @@ use crate::infra::edit_distance::levenshtein;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::LazyLock;
 
+use crate::build::scan::section_text::Rgb;
+
 use moss_core::contract::components::{retired_class_names, COMPONENTS};
 use moss_core::contract::custom_props::CUSTOM_PROPS;
 use moss_core::contract::tokens::load_tokens;
@@ -97,33 +99,80 @@ pub(crate) enum Scope {
     Other,
 }
 
-/// Every `--moss-*` declaration in the sheet as (scope, property, value).
-/// The sheet must already be stripped of comments.
-pub(crate) fn token_declarations(stripped: &str) -> Vec<(Scope, String, String)> {
+/// Which theme a rule with this one selector sets, unconditioned or inside an at-rule.
+fn scope_of(unconditioned: bool, selector: &str) -> Scope {
+    let selector: String = selector.chars().filter(|c| !c.is_whitespace()).filter(|c| !matches!(c, '"' | '\'')).collect();
+    match (unconditioned, selector.as_str()) {
+        (true, ":root") => Scope::Light,
+        (true, ":root[data-theme=dark]" | "html[data-theme=dark]" | "[data-theme=dark]") => Scope::Dark,
+        _ => Scope::Other,
+    }
+}
+
+/// A colour token on one side (light or dark) as the stylesheet sets it at the
+/// page root, following `var(--x)` through other custom properties (`None`
+/// where the build can't read it), and whether the token or a property it goes
+/// through is also set in another scope (a section, a media query), so that
+/// some pages differ from the root. A `var(--x, fallback)` follows `--x` only.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RootColour {
+    pub root: Option<Rgb>,
+    pub varies: bool,
+}
+
+/// `token` on the light and the dark side, with moss's own `default` where the
+/// sheet does not set it.
+pub(crate) fn root_colours(theme_css: Option<&str>, token: &str, default: (Rgb, Rgb)) -> (RootColour, RootColour) {
+    let css = strip_comments(theme_css.unwrap_or_default());
+    let decls = custom_properties(&css);
+    (resolve_colour(&decls, token, Scope::Light, default.0), resolve_colour(&decls, token, Scope::Dark, default.1))
+}
+
+/// Every custom property declaration as (scope, property, value), once per
+/// selector of its rule: `:root, main {}` sets the root and another scope.
+fn custom_properties(stripped: &str) -> Vec<(Scope, String, String)> {
     let mut out = Vec::new();
     for rule in style_rules(stripped) {
         let Some((_, body)) = rule.rule.split_once('{') else { continue };
-        let selector: String = rule.prelude.chars().filter(|c| !c.is_whitespace()).filter(|c| !matches!(c, '"' | '\'')).collect::<String>();
-        let scope = match (rule.conditions.is_empty(), selector.as_str()) {
-            (true, ":root") => Scope::Light,
-            (true, ":root[data-theme=dark]" | "html[data-theme=dark]" | "[data-theme=dark]") => Scope::Dark,
-            _ => Scope::Other,
-        };
-        for decl in body.trim_end_matches('}').split(';') {
-            let Some((prop, value)) = decl.split_once(':') else { continue };
-            let prop = prop.trim();
-            if prop.starts_with("--moss-") {
-                out.push((scope, prop.to_string(), value.trim().to_string()));
+        for selector in rule.prelude.split(',') {
+            let scope = scope_of(rule.conditions.is_empty(), selector);
+            for decl in body.trim_end_matches('}').split(';') {
+                let Some((prop, value)) = decl.split_once(':') else { continue };
+                let prop = prop.trim();
+                if prop.starts_with("--") {
+                    out.push((scope, prop.to_string(), value.trim().trim_end_matches("!important").trim().to_string()));
+                }
             }
         }
     }
     out
 }
 
+/// A `var(--x)` chain is followed this many properties deep, which also ends a cycle.
+const MAX_HOPS: usize = 8;
+
+fn resolve_colour(decls: &[(Scope, String, String)], token: &str, side: Scope, default: Rgb) -> RootColour {
+    let mut varies = false;
+    let mut name = token;
+    for _ in 0..MAX_HOPS {
+        varies |= decls.iter().any(|(scope, prop, _)| *scope == Scope::Other && prop == name);
+        let set_in = |want: Scope| decls.iter().rev().find(|(scope, prop, _)| *scope == want && prop == name).map(|d| d.2.as_str());
+        // The dark side reads `:root` too, for whatever its own rule leaves.
+        let Some(value) = set_in(side).or_else(|| set_in(Scope::Light)) else {
+            return RootColour { root: (name == token).then_some(default), varies };
+        };
+        match value.strip_prefix("var(").and_then(|v| v.strip_suffix(')')) {
+            Some(inner) => name = inner.split(',').next().unwrap_or_default().trim(),
+            None => return RootColour { root: crate::build::components::color_extract::parse_css_color(value), varies },
+        }
+    }
+    RootColour { root: None, varies }
+}
+
 /// A colour token set on `:root` with no dark value stays at its light value
 /// in dark mode, so the page ships unreadable.
 fn lint_light_only_colours(stripped: &str, warnings: &mut Vec<String>) {
-    let declared = token_declarations(stripped);
+    let declared = custom_properties(stripped);
     let colours = |scope: Scope| declared.iter().filter(move |(s, p, _)| *s == scope && p.starts_with("--moss-color-"));
     let dark: BTreeSet<&str> = colours(Scope::Dark).map(|(_, p, _)| p.as_str()).collect();
     // A `var()` value resolves on the element, so it follows into dark mode.
@@ -440,6 +489,28 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert!(found[0].contains("--moss-color-accent, --moss-color-bg"), "{found:?}");
         assert!(found[0].contains(":root[data-theme=\"dark\"]"), "{found:?}");
+    }
+
+    #[test]
+    fn a_selector_list_sets_each_of_its_selectors() {
+        assert_eq!(dark_gap(":root, main { --moss-color-accent: #225; }").len(), 1, "it sets the root");
+        assert!(dark_gap(":root { --moss-color-accent: #225; } :root[data-theme=dark], .x { --moss-color-accent: #99f; }").is_empty(), "and the dark root");
+    }
+
+    #[test]
+    fn a_root_colour_follows_var_and_says_when_a_section_changes_it() {
+        const BG: &str = "--moss-color-bg";
+        let defaults = ((1, 1, 1), (2, 2, 2));
+        let sectioned = ":root { --paper: #fbfbfb; }\n:root, body[data-section] { --moss-color-bg: var(--paper); }\nbody[data-section] { --paper: var(--section); }";
+        let (light, dark) = root_colours(Some(sectioned), BG, defaults);
+        assert_eq!(light, RootColour { root: Some((251, 251, 251)), varies: true });
+        assert_eq!(dark, light, "no dark rule: the root holds on both sides");
+        let steady = root_colours(Some(":root { --day: #fff; --paper: var(--day); --moss-color-bg: var(--paper); }"), BG, defaults);
+        assert_eq!(steady.0, RootColour { root: Some((255, 255, 255)), varies: false });
+        assert_eq!(root_colours(None, BG, defaults).1, RootColour { root: Some((2, 2, 2)), varies: false }, "unset: moss's own");
+        for unreadable in [":root { --moss-color-bg: var(--a); --a: var(--b); --b: var(--a); }", ":root { --moss-color-bg: var(--nowhere); }"] {
+            assert_eq!(root_colours(Some(unreadable), BG, defaults).0.root, None, "{unreadable}");
+        }
     }
 
     #[test]

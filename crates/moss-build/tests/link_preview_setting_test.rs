@@ -53,6 +53,7 @@ fn build(files: &[(&str, &str)]) -> (Site, PathBuf) {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
     .expect("build succeeds");
     (site, dir.join(".moss/build.nosync/staging"))

@@ -1,6 +1,34 @@
 use super::*;
 use crate::build::media::fallback_raster::FALLBACK_MAX_EDGE;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
+
+pub(crate) fn copy_deferred_assets(
+    ctx: &BackgroundContext,
+    reporter: &dyn crate::build::ports::reporter::BuildReporter,
+    tx: mpsc::Sender<EmitMessage>,
+    asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
+) -> AssetPipelineRunStats {
+    let mut pending = crate::build::manifest::PendingManifest::new(SiteHashes::default());
+    stage_and_copy_assets(ctx, &mut pending, reporter, tx, asset_registry)
+}
+
+/// Both asset steps in build order, after the pages `pending` already holds.
+pub(crate) fn stage_and_copy_assets(
+    ctx: &BackgroundContext,
+    pending: &mut crate::build::manifest::PendingManifest,
+    reporter: &dyn crate::build::ports::reporter::BuildReporter,
+    tx: mpsc::Sender<EmitMessage>,
+    asset_registry: Option<std::sync::Arc<crate::types::assets::AssetRegistry>>,
+) -> AssetPipelineRunStats {
+    let html_files = crate::build::scan::scan::scan_folder(&ctx.source_path).unwrap().html_files;
+    let html = stage_source_html(ctx, &html_files, pending, reporter, asset_registry.clone());
+    html.apply_to(pending);
+    for message in html.registrations() {
+        tx.blocking_send(message).unwrap();
+    }
+    super::copy_deferred_assets(ctx, html, reporter, tx, asset_registry)
+}
 
 /// Seal exactly what the emit channel reported, so a ship assertion is about
 /// what the code under test registered rather than about this file's idea of it.
@@ -19,11 +47,7 @@ fn drained_sealed(
 fn meta(hash: &str, size: u64, mtime: u64) -> SourceMetadata {
     SourceMetadata {
         hash: hash.to_string(),
-        size,
-        mtime,
-        mtime_nanos: None,
-        ctime: None,
-        inode: None,
+        stat: FileStat::whole_second(size, mtime),
     }
 }
 
@@ -404,7 +428,7 @@ async fn copy_deferred_assets_stale_cleanup_does_not_delete_in_flight_image_vari
     let tx_clone = tx.clone();
     let site_arg = site.clone();
     let h = tokio::task::spawn_blocking(move || {
-        super::copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx_clone, None)
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx_clone, None)
     });
     // Drop the original sender so the coordinator can seal once `h` finishes.
     drop(tx);
@@ -464,7 +488,7 @@ async fn copy_deferred_assets_stale_cleanup_does_not_delete_in_flight_image_vari
     let tx_clone = tx.clone();
     let site_arg = site.clone();
     let h = tokio::task::spawn_blocking(move || {
-        super::copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx_clone, None)
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx_clone, None)
     });
     drop(tx);
 
@@ -523,7 +547,7 @@ async fn copy_deferred_assets_does_not_run_stale_file_cleanup_inline() {
     let tx_clone = tx.clone();
     let site_arg = site.clone();
     let h = tokio::task::spawn_blocking(move || {
-        super::copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx_clone, None)
+        copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx_clone, None)
     });
     drop(tx);
     let _stats = h.await.unwrap();
@@ -636,7 +660,6 @@ async fn copy_deferred_assets_manifest_hash_is_xxh3_not_sha256() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -715,7 +738,6 @@ async fn test_theme_video_overlay_copied_to_output() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -788,7 +810,6 @@ async fn seal_hand_written_page(builds: usize, stale_memo: bool) -> (Vec<Option<
             source_path: source.clone().to_string_lossy().to_string(),
             staging_dir: staging.clone(),
             moss_dir: moss_dir.clone(),
-            blocking_keys: Default::default(),
             dir_overrides: Default::default(),
             ..crate::types::services::BackgroundContext::for_test()
         };
@@ -891,7 +912,6 @@ fn copy_deferred_assets_registers_static_assets_in_registry() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -1119,7 +1139,6 @@ async fn copy_deferred_assets_manifest_entry_not_dropped_by_hash_step() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -1259,7 +1278,6 @@ async fn copy_deferred_assets_sizes_raster_originals_and_copies_others_verbatim(
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -1466,7 +1484,6 @@ async fn run_copy_deferred(
         source_path: source.to_path_buf().to_string_lossy().to_string(),
         staging_dir: staging.to_path_buf(),
         moss_dir: moss_dir.to_path_buf(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -1912,7 +1929,6 @@ async fn copy_deferred_assets_spa_post_hash_wins_over_a_poisoned_memo() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         spa_defaults: Some(SpaDefaultsOwned {
             description: Some("A bundled SPA".to_string()),
@@ -1981,7 +1997,6 @@ async fn copy_deferred_assets_reuses_the_persisted_manifest_hash_memo_across_bui
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -2072,7 +2087,6 @@ async fn copy_deferred_assets_records_the_post_injection_oid_for_a_rewritten_spa
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         spa_defaults: Some(SpaDefaultsOwned {
             description: Some("A bundled SPA".to_string()),
@@ -2147,7 +2161,6 @@ async fn copy_deferred_assets_always_records_a_staged_oid_for_its_own_entries() 
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -2214,7 +2227,6 @@ async fn ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry() {
         source_path: source.clone().to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -2295,7 +2307,6 @@ fn copy_deferred_assets_places_from_the_site_file_when_a_synced_copy_is_in_the_c
         source_path: source.to_string_lossy().to_string(),
         staging_dir: staging.clone(),
         moss_dir: moss_dir.clone(),
-        blocking_keys: Default::default(),
         dir_overrides: Default::default(),
         ..crate::types::services::BackgroundContext::for_test()
     };
@@ -2483,4 +2494,42 @@ async fn planned_webp_base_registered_by_encoder_on_cold_and_warm_builds() {
         assert_eq!(decoded_webp_dims(&staging.join("planned-owned-base.webp")), (1200, 2400));
         previous = sealed.into_inner();
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn html_evicted_between_passes_keeps_its_fresh_hash_and_oid() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let staging = temp.path().join("stage");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(source.join("guide.html"), "<html><body>fresh</body></html>").unwrap();
+    let mut previous = SiteHashes::default();
+    previous.files.insert("guide.html".into(), "100644:old".into());
+    let ctx = BackgroundContext {
+        source_path: source.to_string_lossy().into(), staging_dir: staging,
+        moss_dir: source.join(".moss"), previous_hashes: previous,
+        ..BackgroundContext::for_test()
+    };
+    let html_files = crate::build::scan::scan::scan_folder(&ctx.source_path).unwrap().html_files;
+    let mut pending = crate::build::manifest::PendingManifest::new(SiteHashes::default());
+    let reporter = crate::build::ports::reporter::discarding();
+    let html = stage_source_html(&ctx, &html_files, &pending, reporter, None);
+    html.apply_to(&mut pending);
+    let fresh = html.files["guide.html"].clone();
+    let oid = html.oids["guide.html"].clone();
+    assert_ne!(fresh, "100644:old");
+    fs::remove_file(source.join("guide.html")).unwrap();
+    fs::write(source.join(".guide.html.icloud"), "").unwrap();
+    let (tx, mut rx) = mpsc::channel(100);
+    for message in html.registrations() { tx.blocking_send(message).unwrap(); }
+    super::copy_deferred_assets(&ctx, html, reporter, tx, None);
+    let mut registrations = Vec::new();
+    while let Some(message) = rx.blocking_recv() {
+        if let EmitMessage::File { rel_path, hash, oid, .. } = message {
+            if rel_path == "guide.html" { registrations.push((hash, oid)); }
+        }
+    }
+    assert_eq!(registrations, vec![(fresh.strip_prefix("100644:").unwrap().to_string(), Some(oid))]);
 }

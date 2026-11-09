@@ -37,7 +37,7 @@ use crate::build::ports::spawner::Spawner;
 use crate::build::watch::scope;
 use crate::build::watch::{
     any_path_passes_filter, any_path_watchable, classify_trigger, collect_raw_create_keys,
-    extract_rename_pairs, path_passes_filter, pump_gate, should_recompile_for_event,
+    changed_source_keys, extract_rename_pairs, path_passes_filter, pump_gate, should_recompile_for_event,
     source_asset_request_paths, watcher_lost_events, PumpGate,
 };
 use crate::types::events::MossEvent;
@@ -53,6 +53,20 @@ pub mod worker;
 /// Deliver one [`MossEvent`] to whatever frontend the host has — the typed
 /// Tauri bus, the SSE carrier, or both. Resolved once at construction.
 pub type EventRelay = Arc<dyn Fn(MossEvent) + Send + Sync>;
+
+/// Announce observed source changes without waiting for a rebuild. Keys are
+/// project-relative; callers apply their watch scope before handing them here.
+/// Only the editor's reload-tracked sources are included; this is not a build result.
+pub fn announce_source_changes(source_keys: &[String], emit: &EventRelay) {
+    let mut modified: Vec<String> = source_keys.iter()
+        .filter(|key| crate::build::manifest::is_reload_tracked_source_key(key))
+        .cloned()
+        .collect();
+    modified.sort();
+    modified.dedup();
+    if modified.is_empty() { return; }
+    emit(MossEvent::SourceContentChanged { paths: modified });
+}
 
 /// One boxed unit future, the driver's async-callback currency.
 pub type UnitFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
@@ -96,24 +110,21 @@ pub struct WatchConfig {
     pub cadence: tokio::sync::watch::Receiver<cadence::Cadence>,
 }
 
-/// Per-event delay passed to `notify-debouncer-full`. Lowered from 500ms to
-/// 250ms so a rebuild kicks off sooner after an editor save — the live preview
-/// should respond quickly.
+/// Per-event delay passed to `notify-debouncer-full`: every saved edit waits
+/// this long before its rebuild starts, so it is kept short.
 ///
-/// NOT a quiet period: the crate releases each raw event 250ms after that
-/// event's own arrival, so it merges only what lands inside the same drain
-/// (tick = 250/4 = 62.5ms). It coalesces the sub-millisecond burst one write
-/// emits; it does NOT coalesce two events hundreds of milliseconds apart, and
-/// raising this value would not — it would only delay both. See the
-/// `build::watch` module doc.
+/// NOT a quiet period: the crate releases each raw event this long after that
+/// event's own arrival, merging only what lands inside the same drain (tick =
+/// a quarter of it). That still holds the sub-millisecond burst one write emits
+/// and an editor's atomic save (a temp file renamed over the page) together;
+/// two events further apart than a tick were always two batches, whatever this
+/// value, and the worker's capacity-1 slot merges a batch that arrives while a
+/// build runs.
 ///
-/// CROSS-LAYER CONTRACT: the frontend's `PreviewManager.REFRESH_COALESCE_MS`
-/// (preview-manager.ts, currently 200ms) merges the FileChanged + BuildComplete
-/// pair of ONE rebuild while keeping two DISTINCT rebuilds separate — that only
-/// holds while this value stays ABOVE it (~>= 200ms). Lowering DEBOUNCE_MS below
-/// that would let two genuinely-distinct rebuilds collapse into one preview
-/// morph (the second edit's content would not show). Lower both together.
-const DEBOUNCE_MS: u64 = 250;
+/// Two rebuilds can land closer together than a client's refresh coalescing
+/// window, so a client refreshes on each FileChanged rather than coalescing
+/// by time, or the second edit would not show.
+const DEBOUNCE_MS: u64 = 50;
 
 /// [diag] energy: inter-arrival clock for rebuild triggers. A tight run of small
 /// deltas here is the file-watcher rebuild-loop signature (cloud-sync re-emit,
@@ -273,8 +284,8 @@ pub async fn start(config: WatchConfig) {
             // Adopted from: notify-debouncer-full (canonical),
             // Spacedrive crates/fs-watcher/src/platform/macos.rs
             //
-            // The debouncer thread holds each raw notify event for 250ms (a
-            // delay, not a quiet window — see DEBOUNCE_MS) and stitches
+            // The debouncer thread holds each raw notify event for DEBOUNCE_MS
+            // (a delay, not a quiet window) and stitches
             // `Modify(Name(From))` + `Modify(Name(To))` pairs into a single
             // `Modify(Name(Both))` event with `paths = [from, to]` by matching
             // inodes/file-IDs from the file-id cache.
@@ -284,7 +295,7 @@ pub async fn start(config: WatchConfig) {
 
             let mut debouncer = match new_debouncer(
                 std::time::Duration::from_millis(DEBOUNCE_MS),
-                None, // tick_rate = timeout/4 = 62.5ms
+                None, // tick_rate = timeout/4
                 move |result| {
                     let _ = tx.send(result);
                 },
@@ -491,6 +502,14 @@ async fn handle_debounced_batch(
     emit: &EventRelay,
     dispatch: &RebuildDispatch,
 ) {
+    let root_path = Path::new(folder_path);
+    let source_keys: Vec<String> = events.iter()
+        .flat_map(|ev| changed_source_keys(root_path, ev.kind, &ev.paths))
+        .collect();
+    // Before every rebuild gate, including the dropped-events full dispatch.
+    // This also reports moss's own source writes, such as uid stamping.
+    announce_source_changes(&source_keys, emit);
+
     // ── DEDICATED SOURCE-ASSET PASS ──────────────────────────────────────────
     // Runs BEFORE the rebuild-eligibility gate so that asset edits/deletes/
     // renames always notify the editor — even when the content-hash gate would
@@ -506,7 +525,6 @@ async fn handle_debounced_batch(
     // reference resolver revalidated only if a `FileChanged` happened to follow,
     // and stayed stale forever when the rebuild was gated out or its output
     // diff came up empty. See `source_asset_request_paths` for the event policy.
-    let root_path = Path::new(folder_path);
     for ev in &events {
         for request_path in source_asset_request_paths(root_path, ev.kind, &ev.paths) {
             emit(MossEvent::SourceAssetChanged { path: request_path });
@@ -611,9 +629,8 @@ async fn handle_debounced_batch(
 
     // PATTERN 6 — INODE+FILE-ID PAIRING via notify-debouncer-full
     // Extract source-relative rename pairs from stitched `Modify(Name(Both))`
-    // events. `path_to_relative_key` canonicalizes both sides; for the `from`
-    // path (now gone) it falls back to the raw path, which the watcher emits
-    // in canonical form on macOS.
+    // events. `path_to_relative_key` canonicalizes both sides; the `from`
+    // path (now gone) is canonicalized through its nearest existing ancestor.
     let rename_pairs = extract_rename_pairs(&actionable, folder_path);
 
     // Log which file(s) triggered the rebuild for easier debugging.
@@ -660,7 +677,7 @@ async fn handle_debounced_batch(
         since
     );
 
-    let trigger = classify_trigger(root_path, &actionable);
+    let trigger = classify_trigger(root_path, &actionable, || crate::system::build_records::records().content_hashes(folder_path));
     dispatch(worker::RebuildRequest {
         rename_pairs,
         trigger,
@@ -675,3 +692,7 @@ async fn handle_debounced_batch(
 #[cfg(test)]
 #[path = "watch/rearm_tests.rs"]
 mod rearm_tests;
+
+#[cfg(test)]
+#[path = "watch/batch_tests.rs"]
+mod batch_tests;

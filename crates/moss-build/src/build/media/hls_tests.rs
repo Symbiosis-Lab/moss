@@ -901,6 +901,7 @@ fn a_missing_rung_invalidates_the_whole_cached_ladder() {
             record.transforms.insert(
                 format!("video/hls/{name}"),
                 TransformEntry {
+                    validation: None,
                     oid: oid.clone(),
                     size: 1,
                     params: params.clone(),
@@ -949,7 +950,7 @@ fn cached_ladder_hits_a_new_form_record_with_no_probe_needed() {
     for name in &members {
         record
             .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
@@ -974,7 +975,7 @@ fn seed_ladder_record(transforms: &TransformCache, scratch: &Path, source_oid: &
     for name in hls_members(&VIDEO_LADDER) {
         record
             .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 }
@@ -1047,7 +1048,7 @@ fn cached_ladder_ignores_a_looser_budget_that_doesnt_change_the_effective_ladder
     for name in &members {
         record
             .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
@@ -1085,7 +1086,7 @@ fn cached_ladder_misses_when_a_tighter_budget_narrows_the_effective_ladder() {
     for name in &members {
         record
             .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+            .insert(format!("video/hls/{name}"), TransformEntry { validation: None, oid: oid.clone(), size: 1, params: params.clone() });
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
 
@@ -1141,7 +1142,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
     for name in &stale_members {
         record.transforms.insert(
             format!("video/hls/{name}"),
-            TransformEntry { oid: stale_oid.clone(), size: 1, params: stale_params.clone() },
+            TransformEntry { validation: None, oid: stale_oid.clone(), size: 1, params: stale_params.clone() },
         );
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
@@ -1161,7 +1162,7 @@ fn a_shrunk_ladder_is_recorded_as_a_hit_not_a_stale_miss() {
         .map(|name| {
             (
                 format!("video/hls/{name}"),
-                TransformEntry { oid: fresh_oid.clone(), size: 1, params: fresh_params.clone() },
+                TransformEntry { validation: None, oid: fresh_oid.clone(), size: 1, params: fresh_params.clone() },
             )
         })
         .collect();
@@ -1296,7 +1297,7 @@ fn produce_ladder_re_encodes_a_legacy_record() {
     for (name, oid) in members.iter().zip(&fabricated_oids) {
         record.transforms.insert(
             format!("video/hls/{name}"),
-            TransformEntry { oid: oid.clone(), size: 1, params: legacy_params.clone() },
+            TransformEntry { validation: None, oid: oid.clone(), size: 1, params: legacy_params.clone() },
         );
     }
     transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();

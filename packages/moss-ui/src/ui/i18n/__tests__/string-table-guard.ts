@@ -55,6 +55,10 @@ const GERMAN_IDENTICAL = [
   'chip.logo.label',
   'chip.layout.label',
   'chip.jury.label',
+  'analytics.section_downloads',
+  'analytics.visible_10_30s', // units and digits only
+  'analytics.visible_30s_2m',
+  'analytics.visible_2_10m',
   'versions.back_editor',
   'analytics.col_medium',
   'progress.details',
@@ -108,6 +112,10 @@ const BRAND_ALLOWLIST = new Set<string>(
     'publish.awaiting_advice',
     // `moss build` is the command a terminal runs, typed the same in every language.
     'appsettings.terminal_desc',
+    // `moss edit` is the command that serves the browser editor, typed the same everywhere.
+    'device.needs_https',
+    'browser.signed_out',
+    'browser.no_folder',
   ].flatMap((key) => [`zh-hans:${key}`, `zh-hant:${key}`]),
 );
 

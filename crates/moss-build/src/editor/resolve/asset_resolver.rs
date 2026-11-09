@@ -1,88 +1,60 @@
-//! Editor-facing asset resolution.
+//! Filesystem snapshot and asset metadata adapter for pure reference resolution.
 //!
-//! Resolves asset references for the editor using direct filesystem access —
-//! no dependency on the build's AssetRegistry or WebP/LQIP pipeline.
-//! The editor renders source images directly via `moss-source://`.
-
+//! The editor requests each image by its source path via `moss-source://`.
 use crate::build::scan::classify::{left_out, left_out_of_site};
-use moss_core::content_graph::{normalize_path, ContentGraph, ContentGraphBuilder, PathMatch};
-use moss_core::resolve::asset_class::{AssetProvenance, AssetResolution, resolve_file_target};
+use moss_core::content_graph::{normalize_path, ContentGraph};
+use moss_core::resolve::editor::{RefTarget, ResolveInput};
+use moss_core::resolve::editor::files::named_folders;
+pub use moss_core::resolve::editor::{EditorScope, ResolvedAsset};
+pub use moss_core::resolve::editor::files::mime_for_path;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use moss_core::resolve::asset_class::{AssetProvenance, resolve_file_target};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct ResolvedAsset {
-    pub absolute_path: String,
-    pub request_url: String,
-    pub mime_type: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub size_bytes: u64,
-    /// How the path was resolved: literal, bare-fuzzy, separator-fallback, or
-    /// case-mismatch. Carried from the shared engine.
-    ///
-    /// Read by the editor off the unified reference envelope
-    /// (`EditorReferenceResolution`), which marks a separator-fallback or
-    /// case-mismatch path as a problem and offers the file's real path.
-    /// Also exposed by the singular `editor_resolve_asset` (chip-bar) command.
-    pub provenance: AssetProvenance,
-}
-
-/// The files an editor reference may name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EditorScope {
-    /// Every file the build scans.
-    Site,
-    /// A markdown file opened on its own: its folder can be any folder on the
-    /// machine (`~/Downloads`, a home directory), so it is never walked. Only
-    /// the files directly in it, and in the folders the document spells out,
-    /// are read. It has no build, so no URLs and no folder listings.
-    Folder,
-}
-
-/// The files of `scope` that `target`, written in `from_source`, can name.
-pub fn scope_graph(root: &Path, scope: EditorScope, from_source: &str, target: &str) -> ContentGraph {
-    if scope == EditorScope::Site {
-        return project_graph(root);
-    }
-    let mut folders = std::collections::BTreeSet::from([String::new()]);
-    folders.extend(named_folders(&target.replace('\\', "/"), from_source));
-    let mut builder = ContentGraphBuilder::new();
-    for file in folders.iter().filter_map(|folder| site_files_in(root, folder)).flatten() {
-        builder.add_file(&file, "");
-    }
-    builder.build()
-}
-
-/// Every file of the site as a [`ContentGraph`], read from disk now.
-///
-/// This is the editor's file set for [`resolve_file_target`]: the same
-/// resolver the build runs, over the same files. The walk reads exactly what
-/// the build's scan reads ([`left_out_of_site`]: no `.moss/build.nosync`
-/// shadow copies, no nested site, no root agent instructions) and, like it,
-/// does not follow symlinks, so a symlink cycle cannot recurse or produce
-/// duplicate paths. Built once per call or batch.
-pub fn project_graph(project_root: &Path) -> ContentGraph {
+/// One site walk, with exactly the build scan's exclusions and symlink policy.
+fn site_listing(root: &Path) -> (Vec<String>, Vec<String>) {
     #[cfg(test)]
     tests::SITE_WALKS.with(|n| n.set(n.get() + 1));
-    let mut builder = ContentGraphBuilder::new();
-    let walk = walkdir::WalkDir::new(project_root).into_iter().filter_entry(|e| left_out_of_site(e).is_none());
-    for entry in walk.flatten().filter(|e| e.file_type().is_file()) {
-        if let Ok(rel) = entry.path().strip_prefix(project_root) {
-            builder.add_file(&rel.to_string_lossy().replace('\\', "/"), "");
-        }
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    let walk = walkdir::WalkDir::new(root).into_iter().filter_entry(|e| left_out_of_site(e).is_none());
+    for entry in walk.flatten() {
+        let Ok(rel) = entry.path().strip_prefix(root) else { continue; };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if entry.file_type().is_file() { files.push(rel); }
+        else if entry.file_type().is_dir() && !rel.is_empty() { directories.push(rel); }
     }
-    builder.build()
+    (files, directories)
 }
 
-/// Compute the project-root-relative forward-slash source path from `from_file`.
-///
-/// from_file may not exist (new/unsaved file). We try two strategies:
-///   1. Canonicalize from_file's parent directory (which should exist), then
-///      reconstruct the path with the original filename. This gives the real-case
-///      parent prefix without requiring the file itself to exist.
-///   2. Fall back to lexical strip_prefix against canonical_root.
-///   3. Last resort: basename only.
-fn compute_from_source(from_file: &Path, canonical_root: &Path) -> String {
+pub fn project_graph(root: &Path) -> ContentGraph {
+    moss_core::resolve::editor::files::graph(&site_listing(root).0)
+}
+
+/// Snapshot every named folder once. A loose folder is never recursively walked.
+pub(super) fn reference_input(root: &Path, scope: EditorScope, from: &str, targets: &[RefTarget]) -> ResolveInput {
+    let (files, directories) = if scope == EditorScope::Site {
+        site_listing(root)
+    } else {
+        let mut folders = std::collections::BTreeSet::from([String::new()]);
+        for target in targets {
+            folders.extend(named_folders(&target.text.replace('\\', "/"), from).iter()
+                .filter_map(|folder| moss_core::content_graph::join_written("", folder)));
+        }
+        let files = folders.iter().filter_map(|folder| read_folder_files(root, folder)).flatten()
+            .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        (files, Vec::new())
+    };
+    ResolveInput {
+        files, directories, scope, from_source: from.to_string(), targets: targets.to_vec(), url_index: None,
+        root_name: crate::vault_root::VaultRoot::resolve(root).name().to_string(),
+        passthrough: if scope == EditorScope::Site {
+            crate::build::site_config::get_build_passthrough(&root.to_string_lossy()).unwrap_or_default()
+        } else { Vec::new() },
+    }
+}
+
+pub(super) fn compute_from_source(from_file: &Path, canonical_root: &Path) -> String {
     // The editor passes a PROJECT-ROOT-RELATIVE path (e.g. "News/post.md", from
     // `getCurrentEntry().path`). A relative path IS already the root-relative
     // source — return it directly. Do NOT fall through to the canonicalize-parent
@@ -127,150 +99,39 @@ fn compute_from_source(from_file: &Path, canonical_root: &Path) -> String {
     }
 }
 
-/// Enrich a root-relative path into a full `ResolvedAsset` by reading disk
-/// metadata directly. No registry or WebP/LQIP dependency — the editor
-/// renders source images directly via `moss-source://`.
-///
-/// Returns `None` only when the file has vanished between the engine's index
-/// lookup and this call (i.e. a TOCTOU miss). Callers degrade to an unresolved
-/// reference (kind:not-found) in that case.
-fn enrich(
-    root_rel: &str,
-    provenance: AssetProvenance,
-    canonical_root: &Path,
-) -> Option<ResolvedAsset> {
-    let absolute = canonical_root.join(root_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-    if !absolute.exists() {
-        return None;
-    }
-    let request_url = absolute_to_request_url(&absolute, canonical_root)?;
+/// [`ResolvedAsset::offers_original`] for a source `width` wide with `rung_widths` built.
+fn offers_original(width: Option<u32>, rung_widths: &[u32]) -> bool {
+    !rung_widths.is_empty() && width.is_some_and(moss_core::asset_paths::ladder_stops_short)
+}
+
+/// Add only host facts; classification, request URL and MIME stay core-owned.
+/// The width and height are the source's even when `moss-source://` answers
+/// with a built rung, so the editor's image box does not change when the bytes do.
+pub(super) fn enrich(mut asset: ResolvedAsset, root: &Path) -> Option<ResolvedAsset> {
+    let absolute = root.join(&asset.absolute_path);
     let meta = std::fs::metadata(&absolute).ok()?;
-    let mime_type = mime_for_path(&absolute);
-    let (width, height) = if mime_type.starts_with("image/") {
-        crate::build::scan::scan::extract_image_dimensions(&absolute)
-            .map(|(w, h)| (Some(w), Some(h))).unwrap_or((None, None))
-    } else { (None, None) };
-    Some(ResolvedAsset {
-        absolute_path: absolute.to_string_lossy().to_string(),
-        request_url, mime_type, width, height, size_bytes: meta.len(), provenance,
-    })
-}
-
-/// Enrich a root-relative SOURCE path (as produced by `classify_reference`'s
-/// `target_path`) into a full `ResolvedAsset`, reusing the single `enrich`
-/// implementation so the reference command never duplicates that logic.
-///
-/// `project_root` is canonicalized here (mirroring `resolve_asset`) so the
-/// caller can pass the raw project root. `provenance` carries the engine's
-/// classification (defaults to `Literal` when the caller has none). Returns
-/// `None` only on a TOCTOU miss (file vanished between classify and enrich) —
-/// the caller should degrade to a not-found envelope.
-pub fn enrich_root_rel(
-    root_rel: &str,
-    provenance: AssetProvenance,
-    project_root: &Path,
-) -> Option<ResolvedAsset> {
-    let canonical_root =
-        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
-    enrich(root_rel, provenance, &canonical_root)
-}
-
-/// Resolve a single reference. Returns None when the path doesn't resolve
-/// to a known asset.
-///
-/// Path resolution is delegated to the one resolver (`resolve_file_target` in
-/// moss-core, over [`scope_graph`]), so `CaseMismatch` provenance is
-/// produced when the authored path differs only in case from the real file,
-/// and the file picked is the one the build links.
-///
-/// Used by the singular `editor_resolve_asset` Tauri command (chip-bar asset
-/// widget) which needs a bare `Option<ResolvedAsset>`. Editor lint diagnostics
-/// go through the unified reference resolver (`reference_resolver.rs`), which
-/// reuses `enrich_root_rel` for the same enrichment.
-pub fn resolve_asset(
-    target: &str,
-    from_file: &Path,
-    project_root: &Path,
-    scope: EditorScope,
-) -> Option<ResolvedAsset> {
-    // Canonicalize project_root so strip_prefix works correctly after the engine
-    // returns a root-relative path (both paths must share the same real-path prefix,
-    // not just a lexical one — important on macOS where /tmp is a symlink to
-    // /private/var/folders/...).
-    let canonical_root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
-
-    let from_source = compute_from_source(from_file, &canonical_root);
-    let target_norm = target.replace('\\', "/");
-    let picked = spelled_out_file(&target_norm, &from_source, &canonical_root)
-        .unwrap_or_else(|| {
-            let graph = scope_graph(&canonical_root, scope, &from_source, &target_norm);
-            resolve_file_target(&target_norm, &from_source, &graph)
-        });
-
-    let (root_rel, provenance) = match picked {
-        AssetResolution::Resolved { root_rel, provenance } => (root_rel, provenance),
-        AssetResolution::Ambiguous { chosen, .. } => {
-            // Equally near candidates — use the one the build links. Treat as
-            // SeparatorFallback provenance (non-literal resolution).
-            // The unified reference resolver models Ambiguous properly in its envelope
-            // (kind:ambiguous + candidates); this singular path just picks the winner.
-            (chosen, AssetProvenance::SeparatorFallback)
+    if asset.mime_type.starts_with("image/") {
+        if let Some((width, height)) = crate::build::scan::scan::extract_image_dimensions(&absolute) {
+            asset.width = Some(width);
+            asset.height = Some(height);
         }
-        AssetResolution::NotFound => return None,
-    };
-
-    enrich(&root_rel, provenance, &canonical_root)
+    }
+    asset.rung_widths = crate::editor::source_asset::built_rungs(root, &absolute)
+        .into_iter().map(|(width, _)| width).collect();
+    asset.offers_original = offers_original(asset.width, &asset.rung_widths);
+    asset.absolute_path = absolute.to_string_lossy().to_string();
+    asset.size_bytes = meta.len();
+    Some(asset)
 }
 
-/// What [`resolve_file_target`] answers for a `target` that spells out a path
-/// to an existing file, from the page's folder or from the site root, read
-/// from those two folders instead of a walk of the whole site (a completion
-/// preview asks this once per row). It is exact: the resolver's first two
-/// steps look at nothing but those two paths, so when one of them matches, no
-/// other file can change the answer. `None` when the target is
-/// percent-encoded (a decoded retry could follow a search of the whole site),
-/// when a name is ambiguous on disk (two folders, or two files, that differ
-/// only in letter case), or when neither step matched; the caller then asks
-/// the whole site.
-fn spelled_out_file(target: &str, from_source: &str, root: &Path) -> Option<AssetResolution> {
-    if target.contains('%') {
-        return None;
-    }
-    let mut files = std::collections::BTreeSet::new();
-    for folder in &named_folders(target, from_source) {
-        files.extend(site_files_in(root, folder)?);
-    }
-    let keys: std::collections::HashSet<String> = files.iter().map(|f| normalize_path(f)).collect();
-    if keys.len() != files.len() {
-        return None;
-    }
-    let mut builder = ContentGraphBuilder::new();
-    for f in &files {
-        builder.add_file(f, "");
-    }
-    let graph = builder.build();
-    let found = graph.resolve_path_with_ties(target, from_source)?;
-    (found.matched != PathMatch::Searched).then(|| resolve_file_target(target, from_source, &graph))
+pub fn resolve_asset(target: &str, from_file: &Path, project_root: &Path, scope: EditorScope) -> Option<ResolvedAsset> {
+    let root = std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let from = compute_from_source(from_file, &root);
+    let input = reference_input(&root, scope, &from, &[RefTarget { text: target.to_string(), is_embed: true }]);
+    enrich(moss_core::resolve::editor::resolve_asset(&input, target)?, &root)
 }
 
-/// The folders a spelled-out `target` can sit in: from the site root, and,
-/// unless it starts with `/`, from the page's folder.
-fn named_folders(target: &str, from_source: &str) -> Vec<String> {
-    let folder_of = |path: &str| path.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_string());
-    let rel = target.trim_start_matches('/');
-    let mut folders = vec![folder_of(rel)];
-    if !target.starts_with('/') {
-        folders.push(format!("{}/{}", folder_of(from_source), folder_of(rel)));
-    }
-    folders
-}
-
-/// The site files directly in `folder` (written relative to the site root,
-/// `.` and `..` allowed, any letter case), as root-relative paths in their
-/// real case: the files [`project_graph`] would hold there. Empty when no such
-/// folder belongs to the site; `None` when the folder cannot be read or its
-/// name matches more than one folder on disk.
-fn site_files_in(root: &Path, folder: &str) -> Option<Vec<String>> {
+fn read_folder_files(root: &Path, folder: &str) -> Option<Vec<String>> {
     let Some(joined) = moss_core::content_graph::join_written("", folder) else { return Some(Vec::new()) };
     let written: Vec<&str> = joined.split('/').filter(|s| !s.is_empty()).collect();
     let mut dir = root.to_path_buf();
@@ -303,53 +164,19 @@ fn site_files_in(root: &Path, folder: &str) -> Option<Vec<String>> {
     )
 }
 
-fn absolute_to_request_url(absolute: &Path, project_root: &Path) -> Option<String> {
-    let rel = absolute.strip_prefix(project_root).ok()?;
-    let s = rel.to_string_lossy().to_string();
-    Some(format!("/{}", s.replace('\\', "/")))
-}
-
-pub fn mime_for_path(p: &Path) -> String {
-    match p
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase())
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        Some("svg") => "image/svg+xml",
-        Some("avif") => "image/avif",
-        Some("bmp") => "image/bmp",
-        Some("ico") => "image/x-icon",
-        Some("tiff") | Some("tif") => "image/tiff",
-        Some("heic") | Some("heif") => "image/heic",
-        Some("mp4") => "video/mp4",
-        Some("webm") => "video/webm",
-        Some("ogg") => "audio/ogg",
-        Some("mov") => "video/quicktime",
-        Some("m4v") => "video/x-m4v",
-        Some("mp3") => "audio/mpeg",
-        Some("wav") => "audio/wav",
-        Some("flac") => "audio/flac",
-        Some("aac") => "audio/aac",
-        Some("m4a") => "audio/mp4",
-        Some("opus") => "audio/opus",
-        Some("pdf") => "application/pdf",
-        Some("gltf") => "model/gltf+json",
-        Some("glb") => "model/gltf-binary",
-        Some("usdz") => "model/vnd.usdz+zip",
-        Some("ipynb") => "application/x-ipynb+json",
-        _ => "application/octet-stream",
-    }
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 1,200 px photo has only the 800 rung, so a 2x column needs its
+    /// original; a 3,000 px photo has every rung and its original stays out.
+    #[test]
+    fn the_original_is_offered_only_where_the_ladder_stopped_short() {
+        assert!(offers_original(Some(1200), &[800]));
+        assert!(!offers_original(Some(3000), &[800, 1600]));
+        assert!(!offers_original(Some(1200), &[]), "nothing built, no srcset to join");
+        assert!(!offers_original(None, &[800]));
+    }
 
     fn scratch_root() -> tempfile::TempDir {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/test-tmp");
@@ -591,13 +418,13 @@ mod tests {
             ("uk/z.png", "zh-hans/p.md"),
         ];
         for (target, from) in answered {
-            let fast = spelled_out_file(target, from, &root);
+            let fast = moss_core::resolve::editor::files::spelled_out_file(target, from, site.all_files());
             assert_eq!(fast, Some(resolve_file_target(target, from, &site)), "{target:?} from {from:?}");
         }
         // Anything the first two steps do not settle goes to the whole site.
         let rest = [("x.png", "Team/p.md"), ("shop/y.png", "post.md"), ("assets/x", "News/post.md"), ("q.png", "News/post.md")];
         for (target, from) in rest {
-            assert_eq!(spelled_out_file(target, from, &root), None, "{target:?} from {from:?}");
+            assert_eq!(moss_core::resolve::editor::files::spelled_out_file(target, from, site.all_files()), None, "{target:?} from {from:?}");
         }
     }
 
@@ -607,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn a_spelled_out_path_is_resolved_without_walking_the_site() {
+    fn each_asset_call_walks_the_site_once() {
         let dir = scratch_root();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         std::fs::create_dir_all(root.join("assets")).unwrap();
@@ -615,9 +442,9 @@ mod tests {
         let walks = || SITE_WALKS.with(|n| n.get());
         let before = walks();
         assert!(resolve_asset("assets/x.png", &root.join("News/post.md"), &root, EditorScope::Site).is_some());
-        assert_eq!(walks(), before, "a path from the root must not walk the site");
+        assert_eq!(walks(), before + 1, "one snapshot for a spelled-out path");
         assert!(resolve_asset("x.png", &root.join("News/post.md"), &root, EditorScope::Site).is_some());
-        assert_eq!(walks(), before + 1, "a bare name is found by searching the whole site");
+        assert_eq!(walks(), before + 2, "one snapshot for a bare name");
     }
 
     #[test]
@@ -648,7 +475,7 @@ mod tests {
             eprintln!("skipped: this disk is case-insensitive, so it cannot hold case twins");
             return;
         }
-        assert_eq!(spelled_out_file("a/photo.jpg", "p.md", &root), None);
+        assert_eq!(moss_core::resolve::editor::files::spelled_out_file("a/photo.jpg", "p.md", &site_listing(&root).0), None);
     }
 
     #[test]

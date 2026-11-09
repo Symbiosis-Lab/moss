@@ -295,29 +295,15 @@ impl WorkerHandle {
     /// Deposit a request, merging with any occupant under one critical
     /// section, and wake the worker.
     ///
-    /// The one place this check-and-merge happens, and it has to be one atomic
-    /// operation rather than a caller reading `is_building()` and then
-    /// separately calling `restore`/`restore_visibly`: `take_for_attempt`
-    /// dequeues and flips `building` to `true` under this same slot lock, so a
-    /// caller that checked `is_building()` in a separate critical section could
-    /// observe `false`, have `take_for_attempt` run, and then merge a request
-    /// whose `gate_paths` was never cleared against a build that had, by then,
-    /// already started — reopening the exact mixed-baseline race this
-    /// building-flag check exists to close (see the field doc on `building`).
-    pub fn enqueue(&self, mut req: RebuildRequest) {
+    /// A request arriving while a build runs keeps its content-hash gate. The
+    /// gate runs at admission, after that build has stashed its hashes, and
+    /// every page entry in the stash is the hash of the bytes the render read
+    /// (or replayed from the parse cache), so an event whose bytes the build
+    /// already rendered is dropped and a save that landed after the read is
+    /// built. A sync client's metadata touch after a save is the common case.
+    pub fn enqueue(&self, req: RebuildRequest) {
         {
             let mut slot = self.lock_slot();
-            // A build can copy a source file early, then compute its final
-            // content-hash stash after a newer save lands. In that ordering
-            // the stash describes the newer source while the promoted output
-            // still contains the older bytes. The catch-up request must not
-            // be gated against that mixed baseline or it will be discarded.
-            // `take_for_attempt` sets `building` under this same slot lock, so
-            // there is no dequeue-to-admission window where an arrival can
-            // retain a suppressible gate.
-            if self.building.load(Ordering::SeqCst) {
-                req.gate_paths = None;
-            }
             *slot = Some(match slot.take() {
                 Some(occupant) => merge_requests(occupant, req),
                 None => req,
@@ -332,9 +318,7 @@ impl WorkerHandle {
         self.lock_slot().take()
     }
 
-    /// Dequeue the next request and mark its admission in flight as one
-    /// atomic slot operation. Producers use that mark to make arrivals during
-    /// the attempt unconditional; see [`enqueue`](Self::enqueue).
+    /// Dequeue the next request and mark its admission in flight.
     fn take_for_attempt(&self) -> Option<RebuildRequest> {
         let mut slot = self.lock_slot();
         let req = slot.take();

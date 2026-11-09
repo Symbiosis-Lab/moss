@@ -1,12 +1,3 @@
-// CM6 glue for the frontmatter knowledge layer: lint decorations, hover
-// explanations, and field-name completion. All analysis is pure
-// (frontmatter.ts) — this file only maps results onto editor primitives, so
-// vitest covers the logic and this stays thin.
-//
-// Works in Obsidian's source mode (and the raw-frontmatter portion of Live
-// Preview when properties-as-text is enabled). Live Preview's Properties
-// widget replaces the frontmatter text entirely; surfacing diagnostics inside
-// that widget is out of CM6's reach and out of scope for v1.
 import {
   Decoration,
   EditorView,
@@ -16,71 +7,58 @@ import {
   type Tooltip,
   type ViewUpdate,
 } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
-import {
-  parseFrontmatterBlock,
-  validateFrontmatter,
-  type Diagnostic,
-} from "./frontmatter";
+import { StateEffect, Text, type Extension } from "@codemirror/state";
+import { editorInfoField } from "obsidian";
+import type { EditorDiagnostic, MossSite } from "./core";
+import { editorFieldSpans } from "./core";
 import type { MossSchema } from "./schema";
-import { OBSIDIAN_NATIVE_FIELDS } from "./schema";
 
-/** Late-bound schema so a CLI refresh reaches editors without re-mounting. */
 export type SchemaProvider = () => MossSchema;
+export type SiteProvider = () => MossSite;
+export const contextChanged = StateEffect.define<void>();
 
-const DECO_CLASS: Record<Diagnostic["kind"], string> = {
-  "unknown-field": "moss-fm-unknown",
-  "wrong-type": "moss-fm-wrong-type",
-  "not-in-enum": "moss-fm-wrong-type",
-};
-
-/** Pure: diagnostics → decoration set. Exported for tests. */
-export function diagnosticsToDecorations(diags: Diagnostic[]): DecorationSet {
-  const sorted = [...diags].sort((a, b) => a.from - b.from);
-  return Decoration.set(
-    sorted.map((d) =>
-      Decoration.mark({
-        class: DECO_CLASS[d.kind],
-        attributes: { "data-moss-diagnostic": d.kind },
-      }).range(d.from, d.to),
-    ),
-  );
+export function diagnosticRanges(text: string, diagnostics: EditorDiagnostic[]) {
+  const doc = Text.of(text.split("\n"));
+  const fields = editorFieldSpans(text);
+  return diagnostics.map((diagnostic) => {
+    const field = fields.find((field) => field.key === diagnostic.path);
+    const line = doc.line(Math.max(1, Math.min(doc.lines, diagnostic.line ?? 1)));
+    return {
+      diagnostic,
+      from: field?.from ?? line.from,
+      to: field?.to ?? line.to,
+      line: !field,
+      cls: `moss-diag-${diagnostic.severity === 1 ? "error" : diagnostic.severity === 2 ? "warning" : "hint"}`,
+    };
+  });
 }
 
-/** Pure: compute diagnostics for a document. Exported for tests. */
-export function computeDiagnostics(doc: string, schema: MossSchema): Diagnostic[] {
-  const block = parseFrontmatterBlock(doc);
-  if (!block) return [];
-  return validateFrontmatter(block, schema);
+export function diagnosticsToDecorations(text: string, diagnostics: EditorDiagnostic[]): DecorationSet {
+  return Decoration.set(diagnosticRanges(text, diagnostics).map((range) => {
+    const spec = { class: range.cls };
+    return range.line
+      ? Decoration.line(spec).range(range.from)
+      : Decoration.mark(spec).range(range.from, range.to);
+  }), true);
 }
 
-function lintPlugin(getSchema: SchemaProvider) {
-  return ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
+function check(view: EditorView, site: MossSite): EditorDiagnostic[] {
+  const path = view.state.field(editorInfoField, false)?.file?.path;
+  return path ? JSON.parse(site.check(path, view.state.doc.toString())) : [];
+}
 
-      constructor(view: EditorView) {
-        this.decorations = this.build(view);
-      }
-
-      update(u: ViewUpdate) {
-        if (u.docChanged || u.viewportChanged) {
-          this.decorations = this.build(u.view);
-        }
-      }
-
-      private build(view: EditorView): DecorationSet {
-        // Frontmatter is at the top of the file; skip all work when the doc
-        // does not start with a fence.
-        const doc = view.state.doc;
-        if (doc.length < 4 || doc.sliceString(0, 4) !== "---\n") {
-          return Decoration.none;
-        }
-        return diagnosticsToDecorations(computeDiagnostics(doc.toString(), getSchema()));
-      }
-    },
-    { decorations: (v) => v.decorations },
-  );
+function lintPlugin(getSite: SiteProvider) {
+  return ViewPlugin.fromClass(class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) { this.decorations = this.build(view); }
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged || update.transactions.some((tr) =>
+        tr.effects.some((effect) => effect.is(contextChanged)))) this.decorations = this.build(update.view);
+    }
+    private build(view: EditorView): DecorationSet {
+      return diagnosticsToDecorations(view.state.doc.toString(), check(view, getSite()));
+    }
+  }, { decorations: (plugin) => plugin.decorations });
 }
 
 /** Tooltip body for a field the schema knows. Exported for tests. */
@@ -90,35 +68,31 @@ export function fieldInfoText(schema: MossSchema, name: string): string | null {
     const head = `${spec.name}: ${spec.type}${spec.group ? ` — ${spec.group}` : ""}`;
     return spec.description ? `${head}\n${spec.description}` : head;
   }
-  if (OBSIDIAN_NATIVE_FIELDS.has(name)) {
-    return `${name} is an Obsidian field. moss ignores it when publishing.`;
-  }
   return null;
 }
 
-function buildHover(getSchema: SchemaProvider) {
+function buildHover(getSchema: SchemaProvider, getSite: SiteProvider) {
   return hoverTooltip((view, pos): Tooltip | null => {
     const doc = view.state.doc.toString();
-    const block = parseFrontmatterBlock(doc);
-    if (!block) return null;
-    const diags = validateFrontmatter(block, getSchema());
+    const fields = editorFieldSpans(doc);
+    const diags = diagnosticRanges(doc, check(view, getSite()));
     // A diagnostic under the pointer wins over the plain field explanation.
     const hit = diags.find((d) => pos >= d.from && pos <= d.to);
-    const field = block.fields.find(
-      (f) => (pos >= f.keyFrom && pos <= f.keyTo) || (pos >= f.valueFrom && pos <= f.valueTo),
+    const field = fields.find(
+      (f) => pos >= f.from && pos <= view.state.doc.line(f.line).to,
     );
     if (!hit && !field) return null;
 
     const lines: string[] = [];
-    if (hit) lines.push(hit.message);
+    if (hit) lines.push(hit.diagnostic.message);
     if (field) {
-      const info = fieldInfoText(getSchema(), field.name);
+      const info = fieldInfoText(getSchema(), field.key);
       if (info) lines.push(info);
     }
     if (lines.length === 0) return null;
 
-    const from = hit ? hit.from : field!.keyFrom;
-    const to = hit ? hit.to : field!.keyTo;
+    const from = hit ? hit.from : field!.from;
+    const to = hit ? hit.to : field!.to;
     return {
       pos: from,
       end: to,
@@ -152,8 +126,7 @@ export interface FieldCompletion {
  * CM6 `autocompletion()`, which would race Obsidian's own suggest system.
  */
 export function fieldCompletions(schema: MossSchema, doc: string, prefix: string): FieldCompletion[] {
-  const block = parseFrontmatterBlock(doc);
-  const present = new Set(block?.fields.map((f) => f.name) ?? []);
+  const present = new Set(editorFieldSpans(doc).map((f) => f.key));
   const out: FieldCompletion[] = [];
   const p = prefix.toLowerCase();
   for (const spec of schema.fields.values()) {
@@ -167,10 +140,11 @@ export function fieldCompletions(schema: MossSchema, doc: string, prefix: string
       insert: `${spec.name}: `,
     });
   }
-  return out;
+  // The schema's field order is a hash order; sort so the list is stable.
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The complete frontmatter knowledge extension (lint + hover). */
-export function frontmatterExtension(getSchema: SchemaProvider): Extension {
-  return [lintPlugin(getSchema), buildHover(getSchema)];
+export function frontmatterExtension(getSchema: SchemaProvider, getSite: SiteProvider): Extension {
+  return [lintPlugin(getSite), buildHover(getSchema, getSite)];
 }

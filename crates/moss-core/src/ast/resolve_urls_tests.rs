@@ -52,7 +52,7 @@ fn resolves_standard_markdown_link_to_internal() {
     // (Url::Unresolved) so moss-build's host classifier can decode it via
     // page_map.
     // The renderer doesn't see this state — the host's
-    // `classify_url_prod` pass replaces Unresolved before render.
+    // `classify_url` pass replaces Unresolved before render.
     match &doc.blocks[0] {
         Block::Paragraph(children) => match &children[0] {
             Inline::Link { url, .. } => {
@@ -331,7 +331,7 @@ fn standard_markdown_link_emits_sentinel() {
     assert_eq!(visitor[0].target_path, "文字/文字.md");
     assert_eq!(visitor[0].display_text, "文字");
     assert_eq!(visitor[0].link_type, LinkType::Standard);
-    // The sentinel shape is what `classify_url_prod` in moss-build
+    // The sentinel shape is what `classify_url` in moss-build
     // expects to decode via `page_map` / `external_url_map`.
     match &doc.blocks[0] {
         Block::Paragraph(children) => match &children[0] {

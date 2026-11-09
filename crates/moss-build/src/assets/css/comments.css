@@ -234,7 +234,7 @@ a.comment-author:hover {
   padding: 0.25rem 0;
   border: none;
   /* border-strong: the underline is the field's only boundary (WCAG 1.4.11). */
-  border-bottom: 1px solid var(--moss-border-strong, #8e8b85);
+  border-bottom: 1px solid var(--moss-field-edge, var(--moss-border-strong, #8e8b85));
   font-family: inherit;
   font-size: var(--moss-reading-size, 1.125rem);
   line-height: 1.7;
@@ -244,15 +244,6 @@ a.comment-author:hover {
   overflow: hidden;
   box-sizing: border-box;
   transition: border-color 0.15s ease;
-}
-
-.comment-form textarea:focus {
-  outline: none;
-  /* Keep the border 1px (no box-size change → no layout shift); render the
-     focus emphasis as a box-shadow line, which is decorative and out of flow.
-     1px accent border + 1px accent shadow = a 2px accent underline, visually. */
-  border-bottom-color: var(--moss-color-accent, #2d5a2d);
-  box-shadow: 0 1px 0 0 var(--moss-color-accent, #2d5a2d);
 }
 
 .comment-form textarea::placeholder {
@@ -275,7 +266,7 @@ a.comment-author:hover {
 .comment-field {
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--moss-border-strong, #8e8b85);
+  border-bottom: 1px solid var(--moss-field-edge, var(--moss-border-strong, #8e8b85));
   padding: 0.5rem 0;
   font-family: inherit;
   font-size: var(--moss-size-sm, 1rem);
@@ -283,14 +274,6 @@ a.comment-author:hover {
   box-sizing: border-box;
   transition: border-color 0.15s ease;
   min-width: 0;
-}
-
-.comment-field:focus {
-  outline: none;
-  /* Same no-layout-shift focus underline as the textarea: 1px border (constant
-     box) + a 1px box-shadow line = a 2px accent underline with no reflow. */
-  border-bottom-color: var(--moss-color-accent, #2d5a2d);
-  box-shadow: 0 1px 0 0 var(--moss-color-accent, #2d5a2d);
 }
 
 .comment-field::placeholder {

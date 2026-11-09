@@ -23,9 +23,9 @@ pub fn render(articles: &[ArticleListItemProps], more_url: Option<&str>, lang: c
     let items: Vec<String> = articles
         .iter()
         .map(|article| {
+            let (open, close) = super::child_list::link_or_box(article.url.as_deref(), "span", r#" class="moss-prefix-link""#);
             format!(
-                r#"<li><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix">{}</span><span class="moss-prefix-link-title">{}</span></a></li>"#,
-                html_escape(&article.url),
+                r#"<li>{open}<span class="moss-prefix-link-prefix">{}</span><span class="moss-prefix-link-title">{}</span>{close}</li>"#,
                 html_escape(&article.date_display),
                 html_escape(&article.title)
             )

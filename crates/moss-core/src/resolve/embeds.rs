@@ -93,7 +93,7 @@ fn resolve_embeds_inner(
                     reference: target.to_string(),
                     kind: DiagnosticKind::Other,
                 });
-                output.push_str(line);
+                output.push_str(&missing_embed(target));
                 output.push('\n');
                 continue;
             }
@@ -106,7 +106,7 @@ fn resolve_embeds_inner(
                     reference: target.to_string(),
                     kind: DiagnosticKind::Other,
                 });
-                output.push_str(line);
+                output.push_str(&missing_embed(target));
                 output.push('\n');
                 continue;
             }
@@ -120,7 +120,7 @@ fn resolve_embeds_inner(
                         reference: target.to_string(),
                         kind: DiagnosticKind::Other,
                     });
-                    output.push_str(line);
+                    output.push_str(&missing_embed(target));
                     output.push('\n');
                 }
                 Some(file_content) => {
@@ -177,6 +177,11 @@ fn resolve_embeds_inner(
         diagnostics,
         embed_deps,
     }
+}
+
+/// Visible fallback using the same class as missing folder embeds.
+fn missing_embed(target: &str) -> String {
+    format!("<div class=\"moss-embed-missing\">Embed unavailable: {}</div>", crate::media::html_escape(target))
 }
 
 /// Parse an embed marker line and return the target string.
@@ -635,8 +640,8 @@ mod tests {
 
         assert_eq!(result.diagnostics.len(), 1);
         assert!(result.diagnostics[0].message.contains("not found"));
-        // The marker should be preserved when the file is not found.
-        assert!(result.content.contains("<!-- moss-embed:missing.md -->"));
+        // A missing note must remain visible to the reader.
+        assert!(result.content.contains("<div class=\"moss-embed-missing\">Embed unavailable: missing.md</div>"));
     }
 
     #[test]

@@ -364,8 +364,8 @@ impl Default for TriggerContext {
 impl ProcessContext {
     /// Construct a `ProcessContext`, deriving `moss_dir` from `project_path`.
     /// `trigger` decides whether the plugin's tasks reach the ambient hairline
-    /// or the quiet Workspace surface; prefer [`ProcessContext::for_onboarding`]
-    /// / [`ProcessContext::for_build`] so that choice is explicit.
+    /// or the quiet Workspace surface, and whether the hook may write the
+    /// folder (only a run the person started may).
     pub fn new(project_path: String, project_info: ProjectInfo, trigger: TriggerContext) -> Self {
         let moss_dir = format!("{}/.moss", project_path);
         ProcessContext {
@@ -376,13 +376,6 @@ impl ProcessContext {
             site_config: Default::default(),
             trigger,
         }
-    }
-
-    /// Context for the post-install hook (user just connected a plugin via the
-    /// onboarding card). Stamps `OnboardingFlow` so plugin import tasks route to
-    /// `(ActionPanel, Ambient)` and animate the breadcrumb hairline.
-    pub fn for_onboarding(project_path: String, project_info: ProjectInfo) -> Self {
-        Self::new(project_path, project_info, TriggerContext::OnboardingFlow)
     }
 
     /// Context for the build / preview / rebuild path (no deliberate user
@@ -405,18 +398,6 @@ mod process_context_trigger_tests {
             site_name: None,
             lang: "en".into(),
         }
-    }
-
-    /// Regression guard for the headline onboarding fix: the onboarding
-    /// constructor MUST stamp `OnboardingFlow` (the only trigger that routes
-    /// plugin import tasks to the ActionPanel/Ambient breadcrumb hairline).
-    /// If this flips to Background, the hairline goes dead in production —
-    /// the exact bug this branch fixed.
-    #[test]
-    fn for_onboarding_stamps_onboarding_flow() {
-        let ctx = ProcessContext::for_onboarding("/site".to_string(), sample_info());
-        assert_eq!(ctx.trigger, TriggerContext::OnboardingFlow);
-        assert_eq!(ctx.moss_dir, "/site/.moss");
     }
 
     /// The build/preview/rebuild path MUST stay `Background` (quiet Workspace
@@ -444,7 +425,8 @@ mod process_context_trigger_tests {
     /// TS `TriggerContext` union and `route_plugin_task`'s inputs).
     #[test]
     fn trigger_serializes_to_snake_case() {
-        let ctx = ProcessContext::for_onboarding("/site".to_string(), sample_info());
+        let ctx = ProcessContext::new("/site".to_string(), sample_info(), TriggerContext::OnboardingFlow);
+        assert_eq!(ctx.moss_dir, "/site/.moss");
         let json = serde_json::to_string(&ctx).expect("serialize");
         assert!(json.contains(r#""trigger":"onboarding_flow""#), "got: {json}");
     }
@@ -452,17 +434,26 @@ mod process_context_trigger_tests {
 
 
 /// Context for deploy capability (publishing to hosting platforms)
-///
-/// Note: Path fields (project_path, moss_dir, output_dir) are intentionally omitted.
-/// Plugins access files through SDK functions (readSiteFile, readProjectFile, etc.)
-/// which resolve paths via the runtime's internal context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeployContext {
     /// Project structure information
     pub project_info: ProjectInfo,
 
-    /// List of files to deploy (relative to output_dir)
+    /// The files to deploy, relative to `site_dir`.
     pub site_files: Vec<String>,
+
+    /// Absolute path of a directory holding exactly `site_files`, read-only,
+    /// made for this hook call and removed when it returns. A deploy hook
+    /// reads the site here, never through `readSiteFile`, whose tree the next
+    /// build can advance mid-publish.
+    #[serde(default)]
+    pub site_dir: String,
+
+    /// Absolute path, beside `site_dir`, that the hook may pass to git as
+    /// `GIT_INDEX_FILE` to stage `site_dir` without touching the project's
+    /// own index. Not created; removed with `site_dir`.
+    #[serde(default)]
+    pub index_file: String,
 
     /// Plugin configuration from .moss/config.toml
     #[serde(default)]
@@ -816,6 +807,19 @@ pub struct HookResult {
     /// What a copy hook posted (`publish_copy`, `update_copy`)
     #[serde(default)]
     pub copy: Option<crate::syndication::record::CopyOutcome>,
+
+    /// Work a process hook a build started found but may not do, because it
+    /// would write the person's folder. Read only from such a run; moss shows
+    /// it with one action that runs the hook again as the person's own act.
+    #[serde(default)]
+    pub offer: Option<Offer>,
+}
+
+/// See [`HookResult::offer`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct Offer {
+    /// What is waiting, in the person's words: "3 new posts on Matters".
+    pub title: String,
 }
 
 /// Plugin hook progress payload — carried by `MossEvent::PluginProgress`.
@@ -896,6 +900,7 @@ pub fn clamp_plugin_advisory(p: PluginAdvisory) -> crate::advisory::Advisory {
     };
     let item = p.item.filter(|item| is_site_relative(item));
     crate::advisory::Advisory {
+        lifetime: Default::default(),
         scope: p.scope,
         severity,
         item,

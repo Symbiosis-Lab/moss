@@ -51,6 +51,7 @@ pub struct HookInvocation {
     pub context: serde_json::Value,
     pub project_path: String,
     pub moss_dir: String,
+    pub asked_by: crate::plugins::hook_state::AskedBy,
 }
 
 #[async_trait]
@@ -470,6 +471,7 @@ fn spawn_host_dispatch(
                     &state,
                     &project_path,
                     req.plugin.as_deref(),
+                    req.asked_by,
                     declared.as_ref(),
                     &req.cmd,
                     &req.args_json,
@@ -499,6 +501,7 @@ impl PluginEngine for QuickJsEngineAdapter {
         let hook_name = invocation.hook_name;
         let project_path = invocation.project_path;
         let moss_dir = invocation.moss_dir;
+        let asked_by = invocation.asked_by;
 
         // Live lookup, still BEFORE the spawn — "no bundle / load error" stays an
         // acceptance-time Err (no signal, no spawned completion task).
@@ -553,6 +556,7 @@ impl PluginEngine for QuickJsEngineAdapter {
                     &context_json,
                     &project_path,
                     &moss_dir,
+                    asked_by,
                     cancel.clone(),
                 )
                 .await;
@@ -571,6 +575,7 @@ impl PluginEngine for QuickJsEngineAdapter {
                         &context_json,
                         &project_path,
                         &moss_dir,
+                        asked_by,
                         cancel,
                     )
                     .await;
@@ -669,7 +674,7 @@ fn _assert_quickjs_dispatch_future_is_send(e: &QuickJsEngineAdapter) {
     let inv = HookInvocation {
         plugin_name: "p".into(), hook_name: "process".into(),
         context: serde_json::json!({}),
-        project_path: "/tmp/p".into(), moss_dir: "/tmp/p/.moss".into(),
+        project_path: "/tmp/p".into(), moss_dir: "/tmp/p/.moss".into(), asked_by: crate::plugins::hook_state::AskedBy::Person,
     };
     let fut = e.dispatch_hook(inv, HookSignalSink::new(|_| {}));
     assert_send(&fut);
@@ -711,6 +716,7 @@ mod tests {
             context,
             project_path: "/tmp/p".to_string(),
             moss_dir: "/tmp/p/.moss".to_string(),
+            asked_by: crate::plugins::hook_state::AskedBy::Person,
         }
     }
 
@@ -1123,6 +1129,7 @@ mod tests {
             context,
             project_path: "/proj".into(),
             moss_dir: "/proj/.moss".into(),
+            asked_by: crate::plugins::hook_state::AskedBy::Person,
         }, sink).await.unwrap();
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {

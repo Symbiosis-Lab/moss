@@ -1,73 +1,121 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import type { Editor, EditorSuggestContext } from "obsidian";
+import { MossFieldSuggest } from "../src/field-suggest";
+import type MossPlugin from "../src/main";
 import { describe, expect, it } from "vitest";
-import {
-  computeDiagnostics,
-  diagnosticsToDecorations,
-  fieldCompletions,
-  fieldInfoText,
-} from "../src/cm-frontmatter";
-import { parseDescribeJson } from "../src/schema";
+import { diagnosticsToDecorations, fieldCompletions, fieldInfoText } from "../src/cm-frontmatter";
+import { editorFieldSpans, initializeCore, MossSite, type EditorDiagnostic } from "../src/core";
+import { siteSchema, type SitePlugin } from "../src/schema";
 
-const SCHEMA = parseDescribeJson(
-  readFileSync(join(__dirname, "../src/describe-snapshot.json"), "utf8"),
-);
+initializeCore();
+const site = new MossSite(JSON.stringify({ files: ["note.md"], lang: "en" }));
+const schema = siteSchema(site);
 
-describe("computeDiagnostics", () => {
-  it("is empty for docs without frontmatter", () => {
-    expect(computeDiagnostics("# Hi\n", SCHEMA)).toEqual([]);
+function decorations(text: string, diagnostics: EditorDiagnostic[]) {
+  const result = [];
+  const cursor = diagnosticsToDecorations(text, diagnostics).iter();
+  while (cursor.value) {
+    result.push({ from: cursor.from, to: cursor.to, cls: cursor.value.spec.class });
+    cursor.next();
+  }
+  return result;
+}
+
+describe("core diagnostics in CodeMirror", () => {
+  it("marks top-level keys and decorates body lines using real wasm", () => {
+    const text = '---\ntitel: x\ndraft: "yes"\n---\n\n[[missing]]\n';
+    const diagnostics: EditorDiagnostic[] = JSON.parse(site.check("note.md", text));
+    const ranges = decorations(text, diagnostics);
+    expect(ranges).toContainEqual({ from: 4, to: 9, cls: "moss-diag-hint" });
+    const draft = ranges.find((range) => text.slice(range.from, range.to) === "draft");
+    expect(draft?.cls).toBe("moss-diag-error");
+    const link = text.indexOf("[[missing]]");
+    expect(ranges).toContainEqual({ from: link, to: link, cls: "moss-diag-warning" });
   });
 
-  it("carries offsets a decoration can use", () => {
-    const doc = "---\ntitel: x\n---\n";
-    const [d] = computeDiagnostics(doc, SCHEMA);
-    expect(doc.slice(d.from, d.to)).toBe("titel");
-  });
-});
-
-describe("diagnosticsToDecorations", () => {
-  it("builds a sorted decoration set with the lint classes", () => {
-    const doc = '---\ndraft: "yes"\ntitel: x\n---\n';
-    const set = diagnosticsToDecorations(computeDiagnostics(doc, SCHEMA));
-    const seen: Array<{ from: number; cls: string | undefined }> = [];
-    const iter = set.iter();
-    while (iter.value) {
-      seen.push({ from: iter.from, cls: (iter.value.spec as { class?: string }).class });
-      iter.next();
-    }
-    expect(seen.map((s) => s.cls)).toEqual(["moss-fm-wrong-type", "moss-fm-unknown"]);
-    expect(seen[0].from).toBeLessThan(seen[1].from);
-  });
-});
-
-describe("fieldInfoText", () => {
-  it("explains a schema field with type, group and description", () => {
-    const text = fieldInfoText(SCHEMA, "draft")!;
-    expect(text).toMatch(/^draft: boolean — This Page/);
-    expect(text).toContain("Hidden from all listings");
+  it("uses hint styling for both information and hint severity, including empty lines", () => {
+    const text = "first\n\nlast";
+    expect(decorations(text, [
+      { severity: 3, message: "info", line: 2, path: null, column: null },
+      { severity: 4, message: "hint", line: 3, path: null, column: null },
+    ])).toEqual([
+      { from: 6, to: 6, cls: "moss-diag-hint" },
+      { from: 7, to: 7, cls: "moss-diag-hint" },
+    ]);
   });
 
-  it("names Obsidian fields as ignored by moss", () => {
-    expect(fieldInfoText(SCHEMA, "aliases")).toContain("moss ignores it");
-  });
-
-  it("returns null for genuinely unknown names", () => {
-    expect(fieldInfoText(SCHEMA, "zzqy")).toBeNull();
+  it("checks body shortcodes even without frontmatter", () => {
+    const text = ":::nonesuch\nhello\n:::\n";
+    const diagnostics = JSON.parse(site.check("note.md", text));
+    expect(diagnostics.length).toBeGreaterThan(0);
+    expect(decorations(text, diagnostics).some((range) => range.from === range.to)).toBe(true);
   });
 });
 
-describe("fieldCompletions", () => {
-  it("offers schema fields matching the prefix, with insert text", () => {
-    const items = fieldCompletions(SCHEMA, "---\n\n---\n", "ti");
-    expect(items.map((i) => i.name)).toContain("title");
-    const title = items.find((i) => i.name === "title")!;
-    expect(title.insert).toBe("title: ");
-    expect(title.description).toMatch(/Title of the page/);
+describe("schema descriptions and completion", () => {
+  it("reads built-in descriptions from wasm", () => {
+    expect(fieldInfoText(schema, "draft")).toContain("draft: boolean");
+    expect(fieldInfoText(schema, "zzqy")).toBeNull();
+    expect(fieldCompletions(schema, "---\n\n---\n", "ti").find((field) => field.name === "title")?.insert).toBe("title: ");
+    expect(fieldCompletions(schema, "---\ntitle: x\n---\n", "").map((field) => field.name)).not.toContain("title");
   });
 
-  it("omits fields already present and internal fields", () => {
-    const items = fieldCompletions(SCHEMA, "---\ntitle: x\n---\n", "");
-    expect(items.map((i) => i.name)).not.toContain("title");
-    expect(items.every((i) => !i.name.startsWith("_"))).toBe(true);
+  it("lists completions by name, not in the schema's hash order", () => {
+    const fields = new Map(["review_score", "review_of"].map((name) => [name, { name, type: "string", description: "", group: "" }]));
+    expect(fieldCompletions({ fields }, "", "review").map((field) => field.name)).toEqual(["review_of", "review_score"]);
   });
+
+  it("matches the core's additive plugin composition", () => {
+    const plugins: SitePlugin[] = [{ name: "z-last", fields: { review_score: { type: "string" } } },
+      { name: "a-first", fields: {
+        title: { type: "boolean", description: "Must not replace title" },
+        review_score: { type: "integer", description: "Reader review score" },
+      } }];
+    const contributed = new MossSite(JSON.stringify({ files: [], lang: "en", plugins, listing_styles: ["board"] }));
+    const composed = siteSchema(contributed);
+    expect(composed.fields.get("title")?.type).toBe("string");
+    expect(fieldInfoText(composed, "review_score")).toContain("Reader review score");
+    const review = fieldCompletions(composed, "---\n\n---\n", "review");
+    expect(review.map((field) => field.name)).toEqual(["review_of", "review_score"]);
+    expect(review[1].type).toBe("integer");
+    expect(composed.fields.get("children_style")?.enumValues).toContain("board");
+    expect(JSON.parse(contributed.schemaJson()).frontmatter.fields.review_score.source).toBe("a-first");
+    expect(JSON.parse(contributed.check("page.md", "---\ntitle: Example\nreview_score: 3\nchildren_style: board\n---\n"))).toEqual([]);
+    const text = "---\nreview_score: invalid\n---\n";
+    expect(decorations(text, JSON.parse(contributed.check("page.md", text))))
+      .toContainEqual({ from: 4, to: 16, cls: "moss-diag-error" });
+    contributed.free();
+  });
+});
+
+it.each([
+  ['---\ntitle: café 🌿\n"draft": wrong\n---\n', '"draft"'],
+  ['\uFEFFtitle: café 🌿\r\ndraft: wrong\r\n---\r\n', 'draft'],
+])("uses canonical fields and UTF-16 offsets for %s", (text, spelling) => {
+  const field = editorFieldSpans(text).find((field) => field.key === "draft")!;
+  expect(field.from).toBe(text.indexOf(spelling));
+  expect(text.slice(field.from, field.to)).toBe(spelling);
+  expect(decorations(text, JSON.parse(site.check("note.md", text))))
+    .toContainEqual({ from: field.from, to: field.to, cls: "moss-diag-error" });
+  expect(fieldInfoText(schema, field.key)).toContain("draft: boolean");
+  expect(fieldCompletions(schema, text, "").map((field) => field.name)).not.toContain("draft");
+});
+
+it.each([
+  ['---\n"title": café 🌿\nti\n---\n', 2, true],
+  ['title: café 🌿\nti\n---\n', 1, true],
+  ['# Body\nti\n---\n', 1, false],
+])("triggers completion using canonical frontmatter boundaries for %s", (text, line, inside) => {
+  const lines = text.split("\n");
+  const editor = {
+    getValue: () => text,
+    getLine: (line: number) => lines[line],
+    posToOffset: ({ line, ch }: { line: number; ch: number }) => lines.slice(0, line).reduce((n, text) => n + text.length + 1, 0) + ch,
+  } as Editor;
+  const suggest = new MossFieldSuggest({ app: {} } as MossPlugin, () => schema);
+  const trigger = suggest.onTrigger({ line, ch: 2 }, editor, null);
+  expect(trigger !== null).toBe(inside);
+  if (trigger) {
+    const suggestions = suggest.getSuggestions({ ...trigger, editor } as EditorSuggestContext);
+    expect(suggestions.map((field) => field.name)).not.toContain("title");
+  }
 });

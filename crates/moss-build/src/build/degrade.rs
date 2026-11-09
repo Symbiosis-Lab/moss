@@ -24,13 +24,14 @@ use std::path::Path;
 /// access, so this function needs no `BuildServices`. Returned is whether the
 /// generation may ship at all.
 ///
-/// The four sources that can leave a `<source>` pointing at nothing: a failed
-/// encode, the orphan prune, the presence pass, and a
-/// reference with no manifest entry at all. This is the only scope that sees
-/// all four (as amended 2026-09-09) — and the only one that can hand
-/// them ONE reference scan, which their disjointness depends on: the prune acts
-/// on what that scan did NOT see, the fourth source on what it did. Hoisting
-/// the scan out of the prune also keeps the fourth source alive under
+/// Three sources can leave a `<source>` pointing at nothing: a failed encode,
+/// the presence pass, and a reference with no manifest entry at all. The orphan
+/// prune removes variants too, but only ones no scanned page names, so the
+/// repair has none of its keys to strip. This is the only scope that sees all of
+/// them, and the only one that can hand the prune and the last source ONE
+/// reference scan, which their disjointness depends on: the prune acts on what
+/// that scan did NOT see, the last source on what it did. Hoisting the scan
+/// out of the prune also keeps that source alive under
 /// `[build].prune_orphaned_images = false`, an opt-out about upload bytes.
 ///
 /// The order is load-bearing. Every removal pass runs before
@@ -53,32 +54,77 @@ use std::path::Path;
 /// a generation withheld because its tree could not be read must not also
 /// rewrite the HTML the preview is serving, from a strip set that unreadable
 /// tree produced.
+///
+/// Also returns the staged pages the repair rewrote: they are bytes the
+/// preview is already serving, so the caller tells it to read them again.
 pub(crate) fn repair_staged_html(
     mp: &crate::moss_paths::MossPaths,
     stage_dir: &Path,
     sealed: &mut SealedManifest,
     failed: HashSet<String>,
-) -> crate::build::ship::ShipVerdict {
+) -> (crate::build::ship::ShipVerdict, Vec<String>) {
     let mut unshippable = failed;
-    let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
-    unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
-    let entries = sealed.all_files().len();
     // Same object store `ship_phase` will read from, so a `staged_oid` entry
     // whose stage copy is transiently absent (evicted, mid-write, deleted by
     // something other than moss) is asked of its live CAS blob here too,
     // rather than being dropped from the manifest on the strength of a stage
     // path this generation was never going to read from anyway.
-    let object_store = crate::build::cache::ObjectStore::for_site(mp);
+    let object_store = crate::build::cache::ObjectStore::for_seal(mp);
+    let scan = shipped_references(stage_dir, sealed, &object_store);
+    // Pruned keys are not stripped: no page this generation ships names one,
+    // so a strip could only rewrite a newer build's staged page.
+    crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan);
+    let entries = sealed.all_files().len();
     let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed, Some(&object_store));
+    if let Err(e) = object_store.save_verified() {
+        log::debug!("[CAS] verified-blob index not saved: {e}");
+    }
     let verdict = crate::build::ship::ShipVerdict::after_presence_pass(sealed, entries, lost.len());
     unshippable.extend(lost);
     unshippable.extend(crate::build::ship::unregistered_referenced_variants(
         &scan, sealed, stage_dir,
     ));
-    if verdict.repairs_staging() {
-        apply_to_staging(stage_dir, sealed, &unshippable);
+    let rewritten = if verdict.repairs_staging() { apply_to_staging(stage_dir, sealed, &unshippable) } else { Vec::new() };
+    (verdict, rewritten)
+}
+
+/// The references in what this generation ships: each scannable entry read
+/// where `ship_phase` will read it (`ship::resolve_ship_source`), not from the
+/// stage. The tail runs detached, so an overlapping build may already have
+/// rendered over the stage; read from there, its pages would decide which of
+/// this generation's variants count as referenced, and a variant this
+/// generation's own pages name would be pruned from under them.
+///
+/// A symlink entry ships a passthrough subtree, read through the link. An
+/// entry whose bytes are positively gone ships nothing, so it says nothing;
+/// any other read failure is blindness the prune fails closed on.
+pub(crate) fn shipped_references(
+    stage_dir: &Path,
+    sealed: &SealedManifest,
+    object_store: &crate::build::cache::ObjectStore,
+) -> crate::build::media::orphan_prune::ReferenceScan {
+    use crate::build::media::orphan_prune::{is_scanned, Rescan};
+    use crate::build::ship::{resolve_ship_source, ShipRead};
+    let mut rescan = Rescan::shipped(stage_dir);
+    for (key, entry) in sealed.all_files() {
+        let stage_path = stage_dir.join(key);
+        if crate::types::content::parse_entry(entry).0 == crate::types::content::MODE_SYMLINK && stage_path.is_dir() {
+            rescan.read_tree(&stage_path);
+            continue;
+        }
+        if !is_scanned(&stage_path) {
+            continue;
+        }
+        match resolve_ship_source(key, &stage_path, sealed, Some(object_store)) {
+            ShipRead::Held(bytes) => rescan.read_bytes(Some(key), bytes),
+            ShipRead::Path(path) => match rescan.read_file(&path, Some(key)) {
+                Ok(()) => {}
+                Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => {}
+                Err(_) => rescan.blind(path),
+            },
+        }
     }
-    verdict
+    rescan.finish()
 }
 
 /// Rewrite every sealed HTML page in `stage_dir` to drop references to image
@@ -88,20 +134,21 @@ pub(crate) fn repair_staged_html(
 /// `failed` is every site-root-relative URL that must not survive in HTML,
 /// whatever removed it. This function does not care which — a `<picture>`
 /// cannot fall back from a chosen-source 404 regardless of who deleted the
-/// file, so every source feeds one strip set (as amended 2026-09-09).
+/// file, so every source feeds one strip set.
 /// Taking a set rather than the `AssetRegistry` is what lets the removal
 /// passes downstream of the encoder participate at all.
 ///
-/// No-op, with no filesystem access, when `failed` is empty (the common case).
+/// Returns the pages it rewrote. No-op, with no filesystem access, when
+/// `failed` is empty (the common case).
 /// [`repair_staged_html`] is what assembles the set and owns the ordering this
 /// pass depends on.
 pub fn apply_to_staging(
     stage_dir: &Path,
     sealed: &mut SealedManifest,
     failed: &std::collections::HashSet<String>,
-) {
+) -> Vec<String> {
     if failed.is_empty() {
-        return;
+        return Vec::new();
     }
     let mut rewrites: HashMap<String, String> = HashMap::new();
 
@@ -175,7 +222,9 @@ pub fn apply_to_staging(
         // non-concurrent rewrite and flag every repaired page as if a race
         // had touched it.
         sealed.stamp_ship_fingerprints(stage_dir, rewritten_keys.iter().map(|s| s.as_str()));
+        return rewritten_keys.into_iter().collect();
     }
+    Vec::new()
 }
 
 #[cfg(test)]

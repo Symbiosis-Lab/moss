@@ -5,8 +5,8 @@
  * under its licence.
  *
  *   1. History and outside references, in comments and test titles: doc paths,
- *      ADR ids, tracker numbers, plan labels and dates, and any file path that
- *      names no file in this repository, which a reader here cannot open. A
+ *      ADR ids, tracker numbers, plan labels and dates, and any repository
+ *      path that names no file here, which a reader cannot open. A
  *      comment says what the code cannot; its history belongs in the commit
  *      message.
  *   2. Private names anywhere in any file of the package, from the rules file
@@ -39,43 +39,47 @@ export const HISTORY_RULES = [
     name: "plan-label",
     re: /\b(?:Task|Phase|Plan|Bundle|Slice|Cut|Wave|Gap|Milestone|Law|Decision|Blocker|BLOCKER)\s[0-9][\w.]*|\bThread-\d+\b|\bthis (?:task|investigation|slice|plan)\b|\b(?:slice|phase|task|bundle) \d[\w.-]*|\b[Dd]ecision [A-Z]\b|\bRC-\d+\b|\b(?![Hh][1-6]\b)(?!C[01] control)[A-Z]\d(?:\.\d+)?\b(?=[\s:—)\]-])/g,
   },
+  { name: "letter-plan-label", re: /\b(?:Task|Phase|Part|Fix|Stage)[ -][A-Z]\d*(?:\.\d+)?\b|\b[A-Z]\.\d+(?:\.\d+)?\b/g },
+  { name: "work-history", re: /\breview rounds?\b|\bdesign feedback\b|\bfeat\/[\w-]+|\bT\d{1,2}[a-z]?\b(?!:\d)/g },
   { name: "date", re: /\b20\d\d-\d\d-\d\d\b/g },
   // A section of a document (`design §4`); a published standard's (`RFC 9110 §15.5`) is public.
   { name: "doc-section", re: /(?<!\bRFC ?\d{3,5},? )§\s*[\w.-]+/g },
   { name: "history", re: /\b(?:on|in) this branch\b/gi },
 ];
 
-/** A file path or name in prose; a URL's path is not one, since nothing may precede it but space. */
-const FILE_PATH = /(?<![\w./@:-])@?(?:[\w.-]+\/)*[\w-][\w.-]*\.(?:[cm]?[jt]sx?|css|json|rs|html|md|toml|ya?ml|sh|py)\b(?![\w/-])/g;
+/** A path-shaped reference in prose; bare filenames and URL paths are not repository paths. */
+const FILE_PATH = /(?<![\w./@:-])@?(?:[\w.-]+\/)+[\w-][\w.-]*\.(?:[cm]?[jt]sx?|css|json|rs|html|md|toml|ya?ml|sh|py)\b(?![\w/-])/g;
 /** How this package names its own modules, mapped onto the files that hold them. */
 const SELF_SPECIFIER = /^@symbiosis-lab\/moss-ui\/ui\//;
 
+/** Source code, which a site's content never is. */
+const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|css|rs|toml|sh|py)$/;
+
 /**
- * Whether a path in a comment names a tracked file. A path may be relative to
- * the repository, the package or the file it sits in, so any tracked path that
- * ends with it counts; a path starting `./` or `../` must name the file it
- * resolves to from `from`, the repo-relative path of the file it sits in. A
- * bare file name counts only when one tracked file has it: `style.css` beside
- * four fixtures of that name could mean any of them, or a file in another
- * repository. The names of a site's own files are prose, not paths.
+ * Whether a path in a comment names a tracked file. Only a token shaped like
+ * a repository path is checked: one starting `./` or `../`, one whose first
+ * segment is a top-level entry of the repository, or a source file. Anything
+ * else (`works/post.md`, `folder/index.html`) is an example of a site's own
+ * files, which a comment about the editor names all the time.
+ *
+ * A checked path may be relative to the repository, the package or the file
+ * it sits in, so any tracked path that ends with it counts; a path starting
+ * `./` or `../` must name the file it resolves to from `from`, the
+ * repo-relative path of the file it sits in.
  */
-const SITE_FILES = new Set(["index.md", "config.toml"]);
 export function pathResolver(tracked) {
   const exact = new Set(tracked);
-  const suffixes = new Map();
+  const topLevel = new Set(tracked.filter((f) => f.includes("/")).map((f) => f.split("/")[0]));
+  const suffixes = new Set();
   for (const file of tracked) {
     const parts = file.split("/");
-    for (let i = 0; i < parts.length; i++) {
-      const suffix = parts.slice(i).join("/");
-      suffixes.set(suffix, (suffixes.get(suffix) ?? 0) + 1);
-    }
+    for (let i = 0; i < parts.length; i++) suffixes.add(parts.slice(i).join("/"));
   }
   return (token, from = "") => {
     if (/^\.\.?\//.test(token)) return exact.has(posix.join(posix.dirname(from), token));
-    if (SITE_FILES.has(token)) return true;
     const path = token.replace(SELF_SPECIFIER, "packages/moss-ui/src/ui/");
-    const count = suffixes.get(path) ?? 0;
-    return path.includes("/") ? count > 0 : count === 1;
+    if (!topLevel.has(path.split("/")[0]) && !SOURCE_EXT.test(path)) return true;
+    return suffixes.has(path);
   };
 }
 
@@ -150,6 +154,31 @@ function packageName(spec) {
 }
 
 /**
+ * Consecutive comment lines joined into one text, so a phrase or a path
+ * wrapped across lines is read whole. A line's leading `*` is dropped, and a
+ * line ending inside a word or path (`src/`, `tauri-`) runs on into the next
+ * without a space. `lineAt` maps an offset in the text back to its line.
+ */
+export function commentBlocks(lines) {
+  const blocks = [];
+  let prev = -1;
+  for (const [line, raw] of lines) {
+    const piece = raw.replace(/^\s*\*?\s*/, "").trimEnd();
+    if (!piece) continue;
+    let block = blocks.at(-1);
+    if (!block || line !== prev + 1) blocks.push((block = { text: "", starts: [] }));
+    else block.text += /[\w.][/-]$/.test(block.text) ? "" : " ";
+    block.starts.push([block.text.length, line]);
+    block.text += piece;
+    prev = line;
+  }
+  return blocks.map(({ text, starts }) => ({
+    text,
+    lineAt: (offset) => starts.findLast(([start]) => start <= offset)[1],
+  }));
+}
+
+/**
  * Every hit in one file, as { file, line, rule, match }. `known` answers
  * whether a path names a tracked file; without it paths go unchecked.
  * `repoPath` is the file's path from the repository root.
@@ -158,19 +187,25 @@ export function scanFile(file, source, privateRules, known, repoPath = file) {
   const hits = [];
   const ext = file.slice(file.lastIndexOf("."));
   const isTest = /\/__tests__\/|\.test\.[cm]?[jt]s$|test-setup/.test(file);
-  const readable = [...commentLines(source, ext), ...(isTest ? testTitles(source) : [])];
-  for (const [line, text] of readable) {
+  const titles = isTest ? testTitles(source).map(([line, text]) => ({ text, lineAt: () => line })) : [];
+  for (const { text, lineAt } of [...commentBlocks(commentLines(source, ext)), ...titles]) {
+    const hit = (rule, m, match = m[0].trim()) => hits.push({ file, line: lineAt(m.index), rule, match });
     for (const rule of HISTORY_RULES) {
       for (const m of text.matchAll(rule.re)) {
         if (rule.name === "tracker" && ext === ".css" && /^#\d{3}(?:\d{3})?$/.test(m[0])) continue;
-        hits.push({ file, line, rule: rule.name, match: m[0].trim() });
+        hit(rule.name, m);
       }
     }
     if (known) {
-      for (const m of text.matchAll(FILE_PATH)) if (!known(m[0], repoPath)) hits.push({ file, line, rule: "unknown-path", match: m[0] });
+      for (const m of text.matchAll(FILE_PATH)) {
+        // A markup attribute's value (`<iframe src="./a.html">`) is a URL the page loads.
+        if (!known(m[0], repoPath) && !/=["']$/.test(text.slice(0, m.index))) hit("unknown-path", m, m[0]);
+      }
     }
-    if (LICENCE_HEADER.test(text)) hits.push({ file, line, rule: "licence-header", match: text.trim().slice(0, 60) });
-    if (TAKEN_FROM.test(text)) hits.push({ file, line, rule: "taken-from", match: text.trim().slice(0, 60) });
+    for (const [rule, re] of [["licence-header", LICENCE_HEADER], ["taken-from", TAKEN_FROM]]) {
+      const m = text.match(re);
+      if (m) hit(rule, m, text.slice(m.index).slice(0, 60));
+    }
   }
   if (privateRules) {
     source.split("\n").forEach((text, i) => {

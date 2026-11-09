@@ -30,6 +30,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -109,18 +110,6 @@ pub struct WalkedFile {
     pub meta: Option<std::fs::Metadata>,
 }
 
-/// One drifted path's stat, condensed: size, mtime at FULL nanosecond
-/// resolution, and the ctime/inode identity.
-///
-/// This is the sticky-suppression key — "has this file changed AGAIN since
-/// the dispatch that was supposed to clear it". Seconds-granular mtime alone
-/// would wrongly suppress a same-size, same-second re-edit (the exact
-/// blindness `mtime_nanos` closed in the content-hash gate), leaving the
-/// preview stale until the file changed once more. All zeroes for a path
-/// with no walk stat — a deletion, or a file that vanished mid-look — which
-/// is right: a reappearance moves the stamp.
-pub type DriftStamp = (u64, i64, u32, Option<i64>, Option<u64>);
-
 /// What drifting means for one path. The distinction the sweep's dispatch
 /// turns on: handing a create or a delete to `ContentOnly` would let the
 /// incremental gates open on a batch that can move the site's structure.
@@ -137,7 +126,8 @@ pub enum DriftKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Drift {
     pub kind: DriftKind,
-    pub stamp: DriftStamp,
+    /// Full stat precision distinguishes same-size edits within one second.
+    pub stamp: FileStat,
 }
 
 /// What one comparison pass concluded. `drifted` is empty ⇔ the screen still
@@ -196,22 +186,9 @@ impl DriftReport {
     }
 }
 
-/// Condense a walk's stat into a [`DriftStamp`]. All zeroes when the walk
-/// carried none — see the type's docs.
-pub fn stamp_of(meta: Option<&std::fs::Metadata>) -> DriftStamp {
-    let Some(m) = meta else {
-        return (0, 0, 0, None, None);
-    };
-    use std::time::UNIX_EPOCH;
-    let mtime = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
-    let (ctime, inode) = crate::build::stat::stat_identity(m);
-    (
-        m.len(),
-        mtime.map(|d| d.as_secs() as i64).unwrap_or(0),
-        mtime.map(|d| d.subsec_nanos()).unwrap_or(0),
-        ctime,
-        inode,
-    )
+/// A missing walk stat uses an empty sentinel: reappearance moves the stamp.
+pub fn stamp_of(meta: Option<&std::fs::Metadata>) -> FileStat {
+    meta.map(FileStat::of).unwrap_or_else(|| FileStat::whole_second(0, 0))
 }
 
 /// Compare the walk's findings against the manifest baseline.

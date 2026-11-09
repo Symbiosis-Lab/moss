@@ -14,10 +14,10 @@ pub struct ListVersionsArgs {
     pub path: Option<String>,
 }
 
-/// Only the site-version drill-down needs the sealed site, so opening the
-/// panel costs no build.
 pub async fn list_versions(host: &dyn CommandHost, a: ListVersionsArgs) -> Result<panel::VersionList, String> {
-    panel::list_versions(host.root(), &a.scope, a.path, host.sealed_now()).await
+    let root = host.root().to_path_buf();
+    tokio::task::spawn_blocking(move || panel::list_versions(&root, &a.scope, a.path))
+        .await.map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -27,12 +27,16 @@ pub struct ReadVersionArgs {
 }
 
 pub async fn read_version(host: &dyn CommandHost, a: ReadVersionArgs) -> Result<panel::VersionContent, String> {
-    panel::read_version(host.root(), &a.id, &a.path)
+    let root = host.root().to_path_buf();
+    tokio::task::spawn_blocking(move || panel::read_version(&root, &a.id, &a.path))
+        .await.map_err(|e| e.to_string())?
 }
 
 /// Opens the history store in the file manager of the machine the engine runs on.
 pub async fn reveal_history_store(host: &dyn CommandHost, _: NoArgs) -> Result<(), String> {
-    panel::reveal_history_store(host.root())
+    let root = host.root().to_path_buf();
+    tokio::task::spawn_blocking(move || panel::reveal_history_store(&root))
+        .await.map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -45,7 +49,9 @@ pub struct RestoreVersionArgs {
 /// Saves the present as a version first; restoring the whole site moves pages
 /// added since to the OS trash.
 pub async fn restore_version(host: &dyn CommandHost, a: RestoreVersionArgs) -> Result<panel::RestoreReport, String> {
-    panel::restore_version(host.root(), &a.id, a.path, &a.mode, host.sealed_now()).await
+    let root = host.root().to_path_buf();
+    tokio::task::spawn_blocking(move || panel::restore_version(&root, &a.id, a.path, &a.mode))
+        .await.map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Deserialize, specta::Type)]
@@ -54,5 +60,7 @@ pub struct SaveVersionArgs {
 }
 
 pub async fn save_version(host: &dyn CommandHost, a: SaveVersionArgs) -> Result<panel::VersionRow, String> {
-    panel::save_version(host.root(), a.label, host.sealed_now()).await
+    let root = host.root().to_path_buf();
+    tokio::task::spawn_blocking(move || panel::save_version(&root, a.label))
+        .await.map_err(|e| e.to_string())?
 }

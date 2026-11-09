@@ -9,11 +9,7 @@
 
 use moss_core::terms::{AUTHOR_NS, TAGS_NS};
 
-/// The two built-in namespaces and the field each one carries by default.
-/// One table, because two readers have to agree about it: config builds the
-/// built-in kinds from it, and [`super::kind_move_stubs`] decides a field
-/// has MOVED by comparing the kinds table against it.
-pub const BUILTIN_DEFAULT_FIELDS: [(&str, &str); 2] = [(AUTHOR_NS, "author"), (TAGS_NS, "tags")];
+pub use moss_core::terms::config::BUILTIN_DEFAULT_FIELDS;
 
 /// One term kind: a URL namespace fed by one or more name-list schema
 /// fields. Built once per build from `.moss/config.toml`. Replaces
@@ -154,49 +150,10 @@ fn kind_title(key: &str, titles: &[(String, String)], lang: &str) -> String {
     chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
-/// Why a name in a `[terms.<key>] fields` list cannot be a name-list field, or
-/// `None` when it can. A built-in field that is not a name list is refused,
-/// since reading its value as a list of names would break it. So is a name
-/// whose claim key (`<name>_page`) is a built-in's claim key while a kind that
-/// does not list the name lists that built-in: `tag` would claim `tag_page:`,
-/// which `tags` already owns, so one `tag_page:` would claim in two kinds.
-/// `place` shares `location`'s `place_page:`, which is harmless until a
-/// different kind also lists `location`.
-pub fn name_list_refusal(field: &str, kinds: &[crate::config::RawKind]) -> Option<String> {
-    match moss_core::schema_fields::BUILTIN_FIELDS.iter().find(|b| b.name == field) {
-        Some(b) if !b.name_list => Some("a built-in field that is not a name list".to_string()),
-        Some(_) => None,
-        None => {
-            let claim = super::claim_field_key(field);
-            let owner = moss_core::schema_fields::BUILTIN_FIELDS
-                .iter()
-                .find(|b| b.name_list && super::claim_field_key(b.name) == claim)?;
-            kinds
-                .iter()
-                .find(|k| k.fields.iter().any(|f| f == owner.name) && !k.fields.iter().any(|f| f == field))
-                .map(|k| {
-                    format!(
-                        "its claim key {claim} is also {}'s, and [terms.{}] lists {}, so one {claim}: would claim in both kinds",
-                        owner.name, k.key, owner.name
-                    )
-                })
-        }
-    }
-}
-
 /// The name-list fields a config declares beyond the built-in five, in
 /// declaration order, deduplicated. The editor's schema adds them.
 pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let kinds = cfg.terms_kinds();
-    for kind in &kinds {
-        for f in &kind.fields {
-            if name_list_refusal(f, &kinds).is_none() && !out.contains(f) {
-                out.push(f.clone());
-            }
-        }
-    }
-    out
+    moss_core::terms::config::declared_name_list_fields(&cfg.terms_kinds()).0
 }
 
 /// Turn config into the kinds table [`super::derive_terms`] derives from —
@@ -206,7 +163,7 @@ pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String>
 /// The name-list set for this build is the built-in five (the `name_list`
 /// flag in [`moss_core::schema_fields::BUILTIN_FIELDS`]) plus every name a declared
 /// `fields` list names: a declared field is a name-list field for this site.
-/// A name refused by [`name_list_refusal`] (a built-in non-list field such as
+/// A name refused by [`moss_core::terms::config::name_list_refusal`] (a built-in non-list field such as
 /// `title`, or a name claiming a built-in's term page) is a diagnostic, not a
 /// silent drop. A field a
 /// DECLARED (non-built-in) kind claims is removed from any built-in kind
@@ -225,32 +182,10 @@ pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String>
 /// i18n default correctly.
 pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermKind> {
     let raw_kinds = cfg.terms_kinds();
-    let filtered: Vec<(crate::config::RawKind, Vec<String>)> = raw_kinds
-        .iter()
-        .cloned()
-        .map(|kind| {
-            let fields = kind
-                .fields
-                .iter()
-                .filter(|f| {
-                    match name_list_refusal(f, &raw_kinds) {
-                        None => true,
-                        Some(reason) => {
-                            crate::build::cli_output::log_warn_problem!(
-                                "[terms.{}] names field \"{}\", which cannot be a name-list field ({}); ignoring",
-                                kind.key,
-                                f,
-                                reason
-                            );
-                            false
-                        }
-                    }
-                })
-                .cloned()
-                .collect();
-            (kind, fields)
-        })
-        .collect();
+    let (filtered, warnings) = moss_core::terms::config::filter_fields(&raw_kinds);
+    for warning in warnings {
+        crate::build::cli_output::log_warn_problem!("{warning}");
+    }
 
     let claimed_by_a_declared_kind: std::collections::HashSet<String> = filtered
         .iter()
@@ -292,19 +227,7 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermK
             // toward an unrecognized `type`.
             let explorer = is_place.then_some(kind.explorer).flatten();
             let line = is_place.then_some(kind.line).flatten();
-            let cards = match kind.cards {
-                None => false,
-                Some(toml::Value::Boolean(on)) => on,
-                Some(other) => {
-                    crate::build::cli_output::log_warn_problem!(
-                        "[terms.{}] cards must be true or false, not {}; ignoring",
-                        kind.key,
-                        other
-                    );
-                    false
-                }
-            };
-            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line, slugs: Default::default(), cards }
+            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line, slugs: Default::default(), cards: kind.cards.unwrap_or(false) }
         })
         .collect()
 }
@@ -314,13 +237,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn built_in_kind_off_by_config_derives_nothing() {
-        let cfg = crate::config::ConfigFile::parse("[terms]\ntags = false\n").unwrap();
-        let kinds = term_kinds(&cfg, "en");
-        let tags = kinds.iter().find(|k| k.key == TAGS_NS).expect("tags kind present");
-        assert!(tags.fields.is_empty(), "tags = false empties the built-in kind: {:?}", tags.fields);
-        let authors = kinds.iter().find(|k| k.key == AUTHOR_NS).expect("authors kind present");
-        assert_eq!(authors.fields, vec!["author".to_string()], "authors kind untouched");
+    fn fixture_site_language_and_name_lists_match_core_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let config = "[site]\nlang = 'invalid'\n[terms]\nauthor = false\n[terms.zebra]\nfields = ['jury']\n[terms.people]\nfields = ['editor', 'tag', 'title']\n";
+        let home = "---\nlang: ' FR '\n---\nHome";
+        std::fs::write(root.path().join("index.md"), home).unwrap();
+        let cfg = crate::config::ConfigFile::parse(config).unwrap();
+        let lang = crate::i18n::detect::resolve_site_default_lang(
+            cfg.site_lang(), Some("index.md"), &[], root.path().to_str().unwrap(),
+        );
+        let (bundle, _) = moss_core::page::site_bundle(moss_core::page::SiteSources {
+            files: vec!["index.md".into()],
+            texts: std::collections::HashMap::from([("index.md".into(), home.into())]),
+            config_toml: Some(config.into()), ..Default::default()
+        });
+        assert_eq!(lang, "fr");
+        assert_eq!(bundle.lang, lang);
+        assert_eq!(declared_name_list_fields(&cfg), ["tags", "editor", "jury"]);
+        assert_eq!(bundle.declared_name_lists, declared_name_list_fields(&cfg));
     }
 
     #[test]
@@ -333,55 +267,6 @@ mod tests {
         assert!(authors.fields.is_empty(), "author moved into people: {:?}", authors.fields);
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert_eq!(people.fields, vec!["author".to_string(), "editor".to_string()]);
-    }
-
-    #[test]
-    fn a_declared_field_is_a_name_list_field_for_the_site() {
-        let cfg =
-            crate::config::ConfigFile::parse("[terms.people]\nfields = [\"editor\", \"ghost\"]\n")
-                .unwrap();
-        let kinds = term_kinds(&cfg, "en");
-        let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
-        assert_eq!(
-            people.fields,
-            vec!["editor".to_string(), "ghost".to_string()],
-            "a name no built-in knows is still a name-list field once declared"
-        );
-    }
-
-    #[test]
-    fn a_built_in_field_that_is_not_a_name_list_is_refused() {
-        let cfg =
-            crate::config::ConfigFile::parse("[terms.people]\nfields = [\"editor\", \"title\"]\n")
-                .unwrap();
-        let kinds = term_kinds(&cfg, "en");
-        let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
-        assert_eq!(people.fields, vec!["editor".to_string()], "title is not a name list");
-    }
-
-    #[test]
-    fn a_declared_name_whose_claim_key_is_a_built_ins_is_refused() {
-        // `tag` would claim `tag_page:`, the key `tags` already owns.
-        let cfg = crate::config::ConfigFile::parse("[terms.people]\nfields = [\"tag\"]\n").unwrap();
-        let kinds = term_kinds(&cfg, "en");
-        let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
-        assert!(people.fields.is_empty(), "tag collides with tags: {:?}", people.fields);
-    }
-
-    #[test]
-    fn place_is_a_place_field_unless_another_kind_lists_location() {
-        let alone = crate::config::ConfigFile::parse("[terms.places]\ntype = \"place\"\nfields = [\"place\"]\n").unwrap();
-        let kinds = term_kinds(&alone, "en");
-        let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
-        assert_eq!(places.fields, vec!["place".to_string()]);
-
-        let both = crate::config::ConfigFile::parse(
-            "[terms.places]\nfields = [\"place\"]\n[terms.venues]\nfields = [\"location\"]\n",
-        )
-        .unwrap();
-        let kinds = term_kinds(&both, "en");
-        let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
-        assert!(places.fields.is_empty(), "one place_page: would claim in both kinds");
     }
 
     #[test]
@@ -453,18 +338,17 @@ mod tests {
 
     #[test]
     fn cards_true_turns_the_kind_on_and_a_non_bool_is_a_diagnostic() {
-        let _ = crate::build::cli_output::take_cli_problems();
         let on = crate::config::ConfigFile::parse("[terms.performers]\nfields = [\"conductor\"]\ncards = true\n")
             .unwrap();
         let kinds = term_kinds(&on, "en");
         assert!(kinds.iter().find(|k| k.key == "performers").unwrap().cards);
-        assert_eq!(crate::build::cli_output::take_cli_problems(), 0, "a bool is not a problem");
+        assert!(on.warnings().is_empty(), "a bool is not a problem");
 
         let bad = crate::config::ConfigFile::parse("[terms.performers]\nfields = [\"conductor\"]\ncards = \"yes\"\n")
             .unwrap();
         let kinds = term_kinds(&bad, "en");
         assert!(!kinds.iter().find(|k| k.key == "performers").unwrap().cards, "a non-bool is off");
-        assert_eq!(crate::build::cli_output::take_cli_problems(), 1, "a non-bool is one diagnostic");
+        assert_eq!(bad.warnings(), ["[terms.performers] cards must be true or false; ignoring it"]);
     }
 
     #[test]

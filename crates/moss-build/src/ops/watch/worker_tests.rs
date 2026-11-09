@@ -194,18 +194,12 @@ async fn a_request_arriving_mid_build_is_built_next() {
     let mut first_started = Some(first_started_tx);
     let mut release = Some(release_rx);
     let mut second_done = Some(second_done_tx);
-    let worker = tokio::spawn(run_worker_loop(handle.clone(), move |req| {
+    let worker = tokio::spawn(run_worker_loop(handle.clone(), move |_req| {
         let n = b.fetch_add(1, Ordering::SeqCst) + 1;
         let started = if n == 1 { first_started.take() } else { None };
         let gate = if n == 1 { release.take() } else { None };
         let done = if n == 2 { second_done.take() } else { None };
         async move {
-            if n == 2 {
-                assert_eq!(
-                    req.gate_paths, None,
-                    "a catch-up arriving during a build must not be discarded against that build's mixed source/output baseline"
-                );
-            }
             if let Some(tx) = started {
                 tx.send(()).ok();
             }
@@ -236,6 +230,78 @@ async fn a_request_arriving_mid_build_is_built_next() {
         .await
         .expect("worker should exit on shutdown")
         .unwrap();
+}
+
+/// A save the running build has already read, followed by an event that
+/// changes no bytes (a sync client's rename-then-touch), is built once: the
+/// follow-up is gated at admission against the stash that build recorded from
+/// the bytes it read. A save landing after the read is built again.
+async fn builds_for_a_follow_up_during_the_build(follow_up: &'static [u8]) -> usize {
+    use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let folder = root.to_str().unwrap().to_string();
+    let page = root.join("P.md");
+    std::fs::write(&page, b"saved").unwrap();
+
+    let handle = std::sync::Arc::new(WorkerHandle::new());
+    let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+    let builds = std::sync::Arc::new(AtomicUsize::new(0));
+    let (read_tx, read_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut read = Some(read_tx);
+    let mut release = Some(release_rx);
+    let (a, b, f, p) = (attempts.clone(), builds.clone(), folder.clone(), page.clone());
+    let worker = tokio::spawn(run_worker_loop(handle.clone(), move |req| {
+        let (a, b, f, p) = (a.clone(), b.clone(), f.clone(), p.clone());
+        let (read, release) = (read.take(), release.take());
+        async move {
+            if req.gate_admits(&f, "test").await {
+                b.fetch_add(1, Ordering::SeqCst);
+                // The render reads the page, the save may land, then the build
+                // stashes the hash of what it read.
+                let stat = crate::build::stat::FileStat::of(&std::fs::metadata(&p).unwrap());
+                let bytes = std::fs::read(&p).unwrap();
+                if let (Some(tx), Some(rx)) = (read, release) {
+                    tx.send(()).ok();
+                    rx.await.ok();
+                }
+                let mut stash = crate::types::content::SiteHashes::new();
+                stash.sources.insert("P.md".into(), crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(&bytes)), stat));
+                crate::system::build_records::records().record_content_hashes(&f, stash);
+            }
+            a.fetch_add(1, Ordering::SeqCst);
+            AttemptOutcome::Completed
+        }
+    }));
+
+    handle.enqueue(content_only("P.md"));
+    read_rx.await.expect("the first build reads the page");
+    std::fs::write(&page, follow_up).unwrap();
+    handle.enqueue(gated(&[page.to_str().unwrap()]));
+    release_tx.send(()).ok();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while attempts.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the follow-up is admitted or gated");
+
+    handle.request_shutdown();
+    tokio::time::timeout(Duration::from_secs(5), worker).await.expect("worker exits").unwrap();
+    crate::system::build_records::records().forget_content_hashes(&folder);
+    builds.load(Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn an_event_during_the_build_that_changes_no_bytes_builds_nothing_more() {
+    assert_eq!(builds_for_a_follow_up_during_the_build(b"saved").await, 1);
+}
+
+#[tokio::test]
+async fn a_save_landing_after_the_build_read_the_page_is_built_next() {
+    assert_eq!(builds_for_a_follow_up_during_the_build(b"saved again").await, 2);
 }
 
 // ── Freeze at admission ─────────────────────────────────────────────────────

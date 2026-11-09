@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{HookRun, PluginManager};
+use super::{AskedBy, HookRun, PluginManager};
 
 impl PluginManager {
     /// Call `listing(ctx)` on one plugin and read what it returned.
@@ -21,7 +21,8 @@ impl PluginManager {
             .find_plugin_by_name(plugin_name)
             .ok_or_else(|| format!("plugin `{plugin_name}` is not loaded"))?;
         let context_json = serde_json::to_string(ctx).map_err(|e| format!("could not serialize the listing context: {e}"))?;
-        match self.run_hook(&plugin, "listing", &context_json, &self.host.state.hooks).await {
+        // The page emit calls it, so it is a build's run.
+        match self.run_hook(&plugin, "listing", &context_json, &self.host.state.hooks, AskedBy::Build).await {
             HookRun::NeverRan(e) => Err(e),
             HookRun::Finished(outcome) => {
                 let (_, returned) = outcome?;

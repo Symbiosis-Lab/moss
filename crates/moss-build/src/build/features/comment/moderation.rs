@@ -17,8 +17,9 @@ use crate::moss_paths::MossPaths;
 
 /// A single owner-signed moderation action. The schema is LOCKED (events are
 /// signed + append-only): `source` qualifies `target` across comment sources;
-/// `seq` is the per-(site,pubkey) monotonic PRIMARY ordering key (clock-skew
-/// proof); `ts` (ms-epoch) is only a tiebreak. v1 acts on hide/unhide;
+/// `seq` is the PRIMARY ordering key, numbered across the whole log whatever key
+/// signed (clock-skew proof, and it orders a hide by an earlier key against an
+/// unhide by the current one); `ts` (ms-epoch) is only a tiebreak. v1 acts on hide/unhide;
 /// pin/unpin are reserved in the schema but a no-op in the reducer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +150,50 @@ pub fn load_mod_events(project_path: &str) -> Vec<ModEvent> {
 /// sign with it, so the two cannot disagree.
 pub fn site_value(site_id: Option<&str>) -> &str {
     site_id.unwrap_or("localhost")
+}
+
+/// Keys that signed events in the log but are not among `owners`, sorted: their
+/// hides and unhides do not apply. A folder whose key was replaced along with
+/// its `.moss/identity` (so without its retired-key list) shows them; `adopt_key`
+/// fixes it.
+pub fn untrusted_signers(events: &[ModEvent], owners: &[String]) -> Vec<String> {
+    let mut keys: Vec<String> = events
+        .iter()
+        .filter(|e| !owners.contains(&e.pubkey))
+        .map(|e| e.pubkey.clone())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Trust the moderation `pubkey` signed in this site's log, by recording it as
+/// one of the folder's retired keys. For a folder whose key was replaced along
+/// with `.moss/identity`, so the replacement could not remember the old key.
+/// Refuses a key with no correctly signed event here, a key whose events name
+/// another site, and a key already trusted.
+pub fn adopt_key(project_path: &str, pubkey: &str, site: &str) -> Result<(), String> {
+    let root = Path::new(project_path);
+    let trusted = crate::identity::keypair::Identity::read_trusted_pubkeys(root);
+    if trusted.is_empty() {
+        return Err("this site has no readable identity in .moss/identity".into());
+    }
+    if trusted.iter().any(|k| k == pubkey) {
+        return Err(format!("{pubkey} is already trusted by this folder"));
+    }
+    let signed: Vec<ModEvent> = load_mod_events(project_path)
+        .into_iter()
+        .filter(|e| e.pubkey == pubkey && e.verify(pubkey))
+        .collect();
+    if signed.is_empty() {
+        return Err(format!("{pubkey} signed no moderation event in this site's log; nothing to adopt"));
+    }
+    if let Some(other) = signed.iter().find(|e| e.site != site) {
+        return Err(format!("{pubkey} signed moderation for another site ({}); refusing to adopt it here", other.site));
+    }
+    let until = signed.iter().map(|e| e.ts / 1000).max().unwrap_or(0);
+    crate::identity::keypair::retire_key(root, pubkey, until)
+        .map_err(|e| format!("could not record the key in .moss/identity/previous-keys.jsonl: {e}"))
 }
 
 /// The moderation actions the build's reducer acts on. The wire format still
@@ -337,9 +382,59 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(events[0].verify(&id.pubkey), "event verifies against the site's public key");
         let comments = vec![comment("7"), comment("8")];
-        let visible = super::super::reduce::resolve(&comments, &events, &id.pubkey);
+        let visible = super::super::reduce::resolve(&comments, &events, std::slice::from_ref(&id.pubkey));
         assert_eq!(visible.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["8"]);
         });
+    }
+
+    #[test]
+    fn regenerating_a_lost_key_keeps_its_hides_in_the_same_save() {
+        crate::infra::home::with_moss_home(|_home| {
+        let d = project();
+        let p = d.path();
+        let ps = p.to_str().unwrap();
+        let old = crate::identity::keypair::Identity::generate().unwrap();
+        old.save(p).unwrap();
+        append_owner_event(ps, ModKind::Hide, "artalk", "7", "page1", "localhost").unwrap();
+
+        std::fs::remove_file(p.join(".moss/identity/secret-key")).unwrap();
+        crate::identity::service::IdentityService::new(p).ensure_signing_key().unwrap();
+
+        let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(p);
+        assert_ne!(owners[0], old.pubkey, "a new key");
+        assert_eq!(&owners[1..], std::slice::from_ref(&old.pubkey), "the old key is retired, not forgotten");
+        let visible = super::super::reduce::resolve(&[comment("7"), comment("8")], &load_mod_events(ps), &owners)
+            .iter()
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(visible, vec!["8"], "the old key's hide still applies");
+        assert!(untrusted_signers(&load_mod_events(ps), &owners).is_empty());
+        });
+    }
+
+    #[test]
+    fn adopt_key_trusts_an_earlier_key_once_and_refuses_the_rest() {
+        let d = project();
+        let p = d.path();
+        let ps = p.to_str().unwrap();
+        crate::identity::keypair::Identity::generate().unwrap().save(p).unwrap();
+        let (earlier, earlier_pk) = owner_key();
+        let (foreign, foreign_pk) = owner_key();
+        let log = moderation_log_path(ps);
+        event_log::append_jsonl(&log, &sign_mod_event(&earlier, "hide", "artalk", "1", "localhost", "p", 1, 5_000)).unwrap();
+        event_log::append_jsonl(&log, &sign_mod_event(&foreign, "hide", "artalk", "2", "another-site", "p", 2, 6_000)).unwrap();
+        let owners = || crate::identity::keypair::Identity::read_trusted_pubkeys(p);
+        let mut untrusted = vec![earlier_pk.clone(), foreign_pk.clone()];
+        untrusted.sort();
+        assert_eq!(untrusted_signers(&load_mod_events(ps), &owners()), untrusted);
+
+        adopt_key(ps, &earlier_pk, "localhost").unwrap();
+        assert!(owners().contains(&earlier_pk));
+        assert!(adopt_key(ps, &earlier_pk, "localhost").unwrap_err().contains("already trusted"));
+        assert!(adopt_key(ps, &foreign_pk, "localhost").unwrap_err().contains("another site"));
+        let (_, silent_pk) = owner_key();
+        assert!(adopt_key(ps, &silent_pk, "localhost").unwrap_err().contains("signed no moderation event"));
+        assert_eq!(untrusted_signers(&load_mod_events(ps), &owners()), vec![foreign_pk]);
     }
 
     #[test]

@@ -96,18 +96,6 @@ use super::video::{cleanup_legacy_video_cache, dispatch_video_conversions};
 /// arch review note recommending this lift.
 const NOTEBOOK_IO_TIMEOUT_SECS: u64 = 30;
 
-/// Above this, a stage-write lock wait is reported at `warn`, not `debug` — a
-/// release preview build is where a user feels it and it was invisible there.
-/// Well above the lock's own measured cost — an earlier investigation clocked the
-/// wait at 57µs–288µs on the affected vault and 57µs–12ms in a later
-/// run — so this is a tripwire for an unexplained
-/// stall, not a fraction of a known worst case. That investigation raised the lock as
-/// one hypothesis (H-lock) for a separate, unexplained 1–3s foreground gap;
-/// measurement rejected it (the wait above is nowhere near 1–3s) along with
-/// the other hypothesis (twelve config re-parses), and that gap is still
-/// unexplained.
-const STAGE_WRITE_LOCK_WARN: std::time::Duration = std::time::Duration::from_millis(200);
-
 /// Heuristic detection: does this absolute path live under a known cloud-sync
 /// mount?
 ///
@@ -939,7 +927,7 @@ pub fn run(
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
 ) -> Result<PipelineRunOutput, BuildStopped> {
-    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None)
+    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None, crate::build::watch::RefreshRequest { rename_pairs: Vec::new(), events: crate::build::null_sink() })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -965,6 +953,7 @@ pub(crate) fn run_leased(
     // The caller's `lifecycle::CacheWriteLease`, carried into the background
     // handle so it drops when the workers have joined.
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+    refresh: crate::build::watch::RefreshRequest,
 ) -> Result<PipelineRunOutput, BuildStopped> {
     // Track build state in the FolderSession's UiBound counter for window
     // close / CLI-wait decisions. begin_ui_bound is a no-op in headless mode.
@@ -973,7 +962,7 @@ pub(crate) fn run_leased(
     }
 
     // Use inner function pattern to ensure build state is cleared on ALL exit paths
-    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease);
+    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease, refresh);
 
     // Clear build state after build completes (success or error)
     if let Some(svc) = services {
@@ -1028,6 +1017,7 @@ fn build_inner(
     cache_keys: &crate::build::ports::CacheKeyInputs,
     derived: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+    refresh: crate::build::watch::RefreshRequest,
     // `BuildStopped`, not `String`: the gate verdict is emitted from inside this
     // function, so the error type must be able to say "not yet" for the caller
     // to raise the gate instead of reporting. See `build::outcome`.
@@ -1149,7 +1139,7 @@ fn build_inner(
         cache_lease.is_some(),
         services.map(|s| s.cancellation.protected_outputs()).unwrap_or_default(),
     );
-    crate::build::phase::record_count("parked_current", usize::from(sweep_permit.is_some()));
+    crate::build::phase::record_value("parked_current", usize::from(sweep_permit.is_some()));
     let current_ptr_exists = paths.current_ptr().exists();
 
     // Step 1: Load previous hashes BEFORE building
@@ -1214,17 +1204,19 @@ fn build_inner(
     // FolderSession, e.g. one-shot CLI builds) means no concurrent rebuild
     // is possible, so no guard is needed.
     //
-    // The WAIT is timed, not elapsed-since-start: only the wait says whether the
-    // PREVIOUS build's seal tail (which takes this same mutex in
-    // `advertise_sealed`, behind every background worker) is on this build's
-    // critical path — hypothesis H-lock, against H-config
-    // just below.
+    // Both waits are timed as `lock_wait`: a long one means another build, or
+    // the previous build's seal tail (which takes the same guard in
+    // `advertise_sealed`), is on this build's critical path.
     // Cross-PROCESS counterpart of `_stage_write_guard` below. Acquired
     // unconditionally, unlike `_stage_write_guard`: two separate processes
     // with no session between them are exactly the case this exists for.
     // Returned rather than dropped: how long it is held after the render is
     // the caller's to decide — see `infra::folder_lock`'s module doc.
-    let folder_build_lock = crate::infra::folder_lock::acquire(root.path())?;
+    let folder_build_lock = crate::phase!("lock_wait", { crate::infra::folder_lock::acquire(root.path()) })?;
+    // The stash and the staging dir are read under the lock, so no other
+    // build can change them between this read and the show. The disk
+    // baseline is not read here: it is `previous_hashes`, read above.
+    let refresh = crate::build::watch::RefreshPlan::before_build(folder_path, &paths, refresh);
     // Minted under the lock, so that across processes the order of these
     // stamps is the order the builds rendered in, which is what the
     // materialize compares them by. Minted before the lock, a build could
@@ -1233,21 +1225,14 @@ fn build_inner(
     // admission time, despite its name) for `folder_build_lock_test.rs` only.
     let locked_at_nanos: u64 = std::env::var("MOSS_TEST_ADMISSION_NANOS").ok().and_then(|s| s.parse().ok())
         .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0));
-    let t_lock = std::time::Instant::now();
     let _stage_write_guard = services
         .and_then(|s| s.session.as_ref())
-        .map(|s| s.blocking_lock_stage_write());
+        .map(|s| crate::phase!("lock_wait", { s.blocking_lock_stage_write() }));
     // A complete prior route can stay on immutable `current` while staging is
     // rewritten. Final readiness below decides whether to show the new stage.
     if prior_route {
         crate::build::lifecycle::protect_current_before_rebuild(&paths);
     }
-    let lock_wait = t_lock.elapsed();
-    log::log!(
-        target: "timing",
-        if lock_wait >= STAGE_WRITE_LOCK_WARN { log::Level::Info } else { log::Level::Debug },
-        "[build] staging: waited {lock_wait:?} for the stage-write lock (above {STAGE_WRITE_LOCK_WARN:?} means the previous build's seal tail is on this build's critical path)",
-    );
 
     // Step 2: Ensure staging directory exists (persistent across rebuilds)
     // We keep staging/ between rebuilds so that mtime+size checks can skip
@@ -1329,7 +1314,7 @@ fn build_inner(
     // `site_comments` just below too) — two ladders that could drift is how
     // this presented before, as English email chrome on a Chinese site.
     let site_lang = crate::i18n::detect::resolve_site_default_lang(
-        site_str("lang").as_deref(),
+        cfg.as_ref().and_then(|c| c.site_lang()),
         project_structure.homepage_file.as_deref(),
         &project_structure.markdown_files,
         &project_structure.root_path,
@@ -1346,7 +1331,7 @@ fn build_inner(
         &site_lang,
     );
     let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
-    for problem in &field_problems {
+    for problem in cfg.as_ref().map(|c| c.warnings()).unwrap_or_default().iter().chain(&field_problems) {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
     for note in cfg.as_ref().map(|c| c.unknown_site_keys()).unwrap_or_default() {
@@ -1487,10 +1472,7 @@ fn build_inner(
         // said" — and the answer is yes, the popup ships. Explicit
         // `[site].link_preview = false` turns it off.
         link_preview: site_bool("link_preview").unwrap_or(true),
-        // Default-on by key absence, same story as `math`: nothing has ever
-        // written `[site].heading_anchors`, so absence means "the author
-        // never said" — and the answer is yes, headings get the `#`.
-        // Explicit `[site].heading_anchors = false` turns it off.
+        // Only an explicit `[site].heading_anchors = false` matters; the per-page rule decides otherwise.
         heading_anchors: site_bool("heading_anchors").unwrap_or(true),
         // Default-OFF by key absence, unlike `math`: extra reading chrome is
         // asked for, not inherited, so a site that never said anything gets no
@@ -1626,47 +1608,52 @@ fn build_inner(
         &stage_dir,
         &resolved_slots,
         &mut pending,
-        &mut site_result,
         carry_verification,
     )?;
 
-    // Store plugin + builder fingerprints so they persist to hashes.json.
-    // Set on site_result.hashes (used for change detection below) and on
-    // `pending`, whose seal is the sole writer of hashes.json.
-    log::debug!(target: "timing", "[build] staging: pre_builder_fingerprint: {:?}", build_start.elapsed());
-    let current_builder_fingerprint = cache_keys.builder.clone();
-    log::debug!(target: "timing", "[build] staging: builder_fingerprint: {:?}", build_start.elapsed());
-    site_result.hashes.builder_fingerprint = Some(current_builder_fingerprint.clone());
-    // Propagate the fingerprint to `pending` so the SealedManifest produced
-    // by the seal+persist side task carries it. The old legacy
-    // on-disk write at `media/pipeline.rs` serialized `&site_hashes` directly
-    // (which had the fingerprint); now the only writer is the seal task, so
-    // it must reach `pending` before it sealed.
-    pending.set_builder_fingerprint(Some(current_builder_fingerprint.clone()));
+    let staged_html = crate::build::media::pipeline::stage_source_html(
+        &background_ctx, &project_structure.html_files, &pending,
+        progress_sender.unwrap_or(crate::build::ports::reporter::discarding()),
+        services.and_then(|s| s.assets.clone()),
+    );
+    staged_html.apply_to(&mut pending);
+
+    pending.set_builder_fingerprint(Some(cache_keys.builder.clone()));
+    // Include every synchronous output and the builder fingerprint in change detection.
+    site_result.hashes = pending.hashes_clone();
 
     // Step 4: Compare hashes to detect changes
     // For first builds (site_has_content == false), always proceed with copy.
     // For rebuilds, check modified/new/deleted files and the builder fingerprint.
     let builder_changed = match &previous_hashes.builder_fingerprint {
-        Some(prev) => *prev != current_builder_fingerprint,
+        Some(prev) => *prev != cache_keys.builder,
         None => true,
     };
-    // Clone the in-memory content hashes for the watcher's refresh decision.
-    // Captured here (before any later move of `site_result`) and returned in
-    // `PipelineRunOutput::content_hashes` so `do_rebuild_and_notify` never
-    // re-reads the asynchronously-persisted hashes.json. See
-    // AppState::last_content_hashes.
+    // The in-memory content hashes: the new side of this render's refresh
+    // diff, and (returned in `PipelineRunOutput::content_hashes` and stashed)
+    // the baseline of the next. Never re-read from hashes.json, which the
+    // detached seal task writes later.
     let content_hashes_for_watch = site_result.hashes.clone();
     let missing_references_for_publish = site_result.missing_references.clone();
-    let new_hashes = &site_result.hashes;
-    let has_output_changes = !current_ptr_exists
-        || builder_changed
-        || !new_hashes.get_changed_files(&previous_hashes).is_empty()
-        || !new_hashes.get_new_files(&previous_hashes).is_empty()
-        || !new_hashes.get_deleted_files(&previous_hashes).is_empty();
+    let (changed, new, deleted) = (
+        site_result.hashes.get_changed_files(&previous_hashes),
+        site_result.hashes.get_new_files(&previous_hashes),
+        site_result.hashes.get_deleted_files(&previous_hashes),
+    );
+    let (html_deleted, stale_html) = crate::build::media::pipeline::html_deletions(
+        &previous_hashes, &pending, project_structure, folder_path, &background_ctx.dir_overrides, &crate::system::build_records::records().late_redirects(folder_path));
+    let has_output_changes = html_deleted || !current_ptr_exists || builder_changed || !changed.is_empty() || !new.is_empty() || !deleted.is_empty();
 
     log::debug!(target: "timing", "[build] staging: hash_compare (changed={}): {:?}", has_output_changes, build_start.elapsed());
+    if has_output_changes && current_ptr_exists {
+        let first = |paths: &[String]| paths.iter().take(5).cloned().collect::<Vec<_>>();
+        log::debug!(
+            "[build] output differs from the last build: builder {}, changed {} {:?}, new {} {:?}, deleted {} {:?}",
+            builder_changed, changed.len(), first(&changed), new.len(), first(&new), deleted.len(), first(&deleted),
+        );
+    }
 
+    crate::build::phase::record_value("output_unchanged", usize::from(!has_output_changes));
     let is_empty = project_structure.total_files == 0;
 
     // The gate, decided and emitted BEFORE the "complete" progress event.
@@ -1775,74 +1762,38 @@ fn build_inner(
         emit_cloud_gate(false, &project_structure.evicted_paths, cloud_outstanding);
     }
 
-    let render_seq: Option<u64>;
-    let announce: Option<std::path::PathBuf>;
-    crate::build::phase::record_count("served_staging", usize::from(publishable));
+    crate::build::phase::record_value("served_staging", usize::from(publishable));
     if has_output_changes {
-
-        // Step 4b: Remove stale HTML pages from deleted source folders.
-        //
-        // Runs unconditionally, including when this build deferred a page.
-        // Each deferred page's published output is reinstated in `blocking_keys`
-        // by `PendingManifest::carry_forward_deferred_page` (see the render
-        // pass), so it is protected by name rather than by skipping the sweep.
-        // `pending.notebook_outputs()` carries background-phase JupyterLite
-        // assets (jupyter/**/index.html) forward from the previous build, so
-        // stale-html cleanup here doesn't delete them before
-        // `run_notebook_processing` below re-registers them.
         if let Some(permit) = sweep_permit.as_ref() {
-            remove_stale_html(&stage_dir, &background_ctx.blocking_keys, pending.notebook_outputs(), permit);
+            remove_stale_html(&stage_dir, &stale_html, pending.blocking_keys(), permit);
         }
-        // gen_dir is immutable post-materialize — stale-html cleanup runs on staging only.
-
-        // Step 5: show this render — unless this build could not read its own
-        // sources. Showing it is the moment the user sees this build's output,
-        // so an unpublishable build must not.
-        let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
-        render_seq = Some(seq);
-        announce = announced;
-
-        log::debug!(target: "timing", "[build] staging: switch_to_stage: {:?}", build_start.elapsed());
-
-        // The cloud-sync gate event is emitted once, at the end of the build,
-        // from the build's own output — see `emit_cloud_gate`.
-
-        // Asked HERE, not carried in. A build that started no server of its own
-        // may have had one come up while it ran — on the incident vault, fourteen
-        // seconds after this build was dispatched and nineteen seconds before it
-        // reached this line. See `ports::LivePortResolver`.
-        send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
-
-        // The preview rests on staging/ after step 5: its HTML has the data-source-line
-        // annotations scroll sync needs, which the clean HTML under `current` lacks.
-
-        // Emit 'initial-build-complete' with the directory actually being
-        // served — staging normally, the sealed generation when this build was
-        // withheld.
-        emit_initial_build_complete(services, announce.as_deref());
-
-    } else {
-        // No output changes — staging still holds this render; show it the same
-        // way, under the same publishable guard.
-        let (seq, announced) = crate::build::lifecycle::show_render(&paths, publishable);
-        render_seq = Some(seq);
-        announce = announced;
-
-        // Asked HERE, not carried in. A build that started no server of its own
-        // may have had one come up while it ran — on the incident vault, fourteen
-        // seconds after this build was dispatched and nineteen seconds before it
-        // reached this line. See `ports::LivePortResolver`.
-        send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
-
-        emit_initial_build_complete(services, announce.as_deref());
-    }
-    if let Some(seq) = render_seq {
-        crate::build::phase::record_count("render", seq as usize);
     }
 
-    // Step 6c: no search worker. Pagefind is generation-free — cost
-    // scales with corpus, not delta — so it runs on its own lane, adopted below.
-    let search_enabled = background_ctx.search_enabled;
+    // Step 5: show this render, unless this build could not read its own
+    // sources: showing it is the moment the user sees this build's output.
+    let (seq, announce) = crate::build::lifecycle::show_render(&paths, publishable);
+    let render_seq = Some(seq);
+    // A shown render tells the preview at once what it now serves; what the
+    // background writes later is the seal tail's to announce.
+    if publishable {
+        pending.note_shown();
+        // A key the show names must already be bytes in staging: one registered
+        // before it is written would be named early here and never by the tail.
+        refresh.announce(&content_hashes_for_watch, &previous_hashes, |key| pending.is_registered(key) && { debug_assert!(stage_dir.join(key).exists(), "the show names {key}, which is not in staging yet"); true }, seq);
+    }
+    log::debug!(target: "timing", "[build] staging: switch_to_stage: {:?}", build_start.elapsed());
+
+    // Asked HERE, not carried in: a build that started no server of its own
+    // may have had one come up while it ran. See `ports::LivePortResolver`.
+    send_progress(progress_sender, "complete", &crate::infra::app_advisory::t("build_complete"), 100, true, preview_port(), Some(is_empty));
+
+    // The preview rests on staging/ after step 5: its HTML has the
+    // data-source-line annotations scroll sync needs, which the clean HTML
+    // under `current` lacks. 'initial-build-complete' names the directory
+    // actually served: staging normally, the sealed generation when this
+    // build was withheld.
+    emit_initial_build_complete(services, announce.as_deref());
+    crate::build::phase::record_value("render", seq as usize);
 
     // === BACKGROUND PHASE (spawn, don't block) ===
     // Background work runs after preview opens.
@@ -1899,7 +1850,7 @@ fn build_inner(
     // Mark-and-sweep — skipping it deletes `_moss/pagefind/*` off the live site.
     let search_paths = MossPaths::new(std::path::Path::new(folder_path));
     let adoption = crate::build::feeds::search_lane::adopt_into(
-        &search_paths, &stage_dir, &mut pending, search_enabled, search_freshness);
+        &search_paths, &stage_dir, &mut pending, background_ctx.search_enabled, search_freshness);
     log::debug!(target: "search", "search bundle: {:?}", adoption);
 
     // Places explorer world/tile base-map SVGs; see that module's doc for
@@ -2052,16 +2003,14 @@ fn build_inner(
         let session_for_derive = services.and_then(|s| s.session.clone());
 
         let register_workers = |tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
-                                workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
+                            workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
             if !og_requests.is_empty() {
                 let tx_cards = tx.clone();
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        crate::build::page::og_card::deferred::render_requests(
-                            og_requests, &og_output, tx_cards,
-                            || og_session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
-                        )
-                    }).await.map_err(crate::build::background::BuildError::from)?
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    crate::build::page::og_card::deferred::render_requests(
+                        og_requests, &og_output, tx_cards,
+                        || og_session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+                    )
                 });
             }
             // Worker 1: Image conversion.
@@ -2072,16 +2021,13 @@ fn build_inner(
             if !image_items_empty {
                 let ctx_for_image = background_ctx.clone();
                 let tx_image = tx.clone();
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        dispatch_image_conversions(
-                            svc_arc_for_image.as_deref(),
-                            &ctx_for_image,
-                            Some(tx_image),
-                        );
-                    })
-                    .await
-                    .map_err(crate::build::background::BuildError::from)
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    dispatch_image_conversions(
+                        svc_arc_for_image.as_deref(),
+                        &ctx_for_image,
+                        Some(tx_image),
+                    );
+                    Ok(())
                 });
             }
 
@@ -2089,16 +2035,13 @@ fn build_inner(
             // Same dispatch pattern as image: internally spawns or runs sync.
             if !video_items_empty {
                 let tx_video = tx.clone();
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        dispatch_video_conversions(
-                            svc_arc_for_video.as_deref(),
-                            background_ctx,
-                            Some(tx_video),
-                        );
-                    })
-                    .await
-                    .map_err(crate::build::background::BuildError::from)
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    dispatch_video_conversions(
+                        svc_arc_for_video.as_deref(),
+                        background_ctx,
+                        Some(tx_video),
+                    );
+                    Ok(())
                 });
             }
 
@@ -2109,36 +2052,32 @@ fn build_inner(
                 if let Some(ref s) = session_for_assets {
                     s.begin_ui_bound();
                 }
-                workers.spawn(async move {
-                    tokio::task::spawn_blocking(move || {
-                        let reporter_for_assets = reporter_for_assets
-                            .as_deref()
-                            .unwrap_or(crate::build::ports::reporter::discarding());
-                        let stats = crate::build::media::pipeline::copy_deferred_assets(
-                            &ctx_for_assets,
-                            reporter_for_assets,
-                            tx_assets,
-                            asset_registry_for_assets,
+                crate::build::background::spawn_traced_worker(workers, move || {
+                    let reporter_for_assets = reporter_for_assets
+                        .as_deref()
+                        .unwrap_or(crate::build::ports::reporter::discarding());
+                    let stats = crate::build::media::pipeline::copy_deferred_assets(
+                        &ctx_for_assets,
+                        staged_html,
+                        reporter_for_assets,
+                        tx_assets,
+                        asset_registry_for_assets,
+                    );
+                    // Publish the skipped-symlink count so the video worker
+                    // (which emits BuildComplete) can include it in the event.
+                    if let Some(counter) = skipped_symlinks_for_assets {
+                        counter.fetch_add(
+                            stats.skipped_symlinks,
+                            std::sync::atomic::Ordering::Relaxed,
                         );
-                        // Publish the skipped-symlink count so the video worker
-                        // (which emits BuildComplete) can include it in the event.
-                        if let Some(counter) = skipped_symlinks_for_assets {
-                            counter.fetch_add(
-                                stats.skipped_symlinks,
-                                std::sync::atomic::Ordering::Relaxed,
-                            );
-                        }
-                        // Task 2.2: emit a BackgroundProgress advisory when symlinks
-                        // were skipped — surfaces on the L1 hairline dot WITHOUT a toast.
-                        if let Some(ev) = crate::build::progress::make_symlink_skip_advisory(stats.skipped_symlinks) {
-                            reporter_for_assets.report(&ev);
-                        }
-                        if let Some(s) = session_for_assets {
-                            s.end_ui_bound();
-                        }
-                    })
-                    .await
-                    .map_err(crate::build::background::BuildError::from)
+                    }
+                    if let Some(ev) = crate::build::progress::make_symlink_skip_advisory(stats.skipped_symlinks) {
+                        reporter_for_assets.report(&ev);
+                    }
+                    if let Some(s) = session_for_assets {
+                        s.end_ui_bound();
+                    }
+                    Ok(())
                 });
             }
             // Derived text (adopt mode only, so a watcher is registered to

@@ -397,6 +397,7 @@ fn test_transform_cache_roundtrip() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
+            validation: None,
             oid: "bbbb".repeat(16),
             size: 1024,
             params: serde_json::json!({"width": 200}),
@@ -461,6 +462,7 @@ fn test_find_cached_output_hit() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
+            validation: None,
             oid: output_oid.clone(),
             size: 18,
             params: params.clone(),
@@ -501,6 +503,7 @@ fn test_find_cached_output_params_mismatch() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
+            validation: None,
             oid: output_oid,
             size: 18,
             params: stored_params,
@@ -538,6 +541,7 @@ fn test_find_cached_output_blob_missing() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
+            validation: None,
             oid: fake_output_oid,
             size: 0,
             params: params.clone(),
@@ -577,6 +581,7 @@ fn test_find_cached_output_rejects_zero_byte_blob() {
     transforms.insert(
         "video/mp4".to_string(),
         TransformEntry {
+            validation: None,
             oid: output_oid.clone(),
             size: 15,
             params: params.clone(),
@@ -648,6 +653,7 @@ fn test_transform_cache_remove() {
     transforms.insert(
         "thumbnail".to_string(),
         TransformEntry {
+            validation: None,
             oid: output_oid.clone(),
             size: 18,
             params: params.clone(),
@@ -774,7 +780,7 @@ fn test_store_bytes_json_blob() {
 
 /// A full stat record, as `FileStat::of` builds one on unix: every field present.
 fn stat(size: u64, mtime: u64) -> FileStat {
-    FileStat { size, mtime, mtime_nanos: Some(250_000_000), ctime: Some(1_700_000_005), inode: Some(77) }
+    FileStat { size, mtime, mtime_nanos: Some(250_000_000), ctime: Some(1_700_000_005), ctime_nanos: Some(500_000_000), inode: Some(77) }
 }
 
 #[test]
@@ -813,6 +819,7 @@ fn a_lookup_misses_when_any_one_field_of_the_stat_record_differs() {
         ("mtime", FileStat { mtime: 1700000001, ..recorded }),
         ("sub-second mtime", FileStat { mtime_nanos: Some(250_000_001), ..recorded }),
         ("ctime", FileStat { ctime: Some(1_700_000_006), ..recorded }),
+        ("sub-second ctime", FileStat { ctime_nanos: Some(500_000_001), ..recorded }),
         ("inode", FileStat { inode: Some(78), ..recorded }),
     ];
     for (field, changed) in variants {
@@ -843,7 +850,12 @@ fn a_missing_subsecond_mtime_never_hits_but_a_missing_ctime_or_inode_does() {
     assert!(idx.lookup("clip.mov", &full).is_none());
 
     // ctime / inode: absence on either side is agreement.
-    assert_eq!(idx.lookup("photo.jpg", &FileStat { ctime: None, inode: None, ..full }), Some("abcd1234"));
+    assert_eq!(idx.lookup("photo.jpg", &FileStat { ctime: None, ctime_nanos: None, inode: None, ..full }), Some("abcd1234"));
+
+    // A ctime both sides report, without its sub-second part on one (an entry from
+    // before the field existed): whole seconds cannot prove it, so a miss.
+    idx.update("old.jpg".to_string(), &FileStat { ctime_nanos: None, ..full }, "abcd1234".to_string());
+    assert!(idx.lookup("old.jpg", &full).is_none());
 }
 
 /// A coarse-timestamp filesystem (exFAT/FAT, older SMB/NFS, some FUSE mounts) reports
@@ -898,6 +910,11 @@ fn the_stat_rule_trusts_a_zero_subsecond_mtime_only_well_before_its_recording() 
     assert!(vouches(coarse, Some(10_000 + M + 1)), "older than the read by more than the margin");
     assert!(!vouches(coarse, Some(10_000 - E - 1)), "a future stamp the clock could still reach");
 
+    let coarse_ctime = FileStat { ctime: Some(10_000), ctime_nanos: Some(0), ..precise };
+    assert!(!vouches(coarse_ctime, None), "a zero sub-second ctime with no clock");
+    assert!(!vouches(coarse_ctime, Some(10_000 + M)), "a zero sub-second ctime inside the margin");
+    assert!(vouches(coarse_ctime, Some(10_000 + M + 1)), "a ctime cannot be set back, so an old one is proof");
+
     assert!(!mtime_is_racy(1000, None), "no clock, nothing suspect");
     assert!(mtime_is_racy(1000, Some(1000 + E)), "inclusive after");
     assert!(mtime_is_racy(1000 + E, Some(1000)), "inclusive before: a write just after the read");
@@ -933,20 +950,24 @@ fn a_zero_subsecond_mtime_read_well_after_it_hits() {
 
 /// An index written before entries carried a recording time loads, keeps its fast
 /// path for real sub-second stamps, and fails open on exact-zero ones — the behaviour
-/// it had before the field existed, never an upgrade to trusting.
+/// it had before the field existed, never an upgrade to trusting. An entry from before
+/// the sub-second ctime existed is no proof either, so it is hashed once.
 #[test]
 fn an_index_without_recording_times_never_trusts_a_zero_subsecond_mtime() {
     let dir = make_test_dir("hash_idx_no_recorded_at");
     let path = dir.join("hash-index.json");
     let entry = |nanos: u32| serde_json::json!({
-        "size": 1024, "mtime": 1700000000u64, "mtime_nanos": nanos, "ctime": 1_700_000_005i64, "inode": 77, "content_hash": "abcd1234"
+        "size": 1024, "mtime": 1700000000u64, "mtime_nanos": nanos, "ctime": 1_700_000_005i64, "ctime_nanos": 500_000_000u32, "inode": 77, "content_hash": "abcd1234"
     });
-    fs::write(&path, serde_json::json!({ "entries": { "coarse.jpg": entry(0), "precise.jpg": entry(250_000_000) } }).to_string()).unwrap();
+    let mut older = entry(250_000_000);
+    older.as_object_mut().unwrap().remove("ctime_nanos");
+    fs::write(&path, serde_json::json!({ "entries": { "coarse.jpg": entry(0), "precise.jpg": entry(250_000_000), "older.jpg": older } }).to_string()).unwrap();
 
     let idx = HashIndex::load(&path);
     assert_eq!(idx.entries["coarse.jpg"].recorded_at, None, "premise: the old format has no recording time");
     assert!(idx.lookup("coarse.jpg", &FileStat { mtime_nanos: Some(0), ..stat(1024, 1700000000) }).is_none());
     assert_eq!(idx.lookup("precise.jpg", &stat(1024, 1700000000)), Some("abcd1234"));
+    assert!(idx.lookup("older.jpg", &stat(1024, 1700000000)).is_none());
 }
 
 /// `resolve` is what records the clock: a local file whose mtime carries exact-zero
@@ -1046,7 +1067,7 @@ fn a_full_stat_entry_only_adds_keys_to_the_old_format() {
     for original in ["size", "mtime", "content_hash"] {
         assert!(object.contains_key(original), "the original key {original} must still be written");
     }
-    assert_eq!(object.len(), 6);
+    assert_eq!(object.len(), 7);
 }
 
 #[test]
@@ -1391,6 +1412,7 @@ fn test_metadata_cache_hit_returns_stored_meta() {
     transforms.insert(
         "media/meta".to_string(),
         TransformEntry {
+            validation: None,
             oid: meta_oid.clone(),
             size: json_bytes.len() as u64,
             params: params.clone(),
@@ -1471,6 +1493,7 @@ fn test_metadata_cache_full_roundtrip() {
     transforms.insert(
         "media/meta".to_string(),
         TransformEntry {
+            validation: None,
             oid: meta_oid.clone(),
             size: json_bytes.len() as u64,
             params: params.clone(),
@@ -2367,6 +2390,7 @@ fn test_gc_removes_orphaned_transform() {
             m.insert(
                 "thumbnail".to_string(),
                 TransformEntry {
+                    validation: None,
                     oid: live_output.clone(),
                     size: 50,
                     params: serde_json::json!({}),
@@ -2383,6 +2407,7 @@ fn test_gc_removes_orphaned_transform() {
             m.insert(
                 "thumbnail".to_string(),
                 TransformEntry {
+                    validation: None,
                     oid: orphan_output.clone(),
                     size: 75,
                     params: serde_json::json!({}),
@@ -2554,6 +2579,7 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
             m.insert(
                 "webp".to_string(),
                 TransformEntry {
+                    validation: None,
                     oid: output_oid.clone(),
                     size: 300,
                     params: serde_json::json!({"quality": 80}),
@@ -2610,7 +2636,7 @@ fn record_with(source_oid: &str, output_oid: &str) -> TransformRecord {
     let mut transforms = HashMap::new();
     transforms.insert(
         "webp".to_string(),
-        TransformEntry { oid: output_oid.to_string(), size: 300, params: serde_json::json!({}) },
+        TransformEntry { validation: None, oid: output_oid.to_string(), size: 300, params: serde_json::json!({}) },
     );
     TransformRecord { source_oid: source_oid.to_string(), source_size: 500, transforms }
 }
@@ -2699,7 +2725,7 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
         let mut transforms = HashMap::new();
         transforms.insert(
             "webp".to_string(),
-            TransformEntry { oid: output_oid.clone(), size: 3, params: serde_json::json!({}) },
+            TransformEntry { validation: None, oid: output_oid.clone(), size: 3, params: serde_json::json!({}) },
         );
         put_transform(
             &transforms_dir,
@@ -3219,7 +3245,7 @@ fn availability_owned_record_changes_recover_without_erasing_newer_merges() {
         let oid = "b".repeat(64);
         let path = cache.record_path(&oid);
         let fault = TestFault::install(cache.root(), &path, stage, 1000, std::time::Duration::from_millis(20));
-        let entry = |hash: &str| TransformEntry { oid: hash.into(), size: 1, params: serde_json::json!({}) };
+        let entry = |hash: &str| TransformEntry { validation: None, oid: hash.into(), size: 1, params: serde_json::json!({}) };
         let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("first".into(), entry("old")); });
         let _ = cache.merge(&oid, 1, RecordMode::Request, |record| {
             record.transforms.insert("first".into(), entry("new"));
@@ -3266,7 +3292,7 @@ fn availability_owned_record_replace_removes_omitted_entries_and_keeps_later_mer
         let cache = TransformCache::for_site(&paths);
         let oid = "d".repeat(64);
         let path = cache.record_path(&oid);
-        let entry = |name: &str| TransformEntry { oid: name.into(), size: 1, params: serde_json::Value::Null };
+        let entry = |name: &str| TransformEntry { validation: None, oid: name.into(), size: 1, params: serde_json::Value::Null };
         let mut record = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: [("removed".into(), entry("old")), ("kept".into(), entry("kept"))].into_iter().collect() };
         cache.put(&record, RecordMode::Request).unwrap();
         let fault = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 1000, std::time::Duration::from_millis(20));
@@ -3297,7 +3323,7 @@ fn availability_owned_record_delete_cannot_be_resurrected_by_older_pending_publi
         let path = cache.record_path(&oid);
         let fault = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 1000, std::time::Duration::from_millis(20));
         let _ = cache.merge(&oid, 1, RecordMode::Request, |record| {
-            record.transforms.insert("invalid".into(), TransformEntry { oid: "invalid-old-output".into(), size: 1, params: serde_json::Value::Null });
+            record.transforms.insert("invalid".into(), TransformEntry { validation: None, oid: "invalid-old-output".into(), size: 1, params: serde_json::Value::Null });
         });
         let _ = cache.remove(&oid);
         drop(fault);
@@ -3353,7 +3379,7 @@ fn availability_new_merge_after_owned_full_intent_survives_unreadable_old_record
             let mut edited = false;
             let _ = cache.merge_via(&oid, 1, RecordMode::Request, &|_, _| Err(std::io::Error::from_raw_os_error(libc::EDEADLK)), |r| {
                 edited = true;
-                r.transforms.insert("reencoded".into(), TransformEntry { oid: "fresh".into(), size: 1, params: serde_json::Value::Null });
+                r.transforms.insert("reencoded".into(), TransformEntry { validation: None, oid: "fresh".into(), size: 1, params: serde_json::Value::Null });
             });
             assert!(edited, "an owned replacement or accepted deletion supplies a complete baseline for the next edit");
             drop(read);
@@ -3407,7 +3433,7 @@ fn gc_drops_a_shared_copy_of_an_original_kept_as_its_own_output() {
     put_transform(&transforms_dir, &TransformRecord {
         source_oid: oid.clone(),
         source_size: 9,
-        transforms: [("video/mp4".to_string(), TransformEntry { oid: oid.clone(), size: 9, params: serde_json::json!({}) })]
+        transforms: [("video/mp4".to_string(), TransformEntry { validation: None, oid: oid.clone(), size: 9, params: serde_json::json!({}) })]
             .into_iter().collect(),
     });
     put_object(&objects_dir, &oid, b"web-ready");
@@ -3417,4 +3443,94 @@ fn gc_drops_a_shared_copy_of_an_original_kept_as_its_own_output() {
 
     assert!(ObjectStore::new(mp.cache_local_objects()).blob_path(&oid).exists(), "the record keeps it, on this machine");
     assert!(!ObjectStore::new(objects_dir).blob_path(&oid).exists(), "a source copy, though also an output, is not shared");
+}
+
+#[test]
+fn a_saved_verified_index_spares_the_next_process_the_hash_and_still_catches_a_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let saved = dir.path().join("verified-blobs.json");
+    let first = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+    let oid = first.store_bytes(b"valid bytes", RecordMode::Request).unwrap();
+    let other = first.store_bytes(b"other bytes", RecordMode::Request).unwrap();
+    let path = first.blob_path(&oid);
+    for blob in [&path, &first.blob_path(&other)] {
+        std::fs::OpenOptions::new().write(true).open(blob).unwrap().set_times(std::fs::FileTimes::new().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_789),
+        )).unwrap();
+    }
+    super::blob_residency::HASH_READS.with(|count| count.set(0));
+    assert_eq!(first.ready_blob(&oid), Some(path.clone()));
+    assert_eq!(first.ready_blob(&other), Some(first.blob_path(&other)));
+    first.save_verified().unwrap();
+    assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 2);
+
+    // A new process: a fresh store reading what the first one saved.
+    let second = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+    assert_eq!(second.ready_blob(&oid), Some(path.clone()));
+    assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 2, "verified at this stat by the last process");
+    second.save_verified().unwrap();
+    assert_eq!(HashIndex::load(&saved).entries.len(), 1, "a blob nobody asked about drops out of the saved index");
+
+    // Rewritten in place at the same size: the stat moves, so it is hashed and refused.
+    std::fs::write(&path, b"wrong bytes").unwrap();
+    let third = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+    assert!(third.ready_blob(&oid).is_none());
+    assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 3);
+}
+
+#[test]
+fn a_store_for_one_pass_saves_every_blob_it_verified() {
+    let dir = tempfile::tempdir().unwrap();
+    let saved = dir.path().join("verified-blobs.json");
+    let store = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+    let blobs = super::blob_residency::MAX_VERIFIED_BLOBS + 1;
+    for n in 0..blobs {
+        let oid = store.store_bytes(format!("blob {n}").as_bytes(), RecordMode::Request).unwrap();
+        assert!(store.ready_blob(&oid).is_some());
+    }
+    store.save_verified().unwrap();
+    assert_eq!(HashIndex::load(&saved).entries.len(), blobs, "past the process-wide bound, nothing is cleared");
+}
+
+// The rewrite lands in the recorded ctime second whenever it follows the record
+// within that second, which is when whole-second ctime cannot see it. It waits
+// out one scheduler tick, since a kernel with tick-granular ctime gives a
+// change within the tick the same ctime; a run that crosses a second boundary
+// proves nothing, so it is tried again.
+#[cfg(unix)]
+#[test]
+fn a_rewrite_that_restores_its_mtime_in_the_recorded_ctime_second_is_not_vouched_for() {
+    for _ in 0..50 {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = dir.path().join("verified-blobs.json");
+        let first = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+        let oid = first.store_bytes(b"valid bytes", RecordMode::Request).unwrap();
+        let path = first.blob_path(&oid);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_789),
+        )).unwrap();
+        assert_eq!(first.ready_blob(&oid), Some(path.clone()));
+        first.save_verified().unwrap();
+        let recorded = FileStat::of(&std::fs::metadata(&path).unwrap());
+        assert_ne!(recorded.mtime_nanos, Some(0), "premise: mtime has sub-second precision");
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        FileStat::rewrite_in_place_keeping_mtime(&path, b"wrong bytes");
+        let rewritten = FileStat::of(&std::fs::metadata(&path).unwrap());
+        if rewritten.ctime != recorded.ctime || rewritten.ctime_nanos == recorded.ctime_nanos {
+            continue;
+        }
+        assert_eq!(
+            (rewritten.size, rewritten.mtime, rewritten.mtime_nanos, rewritten.inode),
+            (recorded.size, recorded.mtime, recorded.mtime_nanos, recorded.inode),
+        );
+
+        let next = ObjectStore::new(dir.path().join("objects")).remembering_verified(&saved);
+        super::blob_residency::HASH_READS.with(|count| count.set(0));
+        assert!(next.ready_blob(&oid).is_none(), "the last build's index vouched for rewritten bytes");
+        assert_eq!(super::blob_residency::HASH_READS.with(|count| count.get()), 1);
+        assert!(!recorded.vouches_for(&rewritten, crate::build::stat::recording_clock()));
+        return;
+    }
+    panic!("no rewrite landed in the recorded ctime second in 50 tries");
 }

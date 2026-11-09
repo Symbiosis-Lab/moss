@@ -21,3 +21,15 @@ fn anchor_target_with_no_matching_heading_returns_none() {
     let info = reference_card_for("#nope", "about.md", tmp.path()).unwrap();
     assert_eq!(info.heading, None);
 }
+
+#[test]
+fn a_page_link_on_a_site_never_built_opens_the_source_the_lint_follows() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("notes")).unwrap();
+    std::fs::write(tmp.path().join("index.md"), "[[Page]]\n").unwrap();
+    std::fs::write(tmp.path().join("notes/Page.md"), "---\ntitle: The page\n---\nBody.\n").unwrap();
+    let info = reference_card_for("Page", "index.md", tmp.path()).unwrap();
+    assert_eq!(info.source_path.as_deref(), Some("notes/Page.md"));
+    assert_eq!(info.title, "The page");
+    assert!(!info.generated);
+}

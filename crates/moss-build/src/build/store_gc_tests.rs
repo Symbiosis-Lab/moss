@@ -374,7 +374,7 @@ fn the_object_store_is_swept_only_when_no_build_holds_a_cache_lease() {
         .put(&TransformRecord {
             source_oid: source.clone(),
             source_size: 1,
-            transforms: [("video/mp4".to_string(), TransformEntry { oid: blob.clone(), size: 12, params: serde_json::json!({}) })]
+            transforms: [("video/mp4".to_string(), TransformEntry { validation: None, oid: blob.clone(), size: 12, params: serde_json::json!({}) })]
                 .into_iter()
                 .collect(),
         }, crate::build::cache::RecordMode::Request)

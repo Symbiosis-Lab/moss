@@ -16,7 +16,7 @@ use crate::build::cli_output::{log_note, log_warn_problem};
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map::layer_crop::{crop_axes, CropJob};
-use crate::build::place_map::layer_warp::tiles::{candidates, encode, level_range, near_places_only, overlaps, render_crop, render_tile, tile_rect, Loaded, TILE_SIZE};
+use crate::build::place_map::layer_warp::tiles::{candidates, encode, encode_crop, level_range, near_places_only, overlaps, render_crop, render_tile, tile_rect, Loaded, TILE_SIZE};
 use crate::build::place_map::layer_warp::{LayerPlan, Plate};
 use crate::build::place_map::world_coords::written;
 use crate::build::served_path::ServedPath;
@@ -97,7 +97,7 @@ fn emit_crops(layer: &MapLayer, plan: &LayerPlan, crops: &[(&String, &CropJob)],
     let mut loaded: Option<Vec<Loaded>> = None;
     let mut total = 0;
     for (name, job) in crops {
-        let Ok(path) = ServedPath::for_place_map_layer_file(hash, &layer.name, &format!("crops/{name}.jpg")) else { continue };
+        let Ok(path) = ServedPath::for_place_map_layer_file(hash, &layer.name, &format!("crops/{name}.webp")) else { continue };
         let bytes = match std::fs::read(output_dir.join(path.as_str())) {
             Ok(bytes) => {
                 pending.register(&path, &bytes, HashBucket::Files);
@@ -109,7 +109,7 @@ fn emit_crops(layer: &MapLayer, plan: &LayerPlan, crops: &[(&String, &CropJob)],
                     log_warn_problem!("map layer {} could not be drawn into a figure: no plate has pixels in its frame", layer.name);
                     continue;
                 };
-                let bytes = encode(&picture);
+                let bytes = encode_crop(&picture);
                 if let Err(error) = BuildContext::for_render(output_dir, pending).emit(&path, &bytes, HashBucket::Files) {
                     log_warn_problem!("map layer {} figure {name}: {error}", layer.name);
                     continue;

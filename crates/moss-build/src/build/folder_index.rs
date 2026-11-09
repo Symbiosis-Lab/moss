@@ -7,7 +7,6 @@
 //! directory doesn't.
 
 use moss_core::resolve::folder_class::FolderIndex;
-use moss_core::resolve::link_class::UrlIndex;
 use moss_core::slug::slugify_path_segments;
 use moss_core::PageKind;
 
@@ -100,41 +99,8 @@ pub(crate) fn is_root_source(doc: &ParsedDocument) -> bool {
     }
 }
 
-/// Negative folder index for source-only reference evidence. Folder references
-/// are not missing assets, so this keeps them advisory without re-deriving the
-/// later whole-corpus page surface during Loop A.
-pub struct NoFolderIndex;
-
-impl FolderIndex for NoFolderIndex {
-    fn is_dir(&self, _root_rel: &str) -> bool {
-        false
-    }
-
-    fn dir_has_markdown_index(&self, _root_rel: &str) -> bool {
-        false
-    }
-
-    fn dir_has_static_index(&self, _root_rel: &str) -> Option<String> {
-        None
-    }
-}
-
-/// Stub url index for `classify_reference` calls that only need the folder
-/// arm. Never consulted — folder markers short-circuit in classify_reference's
-/// folder arm (their `parsed.path` always ends in `/`).
-pub struct NoUrlIndex;
-
-impl UrlIndex for NoUrlIndex {
-    fn lookup_exact(&self, _url_path: &str) -> bool {
-        false
-    }
-    fn lookup_normalized(&self, _url_path: &str) -> Option<String> {
-        None
-    }
-    fn resolve_reference_to_url(&self, _reference: &str, _from_source: &str) -> Option<String> {
-        None
-    }
-}
+pub use moss_core::resolve::folder_class::NoFolderIndex;
+pub use moss_core::resolve::link_class::NoUrlIndex;
 
 #[cfg(test)]
 #[path = "folder_index_tests.rs"]

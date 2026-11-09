@@ -1,4 +1,5 @@
 use super::*;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -622,7 +623,7 @@ fn pending_manifest_new_clears_source_to_output_carry_forward() {
         .insert("media/x.jpg".into(), SourceMetadata::default());
 
     let pending = PendingManifest::new(carry);
-    let (sealed, _) = pending.as_parts_clone();
+    let sealed = pending.hashes_clone();
 
     assert!(
         sealed.source_to_output.is_empty(),
@@ -653,7 +654,7 @@ fn register_source_mapping_populates_after_clear() {
         &crate::build::served_path::ServedPath::from_source("index.html").unwrap(),
     );
 
-    let (sealed, _) = pending.as_parts_clone();
+    let sealed = pending.hashes_clone();
     assert_eq!(
         sealed.source_to_output.len(),
         2,
@@ -989,17 +990,16 @@ fn apply_post_seal_rewrites_is_noop_for_empty_map() {
 // -----------------------------------------------------------------------
 
 fn meta(hash: &str) -> SourceMetadata {
-    SourceMetadata { hash: hash.into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None }
+    SourceMetadata { hash: hash.into(), stat: FileStat::whole_second(1, 1) }
 }
 
 fn sp(path: &str) -> crate::build::served_path::ServedPath {
     crate::build::served_path::ServedPath::from_source(path).unwrap()
 }
 
-/// A page this build never re-read (render skip, parse-cache hit, iCloud
-/// defer) keeps the hash the previous build recorded. Without the carry the
-/// page has an output mapping and no hash, which the classifier can only read
-/// as added or deleted — and a watch-loop rebuild skips most of a large site.
+/// A page this build never read (the cloud deferred it) keeps the hash the
+/// previous build recorded. Without the carry the page has an output mapping
+/// and no hash, which the classifier can only read as added or deleted.
 #[test]
 fn carry_forward_page_source_preserves_hash_for_skipped_page() {
     let mut carry = SiteHashes::default();
@@ -1420,26 +1420,34 @@ mod held {
     }
 }
 
-/// A carried source entry is judged under the NEW build's later clock, which would
-/// vouch for an exact-zero sub-second mtime the old clock could not — a same-tick
-/// rewrite after the old read would then pass for unchanged. So `new` drops that
-/// reading (the entry fails open to the hash tier) and leaves every entry the old
-/// clock could vouch for, and every real sub-second reading, as it was.
+/// Carrying an unsettled zero stamp under a later clock must not create proof.
 #[test]
-fn a_carried_zero_subsecond_mtime_its_own_clock_cannot_vouch_for_is_dropped() {
-    let entry = |mtime: u64, nanos: u32| SourceMetadata { hash: "h".into(), size: 1, mtime, mtime_nanos: Some(nanos), ctime: None, inode: None };
-    let mut carry = SiteHashes::default();
-    carry.captured_at = Some(10_000);
-    carry.sources.insert("racy.png".into(), entry(9_000, 0));
-    carry.sources.insert("settled.png".into(), entry(1_000, 0));
-    carry.sources.insert("precise.png".into(), entry(9_999, 5));
+fn a_carried_zero_subsecond_stamp_its_own_clock_cannot_vouch_for_is_dropped() {
+    let entry = |time: u64, nanos: u32| SourceMetadata {
+        hash: "h".into(),
+        stat: FileStat {
+            mtime_nanos: Some(nanos), ctime: Some(time as i64), ctime_nanos: Some(nanos),
+            ..FileStat::whole_second(1, time)
+        },
+    };
+    for captured_at in [Some(10_000), None] {
+        let mut carry = SiteHashes::default();
+        carry.captured_at = captured_at;
+        carry.sources.insert("racy.png".into(), entry(9_000, 0));
+        carry.sources.insert("settled.png".into(), entry(1_000, 0));
+        carry.sources.insert("precise.png".into(), entry(9_999, 5));
 
-    let m = PendingManifest::new(carry);
-    let nanos = |k: &str| m.inner.sources[k].mtime_nanos;
-    assert_eq!(nanos("racy.png"), None, "read inside the margin: no longer proof under a later clock");
-    assert_eq!(nanos("settled.png"), Some(0));
-    assert_eq!(nanos("precise.png"), Some(5));
-    assert!(m.inner.captured_at > Some(10_000), "premise: the new build's clock replaced the old one");
+        let m = PendingManifest::new(carry);
+        let nanos = |k: &str| {
+            let stat = m.inner.sources[k].stat;
+            (stat.mtime_nanos, stat.ctime_nanos)
+        };
+        assert_eq!(nanos("racy.png"), (None, None), "read inside the margin: no proof under a later clock");
+        let settled = captured_at.map(|_| 0);
+        assert_eq!(nanos("settled.png"), (settled, settled));
+        assert_eq!(nanos("precise.png"), (Some(5), Some(5)));
+        assert!(m.inner.captured_at > Some(10_000), "premise: the new build's clock replaced the old one");
+    }
 }
 
 /// A page registered unwritten is the slot pass's to write only until something
@@ -1457,4 +1465,43 @@ fn a_later_registration_drops_the_unwritten_copy_of_its_path() {
     let unwritten = m.take_unwritten_pages();
     assert_eq!(unwritten.keys().collect::<Vec<_>>(), ["essay/index.html"]);
     assert!(m.take_unwritten_pages().is_empty(), "taking them leaves none behind");
+}
+
+#[test]
+fn output_collisions_belong_to_the_sealed_render_and_persist() {
+    let message = "one.md and two.md both publish to /shared/. Give each source a unique address.";
+    let mut pending = empty_manifest();
+    pending.record_output_collisions(vec![message.into()]);
+    let sealed = pending.seal();
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("hashes.json");
+    sealed.write_to_disk(&path).unwrap();
+    let persisted: SiteHashes = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(persisted.output_collisions, vec![message]);
+    let clean = PendingManifest::new(persisted).seal();
+    assert!(clean.site_hashes_view().output_collisions.is_empty());
+    assert_eq!(sealed.site_hashes_view().output_collisions, vec![message]);
+}
+
+/// After the show, a registration counts as landing late only when it
+/// changes the key's entry: a re-registration with the bytes already shown is
+/// no new change, a new key or new bytes are.
+#[test]
+fn a_key_lands_after_the_show_only_when_its_entry_changes() {
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.apply_message("page/index.html".into(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashBucket::Files, None);
+    pending.apply_message("handout.css".into(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", HashBucket::Files, None);
+    pending.note_shown();
+    pending.apply_message("page/index.html".into(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HashBucket::Files, None);
+    pending.apply_message("handout.css".into(), "cccccccccccccccccccccccccccccccc", HashBucket::Files, None);
+    pending.apply_message("photo.webp".into(), "dddddddddddddddddddddddddddddddd", HashBucket::ImageVariants, None);
+    let sealed = pending.seal();
+    assert!(sealed.was_shown());
+    assert!(!sealed.landed_after_show("page/index.html"), "the same bytes again are not a change");
+    assert!(sealed.landed_after_show("handout.css"));
+    assert!(sealed.landed_after_show("photo.webp"));
+
+    let never_shown = PendingManifest::new(SiteHashes::default()).seal();
+    assert!(!never_shown.was_shown());
+    assert!(never_shown.landed_after_show("anything"), "a render never shown announced nothing");
 }

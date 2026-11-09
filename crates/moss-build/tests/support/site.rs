@@ -13,6 +13,9 @@ impl log::Log for Capture {
     }
     fn log(&self, record: &log::Record) {
         self.0.lock().unwrap().push(record.args().to_string());
+        if record.target().ends_with("#note") {
+            NOTES.lock().unwrap().push(record.args().to_string());
+        }
         // What the CLI counts as a build problem: every warning that is not a note.
         if record.level() == log::Level::Warn && !record.target().ends_with("#note") {
             PROBLEMS.lock().unwrap().push(record.args().to_string());
@@ -22,6 +25,10 @@ impl log::Log for Capture {
 }
 
 static CAPTURE: Capture = Capture(Mutex::new(Vec::new()));
+static NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn notes() -> Vec<String> { NOTES.lock().unwrap().clone() }
+
 static PROBLEMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The lines the last `build_sync` logged that count as build problems.
@@ -29,21 +36,35 @@ pub fn problems() -> Vec<String> {
     PROBLEMS.lock().unwrap().clone()
 }
 
+static TEST_HOME: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
+    let home = tempfile::tempdir().unwrap();
+    if std::env::var_os("MOSS_HOME").is_none() {
+        std::env::set_var("MOSS_HOME", home.path());
+    }
+    home
+});
+
 /// The logger is global to the test binary, so builds take turns: each one
 /// owns the capture from its first log line to its last.
 static SEQUENTIAL: Mutex<()> = Mutex::new(());
 
 /// Build `folder_path` and return what it logged at warn level and above.
 pub fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<Vec<String>, String> {
+    build_captured(folder_path, trigger).map(|(logs, _)| logs)
+}
+
+fn build_captured(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<(Vec<String>, Vec<String>), String> {
     use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
     use moss_build::vault_root::VaultRoot;
 
     let _turn = SEQUENTIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::sync::LazyLock::force(&TEST_HOME);
     let _ = log::set_logger(&CAPTURE);
     log::set_max_level(log::LevelFilter::Warn);
     CAPTURE.0.lock().unwrap().clear();
     PROBLEMS.lock().unwrap().clear();
+    NOTES.lock().unwrap().clear();
     let source = PathBuf::from(folder_path);
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(run_pipeline(PipelineConfig {
@@ -59,14 +80,16 @@ pub fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))?;
-    Ok(std::mem::take(&mut *CAPTURE.0.lock().unwrap()))
+    Ok((std::mem::take(&mut *CAPTURE.0.lock().unwrap()), notes()))
 }
 
 pub struct Site {
     pub root: PathBuf,
     /// What the first build logged at warn level and above.
     pub logged: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 impl Site {
@@ -82,12 +105,12 @@ impl Site {
     pub fn in_language(lang: &str, extra_config: &str, files: &[(&str, &str)]) -> Site {
         let root = std::env::temp_dir().join(format!("moss_inline_site_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
-        let mut site = Site { root, logged: Vec::new() };
+        let mut site = Site { root, logged: Vec::new(), notes: Vec::new() };
         site.write(".moss/config.toml", &format!("schema_version = 6\n\n[site]\nlang = \"{lang}\"\n{extra_config}"));
         for (rel, body) in files {
             site.write(rel, body);
         }
-        site.logged = site.rebuild();
+        (site.logged, site.notes) = build_captured(&site.root.to_string_lossy(), moss_build::build::BuildTrigger::Full).unwrap();
         site
     }
 

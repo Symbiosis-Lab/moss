@@ -32,7 +32,8 @@ fn page(site: &Path) -> String {
 
 /// A site whose comment server is `server`, built once so the article map
 /// names its page, with a cached comment on that page that the server no
-/// longer matches. Returns the site.
+/// longer matches. The page has been published, so its file carries its uid.
+/// Returns the site.
 fn site_with_stale_cache(tmp: &Path, home: &Path, server: &str) -> std::path::PathBuf {
     let site = tmp.join("site");
     std::fs::create_dir_all(site.join(".moss/data/social")).unwrap();
@@ -43,7 +44,7 @@ fn site_with_stale_cache(tmp: &Path, home: &Path, server: &str) -> std::path::Pa
     )
     .unwrap();
     std::fs::write(site.join("index.md"), "---\ntitle: Home\n---\n\nWelcome.\n").unwrap();
-    std::fs::write(site.join("posts/hello.md"), "---\ntitle: Hello Garden\n---\n\nA post about gardens.\n").unwrap();
+    std::fs::write(site.join("posts/hello.md"), "---\ntitle: Hello Garden\nuid: \"4e110a11\"\n---\n\nA post about gardens.\n").unwrap();
     build(home, &site, &[]);
     let map: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(site.join(".moss/build.nosync/article-map.json")).unwrap()).unwrap();

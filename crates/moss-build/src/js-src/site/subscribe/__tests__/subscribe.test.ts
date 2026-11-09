@@ -81,10 +81,11 @@ describe('hydrateSubscribeForm', () => {
     expect(label.textContent).toBe(COPY['zh-hant'].label);
   });
 
-  test('data-button-override leaves the author label and placeholder untouched', () => {
+  test('the override markers leave the author label and placeholder untouched', () => {
     const form = mount('zh-Hant');
-    // Simulate an author override block: :::subscribe{button="申請" placeholder="您的邮箱"}
+    // As rendered for :::subscribe{button="申請" placeholder="您的邮箱"}
     form.dataset.buttonOverride = 'true';
+    form.dataset.placeholderOverride = 'true';
     const input = form.querySelector('input')!;
     const label = form.querySelector('.moss-btn__label')!;
     input.placeholder = '您的邮箱';
@@ -92,6 +93,16 @@ describe('hydrateSubscribeForm', () => {
     hydrateSubscribeForm(form);
     expect(input.placeholder).toBe('您的邮箱');
     expect(label.textContent).toBe('申請');
+  });
+
+  test('an authored placeholder survives without an authored button label', () => {
+    const form = mount('zh-Hant');
+    form.dataset.placeholderOverride = 'true';
+    const input = form.querySelector('input')!;
+    input.placeholder = 'Your email address';
+    hydrateSubscribeForm(form);
+    expect(input.placeholder).toBe('Your email address');
+    expect(form.querySelector('.moss-btn__label')!.textContent).toBe(COPY['zh-hant'].label);
   });
 
   test('is idempotent — hydrating twice binds one submit handler', async () => {

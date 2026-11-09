@@ -65,6 +65,7 @@ fn cfg(folder: &std::path::Path, epoch: u64) -> PipelineConfig {
         server_port: None,
         admission_epoch: Some(epoch),
         live_port: None,
+        rename_pairs: Vec::new(),
     }
 }
 
@@ -201,15 +202,14 @@ fn sealed_stylesheet(sealed: &crate::build::manifest::SealedManifest) -> String 
 /// Whether another process could take `folder`'s build lock right now: a
 /// separate open of the lock file contends exactly as another process would.
 fn folder_lock_is_free(folder: &std::path::Path) -> bool {
-    use fs2::FileExt;
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(crate::infra::folder_lock::lock_path_named(folder, "build").unwrap())
         .unwrap();
-    let free = lock.try_lock_exclusive().is_ok();
+    let free = lock.try_lock().is_ok();
     if free {
-        FileExt::unlock(&lock).unwrap();
+        lock.unlock().unwrap();
     }
     free
 }

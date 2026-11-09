@@ -147,7 +147,7 @@ pub(crate) mod pretend {
         #[cfg(unix)]
         if EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(p, inode)| {
             p == path && std::fs::symlink_metadata(path).is_ok_and(|m| {
-                crate::build::stat::stat_identity(&m).1 == Some(*inode)
+                crate::build::stat::FileStat::of(&m).inode == Some(*inode)
             })
         }) {
             return true;
@@ -190,7 +190,7 @@ pub(crate) mod pretend {
     /// new local inode; a download request alone leaves the placeholder offline.
     #[cfg(unix)]
     pub(crate) fn evicted_until_replaced(path: &Path) -> Guard {
-        let inode = crate::build::stat::stat_identity(&std::fs::symlink_metadata(path).unwrap()).1.unwrap();
+        let inode = crate::build::stat::FileStat::of(&std::fs::symlink_metadata(path).unwrap()).inode.unwrap();
         EVICTED_INODES.lock().unwrap_or_else(|e| e.into_inner()).push((path.to_path_buf(), inode));
         Guard(path.to_path_buf())
     }

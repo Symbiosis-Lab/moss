@@ -1,8 +1,7 @@
-//! `moss agents init` — seed this site's own conventions in `.moss/AGENTS.md`.
-//!
-//! Only `init` remains. `install-skill` wrote the moss skill into `$HOME`,
-//! which is now [`sync`]'s job — into the project, on every full build, with
-//! no command to run. See that module for why $HOME was the wrong place.
+//! `moss agents sync` writes the moss pointer for the coding agents installed
+//! (Claude Code, Cursor) into a site; `moss agents init` does that and seeds
+//! this site's own conventions in `.moss/AGENTS.md`. A build only refreshes
+//! what these wrote; see [`sync`] for why it creates nothing.
 
 pub mod skill_package;
 pub mod sync;
@@ -14,13 +13,43 @@ const TEMPLATE: &str = include_str!("../assets/agents/template.md");
 /// Returns exit code i32, matching the `cli::domain::run` shape.
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
-        Some("init") => run_init(&args[1..]),
+        Some("init") => match run_sync() {
+            0 => run_init(&args[1..]),
+            code => code,
+        },
+        Some("sync") => run_sync(),
         Some(other) => {
             eprintln!("unknown agents subcommand: {}", other);
             1
         }
         None => {
-            eprintln!("usage: moss agents init");
+            eprintln!("usage: moss agents sync | moss agents init");
+            1
+        }
+    }
+}
+
+fn run_sync() -> i32 {
+    let project = crate::vault::paths::resolve_input(std::env::current_dir().expect("cwd"));
+    if !project.join(".moss").is_dir() {
+        eprintln!("error: not in a moss project (no .moss/ directory found at {})", project.display());
+        return 1;
+    }
+    match sync::sync_project(&project, &sync::bundled_cli_path()) {
+        Ok(report) => {
+            for path in &report.written {
+                println!("wrote {path}");
+            }
+            for path in &report.user_owned {
+                println!("left {path} alone: it is yours, not moss's");
+            }
+            if report.is_noop() && report.user_owned.is_empty() {
+                println!("agent guidance is up to date");
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
             1
         }
     }
@@ -93,7 +122,7 @@ fn run_init(_args: &[String]) -> i32 {
 
     println!();
     println!("This file is for YOUR site's conventions. moss's own conventions are");
-    println!("written for your coding agent on every build — nothing to run.");
+    println!("`moss guide`, and every build keeps the pointer files above current.");
     0
 }
 

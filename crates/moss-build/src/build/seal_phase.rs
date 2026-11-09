@@ -39,8 +39,8 @@
 //! syndication/plugin read of `read_site_file` (which resolves under
 //! `current_ptr()`; see `plugins/project_files.rs`'s own note on why it does
 //! not need a separate fix — it runs behind the same publish gate `settle`
-//! already covers). `search_lane::settle_for_publish` remains the search
-//! index's own sync point and is unaffected here — deploy calls both.
+//! already covers). The search bundle's publish synchronization is documented
+//! on [`search_lane::settle_for_publish`](super::feeds::search_lane::settle_for_publish).
 //!
 //! Ending a folder session drops its lane: `FolderSession::shutdown` calls
 //! [`evict`]. A caller that ends a session settles it first (the desktop
@@ -233,7 +233,7 @@ async fn run_materialize_phase(req: PendingSeal) {
     // waiting for this lock while holding the guard would deadlock with it.
     let folder_build_lock = match folder_lock {
         held @ Some(_) => held,
-        None => crate::infra::folder_lock::acquire_async(Path::new(&folder_path)).await,
+        None => crate::phase!("lock_wait", { crate::infra::folder_lock::acquire_async(Path::new(&folder_path)).await }),
     };
 
     // Re-acquire the per-folder stage-write guard, freshly — see
@@ -242,9 +242,10 @@ async fn run_materialize_phase(req: PendingSeal) {
     // `stage_dir` plus the generation GC and search-lane request that follow,
     // all of which depend on the generation `ship_phase` is about to freeze.
     let _stage_write_guard = match &session {
-        Some(s) => Some(s.lock_stage_write().await),
+        Some(s) => Some(crate::phase!("lock_wait", { s.lock_stage_write().await })),
         None => None,
     };
+    let promote_trace = crate::build::phase::PhaseTrace::start("seal_promote");
 
     // Background asset copying has drained by the time this seal is handed
     // off. Refuse promotion if the currently selected page still names a
@@ -334,6 +335,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         (sealed, promotion)
     })
     .await;
+    drop(promote_trace);
     let (mut sealed, promotion) = match blocking_result {
         Ok(pair) => pair,
         Err(e) => {

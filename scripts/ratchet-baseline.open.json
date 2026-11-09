@@ -9,34 +9,45 @@
       "value": {
         "crates/moss-build/src/build/cache.rs": 1000,
         "crates/moss-build/src/build/folder_embed.rs": 1300,
-        "crates/moss-build/src/build/markdown/pipeline.rs": 1400,
+        "crates/moss-build/src/build/markdown/pipeline.rs": 1300,
         "crates/moss-build/src/build/media/ffmpeg.rs": 900,
         "crates/moss-build/src/build/media/image.rs": 1500,
         "crates/moss-build/src/build/media/pipeline.rs": 1100,
         "crates/moss-build/src/build/media/video.rs": 1400,
         "crates/moss-build/src/build/page/meta.rs": 1100,
         "crates/moss-build/src/build/pipeline.rs": 1300,
-        "crates/moss-build/src/build/render/blocking.rs": 2200,
+        "crates/moss-build/src/build/render/blocking.rs": 2100,
         "crates/moss-build/src/build/render/html.rs": 1000,
         "crates/moss-build/src/build/scan/scan.rs": 1000,
         "crates/moss-build/src/build.rs": 1200,
         "crates/moss-core/src/ast/parser.rs": 1400,
         "crates/moss-core/src/ast/shortcode_extract.rs": 1400,
         "packages/moss-api/src/testing/mock-tauri.ts": 900,
-        "crates/moss-core/src/contract/custom_props.rs": 900
+        "crates/moss-core/src/contract/custom_props.rs": 900,
+        "packages/moss-ui/src/ui/editor/chip-bar.ts": 1700,
+        "packages/moss-ui/src/ui/editor/editor-main.ts": 1900,
+        "packages/moss-ui/src/ui/editor/tree/controller.ts": 1100,
+        "packages/moss-ui/src/ui/preview/navigation-manager.ts": 900,
+        "packages/moss-ui/src/ui/preview/preview-manager.ts": 1200,
+        "packages/moss-ui/src/ui/preview/progress/progress-panel.ts": 1400
       },
       "oversized": {
         "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately free of any GUI-framework dependency via the HostPorts ports. run_pipeline_body (about 450 code lines) is most of it: scan once, re-scan after content-producing hooks, the native process phase, then the build. It needs the scan as an explicit value carried across the re-scan before the phases can move to their own file.",
         "crates/moss-build/src/build/folder_embed.rs": "Three resolution branches (content folder, static-index folder, missing) share one marker-parsing frontend; retires by extracting that shared parsing into its own file first, which none of the three branches currently need enough to justify.",
         "crates/moss-build/src/build/markdown/pipeline.rs": "The sole markdown-to-HTML entry point, process_markdown_file (one long function whose phases are already numbered), plus URL classification and prettification. It shrinks by giving each phase its own result instead of locals shared across the function; moving URL handling to another file would only relocate it.",
         "crates/moss-build/src/build/media/image.rs": "The image half of media conversion: WebP encode, EXIF, resize, CAS store, dispatched on threads under a megapixel budget. It shares output registration and the coherence summary with video through output_emit; its dispatch, concurrency and state model differ on purpose, so no further shared skeleton is planned.",
-        "crates/moss-build/src/build/media/pipeline.rs": "Asset copy, cleanup and sync for the background phase, deliberately the only place that writes the stage or seals cleanup bookkeeping per its own module doc. copy_deferred_assets (about 390 code lines) is most of it: one walk applies the sized-raster, CAS and source-metadata fast paths and prunes stale entries. It needs an explicit walk result (found keys, carried-forward entries, counters) before the passes can split.",
+        "crates/moss-build/src/build/media/pipeline.rs": "Asset staging and cleanup share this module. Source HTML staging returns typed output and source records before readiness; the deferred walk reuses its caches and entry writer, then prunes its live asset records. The remaining decomposition is between asset placement and permitted stale-file cleanup, which have separate callers and bookkeeping.",
         "crates/moss-build/src/build/media/video.rs": "The video half of media conversion, grown by a long tail of individually necessary fixes (poster repair, HLS ladder capping and healing, CAS-oid threading): a 2-permit semaphore with superseding runs. It shares output registration and the coherence summary with image through output_emit; its dispatch, concurrency and state model differ on purpose, so no further shared skeleton is planned.",
         "crates/moss-build/src/build/page/meta.rs": "Open Graph/Twitter/Schema.org JSON-LD tag builders sit alongside the larger markdown-to-plain-text excerpt extractor (first_paragraph_excerpt, non_prose_view, strip_markdown_inline) that page descriptions are derived from, plus hreflang and HTML/JSON escaping helpers; retires by moving the excerpt-extraction half — the larger of the two — into its own file, which nothing here currently plans.",
         "crates/moss-build/src/build/pipeline.rs": "The run()/build() entry point for every build path (CLI, GUI, preview, watch), covering the blocking and background phases end to end. Most of it is build_inner, whose decomposition is written in the lines_per_function disposition; the file shrinks as that function does.",
         "crates/moss-build/src/build/render/blocking.rs": "The blocking build coordinates source readiness, parsing, typed document preparation, and distinct authored, term, and place bodies. Folder planning and common page chrome now have single owners; further reduction should give document preparation an explicit result consumed by those body renderers.",
         "crates/moss-core/src/ast/parser.rs": "The one function that walks every pulldown_cmark::Event variant into the typed AST, including heading-ID assignment; retires only if event handling splits by node kind, which would scatter a single parse pass across several files for no behavior change.",
-        "crates/moss-core/src/ast/shortcode_extract.rs": "Pre-parse :::shortcode extraction has to walk the source once, skip every kind of inert region, and track nested opener/closer state together, so the pass doesn't decompose along the shortcode-type boundary it would naturally be split on."
+        "crates/moss-core/src/ast/shortcode_extract.rs": "Pre-parse :::shortcode extraction has to walk the source once, skip every kind of inert region, and track nested opener/closer state together, so the pass doesn't decompose along the shortcode-type boundary it would naturally be split on.",
+        "packages/moss-ui/src/ui/editor/chip-bar.ts": "The chip bar combines field rendering, parsing, dropdown state and keyboard handling. Separate the field state from its renderers before splitting the controller.",
+        "packages/moss-ui/src/ui/editor/editor-main.ts": "The editor entry coordinates document loading, focus, history and host events. Give the document session one explicit state record before separating its event wiring.",
+        "packages/moss-ui/src/ui/editor/tree/controller.ts": "The tree controller coordinates selection, refresh, edit sessions and host actions. Reduce its shared mutable state before separating the remaining coordination methods.",
+        "packages/moss-ui/src/ui/preview/preview-manager.ts": "The preview coordinates navigation, host events, frame state and recovery. Separate frame lifecycle state from navigation before decomposing its event handlers.",
+        "packages/moss-ui/src/ui/preview/progress/progress-panel.ts": "The progress panel owns build and publish state, task subscriptions and rendering. Express its lifecycle as explicit state transitions before separating the renderers."
       },
       "data_tables": {
         "crates/moss-core/src/contract/components.rs": "One ComponentEntry per emitted moss-* class, the federated contract's Source 2: its length measures the class vocabulary.",
@@ -52,27 +63,32 @@
         "crates/moss-build/src": 45,
         "crates/moss-build/src/build": 79,
         "crates/moss-build/src/build/media": 20,
-        "crates/moss-build/src/deploy": 18,
+        "crates/moss-build/src/deploy": 19,
         "crates/moss-build/src/js-src/bridge": 17,
         "crates/moss-build/src/js-src/site": 27,
         "crates/moss-build/src/plugins": 19,
-        "crates/moss-core/src": 41,
+        "crates/moss-core/src": 46,
         "crates/moss-core/src/ast": 29,
-        "crates/moss-core/src/resolve": 17,
-        "crates/moss-build/src/ops/serve": 19,
+        "crates/moss-core/src/resolve": 20,
+        "crates/moss-build/src/ops/serve": 20,
         "crates/moss-build/src/js-src/site/maps/places-explorer": 18,
         "crates/moss-build/src/vault/import/scrape": 17,
-        "crates/moss-build/src/cli": 24,
+        "crates/moss-build/src/cli": 25,
         "crates/moss-build/src/build/components": 16,
         "crates/moss-build/src/build/emit": 18,
-        "crates/moss-build/src/assets/js": 17,
+        "crates/moss-build/src/assets/js": 18,
         "crates/moss-build/src/build/place_map": 16,
-        "packages/moss-ui/src/ui/shared/ui": 18
+        "packages/moss-ui/src/ui/shared/ui": 18,
+        "packages/moss-ui/src/ui": 20,
+        "packages/moss-ui/src/ui/editor": 93,
+        "packages/moss-ui/src/ui/editor/tree": 17,
+        "packages/moss-ui/src/ui/preview": 28
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",
-        "crates/moss-build/src/build": "Pipeline phases still share state through the long functions listed in lines_per_function (build_inner, generate_blocking_content_for_build, copy_deferred_assets); moving files before those functions are decomposed would move them twice, so the directory splits after the functions do.",
-        "crates/moss-build/src": "The crate root holds one module per family (build/, engine/, editor/, ops/, plugins/, config/ and the rest), named the way the code that links this crate names them, so its child count tracks how many families there are, not disorganization; a new family gets a directory, not more root files."
+        "crates/moss-build/src/build": "Pipeline phases still share state through the long functions listed in lines_per_function (build_inner, generate_blocking_content_for_build); moving files before those functions are decomposed would move them twice, so the directory splits after the functions do.",
+        "crates/moss-build/src": "The crate root holds one module per family (build/, engine/, editor/, ops/, plugins/, config/ and the rest), named the way the code that links this crate names them, so its child count tracks how many families there are, not disorganization; a new family gets a directory, not more root files.",
+        "packages/moss-ui/src/ui/editor": "The editor retains its existing syntax, session and surface families so behavior remains stable. Consolidate the session state before regrouping the remaining flat modules."
       }
     },
     "mirror_markers": {
@@ -86,9 +102,10 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/Cargo.toml": 85,
+        "crates/moss-build/Cargo.toml": 86,
         "crates/moss-cli/Cargo.toml": 5,
-        "crates/moss-core/Cargo.toml": 6
+        "crates/moss-core/Cargo.toml": 9,
+        "crates/moss-bindings/Cargo.toml": 5
       }
     },
     "lines_per_function": {
@@ -98,18 +115,17 @@
       "value": {
         "crates/moss-build/src/build.rs::run_pipeline_body": 450,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
-        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 750,
+        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
         "crates/moss-build/src/build/media/image.rs::run_image_conversion": 400,
         "crates/moss-build/src/build/media/image.rs::dispatch_image_conversions_at": 250,
-        "crates/moss-build/src/build/media/pipeline.rs::copy_deferred_assets": 400,
         "crates/moss-build/src/build/media/video.rs::convert_single_video": 250,
         "crates/moss-build/src/build/media/video.rs::run_video_conversion": 350,
         "crates/moss-build/src/build/parse_cache.rs::begin": 250,
         "crates/moss-build/src/build/pipeline.rs::run_notebook_processing": 350,
         "crates/moss-build/src/build/pipeline.rs::build_inner": 650,
-        "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": 1850,
+        "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": 1800,
         "crates/moss-build/src/build/render/html.rs::render_page": 550,
         "crates/moss-build/src/build/render/incremental/verdict.rs::compute": 250,
         "crates/moss-build/src/build/scan/scan.rs::scan_folder_with_dedup_emit_with_error": 400,
@@ -126,13 +142,19 @@
         "crates/moss-core/src/resolve/wikilink_dispatch.rs::dispatch_embed_form": 250,
         "packages/moss-api/src/testing/mock-tauri.ts::setupMockTauri": 450,
         "packages/moss-ui/src/ui/shared/ui/ctx-menu.ts::openCtxMenu": 400,
-        "packages/moss-watercolor/src/engine/solver.ts::createSim": 250
+        "packages/moss-watercolor/src/engine/solver.ts::createSim": 250,
+        "packages/moss-ui/src/ui/editor/chip-bar.ts::showUnifiedDropdown": 250,
+        "packages/moss-ui/src/ui/editor/cm-editor.ts::constructor": 250,
+        "packages/moss-ui/src/ui/editor/editor-main.ts::init": 550,
+        "packages/moss-ui/src/ui/editor/editor-main.ts::loadFileBody": 250,
+        "packages/moss-ui/src/ui/editor/versions-surface.ts::renderVersionsSurface": 400
       },
       "oversized": {
-        "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": "One function runs the whole blocking build in sequence: source scan and uid normalization, page map, content graph and folder languages, theme and assets, the authored page loop, generated term, place and index pages, feeds and sitemap, then the hand-off to the background context; the phases share mutable state (the pending manifest, warnings, source records) instead of passing results. Fix the state model first: give each phase an explicit result (source set, authored pages, generated pages, site files) that the next phase and the background context consume, then split along those results.",
+        "crates/moss-build/src/build/render/blocking.rs::generate_blocking_content_for_build": "One function runs the whole blocking build in sequence: source scan, page map, note IDs, content graph and folder languages, theme and assets, the authored page loop, generated term, place and index pages, feeds and sitemap, then the hand-off to the background context; the phases share mutable state (the pending manifest, warnings, source records) instead of passing results. Fix the state model first: give each phase an explicit result (source set, authored pages, generated pages, site files) that the next phase and the background context consume, then split along those results.",
         "crates/moss-build/src/build/render/html.rs::render_page": "One function decides the page's facts (template kind, locator placement, indexability, title, share card, date line), then composes the body for every page kind and fills the shell. Compute one page-facts record at the top, give each body kind (article, folder index, home) its own function returning its fragments (head extras, article, sidebar, post-article), and let the shell fill take only those fragments.",
         "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": "The body is already numbered phases (parse to the typed AST, wikilink embeds, URL resolution, hero extraction, cover image capture, an unresolved-URL safety net, render through the hooks) plus a raw-media warning pass, threading local variables between them. Introduce one typed-document record (AST, hero, cover image, diagnostics) that each phase takes and returns, then lift each phase into a function over it.",
-        "crates/moss-build/src/build/pipeline.rs::build_inner": "Numbered steps and the background dispatch in one body: the preview rest point, previous hashes, staging prepare and sweep, the blocking render, slot injection, hash comparison, then the hand-off to the background phase, each step reading what the last left in locals. Give each step an explicit result (staging plan, rendered stage, change set) so the background hand-off takes a change set instead of a dozen locals."
+        "crates/moss-build/src/build/pipeline.rs::build_inner": "Numbered steps and the background dispatch in one body: the preview rest point, previous hashes, staging prepare and sweep, the blocking render, slot injection, hash comparison, then the hand-off to the background phase, each step reading what the last left in locals. Give each step an explicit result (staging plan, rendered stage, change set) so the background hand-off takes a change set instead of a dozen locals.",
+        "packages/moss-ui/src/ui/editor/editor-main.ts::init": "The initializer wires the editor session, host events and controls in one lifetime. Give that lifetime explicit ownership and cleanup before extracting groups of subscriptions."
       }
     },
     "string_slices_per_crate": {

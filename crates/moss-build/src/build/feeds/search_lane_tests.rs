@@ -184,6 +184,29 @@ fn a_build_with_no_lane_reindexes_rather_than_adopting_its_own_stale_receipt() {
     );
 }
 
+/// The other half: a lane-less build over the same staged pages would index them
+/// into the same bytes, so it serves the bundle it holds. A bundle the lane
+/// indexed from a generation is never taken for one.
+#[test]
+fn a_build_with_no_lane_serves_the_bundle_it_indexed_from_the_same_pages() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let mut lane = PendingManifest::new(Default::default());
+    adopt(&mp, &mut lane);
+    let mut first = PendingManifest::new(Default::default());
+    let before = search::index_build_count();
+    assert!(matches!(adopt_into(&mp, &mp.staging_dir(), &mut first, true, Freshness::Now), Adoption::Indexed(_)));
+    assert_eq!(search::index_build_count() - before, 1, "a lane receipt is not a lane-less build's own");
+
+    let mut second = PendingManifest::new(Default::default());
+    let outcome = adopt_into(&mp, &mp.staging_dir(), &mut second, true, Freshness::Now);
+
+    assert!(matches!(outcome, Adoption::Adopted(_)), "got {:?}", outcome);
+    assert_eq!(search::index_build_count() - before, 1, "the same pages are not indexed twice");
+    assert_eq!(bundle_keys(&second), bundle_keys(&first));
+    assert_eq!(second.files(), first.files());
+}
+
 // ── Receipt/disk divergence (the rule's second hole) ─────────────────────────
 
 /// An external delete or a cloud eviction of the holding area leaves a receipt
@@ -254,11 +277,11 @@ fn a_copy_that_fails_partway_registers_nothing() {
 fn the_divergence_branch_does_not_delete_a_receipt_it_never_read() {
     let (_root, mp) = project(PAGE);
     let index_dir = mp.index_dir();
-    let fresh = BundleReceipt { fp: "beef".into(), pages: 1, files: vec![] };
+    let fresh = BundleReceipt { fp: "beef".into(), pages: 1, files: vec![], staged: None };
     std::fs::create_dir_all(&index_dir).unwrap();
     std::fs::write(mp.index_receipt(), serde_json::to_vec(&fresh).unwrap()).unwrap();
 
-    let stale = BundleReceipt { fp: "dead".into(), pages: 1, files: vec![] };
+    let stale = BundleReceipt { fp: "dead".into(), pages: 1, files: vec![], staged: None };
     with_holding(&index_dir, |h| drop_receipt_if_still(h, &index_dir, &stale));
 
     assert_eq!(
@@ -286,7 +309,7 @@ fn a_bundle_that_covers_fewer_pages_than_its_page_set_is_refused() {
 
     // Nothing could be read at all — a generation GC'd or evicted mid-walk.
     let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0 };
-    let err = with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, &nothing))
+    let err = with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, None, &nothing))
         .expect_err("a zero-page bundle must not be stamped with a 3-page fingerprint");
     assert!(err.contains("0 of 3"), "unhelpful refusal: {err}");
     assert!(!mp.index_receipt().exists(), "a refused publish writes no receipt");
@@ -299,7 +322,7 @@ fn a_bundle_that_covers_fewer_pages_than_its_page_set_is_refused() {
         skipped: 1,
     };
     assert!(
-        with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, &partial)).is_err(),
+        with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, None, &partial)).is_err(),
         "a bundle missing one page must not be stamped with the whole page set"
     );
     assert!(!mp.index_receipt().exists());
@@ -315,11 +338,11 @@ fn a_refused_publish_leaves_the_previous_bundle_adoptable() {
     let index_dir = mp.index_dir();
     let good = search::build_search_index(&mp.staging_dir()).unwrap();
     let one = PageSet { fp: PageSetFp(0x1111), pages: 1 };
-    with_holding(&index_dir, |h| publish_bundle(h, &index_dir, one, &good)).unwrap();
+    with_holding(&index_dir, |h| publish_bundle(h, &index_dir, one, None, &good)).unwrap();
 
     let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0 };
     let two = PageSet { fp: PageSetFp(0x2222), pages: 2 };
-    assert!(with_holding(&index_dir, |h| publish_bundle(h, &index_dir, two, &nothing)).is_err());
+    assert!(with_holding(&index_dir, |h| publish_bundle(h, &index_dir, two, None, &nothing)).is_err());
 
     let mut pending = PendingManifest::new(Default::default());
     assert!(matches!(adopt(&mp, &mut pending), Adoption::Adopted(_)));
@@ -407,7 +430,7 @@ fn settle_is_a_no_op_when_the_receipt_already_covers_the_published_page_set() {
     std::fs::write(mp.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
     let want = PageSet::of(&hashes.files);
     let produced = search::build_search_index(&mp.staging_dir()).unwrap();
-    with_holding(&mp.index_dir(), |h| publish_bundle(h, &mp.index_dir(), want, &produced))
+    with_holding(&mp.index_dir(), |h| publish_bundle(h, &mp.index_dir(), want, None, &produced))
         .unwrap();
 
     let before = search::index_build_count();
@@ -458,6 +481,7 @@ fn settle_does_not_accept_an_empty_bundle_for_a_page_set_that_has_pages() {
         fp: PageSetFp::of(&hashes.files).hex(),
         pages: 0,
         files: vec![],
+        staged: None,
     };
     std::fs::create_dir_all(mp.index_dir()).unwrap();
     std::fs::write(mp.index_receipt(), serde_json::to_vec(&empty).unwrap()).unwrap();

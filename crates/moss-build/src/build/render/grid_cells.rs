@@ -293,7 +293,7 @@ pub(crate) fn resolve_page_body(
         now,
     };
     apply_summary_grids(&mut plan, &index);
-    apply_collection_cards(&mut plan, &index);
+    apply_collection_cards(&mut plan, &index, doc.body_claims_eager);
     apply_cell_cover_colors(&mut plan, &index);
     mark_upright_leads(&mut plan, &index);
 
@@ -407,7 +407,11 @@ fn summary_card_markup(cell: &GridCellEmission, index: &BuildIndex<'_>) -> Optio
 ///
 /// Skips grids the author marked `{.no-cards}` — navigation grids and
 /// mixed-content splits whose cells happen to contain internal links.
-pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
+///
+/// The first card with a cover takes the page's one eager image, unless
+/// `eager_taken` says a hero or the opening content already holds it.
+pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>, eager_taken: bool) {
+    let mut eager_spent = eager_taken;
     for grid in grids_mut(plan) {
         if grid.no_cards() {
             continue;
@@ -428,9 +432,6 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
             !link.external()
                 && picked_card_props(&link, index).is_some_and(|p| p.cover.is_some())
         });
-        // The first card with a cover carries the LCP preload hint, matching
-        // the bookkeeping the listing-grid renderer does.
-        let mut eager_spent = false;
         for cell in &mut grid.cells {
             if let Some((html, has_cover)) = card_markup(cell, index, &mut eager_spent, list_has_covers) {
                 cell.replace(html, has_cover);

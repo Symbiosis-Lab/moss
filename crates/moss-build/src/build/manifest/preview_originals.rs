@@ -36,6 +36,23 @@ impl Originals {
         found
     }
 
+    /// The ladder rungs this generation promised for `source`, by width,
+    /// read from the URLs it recorded, so a folder's `url:` override is
+    /// honoured and a user file merely named like a rung (recorded under its
+    /// own source) is never mistaken for one.
+    pub(crate) fn rungs(&self, source: &str) -> BTreeMap<u32, (&str, &Original)> {
+        let mut rungs = BTreeMap::new();
+        for url in self.images.iter().filter(|(_, original)| original.source == source).map(|(url, _)| url) {
+            for width in moss_core::asset_paths::LADDER {
+                if let Some((rung, original)) = self.images.get_key_value(&moss_core::asset_paths::to_webp_rung(url, width))
+                    .filter(|(_, original)| original.source == source) {
+                    rungs.insert(width, (rung.as_str(), original));
+                }
+            }
+        }
+        rungs
+    }
+
     pub(crate) fn read(generations: &Path, generation: &str) -> std::io::Result<Option<Self>> {
         let bytes = match std::fs::read(receipt_path(generations, generation)) {
             Ok(bytes) => bytes,
@@ -61,7 +78,7 @@ impl Originals {
         for (source, metadata) in &hashes.sources {
             let ext = Path::new(source).extension().and_then(|ext| ext.to_str()).unwrap_or("");
             if !moss_core::asset_paths::is_ladder_source_ext(ext) { continue; }
-            let original = Original { source: source.clone(), oid: metadata.hash.clone(), size: metadata.size };
+            let original = Original { source: source.clone(), oid: metadata.hash.clone(), size: metadata.stat.size };
             for url in default_urls(source) {
                 candidates.entry(url).and_modify(|old| {
                     if old.as_ref() != Some(&original) { *old = None; }
@@ -93,7 +110,7 @@ impl SealedManifest {
             let source = source.as_ref()?;
             let metadata = self.inner.sources.get(source)?;
             Some((url.clone(), Original {
-                source: source.clone(), oid: metadata.hash.clone(), size: metadata.size,
+                source: source.clone(), oid: metadata.hash.clone(), size: metadata.stat.size,
             }))
         }).collect();
         let receipt = Originals { generation: self.generation_id().into(), images };

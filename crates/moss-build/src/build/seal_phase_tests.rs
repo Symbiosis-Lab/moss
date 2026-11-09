@@ -82,6 +82,7 @@ impl Vault {
             server_port: None,
             admission_epoch: None,
             live_port: None,
+            rename_pairs: Vec::new(),
         })
         .await
         .expect("build");
@@ -198,7 +199,7 @@ async fn a_pending_seal_left_unforced_leaves_current_at_the_prior_valid_generati
 /// (c) Calling `settle` immediately after a save — no natural idle wait —
 /// must force a synchronous materialize before `current_generation_id()` is
 /// read, which is exactly the check a plugin deploy makes
-/// (`deploy::plugin_push::site_dir_for_plugin`) before handing bytes to a
+/// (`deploy::plugin_push::require_promoted`) before handing bytes to a
 /// deploy target.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settle_forces_a_synchronous_seal_before_generation_id_is_read() {

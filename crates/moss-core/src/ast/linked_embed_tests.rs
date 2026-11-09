@@ -131,7 +131,7 @@ fn works_in_prose_headings_lists_and_tables() {
             Inline::Link { children, .. } => {
                 matches!(children.as_slice(), [Inline::Image { .. }])
             }
-            Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) => {
+            Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) | Inline::Mark(c) => {
                 has_linked_image(c)
             }
             _ => false,
@@ -224,7 +224,7 @@ fn contains_linked_image(blocks: &[Block]) -> bool {
             Inline::Link { children, .. } => {
                 matches!(children.as_slice(), [Inline::Image { .. }]) || in_inlines(children)
             }
-            Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) => in_inlines(c),
+            Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) | Inline::Mark(c) => in_inlines(c),
             _ => false,
         })
     }

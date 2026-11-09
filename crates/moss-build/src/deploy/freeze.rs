@@ -123,7 +123,7 @@ pub async fn with_publish_guard<T, F: std::future::Future<Output = Result<T, Str
     body: F,
 ) -> Result<T, String> {
     // Above the emit ON PURPOSE — see the carve-out note above.
-    let _guard = PublishGuard::try_acquire()?;
+    let _guard = super::profile::gate("in_progress", PublishGuard::try_acquire())?;
 
     let result = body.await;
 

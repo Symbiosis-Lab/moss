@@ -51,6 +51,7 @@
 import { markRows, SECTION_SYNC_EVENT, type SectionSyncDetail } from "./section-event";
 import { mountContentsLens } from "./contents-lens";
 import { pictureImg, type SectionPicture } from "./section-pictures";
+import { teardownStack } from "./teardown";
 
 /** Clear space between the widest label and the text column — the same gap
  *  the text keeps from a sidenote. */
@@ -96,16 +97,8 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   const { headings, titles, island } = opts;
   const first = headings[0];
   const article = first.closest("article") ?? first.closest("main") ?? document.body;
-  const undo: Array<() => void> = [];
-  const on = (
-    target: Window | Document | Element,
-    type: string,
-    handler: (event: Event) => void,
-    options?: AddEventListenerOptions,
-  ): void => {
-    target.addEventListener(type, handler, options);
-    undo.push(() => target.removeEventListener(type, handler, options));
-  };
+  const stack = teardownStack();
+  const { on } = stack;
 
   const nav = document.createElement("nav");
   nav.className = "moss-contents-ruler";
@@ -147,8 +140,8 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   const main = first.closest("main");
   if (main?.parentElement) main.after(nav);
   else document.body.append(nav);
-  undo.push(() => nav.remove());
-  if (opts.pictures) undo.push(mountContentsLens({ nav, links }));
+  stack.add(() => nav.remove());
+  if (opts.pictures) stack.add(mountContentsLens({ nav, links }));
 
   // Blocks wider than the text column (`data-width`) can sit anywhere in
   // `main`, and script can add them after load: the list is read on layout and
@@ -238,21 +231,21 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(layout);
   };
-  undo.push(() => cancelAnimationFrame(frame));
+  stack.add(() => cancelAnimationFrame(frame));
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(relayout);
     ro.observe(article);
     ro.observe(first);
-    undo.push(() => ro.disconnect());
+    stack.add(() => ro.disconnect());
   }
   if (typeof MutationObserver !== "undefined") {
     const bandsMo = new MutationObserver(collectBands);
     bandsMo.observe(scope, { childList: true, subtree: true });
-    undo.push(() => bandsMo.disconnect());
+    stack.add(() => bandsMo.disconnect());
     const mo = new MutationObserver(relayout);
     mo.observe(document.documentElement, { attributes: true });
     mo.observe(document.body, { attributes: true });
-    undo.push(() => mo.disconnect());
+    stack.add(() => mo.disconnect());
   }
   on(window, "resize", relayout, { passive: true });
   document.fonts?.ready.then(relayout);
@@ -287,7 +280,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   layout();
   return () => {
     disposed = true;
-    undo.forEach((f) => f());
+    stack.release();
     delete island.dataset.ruler;
   };
 }

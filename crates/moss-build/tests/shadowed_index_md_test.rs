@@ -58,3 +58,47 @@ fn an_undeclared_edition_index_html_still_wins_its_address() {
     assert!(site.html("fr/index/index.html").contains("giraffe"), "the markdown publishes at its own address");
     assert!(site.html("llms.txt").contains("giraffe"));
 }
+
+#[test]
+fn a_rebuild_with_nothing_changed_reports_its_output_unchanged() {
+    let site = site();
+    site.rebuild();
+    let profile = std::fs::read_to_string(site.root.join(".moss/build.nosync/profile.jsonl")).unwrap();
+    let last: serde_json::Value = serde_json::from_str(profile.lines().last().unwrap()).unwrap();
+    assert_eq!(last["counts"]["output_unchanged"], 1, "the markdown homes must not be rendered over the documents: {last}");
+    assert!(site.html("index.html").contains("real home"));
+    assert!(site.html("fr/index.html").contains("fr home"));
+}
+
+#[test]
+fn a_shadowed_index_md_still_maps_to_the_address_its_document_owns() {
+    let site = site();
+    let hashes: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(site.root.join(".moss/build.nosync/hashes.json")).unwrap()).unwrap();
+    for (source, output) in [("index.md", "index.html"), ("fr/index.md", "fr/index.html")] {
+        assert_eq!(hashes["source_to_output"][source], output, "{source}");
+        assert!(hashes["page_meta"][source].is_object(), "{source} keeps its metadata");
+        assert!(hashes["sources"][source].is_object(), "{source} keeps its source hash");
+    }
+}
+
+/// Authored documents are staged before search; a changed build must keep
+/// them through the stale-page sweep.
+#[test]
+fn a_changed_build_still_indexes_the_documents_the_last_build_laid_down() {
+    let site = Site::with_config(&format!("search = true\n{CONFIG}"), &[
+        ("index.md", "---\ntitle: Old\n---\n"),
+        ("index.html", "<!doctype html><html lang=\"en\"><title>Home</title><p>real home</p></html>"),
+        ("fr/index.md", "---\ntitle: Accueil\n---\n"),
+        ("fr/index.html", "<!doctype html><html lang=\"fr\"><title>Fr</title><p>fr home</p></html>"),
+        ("fr/about.md", "---\ntitle: A propos\n---\n\nA propos texte.\n"),
+    ]);
+    let indexed = || {
+        let receipt = std::fs::read_to_string(site.root.join(".moss/build.nosync/index/receipt.json")).unwrap();
+        serde_json::from_str::<serde_json::Value>(&receipt).unwrap()["pages"].as_u64().unwrap()
+    };
+    site.rebuild();
+    let unchanged = indexed();
+    site.write("fr/about.md", "---\ntitle: A propos\n---\n\nA propos texte, revu.\n");
+    site.rebuild();
+    assert_eq!(indexed(), unchanged, "a changed build indexes the documents too");
+}

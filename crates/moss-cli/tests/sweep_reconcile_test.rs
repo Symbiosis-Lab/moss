@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 fn get(port: u16, path: &str) -> String {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    write!(s, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").unwrap();
+    write!(s, "GET {path} HTTP/1.0\r\nHost: localhost:{port}\r\n\r\n").unwrap();
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
     out

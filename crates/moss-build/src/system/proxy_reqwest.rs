@@ -1,7 +1,7 @@
-//! The reqwest adapter over [`crate::system::proxy`]. It lived app-side so this
-//! crate carried no reqwest; the seta client crossed and
-//! brought reqwest with it, so the adapter follows the caller.
-//! Callers: the seta client, the domain orchestrator, and the setup probes.
+//! How moss builds a reqwest client. [`build_client`] is the way for an outside
+//! host: the system proxy ([`crate::system::proxy`]) per request, and the
+//! platform's CA roots with a fallback. [`client_builder`] and [`client`] are for
+//! a client without that proxy. All three install the TLS crypto provider.
 
 use crate::system::proxy::resolve_proxy_for_url;
 
@@ -10,9 +10,8 @@ use crate::system::proxy::resolve_proxy_for_url;
 /// reqwest calls this closure for every request URL — even when the `Client`
 /// is cached — so it follows a live proxy change (the user turning their VPN /
 /// Clash / V2Ray on or off) with no caching, exactly mirroring the ureq
-/// `proxied_agent` path. Drop it into any external-facing reqwest
-/// `Client::builder()` via `.proxy(system_proxy())` so, behind the GFW, the
-/// request routes through the proxy instead of a reset direct connection. A
+/// `proxied_agent` path; [`build_client`] sets it, so behind the GFW a request
+/// routes through the proxy instead of a reset direct connection. A
 /// resolved proxy string that fails to parse falls through to `None` (direct),
 /// the same graceful degradation ureq's builder does.
 pub fn system_proxy() -> reqwest::Proxy {
@@ -21,18 +20,71 @@ pub fn system_proxy() -> reqwest::Proxy {
     })
 }
 
+/// Builds a reqwest client for an outside host: the system proxy per request
+/// and the platform's CA roots, or Mozilla's roots when the platform has none.
+///
+/// On Linux the platform roots are files (the `ca-certificates` package); a
+/// minimal container or server image without them makes reqwest's builder fail
+/// with "No CA certificates were loaded from the system". macOS and Windows ask
+/// the OS and never take the fallback. `configure` runs once per attempt,
+/// since `build` consumes the builder.
+pub fn build_client(
+    configure: impl Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+) -> reqwest::Result<reqwest::Client> {
+    let builder = || configure(client_builder().proxy(system_proxy()));
+    builder().build().or_else(|platform_error| {
+        #[cfg(target_os = "linux")]
+        if let Ok(client) = builder().tls_certs_only(bundled_roots()).build() {
+            log::warn!("no usable system CA certificates ({platform_error}); using the bundled Mozilla roots");
+            return Ok(client);
+        }
+        Err(platform_error)
+    })
+}
+
+/// `reqwest::Client::builder()` with the crypto provider installed and without
+/// [`system_proxy`] (reqwest's own proxy variables still apply), for a probe that
+/// must go direct, such as a captive-portal check. Anything else uses
+/// [`build_client`].
+pub fn client_builder() -> reqwest::ClientBuilder {
+    install_crypto_provider();
+    reqwest::Client::builder()
+}
+
+/// `reqwest::Client::new()` with the crypto provider installed: a
+/// [`client_builder`] client with reqwest's defaults.
+pub fn client() -> reqwest::Client {
+    client_builder().build().expect("reqwest client with default settings")
+}
+
+/// Makes ring the process's TLS crypto provider, unless one is installed.
+///
+/// reqwest is built without a provider of its own and panics on `build` when
+/// the process has none. [`client_builder`] calls this; a process that builds
+/// clients some other way (an updater, a crash reporter) calls it once at
+/// startup.
+pub fn install_crypto_provider() {
+    // Err means a provider is already installed, which is all we need.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+#[cfg(target_os = "linux")]
+fn bundled_roots() -> impl Iterator<Item = reqwest::Certificate> {
+    webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .filter_map(|der| reqwest::Certificate::from_der(der.as_ref()).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Building a reqwest client with [`system_proxy`] set must succeed. This
-    /// validates the `Proxy::custom` closure types end-to-end (and, transitively,
-    /// that the `socks` feature compiles) without needing a live proxy — reqwest
-    /// invokes the closure lazily per request, so construction alone exercises
-    /// the wiring. This is the deterministic guard for the reqwest-proxy fix.
+    /// [`build_client`] builds with no provider installed beforehand (reqwest has
+    /// none of its own and panics) and with [`system_proxy`] set; reqwest calls
+    /// the proxy closure per request, so construction checks only its wiring.
     #[test]
     fn client_builds_with_system_proxy() {
-        let client = reqwest::Client::builder().proxy(system_proxy()).build();
+        let client = build_client(|b| b);
         assert!(
             client.is_ok(),
             "reqwest client must build with the system proxy: {:?}",

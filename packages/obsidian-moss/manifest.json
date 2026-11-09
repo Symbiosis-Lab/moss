@@ -3,8 +3,8 @@
   "name": "moss",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "Build and preview this vault as a website with moss. Requires the moss CLI (npm i -g @symbiosis-lab/moss or Homebrew).",
+  "description": "Check and preview pages with moss on desktop and mobile. Build and publish sites on desktop with the moss CLI and app.",
   "author": "Symbiosis Lab",
   "authorUrl": "https://mosspub.com",
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }

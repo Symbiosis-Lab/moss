@@ -64,11 +64,30 @@ const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 
 /// Directories searched after the PATH lookup fails. An app launched from
 /// Finder inherits a minimal PATH that omits the Homebrew and MacPorts
-/// prefixes, so a tool installed there is invisible to the PATH step.
-#[cfg(target_os = "macos")]
-const STANDARD_INSTALL_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
-#[cfg(not(target_os = "macos"))]
-const STANDARD_INSTALL_DIRS: &[&str] = &[];
+/// prefixes, so a tool installed there is invisible to the PATH step. On
+/// Windows a running app keeps the PATH it started with, so Git installed
+/// while moss is open is found only through its install folder.
+pub(crate) fn standard_install_dirs() -> Vec<PathBuf> {
+    install_dirs_for(std::env::consts::OS, |var| std::env::var_os(var))
+}
+
+fn install_dirs_for(os: &str, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    match os {
+        "macos" => ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"]
+            .iter()
+            .map(PathBuf::from)
+            .collect(),
+        "windows" => [("ProgramFiles", &["Git", "cmd"][..]), ("LOCALAPPDATA", &["Programs", "Git", "cmd"][..])]
+            .iter()
+            .filter_map(|(var, tail)| {
+                let mut dir = PathBuf::from(env(var)?);
+                dir.extend(tail.iter());
+                Some(dir)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
 // =============================================================================
 // Types
@@ -288,7 +307,8 @@ pub fn resolve_binary(
     }
 
     // Step 3: Check the standard install directories
-    let standard_dirs: Vec<&Path> = STANDARD_INSTALL_DIRS.iter().map(Path::new).collect();
+    let install_dirs = standard_install_dirs();
+    let standard_dirs: Vec<&Path> = install_dirs.iter().map(PathBuf::as_path).collect();
     if let Some(resolution) = find_in_dirs(&binary_filename, &standard_dirs, config) {
         return Ok(resolution);
     }

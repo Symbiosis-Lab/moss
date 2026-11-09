@@ -98,11 +98,8 @@ pub(crate) fn verify_bytes(
 ///
 /// A single fresh read is not proof of anything: a torn read mid-write looks
 /// exactly like a finished rebuild's bytes, and only re-checking after a
-/// pause tells the two apart. 250ms mirrors the file watcher's own debounce
-/// window (`build/watch.rs`: "a fixed 250ms per-event delay via
-/// notify-debouncer-full") — the same "how long until a write has almost
-/// certainly settled" number this codebase already trusts elsewhere, rather
-/// than a new one invented for this check.
+/// pause tells the two apart. 250ms is long enough for a write in progress to
+/// land and short enough to go unnoticed beside an upload.
 pub(crate) const DRIFT_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// How many leading bytes to sample when checking whether a file looks like
@@ -368,6 +365,8 @@ pub struct UploadWindow {
     /// When the window opened, which is when the upload phase began — the
     /// wall clock behind the summary line's achieved rate.
     started: std::time::Instant,
+    finished: bool,
+    completed_files: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl UploadWindow {
@@ -377,6 +376,8 @@ impl UploadWindow {
             in_flight_bytes: 0,
             throughput: std::sync::Arc::new(upload_policy::Throughput::new()),
             started: std::time::Instant::now(),
+            finished: false,
+            completed_files: Default::default(),
         }
     }
 
@@ -437,7 +438,12 @@ impl UploadWindow {
         // their requests by how many share the link (upload_policy), and they
         // cannot see this window.
         self.throughput.enter_flight();
-        self.tasks.spawn(async move { (size, fut.await) });
+        let completed = self.completed_files.clone();
+        self.tasks.spawn(async move {
+            let result = fut.await;
+            if result.is_ok() { completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+            (size, result)
+        });
     }
 
     /// Wait for every remaining task, failing on the first error.
@@ -449,8 +455,19 @@ impl UploadWindow {
         while !self.tasks.is_empty() {
             self.harvest_one().await?;
         }
+        self.record_profile();
         log::info!("{}", self.throughput.deploy_summary(self.started.elapsed()));
         Ok(())
+    }
+
+    fn record_profile(&mut self) {
+        if self.finished { return; }
+        self.finished = true;
+        drop(crate::build::phase::PhaseTrace::since("upload", self.started));
+        super::profile::count("files_uploaded", self.completed_files.load(std::sync::atomic::Ordering::Relaxed));
+        for (name, value) in self.throughput.profile_counts(self.started.elapsed()) {
+            super::profile::count(name, value);
+        }
     }
 
     /// Await exactly one completion and release its bytes.
@@ -488,3 +505,7 @@ impl UploadWindow {
 #[cfg(test)]
 #[path = "upload_tests.rs"]
 mod tests;
+
+impl Drop for UploadWindow {
+    fn drop(&mut self) { self.record_profile(); }
+}

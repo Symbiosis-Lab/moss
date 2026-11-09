@@ -31,7 +31,6 @@
 
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
 
 use crate::infra::atomic_write;
 use crate::infra::folder_lock::folder_id;
@@ -66,6 +65,8 @@ pub struct OwnerRecord {
     pub kind: HostKind,
     pub version: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_url: Option<String>,
     /// ISO-8601, [`crate::system::now_iso`]'s form — the convention this
     /// crate already uses for a persisted record's timestamp (the recents
     /// list, the registry cache).
@@ -93,13 +94,13 @@ fn owner_lock_path(folder: &Path) -> Result<PathBuf, String> {
 /// the caller to report (and, for a crashed holder with a since-released
 /// lock, overwritten by this same call — see [`acquire`]'s doc).
 #[derive(Debug)]
-pub struct ExistingOwner(pub OwnerRecord);
+pub struct ExistingOwner(pub Box<OwnerRecord>);
 
 /// Folders this PROCESS currently holds the owner lock for, as a weak
 /// reference to the open file each [`OwnerGuard`] for that folder shares.
 ///
 /// `flock` is scoped to an open file description, not to a process: opening
-/// the SAME lock path a second time and calling `try_lock_exclusive` on the
+/// the SAME lock path a second time and calling `try_lock` on the
 /// new handle conflicts with the first even from the SAME process. That is
 /// the right behavior for a second OS process, which is what this module
 /// exists to catch — but a single process legitimately runs two servers
@@ -185,6 +186,10 @@ impl Drop for OwnerGuard {
 /// untracked, rather than making ownership tracking a reason a folder can't
 /// be served at all.
 pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> Result<OwnerGuard, ExistingOwner> {
+    acquire_with_ui(folder, kind, version, url, None)
+}
+
+fn acquire_with_ui(folder: &Path, kind: HostKind, version: String, url: String, ui_url: Option<String>) -> Result<OwnerGuard, ExistingOwner> {
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let id = folder_id(&canonical);
     let record_path_for_id = record_path(&canonical).ok();
@@ -224,7 +229,7 @@ pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> R
         }
     };
 
-    match file.try_lock_exclusive() {
+    match file.try_lock() {
         Ok(()) => {
             let record = OwnerRecord {
                 folder: canonical.clone(),
@@ -232,6 +237,7 @@ pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> R
                 kind,
                 version,
                 url,
+                ui_url,
                 started_at: crate::system::now_iso(),
             };
             // `record_path_for_id` was resolved from the same `moss_home()`
@@ -250,18 +256,16 @@ pub fn acquire(folder: &Path, kind: HostKind, version: String, url: String) -> R
                 .insert(id.clone(), std::sync::Arc::downgrade(&file));
             Ok(OwnerGuard { _lock: Some(file), folder_id: Some(id), record_path: record_path_for_id })
         }
-        // fs2's WOULD_BLOCK-shaped error, not a hardcoded ErrorKind — see
-        // `deploy::stack_activity::hold` / `infra::folder_lock::acquire` for
-        // why a contended try-lock's error kind is platform-dependent.
-        Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
-            Err(ExistingOwner(read_record(&canonical).unwrap_or_else(|| OwnerRecord {
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Err(ExistingOwner(Box::new(read_record(&canonical).unwrap_or_else(|| OwnerRecord {
                 folder: canonical.clone(),
                 pid: 0,
                 kind: HostKind::Server,
                 version: "unknown".to_string(),
                 url: String::new(),
+                ui_url: None,
                 started_at: String::new(),
-            })))
+            }))))
         }
         Err(e) => {
             log::warn!("could not lock {}: {e}", lock_path.display());
@@ -297,9 +301,10 @@ fn read_record(folder: &Path) -> Option<OwnerRecord> {
 /// different folder now — been re-pointed at another folder without
 /// releasing this one's lock, which a later folder-switch change may do.
 ///
-/// The one HTTP check this performs reuses [`super::port::blocking_get`],
-/// the exact GET [`super::port::verify_server_ready`] already makes — not
-/// the whole of that function, because the two probes disagree on retry
+/// The one HTTP check this performs is [`super::port::blocking_get`], the
+/// GET [`super::port::verify_server_ready`] makes, with the folder's token,
+/// since an owner behind a public URL names its folder only to a token
+/// holder. It does not reuse the whole of that function, because the two probes disagree on retry
 /// policy as much as on what they're checking: `verify_server_ready` polls
 /// for up to a second while a server it already decided to wait for is
 /// still binding, where this is a single-shot "does anyone answer at all
@@ -307,16 +312,18 @@ fn read_record(folder: &Path) -> Option<OwnerRecord> {
 /// starting.
 ///
 /// `None` for every negative: no record, the record's process gone quiet,
-/// a 4xx/5xx, a body with no `folder_id` (an older moss, schema 1 — the
-/// schema's own doc comment calls for exactly this `>=` gate rather than a
-/// hard equality, so a newer schema 3 reader still accepts this one), or a
+/// a 4xx/5xx (a 401 for a token from before the owner published its own),
+/// a body with no `folder_id` (an older moss, schema 1 — the schema's own
+/// doc comment calls for exactly this `>=` gate rather than a hard equality,
+/// so a newer schema 3 reader still accepts this one — or an owner behind a
+/// public URL answering a caller without its token), or a
 /// `folder_id` that names a different folder (the same owner process, moved
 /// on).
 pub async fn find_live_owner(folder: &Path) -> Option<OwnerRecord> {
     let canonical = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let record = read_record(&canonical)?;
     let url = format!("{}{}", record.url, super::port::MOSS_HEALTH_PATH);
-    let body = super::port::blocking_get(url).await.ok()?;
+    let body = super::port::blocking_get(url, super::carrier_token::read(&canonical)).await.ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
     let schema = parsed.get("schema").and_then(serde_json::Value::as_u64).unwrap_or(0);
     if schema < 2 {
@@ -386,12 +393,13 @@ pub async fn acquire_for_site_dir(
     version: String,
     url: String,
     standby_on_conflict: bool,
+    ui_url: Option<String>,
 ) -> Result<Option<OwnerGuard>, String> {
     let Some(folder) = resolve_vault_folder(site_dir) else {
         return Ok(None);
     };
     loop {
-        match acquire(&folder, kind, version.clone(), url.clone()) {
+        match acquire_with_ui(&folder, kind, version.clone(), url.clone(), ui_url.clone()) {
             Ok(guard) => return Ok(Some(guard)),
             Err(ExistingOwner(existing)) => {
                 if !standby_on_conflict {
@@ -539,16 +547,15 @@ pub async fn request_yield(folder: &Path) -> Result<YieldOutcome, String> {
     };
     let vault = crate::vault::paths::VaultRoot::find_containing(&canonical)
         .ok_or_else(|| format!("{} is not inside a vault", canonical.display()))?;
-    let token_path = super::carrier_token::token_path(vault.path());
-    let token = std::fs::read_to_string(&token_path)
-        .map_err(|e| format!("could not read the HTTP carrier token at {}: {e}", token_path.display()))?;
+    let token = super::carrier_token::read(vault.path()).ok_or_else(|| {
+        format!("could not read the HTTP carrier token at {}", super::carrier_token::token_path(vault.path()).display())
+    })?;
     let url = format!("{}/__moss/yield", owner.url);
     let post_url = url.clone();
-    let token = token.trim().to_string();
     let result = tokio::task::spawn_blocking(move || {
-        ureq::post(&post_url)
+        super::carrier_token::agent(std::time::Duration::from_secs(5))
+            .post(&post_url)
             .set(super::carrier_token::TOKEN_HEADER, &token)
-            .timeout(std::time::Duration::from_secs(5))
             .send_string("")
     })
     .await
@@ -565,8 +572,8 @@ pub async fn request_yield(folder: &Path) -> Result<YieldOutcome, String> {
 mod tests {
     use super::*;
 
-    fn moss_home_dir() -> tempfile::TempDir {
-        tempfile::tempdir().expect("tempdir for MOSS_HOME")
+    fn moss_home_dir() -> std::path::PathBuf {
+        crate::infra::home::scratch_moss_home()
     }
 
     /// Serializes the handful of tests here that set `MOSS_HOME` — the same
@@ -583,7 +590,7 @@ mod tests {
     async fn wait_for_owner_to_appear_gives_up_and_returns_none_within_the_timeout() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the unclaimed folder");
 
         let timeout = std::time::Duration::from_millis(300);
@@ -603,7 +610,7 @@ mod tests {
     fn acquire_writes_a_record_that_round_trips_through_the_atomic_writer() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let owned = acquire(folder.path(), HostKind::Cli, "9.9.9".to_string(), "http://127.0.0.1:1234".to_string())
@@ -636,7 +643,7 @@ mod tests {
     fn a_second_acquire_in_the_same_process_succeeds_and_keeps_the_first_record() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
 
         let first =
@@ -669,7 +676,7 @@ mod tests {
     fn acquire_is_refused_by_a_lock_held_outside_this_process_registry() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
 
@@ -679,13 +686,14 @@ mod tests {
         let lock_path = owner_lock_path(&canonical).unwrap();
         std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         let foreign = std::fs::OpenOptions::new().read(true).write(true).create(true).open(&lock_path).unwrap();
-        foreign.try_lock_exclusive().expect("the foreign handle must win the uncontended lock");
+        foreign.try_lock().expect("the foreign handle must win the uncontended lock");
         let foreign_record = OwnerRecord {
             folder: canonical.clone(),
             pid: 777,
             kind: HostKind::Desktop,
             version: "7.0.0".to_string(),
             url: "http://127.0.0.1:7777".to_string(),
+            ui_url: None,
             started_at: crate::system::now_iso(),
         };
         atomic_write::write_json_atomic(&record_path(&canonical).unwrap(), &foreign_record).unwrap();
@@ -709,7 +717,7 @@ mod tests {
     async fn find_live_owner_is_none_when_the_health_body_names_a_different_folder() {
         let _guard = env_guard();
         let home = moss_home_dir();
-        std::env::set_var("MOSS_HOME", home.path());
+        std::env::set_var("MOSS_HOME", &home);
         let folder = tempfile::tempdir().expect("tempdir for the served folder");
         let canonical = std::fs::canonicalize(folder.path()).unwrap();
 
@@ -750,6 +758,7 @@ mod tests {
             kind: HostKind::Cli,
             version: "0.0.0".to_string(),
             url: format!("http://127.0.0.1:{port}"),
+            ui_url: None,
             started_at: crate::system::now_iso(),
         };
         atomic_write::write_json_atomic(&record_path(&canonical).unwrap(), &record).unwrap();

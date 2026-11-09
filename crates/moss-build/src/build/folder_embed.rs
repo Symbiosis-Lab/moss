@@ -1230,8 +1230,9 @@ pub(crate) fn select_children_by_slug<'a>(
                 return false;
             }
             // Folder embeds publish a list of articles — `is_listable`
-            // covers draft/slot_only in one shot.
-            if !d.is_listable() {
+            // covers draft/slot_only in one shot. A page-less entry is a row
+            // in its own folder only, never a term page or an `also_in` one.
+            if !d.is_listable() && !(d.is_pageless_entry() && d.url_path.starts_with(&folder_prefix)) {
                 return false;
             }
             // scope_default_tree: a home lists its own edition only (gated by

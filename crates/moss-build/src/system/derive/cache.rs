@@ -81,7 +81,7 @@ fn store_bytes(
 ) -> Result<(), String> {
     let transforms = TransformCache::for_site(site);
     let oid = transforms.objects().store_bytes(bytes, RecordMode::Request)?;
-    let record = TransformEntry { oid, size: bytes.len() as u64, params: params(entry) };
+    let record = TransformEntry { validation: None, oid, size: bytes.len() as u64, params: params(entry) };
     transforms
         .merge(source_oid, source_size, RecordMode::Request, |rec| {
             rec.transforms.insert(transform, record);
@@ -196,6 +196,7 @@ fn derive_with(site: &MossPaths, entry: &DerivationEntry, input: &Path, remember
     }
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "cache_tests.rs"]
 mod cache_tests;

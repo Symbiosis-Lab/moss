@@ -130,10 +130,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     let by_uid: HashMap<String, &ArticleInfo> = articles
         .articles
         .values()
-        .filter_map(|a| {
-            let uid = a.frontmatter.get("uid").and_then(|u| u.as_str()).map(str::to_string).or_else(|| a.uid.clone())?;
-            Some((uid, a))
-        })
+        .filter_map(|a| Some((a.uid.clone()?, a)))
         .collect();
 
     // Post by post, each post's channels in the order its `syndicate:` names them.
@@ -359,11 +356,9 @@ async fn answers(url: &str) -> bool {
     if url.split('/').nth(2).is_some_and(|host| host.ends_with(".onion")) {
         return true;
     }
-    let Ok(client) = reqwest::Client::builder()
-        .proxy(crate::system::proxy_reqwest::system_proxy())
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    else {
+    let Ok(client) = crate::system::proxy_reqwest::build_client(|builder| {
+        builder.timeout(std::time::Duration::from_secs(10))
+    }) else {
         return true;
     };
     for wait in [0, 2, 5] {

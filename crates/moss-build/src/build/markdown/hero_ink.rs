@@ -35,9 +35,11 @@
 //! colour reads there ([`CreditInk`]).
 
 mod ground;
+mod header;
 mod page;
 mod words;
 pub use ground::{built as grounds_built, Ground};
+pub use header::header_ink_attributes;
 pub use page::PageGround;
 pub(crate) use page::{COLOPHON_PX, CREDIT_LINE_PX};
 use page::colophon_px;
@@ -1354,6 +1356,8 @@ mod tests {
             ":root { --moss-color-bg: color-mix(in oklch, white, tan); }",
             "@media (prefers-color-scheme: dark) { :root { --moss-color-bg: #000; } }",
             "body { --moss-color-bg: #fff; }",
+            // Re-coloured in sections through the property it names: no ground holds on every page.
+            ":root { --paper: #fbfbfb; }\n:root, body[data-section] { --moss-color-bg: var(--paper); }\nbody[data-section] { --paper: var(--section); }",
         ] {
             let ground = PageGround::of_theme(Some(unread));
             assert!(ground.light.is_none() || ground.dark.is_none(), "{unread}: {ground:?}");

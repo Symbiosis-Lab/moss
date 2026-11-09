@@ -67,12 +67,6 @@
 //! token need only be readable by the *user* who runs moss. [`publish`]'s error
 //! path names the *path*, never the bytes.
 //!
-//! One deliberate exception: `ServeConfig::announce_sign_in` prints the token in
-//! a sign-in URL to stderr, for a non-loopback (`ServeConfig::bind`) operator
-//! who has no loopback-readable file to read it from. It is the one sink this
-//! module does not otherwise allow, scoped to the one case — an explicitly
-//! configured host — where there is no local-file alternative.
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -83,16 +77,24 @@ use crate::moss_paths::MossPaths;
 /// forced through a preflight the server never approves.
 pub const TOKEN_HEADER: &str = "x-moss-token";
 
-/// The cookie name `session_route::handle_session` sets. [`admit`] does not
-/// accept it: the site's own scripts share this origin and send its cookies.
-pub const SESSION_COOKIE: &str = "moss_token";
-
 /// The loopback-readable file the session token is published to, relative to the
 /// vault root. Under `.moss/build.nosync/` deliberately: that tree is cloud-excluded
 /// and regenerable (never synced, never left dataless), so the secret cannot
 /// leak to a second machine and is always readable while the server runs.
 pub fn token_path(vault_root: &Path) -> PathBuf {
     MossPaths::new(vault_root).build_dir().join("http-token")
+}
+
+/// The token a local client reads from [`token_path`], or `None` while no
+/// server has published one.
+pub fn read(vault_root: &Path) -> Option<String> {
+    std::fs::read_to_string(token_path(vault_root)).ok().map(|token| token.trim().to_owned())
+}
+
+/// The agent a token-carrying request goes out on. It follows no redirect,
+/// which would carry the token to another listener.
+pub(crate) fn agent(timeout: std::time::Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new().redirects(0).timeout(timeout).build()
 }
 
 /// Mint a fresh session token — 256 bits of entropy, hex, no separators. Two
@@ -149,6 +151,28 @@ pub fn constant_time_eq(provided: &str, expected: &Arc<String>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_token_agent_follows_no_redirect() {
+        use std::io::{Read, Write};
+        let elsewhere = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let target = elsewhere.local_addr().unwrap();
+        let first = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let url = format!("http://{}/", first.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = first.accept().unwrap();
+            let _ = stream.read(&mut [0; 4096]);
+            write!(stream, "HTTP/1.1 302 Found\r\nLocation: http://{target}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let status = match agent(std::time::Duration::from_secs(2)).get(&url).set(TOKEN_HEADER, "secret").call() {
+            Ok(response) => response.status(),
+            Err(ureq::Error::Status(status, _)) => status,
+            Err(e) => panic!("{e}"),
+        };
+        assert_eq!(status, 302);
+        elsewhere.set_nonblocking(true).unwrap();
+        assert!(elsewhere.accept().is_err(), "the token must not follow the redirect");
+    }
 
     #[test]
     fn mint_is_random_and_wide() {

@@ -124,6 +124,36 @@ async fn test_get_live_generation_200_null_returns_none() {
     assert!(result.as_ref().is_ok_and(Option::is_none), "200+null must produce Ok(None), got: {result:?}");
 }
 
+/// Only seta's own 403 is another owner; `live_generation` still answers it
+/// as an error, so its callers go ahead as before.
+#[tokio::test]
+async fn test_generation_403_is_not_owner_and_live_generation_keeps_the_error() {
+    let server = StandIn::json(403, r#"{"error":"Not authorized for this site"}"#).await;
+    let client = client_for(&server);
+    let result = client.generation("her-blog", None).await;
+    assert!(matches!(result, Ok(crate::seta::sites::Generation::NotOwner)), "{result:?}");
+    let live = client.live_generation("her-blog").await;
+    assert!(matches!(live, Err(crate::seta::client::SetaError::Api { status: 403, .. })), "{live:?}");
+}
+
+/// A proxy's 403 is not seta saying the key is another account's.
+#[tokio::test]
+async fn test_generation_403_not_in_setas_words_stays_an_error() {
+    let server = StandIn::new(403, &[("content-type", "text/html")], |_, _| "<html><body>Forbidden</body></html>".to_string()).await;
+    let result = client_for(&server).generation("her-blog", None).await;
+    assert!(matches!(result, Err(crate::seta::client::SetaError::Api { status: 403, .. })), "{result:?}");
+}
+
+#[tokio::test]
+async fn test_generation_404_is_not_found_and_401_stays_an_error() {
+    let server = StandIn::json(404, r#"{"error":"Site not found"}"#).await;
+    let result = client_for(&server).generation("her-blog", None).await;
+    assert!(matches!(result, Ok(crate::seta::sites::Generation::NotFound)), "{result:?}");
+    let server = StandIn::json(401, r#"{"error":"Invalid signature"}"#).await;
+    let result = client_for(&server).generation("her-blog", None).await;
+    assert!(matches!(result, Err(crate::seta::client::SetaError::Api { status: 401, .. })), "{result:?}");
+}
+
 // ============================================================================
 // list_upload_sessions — the resume handshake (I2)
 // ============================================================================

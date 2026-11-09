@@ -169,6 +169,14 @@ pub fn canonicalize_allowing_missing(project_root: &Path, target: &Path) -> Resu
     Ok(canonical)
 }
 
+/// Whether `target` resolves inside `root`, symlinks followed, whether or not
+/// it exists yet. A `..` anywhere refuses: past the deepest existing ancestor
+/// the walk is lexical, so `<root>/missing/../../x` would otherwise pass.
+pub fn resolves_inside(root: &Path, target: &Path) -> bool {
+    !target.components().any(|c| c == std::path::Component::ParentDir)
+        && recheck_canonical_allowing_missing(root, target).is_ok()
+}
+
 /// Move one or more files/folders to the OS trash — recoverable via the file
 /// manager, never a permanent unlink. Refuses to trash the project root
 /// itself (callers should never surface Delete on the root; defend in

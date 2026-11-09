@@ -8,6 +8,7 @@ use sha2::Digest;
 use super::*;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::{MODE_FILE, SiteHashes};
 
@@ -26,7 +27,7 @@ fn seed_page(vault: &Path, pending: &mut PendingManifest, src: &str, out: &str, 
     pending.register_source_mapping(src.to_string(), &sp);
     pending.register_page_source_hash(
         src.to_string(),
-        SourceMetadata { hash: hash_of(bytes), size: bytes.len() as u64, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: hash_of(bytes), stat: FileStat::whole_second(bytes.len() as u64, 1) },
     );
 }
 
@@ -61,7 +62,7 @@ fn restore_page_writes_the_old_bytes_back_in_place() {
     let mut pending = PendingManifest::new(SiteHashes::default());
     seed_page(&vault, &mut pending, "a.md", "a/index.html", b"original");
     let sealed = pending.seal();
-    record::snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    record::snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
     let (id, _) = store::list_records(&history_root)[0].clone();
 
     fs::write(vault.join("a.md"), b"edited since").unwrap();
@@ -81,7 +82,7 @@ fn restore_page_as_copy_leaves_the_present_file_untouched() {
     let mut pending = PendingManifest::new(SiteHashes::default());
     seed_page(&vault, &mut pending, "a.md", "a/index.html", b"original");
     let sealed = pending.seal();
-    record::snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    record::snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
     let (id, rec) = store::list_records(&history_root)[0].clone();
 
     fs::write(vault.join("a.md"), b"edited since").unwrap();
@@ -103,7 +104,7 @@ fn restore_page_names_the_reason_when_the_content_was_not_kept() {
     let mut entries = BTreeMap::new();
     entries.insert(
         "huge.mp4".to_string(),
-        Entry { mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
+        Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
     );
     let id = write_record_directly(&history_root, "2026-01-01T00:00:00Z", "gen-1", entries);
 
@@ -139,10 +140,10 @@ fn restore_page_recreates_a_symlink() {
     // see the path; `record_one`'s lstat check does the rest.
     pending.register_page_source_hash(
         "link".to_string(),
-        SourceMetadata { hash: "unused".to_string(), size: 0, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+        SourceMetadata { hash: "unused".to_string(), stat: FileStat::whole_second(0, 1) },
     );
     let sealed = pending.seal();
-    record::snapshot(&history_root, &vault, &sealed, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    record::snapshot(&history_root, &vault, &SourceTree::from_sealed(&sealed), "moss:test", "2026-01-01T00:00:00Z").unwrap();
     let (id, _) = store::list_records(&history_root)[0].clone();
 
     fs::remove_file(vault.join("link")).unwrap();
@@ -168,7 +169,7 @@ fn restore_site_restores_edited_and_deleted_and_trashes_added() {
     seed_page(&vault, &mut pending, "edit.md", "edit/index.html", b"original body");
     seed_page(&vault, &mut pending, "gone.md", "gone/index.html", b"about to vanish");
     let old = pending.seal();
-    record::snapshot(&history_root, &vault, &old, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    record::snapshot(&history_root, &vault, &SourceTree::from_sealed(&old), "moss:test", "2026-01-01T00:00:00Z").unwrap();
     let (id, _) = store::list_records(&history_root)[0].clone();
 
     fs::write(vault.join("edit.md"), b"edited body").unwrap();
@@ -187,7 +188,7 @@ fn restore_site_restores_edited_and_deleted_and_trashes_added() {
         Ok(())
     };
 
-    let report = restore_site(&history_root, &vault, &id, &current, &fake_trash);
+    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&current), &fake_trash);
 
     assert_eq!(report.restored, vec!["edit.md".to_string(), "gone.md".to_string()]);
     assert_eq!(report.trashed, vec!["new.md".to_string()]);
@@ -195,6 +196,31 @@ fn restore_site_restores_edited_and_deleted_and_trashes_added() {
     assert_eq!(fs::read(vault.join("edit.md")).unwrap(), b"original body");
     assert_eq!(fs::read(vault.join("gone.md")).unwrap(), b"about to vanish", "the deleted-since page must come back");
     assert_eq!(trashed_calls.into_inner().unwrap(), vec!["new.md".to_string()]);
+}
+
+#[test]
+fn restore_site_preserves_non_page_files_absent_from_the_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let root = dir.path().join("history");
+    let id = write_record_directly(&root, "2026-01-01T00:00:00Z", "gen-1", BTreeMap::new());
+    for path in ["photo.png", "lab.ipynb"] {
+        fs::write(vault.join(path), b"keep these bytes").unwrap();
+    }
+    fs::write(vault.join("new.md"), b"new page").unwrap();
+    let current = SourceTree::on_disk(&vault, "run the restore again", &mut |_| {}).unwrap();
+    let trash = |root: &Path, path: &str| -> Result<(), String> {
+        fs::remove_file(root.join(path)).map_err(|e| e.to_string())
+    };
+
+    let report = restore_site(&root, &vault, &id, &current, &trash);
+
+    assert_eq!(report.trashed, vec!["new.md"]);
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    for path in ["photo.png", "lab.ipynb"] {
+        assert_eq!(fs::read(vault.join(path)).unwrap(), b"keep these bytes");
+    }
 }
 
 #[test]
@@ -207,13 +233,13 @@ fn restore_site_leaves_an_unchanged_page_alone() {
     let mut pending = PendingManifest::new(SiteHashes::default());
     seed_page(&vault, &mut pending, "keep.md", "keep/index.html", b"keep body");
     let old = pending.seal();
-    record::snapshot(&history_root, &vault, &old, "moss:test", "2026-01-01T00:00:00Z").unwrap();
+    record::snapshot(&history_root, &vault, &SourceTree::from_sealed(&old), "moss:test", "2026-01-01T00:00:00Z").unwrap();
     let (id, _) = store::list_records(&history_root)[0].clone();
 
     let no_trash = |_: &Path, path: &str| -> Result<(), String> {
         panic!("nothing should be trashed, got {path}");
     };
-    let report = restore_site(&history_root, &vault, &id, &old, &no_trash);
+    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&old), &no_trash);
 
     assert!(report.restored.is_empty());
     assert!(report.trashed.is_empty());
@@ -229,10 +255,10 @@ fn restore_site_reports_a_failure_without_stopping_the_rest() {
 
     let edit_hash = hash_of(b"original body");
     let mut entries = BTreeMap::new();
-    entries.insert("edit.md".to_string(), Entry { mode: MODE_FILE.to_string(), hash: edit_hash.clone(), size: Some(13) });
+    entries.insert("edit.md".to_string(), Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: edit_hash.clone(), size: Some(13) });
     entries.insert(
         "huge.mp4".to_string(),
-        Entry { mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
+        Entry { source_mtime: None, mode: MODE_FILE.to_string(), hash: "deadbeef".to_string(), size: Some(store::HISTORY_MEDIA_CEILING + 1) },
     );
     // Store the one blob that IS kept, matching edit.md's hash exactly.
     let object_store = store::object_store(&history_root);
@@ -247,7 +273,7 @@ fn restore_site_reports_a_failure_without_stopping_the_rest() {
     let current = cur_pending.seal();
 
     let no_trash = |_: &Path, _: &str| -> Result<(), String> { Ok(()) };
-    let report = restore_site(&history_root, &vault, &id, &current, &no_trash);
+    let report = restore_site(&history_root, &vault, &id, &SourceTree::from_sealed(&current), &no_trash);
 
     assert_eq!(report.restored, vec!["edit.md".to_string()]);
     assert_eq!(report.failed.len(), 1);
@@ -269,7 +295,7 @@ fn restore_site_refuses_a_kept_outside_edit_and_trashes_nothing() {
 
     let trashed = std::cell::RefCell::new(Vec::new());
     let trash = |_: &Path, p: &str| -> Result<(), String> { trashed.borrow_mut().push(p.to_string()); Ok(()) };
-    let report = restore_site(&root, &vault, &id, &pending.seal(), &trash);
+    let report = restore_site(&root, &vault, &id, &SourceTree::from_sealed(&pending.seal()), &trash);
 
     assert!(trashed.borrow().is_empty(), "a one-page record must not trash the rest of the site");
     assert!(report.restored.is_empty());

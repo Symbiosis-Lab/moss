@@ -13,5 +13,5 @@ import { defineGateConfig } from './define-gate-config';
 export default defineGateConfig({
   gate: 'grid-block-rhythm',
   fullyParallel: true,
-  use: { reducedMotion: 'reduce' },
+  use: { contextOptions: { reducedMotion: 'reduce' } },
 });

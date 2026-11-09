@@ -154,9 +154,10 @@ impl FolderIndexPlan {
                 });
                 // A folder whose only pages are partials has nothing to show:
                 // its sources are never built, so an index for it would be a
-                // live, empty page at an address the author never made.
+                // live, empty page at an address the author never made. Rows
+                // with no page of their own are something to show.
                 let mut under = documents.iter().filter(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
-                let partials_only = under.clone().next().is_some() && under.all(|doc| doc.slot_only);
+                let partials_only = under.clone().next().is_some() && under.all(|doc| doc.slot_only && !doc.is_pageless_entry());
                 pending_only || authored_index_pending || partials_only
             }).map(|(_, key)| key).collect();
 
@@ -240,34 +241,35 @@ impl FolderIndexPlan {
     }
 }
 
-/// Report each page whose address is also the output path of a source `.html`
-/// file. The asset copy serves the page and drops the file, so one of them is
-/// lost: a build problem, not a quiet override.
+/// Find colliding HTML outputs before the asset copy drops either source.
 ///
 /// A file named exactly in `[build].passthrough` replaces its page by the
 /// author's own declaration and is not reported.
-pub(super) fn report_verbatim_collisions(
+pub(super) fn verbatim_collisions(
     documents: &[ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &HashMap<String, String>,
-) {
+) -> Vec<String> {
     let (html_files, passthrough_roots) = (&project.html_files, &project.passthrough_roots);
-    let sources: HashMap<String, &str> = html_files
-        .iter()
-        .filter(|f| !passthrough_roots.contains(&f.path))
-        .map(|f| (crate::build::scan::page_map::resolve_path_with_overrides(&f.path, dir_overrides), f.path.as_str()))
-        .collect();
+    let mut sources = HashMap::new();
+    let mut collisions = Vec::new();
+    for file in html_files.iter().filter(|f| !passthrough_roots.contains(&f.path)) {
+        let output = crate::build::scan::page_map::resolve_path_with_overrides(&file.path, dir_overrides);
+        if let Some(previous) = sources.insert(output.clone(), file.path.as_str()) {
+            collisions.push(format!("`{previous}` and `{}` both publish to {}. Give each source a unique address.", file.path,
+                crate::build::served_path::served_address(&output)));
+        }
+    }
     for doc in documents.iter().filter(|d| !d.slot_only) {
         let Some(&file) = sources.get(&doc.url_path) else { continue };
         let page = match &doc.source_path {
             Some(source) => format!("`{source}`"),
             None => "a generated folder page".to_string(),
         };
-        crate::build::cli_output::log_warn_problem!(
-            "{page} and `{file}` are both published at {}: the page is served and the file is lost",
-            crate::build::served_path::served_address(&doc.url_path)
-        );
+        collisions.push(format!("{page} and `{file}` both publish to {}. Give each source a unique address.",
+            crate::build::served_path::served_address(&doc.url_path)));
     }
+    collisions
 }
 
 /// Withhold the body of every page whose address a passthrough `.html` file
@@ -275,11 +277,15 @@ pub(super) fn report_verbatim_collisions(
 /// readers get, so its markdown is only metadata: its title and description
 /// still serve the site, but its text must not reach `llms.txt`, a feed or any
 /// other surface built from the documents.
+///
+/// Returns those addresses. The render emits no page at one: the asset copy
+/// writes the file there, and a page rendered first would only be overwritten,
+/// while its hash told the build that the site's output had changed.
 pub(super) fn withhold_shadowed_bodies(
     documents: &mut [ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &HashMap<String, String>,
-) {
+) -> HashSet<String> {
     let owned: HashSet<String> = project
         .html_files
         .iter()
@@ -297,6 +303,7 @@ pub(super) fn withhold_shadowed_bodies(
         doc.content.clear();
         doc.html_content.clear();
     }
+    owned
 }
 
 /// The old addresses of language-tree homes whose `index.md` used to be

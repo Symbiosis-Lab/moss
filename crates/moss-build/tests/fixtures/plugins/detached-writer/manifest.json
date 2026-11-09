@@ -1,0 +1,7 @@
+{
+  "name": "detached-writer",
+  "version": "0.1.0",
+  "entry": "main.bundle.js",
+  "global_name": "DetachedWriter",
+  "capabilities": ["process"]
+}

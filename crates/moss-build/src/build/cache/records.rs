@@ -364,7 +364,7 @@ mod tests {
     }
 
     fn entry(tag: &str) -> TransformEntry {
-        TransformEntry { oid: tag.to_string(), size: 1, params: serde_json::Value::Null }
+        TransformEntry { validation: None, oid: tag.to_string(), size: 1, params: serde_json::Value::Null }
     }
 
     fn seeded(dir: &Path, entries: &[&str]) -> TransformCache {

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>moss</title>
+    <!-- Theme before the stylesheet parses, so the first paint has the right tokens. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("preview-theme");
+          var prefers = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var theme = saved || (prefers ? "dark" : "light");
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.setAttribute("data-chrome-theme", theme);
+          if (localStorage.getItem("moss-preview-mode") === "mobile")
+            document.documentElement.setAttribute("data-preview-mode", "mobile");
+        } catch (e) { /* localStorage blocked: the defaults hold */ }
+      })();
+    </script>
+    <link rel="stylesheet" href="../ui/style.css" />
+    <link rel="stylesheet" href="./browser.css" />
+  </head>
+  <body class="home-gate-active">
+    <div class="moss-app">
+      <div class="moss-titlebar moss-glass-surface" id="moss-titlebar">
+        <button class="moss-icon-button moss-edit-button moss-glass-pill" id="moss-edit-button" aria-pressed="false" aria-label="Edit page" data-i18n-aria="toolbar.edit_page" data-tooltip="Edit page" data-i18n-tooltip="toolbar.edit_page">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>
+          </svg>
+        </button>
+        <span class="moss-env-chip moss-glass-pill" id="moss-env-chip" hidden></span>
+        <!-- The progress seam, advisory dot and hairline mount in this cluster. -->
+        <div class="moss-pill-cluster">
+          <div class="moss-nav-pill moss-glass-pill">
+            <button class="moss-nav-button" id="btn-nav-back" aria-label="Go back" data-i18n-aria="toolbar.nav_back" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+            <span class="moss-url-text" id="moss-url-text">/</span>
+            <button class="moss-nav-button" id="btn-nav-forward" aria-label="Go forward" data-i18n-aria="toolbar.nav_forward" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6" /></svg>
+            </button>
+          </div>
+        </div>
+        <button class="moss-icon-button moss-device-button moss-glass-pill" id="moss-device-button" aria-label="Open on another device" data-i18n-aria="device.open_on_another" data-tooltip="Open on another device" data-i18n-tooltip="device.open_on_another">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="moss-preview-container" id="moss-preview-container">
+        <div class="moss-ambient-band" id="moss-ambient-band" aria-hidden="true"></div>
+        <iframe id="moss-preview-iframe" title=""></iframe>
+        <!-- The first picture before any script runs; the preview adopts it in place. -->
+        <div id="moss-preview-overlay" class="moss-preview-overlay visible home-gate-active"><canvas id="blueprint-canvas" aria-hidden="true"></canvas>
+          <div class="moss-waiting-screen">
+            <div class="moss-waiting-screen__crossing" data-crossing aria-hidden="true"><span></span></div>
+            <div class="moss-waiting-screen__stack moss-waiting-screen__stack--above">
+              <p class="moss-waiting-screen__title" data-title>Starting moss</p>
+            </div>
+            <div class="moss-waiting-screen__meter" data-mode="unknown">
+              <div class="moss-waiting-screen__meter-track"></div>
+              <div class="moss-waiting-screen__meter-fill" style="width: 0.00%"></div>
+            </div>
+            <div class="moss-waiting-screen__stack moss-waiting-screen__stack--below"></div>
+          </div>
+        </div>
+        <div id="moss-preview-find"></div>
+        <div id="moss-fake-scrollbar" aria-hidden="true">
+          <div id="moss-fake-scrollbar-thumb"></div>
+        </div>
+      </div>
+    </div>
+    <div id="moss-toast-container" role="status" aria-live="polite"></div>
+    <script type="module" src="./shell.ts"></script>
+  </body>
+</html>

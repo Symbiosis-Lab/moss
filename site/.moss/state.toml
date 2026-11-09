@@ -1,21 +1,26 @@
+schema_version = 1
 [deployment]
-deploy_method = "moss"
-dns_configured = true
-dns_configured_at = "2026-06-08T14:26:37.151956+00:00"
-domain = "mosspub.com"
-last_deployed_generation_id = "4ce74d078dda2a46"
-last_deployment_at = "2026-07-22T05:18:30+00:00"
-last_deployment_url = "https://landing.mosspub.com"
 site_id = "landing"
 
-[[deployment.dns_target.records]]
+[deployment.observed]
+checked_at = "2026-11-07T03:25:01+00:00"
+dns_configured = true
+
+[deployment.observed.dns_target]
+
+[[deployment.observed.dns_target.records]]
 name = "@"
 record_type = "A"
 ttl = 3600
 value = "45.76.13.224"
 
-[[deployment.dns_target.records]]
+[[deployment.observed.dns_target.records]]
 name = "www"
 record_type = "A"
 ttl = 3600
 value = "45.76.13.224"
+
+[deployment.targets."moss:landing"]
+last_deployed_generation_id = "158a0415f10a8fde"
+last_deployment_at = "2026-11-07T03:25:01+00:00"
+last_deployment_url = "https://landing.mosspub.com"

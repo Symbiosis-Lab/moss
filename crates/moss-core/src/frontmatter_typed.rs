@@ -468,7 +468,7 @@ pub struct FrontMatter {
     /// renders it when one would otherwise show. No effect elsewhere.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub map: Option<bool>,
-    /// Durable page identity: 8 RANDOM hex chars minted at first build — never derivable, never changed once published
+    /// Durable page identity: 8 RANDOM hex chars, never derivable, written by the first publish and never changed once published
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub uid: Option<String>,
     /// Typesetting direction: "horizontal" (default) or "vertical"
@@ -983,16 +983,16 @@ pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 9] = [
 /// free by moss-core's no-I/O rule; the caller owns the path and the decision
 /// to warn (`foreign_frontmatter_warnings` in `build/markdown/pipeline.rs`).
 pub fn simplified_frontmatter_keys(content: &str) -> Vec<String> {
-    simplified_field_pairs(content).into_iter().map(|(key, _)| key).collect()
+    simplified_field_pairs(content).into_iter().map(|(key, _)| key.to_string()).collect()
 }
 
 /// Every simplified field as `(key, value)`, in source order; `None` marks a
-/// bare flag. The one owner of "which lines are fields and what are their keys",
+/// bare flag. Both are slices of `content`, so a caller can locate them. The one owner of "which lines are fields and what are their keys",
 /// shared by [`simplified_frontmatter_keys`] and
 /// [`crate::frontmatter::frontmatter_map`]. What a VALUE means is deliberately
 /// NOT settled here — this hands back raw text, and the typed parser below
 /// applies the per-field coercions (comma lists, wikilink refs) it has no schema for.
-pub(crate) fn simplified_field_pairs(content: &str) -> Vec<(String, Option<&str>)> {
+pub(crate) fn simplified_field_pairs(content: &str) -> Vec<(&str, Option<&str>)> {
     let Some((fields, _body)) = simplified_fields(content) else {
         return Vec::new();
     };
@@ -1004,8 +1004,8 @@ pub(crate) fn simplified_field_pairs(content: &str) -> Vec<(String, Option<&str>
                 return None;
             }
             match trimmed.split_once(':') {
-                Some((key, value)) => Some((key.trim().to_string(), Some(value.trim()))),
-                None => Some((trimmed.to_string(), None)),
+                Some((key, value)) => Some((key.trim(), Some(value.trim()))),
+                None => Some((trimmed, None)),
             }
         })
         .collect()

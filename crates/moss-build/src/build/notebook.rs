@@ -90,6 +90,35 @@ const JUPYTERLITE_ZIP_SHA256: &str =
     "9c0f20abc244fb98e5d08c6bfdb6559fe8abc84adfc96ca00a40737af108c2b4";
 
 /// Returns the `AssetConfig` for downloading the pinned JupyterLite bundle.
+/// Record each notebook's source hash, with no output mapping: the sweep
+/// judges notebooks against `sources`, and one missing there reads as a new
+/// file on every pass. A notebook whose stat vouches for the previous record
+/// keeps it unread; one that cannot be read keeps its previous hash.
+pub(crate) fn register_notebook_sources(
+    pending: &mut crate::build::manifest::PendingManifest,
+    root: &std::path::Path,
+    notebook_files: &[FileInfo],
+    previous: &crate::types::content::SiteHashes,
+) {
+    use crate::build::watch::{source_metadata_verdict, SourceVerdict};
+    for file in notebook_files {
+        let abs = root.join(&file.path);
+        let prior = previous.sources.get(&file.path);
+        if let (Some(meta), Ok(md)) = (prior, std::fs::metadata(&abs)) {
+            if let SourceVerdict::Unchanged { refreshed } = source_metadata_verdict(meta, &md, &abs, previous.captured_at) {
+                pending.register_page_source_hash(file.path.clone(), refreshed.unwrap_or_else(|| meta.clone()));
+                continue;
+            }
+        }
+        let (stat, bytes) = crate::build::stat::stat_then(&abs, |path| std::fs::read(path));
+        match (bytes, prior) {
+            (Ok(bytes), _) => pending.register_page_source_hash(file.path.clone(), crate::build::render::blocking::source_metadata(stat, &bytes)),
+            (Err(_), Some(meta)) => pending.register_page_source_hash(file.path.clone(), meta.clone()),
+            (Err(e), None) => log::debug!("notebook {} could not be hashed: {e}", file.path),
+        }
+    }
+}
+
 pub fn jupyterlite_asset_config() -> AssetConfig {
     AssetConfig {
         name: "jupyterlite".to_string(),

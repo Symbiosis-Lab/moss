@@ -259,6 +259,139 @@ fn stop_process_group(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+/// A running child and the means to stop everything it starts: its own
+/// process group on unix, a job object on Windows.
+struct Tree {
+    child: std::process::Child,
+    #[cfg(windows)]
+    job: Option<job::Job>,
+}
+
+impl Tree {
+    fn spawn(cmd: &mut std::process::Command, what: &str) -> std::io::Result<Tree> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        #[cfg(not(windows))]
+        let _ = what;
+        let child = cmd.spawn()?;
+        Ok(Tree {
+            #[cfg(windows)]
+            job: job::Job::contain(&child, what),
+            child,
+        })
+    }
+
+    fn stop(mut self) {
+        #[cfg(windows)]
+        if self.job.as_ref().is_some_and(job::Job::terminate) {
+            let _ = self.child.wait();
+            return;
+        }
+        stop_process_group(&mut self.child);
+    }
+
+    /// The child exited on its own; what it left running is not stopped.
+    fn finish(self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job {
+            job.release();
+        }
+    }
+}
+
+/// The Windows counterpart of the process group: a job object holding the
+/// child and everything it starts. `Child::kill` ends the direct child only,
+/// so without the job a grandchild holding the pipes lives on.
+///
+/// The child is assigned right after `spawn`, so a process it starts in that
+/// instant is outside the job. Closing the gap means spawning it suspended and
+/// resuming its primary thread, and `std::process::Child` does not expose that
+/// thread. A process that asks to break away from its job fails to start,
+/// since breaking away is the escape the job exists to close.
+///
+/// Kill-on-close ties the subtree to the job's handle, so a moss that panics
+/// or exits mid-run takes the subtree with it. A child that finishes is
+/// released instead: what it left running survives, as it does on unix,
+/// where only a stop signals the group.
+#[cfg(windows)]
+mod job {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    pub(super) struct Job(HANDLE);
+
+    impl Job {
+        /// `None` when Windows refuses the job; a stop then reaches the direct
+        /// child only.
+        pub(super) fn contain(child: &std::process::Child, what: &str) -> Option<Job> {
+            use std::os::windows::io::AsRawHandle;
+            // SAFETY: null attributes and name ask for an unnamed job with
+            // default security.
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if handle.is_null() {
+                log::debug!("{what}: no job object: {}", std::io::Error::last_os_error());
+                return None;
+            }
+            let job = Job(handle);
+            // SAFETY: the child is not reaped yet, so its process handle is valid.
+            let assigned = job.set_limits(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+                && unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) } != 0;
+            if !assigned {
+                log::debug!("{what}: not in a job object: {}", std::io::Error::last_os_error());
+                return None;
+            }
+            Some(job)
+        }
+
+        fn set_limits(&self, flags: JOB_OBJECT_LIMIT) -> bool {
+            // SAFETY: the struct is integers only, so all-zero is valid.
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            info.BasicLimitInformation.LimitFlags = flags;
+            // SAFETY: `info` is the struct this information class names,
+            // passed with its own size.
+            unsafe {
+                SetInformationJobObject(
+                    self.0,
+                    JobObjectExtendedLimitInformation,
+                    (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) != 0
+            }
+        }
+
+        /// `false` when Windows refused, and the caller has to stop the child
+        /// another way.
+        pub(super) fn terminate(&self) -> bool {
+            // SAFETY: the handle is the job this value owns.
+            unsafe { TerminateJobObject(self.0, 1) != 0 }
+        }
+
+        /// Close the job without ending what is still in it.
+        pub(super) fn release(self) {
+            if !self.set_limits(0) {
+                log::debug!(
+                    "kill-on-close stays set, so closing the job ends what the child left running: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: the handle is closed once, here.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
 /// Run a child to completion, STOPPING it if it outlives `timeout`, and calling
 /// `tick` roughly every 100 ms while it runs.
 ///
@@ -319,23 +452,16 @@ pub fn run_bounded_capped(
     caps: OutputCaps,
     mut tick: impl FnMut(),
 ) -> Result<BoundedOutput, String> {
-    #[cfg(unix)]
-    {
-        // Its own process group, so a deadline can reach the whole subtree
-        // rather than only the direct child. See `stop_process_group`.
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    let mut child = cmd
-        .stdin(if stdin_bytes.is_some() {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::null()
-        })
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to run {what}: {e}"))?;
+    cmd.stdin(if stdin_bytes.is_some() {
+        std::process::Stdio::piped()
+    } else {
+        std::process::Stdio::null()
+    })
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped());
+    // The whole subtree, so a deadline reaches more than the direct child.
+    let mut tree = Tree::spawn(cmd, what).map_err(|e| format!("failed to run {what}: {e}"))?;
+    let child = &mut tree.child;
 
     if let (Some(bytes), Some(mut stdin)) = (stdin_bytes, child.stdin.take()) {
         // A child that exits without reading ends this with a broken pipe,
@@ -385,6 +511,7 @@ pub fn run_bounded_capped(
         // on the success path too, because a background grandchild holding
         // them open is the ordinary case, not the failure case.
         Ok(status) => {
+            tree.finish();
             let (stdout, stderr) = (collect_drained(&out), collect_drained(&err));
             // The cap can be crossed by what the child left in the pipe as it
             // exited; the check above would not have seen it yet.
@@ -396,7 +523,7 @@ pub fn run_bounded_capped(
             Ok(BoundedOutput { status, stdout, stderr })
         }
         Err(msg) => {
-            stop_process_group(&mut child);
+            tree.stop();
             // The receivers drop with this frame, which is what ends the drain
             // threads if anything is still holding a pipe open.
             Err(msg)
@@ -412,6 +539,10 @@ pub fn run_bounded(
 ) -> Result<BoundedOutput, String> {
     run_bounded_with_tick(cmd, timeout, what, || {})
 }
+
+#[cfg(all(test, windows))]
+#[path = "bounded_command_windows_tests.rs"]
+mod windows_tests;
 
 #[cfg(test)]
 mod tests {

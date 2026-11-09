@@ -22,7 +22,11 @@ Arguments to pass to the binary
 binaryPath: string;
 ```
 
-Path to the binary (can be just the name if in PATH)
+The binary to run, named in the manifest's `requires` as
+`execute_binary:<name>`. Pass the bare name to have it looked up on the
+PATH. An absolute path is accepted only where moss itself would find that
+binary: a PATH directory, a standard install directory such as
+`/opt/homebrew/bin`, or the path `resolve_git_path` returned.
 
 ***
 
@@ -32,7 +36,10 @@ Path to the binary (can be just the name if in PATH)
 optional env?: Record<string, string>;
 ```
 
-Additional environment variables
+Environment variables to add. Only `GIT_TERMINAL_PROMPT`,
+`COPYFILE_DISABLE` and `GIT_INDEX_FILE` are accepted; any other name
+refuses the call. `GIT_INDEX_FILE` must be a deploy hook's
+`context.index_file`.
 
 ***
 
@@ -85,4 +92,7 @@ Timeout in milliseconds (default: 60000)
 optional workingDir?: string;
 ```
 
-Working directory relative to project root (default: project root itself)
+Working directory: relative to the project root, or absolute, such as a
+deploy hook's `context.site_dir` (default: the project root). moss refuses
+one outside the project, or inside its `.moss/` folder other than
+`site_dir`.

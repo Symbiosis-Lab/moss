@@ -55,7 +55,7 @@ impl Site {
         pending.seal()
     }
 
-    async fn server(&self, probe: super::super::router::EvictedProbe) -> (u16, tokio::sync::oneshot::Sender<()>) {
+    async fn server(&self, probe: super::super::router::EvictedProbe) -> (u16, Option<u16>, tokio::sync::oneshot::Sender<()>) {
         let registry = Arc::new(crate::types::assets::AssetRegistry::new());
         registry.set_failed(ALIAS.into(), crate::types::assets::Failure::encode("a newer attempt failed"));
         registry.set_source_passthrough(ALIAS.into(), self.mp.project_root().join("unrelated.jpg"));
@@ -92,7 +92,7 @@ fn status(url: &str) -> u16 {
 async fn generation_original_receipt_serves_alias_range_and_head_over_newer_registry() {
     let site = Site::new(false);
     assert!(!site.mp.current_ptr().join(ALIAS).exists());
-    let (port, shutdown) = site.server(|_| false).await;
+    let (port, _, shutdown) = site.server(|_| false).await;
     let url = format!("http://localhost:{port}/{ALIAS}");
     let response = ureq::get(&url).set("Range", "bytes=2-9").call().unwrap();
     assert_eq!(response.status(), 206);
@@ -113,7 +113,7 @@ async fn generation_original_legacy_missing_copies_pin_canonical_identity_once()
     let site = Site::new(true);
     let oid = site.oid();
     assert!(!site.mp.current_ptr().join(LEGACY).exists());
-    let (port, shutdown) = site.server(|_| false).await;
+    let (port, _, shutdown) = site.server(|_| false).await;
     let url = format!("http://localhost:{port}/{}", urlencoding::encode(LEGACY));
     assert_eq!(bytes(ureq::get(&url).call().unwrap()), BYTES);
     assert!(site.receipt().exists());
@@ -143,7 +143,7 @@ async fn generation_original_cloud_cas_retries_without_encoding() {
     std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
     std::fs::write(blob.with_extension("evicted"), b"pending").unwrap();
     std::fs::remove_file(site.mp.project_root().join(SOURCE)).unwrap();
-    let (port, shutdown) = site.server(evicted).await;
+    let (port, _, shutdown) = site.server(evicted).await;
     let url = format!("http://localhost:{port}/{ALIAS}");
     assert_eq!(status(&url), 503);
     std::fs::write(&blob, BYTES).unwrap();
@@ -155,7 +155,7 @@ async fn generation_original_cloud_cas_retries_without_encoding() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generation_original_rejects_corrupt_receipt_and_source_or_cas_escape() {
     let site = Site::new(false);
-    let (port, shutdown) = site.server(|_| false).await;
+    let (port, _, shutdown) = site.server(|_| false).await;
     let url = format!("http://localhost:{port}/{ALIAS}");
     let mut receipt: crate::build::manifest::preview_originals::Originals = serde_json::from_slice(&std::fs::read(site.receipt()).unwrap()).unwrap();
     receipt.generation = "0000000000000000".into();
@@ -175,7 +175,7 @@ async fn generation_original_rejects_corrupt_receipt_and_source_or_cas_escape() 
         let blob = store.blob_path(&site.oid());
         std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&secret, &blob).unwrap();
-        let (port, shutdown) = site.server(|_| false).await;
+        let (port, _, shutdown) = site.server(|_| false).await;
         assert_eq!(status(&format!("http://localhost:{port}/{ALIAS}")), 404);
         assert!(std::fs::symlink_metadata(&blob).unwrap().file_type().is_symlink(), "CAS must reject an escape before hashing or deleting it");
         std::fs::remove_file(blob).unwrap();
@@ -208,7 +208,7 @@ async fn generation_original_unreadable_known_source_is_retryable() {
     let site = Site::new(false);
     let source = site.mp.project_root().join(SOURCE);
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o0)).unwrap();
-    let (port, shutdown) = site.server(|_| false).await;
+    let (port, _, shutdown) = site.server(|_| false).await;
     let url = format!("http://localhost:{port}/{ALIAS}");
     let pending = status(&url);
     std::fs::set_permissions(source, std::fs::Permissions::from_mode(0o600)).unwrap();

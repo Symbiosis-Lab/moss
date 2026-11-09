@@ -44,7 +44,7 @@ fn parse_hex(hex: &str) -> Option<Rgb> {
     }
 }
 
-fn to_hex((r, g, b): Rgb) -> String {
+pub(crate) fn to_hex((r, g, b): Rgb) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 

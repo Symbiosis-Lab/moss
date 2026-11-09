@@ -605,10 +605,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub kind: moss_core::PageKind,
-    /// Stable note identity: 8 random hex characters, minted once on first
-    /// build and written back to frontmatter. It is NOT derived from the path
-    /// or the content — a lost uid cannot be recomputed, and it is the join key
-    /// for the note's comment thread and its signed moderation events.
+    /// The note ID the page is built under: 8 random hex characters, NOT
+    /// derived from the path or the content, so a lost uid cannot be
+    /// recomputed, and the join key for the note's comment thread and its
+    /// signed moderation events. Its frontmatter's, else one the build assigns
+    /// (`render::uid_dedup`), which the first publish writes into the file.
     pub uid: Option<String>,
     /// Typesetting direction: "horizontal" or "vertical" (from frontmatter)
     #[serde(skip)]
@@ -884,6 +885,23 @@ impl ParsedDocument {
         self.draft != Some(true) && self.listed != Some(false) && !self.slot_only && !self.is_not_found_page()
     }
 
+    /// An authored `partial: true` file that is not a draft. Read from the
+    /// frontmatter, not `slot_only`: `footer.md` is slot-only too and is
+    /// neither a header link nor a listing row.
+    pub fn is_partial(&self) -> bool {
+        self.slot_only
+            && self.draft != Some(true)
+            && self.raw_frontmatter.get("partial").and_then(|v| v.as_bool()) == Some(true)
+    }
+
+    /// A partial that says `listed: true`: a row in its own folder's listings
+    /// with no page behind it. Only folder listings take it; every surface
+    /// that needs an address (feeds, sitemap, search, prev/next, the "N pages"
+    /// count) keeps to [`Self::is_listable`].
+    pub fn is_pageless_entry(&self) -> bool {
+        self.is_partial() && self.listed == Some(true)
+    }
+
     /// The site's `404.md`: the page a host shows for an unknown address. It
     /// is a page at `/404/` and a copy at `/404.html`, and it is no part of
     /// the site's content, so no listing surface carries it.
@@ -1009,7 +1027,8 @@ pub struct SiteAssets {
     pub hero_ends: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
-    /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
+    /// Click-to-copy section permalinks. Absent `[site].heading_anchors` means
+    /// ON, and the per-page rule decides; `false` turns them off.
     pub heading_anchors: bool,
     /// `[site].selection_tools` — Share and Copy on selected text, the
     /// share-card chunk and every page's QR code. Defaults OFF.
@@ -1129,50 +1148,20 @@ impl SiteAssets {
 pub struct SourceMetadata {
     /// SHA-256 hash of the file content
     pub hash: String,
-    /// File size in bytes
-    pub size: u64,
-    /// Modification time as Unix timestamp (seconds since epoch)
-    pub mtime: u64,
-    /// Sub-second component of the modification time, in nanoseconds.
-    ///
-    /// `None` when the writer could not read an mtime at all, or when the
-    /// manifest predates this field (`#[serde(default)]` on read). The
-    /// watcher gate's size+mtime fast path requires `Some` and a match that
-    /// [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for)
-    /// accepts — a whole-second match alone cannot distinguish the hashed file
-    /// from a same-size rewrite landing in the same second, so missing
-    /// precision fails OPEN to hashing, never to suppression.
-    #[serde(default)]
-    pub mtime_nanos: Option<u32>,
-    /// Inode change time (ctime) as Unix seconds, where the platform reports
-    /// one (`None` on Windows and in manifests that predate the field).
-    ///
-    /// mtime can be forged from userland (`rsync -t`, `touch -r`,
-    /// mtime-preserving editors); ctime cannot. A ctime disagreement never
-    /// suppresses — it only demotes the size+mtime fast path to the hash
-    /// tier, so false positives (a permission change bumps ctime) cost one
-    /// hash and self-absorb. git's index does exactly this.
-    #[serde(default)]
-    pub ctime: Option<i64>,
-    /// Inode number, where the platform reports one. Replace-via-rename (the
-    /// atomic-save pattern) changes the inode even when size and mtime are
-    /// preserved. Same fail-open rule as `ctime`: disagreement routes to the
-    /// hash tier, absence changes nothing.
-    #[serde(default)]
-    pub inode: Option<u64>,
+    #[serde(flatten)]
+    pub stat: crate::build::stat::FileStat,
 }
 
 impl SourceMetadata {
-    /// The record for bytes hashing to `hash`, read from a file as it stood at
-    /// `stat` — the one place a stat becomes a manifest source entry.
-    pub(crate) fn from_stat(hash: String, stat: crate::build::stat::FileStat) -> Self {
-        let crate::build::stat::FileStat { size, mtime, mtime_nanos, ctime, inode } = stat;
-        Self { hash, size, mtime, mtime_nanos, ctime, inode }
+    pub fn from_stat(hash: String, stat: crate::build::stat::FileStat) -> Self {
+        Self { hash, stat }
     }
 
-    /// The stat record half, for [`FileStat::vouches_for`](crate::build::stat::FileStat::vouches_for).
-    pub(crate) fn stat(&self) -> crate::build::stat::FileStat {
-        crate::build::stat::FileStat { size: self.size, mtime: self.mtime, mtime_nanos: self.mtime_nanos, ctime: self.ctime, inode: self.inode }
+    /// Whether `current`, the file stat'd now, proves it still holds the bytes
+    /// this record hashed, without reading them: the shared rule plus the
+    /// racy-write window around `captured_at`, the manifest's clock.
+    pub(crate) fn vouches_for(&self, current: &crate::build::stat::FileStat, captured_at: Option<u64>) -> bool {
+        !crate::build::stat::mtime_is_racy(self.stat.mtime, captured_at) && self.stat.vouches_for(current, captured_at)
     }
 }
 

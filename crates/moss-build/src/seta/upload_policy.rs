@@ -417,6 +417,19 @@ impl Throughput {
     /// `self-healed` is always printed, even at 0 — the whole point is to be
     /// greppable across a log history, and a metric that only appears when
     /// nonzero cannot be told apart from a build too old to have it.
+    pub(crate) fn profile_counts(&self, elapsed: Duration) -> [(&'static str, u64); 7] {
+        let bytes = self.bytes_confirmed.load(Ordering::Relaxed);
+        let requests = self.requests.load(Ordering::Relaxed);
+        [
+            ("bytes_uploaded", bytes), ("body_requests", requests),
+            ("retries", requests.saturating_sub(self.requests_ok.load(Ordering::Relaxed))),
+            ("chunked_files", self.chunked_files.load(Ordering::Relaxed)),
+            ("single_put_files", self.single_put_files.load(Ordering::Relaxed)),
+            ("final_concurrency", self.effective_limit() as u64),
+            ("achieved_bytes_per_s", (bytes as f64 / elapsed.as_secs_f64().max(0.001)) as u64),
+        ]
+    }
+
     pub fn deploy_summary(&self, elapsed: Duration) -> String {
         let bytes = self.bytes_confirmed.load(Ordering::Relaxed);
         let requests = self.requests.load(Ordering::Relaxed);

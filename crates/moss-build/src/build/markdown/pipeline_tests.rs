@@ -279,7 +279,7 @@ fn body_cover_path_skips_raw_html_img_in_markdown() {
 // body-cover-path capture time lives inside
 // `find_first_block_image` / `process_markdown_file`'s
 // `body_cover_path` derivation, which reads `Url::Resolved` from the
-// typed AST — the sentinel is decoded by `classify_url_prod` before
+// typed AST — the sentinel is decoded by `moss_core::ast::classify_url` before
 // it ever reaches the cover field. The end-to-end coverage is
 // preserved by `body_cover_path_*` integration tests in this module.
 
@@ -1051,11 +1051,11 @@ fn homepage_body_h1_is_kept_verbatim_no_injection() {
 /// page's `# Title` (level 1) is never anchored, on the home page or elsewhere.
 #[test]
 fn homepage_sections_keep_permalink_anchors_and_title_has_none() {
-    let md = "---\n---\n# Hero Title\n\n## First\n\nbody\n\n## Second\n\nbody\n";
+    let md = format!("---\n---\n# Hero Title\n\n## First\n\n{}\n\n## Second\n\n{}\n", eighty_words(), eighty_words());
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "index.md",
-        md,
+        &md,
         "site",
         &empty_map,
         false,
@@ -1096,11 +1096,11 @@ fn homepage_sections_keep_permalink_anchors_and_title_has_none() {
 /// home page, not a side effect of the level-2 heading itself.
 #[test]
 fn ordinary_page_heading_keeps_h2_permalink_anchor() {
-    let md = "---\n---\n## Section\n\nbody\n";
+    let md = format!("---\n---\n## Section\n\n{}\n\n## Other\n\n{}\n", eighty_words(), eighty_words());
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "posts/note.md",
-        md,
+        &md,
         "site",
         &empty_map,
         false,
@@ -2673,16 +2673,32 @@ fn site_hard_line_breaks_off_keeps_commonmark_soft_break() {
     );
 }
 
-/// Render with an explicit `[site].heading_anchors` answer, everything
-/// else at production defaults. `## Title` (level 2), not `# Title` — a
-/// level-1 heading never gets a permalink anchor regardless of this
-/// setting, which would make the "on" case below indistinguishable from
-/// a wiring bug.
+/// Eighty words of running text: two sections of this much make a page long enough for permalink marks.
+fn eighty_words() -> String {
+    vec!["word"; 80].join(" ")
+}
+
+/// A built page under the length rule has no marks, yet every heading keeps its id.
+/// This checks the built page; the rule itself is pinned in moss-core.
+#[test]
+fn a_short_page_has_heading_ids_but_no_permalink_marks() {
+    let html = render_body_with_heading_anchors("## First\n\nshort.\n\n## Second\n\nshort.\n", true);
+    assert!(!html.contains("moss-heading-anchor"), "{html}");
+    assert!(html.contains(r#"<h2 id="first">First"#) && html.contains(r#"<h2 id="second">Second"#), "{html}");
+}
+
+/// Render a page long enough for marks with an explicit `[site].heading_anchors`
+/// answer, everything else at production defaults. `## Title` (level 2), not
+/// `# Title`: a level-1 heading never gets a permalink anchor.
 fn render_with_heading_anchors(heading_anchors: bool) -> String {
+    render_body_with_heading_anchors(&format!("## Title\n\n{}\n\n## More\n\n{}\n", eighty_words(), eighty_words()), heading_anchors)
+}
+
+fn render_body_with_heading_anchors(body: &str, heading_anchors: bool) -> String {
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "test.md",
-        "## Title\n\nBody text.\n",
+        body,
         "site",
         &empty_map,
         false,
@@ -2698,15 +2714,7 @@ fn render_with_heading_anchors(heading_anchors: bool) -> String {
     doc.html_content
 }
 
-/// The `heading_anchors` argument must reach `RenderHooks::emit_heading_anchors`,
-/// not just exist — same wiring hazard as `hard_line_breaks` above: a dropped
-/// thread (param unused, `PipelineHooks::heading_anchors` never populated
-/// from `site_config.heading_anchors` at the blocking.rs call site) leaves
-/// every moss-core test green while every real build keeps emitting
-/// permalink anchors regardless of the config toggle. Mutation check: hardcode
-/// `emit_heading_anchors(&self, _level: u8) -> bool { true }` in `PipelineHooks`
-/// and this goes red only for the off case below — this test guards the on
-/// case stays unaffected by the wiring itself.
+/// A long page with the site allowing marks (the default) shows them.
 #[test]
 fn site_heading_anchors_on_renders_permalink_anchor() {
     let html = render_with_heading_anchors(true);
@@ -2747,14 +2755,15 @@ fn site_heading_anchors_off_omits_permalink_anchor() {
 fn render_markdown_to_html_with_respects_heading_anchors_param() {
     let default_resolver = |href: &str| -> String { href.to_string() };
 
-    let on = render_markdown_to_html_with("## Title\n", &default_resolver, None, true);
+    let long = format!("## Title\n\n{0}\n\n## More\n\n{0}\n", eighty_words());
+    let on = render_markdown_to_html_with(&long, &default_resolver, None, true);
     assert!(
         on.contains(r#"class="moss-heading-anchor""#),
         "expected the permalink anchor when heading_anchors=true, got: {}",
         on
     );
 
-    let off = render_markdown_to_html_with("## Title\n", &default_resolver, None, false);
+    let off = render_markdown_to_html_with(&long, &default_resolver, None, false);
     assert!(
         !off.contains("moss-heading-anchor"),
         "no permalink anchor may appear when heading_anchors=false, got: {}",
@@ -3920,7 +3929,8 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
         .html_content
     };
     let vertical = r#"sizes="calc(1.356 * (100vh - 4rem))""#;
-    let horizontal = r#"sizes="auto, (min-width: 48rem) 47.25rem, 100vw""#;
+    // The page's only image is its eager first one, so no `auto,` lead.
+    let horizontal = r#"sizes="(min-width: 48rem) 47.25rem, 100vw""#;
 
     let site_vertical = render("", Some("vertical"));
     assert!(site_vertical.contains(vertical), "{site_vertical}");
@@ -4471,4 +4481,19 @@ fn children_count_text_without_a_placeholder_warns() {
     assert_eq!(children_count_warning("index.md", Some(&ChildrenCount("{n} productions".into()))), None);
     assert_eq!(children_count_warning("index.md", Some(&ChildrenCount(String::new()))), None);
     assert_eq!(children_count_warning("index.md", None), None);
+}
+
+/// Hosts with no build (the WebAssembly and Swift bindings) draw a one-page
+/// preview with this stylesheet, compiled into them; it must be the one the
+/// standalone renderer uses. Regenerate:
+/// UPDATE_PAGE_CSS=1 cargo test -p moss-build --lib the_bindings_page_css
+#[test]
+fn the_bindings_page_css_matches_the_standalone_stylesheet() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../moss-bindings/assets/page.css");
+    let css = standalone_document_css();
+    if std::env::var_os("UPDATE_PAGE_CSS").is_some() {
+        std::fs::write(&path, &css).unwrap();
+    }
+    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(committed == css, "{} is stale; regenerate it with UPDATE_PAGE_CSS=1 cargo test -p moss-build --lib the_bindings_page_css", path.display());
 }

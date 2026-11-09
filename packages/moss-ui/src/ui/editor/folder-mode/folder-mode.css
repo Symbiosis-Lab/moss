@@ -1,0 +1,660 @@
+/**
+ * folder-mode.css — Styles for the editor's folder-mode component.
+ *
+ * Layout:
+ *
+ *   - Site-header band on top: folder-name heading + microcopy + theme
+ *     picker + hover-reveal "Open in Finder" button.
+ *   - Empty state: blueprint-grid background + large "Start writing"
+ *     card + three smaller cards beneath an "or start with" divider.
+ *   - Populated state: divider + body slot that hosts CM6 on the home
+ *     file.
+ *
+ * Blueprint grid: copies the gradient stack from
+ * the host launcher stylesheet so empty-folder mode visually
+ * carries over from the launcher window. Token-driven so a global
+ * accent change picks up automatically.
+ *
+ * Tokens consumed here are in @symbiosis-lab/moss-ui/ui/styles/shared/tokens.css.
+ * Two values from site.css's internal
+ * scale into the app-shell tokens file (--moss-font-heading serif
+ * stack, --moss-size-2xl 1.625rem) make the editor heading match the
+ * preview `.moss-folder-title`. These mirror the scale and font family
+ * already defined in tokens.json.
+ */
+
+.moss-folder-mode {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 32px 28px 60px;
+  gap: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--moss-color-text);
+  background: var(--moss-color-bg);
+  overflow-y: auto;
+}
+
+/* Empty state: animated blueprint-grid canvas carried through from the
+   launcher window. Same particle-physics module
+   (the `@symbiosis-lab/moss-blueprint-grid` package) the preview empty-state uses,
+   so the user gets the same tuned visual from "I picked a folder" through
+   "moss opened on it" through "I emptied a folder".
+
+   The canvas is absolutely positioned, so it is NOT a flex item and the
+   existing site-header + cards children keep their normal flex flow with
+   the parent's `gap`. The header / cards are kept above the canvas with
+   `position: relative` + `z-index: 1`.
+
+   `overflow: hidden` here overrides the base `.moss-folder-mode`'s
+   `overflow-y: auto`: the empty state has bounded content (header + four
+   cards) and we don't want the canvas (positioned inside the scroll
+   container's content box) to scroll with content if it ever overflows.
+   The populated state still scrolls — its CM6 body owns its own scroll. */
+.moss-folder-mode--empty {
+  position: relative;
+  background-color: var(--moss-color-bg);
+  overflow: hidden;
+}
+
+.moss-folder-mode--empty > #blueprint-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: block;
+  z-index: 0;
+}
+
+.moss-folder-mode--empty > .moss-folder-mode__cards {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Site-header band ───────────────────────────────────────────────── */
+
+.moss-folder-mode__header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.moss-folder-mode__heading-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.moss-folder-mode__heading {
+  margin: 0;
+  /* Matches the `.moss-folder-title` typography defined in
+     `crates/moss-build/src/assets/css/site.css` so the editor
+     heading and the preview heading render with the same serif face,
+     size, weight and letter-spacing. This is the "folder name = site
+     name" teaching moment: the two surfaces must read as the same
+     string in the same voice, not as two different titles that happen
+     to share text. Spec § "Folder name as heading, not field."
+
+     Tokens:
+       --moss-font-heading : serif stack (Source Han Serif …) — sourced
+         from tokens.json (`moss-font-heading`) and mirrored in this
+         app-shell `@symbiosis-lab/moss-ui/ui/styles/shared/tokens.css`. The mirror
+         previously aliased to body-sans; revised in this change
+         to the same serif stack as tokens.json so the editor honours
+         the design contract.
+       --moss-size-2xl    : 1.625rem (26px) — internal scale token
+         declared in site.css (line 99) and mirrored into the app-shell
+         tokens file by the same mirror. Not in tokens.json
+         (the scale lives in the "internal" :root block, hand-edited per
+         CLAUDE.md "Design tokens" rules). */
+  font-family: var(--moss-font-heading);
+  font-size: var(--moss-size-2xl);
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.05em;
+  color: var(--moss-color-text);
+}
+
+/* "Open in Finder" affordance. Persistent at rest, brightening on row hover
+   or focus — NOT hover-revealed. (A hover-only
+   reveal is undiscoverable: an invisible trigger is a moving target under the
+   cursor. Same
+   0.65-at-rest treatment as the launcher mark.) */
+.moss-folder-mode__reveal {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--moss-color-muted);
+  cursor: pointer;
+  opacity: 0.65;
+  transition: opacity 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+.moss-folder-mode__heading-row:hover .moss-folder-mode__reveal,
+.moss-folder-mode__reveal:focus-visible {
+  opacity: 1;
+}
+
+.moss-folder-mode__reveal:hover {
+  color: var(--moss-color-text);
+  background: var(--moss-hover-overlay);
+}
+
+.moss-folder-mode__reveal:focus-visible {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: 2px;
+}
+
+.moss-folder-mode__microcopy {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--moss-color-muted);
+  max-width: 56ch;
+}
+
+/* ── Populated body slot ─────────────────────────────────────────────── */
+
+.moss-folder-mode__divider {
+  height: 1px;
+  background: var(--moss-border-light);
+  margin: 8px 0 0;
+}
+
+.moss-folder-mode__body {
+  flex: 1;
+  min-height: 0;
+  /* CM6 takes over this slot via the caller's mount logic. This rule just
+     reserves the box; no opinion on what CM6 looks like inside. */
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────── */
+
+.moss-folder-mode__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+/* Label divider with flanking hairlines (`─── text ───`). The empty-state
+   "Start your site" divider was removed, but this style is still live: the
+   starter picker (`starter-picker-controller.ts`) emits a heading divider
+   with this class when the "Try an example" card is clicked. */
+.moss-folder-mode__cards-divider {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--moss-color-muted);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.moss-folder-mode__cards-divider::before,
+.moss-folder-mode__cards-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--moss-border-light);
+}
+
+.moss-folder-mode__cards-primary {
+  /* Large card lives in its own row so the grid below it can be a
+     simple 3-column layout. */
+  display: block;
+}
+
+.moss-folder-mode__cards-or {
+  font-size: 12px;
+  color: var(--moss-color-muted);
+  text-align: center;
+  margin: 4px 0;
+}
+
+.moss-folder-mode__cards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* Card chrome shared across sizes. Resets `<button>` user-agent
+   defaults so the card feels like a surface, not a chrome button.
+   `data-tooltip=` (used by URL/Plugin cards) is honoured by moss's
+   portal tooltip system — see CLAUDE.md "Tooltips" rule. */
+.moss-folder-mode__card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 20px;
+  background: var(--moss-color-surface);
+  border: 1px solid var(--moss-border-light);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--moss-color-text);
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.moss-folder-mode__card:hover {
+  background: var(--moss-hover-overlay);
+  border-color: var(--moss-border-medium);
+}
+
+.moss-folder-mode__card:active {
+  transform: translateY(1px);
+}
+
+.moss-folder-mode__card:focus-visible {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: 2px;
+}
+
+.moss-folder-mode__card--large {
+  /* Span the full primary-row width per the spec mockup. The card chrome
+     above (`.moss-folder-mode__card`) inherits `display: flex` with
+     `align-items: flex-start`, which sizes the card to its content
+     (~280px); without an explicit width the "Start writing" primary
+     card collapses to a narrow pill in the middle of the row instead
+     of mirroring the 3-column grid below it. `width: 100%` makes the
+     primary row a full-width band, which the design mockup shows
+     */
+  width: 100%;
+  padding: 28px 24px;
+  /* Slightly stronger accent for the primary card so the eye lands on
+     it first. Border picks up the accent at low opacity (token-driven
+     via the shared --moss-color-accent-quiet token). */
+  border-color: var(--moss-color-accent-quiet);
+}
+
+.moss-folder-mode__card--large:hover {
+  border-color: var(--moss-color-accent);
+}
+
+.moss-folder-mode__card--small {
+  /* Sized for the 3-column grid; padding kept tighter than the large
+     card so the row reads as secondary. */
+  padding: 14px 16px;
+}
+
+.moss-folder-mode__card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--moss-color-text);
+}
+
+.moss-folder-mode__card--large .moss-folder-mode__card-title {
+  font-size: 18px;
+}
+
+.moss-folder-mode__card-description {
+  font-size: 13px;
+  color: var(--moss-color-muted);
+  line-height: 1.4;
+}
+
+/* ── URL card: inline-expand interaction ─────────────────────────────────
+   Ported from the (removed) preview empty-state overlay's inline-URL form
+   (overlay-templates.ts `.import-row` / `.import-inline-form` +
+   preview-manager.ts setupEmptySiteFormHandler), adapted to folder-mode's
+   BEM class system. The URL card morphs in place: the label crossfades to
+   an input, and the trailing arrow morphs into the Import button. The
+   other three cards stay put — no full-grid swap. */
+
+/* When expanded, the card behaves like a focused surface (accent border,
+   default cursor) and lays out its row + error stacked. The base
+   `.moss-folder-mode__card` already provides padding / radius / chrome. */
+.moss-folder-mode__card--url-expanded {
+  cursor: default;
+  border-color: var(--moss-color-accent);
+  background: var(--moss-color-bg);
+  /* Override the card's flex column-of-content layout; the URL card body
+     manages its own row layout below. */
+  gap: 8px;
+}
+
+.moss-folder-mode__card--url-expanded:hover {
+  background: var(--moss-color-bg);
+  border-color: var(--moss-color-accent);
+}
+
+.moss-folder-mode__url-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+/* The label and input occupy the same box and crossfade. Fixed height so
+   the morph doesn't jump the card's height. */
+.moss-folder-mode__url-middle {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  height: 34px;
+  display: flex;
+  align-items: center;
+}
+
+.moss-folder-mode__url-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  opacity: 0;
+  transform: translateX(-12px);
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+  pointer-events: none;
+}
+
+.moss-folder-mode__url-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  font-size: 0.9rem;
+  font-family: inherit;
+  border: none;
+  background: transparent;
+  color: var(--moss-color-text);
+  outline: none;
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 0.18s ease-out 0.04s, transform 0.18s ease-out 0.04s;
+}
+
+.moss-folder-mode__url-input::placeholder {
+  color: var(--moss-color-muted);
+}
+
+/* Trailing slot: arrow (collapsed face) ↔ Import button (expanded face). */
+.moss-folder-mode__url-right {
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 64px;
+  height: 30px;
+}
+
+.moss-folder-mode__url-arrow {
+  position: absolute;
+  right: 0;
+  font-size: 1.25rem;
+  color: var(--moss-color-muted);
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+  pointer-events: none;
+}
+
+.moss-folder-mode__url-submit {
+  appearance: none;
+  position: absolute;
+  right: 0;
+  padding: 0.35rem 0.8rem;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--moss-color-accent);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out, background 0.15s;
+}
+
+.moss-folder-mode__url-submit:hover {
+  background: var(--moss-color-accent-hover);
+}
+
+.moss-folder-mode__url-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.moss-folder-mode__url-error {
+  width: 100%;
+  color: var(--moss-error, var(--moss-color-accent));
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+/* `[hidden]` should fully remove the error row (some resets set
+   display on hidden inconsistently). */
+.moss-folder-mode__url-error[hidden] {
+  display: none;
+}
+
+/* Inline status label injected below the import-URL card when a URL
+   import returns zero results (NeedsAction / amber muted treatment so
+   it reads as "nothing found" rather than a hard error). */
+.moss-folder-mode__url-status {
+  margin-top: 6px;
+  font-size: 0.8125rem; /* 13px */
+  color: var(--moss-warning, oklch(0.62 0.13 75));
+  line-height: 1.4;
+}
+
+/* ── Starter picker ──────────────────────────────────────────────────────
+   Replaces the cards-grid with a one-column list of starter cards when the
+   "Starter" card is clicked in the host starter picker, laid
+   out like moss's own summary cards in list layout
+   (`.moss-cards[data-layout="list"]`, `crates/moss-build/src/assets/css/
+   site.css`): a fixed-width cover on the left, title/description/meta on
+   the right, `align-items: stretch` so the cover matches the body's own
+   height — mirrored here with app-prefixed class names rather than reusing
+   the site theme's own (a different token scope, and reusing them verbatim
+   would trip the `duplicated_selectors` ratchet row). Outline-only, the
+   SAME grammar `style.css`'s waiting screen and threshold screen (and
+   starter-frame.ts) already use: transparent fill, a
+   hairline border, never a background tint. Nothing about a card's layout
+   changes on hover or previewed/selected state — only the border colour,
+   and greys before colour there too: resting
+   `--moss-border-light`, previewed (`--previewed`, hovered/arrow-key-
+   focused) `--moss-border-medium`, selected (`[aria-selected]`, once
+   clicked, persistent) `--moss-border-strong` — no accent on any border
+   here; accent stays reserved for the enabled "Use this starter" button and
+   the keyboard focus ring. "Use this starter" and "Back to options" reuse
+   `.moss-btn`/`.moss-btn-primary` (styles/shared/modal.css) and
+   `.moss-link--subtle` (primitives.css) rather than bespoke button chrome —
+   both are already imported into this webview (editor.css). */
+.moss-starter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.moss-starter-card {
+  appearance: none;
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  border: 1px solid var(--moss-border-light);
+  border-radius: var(--moss-border-radius);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--moss-color-text);
+  transition: border-color 150ms ease;
+}
+
+.moss-starter-card--previewed {
+  border-color: var(--moss-border-medium);
+}
+
+.moss-starter-card:focus-visible {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: 2px;
+}
+
+.moss-starter-card[aria-selected="true"] {
+  border-color: var(--moss-border-strong);
+}
+
+.moss-starter-card[data-unavailable] {
+  cursor: default;
+}
+
+.moss-starter-card__cover {
+  flex: 0 0 auto;
+  width: 120px;
+  border: 1px solid var(--moss-border-light);
+  border-radius: var(--moss-border-radius);
+  overflow: hidden;
+  background: transparent;
+}
+
+.moss-starter-card__cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.moss-starter-card__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  justify-content: center;
+}
+
+.moss-starter-card__title {
+  margin: 0;
+  font-family: var(--moss-font-heading);
+  font-size: 15px;
+  font-weight: 480;
+  color: var(--moss-color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.moss-starter-card[data-unavailable] .moss-starter-card__title {
+  color: var(--moss-color-muted);
+}
+
+.moss-starter-card__desc {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--moss-color-text-secondary);
+  line-height: 1.4;
+}
+
+.moss-starter-card[data-unavailable] .moss-starter-card__desc {
+  color: var(--moss-color-muted);
+}
+
+/* The demo unit: the fill line with the "See demo site" link inline after it. Space above and below sets it apart
+   from the purpose line and the status slot; inside it there is none, so a wrapped link sits right under the line. */
+.moss-starter-card__meta {
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--moss-color-muted);
+  font-style: italic;
+}
+
+/* What the starter is doing: one line, a calm progress bar or text (with
+   Retry), in a slot every card keeps at the same height whether or not it
+   shows anything, so a download starting on hover never grows the card and
+   moves the cards under the pointer. */
+.moss-starter-card__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+  min-width: 0;
+}
+
+.moss-starter-card__status:empty {
+  visibility: hidden;
+}
+
+.moss-starter-card__progress {
+  flex: 1;
+  height: 3px;
+  background: var(--moss-border-light);
+  border-radius: var(--moss-border-radius);
+  overflow: hidden;
+}
+
+.moss-starter-card__progress > span {
+  display: block;
+  height: 100%;
+  background: var(--moss-border-strong);
+  transition: width 300ms ease;
+}
+
+.moss-starter-card__status-text {
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--moss-color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.moss-starter-card__status > button {
+  flex: none;
+}
+
+/* Read to a screen reader, not shown: the failure line's starter name. */
+.moss-starter-card__unseen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.moss-starter-card__demo {
+  font-style: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-starter-card__progress > span {
+    transition: none;
+  }
+}
+
+.moss-starter-named {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+  color: var(--moss-color-text-secondary);
+}
+
+.moss-folder-mode__starter-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}

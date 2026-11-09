@@ -12,23 +12,58 @@
     "./ui/*": "./src/ui/*.ts"
   },
   "scripts": {
+    "build:browser": "node scripts/build-browser.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
   "author": "Guo Liu",
   "license": "MIT",
-  "peerDependencies": {
-    "@codemirror/view": "^6"
-  },
-  "peerDependenciesMeta": {
-    "@codemirror/view": {
-      "optional": true
-    }
-  },
   "devDependencies": {
-    "@codemirror/view": "^6.43.6",
     "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "vite": "^6.4.3",
+    "@types/node": "^24.13.3",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/language": "^6.12.4",
+    "codemirror": "^6.0.2",
+    "@codemirror/search": "^6.7.1",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/lint": "^6.9.5",
+    "@codemirror/lang-markdown": "^6.5.1",
+    "@lezer/markdown": "^1.7.2",
+    "@lezer/highlight": "^1.2.3",
+    "@symbiosis-lab/moss-syntax": "workspace:*",
+    "@symbiosis-lab/moss-blueprint-grid": "workspace:*"
+  },
+  "dependencies": {
+    "@leeoniya/ufuzzy": "1.0.19"
+  },
+  "peerDependencies": {
+    "@symbiosis-lab/moss-syntax": "*",
+    "@symbiosis-lab/moss-blueprint-grid": "*",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/language": "^6.12.4",
+    "codemirror": "^6.0.2",
+    "@codemirror/search": "^6.7.1",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/legacy-modes": "^6.5.3",
+    "@codemirror/lint": "^6.9.5",
+    "@codemirror/lang-markdown": "^6.5.1",
+    "@lezer/markdown": "^1.7.2",
+    "@lezer/highlight": "^1.2.3"
   }
 }

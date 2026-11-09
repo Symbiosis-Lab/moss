@@ -106,7 +106,7 @@
      genuinely vertical-rl (no horizontal exception), and block-end is the
      reading-side edge there (physically left) — the same edge `border-bottom`
      names in horizontal-tb. One declaration, both writing modes. */
-  border-block-end: 1px solid var(--moss-border-strong);
+  border-block-end: 1px solid var(--moss-field-edge, var(--moss-border-strong));
   border-radius: 0;
   padding: var(--moss-space-xs, 0.5rem) 0;
   width: 100%;
@@ -114,23 +114,29 @@
   background: transparent;
   transition: border-color 0.2s ease;
 }
-.moss-input:focus {
-  border-block-end-color: var(--moss-color-text);
+/* field-focus:start */
+/* `:focus`, not `:focus-visible`: a text field matches both whenever focused.
+   Underline fields draw their resting edge through `--moss-field-edge` so a sheet outside the layers (comments, a landing's own underline) can read the focus colour. */
+.moss-input:focus,
+.comment-field:focus,
+.comment-form textarea:focus {
+  outline: none;
+  --moss-field-edge: var(--moss-focus-ring);
+  box-shadow: inset 0 -1px 0 0 var(--moss-field-edge);
 }
-.moss-input:focus-visible { outline: none; }
 @media (forced-colors: active) {
-  .moss-input:focus { border-block-end-color: Highlight; }
+  .moss-input:focus,
+  .comment-field:focus,
+  .comment-form textarea:focus { --moss-field-edge: Highlight; }
 }
+/* field-focus:end */
 
-/* A field with a full border shows focus on its own edge, never as a ring
-   around or inside it. The inset shadow doubles the 1px border to the 2px a
-   focus ring is elsewhere, without moving anything. The outline is removed with
-   `!important` because a theme's own unlayered `:focus-visible { outline }`
-   sits outside every layer and would otherwise draw a second box. The class is
-   doubled so the rule outranks a component's own border rule. */
+/* A bordered field takes the same edge on all four sides. `!important` because a
+   theme's unlayered `:focus-visible { outline }` would otherwise draw a second
+   box; the class is doubled to outrank a component's own border rule. */
 .moss-input--boxed.moss-input--boxed:focus {
-  border-color: var(--moss-color-ui-accent);
-  box-shadow: inset 0 0 0 1px var(--moss-color-ui-accent);
+  border-color: var(--moss-focus-ring);
+  box-shadow: inset 0 0 0 1px var(--moss-focus-ring);
   outline: none !important;
 }
 /* Forced colors drop the shadow; an outline just inside the border keeps 2px. */
@@ -637,32 +643,12 @@ article h6 {
   white-space: nowrap;
 }
 
-/* Section permalink anchors (moss-heading-anchor), inside body headings.
-   Revealed on hover or focus only (a tap reveals it on touch, where hover
-   sticks). Quiet at rest: a glyph smaller than the heading in a faint tone
-   mixed most of the way to the background, firming up to the accent on direct
-   hover or focus (rule below). */
-:is(h1, h2, h3, h4, h5, h6):has(> .moss-heading-anchor) {
-  position: relative;
-}
+/* Section permalink anchors (moss-heading-anchor), trailing a body heading.
+   The mark's space is always reserved and only opacity changes, so revealing
+   it never moves a line; the word joiner keeps it on the last word's line. */
 .moss-heading-anchor {
-  /* Hung in the heading's inline-start gutter, out of the line: it takes no
-     room hidden or shown, so no line wraps or moves, a no-break range keeps
-     its line, and overflow on the start side never scrolls. It stays
-     focusable. */
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: 100%;
-  /* The containing block is the heading's padding box: repeating the
-     heading's top padding puts the mark on its first line. It keeps the
-     heading's line box (only the glyph shrinks, on ::after), so the two
-     share a baseline. */
-  padding-block-start: inherit;
-  /* The gutter's own width, glyph against the heading, so the mark and its
-     inset ring stay inside the window at the page's edge. */
-  box-sizing: border-box;
-  inline-size: var(--moss-container-padding);
-  text-align: end;
+  position: relative;
+  margin-inline-start: 0.3em;
   font-weight: 400;
   color: color-mix(in oklch, var(--moss-color-text-secondary) 45%, var(--moss-color-bg));
   text-decoration: none;
@@ -674,16 +660,32 @@ article h6 {
   user-select: none;
 }
 .moss-heading-anchor::after {
-  content: "#";
-  font-size: min(0.8em, var(--moss-container-padding));
+  content: "\2060#";
+  font-size: 0.8em;
+}
+/* A 24px target centred on the glyph, whatever the heading's size. */
+.moss-heading-anchor::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  inline-size: 24px;
+  block-size: 24px;
+  translate: -50% -50%;
 }
 :is(h1, h2, h3, h4, h5, h6):hover .moss-heading-anchor,
 .moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {
   opacity: 1;
 }
+/* Touch has no hover to reveal it: show it faintly at rest. */
+@media (hover: none) {
+  .moss-heading-anchor {
+    opacity: 0.4;
+  }
+}
 .moss-heading-anchor:focus-visible {
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 .moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {
@@ -1600,7 +1602,8 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
     width 0.45s var(--moss-ease-subscribe),
     height 0.45s var(--moss-ease-subscribe),
     padding 0.45s var(--moss-ease-subscribe),
-    border-radius 0.45s var(--moss-ease-subscribe);
+    border-radius 0.45s var(--moss-ease-subscribe),
+    overflow 0s allow-discrete;
 }
 
 /* All subscribe-specific transition rules are scoped under
@@ -1637,7 +1640,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   align-items: center;
   gap: 0.6em;
   color: var(--moss-color-muted);
-  font-size: 0.95rem;
+  font-size: var(--moss-subscribe-status-size, 0.95rem);
   opacity: 0;
   transform: translateY(6px);
   transition:
@@ -1646,8 +1649,8 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   pointer-events: none;
 }
 .moss-subscribe-form[data-moss-hosted="true"] .moss-subscribe-status__icon {
-  width: 1.125em;
-  height: 1.125em;
+  width: min(1.125em, 1lh);
+  height: min(1.125em, 1lh);
   color: var(--moss-color-accent);
   flex-shrink: 0;
 }
@@ -1669,22 +1672,60 @@ body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   transform: translateY(-4px);
   pointer-events: none;
 }
-/* Pull the button out of flow and center inside the slot so the circle sits
-   where the idle button's center was. right/left:auto resets any idle
-   positioning; translate(-50%,-50%) centers on the slot's mid-point. */
+/* Out of flow and centred in the slot, where the idle button's centre was. */
 .moss-subscribe-form[data-state="success"] .moss-btn-slot .moss-btn {
   position: absolute;
   left: 50%;
   top: 50%;
   right: auto;
   transform: translate(-50%, -50%);
-  width: 2.25rem;
-  height: 2.25rem;
+  /* One status line across: size and line height come from the same sources as
+     the status text (a theme sets line height on the form, not the slot or the
+     status). The geometry is important: inside moss's layer that outranks a
+     theme's unlayered button rules, so the mark stays a circle; colour and
+     border remain the theme's. */
+  font-size: var(--moss-subscribe-status-size, 0.95rem) !important;
+  line-height: inherit !important;
+  box-sizing: border-box !important;
+  inline-size: 1lh !important;
+  block-size: 1lh !important;
+  min-inline-size: 0 !important;
+  min-block-size: 0 !important;
+  max-inline-size: none !important;
+  max-block-size: none !important;
+  aspect-ratio: 1 !important;
+  flex: none !important;
   background: var(--moss-color-accent);
   color: var(--moss-color-bg);
-  padding: 0;
-  border-radius: 50%;
+  padding: 0 !important;
+  border-radius: 50% !important;
   cursor: pointer;
+  /* Visible only once the morph ends, so the fading label never spills out of
+     the shrinking pill; the hit area below needs it. The delay is the last
+     entry of the button's transition list. */
+  overflow: visible;
+  transition-delay: 0s, 0s, 0s, 0s, 0s, 0s, 0.45s;
+}
+/* The circle is tapped to start over: a transparent hit area, 24px, and 44px
+   where the touch floor applies. */
+.moss-subscribe-form[data-state="success"] .moss-btn::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  inline-size: 24px;
+  block-size: 24px;
+  translate: -50% -50%;
+}
+@media (width < 48rem), (pointer: coarse) {
+  .moss-subscribe-form[data-state="success"] .moss-btn::before {
+    inline-size: 44px;
+    block-size: 44px;
+  }
+}
+.moss-subscribe-form[data-state="success"] .moss-btn__check svg {
+  inline-size: 0.7lh;
+  block-size: 0.7lh;
 }
 .moss-subscribe-form[data-state="success"] .moss-btn__label { opacity: 0; }
 .moss-subscribe-form[data-state="success"] .moss-btn__spinner { opacity: 0; }
@@ -2265,8 +2306,13 @@ header:has(+ .moss-hero) .main-nav {
 }
 
 /* header=over (`:::hero {header=over}` on the page's opening hero): the header
-   leaves the flow so the hero starts at the page top, under it. */
+   leaves the flow so the hero starts at the page top, under it. Its ink is
+   white unless the build found only dark ink reads on the picture's top band
+   (`data-header-ink`, `-night` for the dark theme). The build measures that
+   dark ink as the default `--moss-hero-tone-color`; a theme's own value is not
+   re-measured. */
 header:has(+ .moss-hero[data-header="over"]) {
+  --_over-ink: #ffffff;
   position: absolute;
   inset-block-start: 0;
   inset-inline: 0;
@@ -2274,12 +2320,15 @@ header:has(+ .moss-hero[data-header="over"]) {
   /* No band: the photo is the header's background. */
   background: transparent;
   border-block-end: none;
-  /* Light text, the same white the hero overlay text uses. */
-  color: #ffffff;
+  color: var(--_over-ink);
+}
+
+:is(:root:not([data-theme="dark"]) header:has(+ .moss-hero[data-header-ink="dark"]), :root[data-theme="dark"] header:has(+ .moss-hero[data-header-ink-night="dark"])) {
+  --_over-ink: var(--moss-hero-tone-color, #2c2825);
 }
 
 /* Nav links and the site name set their own colour from the base sheet, which
-   would stay dark over the photo; they take the header's light colour back.
+   would stay dark over the photo; they take the header's ink back.
    The phone menu's sheet is opaque and not over the photo, so its links keep
    their own colour. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
@@ -2287,15 +2336,17 @@ header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.
   color: inherit;
 }
 
-/* Focus rings sit on the photo, so they use the light header colour rather
-   than the accent, which can fall below contrast on a dark image. The opened
-   mobile sheet keeps the accent ring: it is opaque, not over the photo. */
+/* Focus rings sit on the photo, so they take the header's ink rather than the
+   accent, which can fall below contrast on an image. The opened mobile sheet
+   keeps the accent ring: it is opaque, not over the photo. */
 header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *) {
-  outline-color: #ffffff;
+  outline-color: var(--_over-ink);
 }
 
-/* A soft dark wash across the top of the photo keeps the light nav legible
-   over a pale image. */
+/* A wash across the top of the photo under the header. White needs a ground
+   no brighter than 0.18 luminance; black at 60% over pure white gives 0.13, so
+   where no ink was measured to read, the wash is that strong and solid over
+   the 5rem band the build measures. */
 .moss-hero[data-header="over"] {
   --moss-hero-wash-size: 6rem;
 }
@@ -2305,9 +2356,15 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
   inset-block-start: 0;
   inset-inline: 0;
   block-size: var(--moss-hero-wash-size);
-  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+  background: linear-gradient(rgba(0, 0, 0, 0.6) 5rem, rgba(0, 0, 0, 0));
   pointer-events: none;
   z-index: 1;
+}
+:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="light"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="light"])::after {
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+}
+:is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="dark"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="dark"])::after {
+  content: none;
 }
 
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
@@ -2784,7 +2841,8 @@ body > header .site-name {
    set itself wraps across two rows, the rows stay visually adjacent. */
 .nav-links {
   display: flex;
-  align-items: center;
+  /* Baseline, not center: a link's own border or padding never lifts its text off the line. */
+  align-items: baseline;
   flex-wrap: wrap;
   gap: var(--moss-space-xs) clamp(var(--moss-space-sm), 2vw, var(--moss-space-md));
   /* .nav-right bottom-aligns its children (align-items: flex-end — see the
@@ -4751,7 +4809,8 @@ body[data-contents="pictures"] [data-island-menu="sections"] a[data-pic] {
   color: var(--moss-color-text);
 }
 
-.moss-prefix-link:hover .moss-prefix-link-title {
+/* Only a row that links somewhere reacts; a row with no page stays still. */
+.moss-prefix-link:where(a, :has(a)):hover .moss-prefix-link-title {
   color: var(--moss-color-accent);
   text-decoration: underline;  /* Underline only title on hover */
 }
@@ -5120,6 +5179,18 @@ html[lang^="zh"] {
 /* ==========================================================================
    8. UI Components
    ========================================================================== */
+
+/* ==highlight== */
+mark {
+  background: var(--moss-color-highlight);
+  color: inherit;
+}
+@media (forced-colors: active) {
+  mark {
+    background: Mark;
+    color: MarkText;
+  }
+}
 
 /* Code */
 code {
@@ -6020,7 +6091,7 @@ hr::before {
  * decoupling never applied here — rescoping to `.moss-card-title-link:hover`
  * just left this rule matching nothing, so hovering the row outside the
  * (short) link stopped lighting the title. Restore the whole-row hover. */
-.moss-cards-minimal-year-group.minimal .moss-card:hover .title {
+.moss-cards-minimal-year-group.minimal .moss-card:where(:has(a)):hover .title {
   color: var(--moss-color-accent);
 }
 
@@ -6765,8 +6836,8 @@ article a:where(:not(.moss-btn)):focus {
   background: var(--moss-color-surface);
 }
 
-.moss-cards[data-layout="grid"] .moss-card:hover,
-.moss-grid > .moss-card:hover {
+.moss-cards[data-layout="grid"] .moss-card:where(a, :has(a)):hover,
+.moss-grid > .moss-card:where(a, :has(a)):hover {
   transform: translateY(-2px);
   box-shadow: var(--moss-elevation-1);
 }
@@ -8449,10 +8520,8 @@ body > footer.container:has(> .moss-hero-closing) {
     margin-block-start: 0;
   }
 
-  /* Lead heading keeps 1.5rem — the size the `h1` rule gave it before this
-     was generalised, so nothing already shipping moves. */
   .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
-    font-size: 1.5rem;
+    font-size: var(--moss-hero-title-size, 1.5rem);
   }
 
   .moss-hero-content p {

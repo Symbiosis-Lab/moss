@@ -352,6 +352,9 @@ struct Queue {
     background_in_flight: usize,
     /// Active concrete read failures, pruned by the folder’s next sweep.
     failures: HashSet<PathBuf>,
+    /// Reads and operations finished. Counted in the same locked step that
+    /// frees their slot, so a snapshot never sees one both done and in flight.
+    done: u64,
     shutdown: bool,
 }
 
@@ -367,7 +370,6 @@ struct Inner {
     work: Condvar,
     structural_work: Condvar,
     materialize: Materializer,
-    done: AtomicU64,
     settlement_emitter: Mutex<Option<crate::ops::watch::EventRelay>>,
     background_limit: usize,
 }
@@ -403,12 +405,12 @@ impl Prefetcher {
                 in_flight: HashMap::new(),
                 background_in_flight: 0,
                 failures: HashSet::new(),
+                done: 0,
                 shutdown: false,
             }),
             work: Condvar::new(),
             structural_work: Condvar::new(),
             materialize,
-            done: AtomicU64::new(0),
             settlement_emitter: Mutex::new(None),
             background_limit: readers.saturating_sub(2).max(1),
         });
@@ -586,13 +588,12 @@ impl Prefetcher {
 
     /// Queue depth and in-flight count, for the stall diagnosis.
     pub fn snapshot(&self) -> Snapshot {
-        let done = self.inner.done.load(Ordering::Relaxed);
         let now = Instant::now();
         match self.inner.queue.lock() {
             Ok(q) => Snapshot {
                 waiting: q.fifo.len() + q.foreground.len() + q.structural.len(),
                 in_flight: q.in_flight.len() + q.structural_in_flight.len() + q.cache_in_flight.len(),
-                done,
+                done: q.done,
                 oldest_read: q
                     .in_flight
                     .iter()
@@ -601,7 +602,7 @@ impl Prefetcher {
                     .min_by_key(|(_, started)| **started)
                     .map(|(path, started)| (path.clone(), now.saturating_duration_since(*started))),
             },
-            Err(_) => Snapshot { waiting: 0, in_flight: 0, done, oldest_read: None },
+            Err(_) => Snapshot { waiting: 0, in_flight: 0, done: 0, oldest_read: None },
         }
     }
 
@@ -711,7 +712,6 @@ fn reader_loop(inner: &Arc<Inner>) {
             BackgroundWork::Bytes(path) => {
                 let result = (inner.materialize)(&path);
                 if let Err(error) = &result { log::debug!("cloud: reading {} did not materialize it: {error}", path.display()); }
-                inner.done.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut q) = inner.queue.lock() {
                     q.in_flight.remove(&path);
                     q.pending.remove(&path);
@@ -720,6 +720,7 @@ fn reader_loop(inner: &Arc<Inner>) {
                         Err(_) => { q.failures.insert(path); }
                     }
                     if background { q.background_in_flight -= 1; }
+                    q.done += 1;
                 }
                 inner.work.notify_all();
             }

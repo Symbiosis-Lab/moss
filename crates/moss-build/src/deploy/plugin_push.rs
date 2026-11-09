@@ -34,12 +34,13 @@
 //! folder that publishes to onionpress or GitHub Pages. A plugin target's
 //! publish record is keyed by the bare method, with no site id.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::build::manifest::SealedManifest;
 use crate::config::deployment;
 use crate::deploy::plugin_context::{
-    build_deploy_context, deploy_failed, get_git_origin, refuses_subpath_pages,
+    build_deploy_context, deploy_domain, deploy_failed, get_git_origin, refuses_subpath_pages,
+    DeployScratch,
 };
 use crate::deploy::progress::{self, DeployStage};
 use crate::deploy::DeployReport;
@@ -83,7 +84,7 @@ pub fn report_for(result: &DeployResult) -> Result<DeployReport, String> {
             .message
             .clone()
             .unwrap_or_else(|| crate::infra::app_advisory::t("publish_failed"))),
-        DeployResult::NoPlugin { message } => Err(message.clone()),
+        DeployResult::NoPlugin { message } => { super::profile::refusal("missing_plugin"); Err(message.clone()) },
     }
 }
 
@@ -99,7 +100,7 @@ pub async fn run_plugin_deploy(
     folder: &Path,
     host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
     plugins: crate::build::PluginMode,
-    accept_removals: bool,
+    overrides: super::push::PublishOverrides,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<DeployResult, String> {
     let folder_str = folder.to_string_lossy().to_string();
@@ -134,12 +135,9 @@ pub async fn run_plugin_deploy(
     // An empty slot is refused rather than shrugged at, by
     // `one_shot::require_sealed` inside the inner body — see its doc for why
     // the absence is a promotion failure and not a missing description.
-    let sealed = super::one_shot::build_and_seal(&root, host, plugins).await?;
+    let sealed = super::one_shot::build_and_seal(&root, host, plugins, overrides.accept_removals).await?;
 
-    // Between the build that found the removals and the gate that reads them.
-    if accept_removals {
-        crate::system::build_records::records().accept_all_pending_removals(&folder_str);
-    }
+    overrides.accept(folder, sealed.as_ref());
 
     let ports = super::one_shot::HeadlessDeployPorts;
     run_plugin_deploy_inner(&PluginDeployContext {
@@ -174,24 +172,14 @@ pub struct PluginDeployContext<'a> {
     pub ports: &'a dyn crate::build::ports::deploy::DeployPorts,
 }
 
-/// The directory the deploy context enumerates — which has to be the one the
-/// plugin reads bytes through.
+/// Refuse a publish whose sealed generation is not the one `current` names.
 ///
-/// A plugin gets bytes with `read_site_file`, which resolves under
-/// [`MossPaths::current_ptr`], so that is the directory to enumerate — and
-/// then to check, because `current` is only the tree this build produced if
-/// this build's generation is the one that got promoted. Without the check a
-/// build whose promotion was withheld or superseded ships the previous
-/// generation while reporting the new file list — green, wrong, and invisible
-/// to every layer below this one.
-///
-/// The app's own body enumerated `staging_dir()` until track P slice P3, and
-/// got away with it because a watcher has usually promoted `current` by the
-/// time a person clicks Publish. Usually is the whole objection: `staging/` is
-/// the mutable directory the NEXT build writes into, so the two are the same
-/// tree only by timing, and neither the publish freeze nor any test could say
-/// which tree a given click enumerated. It folded onto this.
-fn site_dir_for_plugin(mp: &MossPaths, sealed: &SealedManifest) -> Result<PathBuf, String> {
+/// Without the check a build whose promotion was withheld or superseded
+/// ships the previous generation while reporting the new file list: green,
+/// wrong, and invisible to every layer below this one. Everything after it
+/// reads the sealed generation by id, never through `current`, which the
+/// next build can advance mid-publish.
+fn require_promoted(mp: &MossPaths, sealed: &SealedManifest) -> Result<(), String> {
     let promoted = mp
         .current_generation_id()
         .map_err(|e| format!("this build materialized no generation to publish: {e}"))?;
@@ -202,7 +190,7 @@ fn site_dir_for_plugin(mp: &MossPaths, sealed: &SealedManifest) -> Result<PathBu
             sealed.generation_id()
         ));
     }
-    Ok(mp.current_ptr())
+    Ok(())
 }
 
 /// Hand a built generation to the folder's deploy plugin, and record what it
@@ -235,21 +223,18 @@ pub async fn run_plugin_deploy_inner(
     // manifest there is no generation to check `current` against, and
     // `current` on this path is the PREVIOUS build's tree.
     let sealed = super::one_shot::require_sealed(cx.sealed)?;
-    crate::deploy::refuse_foreign_inputs(sealed, cx.folder)?;
-    crate::deploy::refuse_unresolved_inputs(sealed)?;
+    super::profile::gate("output_collisions", super::removal_gate::refuse_output_collisions(sealed))?;
+    super::profile::gate("stale_generation", super::removal_gate::refuse_stale_generation(cx.folder, sealed))?;
+    super::profile::gate("foreign_inputs", crate::deploy::refuse_foreign_inputs(sealed, cx.folder))?;
+    super::profile::gate("unresolved_inputs", crate::deploy::refuse_unresolved_inputs(sealed))?;
 
-    // Force any pending seal to materialize NOW, before the check below reads
-    // `current_generation_id()`. The seal's own materialize phase is
-    // debounced (`build::seal_phase`) since the app and headless `--watch`
-    // no longer promote a generation on every rebuild — without this, a
-    // publish click right after a save would almost always fail
-    // `site_dir_for_plugin`'s check below, because `current` would still lag
-    // the manifest `cx.sealed` already names. A one-shot CLI publish
-    // (`run_plugin_deploy` → `one_shot::build_and_seal`) already materialized
-    // synchronously, so this is a no-op there — settle() only does work when
-    // something is actually pending.
+    // The seal's materialize phase is debounced, so `current` can lag the
+    // manifest `cx.sealed` names and `require_promoted` would refuse a publish
+    // clicked right after a save. `settle` materializes it now; a no-op when
+    // nothing is pending (a one-shot CLI publish already materialized).
     crate::build::seal_phase::settle(&mp).await;
-    let output_dir = site_dir_for_plugin(&mp, sealed)?;
+    require_promoted(&mp, sealed)?;
+    let generation = sealed.generation_id();
 
     let manager = match cx.managers.get_or_create(&folder_str) {
         Ok(m) => m,
@@ -258,27 +243,25 @@ pub async fn run_plugin_deploy_inner(
         }
     };
 
-    // Walks the generation to enumerate what ships.
     cx.sink.stage(
         DeployStage::Syncing,
         0,
         0,
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
-    let context = match build_deploy_context(&folder_str, &output_dir) {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(deploy_failed(e, crate::infra::app_advisory::t("deploy_err_config")))
-        }
-    };
+    let manifest_phase = crate::build::phase::PhaseTrace::start("manifest");
+    let domain = deploy_domain(&folder_str);
+
+    drop(manifest_phase);
 
     // GitHub Pages on a project repo serves the site from a subpath, where
     // moss's absolute paths (`/style.css`, `/article/`) 404.
     if refuses_subpath_pages(
         crate::build::site_config::current_deploy_plugin(&folder_str).as_deref(),
-        context.domain.as_deref(),
+        domain.as_deref(),
         get_git_origin(&folder_str).ok().as_deref(),
     ) {
+        super::profile::refusal("subpath_hosting");
         return Ok(deploy_failed(
             "Cannot deploy to a project repository on GitHub Pages without a custom domain. \
              moss uses absolute paths that break on subpath hosting. Set up a custom domain \
@@ -304,7 +287,39 @@ pub async fn run_plugin_deploy_inner(
     // moss window left open would bounce the stack mid-upload. The lease is a
     // file now, so this one line covers the route that could not reach it.
     onionpress_publish_lease(&folder_str);
-    let result = match manager.execute_deploy(&context).await {
+    let mut site_files: Vec<String> = sealed.files().keys().cloned().collect();
+    site_files.sort();
+    let folder = cx.folder.to_path_buf();
+    let generation = generation.to_string();
+    // The copy may wait behind another publish while builds run: pinned, the
+    // generation it copies from outlives this process's own store GC.
+    let pin = crate::build::ports::deploy::pin_generation(cx.ports, sealed.generation_id());
+    // Set if this future is dropped while the copy waits for the lock, so the
+    // blocked thread takes the lock and gives it straight back.
+    let cancelled = CancelOnDrop::default();
+    let abandoned = cancelled.0.clone();
+    let sink = cx.sink.clone();
+    let on_wait = move || {
+        sink.stage(DeployStage::Syncing, 0, 0, &crate::infra::app_advisory::t("waiting_for_other_publish"))
+    };
+    let scratch = tokio::task::spawn_blocking(move || {
+        DeployScratch::create(&folder, &generation, site_files, on_wait, &abandoned)
+    })
+    .await;
+    drop(pin);
+    let scratch = match scratch {
+        Ok(Ok(scratch)) => scratch,
+        Ok(Err(e)) => return Ok(deploy_failed(e, crate::infra::app_advisory::t("deploy_err_plugin"))),
+        Err(e) => return Ok(deploy_failed(e.to_string(), crate::infra::app_advisory::t("deploy_err_plugin"))),
+    };
+    let context = build_deploy_context(&folder_str, &scratch, domain);
+    let publish_phase = crate::build::phase::PhaseTrace::start("publish");
+    let outcome = manager.execute_deploy(&context).await;
+    drop(publish_phase);
+    let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
+    // Removing a full copy (no reflinks) is real disk work.
+    let _ = tokio::task::spawn_blocking(move || drop(scratch)).await;
+    let result = match outcome {
         Ok(Some(hook_result)) => {
             if hook_result.success {
                 if let Some(deployment) = &hook_result.deployment {
@@ -327,6 +342,17 @@ pub async fn run_plugin_deploy_inner(
     };
 
     Ok(result)
+}
+
+/// Raises its flag when dropped, which is how a blocking task learns that the
+/// future waiting for it went away.
+#[derive(Default)]
+struct CancelOnDrop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// Take the machine-scoped publish lease, if and only if this folder publishes
@@ -398,12 +424,9 @@ async fn record_landing(
         0,
         &crate::infra::app_advisory::t("finalizing"),
     );
-    // The documented seam, rather than `domain::orchestrator` directly. The
-    // app's own body reached past the port to the orchestrator until track P
-    // slice P3 deleted that call; the app-only advisory it carried — a
-    // configured domain left without DNS management by an unverified identity
-    // — moved into the port's implementation, where both publish routes now
-    // reach it. Headless the whole thing is a no-op.
+    // The documented seam, rather than `domain::orchestrator` directly: the
+    // port's implementation also carries the app-only advisory for a
+    // configured domain left without DNS management. A no-op headless.
     cx.ports.ensure_domain_ready(folder_str).await;
 }
 

@@ -13,9 +13,10 @@
 //! can be driven against an injected materializer (see `Prefetcher::with_materializer`)
 //! on a platform with no dataless files.
 //!
-//! Two commands use it: `moss build` (a gate before the build starts) and
+//! Three callers use it: `moss build` (a gate before the build starts),
 //! `moss fetch <folder>`, which downloads everything cloud-only in a folder
-//! except what moss regenerates, and writes nothing there.
+//! except what moss regenerates and writes nothing there, and the version
+//! history, which downloads a file no build recorded before it reads it.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -73,7 +74,8 @@ pub struct Stall {
 
 impl Stall {
     /// What happened and what to do, for a person or an agent reading stderr.
-    /// `retry` is the command to run again once the provider is back.
+    /// `retry` says what to do once the provider is back, as a phrase
+    /// ("run `moss build` again").
     pub fn message(&self, folder: &Path, retry: &str) -> String {
         let who = self.provider.and_then(CloudProvider::display_name).unwrap_or("The cloud provider");
         let mut names: Vec<String> = self
@@ -95,7 +97,7 @@ impl Stall {
         if self.refused > 0 {
             text.push_str(&format!("The provider refused {} of the downloads.\n", self.refused));
         }
-        text.push_str(&format!("{}, then run `{retry}` again.", open_hint(self.provider)));
+        text.push_str(&format!("{}, then {retry}.", open_hint(self.provider)));
         text
     }
 }
@@ -219,7 +221,7 @@ pub fn require_sources_local(
     if walked.dataless.is_empty() {
         return Ok(());
     }
-    bring_local(folder, walked.dataless, &wait(), "moss build", say).map(|_| ())
+    bring_local(folder, walked.dataless, &wait(), "run `moss build` again", say).map(|_| ())
 }
 
 /// Usage line for `moss fetch`.
@@ -258,7 +260,7 @@ pub fn fetch_folder(
     let listing = cloud_only_files(folder);
     let total = listing.files.len();
     if total > 0 {
-        if let Err(message) = bring_local(folder, listing.files, &wait(), "moss fetch", say) {
+        if let Err(message) = bring_local(folder, listing.files, &wait(), "run `moss fetch` again", say) {
             say(&message);
             return 1;
         }

@@ -37,7 +37,7 @@
 //! render writes `stage_dir`. What happens after the render depends on the
 //! runtime.
 //!
-//! A one-shot build (`moss build`, `moss deploy`, `moss history --save`) keeps
+//! A one-shot build (`moss build`, `moss deploy`) keeps
 //! holding it through its seal and its promotion, and `run_materialize_phase`
 //! (`build/seal_phase.rs`) releases it once `current` has moved. That whole
 //! span reads and deletes from `stage_dir`: the final sweep removes whatever
@@ -75,7 +75,6 @@
 
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt;
 
 /// The held lock. Releasing is `drop`, and so is the holding process dying —
 /// the kernel clears an `flock` the moment its last descriptor closes, which
@@ -92,7 +91,7 @@ pub struct Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -142,6 +141,13 @@ pub fn acquire(folder: &Path) -> Result<Held, String> {
 /// appended, which must never wait on a build that holds the build lock for
 /// minutes).
 pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
+    acquire_named_noting_wait(folder, name, || {})
+}
+
+/// [`acquire_named`] that calls `on_wait` once, before blocking, when another
+/// process or thread holds the lock, so a caller can tell its user why
+/// nothing is happening.
+pub fn acquire_named_noting_wait(folder: &Path, name: &str, on_wait: impl FnOnce()) -> Result<Held, String> {
     let path = lock_path_named(folder, name)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -156,19 +162,17 @@ pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
         .open(&path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
 
-    match file.try_lock_exclusive() {
+    match file.try_lock() {
         Ok(()) => {}
-        // fs2's WOULD_BLOCK-shaped error, not a hardcoded ErrorKind — see
-        // `deploy::stack_activity::hold` for why a contended try-lock's
-        // error kind is platform-dependent.
-        Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
+        Err(std::fs::TryLockError::WouldBlock) => {
             if name == "build" {
                 log::info!("waiting for another moss process building this folder");
             } else {
                 log::info!("waiting for another moss process holding the {name} lock on this folder");
             }
+            on_wait();
             let waited = std::time::Instant::now();
-            file.lock_exclusive().map_err(|e| format!("lock {}: {e}", path.display()))?;
+            file.lock().map_err(|e| format!("lock {}: {e}", path.display()))?;
             log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
         }
         Err(e) => return Err(format!("lock {}: {e}", path.display())),

@@ -32,8 +32,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "deploy",
-            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--email <address>] [--allow-plugins] [--overwrite-newer] [--dry-run [--json]] [--accept-removals] [--retry-copies=<channel>]",
-            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise seta, Symbiosis Lab's hosting service. moss also publishes to any other target a deploy plugin reaches. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A first publish is refused until this folder's key is linked to an account whose email has been confirmed; pass --email <address> to be sent a sign-in link, wait for it to be opened (up to 15 minutes), and continue. The address must be the account the site should belong to: a wrong one can leave this folder's key linked to the wrong account. No message is sent without --email. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`. A publish to that hosting destination, --prebuilt included, is refused when the live site was published from another copy after this folder last published — deploying would undo that publish. Bring this folder up to date with that copy (for example, git pull) and deploy again, or pass --overwrite-newer to replace the live site anyway. A publish that would stop serving an address the site has served, for a reason other than you deleting its source (a moved page or file with no redirect, a generated file no longer produced), is refused with each address and its cause; add the redirect it shows under [redirects] in .moss/config.toml, or pass --accept-removals to accept losing exactly those addresses. An image derivative (.webp) that stops being produced while its picture is still served needs neither: moss keeps its address as a redirect to the picture, and --dry-run lists it as kept. Run with --dry-run first to see what a deploy would do: it builds exactly as a deploy builds, including any plugin the flags allow (the build may use the network as any build does: a plugin's requests, and link previews fetched from third-party sites), and prints the pages added, edited and deleted, the addresses that would go offline, the upload and remove counts measured against this folder's last publish record (unknown when there is none), and whether the publish check passes. It uploads nothing and records nothing, runs the checks a deploy makes locally (the folder has a site, the config is not from a newer moss), says when a deploy would register a site, create a signing key or need --email to verify the folder, exits 1 where those or the removed-address check would refuse the deploy, and says that it did not check what needs the server, such as whether another copy published since. Its lists stop at 20 lines; --dry-run --json prints the same report as JSON with every list in full: `refusal` is {kind, text}, kind one of unresolved_inputs, missing_references, drafts_linked, links_in_cloud, links_in_flight, pending_derivations, removals, no_environment, foreign_inputs; `pending_removals` lists each refused address with its cause (with --prebuilt there is no cause, and the refused files are `transfer.removed_output_paths`); `redirects_to_add` holds the [redirects] lines that keep every moved address working, ready for .moss/config.toml; and a failure, local setup included (plugin credentials, a config from a newer moss, an invalid site id), prints {\"error\"}. An `output_path` is a file of the build output, an `address` or `moved_to` is what a visitor asks for, and a `source_path` is a file in the site folder. After a publish lands, moss posts a copy of each new page to the channels its `syndicate:` names (one record per copy in .moss/deploy/copies/, never posted twice), at most ten per channel per run, and adds each copy's address to the page's `syndicated:`; it prints one line per copy. While one run sends a folder's copies, another run in that folder sends none and leaves them due. A copy whose send stopped before the network answered is not retried on a network that cannot retry safely; --retry-copies=<channel> sends those again.",
+            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--email <address>] [--allow-plugins] [--overwrite-newer] [--dry-run [--json]] [--accept-removals] [--accept-stale-content] [--retry-copies=<channel>]",
+            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise seta, Symbiosis Lab's hosting service. moss also publishes to any other target a deploy plugin reaches. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A first publish is refused until this folder's key is linked to an account whose email has been confirmed; pass --email <address> to be sent a sign-in link, wait for it to be opened (up to 15 minutes), and continue. The address must be the account the site should belong to: a wrong one can leave this folder's key linked to the wrong account. No message is sent without --email. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`. A publish to that hosting destination, --prebuilt included, is refused when the live site was published from another copy after this folder last published — deploying would undo that publish. Bring this folder up to date with that copy (for example, git pull) and deploy again, or pass --overwrite-newer to replace the live site anyway. A publish that would stop serving an address the site has served, for a reason other than you deleting its source (a moved page or file with no redirect, a generated file no longer produced), is refused with each address and its cause; add the redirect it shows under [redirects] in .moss/config.toml, or pass --accept-removals to accept losing exactly those addresses. Sources that share an output address are reported as build warnings and refuse publishing; give each source a unique address. There is no override for an output collision. Changed pages with older source timestamps or an older published content hash are refused; restore the current files, or use --accept-stale-content for a deliberate revert. An image derivative (.webp) that stops being produced while its picture is still served needs neither: moss keeps its address as a redirect to the picture, and --dry-run lists it as kept. Run with --dry-run first to see what a deploy would do: it builds exactly as a deploy builds, including any plugin the flags allow (the build may use the network as any build does: a plugin's requests, and link previews fetched from third-party sites), and prints the pages added, edited and deleted, the addresses that would go offline, the upload and remove counts measured against this folder's last publish record (unknown when there is none), and whether the publish check passes. It uploads nothing and records nothing, runs the checks a deploy makes locally (the folder has a site, the config is not from a newer moss), says when a deploy would register a site, create a signing key or need --email to verify the folder, exits 1 where those or the removed-address check would refuse the deploy, and asks the server once, with the read a deploy starts with: whether this folder's key may publish its site (not the owner refuses and names --email; no answer, offline or a skewed clock, refuses nothing and says why) and whether another copy published since (refused unless --overwrite-newer). Its lists stop at 20 lines; --dry-run --json prints the same report as JSON with every list in full: `refusal` is {kind, text}, kind one of unresolved_inputs, missing_references, drafts_linked, links_in_cloud, links_in_flight, pending_derivations, removals, stale_content, output_collision, no_environment, foreign_inputs, not_owner, stale_copy; `owner` is {state: answered, site, access: authorized, not_owner or not_found} or {state: unchecked, reason}; `pending_removals` lists each refused address with its cause (with --prebuilt there is no cause, and the refused files are `transfer.removed_output_paths`); `redirects_to_add` holds the [redirects] lines that keep every moved address working, ready for .moss/config.toml; and a failure, local setup included (plugin credentials, a config from a newer moss, an invalid site id), prints {\"error\"}. An `output_path` is a file of the build output, an `address` or `moved_to` is what a visitor asks for, and a `source_path` is a file in the site folder. After a publish lands, moss posts a copy of each new page to the channels its `syndicate:` names (one record per copy in .moss/deploy/copies/, never posted twice), at most ten per channel per run, and adds each copy's address to the page's `syndicated:`; it prints one line per copy. While one run sends a folder's copies, another run in that folder sends none and leaves them due. A copy whose send stopped before the network answered is not retried on a network that cannot retry safely; --retry-copies=<channel> sends those again.",
         },
         CliCommandInfo {
             name: "preview",
@@ -42,8 +42,13 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "edit",
-            args: "<path>",
-            description: "Open GUI preview in moss desktop (which `moss desktop install` provides), then open <path> directly in the editor (agent-friendly scriptable entrypoint).",
+            args: "[folder] [--serve] [--no-browser] [--port <n>] [--public-url <https origin> [--public-preview-port <n>]]",
+            description: "Open the editor in moss desktop when installed and stdin is a terminal. With --serve, without a terminal, or without desktop, build, watch and serve the editor and preview. A terminal opens a sign-in link in the default browser; --no-browser or piped stdin prints a link and QR. --port selects the UI port, and the preview takes the next one. --public-url names the HTTPS origin a reverse proxy serves the UI at, for another device; it needs --port, and the proxy serves the preview at the same host on the next port or on --public-preview-port, forwarding each to the port moss edit prints. The folder defaults to the current directory. A second edit requests a fresh sign-in link from the live owner.",
+        },
+        CliCommandInfo {
+            name: "sessions",
+            args: "[revoke <id> | revoke --all]",
+            description: "List browser sessions (id, created, last seen, user agent), revoke one session by id, or revoke all sessions on this machine.",
         },
         CliCommandInfo {
             name: "desktop",
@@ -54,6 +59,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             name: "domain",
             args: "<list|link|status> <folder> [<domain>] [--json]",
             description: "List, link or check custom domains for a project's site; link prints the DNS records to set.",
+        },
+        CliCommandInfo {
+            name: "site",
+            args: "transfer <folder> (--to <email> [--keep-publishing] [--dry-run] | --cancel) [--json]",
+            description: "Hand a project's hosted site to another email address. The receiver gets one link by email and accepts from it within 72 hours; the address, files, subscribers and history stay with the site, and this folder's key can no longer publish it. With `--keep-publishing` the receiver may also take this folder's key, on its own button, so this folder keeps publishing the site as them; it is refused when the key has published another site of yours. `--dry-run` shows what would move and sends nothing; `--cancel` withdraws a pending transfer.",
         },
         CliCommandInfo {
             name: "env",
@@ -92,8 +102,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "agents",
-            args: "init",
-            description: "Seed .moss/AGENTS.md with this site's own conventions, for a coding agent to read. moss's own guidance is `moss guide`.",
+            args: "sync | init",
+            description: "`sync` writes the pointer to moss's guidance for the coding agents installed here or in your home folder (.claude/skills/moss/SKILL.md for Claude Code, .cursor/rules/moss.mdc for Cursor); a build never creates these, only keeps them current once written. `init` does the same and seeds .moss/AGENTS.md with this site's own conventions. moss's own guidance is `moss guide`.",
         },
         CliCommandInfo {
             name: "guide",
@@ -138,7 +148,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "history",
             args: "[<folder>] [<path>] [--json] | [<folder>] --save [<name>] [--json] | [<folder>] <path> --restore --at <id> [--copy] | [<folder>] --restore --at <id> --yes",
-            description: "moss's own version history, kept inside the site at `.moss/history` (not git — a git user already has their own history, and this store never adds commits): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). A page's timeline also lists each outside edit kept when the editor saved the person's text over lines another writer had changed (`\"trigger\": \"displaced\"` in --json); restore one with `<path> --restore --at <id>`. `--save [<name>]` builds the site and saves a version of it right now, ending with one line naming the version saved; `--save --json` prints that one version as a single JSON object on stdout instead (build progress and warnings still go to stderr), so a script never has to scrape the saved id out of the build log. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move files to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. With no folder, this command operates on the site containing the current directory; pass `<folder>` — a directory that already contains `.moss` — to act on a site from outside it, the same as `moss build <folder>`.",
+            description: "moss's own version history, kept inside the site at `.moss/history` (not git — a git user already has their own history, and this store never adds commits): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). A page's timeline also lists each outside edit kept when the editor saved the person's text over lines another writer had changed (`\"trigger\": \"displaced\"` in --json); restore one with `<path> --restore --at <id>`. `--save [<name>]` saves the files currently on disk without running a build, ending with one line naming the version saved; `--save --json` prints that one version as a single JSON object on stdout instead (diagnostics go to stderr), so a script can read the saved id directly. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move pages added since that version to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. With no folder, this command operates on the site containing the current directory; pass `<folder>` — a directory that already contains `.moss` — to act on a site from outside it, the same as `moss build <folder>`.",
         },
         CliCommandInfo {
             name: "map",
@@ -147,15 +157,15 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "comments",
-            args: "list [<folder>] [--json] | hide [<folder>] <id>... [--source <name>] [--json] | unhide [<folder>] <id>... [--source <name>] [--json]",
-            description: "Review and hide a site's comments. `list` prints every comment, newest first: id, source, the page it is on (address and title once a build has run, otherwise the page uid), author, time, the first 60 characters of its text, and whether it is hidden; it needs no build. `hide` takes one or more ids from `list` and removes those comments, and the replies under them, from the site at the next publish; `unhide` reverses it. Nothing is erased and nothing is sent anywhere: a hide is a signed event in `.moss/data/social/moderation.jsonl`, signed with the site's own key in `.moss/identity`, which moss never creates for this (no key, no hide). A call validates every id first, so an unknown id changes nothing; an id that exists under two sources needs `--source <name>`; an already-hidden comment is left alone. Nothing reviews new comments before they go live, so list them before publishing and hide the spam. `--json` prints rows, or `{\"changed\": [...], \"unchanged\": [...]}` for hide and unhide, and failures as `{\"error\": ...}`. With no folder, this command operates on the site containing the current directory.",
+            args: "list [<folder>] [--json] | hide [<folder>] <id>... [--source <name>] [--json] | unhide [<folder>] <id>... [--source <name>] [--json] | adopt-key [<folder>] <pubkey> [--json]",
+            description: "Review and hide a site's comments. `list` prints every comment, newest first: id, source, the page it is on (address and title once a build has run, otherwise the page uid), author, time, the first 60 characters of its text, and whether it is hidden; it needs no build. `hide` takes one or more ids from `list` and removes those comments, and the replies under them, from the site at the next publish; `unhide` reverses it. Nothing is erased and nothing is sent anywhere: a hide is a signed event in `.moss/data/social/moderation.jsonl`, signed with the site's own key in `.moss/identity`, which moss never creates for this (no key, no hide). A call validates every id first, so an unknown id changes nothing; an id that exists under two sources needs `--source <name>`; an already-hidden comment is left alone. Nothing reviews new comments before they go live, so list them before publishing and hide the spam. `--json` prints rows, or `{\"changed\": [...], \"unchanged\": [...]}` for hide and unhide, and failures as `{\"error\": ...}`. A hide keeps applying when the folder gets a new key: the key it replaced is remembered in `.moss/identity/previous-keys.jsonl`. When that file was lost with the key, `list` names the earlier key and `adopt-key <pubkey>` trusts it again; it refuses a key that signed nothing here or signed for another site. With no folder, this command operates on the site containing the current directory.",
         },
     ]
 }
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 10] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "env", "import", "history"];
+const OWN_HELP: [&str; 11] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "site", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///
@@ -206,12 +216,16 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("preview", "moss preview ~/blog/                 # Open a preview window"),
     ("preview", "moss preview ~/blog/posts/article.md # Preview and navigate to the article"),
     ("edit", "moss edit ~/blog/posts/article.md    # Preview, then open the article in the editor"),
+    ("edit", "moss edit ~/blog/ --serve            # Serve the editor and sign in this browser"),
+    ("edit", "moss edit --serve --no-browser       # Print a sign-in link and QR"),
+    ("sessions", "moss sessions revoke --all          # Sign out all browser sessions"),
     // The binary that can open a preview window is the binary that opens one
     // with no arguments at all.
     ("preview", "moss                                 # Launch the app window"),
     ("domain", "moss domain list ~/blog/             # Show domains linked to this project's site"),
     ("domain", "moss domain link ~/blog/ example.com # Link a domain; prints the DNS records to set"),
     ("domain", "moss domain status ~/blog/ example.com # Check live DNS and certificate; exit 0 when live"),
+    ("site", "moss site transfer ~/blog/ --to new@example.com --dry-run # What handing the site over would move"),
     ("env", "moss env staging ~/blog/             # Set the mosspub.com environment to staging"),
     ("env", "moss env ~/blog/                     # Show the mosspub.com environment"),
     ("tools", "moss tools download ffmpeg         # Fetch FFmpeg so videos are optimized"),
@@ -299,9 +313,10 @@ fn wrap(text: &str, indent: &str) -> String {
 ///
 /// The sentence is printed ready to paste into a coding agent because that is
 /// the actual first step of the journey: a human tells an agent to use moss.
-/// Everything after it is self-bootstrapping — `moss build` writes the skill
-/// files and prints where they landed (see `sync::guidance_pointer`), so this
-/// one line is the whole handoff.
+/// `moss build` prints where the guidance pointer is (see
+/// `sync::guidance_pointer`), so this one line orients the agent; for Claude
+/// Code or Cursor to find it unprompted in later sessions, the author runs
+/// `moss agents sync` once, since a build never adds their folders to a site.
 fn agent_footer() -> String {
     let cli = crate::cli::agents::sync::bundled_cli_path();
     format!(
@@ -311,9 +326,12 @@ USING MOSS FROM A CODING AGENT:
 
     Build a website from this folder: run {0} build .
 
-    That points your agent at the authoring and theming guide. Afterwards —
-    including after previewing the folder in the moss app, which does the
-    same — say what you want and nothing more:
+    That points your agent at the authoring and theming guide. For Claude
+    Code or Cursor to find it on their own in later sessions, run once:
+
+    {0} agents sync
+
+    After that, say what you want and nothing more:
 
     Restyle this site: warmer palette, serif headings, quiet nav.
 

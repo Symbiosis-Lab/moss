@@ -843,13 +843,13 @@ fn synthesize_gallery_thumb_emits_picture_with_lazy() {
     let mut snap = AssetSnapshot::new();
     snap.dimensions
         .insert(PathBuf::from("photo.jpg"), (1200, 800));
-    let out = synthesize_image_html("photo.jpg", "alt", &snap, ImageContext::GalleryThumb, &p);
+    let out = synthesize_image_html("photo.jpg", "alt", &snap, ImageContext::GalleryThumb { columns: None }, &p);
     assert!(out.contains("<picture"), "{out}");
     // 1200px-wide fixture → ladder rung at 800 + capped base descriptor,
     // with the gallery grid-cell sizes (Task 3, responsive-image-variants).
     assert!(
             out.contains(
-                r#"srcset="photo.w800.webp 800w, photo.webp 1200w" type="image/webp" sizes="(min-width: 48rem) 33vw, 100vw""#
+                r#"srcset="photo.w800.webp 800w, photo.webp 1200w" type="image/webp" sizes="auto, (min-width: 48rem) 33vw, 100vw""#
             ),
             "{out}"
         );
@@ -867,7 +867,7 @@ fn synthesize_gallery_thumb_non_raster_bare_img() {
     let p = ImageRenderOptions::default();
     let mut snap = AssetSnapshot::new();
     snap.dimensions.insert(PathBuf::from("icon.svg"), (64, 64));
-    let out = synthesize_image_html("icon.svg", "", &snap, ImageContext::GalleryThumb, &p);
+    let out = synthesize_image_html("icon.svg", "", &snap, ImageContext::GalleryThumb { columns: None }, &p);
     assert!(!out.contains("<picture"), "{out}");
     assert!(!out.contains("<source"), "{out}");
     assert!(out.contains(r#"loading="lazy""#), "{out}");
@@ -892,7 +892,7 @@ fn synthesize_gallery_thumb_threads_its_display_style() {
         style: Some("object-position:50% 50%"),
         ..Default::default()
     };
-    let out = synthesize_image_html("photo.jpg", "", &snap, ImageContext::GalleryThumb, &opts);
+    let out = synthesize_image_html("photo.jpg", "", &snap, ImageContext::GalleryThumb { columns: None }, &opts);
     assert_eq!(
         out.matches("style=").count(),
         1,
@@ -950,7 +950,7 @@ fn ladder_srcset_emitted_for_wide_raster() {
     );
     assert!(
             html.contains(
-                r#"<source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
+                r#"<source srcset="photo.w800.webp 800w, photo.w1200.webp 1200w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
             ),
             "got: {html}"
         );
@@ -1037,7 +1037,7 @@ fn portrait_base_descriptor_uses_post_resize_width() {
         &ImageRenderOptions::default(),
     );
     assert!(
-        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 1800w""#),
+        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1200.webp 1200w, photo.w1600.webp 1600w, photo.webp 1800w""#),
         "got: {html}"
     );
 }
@@ -1059,30 +1059,24 @@ fn folder_card_cover_uses_card_sizes() {
 }
 
 #[test]
-fn folder_card_cover_eager_still_gets_auto_sizes() {
-    // `sizes="auto"` only binds when the img carries `loading="lazy"`
-    // (HTML spec) — an eager, high-fetchpriority card (the first card in
-    // a listing) is a browser that "doesn't support auto" as far as this
-    // attribute is concerned, so it needs no special-cased sizes string:
-    // the same `auto, <fallback>` value falls through to the fallback for
-    // it automatically, same as WebKit today. This pins that no branch in
-    // the renderer needs to vary `sizes` by `options.eager`.
+fn an_eager_image_drops_the_auto_lead() {
+    // Chromium reads an eager image's `auto,` lead as `100vw` rather than
+    // skipping to the next entry, so the first card fetched a viewport-wide rung.
     let assets = snapshot_dims("cover.jpg", 2000, 1200);
-    let html = synthesize_image_html(
-        "cover.jpg",
-        "",
-        &assets,
-        ImageContext::FolderCardCover,
-        &ImageRenderOptions {
-            eager: true,
-            ..ImageRenderOptions::default()
-        },
-    );
-    assert!(html.contains(r#"loading="eager""#), "got: {html}");
-    assert!(
-        html.contains(r#"sizes="auto, (min-width: 48rem) 24rem, 100vw""#),
-        "got: {html}"
-    );
+    let render = |eager| {
+        synthesize_image_html(
+            "cover.jpg",
+            "",
+            &assets,
+            ImageContext::FolderCardCover,
+            &ImageRenderOptions { eager, ..ImageRenderOptions::default() },
+        )
+    };
+    let eager = render(true);
+    assert!(eager.contains(r#"loading="eager""#), "got: {eager}");
+    assert!(eager.contains(r#"sizes="(min-width: 48rem) 24rem, 100vw""#), "got: {eager}");
+    let lazy = render(false);
+    assert!(lazy.contains(r#"sizes="auto, (min-width: 48rem) 24rem, 100vw""#), "got: {lazy}");
 }
 
 #[test]
@@ -1101,7 +1095,7 @@ fn percent_encoded_src_gets_encoded_rung_urls() {
     );
     assert!(
             html.contains(
-                r#"srcset="a%20b/photo.w800.webp 800w, a%20b/photo.w1600.webp 1600w, a%20b/photo.webp 2000w""#
+                r#"srcset="a%20b/photo.w800.webp 800w, a%20b/photo.w1200.webp 1200w, a%20b/photo.w1600.webp 1600w, a%20b/photo.webp 2000w""#
             ),
             "got: {html}"
         );
@@ -1135,7 +1129,7 @@ fn comma_named_raster_encodes_srcset_commas_but_not_base_src() {
     );
     assert_eq!(
         html,
-        r#"<picture><source srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="a,b.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
+        r#"<picture><source srcset="a%2Cb.w800.webp 800w, a%2Cb.w1200.webp 1200w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="a,b.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
     );
 }
 
@@ -1153,7 +1147,7 @@ fn comma_named_webp_source_encodes_img_srcset_commas_but_not_base_src() {
     );
     assert_eq!(
         html,
-        r#"<img src="a,b.webp" srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="2000" height="1200" loading="lazy" alt="cat" />"#
+        r#"<img src="a,b.webp" srcset="a%2Cb.w800.webp 800w, a%2Cb.w1200.webp 1200w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="2000" height="1200" loading="lazy" alt="cat" />"#
     );
 }
 
@@ -1207,7 +1201,7 @@ fn no_comma_filename_srcset_is_not_over_encoded() {
     assert!(!html.contains("%2C"), "no comma to encode; got: {html}");
     assert_eq!(
         html,
-        r#"<picture><source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="photo.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
+        r#"<picture><source srcset="photo.w800.webp 800w, photo.w1200.webp 1200w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="photo.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
     );
 }
 
@@ -1581,7 +1575,7 @@ fn webp_source_wide_emits_img_srcset_no_picture() {
     );
     assert_eq!(
         html,
-        r#"<img src="photo.webp" srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 1866w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="1866" height="1866" loading="lazy" alt="alt" />"#
+        r#"<img src="photo.webp" srcset="photo.w800.webp 800w, photo.w1200.webp 1200w, photo.w1600.webp 1600w, photo.webp 1866w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="1866" height="1866" loading="lazy" alt="alt" />"#
     );
     assert!(
         !html.contains("<picture"),
@@ -1807,7 +1801,7 @@ fn webp_source_explicit_non_animated_flag_ladders() {
         &ImageRenderOptions::default(),
     );
     assert!(
-        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w""#),
+        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1200.webp 1200w, photo.w1600.webp 1600w, photo.webp 2000w""#),
         "got: {html}"
     );
 }
@@ -1824,7 +1818,7 @@ fn webp_source_card_context_uses_card_sizes() {
     );
     assert!(
             html.contains(
-                r#"srcset="cover.w800.webp 800w, cover.w1600.webp 1600w, cover.webp 2000w" sizes="auto, (min-width: 48rem) 24rem, 100vw""#
+                r#"srcset="cover.w800.webp 800w, cover.w1200.webp 1200w, cover.w1600.webp 1600w, cover.webp 2000w" sizes="auto, (min-width: 48rem) 24rem, 100vw""#
             ),
             "got: {html}"
         );
@@ -1838,11 +1832,11 @@ fn webp_source_gallery_context_uses_gallery_sizes() {
         "g.webp",
         "",
         &assets,
-        ImageContext::GalleryThumb,
+        ImageContext::GalleryThumb { columns: None },
         &ImageRenderOptions::default(),
     );
     assert!(
-        html.contains(r#"sizes="(min-width: 48rem) 33vw, 100vw""#),
+        html.contains(r#"sizes="auto, (min-width: 48rem) 33vw, 100vw""#),
         "got: {html}"
     );
     assert!(!html.contains("<picture"), "got: {html}");
@@ -1860,7 +1854,7 @@ fn webp_source_hero_context_uses_full_bleed_sizes() {
     );
     assert!(
         html.contains(
-            r#"srcset="hero.w800.webp 800w, hero.w1600.webp 1600w, hero.webp 2400w" sizes="100vw""#
+            r#"srcset="hero.w800.webp 800w, hero.w1200.webp 1200w, hero.w1600.webp 1600w, hero.webp 2400w" sizes="100vw""#
         ),
         "got: {html}"
     );
@@ -1880,7 +1874,7 @@ fn webp_source_portrait_base_descriptor_uses_post_resize_width() {
         &ImageRenderOptions::default(),
     );
     assert!(
-        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 1800w""#),
+        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1200.webp 1200w, photo.w1600.webp 1600w, photo.webp 1800w""#),
         "got: {html}"
     );
     assert!(
@@ -1922,7 +1916,7 @@ fn webp_source_uppercase_ext_ladders_and_uses_src_case() {
         "uppercase .WEBP must ladder as <img srcset>: {html}"
     );
     assert!(
-        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.WEBP 2000w""#),
+        html.contains(r#"srcset="photo.w800.webp 800w, photo.w1200.webp 1200w, photo.w1600.webp 1600w, photo.WEBP 2000w""#),
         "got: {html}"
     );
 }

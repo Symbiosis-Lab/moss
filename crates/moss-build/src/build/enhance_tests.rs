@@ -408,8 +408,20 @@ fn serde_roundtrip_per_page() {
 // --- inject_slots_into_directory_cached tests ---
 
 /// The pass over pages a test already put in the stage `dir`, with nothing
-/// rendered in memory and no record of earlier links.
+/// rendered in memory and no record of earlier links, as a new process runs
+/// it: records come from the transform cache, not this process's memo.
 fn inject_staged(
+    dir: &std::path::Path,
+    slots: &ResolvedSlots,
+    objects: &crate::build::cache::ObjectStore,
+    transforms: &crate::build::cache::TransformCache,
+) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
+    forget_slot_memo(dir);
+    inject_in_this_process(dir, slots, objects, transforms)
+}
+
+/// [`inject_staged`] in a process that ran the previous pass.
+fn inject_in_this_process(
     dir: &std::path::Path,
     slots: &ResolvedSlots,
     objects: &crate::build::cache::ObjectStore,
@@ -840,6 +852,27 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
             "build {build}: identical slot content, rebuilt from scratch, missed the cache"
         );
     }
+}
+
+/// A later pass in the same process reads no record for a page whose bytes
+/// before injection are unchanged: with every record gone, it still answers
+/// and writes none back.
+#[test]
+fn a_rebuild_in_the_same_process_reads_no_slot_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let html = "<html><head></head><body>no markers</body></html>";
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
+    let slots = head_end_slots("<meta name=\"probe\">");
+
+    let cold = inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
+    std::fs::remove_dir_all(cache_dir.path().join("transforms")).unwrap();
+    let warm = inject_in_this_process(dir.path(), &slots, &objects, &transforms).unwrap();
+
+    assert_eq!(warm[0].manifest_hash, cold[0].manifest_hash);
+    assert_eq!(warm[0].content_oid, cold[0].content_oid);
+    assert!(!cache_dir.path().join("transforms").exists(), "the second pass looked its record up again and rewrote it");
 }
 
 /// A record can outlive its blob (GC). A receipt naming a missing blob would

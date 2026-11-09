@@ -179,6 +179,7 @@ fn install_into(
     binary_in(entry, root)
 }
 
-#[cfg(test)]
+// Its fixtures are sh scripts.
+#[cfg(all(test, unix))]
 #[path = "binary_tests.rs"]
 mod binary_tests;

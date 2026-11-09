@@ -115,15 +115,7 @@ pub struct JobDescriptor {
     pub noun: String,
 }
 
-/// Frontmatter schema contributed by a plugin.
-///
-/// Uses the same `FieldDefinition` type as the builtin schema (moss-core),
-/// so plugin-contributed fields get identical UI widgets and validation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContributedFrontmatter {
-    /// Field definitions keyed by field name (same format as builtin schema).
-    pub fields: HashMap<String, moss_core::schema::FieldDefinition>,
-}
+pub use moss_core::page::plugin_source::ContributedFrontmatter;
 
 /// A channel the plugin adds — somewhere the user's writing goes.
 ///
@@ -486,7 +478,9 @@ impl PluginManifest {
         if let Some(stack) = manifest.contributes.as_ref().and_then(|c| c.stack.as_ref()) {
             stack.validate().map_err(serde_json::Error::custom)?;
         }
-        manifest.entry = manifest.entry.filter(|e| !e.trim().is_empty());
+        let styles = manifest.contributes.as_ref().and_then(|c| c.listing_styles.as_ref());
+        manifest.entry = moss_core::page::plugin_source::validate_page_contributions(manifest.entry.take(), styles)
+            .map_err(serde_json::Error::custom)?;
         let has_derivations =
             manifest.contributes.as_ref().is_some_and(|c| c.derivations.as_ref().is_some_and(|d| !d.is_empty()));
         if manifest.entry.is_none() && !has_derivations {
@@ -495,14 +489,6 @@ impl PluginManifest {
         if let Some(derivations) = manifest.contributes.as_ref().and_then(|c| c.derivations.as_ref()) {
             for (id, derivation) in derivations {
                 derivation.validate(id).map_err(serde_json::Error::custom)?;
-            }
-        }
-        if let Some(styles) = manifest.contributes.as_ref().and_then(|c| c.listing_styles.as_ref()) {
-            for (id, style) in styles {
-                listing_style::validate(id, style).map_err(serde_json::Error::custom)?;
-            }
-            if manifest.entry.is_none() {
-                return Err(serde_json::Error::custom("a plugin that contributes listing styles needs an `entry` that exports `listing`"));
             }
         }
         manifest.fold_legacy_surfaces();

@@ -47,6 +47,7 @@ fn build_sync(folder_path: &str) -> Result<String, String> {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 

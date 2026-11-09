@@ -134,6 +134,7 @@ async fn build_and_serve_report_the_same_root_identity_through_every_phase() {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     })
     .await
     .expect("build");
@@ -163,10 +164,12 @@ async fn build_and_serve_report_the_same_root_identity_through_every_phase() {
 
     // Serve time: a real 404 through the real router.
     use moss_build::ops::serve::{start_server, ServeConfig};
-    let (port, shutdown) = start_server(ServeConfig::new(served.clone(), 62_531))
+    let (port, _, shutdown) = start_server(ServeConfig::new(served.clone(), 62_531))
         .await
         .expect("server starts");
-    let response = reqwest::get(format!("http://127.0.0.1:{port}/this-page-does-not-exist"))
+    let response = moss_build::system::proxy_reqwest::client()
+        .get(format!("http://127.0.0.1:{port}/this-page-does-not-exist"))
+        .send()
         .await
         .expect("request completes");
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);

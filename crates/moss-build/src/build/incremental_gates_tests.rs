@@ -20,6 +20,7 @@ fn cfg(trigger: BuildTrigger) -> PipelineConfig {
         admission_epoch: None,
         server_port: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }
 }
 

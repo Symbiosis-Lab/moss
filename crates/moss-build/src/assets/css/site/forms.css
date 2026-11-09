@@ -59,9 +59,8 @@
   border-color: var(--moss-error, #c85450);
 }
 
-/* The base rule hides the focus outline in favour of a darker underline,
-   which a keyboard user can miss; the ring comes back for keyboard focus. */
-.moss-form .moss-input:focus-visible,
+/* Text fields take the field-edge focus in site.css; a checkbox has no edge
+   to draw on, so it keeps a ring. */
 .moss-form__choice input:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;

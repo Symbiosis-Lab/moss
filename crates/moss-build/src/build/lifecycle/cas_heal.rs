@@ -7,8 +7,8 @@
 //! the blob it already owns instead of sending the source back to the encoder.
 //! Images and videos share these two entry points — [`rematerialize`] when the
 //! caller only has a stat-index hint and must not hash on a miss, and
-//! [`rematerialize_with_oid`] when it already holds the source's content hash
-//! (e.g. from a strict, no-hash-on-miss lookup the caller ran itself).
+//! [`rematerialize_with_record`] when it already loaded the transform record
+//! for a source identified by a strict stat-index lookup.
 
 use std::path::Path;
 
@@ -66,35 +66,27 @@ pub(crate) fn rematerialize(
     relink_from_cache(objects, transforms, params, staging_path, transform, &source_oid)
 }
 
-/// [`rematerialize`], for a caller that already holds the source's content hash —
-/// e.g. a strict, no-hash-on-miss [`HashIndex::lookup`] the caller ran itself,
-/// against a `FileStat` it already had in hand.
-///
-/// Deliberately does NOT take [`rematerialize`]'s "present → already correct"
-/// shortcut: that shortcut is only sound when the caller reached this file by
-/// first confirming its own bytes are unchanged. A stat-index hit proves only
-/// what the SOURCE's current content is, never that the file already sitting
-/// at `staging_path` was encoded from it — staging carries content forward
-/// between builds, so a changed source can find its PREVIOUS build's output
-/// still present and, if presence alone were trusted, ship it unchanged. This
-/// always re-verifies the exact oid against the transform cache, then leaves
-/// the placement to [`StagedLinks::link`], which links it unless its record
-/// of the last link still vouches for the file, and never overwrites a path
-/// it cannot verify.
-///
-/// [`HashIndex::lookup`]: crate::build::cache::HashIndex::lookup
-pub(crate) fn rematerialize_with_oid(
+/// Restore an image variant from an already loaded source record. The caller
+/// reuses that record for the base and every rung. Matching parameters select
+/// the desired blob; a staged receipt proves its bytes with one stat. Presence
+/// alone cannot distinguish an old generation's output from the desired one.
+pub(crate) fn rematerialize_with_record(
     objects: &crate::build::cache::ObjectStore,
-    transforms: &crate::build::cache::TransformCache,
+    record: Option<&crate::build::cache::TransformRecord>,
     params: &serde_json::Value,
     staged: &mut StagedLinks,
     staging_path: &Path,
     transform: &str,
-    source_oid: &str,
 ) -> HealOutcome {
-    let Some(oid) = transforms.find_cached_output(source_oid, transform, params, crate::build::cache::RecordMode::Wait) else {
+    let Some(entry) = record.and_then(|r| r.transforms.get(transform)).filter(|e| e.params == *params) else {
         return HealOutcome::NotCached;
     };
+    let oid = entry.oid.clone();
+    if staged.holds_oid(staging_path, &oid) {
+        return HealOutcome::AlreadyPresent { oid: Some(oid) };
+    }
+    crate::build::phase::record_count("image_variants_blob_checks", 1);
+    if objects.ready_blob(&oid).is_none() { return HealOutcome::NotCached; }
     match staged.link(objects, &oid, staging_path, None) {
         Placement::Held => HealOutcome::AlreadyPresent { oid: Some(oid) },
         Placement::Linked => {
@@ -230,9 +222,13 @@ impl StagedLinks {
     ) -> Placement {
         use crate::build::io_utils::Presence;
         let key = staging_path.strip_prefix(&self.staging).ok().map(|rel| rel.to_string_lossy().into_owned());
-        match crate::build::io_utils::probe_path(staging_path) {
+        let metadata = std::fs::symlink_metadata(staging_path);
+        let stat = metadata.as_ref().ok().filter(|md| md.is_file()).map(crate::build::stat::FileStat::of);
+        match crate::build::io_utils::probe_output_stat(staging_path, "100644", metadata) {
             Presence::Unverified(e) => return Placement::Unverified(e),
-            Presence::Present if key.as_deref().is_some_and(|key| self.holds(key, staging_path, oid)) => {
+            Presence::Present if key.as_deref().zip(stat.as_ref()).is_some_and(|(key, stat)| {
+                self.holds_stat(key, stat, oid) || self.renews_named(key, stat, oid, staging_path)
+            }) => {
                 return Placement::Held;
             }
             _ => {}
@@ -263,22 +259,40 @@ impl StagedLinks {
 
     /// Whether the present file at `staging_path` is still the one linked
     /// from `oid`; carries its record into this run's when it is.
-    fn holds(&mut self, key: &str, staging_path: &Path, oid: &str) -> bool {
-        let Some(entry) = self.previous.entries.get(key) else { return false };
-        let Ok(md) = std::fs::symlink_metadata(staging_path) else { return false };
-        let current = crate::build::stat::FileStat::of(&md);
-        let held = entry.content_hash == oid && entry.stat.vouches_for(&current, entry.recorded_at);
-        if held {
-            self.current.carry_forward(&self.previous, key);
-        }
+    fn holds_stat(&mut self, key: &str, stat: &crate::build::stat::FileStat, oid: &str) -> bool {
+        let Some(entry) = self.current.entries.get(key).or_else(|| self.previous.entries.get(key)).cloned() else { return false };
+        let held = entry.content_hash == oid && entry.stat.vouches_for(stat, entry.recorded_at);
+        if held { self.current.entries.insert(key.to_string(), entry); }
         held
+    }
+
+    /// Whether the present file at `staging_path`, which a record names as
+    /// `oid`'s copy but whose stat no longer vouches for it, still holds
+    /// `oid`'s bytes; records it anew when it does. Replacing it instead would
+    /// move its ctime, which on a coarse-timestamp filesystem never settles.
+    fn renews_named(&mut self, key: &str, stat: &crate::build::stat::FileStat, oid: &str, staging_path: &Path) -> bool {
+        let named = [&self.current, &self.previous].iter().any(|index| index.entries.get(key).is_some_and(|e| e.content_hash == oid));
+        if !named { return false; }
+        let recorded_at = crate::build::stat::recording_clock();
+        let renewed = crate::build::cache::ObjectStore::hash_file(staging_path).is_ok_and(|hash| hash == oid)
+            && std::fs::symlink_metadata(staging_path).is_ok_and(|md| crate::build::stat::FileStat::of(&md) == *stat);
+        if renewed { self.current.update_read_at(key.to_string(), stat, oid.to_string(), recorded_at); }
+        renewed
+    }
+
+    /// One stat proves both residency and the identity of the staged bytes.
+    pub(crate) fn holds_oid(&mut self, path: &Path, oid: &str) -> bool {
+        let Ok(md) = std::fs::symlink_metadata(path) else { return false };
+        if !md.is_file() || md.len() == 0 || crate::build::icloud::is_evicted_stat(path, &md) { return false; }
+        let Some(key) = path.strip_prefix(&self.staging).ok().map(|p| p.to_string_lossy().into_owned()) else { return false };
+        self.holds_stat(&key, &crate::build::stat::FileStat::of(&md), oid)
     }
 
     /// The blob the file at `key` (staging-relative) was linked from, when the
     /// file there is still that link; carries its record into this run's.
     pub(crate) fn vouched_oid(&mut self, key: &str) -> Option<String> {
         let oid = self.previous.entries.get(key)?.content_hash.clone();
-        self.holds(key, &self.staging.join(key), &oid).then_some(oid)
+        self.holds_oid(&self.staging.join(key), &oid).then_some(oid)
     }
 
     /// Persist what this run linked or found held. Writes nothing when that

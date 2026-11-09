@@ -58,8 +58,7 @@ pub struct BackgroundContext {
     pub staging_dir: std::path::PathBuf,
     /// .moss directory for cache paths
     pub moss_dir: std::path::PathBuf,
-    /// The previous build's manifest. Read for incremental conversion, and by
-    /// the deferred asset walk as the only carry-forward it may re-emit.
+    /// Previous outputs for incremental conversion and asset carry-forward.
     pub previous_hashes: SiteHashes,
     /// Build start time for total_time_ms calculation in BuildComplete event
     pub start_time: std::time::Instant,
@@ -71,22 +70,6 @@ pub struct BackgroundContext {
     /// the asset walk, video `.mp4`/`.thumb.jpg` placement, and the image
     /// worker's `.webp` rung paths.
     pub dir_overrides: HashMap<String, String>,
-    /// Paths the RENDER phase generated (HTML, CSS, JS, RSS). Two readers, both
-    /// in the deferred phase: `remove_stale_html` protects them from the stale
-    /// sweep, and the asset walk skips a source `.html` whose path a rendered
-    /// page already claims.
-    ///
-    /// A snapshot, taken by `as_parts_clone` at the end of
-    /// `generate_blocking_content` — so it is missing anything registered as
-    /// `HashBucket::Files` after that point. Two things are:
-    /// `feature_styles::emit` (reached from slot injection) and
-    /// `search_lane::adopt_into`. Both readers get away with it only because
-    /// they filter to HTML — `remove_stale_html` to `index*.html`, the asset
-    /// walk to `html`/`htm` — and neither writes an HTML output. Adding a
-    /// post-render `Files` registration that DOES produce HTML means passing
-    /// the live `blocking_keys` here instead of a snapshot; the sweep would
-    /// otherwise delete the new page.
-    pub blocking_keys: std::collections::HashSet<String>,
     /// Site-level meta defaults for bundled-SPA `<head>` injection. Built once
     /// from the homepage frontmatter; consumed by the asset walk after each
     /// source `index.html` is copied to the output. `None` disables injection.
@@ -146,7 +129,6 @@ impl BackgroundContext {
             previous_hashes: SiteHashes::default(),
             start_time: std::time::Instant::now(),
             dir_overrides: HashMap::new(),
-            blocking_keys: std::collections::HashSet::new(),
             spa_defaults: None,
             passthrough_roots: std::collections::HashSet::new(),
             search_enabled: false,
@@ -695,7 +677,6 @@ mod tests {
             previous_hashes: SiteHashes::default(),
             start_time: std::time::Instant::now(),
             dir_overrides: Default::default(),
-            blocking_keys: Default::default(),
             spa_defaults: None,
             passthrough_roots: Default::default(),
             search_enabled: false,

@@ -417,16 +417,36 @@ fn resolve_content_hash(
 /// before it enriches (and thereby overwrites) a stat-keyed entry with the
 /// dominant color + LQIP it computes — see `run_image_conversion`'s call in
 /// `build/media/image.rs`.
+///
+/// Answers from [`MEDIA_META`] first.
 pub(crate) fn read_cached_meta(
     transform_cache: &TransformCache,
     objects: &ObjectStore,
     content_hash: &str,
 ) -> Option<CachedMediaMeta> {
+    let key = (transform_cache.root().to_path_buf(), content_hash.to_string());
+    if let Some(meta) = MEDIA_META.get(&key) {
+        return Some(meta);
+    }
     let params = serde_json::json!({ "v": MEDIA_META_VERSION });
     let meta_oid = transform_cache.find_cached_output(content_hash, MEDIA_META_TRANSFORM, &params, crate::build::cache::RecordMode::Request)?;
     let blob_path = objects.get_path(&meta_oid)?;
     let raw = std::fs::read(blob_path).ok()?;
-    serde_json::from_slice(&raw).ok()
+    let meta: CachedMediaMeta = serde_json::from_slice(&raw).ok()?;
+    remember_meta(key, &meta);
+    Some(meta)
+}
+
+/// Complete media metadata (dominant color present) this process has read or
+/// written, by cache and key, so a watch rescan reads no record for media it
+/// has seen. An answer the background phase has yet to enrich is read again
+/// each time.
+static MEDIA_META: crate::build::cache::KeyedMemo<(std::path::PathBuf, String), CachedMediaMeta> = crate::build::cache::KeyedMemo::new();
+
+fn remember_meta(key: (std::path::PathBuf, String), meta: &CachedMediaMeta) {
+    if meta.dominant_color.is_some() {
+        MEDIA_META.put(key, meta.clone());
+    }
 }
 
 impl From<&MediaMetadata> for CachedMediaMeta {
@@ -451,6 +471,7 @@ pub(crate) fn write_cached_meta(
     source_size: u64,
     meta: &CachedMediaMeta,
 ) {
+    remember_meta((transform_cache.root().to_path_buf(), content_hash.to_string()), meta);
     let json_bytes = match serde_json::to_vec(meta) {
         Ok(b) => b,
         Err(e) => {
@@ -469,6 +490,7 @@ pub(crate) fn write_cached_meta(
 
     let params = serde_json::json!({ "v": MEDIA_META_VERSION });
     let new_entry = TransformEntry {
+        validation: None,
         oid: meta_oid,
         size: json_bytes.len() as u64,
         params,
@@ -1491,8 +1513,19 @@ pub fn scan_folder_with_dedup_emit_with_error(
             log::warn!("[scan] failed to read [build].passthrough from config.toml: {}", e);
             vec![]
         });
+    let html_paths: Vec<&str> = html_files.iter().map(|f| f.path.as_str()).collect();
+    if log::log_enabled!(log::Level::Debug) {
+        for root in crate::build::scan::classify::compute_passthrough_roots(&html_paths, &[]) {
+            log::debug!(
+                "[scan] passthrough subtree auto-detected: {} (contains index.html; \
+                 add \"!{}\" to [build].passthrough in .moss/config.toml to opt out)",
+                root,
+                root.trim_end_matches('/')
+            );
+        }
+    }
     let passthrough_roots = crate::build::scan::classify::compute_passthrough_roots(
-        &html_files, &config_passthrough,
+        &html_paths, &config_passthrough,
     );
     let mut passthrough_media: Vec<String> = Vec::new();
     if !passthrough_roots.is_empty() {
@@ -1502,12 +1535,12 @@ pub fn scan_folder_with_dedup_emit_with_error(
         // would rewrite filenames the app's HTML/CSS/JS already reference).
         // copy_deferred_assets still copies them verbatim via its own WalkDir.
         //
-        // We deliberately DO NOT filter `html_files`: its only consumer is the
-        // folder-embed iframe lookup (folder_embed.rs), so keeping a passthrough
-        // `index.html` here lets `![[my-app]]` embed the app as an iframe. The
-        // blocking phase never reads `html_files`, and SPA meta-injection is
-        // guarded separately by `passthrough_roots` in copy_deferred_assets, so
-        // retaining these entries causes no rewriting.
+        // We deliberately DO NOT filter `html_files`: the folder-embed iframe
+        // lookup (folder_embed.rs) reads it, so keeping a passthrough
+        // `index.html` here lets `![[my-app]]` embed the app as an iframe, and
+        // source HTML staging copies every entry verbatim. SPA meta-injection is
+        // guarded separately by `passthrough_roots`, so retaining these entries
+        // causes no rewriting.
         //
         // We also DO NOT filter `markdown_files` / `notebook_files`. The
         // motivating case (a JS/HTML/CSS/image SPA) ships neither, and

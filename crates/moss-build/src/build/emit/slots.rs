@@ -19,7 +19,6 @@ use crate::build::outcome::BuildStopped;
 use crate::build::manifest::PendingManifest;
 use crate::build::render::incremental::CarryVerification;
 use crate::build::enhance::ResolvedSlots;
-use crate::types::content::SiteResult;
 use crate::moss_paths::MossPaths;
 use std::path::Path;
 
@@ -35,7 +34,6 @@ pub fn apply_to_stage_and_manifest(
     stage_dir: &Path,
     slots: &ResolvedSlots,
     pending: &mut PendingManifest,
-    site_result: &mut SiteResult,
     // Shadow-verification snapshots. `Some` only under
     // `MOSS_INCREMENTAL_VERIFY=1`; consumed at the END of this function because
     // that is the first moment the stage holds post-injection bytes.
@@ -102,10 +100,7 @@ pub fn apply_to_stage_and_manifest(
         let Ok(sp) = crate::build::served_path::ServedPath::from_source(&receipt.page_path) else {
             continue;
         };
-        let Some(entry) = pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid) else {
-            continue;
-        };
-        site_result.hashes.insert_file_hash(&sp, entry);
+        pending.attach_final_bytes(&sp, &receipt.manifest_hash, receipt.content_oid);
     }
 
     // Comparing any earlier compares the render phase's PRE-injection bytes

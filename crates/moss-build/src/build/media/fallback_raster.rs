@@ -453,6 +453,7 @@ pub(crate) fn sized_raster_oid_for_original(
     transforms: &crate::build::cache::TransformCache,
     config: &ImageCompressionConfig,
     quality: u8,
+    staged: Option<(&mut crate::build::lifecycle::cas_heal::StagedLinks, &Path)>,
 ) -> Option<String> {
     static IN_FLIGHT: std::sync::LazyLock<crate::build::cache::Singleflight<Option<String>>> =
         std::sync::LazyLock::new(crate::build::cache::Singleflight::new);
@@ -483,6 +484,15 @@ pub(crate) fn sized_raster_oid_for_original(
         return produce_sized_raster(&job, objects, transforms);
     }
     // ---- Cache hit? (checked BEFORE reading the source at all) ----
+    if let Some((staged, target)) = staged {
+        let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait);
+        if let Some(entry) = record.as_ref().and_then(|r| r.transforms.get(SIZED_RASTER_TRANSFORM)).filter(|e| e.params == params) {
+            if staged.holds_oid(target, &entry.oid) {
+                return Some(entry.oid.clone());
+            }
+        }
+        crate::build::phase::record_count("sized_raster_blob_checks", 1);
+    }
     let cached = || transforms.find_cached_output(source_oid, SIZED_RASTER_TRANSFORM, &params, crate::build::cache::RecordMode::Wait);
     if let Some(hit) = cached() {
         return Some(hit);
@@ -638,6 +648,7 @@ fn produce_sized_raster(
             record.transforms.insert(
                 SIZED_RASTER_TRANSFORM.to_string(),
                 TransformEntry {
+                    validation: None,
                     oid: out_oid.clone(),
                     size: out_size,
                     params: params.clone(),

@@ -27,6 +27,7 @@ fn build_sync(folder_path: &str) -> Result<String, String> {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 
@@ -59,7 +60,7 @@ fn a_page_renamed_on_disk_between_two_builds_is_reported_as_a_rename() {
     build_sync(&folder).expect("second build");
     let after = moss_build::build::load_previous_hashes(&folder);
 
-    let event = moss_build::build::watch::decide_rebuild_event(Some(after), &folder, &before, &[])
+    let event = moss_build::build::watch::build_rebuild_event_with_renames(&after, &before, &[])
         .expect("the rename changes the site");
     assert_eq!(
         event.source_renames,

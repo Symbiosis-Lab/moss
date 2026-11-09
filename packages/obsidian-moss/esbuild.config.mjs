@@ -31,7 +31,8 @@ const context = await esbuild.context({
   sourcemap: production ? false : "inline",
   treeShaking: true,
   outfile: "main.js",
-  platform: "node",
+  platform: "browser",
+  loader: { ".wasm": "binary" },
 });
 
 if (production) {

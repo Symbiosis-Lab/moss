@@ -70,7 +70,7 @@ the `.css` files under its `_moss/` are minified build output — use
 
 **A site in cloud storage.** A folder in Google Drive, iCloud Drive, Dropbox or OneDrive can hold files that are only in the cloud. `moss build` waits for them while they keep arriving, and exits 1 when the provider has stopped delivering, naming it and saying what to open. `moss fetch <folder>` downloads every cloud-only file in the folder and writes nothing there, so a tool that copies the folder (rsync, a backup) does not block on each file; it exits 1 the same way. It leaves moss's own cache (`.moss/cache/`) in the cloud, since a build downloads what it needs again, so exclude that from a copy.
 
-**Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`. To try a restructure on a copy instead, copy the folder without `.moss/identity/`, `.moss/data/`, `.moss/state.toml` and `.moss/build.nosync/`: the site's identity and publish record stay with the original, and `moss deploy <copy> --dry-run` on the copy reports that it has no site and that a real deploy would create a new signing key and be refused until `moss env` names an environment.
+**Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` read the files currently on disk without running a build, so versions work before the site has ever been built. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move pages added since that version to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`. To try a restructure on a copy instead, copy the folder without `.moss/identity/`, `.moss/data/`, `.moss/state.toml` and `.moss/build.nosync/`: the site's identity and publish record stay with the original, and `moss deploy <copy> --dry-run` on the copy reports that it has no site and that a real deploy would create a new signing key and be refused until `moss env` names an environment.
 
 **Version control.** Commit `.moss/config.toml`, `.moss/theme/` and `.moss/redirects.json`, and any assets or plugins folder there, with the site; moss's own `.moss/.gitignore` keeps identity, data, caches, history and build output out. A root `.gitignore` rule `.moss/*` (an older GitHub Pages deploy wrote it with `!.moss/site/`) hides those too, and `.moss/` cannot be undone by `!` lines at all: use `.moss/*` followed by a `!` line for each of those (the build prints the exact lines), and never delete the rule outright.
 
@@ -286,6 +286,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `moss guide comments`.
 - **Building a site in more than one language** →
   `moss guide authoring`, Multilingual sites.
+- **Editing in a browser, from another device, or with moss on a server** → read `moss guide editing`.
 - **Putting the site online** → Publishing below. moss publishes to mosspub.com, to other built-in targets, or anywhere a deploy plugin reaches.
 
 ## Publishing
@@ -314,8 +315,13 @@ model (dark mode, quiet chrome, `@layer` rules), see
   build does: plugins the flags allow, link previews from third-party sites), prints the pages added, edited and deleted and
   the addresses that would go offline, and stops. It uploads nothing and
   records nothing, and exits 1 where a deploy would be refused by the checks it
-  ran. It does not check what needs the server (whether another copy published
-  since), so a passing dry run is not a promise the deploy goes ahead.
+  ran. It asks the server once, with the read a deploy starts with: whether
+  this folder's key may publish its site (`Publishing:` in the text, `owner`
+  in `--json`), and whether another copy published since. Not the owner
+  refuses, with the `--email` fix; a newer publish from another copy refuses
+  unless `--overwrite-newer`; no answer (offline, a skewed clock) says why and
+  refuses nothing. The upload itself is not tried, so a passing dry run is not
+  a promise the deploy goes ahead.
 - **Refused because an address would go offline:** an address the site has
   served must not vanish unasked. When a build would stop serving one for a
   reason other than the human deleting its source (a page whose address
@@ -325,7 +331,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `"/old/" = "/new/"` line under `[redirects]` in `.moss/config.toml`; past 20
   addresses, `moss deploy <folder> --dry-run --json` lists every one, and its
   `redirects_to_add` holds the lines to paste; in that JSON, `refusal.kind` is one
-  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `removals`, `no_environment`, `foreign_inputs`;
+  of `unresolved_inputs`, `missing_references`, `drafts_linked`, `links_in_cloud`, `links_in_flight`, `pending_derivations`, `removals`, `stale_content`, `output_collision`, `no_environment`, `foreign_inputs`, `not_owner`, `stale_copy`;
   a setup failure prints `{"error"}` instead; an `output_path` is a file of the
   build output, an `address` is what a visitor asks for; with `--prebuilt` the
   refused files are `transfer.removed_output_paths`), or pass `--accept-removals` — only when
@@ -343,6 +349,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   certificate and says what is left; it exits 0 when live, 3 while waiting, 4 if it
   failed. All three take `--json`. Only a registered domain of two labels is
   supported, not `blog.example.com`. `moss domain list <folder>` shows what is linked.
+- **Handing a site to another account:** `moss site transfer <folder> --to <email>` mails that address one link; accepting it moves the site to their account (its address, files, subscribers and history stay), and this folder's key can no longer publish it. When this same folder should keep publishing as the new owner, add `--keep-publishing`: the receiver can then also take this folder's key, on its own button, and the folder publishes as them from then on; it is refused when the key has also published another site of the sender's. Run it with `--dry-run` first; `--cancel` withdraws a pending transfer. A site billed through Stripe, or with a domain bought through moss linked, is refused. Ask the human for the address first: it sends a real email.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
 - **Any other host:** `moss build <folder> --site-url=https://example.com`,

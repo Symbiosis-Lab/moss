@@ -23,6 +23,6 @@ const PORT = gatePort('vertical-nav-chrome');
 
 export default defineGateConfig({
   gate: 'vertical-nav-chrome',
-  use: { baseURL: `http://localhost:${PORT}`, reducedMotion: 'reduce' },
+  use: { baseURL: `http://localhost:${PORT}`, contextOptions: { reducedMotion: 'reduce' } },
   webServer: { configFile: 'playwright/vite.vertical-nav-chrome-harness.config.ts', port: PORT },
 });

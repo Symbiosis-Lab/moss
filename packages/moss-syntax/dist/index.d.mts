@@ -161,11 +161,9 @@ interface WikilinkCompleteOptions {
   resolveAssetPreview?: (target: string) => Promise<AssetPreviewData | null>;
 }
 /**
- * Structural subset of Rust `ResolvedAsset` (bindings.ts) that the preview card
- * needs. Mirrored here for the same reason `WikilinkCompletionItem` is — this
- * module is the shared pure DTO layer, and depcruise's bindings allowlist is
- * shrink-only, so neither this module nor `asset-preview.ts` may import
- * `../bindings`. `ResolvedAsset` is structurally assignable to this.
+ * Structural subset of Rust `ResolvedAsset` that the preview card needs,
+ * declared here for the same reason as `ExtKind`: this package depends on no
+ * host's generated types. `ResolvedAsset` is structurally assignable to this.
  * `size_bytes` is a u64 serialized to string by specta; accepted as either.
  */
 interface AssetPreviewData {

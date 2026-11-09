@@ -93,6 +93,20 @@ pub fn merge_tag_lists(
     }
 }
 
+/// Pure interpretation of the site’s term configuration.
+pub mod config;
+
+/// The frontmatter key a page claims this field's term page with. `<field>_page`,
+/// except `tags` (`tag_page`) and `location` (`place_page`). Anything that writes
+/// a claim goes through here, not by concatenating the suffix.
+pub fn claim_field_key(field: &str) -> String {
+    match field {
+        "tags" => "tag_page".to_string(),
+        "location" => "place_page".to_string(),
+        other => format!("{other}_page"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -306,7 +306,10 @@ fn background_progress_lines(
     if current == 0 && total == 0 {
         return advisories
             .iter()
-            .map(|a| format!("[advisory] {task}: {}", a.what))
+            .map(|a| match a.action.cli_hint() {
+                Some(hint) => format!("[advisory] {task}: {} ({hint})", a.what),
+                None => format!("[advisory] {task}: {}", a.what),
+            })
             .collect();
     }
     vec![if completed {
@@ -323,6 +326,7 @@ mod background_progress_lines_tests {
 
     fn advisory(what: &str) -> Advisory {
         Advisory {
+            lifetime: Default::default(),
             scope: Scope::Config,
             severity: Severity::NeedsAction,
             item: None,

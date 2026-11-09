@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use futures::future::BoxFuture;
 use serde_json::{json, Value};
 
 use super::rename_undo::{RenameUndoStore, RENAME_UNDO_CAPACITY};
@@ -205,9 +204,6 @@ impl CommandHost for TestHost {
     ) -> Result<crate::editor::content::SaveResult, String> {
         self.saved.lock().unwrap().push(file_path.to_string());
         save()
-    }
-    fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>> {
-        Box::pin(async { Err("no build in tests".to_string()) })
     }
 }
 
@@ -709,6 +705,9 @@ fn render_contract() -> String {
         crate::deploy::progress::DeployProgress::reference(&mut types, &[]);
         crate::advisory::AppOp::reference(&mut types, &[]);
         crate::i18n::AppLanguage::reference(&mut types, &[]);
+        // Hosts without the engine get these from moss-core's page bindings.
+        moss_core::page::PagePreview::reference(&mut types, &[]);
+        moss_core::page::FieldSpan::reference(&mut types, &[]);
     }
     let ts = Typescript::default().bigint(BigIntExportBehavior::Number).remove_default_header();
     let render = |dt: &specta::DataType| {
@@ -775,6 +774,7 @@ fn arg_fields(args: &specta::DataType, types: &specta::TypeMap) -> Vec<(String, 
 #[test]
 fn the_contract_carries_what_the_engine_tells_a_ui() {
     let contract = render_contract();
+    assert!(contract.contains("{ kind: \"SourceContentChanged\"; payload: {"));
     for name in ["MossEvent", "ProgressUpdate", "DeployProgress", "AppOp", "AppLanguage", "PanelTaskWire", "BuildComplete", "FileChangeEvent"] {
         assert!(contract.contains(&format!("export type {name} =")), "the contract lacks {name}");
     }

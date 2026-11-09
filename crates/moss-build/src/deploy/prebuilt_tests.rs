@@ -295,8 +295,7 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         // conn 0: GET /api/sites/:id/generation -> 404 (get_live_generation
         // short-circuit: no live generation known, proceed normally).
         {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            crate::test_drain_http_request(&mut stream).await;
+            let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
             crate::test_respond_and_close(
                 &mut stream,
                 b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
@@ -308,8 +307,7 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         // downstream of this response (the file-size stat, the upload's own
         // read) happens only after the rewrite has landed.
         {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            crate::test_drain_http_request(&mut stream).await;
+            let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
             tokio::fs::write(&rewrite_target, &new_bytes_owned)
                 .await
                 .expect("rewrite mid-deploy");
@@ -321,8 +319,7 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         }
         // conn 2: PUT /api/sites/:id/files/index.html — the upload itself.
         {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            crate::test_drain_http_request(&mut stream).await;
+            let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
             crate::test_respond_and_close(
                 &mut stream,
                 b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
@@ -332,8 +329,7 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         // conn 3: POST /api/sites/:id/commit — capture the body so the test
         // can inspect which hash actually got committed.
         {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let raw = crate::test_drain_http_request(&mut stream).await;
+            let (mut stream, raw) = crate::test_accept_skipping_whoami(&listener).await;
             crate::test_respond_and_close(
                 &mut stream,
                 b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 104\r\n\r\n{\"url\":\"https://healed-prebuilt.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",

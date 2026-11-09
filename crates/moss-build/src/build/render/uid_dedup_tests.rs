@@ -46,7 +46,20 @@ fn resolve(
     root: &std::path::Path,
     load: impl FnOnce() -> Baseline,
 ) -> Vec<UidReassignment> {
-    resolve_duplicate_uids(documents, root, load, |_| true).reassignments
+    resolve_fresh(documents, root, load, |_| true).reassignments
+}
+
+/// The resolver with a fresh random uid for every reassigned file.
+fn resolve_fresh(
+    documents: &mut [ParsedDocument],
+    root: &std::path::Path,
+    load: impl FnOnce() -> Baseline,
+    built_before: impl Fn(&str) -> bool,
+) -> UidResolution {
+    let baseline = std::cell::OnceCell::new();
+    resolve_duplicate_uids(documents, root, || baseline.get_or_init(load), built_before, |path| {
+        (crate::build::markdown::generate_uid(path), true)
+    })
 }
 
 /// Write a markdown file with the given uid + date frontmatter into `root`.
@@ -190,11 +203,11 @@ fn empty_contenders_do_not_panic() {
 }
 
 // ---------------------------------------------------------------
-// resolve_duplicate_uids — end to end, including the frontmatter write-back
+// resolve_duplicate_uids — end to end
 // ---------------------------------------------------------------
 
 #[test]
-fn published_note_keeps_its_uid_and_the_copy_is_rewritten_on_disk() {
+fn published_note_keeps_its_uid_and_the_copy_is_reassigned_without_a_write() {
     let tmp = tempdir();
     let root = tmp.path();
     // The copy carries the original's frontmatter verbatim (Obsidian
@@ -217,11 +230,11 @@ fn published_note_keeps_its_uid_and_the_copy_is_rewritten_on_disk() {
     assert_ne!(documents[0].uid.as_deref(), Some("aabbccdd"),
         "the copy must be reassigned");
 
-    // The write-back landed in the copy's frontmatter, not the original's.
-    let copy_src = std::fs::read_to_string(root.join("posts/copy.md")).unwrap();
-    let original_src = std::fs::read_to_string(root.join("posts/original.md")).unwrap();
-    assert!(!copy_src.contains("uid: aabbccdd"), "copy still holds the contested uid");
-    assert!(original_src.contains("uid: aabbccdd"), "original's uid was rewritten");
+    // Neither file is written: the copy is stamped when it is published.
+    for name in ["posts/copy.md", "posts/original.md"] {
+        let src = std::fs::read_to_string(root.join(name)).unwrap();
+        assert!(src.contains("uid: aabbccdd"), "{name} was rewritten by a build");
+    }
 
     assert_eq!(reassignments.len(), 1);
     assert_eq!(reassignments[0].keeper_path, "posts/original.md");
@@ -432,29 +445,6 @@ fn ambiguous_basename_falls_back_to_the_heuristic_and_flags_the_live_risk() {
     );
 }
 
-#[test]
-fn a_rewritten_loser_round_trips_through_the_frontmatter_parser() {
-    // The resolver's loser write goes through replace_uid_in_frontmatter.
-    // Minted uids are 8 hex chars, so digits-e-digits shapes occur
-    // (~1.1% of mints) — unquoted, YAML parses one as a float and the next
-    // build reads a 13-digit string: a silent identity flip that orphans
-    // the comment thread with no advisory. The quoted write is the fix;
-    // prove the misparse is dead at the ONE parser the pipeline uses
-    // (parse_typed_frontmatter). The uid is `753659e7` — the shape
-    // whose float FITS in f64 (unquoted it parses to "7536590000000");
-    // larger exponents like `12e45678` overflow and accidentally round-trip
-    // as strings, so they would not detect an unquoted regression.
-    let content = "---\ntitle: note\ndate: 2026-01-01\nuid: aabbccdd\n---\n\nbody\n";
-    let updated = crate::build::markdown::replace_uid_in_frontmatter(content, "753659e7");
-    let fm = crate::build::markdown::parse_typed_frontmatter(&updated);
-    assert_eq!(
-        fm.uid.as_deref(),
-        Some("753659e7"),
-        "the written uid must survive the pipeline's frontmatter parser \
-         byte-for-byte; got a YAML-float coercion from: {updated}"
-    );
-}
-
 // ---------------------------------------------------------------
 // The user-facing surface
 // ---------------------------------------------------------------
@@ -517,106 +507,11 @@ fn a_live_at_risk_reassignment_names_both_files_and_asks_her_to_check() {
 }
 
 // ---------------------------------------------------------------
-// The in-memory uid may only move when the disk moved with it
-// ---------------------------------------------------------------
-
-#[test]
-fn an_unreadable_duplicate_keeps_its_old_uid_in_memory() {
-    // A cloud-evicted source fails the read. Reassigning in memory anyway
-    // would emit — and sign — this build against a uid no file claims, and
-    // the next build would read the old uid and collide all over again.
-    let tmp = tempdir();
-    let root = tmp.path();
-    write_note(root, "posts/original.md", "aabbccdd", "2026-07-01");
-    // posts/copy.md is deliberately never written.
-
-    let mut documents = vec![
-        doc("posts/copy.md", "aabbccdd", Some("2020-01-01")),
-        doc("posts/original.md", "aabbccdd", Some("2026-07-01")),
-    ];
-
-    let reassignments = resolve(&mut documents, root, || {
-        deployed(&[("posts/original.md", "aabbccdd")])
-    });
-
-    assert_eq!(
-        documents[0].uid.as_deref(),
-        Some("aabbccdd"),
-        "an unreadable file must keep the uid its source still carries"
-    );
-    assert!(
-        reassignments.is_empty(),
-        "a reassignment that never reached disk must not be reported as one"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn an_unwritable_duplicate_keeps_its_old_uid_in_memory() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let tmp = tempdir();
-    let root = tmp.path();
-    write_note(root, "posts/copy.md", "aabbccdd", "2020-01-01");
-    write_note(root, "posts/original.md", "aabbccdd", "2026-07-01");
-
-    let copy = root.join("posts/copy.md");
-    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o444)).unwrap();
-
-    let mut documents = vec![
-        doc("posts/copy.md", "aabbccdd", Some("2020-01-01")),
-        doc("posts/original.md", "aabbccdd", Some("2026-07-01")),
-    ];
-
-    let reassignments = resolve(&mut documents, root, || {
-        deployed(&[("posts/original.md", "aabbccdd")])
-    });
-
-    // Restore write permission so TempDir cleanup succeeds.
-    std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o644)).unwrap();
-
-    assert_eq!(
-        documents[0].uid.as_deref(),
-        Some("aabbccdd"),
-        "a failed write must leave the in-memory uid matching the file"
-    );
-    assert!(reassignments.is_empty());
-}
-
-#[test]
-fn a_duplicate_with_no_uid_line_is_not_treated_as_reassigned() {
-    // `replace_uid_in_frontmatter` is a no-op when there is no `uid:` line, so
-    // the file would keep whatever it had. That is not a persisted
-    // reassignment, and must not be recorded as one.
-    let tmp = tempdir();
-    let root = tmp.path();
-    std::fs::create_dir_all(root.join("posts")).unwrap();
-    std::fs::write(
-        root.join("posts/copy.md"),
-        "---\ntitle: note\ndate: 2020-01-01\n---\n\nbody\n",
-    )
-    .unwrap();
-    write_note(root, "posts/original.md", "aabbccdd", "2026-07-01");
-
-    let mut documents = vec![
-        doc("posts/copy.md", "aabbccdd", Some("2020-01-01")),
-        doc("posts/original.md", "aabbccdd", Some("2026-07-01")),
-    ];
-
-    let reassignments = resolve(&mut documents, root, || {
-        deployed(&[("posts/original.md", "aabbccdd")])
-    });
-
-    assert_eq!(documents[0].uid.as_deref(), Some("aabbccdd"));
-    assert!(reassignments.is_empty());
-}
-
-// ---------------------------------------------------------------
 // An unreadable record defers — it does not fall back
 // ---------------------------------------------------------------
 
 #[test]
-fn an_unreadable_record_reassigns_nothing_and_writes_no_frontmatter() {
+fn an_unreadable_record_reassigns_nothing() {
     // Every heuristic signal points at the copy here (it carries the
     // original's date verbatim and sorts first), which is exactly what a
     // synced vault produces — so falling back would rewrite the PUBLISHED
@@ -626,7 +521,6 @@ fn an_unreadable_record_reassigns_nothing_and_writes_no_frontmatter() {
     let root = tmp.path();
     write_note(root, "posts/copy.md", "aabbccdd", "2020-01-01");
     write_note(root, "posts/original.md", "aabbccdd", "2026-07-01");
-    let before = std::fs::read_to_string(root.join("posts/copy.md")).unwrap();
 
     let mut documents = vec![
         doc("posts/copy.md", "aabbccdd", Some("2020-01-01")),
@@ -635,7 +529,7 @@ fn an_unreadable_record_reassigns_nothing_and_writes_no_frontmatter() {
 
     // Both files are known to a previous build, so the never-built rule has
     // nothing to say and the deferral stands.
-    let resolution = resolve_duplicate_uids(
+    let resolution = resolve_fresh(
         &mut documents,
         root,
         || Baseline::Unreadable(Unreadable::Withheld),
@@ -654,11 +548,6 @@ fn an_unreadable_record_reassigns_nothing_and_writes_no_frontmatter() {
     assert_eq!(resolution.deferred_because, Some(Unreadable::Withheld));
     assert_eq!(documents[0].uid.as_deref(), Some("aabbccdd"));
     assert_eq!(documents[1].uid.as_deref(), Some("aabbccdd"));
-    assert_eq!(
-        std::fs::read_to_string(root.join("posts/copy.md")).unwrap(),
-        before,
-        "not one byte of the user's frontmatter may be rewritten on a guess"
-    );
 }
 
 #[test]
@@ -675,7 +564,7 @@ fn a_corrupt_record_defers_the_same_way_a_withheld_one_does() {
         doc("posts/original.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let resolution = resolve_duplicate_uids(
+    let resolution = resolve_fresh(
         &mut documents,
         root,
         || Baseline::Unreadable(Unreadable::Corrupt),
@@ -780,7 +669,7 @@ fn a_half_updated_record_defers_instead_of_reaching_the_heuristic() {
         Baseline::Unreadable(crate::build::manifest::live_baseline::Unreadable::Inconsistent)
     );
 
-    let resolution = resolve_duplicate_uids(&mut documents, root, || baseline, |_| true);
+    let resolution = resolve_fresh(&mut documents, root, || baseline, |_| true);
 
     assert!(
         resolution.reassignments.is_empty(),
@@ -809,7 +698,7 @@ fn a_duplicate_this_install_has_never_built_is_re_minted_without_the_record() {
         doc("posts/original.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let resolution = resolve_duplicate_uids(
+    let resolution = resolve_fresh(
         &mut documents,
         root,
         || Baseline::Unreadable(Unreadable::Withheld),
@@ -844,7 +733,7 @@ fn a_collision_where_nothing_was_built_before_still_defers() {
         doc("posts/original.md", "aabbccdd", Some("2026-07-01")),
     ];
 
-    let resolution = resolve_duplicate_uids(
+    let resolution = resolve_fresh(
         &mut documents,
         root,
         || Baseline::Unreadable(Unreadable::Withheld),
@@ -853,4 +742,143 @@ fn a_collision_where_nothing_was_built_before_still_defers() {
 
     assert!(resolution.reassignments.is_empty());
     assert_eq!(resolution.deferred.len(), 1);
+}
+
+/// The uid each page is built under before duplicates are resolved.
+mod built_under {
+    use super::*;
+
+    fn doc(source: &str, uid: Option<&str>) -> ParsedDocument {
+        ParsedDocument {
+            source_path: Some(source.to_string()),
+            uid: uid.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn assign(documents: &mut [ParsedDocument], provisional: &mut ProvisionalUids, published: impl FnOnce() -> HashMap<String, String>) {
+        let mut taken: HashSet<String> = documents.iter().filter_map(|doc| doc.uid.clone()).collect();
+        assign_missing(documents, provisional, &mut taken, published);
+    }
+
+    fn uids(documents: &[ParsedDocument]) -> Vec<Option<&str>> {
+        documents.iter().map(|doc| doc.uid.as_deref()).collect()
+    }
+
+    #[test]
+    fn a_page_keeps_its_own_uid_and_the_record_never_loads_when_none_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
+        let mut documents = vec![doc("a.md", Some("aaaa1111"))];
+        assign(&mut documents, &mut provisional, || panic!("the record is read only when a page lacks a uid"));
+        assert_eq!(uids(&documents), [Some("aaaa1111")]);
+    }
+
+    /// A published page with no frontmatter block has its uid only in the record,
+    /// and must be built under it on any machine.
+    #[test]
+    fn a_page_without_a_uid_is_built_under_the_one_published_from_its_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
+        let mut documents = vec![doc("plain.md", None)];
+        assign(&mut documents, &mut provisional, || {
+            [("plain.md".to_string(), "bbbb2222".to_string())].into()
+        });
+        assert_eq!(uids(&documents), [Some("bbbb2222")]);
+    }
+
+    /// The published page was renamed, carrying its uid in its frontmatter, and a
+    /// new note now sits at its old path. The new note must not take the uid: that
+    /// would hand it the published page's comment thread.
+    #[test]
+    fn a_published_uid_another_page_now_carries_is_not_reused_at_the_old_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
+        let mut documents = vec![doc("renamed.md", Some("cccc3333")), doc("old.md", None)];
+        assign(&mut documents, &mut provisional, || {
+            [("old.md".to_string(), "cccc3333".to_string())].into()
+        });
+        assert_eq!(documents[0].uid.as_deref(), Some("cccc3333"));
+        assert!(documents[1].uid.as_deref().is_some_and(|uid| uid != "cccc3333"), "{:?}", uids(&documents));
+    }
+
+    #[test]
+    fn a_provisional_uid_survives_a_new_process_and_is_forgotten_with_its_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("a.md"), "a").unwrap();
+        std::fs::write(root.join("b.md"), "b").unwrap();
+        let ledger = root.join("ids.json");
+
+        let mut provisional = ProvisionalUids::load(ledger.clone());
+        let mut documents = vec![doc("a.md", None), doc("b.md", None)];
+        assign(&mut documents, &mut provisional, HashMap::new);
+        provisional.save(root);
+        let first = uids(&documents).into_iter().map(|uid| uid.unwrap().to_string()).collect::<Vec<_>>();
+        assert_ne!(first[0], first[1]);
+
+        forget_in_process(&ledger);
+        let mut provisional = ProvisionalUids::load(ledger.clone());
+        let mut again = vec![doc("a.md", None), doc("b.md", None)];
+        assign(&mut again, &mut provisional, HashMap::new);
+        assert_eq!(uids(&again), [Some(first[0].as_str()), Some(first[1].as_str())]);
+        std::fs::remove_file(root.join("b.md")).unwrap();
+        provisional.save(root);
+
+        let saved: BTreeMap<String, String> = serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
+        assert_eq!(saved.keys().collect::<Vec<_>>(), ["a.md"], "b.md is gone, so its provisional uid is too");
+    }
+
+    /// Two builds in flight at once (a save landing mid-build) must agree on a new
+    /// page's uid, or their outputs differ.
+    #[test]
+    fn overlapping_builds_give_a_new_page_one_uid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = tmp.path().join("ids.json");
+        let mut first = ProvisionalUids::load(ledger.clone());
+        let mut second = ProvisionalUids::load(ledger);
+        let mut a = vec![doc("new.md", None)];
+        let mut b = vec![doc("new.md", None)];
+        assign(&mut a, &mut first, HashMap::new);
+        assign(&mut b, &mut second, HashMap::new);
+        assert_eq!(uids(&a), uids(&b));
+    }
+
+    #[test]
+    fn a_provisional_uid_another_page_has_taken_is_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = tmp.path().join("ids.json");
+        std::fs::write(&ledger, r#"{"new.md": "dddd4444"}"#).unwrap();
+        let mut provisional = ProvisionalUids::load(ledger);
+        let mut documents = vec![doc("other.md", Some("dddd4444")), doc("new.md", None)];
+        assign(&mut documents, &mut provisional, HashMap::new);
+        assert!(documents[1].uid.as_deref().is_some_and(|uid| uid != "dddd4444"));
+    }
+
+    #[test]
+    fn a_slot_file_is_given_no_uid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut provisional = ProvisionalUids::load(tmp.path().join("ids.json"));
+        let mut documents = vec![ParsedDocument { slot_only: true, ..doc("footer.md", None) }];
+        assign(&mut documents, &mut provisional, HashMap::new);
+        assert_eq!(uids(&documents), [None]);
+    }
+
+    /// A copy is built under the same new uid on every build until a publish
+    /// writes it into the file, and the author is told about it once.
+    #[test]
+    fn a_duplicate_is_reported_on_the_build_that_resolves_it_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("a.md"), "a").unwrap();
+        std::fs::write(root.join("b.md"), "b").unwrap();
+        let paths = crate::moss_paths::MossPaths::new(root);
+        let notes = || vec![doc("a.md", Some("aaaa1111")), doc("b.md", Some("aaaa1111"))];
+
+        let mut first = notes();
+        assert_eq!(assign_note_ids(&mut first, &paths, |_| false).reassignments.len(), 1);
+        let mut second = notes();
+        assert!(assign_note_ids(&mut second, &paths, |_| true).reassignments.is_empty());
+        assert_eq!(uids(&first), uids(&second), "both builds give the copy one uid");
+    }
 }

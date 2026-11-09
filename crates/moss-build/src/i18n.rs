@@ -62,14 +62,11 @@ impl Language {
     /// `zh-hant` / `zh-tw` remain distinct for Traditional Chinese.
     /// Returns None if the code is not recognized.
     pub fn from_code(code: &str) -> Option<Language> {
-        let lower = code.to_lowercase();
-        if lower == "de" || lower.starts_with("de-") {
-            return Some(Language::De);
-        }
-        match lower.as_str() {
-            "en" => Some(Language::En),
-            "zh" | "zh-hans" | "zh-cn" => Some(Language::ZhHans),
-            "zh-hant" | "zh-tw" => Some(Language::ZhHant),
+        match moss_core::home::folder_language_code(code) {
+            Some("en") => Some(Language::En),
+            Some("de") => Some(Language::De),
+            Some("zh-hans") => Some(Language::ZhHans),
+            Some("zh-hant") => Some(Language::ZhHant),
             _ => None,
         }
     }
@@ -444,12 +441,7 @@ pub fn declared_lang_in_file(
         return None;
     }
     let content = std::fs::read_to_string(path).ok()?;
-    let declared = crate::build::scan::article_map::parse_frontmatter(&content)
-        .get("lang")?
-        .as_str()?
-        .trim()
-        .to_string();
-    moss_core::home::is_known_language_code(&declared).then_some(declared)
+    moss_core::page::site_sources::declared_lang_in_text(&content)
 }
 
 /// The tag for a page that declares nothing of its own but sits in a folder

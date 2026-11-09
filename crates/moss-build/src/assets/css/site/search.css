@@ -133,8 +133,8 @@
    without moving anything: the recipe of `.moss-input--boxed` in site.css,
    on the panel because focus sits on a child. */
 .moss-search__panel:has(.moss-search__input:focus) {
-  border-color: var(--moss-color-ui-accent);
-  box-shadow: inset 0 0 0 1px var(--moss-color-ui-accent);
+  border-color: var(--moss-focus-ring);
+  box-shadow: inset 0 0 0 1px var(--moss-focus-ring);
 }
 /* Forced colors drop the shadow; an outline just inside the border keeps 2px. */
 @media (forced-colors: active) {

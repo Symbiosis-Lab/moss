@@ -3,6 +3,7 @@
     "target": "ES2021",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "lib": ["ES2021", "DOM"],
     "types": ["node"],
     "strict": true,

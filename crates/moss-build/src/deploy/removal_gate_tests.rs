@@ -406,3 +406,130 @@ fn a_redirect_line_quotes_an_address_toml_can_read_back() {
     let table: toml::Table = toml::from_str(&line).unwrap();
     assert_eq!(table["/say \"hi\".pdf"].as_str(), Some("/new.pdf"));
 }
+
+fn source_version(hash: &str, mtime: Option<(u64, u32)>) -> crate::build::manifest::SealedManifest {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    use crate::build::served_path::ServedPath;
+    let mut pending = PendingManifest::new(Default::default());
+    let output = ServedPath::from_source("note/index.html").unwrap();
+    pending.register(&output, hash.as_bytes(), HashBucket::Files);
+    pending.register_source_mapping("note.md".into(), &output);
+    pending.register_page_source_hash("note.md".into(), crate::build::types::SourceMetadata {
+        hash: hash.into(),
+        stat: crate::build::stat::FileStat {
+            mtime_nanos: mtime.map(|t| t.1),
+            ..crate::build::stat::FileStat::whole_second(1, mtime.map_or(0, |t| t.0))
+        },
+    });
+    pending.seal()
+}
+
+fn publish_version(folder: &std::path::Path, hash: &str, mtime: Option<(u64, u32)>, day: u32) {
+    let sealed = source_version(hash, mtime);
+    crate::deploy::history::HistoryStore::in_vault(folder)
+        .snapshot(folder, &crate::deploy::history::tree::SourceTree::from_sealed(&sealed), "moss:example", &format!("2026-01-{day:02}T00:00:00Z")).unwrap();
+}
+
+fn check_version(folder: &std::path::Path, hash: &str, mtime: Option<(u64, u32)>) -> Result<(), String> {
+    super::removal_gate::refuse_stale_generation(folder, &source_version(hash, mtime))
+}
+
+fn accept_version(folder: &std::path::Path, hash: &str, mtime: Option<(u64, u32)>) {
+    let stale = super::removal_gate::stale_content(folder, &source_version(hash, mtime));
+    records().accept_stale_content(folder.to_str().unwrap(), stale);
+}
+
+#[test]
+fn stale_content_uses_source_time_not_publish_time_and_round_trips_it() {
+    let dir = tempfile::tempdir().unwrap();
+    publish_version(dir.path(), "latest", Some((100, 20)), 1);
+    let history = crate::deploy::history::HistoryStore::in_vault(dir.path());
+    assert_eq!(history.list_records()[0].1.entries["note.md"].source_mtime, Some((100, 20)));
+    let error = check_version(dir.path(), "restored", Some((100, 10))).unwrap_err();
+    assert!(error.contains("note.md") && error.contains("--accept-stale-content"), "{error}");
+    assert!(check_version(dir.path(), "latest", Some((1, 0))).is_ok(), "unchanged bytes pass");
+    assert!(check_version(dir.path(), "new edit", Some((101, 0))).is_ok(), "an edit can predate publish time");
+    assert!(check_version(dir.path(), "clone", Some((200, 0))).is_ok(), "checkout timestamps pass");
+    assert!(check_version(dir.path(), "unknown time", None).is_ok());
+}
+
+#[test]
+fn stale_content_old_published_hash_needs_acceptance_even_with_a_fresh_timestamp() {
+    let dir = tempfile::tempdir().unwrap();
+    publish_version(dir.path(), "old", Some((100, 0)), 1);
+    publish_version(dir.path(), "latest", Some((200, 0)), 2);
+    let error = check_version(dir.path(), "old", Some((300, 0))).unwrap_err();
+    assert!(error.contains("deliberate revert"), "{error}");
+    accept_version(dir.path(), "old", Some((300, 0)));
+    assert!(check_version(dir.path(), "old", Some((300, 0))).is_ok());
+    assert!(check_version(dir.path(), "other rollback", Some((50, 0))).is_err(), "acceptance names content");
+}
+
+#[test]
+fn stale_content_first_publish_new_pages_and_legacy_records_have_no_timestamp_opinion() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(check_version(dir.path(), "first", Some((1, 0))).is_ok());
+    publish_version(dir.path(), "latest", None, 1);
+    assert!(check_version(dir.path(), "edited", Some((1, 0))).is_ok());
+    let legacy: crate::deploy::history::Entry = serde_json::from_str(r#"{"mode":"100644","hash":"old"}"#).unwrap();
+    assert_eq!(legacy.source_mtime, None);
+    let history = crate::deploy::history::HistoryStore::in_vault(dir.path());
+    let (id, mut record) = history.list_records().pop().unwrap();
+    record.entries.clear();
+    std::fs::write(history.store_dir().join("publishes").join(format!("{id}.json")), serde_json::to_vec(&record).unwrap()).unwrap();
+    assert!(check_version(dir.path(), "new page", Some((1, 0))).is_ok());
+}
+
+#[test]
+fn stale_content_ignores_manual_saves_and_other_publish_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::in_vault(dir.path());
+    history.snapshot_manual(dir.path(), &crate::deploy::history::tree::SourceTree::from_sealed(&source_version("manual", Some((900, 0)))), "moss:example", None).unwrap();
+    assert!(check_version(dir.path(), "first", Some((1, 0))).is_ok());
+    publish_version(dir.path(), "latest", Some((100, 0)), 1);
+    assert!(check_version(dir.path(), "manual", Some((101, 0))).is_ok());
+    history.snapshot(dir.path(), &crate::deploy::history::tree::SourceTree::from_sealed(&source_version("other", Some((900, 0)))), "moss:other", "2026-01-02T00:00:00Z").unwrap();
+    crate::vault::deployment_state::save_domain_config(dir.path().to_str().unwrap(), &crate::config::deployment::DomainDeploymentConfig {
+        site_id: Some("example".into()), ..Default::default()
+    }).unwrap();
+    assert!(check_version(dir.path(), "other", Some((101, 0))).is_ok());
+}
+
+async fn collision_push(plugin: bool) {
+    use crate::build::manifest::PendingManifest;
+    use crate::deploy::{plugin_push, push};
+    let folder = tempfile::tempdir().unwrap();
+    let sink = crate::deploy::progress::silent();
+    let ports = crate::deploy::one_shot::HeadlessDeployPorts;
+    let managers = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
+    let identity = crate::identity::Identity::generate().unwrap();
+    let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    let messages = vec![
+        "one.md and two.md both publish to /shared/. Give each source a unique address.".into(),
+        "`docs.md` and `docs/index.html` both publish to /docs/. Give each source a unique address.".into(),
+    ];
+    let mut pending = PendingManifest::new(Default::default());
+    pending.record_output_collisions(messages.clone());
+    let sealed = pending.seal();
+    let error = if plugin {
+        plugin_push::run_plugin_deploy_inner(&plugin_push::PluginDeployContext {
+            folder: folder.path(), sealed: Some(&sealed), managers: &managers, sink: &sink, ports: &ports,
+        }).await.unwrap_err()
+    } else {
+        push::push_site_inner(&sealed, &push::PushContext {
+            folder_path: folder.path(), identity: &identity, site_id: "collision-test",
+            sink: &sink, ports: &ports, events_lock: &events_lock,
+        }).await.unwrap_err()
+    };
+    assert_eq!(error, messages.join("\n"));
+}
+
+#[tokio::test]
+async fn output_collisions_refuse_hosted_push() {
+    collision_push(false).await;
+}
+
+#[tokio::test]
+async fn output_collisions_refuse_plugin_push() {
+    collision_push(true).await;
+}

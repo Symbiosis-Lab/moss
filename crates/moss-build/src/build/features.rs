@@ -376,11 +376,13 @@ pub fn generate_native_slots(
         // (the identity is not even loaded).
         let mod_events = comment::moderation::load_mod_events(project_path);
         if !mod_events.is_empty() {
-            let mut id_svc =
-                crate::identity::service::IdentityService::new(std::path::Path::new(project_path));
-            if let Some(pubkey) = id_svc.get().ok().flatten().map(|i| i.pubkey.clone()) {
+            let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(std::path::Path::new(project_path));
+            if !owners.is_empty() {
+                for key in comment::moderation::untrusted_signers(&mod_events, &owners) {
+                    log::warn!(target: "comments", "moderation signed by {key} is ignored: not one of this folder's keys; `moss comments list` says how to keep it");
+                }
                 for comments in all_comments.values_mut() {
-                    comment::reduce::retain_visible(comments, &mod_events, &pubkey);
+                    comment::reduce::retain_visible(comments, &mod_events, &owners);
                 }
             }
         }

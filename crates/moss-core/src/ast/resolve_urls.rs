@@ -8,7 +8,7 @@
 //! fence tracking is needed.
 //!
 //! `resolve_link_urls` emits a `moss-resolved:<path>` sentinel and leaves the
-//! URL `Url::Unresolved` so moss-build's `classify_url_prod` can apply
+//! URL `Url::Unresolved` so `classify_url` can apply
 //! `page_map` / `external_url_map` / wikilink-class-aware decoding. That
 //! sentinel IS the moss-core ↔ moss-build layering seam: moss-core resolves
 //! filesystem paths, moss-build owns the deployed URL space.
@@ -31,6 +31,87 @@ use crate::resolve::asset_class::{resolve_file_target, AssetResolution};
 use crate::resolve::fuzzy_path::{resolve_reference, ResolvedRef};
 use crate::resolve::{Diagnostic, DiagnosticKind, LinkType, OutgoingLink};
 
+/// Classify a URL, delegating site paths to the host's URL mapping.
+pub fn classify_url<R: Fn(&str) -> String>(raw: &str, resolve_link: &R) -> Url {
+    if let Some(rest) = raw.strip_prefix("mailto:") {
+        return Url::Resolved(ResolvedUrl::new(format!("mailto:{rest}"), UrlKind::Mailto));
+    }
+    if let Some(rest) = raw.strip_prefix("tel:") {
+        return Url::Resolved(ResolvedUrl::new(format!("tel:{rest}"), UrlKind::Tel));
+    }
+    if raw.starts_with('#') {
+        return Url::Resolved(ResolvedUrl::new(raw.to_string(), UrlKind::Anchor));
+    }
+    if raw.starts_with("http://")
+        || raw.starts_with("https://")
+        || raw.starts_with("//")
+        || raw.starts_with("data:")
+    {
+        return Url::Resolved(ResolvedUrl::new(raw.to_string(), UrlKind::External));
+    }
+
+    let resolved = resolve_link(raw);
+    if let Some(href) = resolved.strip_prefix("wikilink:") {
+        Url::Resolved(ResolvedUrl::new(href.to_string(), UrlKind::Wikilink))
+    } else if let Some(href) = resolved.strip_prefix("moss-newtab:") {
+        Url::Resolved(ResolvedUrl::new(href.to_string(), UrlKind::AssetNewtab))
+    } else {
+        Url::Resolved(ResolvedUrl::new(resolved, UrlKind::Internal))
+    }
+}
+
+/// URL-prettification only. Converts `.md` / `.markdown` hrefs to pretty
+/// URLs (trailing slash or folder-index collapse) and leaves external /
+/// anchor / mailto URLs untouched.
+///
+/// This function does NOT perform content-graph resolution. By the time
+/// an href reaches it, `moss-core`'s resolve pipeline has already rewritten
+/// any resolvable reference through `ContentGraph::resolve_path`. Any href
+/// here is either external, pre-resolved (then stripped of the
+/// `moss-resolved:` prefix), or an already-absolute-like path that only
+/// needs format normalization.
+///
+/// # Examples
+/// - `transform_markdown_link("./roadmap.md")` → `"./roadmap/"`
+/// - `transform_markdown_link("file.md#anchor")` → `"file/#anchor"`
+/// - `transform_markdown_link("https://example.com/file.md")` → unchanged
+pub fn transform_markdown_link(url: &str) -> String {
+    // Don't transform external URLs
+    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("//") {
+        return url.to_string();
+    }
+
+    // Split URL into path and fragment (the `#` stays with the fragment)
+    let (path, fragment) = match url.find('#') {
+        Some(pos) => (url.get(..pos).unwrap_or(url), url.get(pos..)),
+        None => (url, None),
+    };
+
+    // Transform .md or .markdown to pretty URL format
+    let transformed_path = if let Some(stem) = path.strip_suffix(".md").or_else(|| path.strip_suffix(".markdown")) {
+        let filename = stem.rsplit('/').next().unwrap_or(stem);
+        if crate::home::is_index_stem(filename) {
+            let dir = stem.strip_suffix(filename).unwrap_or("");
+            if dir.is_empty() {
+                "./".to_string()
+            } else {
+                dir.to_string()
+            }
+        } else {
+            format!("{}/", stem)
+        }
+    } else {
+        path.to_string()
+    };
+
+    // Recombine with fragment if present
+    if let Some(frag) = fragment {
+        transformed_path + frag
+    } else {
+        transformed_path
+    }
+}
+
 /// What one `resolve_urls` walk learned: the dependency edges the build needs,
 /// and the references it could not resolve. A miss produces a diagnostic and
 /// keeps the author's bytes — never a guessed URL. The host
@@ -39,6 +120,44 @@ use crate::resolve::{Diagnostic, DiagnosticKind, LinkType, OutgoingLink};
 pub struct UrlResolution {
     pub outgoing: Vec<OutgoingLink>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Resolve a parsed document in the order shared by every page renderer.
+/// Returns dispatch diagnostics first, then URL diagnostics, with outgoing
+/// links in the same order. The host owns the final deployed URL mapping.
+pub fn resolve_document(
+    doc: &mut Document,
+    snapshot: &crate::asset_snapshot::AssetSnapshot,
+    graph: Option<&ContentGraph>,
+    file_path: &str,
+    implicit_figure: bool,
+    resolve_link: &dyn Fn(&str) -> String,
+) -> UrlResolution {
+    let mut result = UrlResolution::default();
+    if let Some(graph) = graph {
+        // LOCKED ORDER: dispatch BEFORE resolve_urls. Dispatch reads unresolved
+        // image sources; resolving first would double-resolve the reference.
+        let dispatched = super::dispatch_wikilink_embeds(doc, snapshot, graph, file_path);
+        result.outgoing.extend(dispatched.outgoing_links);
+        result.diagnostics.extend(dispatched.diagnostics);
+        // Dispatch creates figures after the parser's own unwrap pass.
+        if !implicit_figure {
+            super::unwrap_implicit_figures(doc);
+        }
+        // LOCKED ORDER: resolve AFTER dispatch (including its fresh blocks),
+        // and BEFORE the caller extracts a hero or finds the first image.
+        let urls = resolve_urls(doc, graph, file_path);
+        result.outgoing.extend(urls.outgoing);
+        result.diagnostics.extend(urls.diagnostics);
+    }
+    // LOCKED ORDER: host classification comes last. Graph resolution leaves
+    // moss-resolved:/moss-newtab:/wikilink: sentinels for the host to decode.
+    visit_urls_mut(doc, |url| {
+        if let Url::Unresolved(raw) = url {
+            *url = classify_url(raw, &resolve_link);
+        }
+    });
+    result
 }
 
 /// Walk every URL in `doc` and classify it into [`Url::Resolved`].
@@ -84,7 +203,7 @@ pub fn resolve_urls(
     // for one more classification pass before rendering. Callers that
     // need a complete classification can call
     // [`classify_remaining_urls`] explicitly. moss-build's host pipeline
-    // chains a second `visit_urls_mut` to apply its `classify_url_prod`
+    // chains a second `visit_urls_mut` to apply `classify_url`
     // for page_map-aware decoding of the three sentinel prefixes.
 
     found
@@ -405,7 +524,7 @@ fn resolve_link_urls(
         // — the final pretty URL depends on the host's `page_map`, which
         // lives in moss-build's pipeline context. Leave these as
         // `Url::Unresolved` so the host's per-URL classifier
-        // (`classify_url_prod` in moss-build's pipeline) can apply the
+        // (`classify_url`) can apply the
         // page_map-aware decoding. This preserves the byte-equivalence
         // contract (no OutgoingLink emitted for already-resolved targets,
         // which were counted upstream) while letting the host close the
@@ -434,7 +553,7 @@ fn resolve_link_urls(
         // sentinel for the host classifier. Sentinel shape:
         // `moss-resolved:<path>[<suffix>]`.
         //
-        // moss-core resolves the filesystem path; moss-build's `classify_url_prod` decodes the
+        // moss-core resolves the filesystem path; `classify_url` decodes the
         // sentinel into the final pretty / external / asset URL using
         // `page_map`, `external_url_map`, and the wikilink-class signal.
         // The sentinel IS the moss-core ↔ moss-build layering seam — the
@@ -496,7 +615,7 @@ fn names_page_source(rel: &str, graph: &ContentGraph) -> bool {
 
 /// Split a URL into (path, suffix) where `suffix` is `?query` and/or
 /// `#fragment` in source order. Suffix is opaque — round-trip parity with
-/// moss-build's `build::markdown::pipeline::classify_url_prod` (its
+/// [`classify_url`] (its
 /// decoder) is the contract; this function must not reorder, normalize,
 /// or escape the suffix bytes.
 ///
@@ -568,7 +687,7 @@ pub fn slug_wikilink_suffix(suffix: &str) -> String {
 /// `Inline::Link` variant added before its phase-2 arm is wired).
 ///
 /// Callers that follow [`resolve_urls`] with their own per-URL classifier
-/// (e.g., moss-build's pipeline calling `classify_url_prod` for
+/// (e.g., moss-build's pipeline calling `classify_url` for
 /// resolver-prefix decoding) should NOT call this — let the secondary
 /// classifier handle the remaining URLs. Callers that have no secondary
 /// pass should call this to maintain the render invariant.
@@ -587,7 +706,7 @@ pub fn classify_remaining_urls(doc: &mut Document) {
 
 /// Best-effort kind classification for an Unresolved URL that escaped the
 /// per-kind phases. Mirrors the prefix-based detection in
-/// `pipeline::classify_url_prod` for consistency.
+/// `classify_url` for consistency.
 fn classify_unresolved_kind(raw: &str) -> UrlKind {
     if raw.starts_with("mailto:") {
         UrlKind::Mailto
@@ -736,7 +855,8 @@ where
                 walk_images_in_inline(nested, f);
             }
         }
-        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
             for nested in children {
                 walk_images_in_inline(nested, f);
             }
@@ -898,7 +1018,8 @@ where
         Inline::Image { .. } => {
             // Image src is a Url but it's image-kind — handled by phase 1.
         }
-        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
             for nested in children {
                 walk_links_in_inline(nested, f);
             }
@@ -927,7 +1048,8 @@ fn gather_text_inline(inline: &Inline, out: &mut String) {
     match inline {
         Inline::Text(t) => out.push_str(t),
         Inline::Code(c) => out.push_str(c),
-        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+        Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
             for nested in children {
                 gather_text_inline(nested, out);
             }

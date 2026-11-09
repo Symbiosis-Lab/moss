@@ -53,6 +53,7 @@ advisory_strings! {
     // ── Advisories + receipts ────────────────────────────────────
     ffmpeg_offer => { en: "Videos ship full-size because FFmpeg isn't installed. Download it and moss will optimize them.", zh_hans: "没有安装 FFmpeg，视频将以原始大小发布。下载它后，青苔会为视频做优化。", zh_hant: "沒有安裝 FFmpeg，影片將以原始大小發佈。下載它後，青苔會為影片做最佳化。", de: "Videos werden in voller Größe veröffentlicht, weil FFmpeg nicht installiert ist. Lade es herunter, dann optimiert moss sie." },
     ffmpeg_install => { en: "Videos ship full-size because FFmpeg isn't installed. Install it with your system's package manager and moss will optimize them.", zh_hans: "没有安装 FFmpeg，视频将以原始大小发布。请用系统的包管理器安装它，青苔会随后为视频做优化。", zh_hant: "沒有安裝 FFmpeg，影片將以原始大小發佈。請用系統的套件管理員安裝它，青苔會隨後為影片做最佳化。", de: "Videos werden in voller Größe veröffentlicht, weil FFmpeg nicht installiert ist. Installiere es über den Paketmanager deines Systems, dann optimiert moss sie." },
+    plugin_offer_sync => { en: "Sync", zh_hans: "同步", zh_hant: "同步", de: "Synchronisieren" },
     download_ffmpeg => { en: "Download FFmpeg", zh_hans: "下载 FFmpeg", zh_hant: "下載 FFmpeg", de: "FFmpeg herunterladen" },
     copy => { en: "Copy", zh_hans: "复制", zh_hant: "複製", de: "Kopieren" },
     // Two files carry the same `url:` — usually a folder copied in Finder,
@@ -143,6 +144,7 @@ advisory_strings! {
     preparing_to_publish => { en: "Preparing to publish…", zh_hans: "正在准备发布……", zh_hant: "正在準備發佈……", de: "Veröffentlichung wird vorbereitet …" },
     rebuilding_site => { en: "Rebuilding your site…", zh_hans: "正在重新构建网站……", zh_hant: "正在重新建置網站……", de: "Deine Website wird neu erstellt …" },
     sending_site => { en: "Sending your site…", zh_hans: "正在发送网站……", zh_hant: "正在傳送網站……", de: "Deine Website wird gesendet …" },
+    waiting_for_other_publish => { en: "Waiting for another publish of this folder…", zh_hans: "正在等待此文件夹的另一次发布完成……", zh_hant: "正在等待此資料夾的另一次發佈完成……", de: "Warte auf eine andere Veröffentlichung dieses Ordners …" },
     registering_site => { en: "Registering site…", zh_hans: "正在注册网站……", zh_hant: "正在註冊網站……", de: "Website wird registriert …" },
     uploading => { en: "Uploading {name}", zh_hans: "正在上传 {name}", zh_hant: "正在上傳 {name}", de: "{name} wird hochgeladen" },
     rechecking => { en: "Rechecking...", zh_hans: "重新检查……", zh_hant: "重新檢查……", de: "Wird erneut geprüft …" },

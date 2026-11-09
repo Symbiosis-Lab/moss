@@ -33,6 +33,7 @@ async fn build_once(folder_path: &str) {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     })
     .await
     .expect("build");
@@ -914,11 +915,11 @@ fn a_starved_walk_keeps_the_cursor_it_was_given() {
 
 // ── Sticky drift is a per-PATH verdict, not a per-SET one ─────────────────
 
-fn stamp(n: u64) -> crate::build::watch::drift::DriftStamp {
-    (n, n as i64, 0, None, None)
+fn stamp(n: u64) -> crate::build::stat::FileStat {
+    crate::build::stat::FileStat { mtime_nanos: Some(0), ..crate::build::stat::FileStat::whole_second(n, n) }
 }
 
-fn fp(entries: &[(&str, u64)]) -> std::collections::BTreeMap<String, crate::build::watch::drift::DriftStamp> {
+fn fp(entries: &[(&str, u64)]) -> std::collections::BTreeMap<String, crate::build::stat::FileStat> {
     entries.iter().map(|(r, n)| ((*r).to_string(), stamp(*n))).collect()
 }
 
@@ -954,7 +955,7 @@ fn a_neighbour_joining_the_drift_set_does_not_re_dispatch_the_rest() {
 /// when every drifted file says when.
 #[test]
 fn newest_landing_is_the_end_of_the_newest_ctime_second() {
-    let at = |ctime: Option<i64>| drift::Drift { kind: drift::DriftKind::Edited, stamp: (1, 50, 0, ctime, None) };
+    let at = |ctime: Option<i64>| drift::Drift { kind: drift::DriftKind::Edited, stamp: crate::build::stat::FileStat { mtime_nanos: Some(0), ctime, ..crate::build::stat::FileStat::whole_second(1, 50) } };
     let mut now = std::collections::BTreeMap::new();
     now.insert("a.md".to_string(), at(Some(100)));
     now.insert("b.md".to_string(), at(Some(200)));
@@ -1111,7 +1112,7 @@ async fn an_evicted_sibling_does_not_strand_a_genuine_edit_as_sticky() {
         "premise: the edit must be seen as drift: {:?}",
         report1.drifted
     );
-    let mut dispatched_drift: std::collections::BTreeMap<String, crate::build::watch::drift::DriftStamp> =
+    let mut dispatched_drift: std::collections::BTreeMap<String, crate::build::stat::FileStat> =
         std::collections::BTreeMap::new();
     for (rel, d) in &report1.drifted {
         dispatched_drift.insert(rel.clone(), d.stamp);

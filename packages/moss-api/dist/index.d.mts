@@ -433,7 +433,24 @@ interface ProcessContext extends BaseContext {
  * @category Hook contexts
  */
 interface DeployContext extends BaseContext {
+  /** The files to deploy, relative to `site_dir`. */
   site_files: string[];
+  /**
+   * Absolute path of a read-only directory holding exactly `site_files`,
+   * made for this hook call and removed when it returns. Read the site here
+   * (pass it as `executeBinary`'s `workingDir`, or to `tar -C`), not through
+   * `readSiteFile`, whose tree the next build can advance mid-publish.
+   * Set from moss 0.15.20: a plugin that reads it declares
+   * `min_moss_version` "0.15.20", and should stop if it is missing rather
+   * than fall back to the project folder.
+   */
+  site_dir?: string;
+  /**
+   * Absolute path beside `site_dir` to pass to git as `GIT_INDEX_FILE`, so
+   * staging `site_dir` leaves the project's own index alone. Not created
+   * until git writes it; removed with `site_dir`. Set from moss 0.15.20.
+   */
+  index_file?: string;
   /** Custom domain from .moss/config.toml [deployment] section (if configured) */
   domain?: string;
 }
@@ -768,6 +785,15 @@ interface HookResult {
   setup?: SetupVerdict | LegacySetupVerdict;
   /** A copy hook's answer (populated by `publish_copy` and its siblings) */
   copy?: CopyOutcome | null;
+  /**
+   * Work a `process` hook started by a build found and leaves to the person,
+   * because it would write their folder. moss shows `title` with a Sync
+   * action that runs the hook again as the person's own act. Ignored from any
+   * other run. Needs moss 0.15.20.
+   */
+  offer?: {
+    title: string;
+  } | null;
 }
 /**
  * One field of a {@link SetupForm} — the same vocabulary a manifest's
@@ -1987,25 +2013,41 @@ declare function downloadAsset(url: string, targetDir: string, options?: Downloa
  * Allows plugins to execute external binaries (git, npm, etc.)
  * in a controlled environment.
  *
- * Working directory is auto-detected from the runtime context
- * (always the project root).
+ * The working directory is the project root unless `workingDir` names
+ * another inside the project, or a deploy hook's `site_dir`.
  */
 /**
  * Options for executing a binary
  * @category Binary execution
  */
 interface ExecuteOptions {
-  /** Path to the binary (can be just the name if in PATH) */
+  /**
+   * The binary to run, named in the manifest's `requires` as
+   * `execute_binary:<name>`. Pass the bare name to have it looked up on the
+   * PATH. An absolute path is accepted only where moss itself would find that
+   * binary: a PATH directory, a standard install directory such as
+   * `/opt/homebrew/bin`, or the path `resolve_git_path` returned.
+   */
   binaryPath: string;
   /** Arguments to pass to the binary */
   args: string[];
   /** Timeout in milliseconds (default: 60000) */
   timeoutMs?: number;
-  /** Additional environment variables */
+  /**
+   * Environment variables to add. Only `GIT_TERMINAL_PROMPT`,
+   * `COPYFILE_DISABLE` and `GIT_INDEX_FILE` are accepted; any other name
+   * refuses the call. `GIT_INDEX_FILE` must be a deploy hook's
+   * `context.index_file`.
+   */
   env?: Record<string, string>;
   /** Data to pass to stdin (useful for commands like `git credential fill`) */
   stdin?: string;
-  /** Working directory relative to project root (default: project root itself) */
+  /**
+   * Working directory: relative to the project root, or absolute, such as a
+   * deploy hook's `context.site_dir` (default: the project root). moss refuses
+   * one outside the project, or inside its `.moss/` folder other than
+   * `site_dir`.
+   */
   workingDir?: string;
   /**
    * Callback for real-time stderr output. When provided, stderr lines are
@@ -2032,8 +2074,8 @@ interface ExecuteResult {
 /**
  * Execute an external binary
  *
- * Working directory is auto-detected from the runtime context
- * (always the project root).
+ * The working directory is the project root unless `workingDir` names
+ * another inside the project, or a deploy hook's `site_dir`.
  *
  * @param options - Execution options including binary path and args
  * @returns Execution result with stdout, stderr, and exit code
@@ -2056,12 +2098,12 @@ interface ExecuteResult {
  *
  * @example
  * ```typescript
- * // Run npm install with timeout
+ * // Push without ever waiting on a credential prompt
  * const result = await executeBinary({
- *   binaryPath: "npm",
- *   args: ["install"],
+ *   binaryPath: "git",
+ *   args: ["push"],
  *   timeoutMs: 120000,
- *   env: { NODE_ENV: "production" },
+ *   env: { GIT_TERMINAL_PROMPT: "0" },
  * });
  * ```
  *

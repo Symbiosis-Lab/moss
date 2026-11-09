@@ -243,20 +243,22 @@ fn collect_refs_in_inlines(inlines: &[Inline], out: &mut Vec<String>, seen: &mut
             Inline::Emphasis(children)
             | Inline::Strong(children)
             | Inline::Strikethrough(children)
+            | Inline::Mark(children)
             | Inline::Link { children, .. } => collect_refs_in_inlines(children, out, seen),
             _ => {}
         }
     }
 }
 
-/// Per-render footnote state: the document's [`FootnoteIndex`] plus the
-/// counters that keep marker ids and back-links in step.
+/// The per-document render context: footnote numbering and whether headings carry permalinks.
 ///
-/// Default (empty index) is what every [`super::render::render_blocks`]
-/// entry point carries, so a marker there falls back to its literal source.
+/// Default (empty index, permalinks left to the hooks) is what every
+/// [`super::render::render_blocks`] entry point carries.
 #[derive(Default)]
 pub struct FootnoteCtx {
     index: FootnoteIndex,
+    /// The page fails [`crate::heading::anchor_rule::wants_heading_anchors`].
+    permalinks_off: bool,
     /// Markers emitted per label so far. Drives the `fnref-N-K` id suffix
     /// and, once the whole document is rendered, the number of back-links.
     emitted: HashMap<String, usize>,
@@ -284,7 +286,13 @@ impl FootnoteCtx {
             index,
             emitted: HashMap::new(),
             hoisted,
+            permalinks_off: !crate::heading::anchor_rule::wants_heading_anchors(blocks),
         }
+    }
+
+    /// The document is too short for heading permalinks; its headings keep their ids.
+    pub(super) fn permalinks_off(&self) -> bool {
+        self.permalinks_off
     }
 }
 

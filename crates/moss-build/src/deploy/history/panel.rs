@@ -4,38 +4,29 @@
 //! They live here rather than as `#[tauri::command]` functions because the
 //! command surface has two carriers, and a body that only the Tauri shell can
 //! reach is a feature the HTTP carrier has to re-implement.
-//! Nothing below is Tauri-shaped — the app's own commands are one-line
-//! wrappers over these, and the carrier's arms are the same one line with a
-//! different source for the sealed manifest (`ops/serve/invoke.rs`).
+//! Nothing below is Tauri-shaped: every carrier reaches them through the
+//! command table (`commands::versions`).
 //!
 //! Every backend rule — `[history] enabled`, the size ceiling, "moss never
 //! writes a vault's `.git`", best-effort restore — lives entirely in
 //! [`super`]'s store/record/restore/timeline modules; nothing here re-derives
 //! one.
 //!
-//! ## Where the sealed manifest comes from
+//! ## No build in the way
 //!
-//! Three of the five need "the tree as it stands right now" as a
-//! [`SealedManifest`], and the two carriers get one in completely different
-//! ways: the app keeps a live one in `AppState`, sealed by the last build; a
-//! headless process has none and must build ([`crate::deploy::one_shot::build_sealed_now`],
-//! the same answer [`super::cli`] already makes for `moss history --save`).
-//! So the manifest arrives as a **lazily awaited future**, not a value. That
-//! is load-bearing rather than stylistic: [`list_versions`] needs one only on
-//! the site-version drill-down, so a Versions panel opening on the ordinary
-//! timeline never awaits the provider and a headless carrier therefore never
-//! builds to answer it.
+//! Saving, restoring and comparing a version read the site as the disk holds
+//! it ([`SourceTree::on_disk`]), never a sealed build: a host with no build
+//! running, or one whose build is busy with media, answers at once.
 
-use std::future::Future;
 use std::path::Path;
 
 use serde::Serialize;
 use specta::Type;
 
 use super::record::PublishRecord;
-use super::{restore, HistoryStore, RestoreMode, Trigger};
+use super::{restore, HistoryStore, RestoreMode, SourceTree, Trigger};
 use crate::build::manifest::change_set::ChangedPage;
-use crate::build::manifest::{published_record, SealedManifest};
+use crate::build::manifest::published_record;
 use crate::moss_paths::MossPaths;
 
 // ── Wire types ───────────────────────────────────────────────────────────
@@ -69,9 +60,7 @@ pub struct VersionRow {
 /// for a site-scope drill-down (`scope: "site"`, `path: Some(<version id>)`)
 /// — the "A site version" sub-view's Changed-since/Unchanged groups — and
 /// `rows` is empty in that mode. One command rather than two: the drill-down
-/// reuses [`HistoryStore::site_version_pages`], which needs the live sealed
-/// manifest exactly like the top-level list's `live_id` does, so the two
-/// share one body instead of duplicating the manifest plumbing.
+/// reuses [`HistoryStore::site_version_pages`] in the same body as the list.
 #[derive(Debug, Clone, Serialize, Type)]
 pub struct VersionList {
     pub rows: Vec<VersionRow>,
@@ -238,16 +227,7 @@ fn known_id(records: &[(String, PublishRecord)], id: &str) -> Result<(), String>
 
 /// The Versions panel's list, for either scope, and the site-version
 /// drill-down (see [`VersionList`]'s own doc for the three response shapes).
-///
-/// `sealed` is awaited ONLY on the drill-down. Both other shapes read records
-/// off disk and nothing else, so opening the panel costs a headless carrier no
-/// build at all.
-pub async fn list_versions(
-    vault_root: &Path,
-    scope: &str,
-    path: Option<String>,
-    sealed: impl Future<Output = Result<SealedManifest, String>>,
-) -> Result<VersionList, String> {
+pub fn list_versions(vault_root: &Path, scope: &str, path: Option<String>) -> Result<VersionList, String> {
     let store = HistoryStore::in_vault(vault_root);
     let records = store.list_records();
     let live_id = resolve_live_id(vault_root, &records);
@@ -271,11 +251,10 @@ pub async fn list_versions(
         }
         "site" => match path {
             // The site-version drill-down: one version's pages against the
-            // live tree now (design's "A site version" Changed-since/Unchanged
-            // groups). Needs the live sealed manifest, same as save_version.
+            // tree on disk now (the Changed-since/Unchanged groups).
             Some(version_id) => {
                 known_id(&records, &version_id)?;
-                let pages = store.site_version_pages(&version_id, &sealed.await?)?;
+                let pages = store.site_version_pages(&version_id, &site_on_disk(vault_root)?)?;
                 Ok(VersionList {
                     changed_since: pages.changed_since,
                     unchanged: pages.unchanged,
@@ -323,24 +302,30 @@ pub fn read_version(vault_root: &Path, id: &str, path: &str) -> Result<VersionCo
 /// pass its own closure that skipped the join, so every page added since the
 /// version failed the delete core's own containment check and was reported as
 /// a restore failure instead of being trashed; `panel_tests.rs` pins the join.
-pub async fn restore_version(
+pub fn restore_version(vault_root: &Path, id: &str, path: Option<String>, mode: &str) -> Result<RestoreReport, String> {
+    restore_version_with(vault_root, id, path, mode, &restore::real_trash)
+}
+
+/// [`restore_version`] with the site restore's trash given: a test passes one
+/// that records the call instead of moving a real file to the OS Trash.
+pub(crate) fn restore_version_with(
     vault_root: &Path,
     id: &str,
     path: Option<String>,
     mode: &str,
-    sealed: impl Future<Output = Result<SealedManifest, String>>,
+    trash: &dyn Fn(&Path, &str) -> Result<(), String>,
 ) -> Result<RestoreReport, String> {
     let store = HistoryStore::in_vault(vault_root);
     known_id(&store.list_records(), id)?;
     if path.is_none() {
         store.site_version(id)?;
     }
-    let sealed = sealed.await?;
+    let current = site_on_disk(vault_root)?;
     let target = current_target(vault_root);
 
     // The backup dedups against the newest record for this target (design
     // rule 3), so it answers whether it wrote one.
-    let undo_id = store.save_before_restore(vault_root, &sealed, &target, id)?;
+    let undo_id = store.save_before_restore(vault_root, &current, &target, id)?;
 
     match path {
         Some(page_path) => {
@@ -367,7 +352,7 @@ pub async fn restore_version(
         // Whole-site restore. `mode` has no site-scoped meaning (there is no
         // "copy" form of restoring an entire tree) and is ignored here.
         None => Ok(to_restore_report(
-            store.restore_site(vault_root, id, &sealed, &restore::real_trash),
+            store.restore_site(vault_root, id, &current, trash),
             undo_id,
         )),
     }
@@ -388,29 +373,24 @@ fn to_restore_report(report: super::RestoreReport, undo_id: Option<String>) -> R
     }
 }
 
-/// Save a version now, outside the publish flow (design decision 2): snapshot
-/// from the current sealed manifest with `trigger: manual`.
-///
-/// "Current" is the caller's to define, and each carrier defines it the way
-/// its own process can: the app waits for any in-flight watch rebuild to go
-/// quiet before reading `AppState`'s manifest (the same gate `push_site`
-/// applies), and its frontend flushes the editor's pending auto-save first
-/// (`flushEditorSave`, `panel-controller.ts`); a headless carrier builds. Both
-/// are inside the `sealed` future, which is why the `[history] enabled` refusal
-/// below comes first — a site with history turned off does neither.
-pub async fn save_version(
-    vault_root: &Path,
-    label: Option<String>,
-    sealed: impl Future<Output = Result<SealedManifest, String>>,
-) -> Result<VersionRow, String> {
+/// [`SourceTree::on_disk`] for the panel, which has no terminal: download
+/// progress goes to the log, and a stall's diagnosis says to try again.
+fn site_on_disk(vault_root: &Path) -> Result<SourceTree, String> {
+    SourceTree::on_disk(vault_root, "try again", &mut |line| log::info!("history: {line}"))
+}
+
+/// Save a version now, outside the publish flow, of the site as the disk
+/// holds it. The editor flushes its pending auto-save first
+/// (`flushEditorSave`); no build is awaited.
+pub fn save_version(vault_root: &Path, label: Option<String>) -> Result<VersionRow, String> {
     if !super::store::history_enabled(vault_root) {
         return Err("Publish history is turned off for this site.".to_string());
     }
     let store = HistoryStore::in_vault(vault_root);
-    let sealed = sealed.await?;
+    let tree = site_on_disk(vault_root)?;
     let target = current_target(vault_root);
 
-    let new_id = store.snapshot_manual(vault_root, &sealed, &target, label)?;
+    let new_id = store.snapshot_manual(vault_root, &tree, &target, label)?;
     let new_record = new_id.as_deref().and_then(|id| store.load_record(id));
     match (new_id, new_record) {
         (Some(id), Some(record)) => Ok(version_row_from_record(id, &record)),

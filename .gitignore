@@ -19,3 +19,5 @@ target/
 
 # Playwright default output dir (render-gate configs pin outputDir to target/test-tmp)
 test-results/
+
+packages/moss-ui/dist-browser/

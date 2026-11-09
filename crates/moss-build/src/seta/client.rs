@@ -37,36 +37,27 @@ const SEND_LOGS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// would await forever. Bounding it here means every seta call surfaces a
 /// retryable error instead of an unrecoverable hang.
 fn build_seta_http_client() -> Client {
-    Client::builder()
-        // Identify moss on every request — see `system::user_agent` for
-        // why an absent UA is what got moss challenged in the first place, and
-        // why the string is shared rather than written out here (the net
-        // diagnosis probe HEADs the same Cloudflare zone, so a second literal
-        // here is a drift waiting to happen).
-        .user_agent(crate::system::user_agent())
-        .connect_timeout(SETA_CONNECT_TIMEOUT)
-        .timeout(SETA_REQUEST_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if is_safe_transport(attempt.url()) {
-                reqwest::redirect::Policy::default().redirect(attempt)
-            } else {
-                attempt.error("seta redirects require HTTPS or loopback HTTP without credentials")
-            }
-        }))
-        // Behind the GFW a DIRECT connection to api.mosspub.com (Cloudflare) is
-        // reset, so every deploy `sync`/`upload`/`commit` and "Send logs" call —
-        // all of which flow through this one shared client — failed with
-        // `error sending request for url (...)`. reqwest never received the
-        // CFNetworkCopyProxiesForURL proxy that the ureq download path already
-        // uses, so it connected directly while the WKWebView (and curl's IPv6
-        // path) reached Cloudflare fine. Match the browser's proxy PER request:
-        // `Proxy::custom` re-invokes the resolver for every request URL, so a
-        // live proxy change (VPN / Clash / V2Ray toggled) is followed with no
-        // caching even though this `Client` is cached inside `MossSetaClient`.
-        .proxy(crate::system::proxy_reqwest::system_proxy())
-        .build()
-        // Mirror `Client::new()`'s panic-on-TLS-init-failure contract.
-        .expect("failed to build seta HTTP client")
+    crate::system::proxy_reqwest::build_client(|builder| {
+        builder
+            // Identify moss on every request — see `system::user_agent` for
+            // why an absent UA is what got moss challenged in the first place, and
+            // why the string is shared rather than written out here (the net
+            // diagnosis probe HEADs the same Cloudflare zone, so a second literal
+            // here is a drift waiting to happen).
+            .user_agent(crate::system::user_agent())
+            .connect_timeout(SETA_CONNECT_TIMEOUT)
+            .timeout(SETA_REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if is_safe_transport(attempt.url()) {
+                    reqwest::redirect::Policy::default().redirect(attempt)
+                } else {
+                    attempt.error("seta redirects require HTTPS or loopback HTTP without credentials")
+                }
+            }))
+    })
+    // Only a broken TLS backend gets here: a missing system CA store falls
+    // back to the bundled roots inside `build_client`.
+    .expect("failed to build seta HTTP client")
 }
 
 /// Total tries for a transient failure: 1 attempt + 3 retries.
@@ -456,8 +447,10 @@ pub enum SetaError {
 /// Extract the user-facing message from a moss-seta error response body.
 ///
 /// moss-seta returns errors as `{"error": "..."}` JSON; auth endpoints sometimes
-/// use `{"message": "..."}`. If either key parses, that string is returned;
-/// otherwise the raw body is returned (length-capped). Used wherever an error
+/// use `{"message": "..."}`. If either key parses, that string is returned,
+/// followed by `": <detail>"` when the body also carries a `detail` (a site
+/// transfer's `key_shared` names the other sites there); otherwise the raw
+/// body is returned (length-capped). Used wherever an error
 /// surface reaches the UI, so we don't dump raw JSON or an HTML page.
 pub(super) fn extract_api_error_message(body: &str) -> String {
     // Cap the raw fallback at 200 chars to avoid leaking full HTML error
@@ -467,10 +460,11 @@ pub(super) fn extract_api_error_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|json| {
-            json.get("error")
-                .or_else(|| json.get("message"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+            let head = json.get("error").or_else(|| json.get("message")).and_then(|v| v.as_str())?;
+            Some(match json.get("detail").and_then(|v| v.as_str()) {
+                Some(detail) => format!("{head}: {detail}"),
+                None => head.to_string(),
+            })
         })
         .unwrap_or_else(|| {
             if body.len() > MAX_RAW_LEN {
@@ -931,4 +925,4 @@ impl MossSetaClient {
 
 #[cfg(test)]
 #[path = "client_tests.rs"]
-pub(super) mod tests;
+pub(crate) mod tests;

@@ -343,7 +343,7 @@ fn removals_after(withdrawn: crate::build::manifest::change_set::Withdrawn) -> V
     std::fs::create_dir_all(vault.path().join("qr")).unwrap();
     std::fs::write(vault.path().join(own), b"<svg/>").unwrap();
     last.register(&ServedPath::from_source(own).unwrap(), b"<svg/>", HashBucket::Files);
-    let meta = crate::build::types::SourceMetadata { hash: "h".into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None };
+    let meta = crate::build::types::SourceMetadata { hash: "h".into(), stat: crate::build::stat::FileStat::whole_second(1, 1) };
     last.register_page_source_hash(own.into(), meta);
     published_record::save(&mp, &PublishedSnapshot::from_sealed(&last.seal(), "moss:site-1", "2026-11-05T00:00:00Z".into())).unwrap();
     let mut now = PendingManifest::new(SiteHashes::default());

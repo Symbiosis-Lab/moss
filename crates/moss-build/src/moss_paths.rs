@@ -394,6 +394,13 @@ impl MossPaths {
         self.build_dir().join("cache")
     }
 
+    /// `.moss/build.nosync/deploy/` — the per-call copies a deploy hook
+    /// publishes from, and the only place a plugin's binary may point
+    /// `GIT_INDEX_FILE` or a working directory inside `.moss/`.
+    pub fn deploy_scratch_dir(&self) -> PathBuf {
+        self.build_dir().join("deploy")
+    }
+
     /// `.moss/cache/objects/` — hashed file blobs.
     /// The optional shared cache, `.moss/cache/`, synced with the folder.
     /// A plain join, not the held handle — the store is never marked, so a
@@ -424,6 +431,13 @@ impl MossPaths {
     /// `.moss/build.nosync/cache/hash-index.json` — fast-path cache validation index.
     pub fn cache_hash_index(&self) -> PathBuf {
         self.cache_dir().join("hash-index.json")
+    }
+
+    /// `.moss/build.nosync/cache/verified-blobs.json` — which CAS blobs the last
+    /// seal pass read and found matching their names, keyed by absolute path and
+    /// stat. Machine-local: the key and the inode mean nothing on another machine.
+    pub fn cache_verified_blobs(&self) -> PathBuf {
+        self.cache_dir().join("verified-blobs.json")
     }
 
     /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from
@@ -514,6 +528,18 @@ impl MossPaths {
     /// `.moss/build.nosync/generations/<gen_id>/` — a single sealed generation.
     pub fn generation_dir(&self, gen_id: &str) -> PathBuf {
         self.generations_dir().join(gen_id)
+    }
+
+    /// The canonical directory of generation `gen_id`, or `None` unless the id
+    /// has the form the build mints (16 hex digits) and the directory exists
+    /// directly under [`generations_dir`](Self::generations_dir) once links
+    /// are resolved. For an id read from a file rather than computed.
+    pub(crate) fn sealed_generation_dir(&self, gen_id: &str) -> Option<PathBuf> {
+        if gen_id.len() != 16 || !gen_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let dir = self.generation_dir(gen_id).canonicalize().ok()?;
+        (dir.parent()? == self.generations_dir().canonicalize().ok()?).then_some(dir)
     }
 
     /// `.moss/build.nosync/current` — symlink to the active generation directory.
@@ -632,6 +658,13 @@ impl MossPaths {
     /// Used by syndication plugins, RSS generation, and search.
     pub fn article_map(&self) -> PathBuf {
         self.build_dir().join("article-map.json")
+    }
+
+    /// `.moss/build.nosync/provisional-uids.json` — the note IDs this machine
+    /// builds unpublished pages under, by source path. See
+    /// `build::render::uid_dedup`.
+    pub fn provisional_uids(&self) -> PathBuf {
+        self.build_dir().join("provisional-uids.json")
     }
 
     /// `.moss/build.nosync/profile.jsonl` — build performance metrics.

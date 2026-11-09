@@ -327,7 +327,7 @@
 
 /* Track + fill. The toast is the only consumer of the
    .moss-progress-bar-* classes (the progress panel's bars were
-   removed in Phase C), so they stay scoped under
+   removed when progress moved to the titlebar), so they stay scoped under
    .moss-toast-progress. */
 .moss-toast-progress .moss-progress-bar-track {
   width: 100%;

@@ -396,6 +396,9 @@ pub struct SiteResult {
 /// Persisted to `.moss/hashes.json` after each build.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SiteHashes {
+    /// Collision diagnostics from this render, sealed with its output hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_collisions: Vec<String>,
     /// Map of output path to mode-tagged content hash.
     ///
     /// Wire format:
@@ -562,6 +565,10 @@ pub struct PageMeta {
     /// `draft: true`: built and previewed, never published.
     #[serde(default)]
     pub draft: bool,
+    /// The note ID the page was built under, which the publish that puts it
+    /// online stamps into its frontmatter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
 }
 
 impl SiteHashes {
@@ -629,11 +636,17 @@ impl SiteHashes {
     pub fn source_metadata_for(&self, relative_path: &str) -> Option<&SourceMetadata> {
         self.sources.get(relative_path)
     }
+
+    /// The manifest at `path`, or `None` when it is absent or unreadable.
+    pub(crate) fn read(path: &std::path::Path) -> Option<Self> {
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::stat::FileStat;
 
     // =========================================
     // SiteHashes Tests
@@ -827,10 +840,10 @@ mod tests {
         let mut hashes = SiteHashes::new();
         hashes.sources.insert(
             "posts/hello.md".to_string(),
-            SourceMetadata { hash: "abc".into(), size: 42, mtime: 1000, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: "abc".into(), stat: FileStat::whole_second(42, 1000) },
         );
         let meta = hashes.source_metadata_for("posts/hello.md").expect("present");
-        assert_eq!(meta.size, 42);
+        assert_eq!(meta.stat.size, 42);
         assert!(hashes.source_metadata_for("posts/missing.md").is_none());
     }
 }

@@ -17,6 +17,7 @@
   "docs/media/": "docs/writing/media/",
   "docs/multilingual/": "docs/writing/multilingual/",
   "docs/structure/": "docs/writing/structure/",
+  "scene5-loop/credits/": "home/scene5-loop/credits/",
   "zh-hans/docs/author/callouts/": "zh-hans/docs/writing/callouts/",
   "zh-hans/docs/author/frontmatter/": "zh-hans/开始使用/frontmatter/",
   "zh-hans/docs/author/links/": "zh-hans/docs/writing/wikilinks-and-embeds/",

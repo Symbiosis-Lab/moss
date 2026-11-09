@@ -318,7 +318,7 @@ mod tests {
             materialize_remote_covers(&mut link_meta, &moss_dir, &output_dir, &mut first_pending),
             1
         );
-        let (first_hashes, _) = first_pending.as_parts_clone();
+        let first_hashes = first_pending.hashes_clone();
         let first = first_pending.seal();
         let original = link_meta["https://example.com/post"].cover_served_path.clone().unwrap();
         let webp = moss_core::asset_paths::to_webp(&original);
@@ -367,6 +367,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_preexisting_unwritable_scratch_file_does_not_block_materialization() {
         // `scratch_source` is named `{oid}.{ext}` — content-addressed, not a

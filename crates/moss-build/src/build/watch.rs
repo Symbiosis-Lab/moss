@@ -16,16 +16,12 @@
 //! `notify-debouncer-full` stamps each raw event with its own arrival time
 //! (`push_event`) and releases it `DEBOUNCE_MS` later, draining a path's queue
 //! only up to the first event still too young (`debounced_events`). Nothing
-//! resets. So it merges what lands inside one drain (tick = `timeout/4` =
-//! 62.5ms) and preserves the spacing of everything else: two events 300ms
-//! apart are two rebuilds 300ms apart, and raising `DEBOUNCE_MS` only delays
-//! both. Measured against 0.3.2 — two writes 40ms apart gave two batches 63ms
-//! apart; 80ms apart gave 126ms.
-//!
-//! This said the opposite until 2026-08-31 ("a resetting 250ms quiet window;
-//! 10 plugin downloads, one rebuild"), which is why a user's paired triggers
-//! read as a debounce artefact instead of as two real disk events. Coalescing
-//! past one drain happens downstream, in the worker's capacity-1 slot.
+//! resets. So it merges what lands inside one drain (tick = `timeout/4`) and
+//! preserves the spacing of everything else: two events 300ms apart are two
+//! rebuilds 300ms apart, and raising `DEBOUNCE_MS` only delays both. Measured
+//! against 0.3.2 at a 250ms timeout: two writes 40ms apart gave two batches
+//! 63ms apart; 80ms apart gave 126ms. Coalescing past one drain happens
+//! downstream, in the worker's capacity-1 slot.
 //!
 //! The loop lives inside [`notify_debouncer_full::new_debouncer`]; our wrapper
 //! forwards its batched callback onto `trigger_rebuild_with_lock`.
@@ -51,11 +47,12 @@
 //! When the debounce timer fires, `trigger_rebuild_with_lock()` ensures:
 //! - No concurrent rebuilds (would cause "Directory not empty" errors)
 //! - At most one pending rebuild queued
-//! - Preview refreshes once per rebuild cycle, not per file change
+//! - A rebuild tells the preview what changed when it shows the render, and
+//!   again from its seal tail for what the background wrote after
 //!
 //! ## Features
 //! - Async file watching with tokio integration
-//! - A fixed 250ms per-event delay via `notify-debouncer-full` (not a quiet period)
+//! - A fixed `DEBOUNCE_MS` per-event delay via `notify-debouncer-full` (not a quiet period)
 //! - Cross-platform rename pair stitching (inode/file-id pairing)
 //! - Rebuild locking to prevent concurrent directory operations
 //! - Smart diff detection for efficient browser refresh
@@ -66,7 +63,7 @@ use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 use std::path::{Path, PathBuf};
 
-use crate::build::stat::{mtime_is_racy, FileStat};
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 
 pub mod drift;
@@ -76,28 +73,30 @@ pub use scope::{
 };
 pub use scope::{should_watch_file, should_watch_moss_file};
 
-use super::pipeline::load_previous_hashes;
 use super::BuildTrigger;
 
 
 /// Classify an actionable debounced batch.
 ///
-/// `Structural` if ANY event in the batch is a create/remove/rename — a
+/// `Structural` if ANY event in the batch changes which files exist — a
 /// mixed batch (e.g. one content edit + one new file) cannot be salvaged as
 /// `ContentOnly` by dropping the structural event, because the rebuild still
-/// has to account for it. `ContentOnly` requires EVERY event to be a plain
-/// modify. Paths are the same `path_passes_filter`-eligible set the trigger
-/// log already computes; `Full` (no paths) should not occur here since the
-/// caller already checked `actionable` is non-empty, but is the safe
-/// fallback if a future caller passes an empty slice.
-pub fn classify_trigger(root: &Path, events: &[&DebouncedEvent]) -> BuildTrigger {
+/// has to account for it. Paths are the same `path_passes_filter`-eligible
+/// set the trigger log already computes; `Full` (no paths) should not occur
+/// here since the caller already checked `actionable` is non-empty, but is the
+/// safe fallback if a future caller passes an empty slice.
+///
+/// `baseline` reads the last build's manifest, when there is one; it is asked
+/// only for a batch that creates, removes or renames something.
+pub fn classify_trigger(root: &Path, events: &[&DebouncedEvent], baseline: impl FnOnce() -> Option<SiteHashes>) -> BuildTrigger {
     let mut paths = Vec::new();
     let mut structural = false;
+    let mut baseline = Some(baseline);
+    let mut known: Option<Option<SiteHashes>> = None;
     for ev in events {
-        if matches!(ev.kind, EventKind::Create(_) | EventKind::Remove(_))
-            || matches!(ev.kind, EventKind::Modify(ModifyKind::Name(_)))
-        {
-            structural = true;
+        if names_files(ev) {
+            let known = known.get_or_insert_with(|| baseline.take().and_then(|read| read()));
+            structural |= reshapes_tree(root, ev, known.as_ref());
         }
         paths.extend(ev.paths.iter().filter(|p| path_passes_filter(root, p)).cloned());
     }
@@ -108,6 +107,22 @@ pub fn classify_trigger(root: &Path, events: &[&DebouncedEvent]) -> BuildTrigger
     } else {
         BuildTrigger::ContentOnly(paths)
     }
+}
+
+/// A create, remove or rename changes which files exist, unless every watched
+/// path it names is a source the last build knew and is still a file now. An
+/// editor's atomic save (a temp file renamed over the page) reaches the
+/// watcher as a rename or a create of that page, and macOS keeps reporting a
+/// path's earlier create on later plain writes to it.
+fn reshapes_tree(root: &Path, ev: &DebouncedEvent, baseline: Option<&SiteHashes>) -> bool {
+    let Some(baseline) = baseline else { return true };
+    !ev.paths.iter().filter(|p| path_passes_filter(root, p)).all(|p| {
+        p.is_file() && path_to_relative_key(root, p).is_some_and(|key| baseline.sources.contains_key(&key))
+    })
+}
+
+fn names_files(ev: &DebouncedEvent) -> bool {
+    matches!(ev.kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)))
 }
 
 /// Pull `(from_rel, to_rel)` source-relative pairs out of stitched rename
@@ -144,67 +159,6 @@ pub fn extract_rename_pairs(
         .collect()
 }
 
-
-
-/// Pick the `previous_hashes` baseline for `do_rebuild_and_notify`'s
-/// pre/post change-detection diff.
-///
-/// The hash-diff at the end of `do_rebuild_and_notify` decides whether to
-/// emit `FileChanged` based on (pre-rebuild hashes) vs (post-rebuild
-/// hashes). The implicit assumption is that the on-disk output tree
-/// (`.moss/build.nosync/staging/`) reflects the state hashes.json describes — moss
-/// is the only writer.
-///
-/// When an external process wipes staging/ between ticks (iCloud "Optimize
-/// Mac Storage" eviction, antivirus quarantine, manual `rm`, etc.),
-/// hashes.json survives in `build/` but its referenced files are gone.
-/// Without this guard, the pre/post comparison would still match — no
-/// refresh emitted, browser stays on its 404 even though the pipeline
-/// rewrote staging/ during the rebuild.
-///
-/// Substituting `SiteHashes::default()` when output is missing makes the
-/// post-rebuild diff see "all files new" and emit the refresh.
-fn previous_hashes_for_diff(folder_path: &str, output: &Path) -> SiteHashes {
-    if output.exists() {
-        load_previous_hashes(folder_path)
-    } else {
-        log::info!(
-            "Output dir missing at rebuild start: {} — treating as full rebuild for refresh emit",
-            output.display()
-        );
-        SiteHashes::default()
-    }
-}
-
-/// Choose the baseline (`previous`) hashes for the post-rebuild change diff.
-///
-/// Prefers the PREVIOUS build's race-free in-memory content hashes (`in_memory`,
-/// the AppState stash the prior rebuild left behind) over re-reading
-/// `hashes.json` from disk. The disk file is written by a DETACHED seal+persist
-/// task (`build.rs`) that can land DURING the next rebuild; a disk-loaded
-/// baseline can therefore already contain THIS build's hashes, making the
-/// just-edited page look unchanged → omitted from `changed_output_files` →
-/// spurious `action=none` → no preview refresh (the frequent "I have to Cmd+R"
-/// bug). The `new` side of the diff was already made race-free by the
-/// 2026-05-31 stale-hash work; this closes the symmetric baseline gap flagged
-/// in that plan's §6. Falls back to disk only when no in-memory baseline exists
-/// (first rebuild after launch, or CLI/headless/external builds that never
-/// stashed). See `AppState::peek_content_hashes`.
-///
-/// Prior art (carry a race-free version in-memory rather than re-reading a
-/// disk artifact a background task may have rewritten): Vite HMR's per-module
-/// version/timestamp stamping <https://vite.dev/guide/api-hmr> and webpack's
-/// `currentHash`/`lastHash` <https://webpack.js.org/concepts/hot-module-replacement/>.
-pub fn baseline_for_rebuild(
-    in_memory: Option<SiteHashes>,
-    folder_path: &str,
-    output: &Path,
-) -> SiteHashes {
-    match in_memory {
-        Some(h) => h,
-        None => previous_hashes_for_diff(folder_path, output),
-    }
-}
 
 
 /// Compare old and new site hashes to produce a `FileChangeEvent` for the frontend.
@@ -322,8 +276,8 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
     None
 }
 
-/// Which source files this rebuild saw appear, disappear, or change in place —
-/// the one statement of "which sources changed". Paths are project-root-
+/// Which source files this rebuild saw appear, disappear, or change in place.
+/// Also the fallback for changes missed by watcher batches. Paths are project-root-
 /// relative, the keys of `SiteHashes.source_to_output` / `sources`.
 struct SourceChanges {
     creates: Vec<String>,
@@ -433,7 +387,7 @@ fn identity_pairs(
     already: &[(String, String)],
 ) -> Vec<(String, String)> {
     let identity = |h: &SiteHashes, src: &str| {
-        h.sources.get(src).and_then(|m| Some((m.inode?, m.hash.clone())))
+        h.sources.get(src).and_then(|m| Some((m.stat.inode?, m.hash.clone())))
     };
     let paired_old: std::collections::HashSet<&str> = already.iter().map(|(o, _)| o.as_str()).collect();
     let paired_new: std::collections::HashSet<&str> = already.iter().map(|(_, n)| n.as_str()).collect();
@@ -502,7 +456,7 @@ fn identity_pairs(
 ///
 /// A pair is first dropped as stale when a markdown side is known to neither
 /// the page map nor the source hashes of its manifest (see [`pair_is_stale`]).
-fn build_rebuild_event_with_renames(
+pub fn build_rebuild_event_with_renames(
     new_hashes: &SiteHashes,
     previous_hashes: &SiteHashes,
     rename_pairs: &[(String, String)],
@@ -625,35 +579,97 @@ fn build_rebuild_event_with_renames(
     event
 }
 
-/// Select the new hashes for the refresh decision and compute the
-/// `FileChangeEvent`.
+/// The port a build tells the preview on, and the renames its watch batch saw.
+pub(crate) struct RefreshRequest {
+    pub(crate) rename_pairs: Vec<(String, String)>,
+    pub(crate) events: crate::build::ProgressSink,
+}
+
+/// What a build needs to tell the preview, at the moment it shows its render,
+/// what that render changed: the output the preview showed before it, the
+/// renames its batch saw, and the port the preview listens on.
 ///
-/// This is the testable core of the stale-hash race fix. `do_rebuild_and_notify`
-/// extracts the in-memory stash from `AppState` and calls this function so the
-/// decision can be unit-tested without a `tauri::AppHandle`.
-///
-/// **Why `stash` instead of re-reading `hashes.json`:**
-/// `hashes.json` is written by a detached seal+persist task that first awaits
-/// the entire background media phase. Re-reading it synchronously right after
-/// `run_pipeline()` returns races that write. On asset-heavy sites the read
-/// always loses → "no output changes → suppress refresh" even though the page
-/// genuinely changed. The stash carries the build's own synchronously-computed
-/// hashes, eliminating the race. Fallback to the disk read only when the stash
-/// is absent (CLI / headless / no AppState).
-pub fn decide_rebuild_event(
-    stash: Option<SiteHashes>,
-    folder_path: &str,
-    previous_hashes: &SiteHashes,
-    rename_pairs: &[(String, String)],
-) -> Option<FileChangeEvent> {
-    let new_hashes = if stash.is_some() {
-        log::debug!("[watch] refresh decision: using in-memory content hashes (stash)");
-        stash.unwrap()
-    } else {
-        log::info!("[watch] refresh decision: stash absent — falling back to disk hashes.json (CLI/headless or stash not written)");
-        load_previous_hashes(folder_path)
-    };
-    build_rebuild_event_with_renames(&new_hashes, previous_hashes, rename_pairs)
+/// Made right after the build takes the folder lock, while the stash still
+/// holds the render on screen. Prior art for carrying a version in memory
+/// rather than re-reading a file a background task rewrites: Vite HMR's
+/// per-module timestamps <https://vite.dev/guide/api-hmr> and webpack's
+/// `currentHash`/`lastHash` <https://webpack.js.org/concepts/hot-module-replacement/>.
+pub(crate) struct RefreshPlan {
+    baseline: Baseline,
+    asked: RefreshRequest,
+}
+
+/// The output the preview showed before this build.
+enum Baseline {
+    /// The stash of the render on screen. Preferred over `hashes.json`, which
+    /// a detached seal task writes during the next build, so the file can
+    /// already hold this build's hashes and read the edited page as unchanged.
+    Shown(SiteHashes),
+    /// No render stashed in this process: the build's own read of `hashes.json`.
+    Disk,
+    /// No staging dir: an outside process removed the output, so every file
+    /// is new to the preview.
+    Gone,
+}
+
+impl RefreshPlan {
+    pub(crate) fn before_build(folder_path: &str, paths: &crate::moss_paths::MossPaths, asked: RefreshRequest) -> Self {
+        let baseline = match crate::system::build_records::records().content_hashes(folder_path) {
+            Some(stash) => Baseline::Shown(stash),
+            None if paths.staging_dir().exists() => Baseline::Disk,
+            None => Baseline::Gone,
+        };
+        Self { baseline, asked }
+    }
+
+    /// Send `FileChanged` for `render`: what changed against the baseline
+    /// (`on_disk` is the build's read of `hashes.json`), with its output list
+    /// cut to the keys `written` says are already in staging. A key whose
+    /// bytes the background writes later is the seal tail's to announce.
+    /// Sends nothing when nothing is left to say.
+    pub(crate) fn announce(&self, new_hashes: &SiteHashes, on_disk: &SiteHashes, written: impl Fn(&str) -> bool, render: u64) {
+        let nothing = SiteHashes::default();
+        let (baseline, from) = match &self.baseline {
+            Baseline::Shown(stash) => (stash, "the shown render"),
+            Baseline::Disk => (on_disk, "hashes.json"),
+            Baseline::Gone => (&nothing, "nothing (no staging dir)"),
+        };
+        let event = build_rebuild_event_with_renames(new_hashes, baseline, &self.asked.rename_pairs).and_then(|mut event| {
+            let files = event.changed_output_files.take().unwrap_or_default();
+            event.set_changed_output_files(files.into_iter().filter(|key| written(key)).collect());
+            (!event.is_empty()).then_some(event)
+        });
+        match event {
+            Some(mut event) => {
+                event.render_seq = Some(render);
+                self.asked.events.report(&crate::build::progress::PipelineEvent::FileChanged(event));
+            }
+            None => log::info!("Rebuild shown with no output changes against {from} (suppressing refresh)"),
+        }
+    }
+}
+
+/// The keys a render's seal tail announces: what changed since the last
+/// sealed build and since the show (`late` says which keys were written or
+/// rewritten after the show, every key for a render the show did not
+/// announce), plus the pages the repair rewrote under the preview. Diffing
+/// against the last seal rather than the show keeps the late bytes of a
+/// render whose own tail left to a newer one. Search shards are left out, as
+/// in the show's diff (see `compute_rebuild_event`). `previous` is `None` when
+/// only the repairs count: a first build, whose preview loads everything.
+pub(crate) fn changed_after_show(
+    sealed: &SiteHashes,
+    previous: Option<&SiteHashes>,
+    late: impl Fn(&str) -> bool,
+    mut rewritten: Vec<String>,
+) -> Vec<String> {
+    if let Some(previous) = previous {
+        let is_search = crate::build::served_path::ServedPath::is_search_asset;
+        rewritten.extend(sealed.files.iter().filter(|(key, entry)| previous.files.get(*key) != Some(entry) && !is_search(key) && late(key)).map(|(key, _)| key.clone()));
+    }
+    rewritten.sort();
+    rewritten.dedup();
+    rewritten
 }
 
 // ---------------------------------------------------------------------------
@@ -688,13 +704,14 @@ pub(crate) enum SourceCheck {
 ///    - Hash match → `Unchanged`.
 ///    - Hash mismatch → `Changed`.
 /// 4. Any I/O error while reading metadata or bytes → `Unknown` (fail open).
+#[cfg(test)]
 pub(crate) fn source_metadata_matches(meta: &SourceMetadata, fs_path: &Path) -> SourceCheck {
     source_metadata_matches_at(meta, fs_path, None)
 }
 
 /// [`source_metadata_matches`] against the manifest's capture clock,
 /// [`SiteHashes::captured_at`](crate::types::content::SiteHashes::captured_at):
-/// the racy-write window ([`mtime_is_racy`]) arms, and an exact-zero sub-second
+/// the racy-write window ([`mtime_is_racy`](crate::build::stat::mtime_is_racy)) arms, and an exact-zero sub-second
 /// mtime comfortably older than the capture can fast-path (see
 /// [`FileStat::vouches_for`]). The window only ever routes to the hash tier —
 /// it can never suppress, so a false positive costs one hash and self-absorbs.
@@ -750,7 +767,7 @@ pub(crate) fn source_metadata_verdict(
     captured_at: Option<u64>,
 ) -> SourceVerdict {
     // Size differs: content definitely changed. Don't hash (file may be huge).
-    if md.len() != meta.size {
+    if md.len() != meta.stat.size {
         return SourceVerdict::Changed;
     }
 
@@ -762,7 +779,7 @@ pub(crate) fn source_metadata_verdict(
     // The window sends an mtime near the capture to the hash tier, which
     // catches such a pair when the read was close to the capture.
     let current = FileStat::of(md);
-    if !mtime_is_racy(meta.mtime, captured_at) && meta.stat().vouches_for(&current, captured_at) {
+    if meta.vouches_for(&current, captured_at) {
         return SourceVerdict::Unchanged { refreshed: None };
     }
 
@@ -790,15 +807,16 @@ pub(crate) fn source_metadata_verdict(
 /// report `/private/var/...` while `folder` was opened as `/var/...` (symlink);
 /// we `canonicalize` both sides before comparing to avoid false negatives.
 ///
-/// If canonicalization fails on either side (e.g. the file has been removed
-/// between the event firing and the gate reading it), we fall back to the raw
-/// paths. If that fallback produces a prefix mismatch, we return `None` and
-/// the gate fails open — `Remove` events never reach this function today
-/// (`should_gate_modify_event` filters them), but keep the behavior in mind
-/// if the gate's scope is widened.
+/// A path that no longer exists (a rename's old name, a deletion, a cloud
+/// placeholder's real name, a file in a renamed folder) is canonicalized
+/// through its nearest existing ancestor, with the missing tail joined back as
+/// written. A path stays raw only when no ancestor exists. If a raw path then
+/// mismatches the folder's prefix, we return `None` and the gate fails open —
+/// `Remove` events never reach this function today (`should_gate_modify_event`
+/// filters them), but keep the behavior in mind if the gate's scope is widened.
 pub fn path_to_relative_key(folder: &Path, abs: &Path) -> Option<String> {
     let folder_canon = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
-    let abs_canon = std::fs::canonicalize(abs).unwrap_or_else(|_| abs.to_path_buf());
+    let abs_canon = canonical_through_missing(abs);
     let rel = abs_canon.strip_prefix(&folder_canon).ok()?;
     let mut parts = Vec::new();
     for comp in rel.components() {
@@ -811,17 +829,36 @@ pub fn path_to_relative_key(folder: &Path, abs: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// `abs` canonicalized as far as it exists: the nearest existing ancestor,
+/// canonicalized, with the missing tail joined back. Without it a folder
+/// reached through a symlink never strips from a path that is gone.
+fn canonical_through_missing(abs: &Path) -> std::path::PathBuf {
+    let mut tail = Vec::new();
+    let mut existing = abs;
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(existing) {
+            return tail.iter().rev().fold(canon, |path, name| path.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name);
+                existing = parent;
+            }
+            _ => return abs.to_path_buf(),
+        }
+    }
+}
+
 /// Decide whether a watcher event with the given paths should trigger a rebuild.
 ///
 /// Consults `SiteHashes.sources` from `baseline` when given — the caller's
-/// race-free in-memory stash of the LAST build's hashes (see
-/// `AppState::peek_content_hashes`) — falling back to the on-disk manifest
+/// race-free in-memory stash of the LAST build's hashes — falling back to the on-disk manifest
 /// only when no stash exists (first rebuild after launch, CLI/headless).
 /// The disk file is written by a DETACHED seal task minutes after the build
 /// renders, so during that tail it still describes the build BEFORE last:
 /// an edit-then-undo lands the file back on the stale manifest's bytes, the
 /// disk-based gate calls it `Unchanged`, and the revert never renders. Same
-/// race `baseline_for_rebuild` closes for the refresh diff; this closes it
+/// race [`RefreshPlan`] closes for the refresh diff; this closes it
 /// for the gate.
 ///
 /// Returns `true` (caller must proceed with rebuild) if any of:
@@ -861,7 +898,7 @@ pub fn should_rebuild_for_paths(
             Some(m) => m,
             None => return true, // unknown to manifest → fail open
         };
-        match source_metadata_matches(meta, abs) {
+        match source_metadata_matches_at(meta, abs, hashes.captured_at) {
             SourceCheck::Unchanged => continue,
             SourceCheck::Changed | SourceCheck::Unknown => return true,
         }
@@ -993,6 +1030,30 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "svg", "avif", "bmp", "heic", "heif", "tiff", "tif",
     "ico",
 ];
+
+/// The project-relative keys of the files whose bytes one watcher event says
+/// changed: a create, a write, and the destination of an atomic-save rename
+/// (a rename reported per path, as FSEvents does, counts too). A rename's
+/// source, a removal and a metadata change other than a write time are not
+/// changes of content; moss's own output and anything outside the watch scope
+/// are left out.
+pub(crate) fn changed_source_keys(root: &Path, kind: EventKind, paths: &[PathBuf]) -> Vec<String> {
+    use notify::event::MetadataKind;
+    let paths = match kind {
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => return Vec::new(),
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if paths.len() == 2 => &paths[1..],
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => return Vec::new(),
+        EventKind::Modify(ModifyKind::Metadata(m)) if !matches!(m, MetadataKind::Any | MetadataKind::WriteTime) => return Vec::new(),
+        EventKind::Create(_) | EventKind::Modify(_) => paths,
+        _ => return Vec::new(),
+    };
+    paths.iter()
+        .filter(|path| scope::path_is_watchable(root, path)
+            && !scope::all_paths_moss_written(root, std::slice::from_ref(*path))
+            && !path.is_dir())
+        .filter_map(|path| path_to_relative_key(root, path))
+        .collect()
+}
 
 /// Which `SourceAssetChanged` emissions one debounced event owes the editor.
 ///

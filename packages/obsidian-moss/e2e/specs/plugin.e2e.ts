@@ -33,20 +33,20 @@ describe("moss plugin", () => {
       void leaf.setViewState(state);
     });
 
-    const unknown = browser.$(".moss-fm-unknown");
+    const unknown = browser.$(".moss-diag-hint");
     await unknown.waitForExist({ timeout: 10000 });
     expect(await unknown.getText()).toBe("titel");
 
-    const wrongType = browser.$(".moss-fm-wrong-type");
+    const wrongType = browser.$("span.moss-diag-error");
     await wrongType.waitForExist({ timeout: 10000 });
-    expect(await wrongType.getText()).toContain("yes");
+    expect(await wrongType.getText()).toBe("draft");
 
     // The clean note gets no decorations. Scope to the ACTIVE leaf —
     // Obsidian keeps the previous tab's DOM alive in the background.
     await obsidianPage.openFile("welcome.md");
     await browser.waitUntil(
       async () =>
-        !(await browser.$(".workspace-leaf.mod-active .moss-fm-unknown").isExisting()) &&
+        !(await browser.$(".workspace-leaf.mod-active .moss-diag-hint").isExisting()) &&
         (await browser.$(".workspace-leaf.mod-active .cm-content").getText()).includes("Welcome"),
       { timeout: 10000, timeoutMsg: "diagnostics lingered in the active editor" },
     );

@@ -111,8 +111,10 @@ pub struct DeployFlags {
     /// would go offline for a reason other than the author removing them. It
     /// accepts exactly the set this build found, nothing standing.
     pub accept_removals: bool,
+    /// Accept a rollback identified by source timestamps or published hashes.
+    pub accept_stale_content: bool,
     /// `--dry-run`: build as a deploy would, say what it would do, send
-    /// nothing and record nothing.
+    /// nothing and write no publish state. Performance telemetry is still recorded.
     pub dry_run: bool,
     /// `--json`, with `--dry-run`: print the dry run as JSON, every list in
     /// full, for a script or an agent.
@@ -158,6 +160,7 @@ impl DeployArgs {
                 "--allow-plugins" => flags.allow_plugins = true,
                 "--overwrite-newer" => flags.overwrite_newer = true,
                 "--accept-removals" => flags.accept_removals = true,
+                "--accept-stale-content" => flags.accept_stale_content = true,
                 "--dry-run" => flags.dry_run = true,
                 "--json" => flags.json = true,
                 a if a.starts_with("--retry-copies=") => {
@@ -180,9 +183,12 @@ impl DeployArgs {
         if flags.json && !flags.dry_run {
             return Err("error: --json goes with --dry-run; a deploy itself prints the published address".to_string());
         }
+        if flags.dry_run && flags.accept_stale_content {
+            return Err("error: --dry-run cannot accept stale content; drop --accept-stale-content to inspect the refusal".into());
+        }
         if flags.dry_run && flags.accept_removals {
             return Err(
-                "error: --dry-run records nothing, so it cannot accept removals. Drop --accept-removals to see \
+                "error: --dry-run records no publish state, so it cannot accept removals. Drop --accept-removals to see \
                  what would be refused, or drop --dry-run to publish."
                     .to_string(),
             );
@@ -284,13 +290,16 @@ pub fn publish(
     };
 
     let sink = printing();
-    let report = runtime.block_on(dispatch(folder, route, host_ports, crate::build::PluginMode::Blocking, flags, &sink));
+    runtime.block_on(crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
+    let report = dispatch(folder, route, host_ports, crate::build::PluginMode::Blocking, flags, &sink).await;
     // After the publish has returned: a copy that fails never fails it.
     if let Some(url) = report.as_ref().ok().filter(|r| r.landed()).and_then(|r| r.site_url()) {
         let print = |s: &crate::syndication::send::Sent| eprint!("{}", crate::syndication::send::render(std::slice::from_ref(s)));
-        runtime.block_on(crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, &print));
+        let _phase = crate::build::phase::PhaseTrace::start("after_publish");
+        crate::syndication::send::after_publish(folder, url, host_ports, &flags.retry_copies, &print).await;
     }
     report
+    }))
 }
 
 /// What `moss deploy` does once its process-wide setup is done: describe the
@@ -305,6 +314,7 @@ async fn dispatch(
     flags: &DeployFlags,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
+    crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
     // Before the route's own send: a dry run is the same build with
     // everything after the gate left out, so it never reaches the match.
     if flags.dry_run {
@@ -314,10 +324,11 @@ async fn dispatch(
                 dir,
                 flags.site_id.as_deref(),
                 flags.accept_removals,
+                flags.overwrite_newer,
             )
             .await
             .map(|dry| DeployReport::DryRun(Box::new(dry))),
-            _ => crate::deploy::dry_run::run_dry_run(folder, route, flags.site_id.as_deref(), host_ports, plugins)
+            _ => crate::deploy::dry_run::run_dry_run(folder, route, flags.site_id.as_deref(), host_ports, plugins, flags.overwrite_newer)
                 .await
                 .map(|dry| DeployReport::DryRun(Box::new(dry))),
         };
@@ -330,6 +341,7 @@ async fn dispatch(
         || send(folder, route, host_ports, plugins, flags, sink),
     )
     .await
+    }).await
 }
 
 /// The route's own send, once.
@@ -341,6 +353,7 @@ async fn send(
     flags: &DeployFlags,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
+    crate::deploy::profile::begin_attempt();
     match route {
         DeployRoute::Prebuilt { dir } => {
             crate::deploy::prebuilt::run_prebuilt_deploy(
@@ -368,6 +381,7 @@ async fn send(
                 crate::deploy::push::PublishOverrides {
                     overwrite_newer: flags.overwrite_newer,
                     accept_removals: flags.accept_removals,
+                    accept_stale_content: flags.accept_stale_content,
                 },
                 sink,
             )
@@ -383,7 +397,11 @@ async fn send(
                 folder,
                 host_ports,
                 plugins,
-                flags.accept_removals,
+                crate::deploy::push::PublishOverrides {
+                    accept_removals: flags.accept_removals,
+                    accept_stale_content: flags.accept_stale_content,
+                    ..Default::default()
+                },
                 sink,
             )
             .await
@@ -615,6 +633,13 @@ mod removal_flag_tests {
     }
 
     #[test]
+    fn stale_content_acceptance_is_explicit_and_not_a_dry_run() {
+        assert!(!parse(&["site"]).unwrap().flags.accept_stale_content);
+        assert!(parse(&["site", "--accept-stale-content"]).unwrap().flags.accept_stale_content);
+        assert!(parse(&["site", "--dry-run", "--accept-stale-content"]).is_err());
+    }
+
+    #[test]
     fn email_is_accepted_both_ways_and_must_look_like_an_address() {
         assert_eq!(parse(&["site", "--email", "a@b.co"]).unwrap().flags.email.as_deref(), Some("a@b.co"));
         assert_eq!(parse(&["site", "--email=a@b.co"]).unwrap().flags.email.as_deref(), Some("a@b.co"));
@@ -648,7 +673,7 @@ mod removal_flag_tests {
     #[test]
     fn a_dry_run_cannot_accept_removals() {
         let err = parse(&["site", "--dry-run", "--accept-removals"]).unwrap_err();
-        assert!(err.starts_with("error: --dry-run records nothing"), "{err}");
+        assert!(err.starts_with("error: --dry-run records no publish state"), "{err}");
     }
 }
 
@@ -661,17 +686,20 @@ mod dry_run_tests {
     use crate::build::manifest::change_set::PublishedSnapshot;
     use crate::moss_paths::MossPaths;
 
+    use crate::seta::client::tests::StandIn;
+
+    /// The one read a dry run sends a folder with a site and a key.
+    const GENERATION: &str = "GET /api/sites/dry-test/generation";
+
     struct Fixture {
         dir: tempfile::TempDir,
-        connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        seta: StandIn,
         _env: std::sync::MutexGuard<'static, ()>,
         prev_url: Option<String>,
     }
 
     impl Drop for Fixture {
         fn drop(&mut self) {
-            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
             match self.prev_url.take() {
                 Some(u) => std::env::set_var("MOSS_SETA_URL", u),
                 None => std::env::remove_var("MOSS_SETA_URL"),
@@ -680,10 +708,14 @@ mod dry_run_tests {
     }
 
     impl Fixture {
-        /// A one-page folder; `lost_feed` adds a record of a publish that
-        /// served `legacy-feed.xml`. The hosting server is a listener that records
-        /// whether anything connected.
-        fn new(lost_feed: bool) -> Self {
+        /// A one-page folder with a site and a signing key; `lost_feed` adds a
+        /// record of a publish that served `legacy-feed.xml`. The hosting
+        /// server says the key owns the site, which has never published.
+        async fn new(lost_feed: bool) -> Self {
+            Self::answered_by(lost_feed, StandIn::json(200, r#"{"generation_id":null,"deployed_at":null}"#).await)
+        }
+
+        fn answered_by(lost_feed: bool, seta: StandIn) -> Self {
             let env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp/hosted");
             std::fs::create_dir_all(&base).unwrap();
@@ -691,10 +723,7 @@ mod dry_run_tests {
             std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\n\nHello.\n").unwrap();
             std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
             std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-test\"\n").unwrap();
-            // A registered site has a signing key; a dry run only checks it is there.
-            std::fs::create_dir_all(dir.path().join(".moss/identity")).unwrap();
-            std::fs::write(dir.path().join(".moss/identity/secret-key"), "k").unwrap();
-            std::fs::write(dir.path().join(".moss/identity/public.json"), "{}").unwrap();
+            crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
             if lost_feed {
                 crate::build::manifest::published_record::save(
                     &MossPaths::new(dir.path()),
@@ -709,37 +738,26 @@ mod dry_run_tests {
                 )
                 .unwrap();
             }
-            // Counts connections and hangs up on each, so a deploy that does
-            // reach for the server fails fast instead of waiting on it.
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.set_nonblocking(true).unwrap();
-            let addr = listener.local_addr().unwrap();
-            let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let (c, st) = (connections.clone(), stop.clone());
-            std::thread::spawn(move || {
-                while !st.load(std::sync::atomic::Ordering::Relaxed) {
-                    match listener.accept() {
-                        Ok(_) => {
-                            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        Err(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
-                    }
-                }
-            });
             let prev_url = std::env::var("MOSS_SETA_URL").ok();
-            std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
-            Self { dir, connections, stop, _env: env, prev_url }
+            std::env::set_var("MOSS_SETA_URL", seta.url());
+            Self { dir, seta, _env: env, prev_url }
+        }
+
+        /// What the hosting server received, as "METHOD path".
+        fn requests(&self) -> Vec<String> {
+            self.seta.requests().iter().map(|r| format!("{} {}", r.method, r.path_and_query)).collect()
         }
 
         async fn run(&self, dry_run: bool) -> Result<DeployReport, String> {
-            let flags = DeployFlags { dry_run, ..DeployFlags::default() };
-            dispatch(self.dir.path(), &DeployRoute::Hosted, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing()).await
+            self.run_with(DeployFlags { dry_run, ..DeployFlags::default() }).await
         }
 
-        fn contacted_the_server(&self) -> bool {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            self.connections.load(std::sync::atomic::Ordering::Relaxed) > 0
+        async fn run_with(&self, flags: DeployFlags) -> Result<DeployReport, String> {
+            self.run_on(&DeployRoute::Hosted, flags).await
+        }
+
+        async fn run_on(&self, route: &DeployRoute, flags: DeployFlags) -> Result<DeployReport, String> {
+            dispatch(self.dir.path(), route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing()).await
         }
 
         fn record_bytes(&self) -> Vec<u8> {
@@ -752,7 +770,7 @@ mod dry_run_tests {
     /// `[redirects]` lines that keep them, which the text report cuts at 20.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_json_dry_run_lists_every_move_and_the_lines_that_keep_them() {
-        let fx = Fixture::new(false);
+        let fx = Fixture::new(false).await;
         // A page that moved, beside 25 files that moved with their folder.
         std::fs::write(fx.dir.path().join("moved.md"), "---\ntitle: Moved\n---\n\nNew home.\n").unwrap();
         let mut files = std::collections::HashMap::from([("old/index.html".to_string(), "100644:abc".to_string())]);
@@ -779,9 +797,7 @@ mod dry_run_tests {
         )
         .unwrap();
         let flags = DeployFlags { dry_run: true, json: true, ..DeployFlags::default() };
-        let report = dispatch(fx.dir.path(), &DeployRoute::Hosted, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing())
-            .await
-            .expect("a dry run reports");
+        let report = fx.run_with(flags).await.expect("a dry run reports");
 
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
         assert!(dry.refusal.is_some());
@@ -802,12 +818,12 @@ mod dry_run_tests {
         assert_eq!(pending[1]["address"], "/review/old/00.pdf");
         assert_eq!(pending[1]["cause"], serde_json::json!({ "kind": "moved", "to": "/review/new/00.pdf" }));
         assert_eq!(json["redirects_to_add"], serde_json::json!([r#""/old/" = "/moved/""#, r#""/review/old/" = "/review/new/""#]));
-        assert!(!fx.contacted_the_server());
+        assert_eq!(fx.requests(), [GENERATION]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_dry_run_leaves_the_source_folder_byte_identical() {
-        let fx = Fixture::new(false);
+        let fx = Fixture::new(false).await;
         let note = "---\ntitle: Note\n---\n\nShared text.\n";
         std::fs::write(fx.dir.path().join("note.md"), note).unwrap();
         let index_before = std::fs::read(fx.dir.path().join("index.md")).unwrap();
@@ -819,11 +835,15 @@ mod dry_run_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_dry_run_that_a_real_deploy_would_refuse_exits_non_zero_and_sends_nothing() {
-        let fx = Fixture::new(true);
+    async fn a_dry_run_that_a_real_deploy_would_refuse_exits_non_zero_and_uploads_nothing() {
+        let fx = Fixture::new(true).await;
         let before = fx.record_bytes();
 
-        let report = fx.run(true).await.expect("a dry run reports, it does not fail");
+        let (host, mut warnings) = crate::ops::serve::events::collect_removal_warnings();
+        let flags = DeployFlags { dry_run: true, ..DeployFlags::default() };
+        let report = dispatch(fx.dir.path(), &DeployRoute::Hosted, &host, crate::build::PluginMode::Skip, &flags, &printing())
+            .await.expect("a dry run reports, it does not fail");
+        assert!(warnings().iter().any(|w| w.contains("/legacy-feed.xml")));
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
         assert!(dry.refusal.as_ref().map(|r| r.text.as_str()).is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
@@ -833,7 +853,7 @@ mod dry_run_tests {
             dry.transfer
         );
         assert_eq!(report_code(report), 1);
-        assert!(!fx.contacted_the_server(), "a dry run must not contact the hosting server");
+        assert_eq!(fx.requests(), [GENERATION], "a dry run asks one thing and sends nothing");
         assert_eq!(fx.record_bytes(), before, "a dry run must not write a published record");
         let key = fx.dir.path().to_string_lossy().to_string();
         assert!(
@@ -844,7 +864,7 @@ mod dry_run_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_derivative_the_build_stops_producing_is_kept_as_a_redirect_and_the_check_passes() {
-        let fx = Fixture::new(false);
+        let fx = Fixture::new(false).await;
         std::fs::write(fx.dir.path().join("photo-2.jpg"), b"JPEG").unwrap();
         crate::build::manifest::published_record::save(
             &MossPaths::new(fx.dir.path()),
@@ -872,8 +892,8 @@ mod dry_run_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_dry_run_a_real_deploy_would_not_refuse_exits_zero_and_sends_nothing() {
-        let fx = Fixture::new(false);
+    async fn a_dry_run_a_real_deploy_would_not_refuse_exits_zero_and_uploads_nothing() {
+        let fx = Fixture::new(false).await;
 
         let report = fx.run(true).await.expect("a dry run reports");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
@@ -881,13 +901,170 @@ mod dry_run_tests {
         assert!(dry.refusal.is_none(), "{dry:?}");
         assert!(matches!(dry.transfer, crate::deploy::dry_run::Transfer::NoRecord), "no record, so there is nothing to count against: {dry:?}");
         assert_eq!(report_code(report), 0);
-        assert!(!fx.contacted_the_server());
+        assert_eq!(fx.requests(), [GENERATION], "a dry run asks one thing and sends nothing");
         assert!(fx.record_bytes().is_empty(), "nothing published, so no record");
     }
 
+    async fn dry_run_with(fx: &Fixture, flags: DeployFlags) -> crate::deploy::dry_run::DryRun {
+        let report = fx.run_with(flags).await.expect("a dry run reports");
+        let DeployReport::DryRun(dry) = report else { panic!("expected a dry run, got {report:?}") };
+        *dry
+    }
+
+    async fn dry_run_against(fx: &Fixture) -> crate::deploy::dry_run::DryRun {
+        dry_run_with(fx, DeployFlags { dry_run: true, ..DeployFlags::default() }).await
+    }
+
+    /// A dry run of the folder's `_site`, holding one page, as a prebuilt publish.
+    async fn prebuilt_dry_run(fx: &Fixture) -> crate::deploy::dry_run::DryRun {
+        let site = fx.dir.path().join("_site");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(site.join("index.html"), "<p>hi</p>").unwrap();
+        let route = DeployRoute::Prebuilt { dir: site };
+        let report = fx.run_on(&route, DeployFlags { dry_run: true, ..DeployFlags::default() }).await.expect("a prebuilt dry run reports");
+        let DeployReport::DryRun(dry) = report else { panic!("expected a dry run, got {report:?}") };
+        *dry
+    }
+
+    fn answered(access: crate::deploy::dry_run::SiteAccess) -> crate::deploy::dry_run::Owner {
+        crate::deploy::dry_run::Owner::Answered { site: "dry-test".into(), access }
+    }
+
+    fn unchecked_reason(dry: &crate::deploy::dry_run::DryRun) -> &str {
+        let crate::deploy::dry_run::Owner::Unchecked { reason } = &dry.owner else { panic!("{:?}", dry.owner) };
+        reason
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_asks_the_server_whether_this_key_may_publish_and_sends_nothing_else() {
+        let fx = Fixture::answered_by(false, StandIn::json(200, r#"{"generation_id":"live-gen-0001","deployed_at":1}"#).await);
+        let dry = dry_run_against(&fx).await;
+        assert_eq!(dry.owner, answered(crate::deploy::dry_run::SiteAccess::Authorized));
+        assert!(dry.render().contains("may publish the site \"dry-test\""), "{}", dry.render());
+        assert_eq!(dry.to_json()["owner"], serde_json::json!({ "state": "answered", "site": "dry-test", "access": "authorized" }));
+        assert!(dry.refusal.is_none(), "{dry:?}");
+        assert_eq!(fx.requests(), [GENERATION], "one read, no upload");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_key_that_does_not_own_the_site_is_refused_with_the_email_fix() {
+        let fx = Fixture::answered_by(false, StandIn::json(403, r#"{"error":"Not authorized for this site"}"#).await);
+        let dry = dry_run_against(&fx).await;
+        assert_eq!(dry.owner, answered(crate::deploy::dry_run::SiteAccess::NotOwner));
+        let refusal = dry.refusal.as_ref().expect("a real deploy would be refused");
+        assert_eq!(refusal.kind, crate::deploy::RefusalKind::NotOwner);
+        assert!(refusal.text.contains("--email"), "{}", refusal.text);
+    }
+
+    /// The prebuilt route asks the same question and refuses the same way.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_prebuilt_dry_run_refuses_a_key_that_does_not_own_the_site() {
+        let fx = Fixture::answered_by(false, StandIn::json(403, r#"{"error":"Not authorized for this site"}"#).await);
+        let dry = prebuilt_dry_run(&fx).await;
+        assert_eq!(dry.refusal.as_ref().map(|r| r.kind), Some(crate::deploy::RefusalKind::NotOwner), "{dry:?}");
+        assert_eq!(fx.requests(), [GENERATION]);
+    }
+
+    /// A 404 is a site the server does not know or a server too old to have
+    /// the route, so the dry run claims neither and refuses nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_site_the_server_does_not_know_is_not_known_and_not_a_refusal() {
+        let fx = Fixture::answered_by(false, StandIn::json(404, r#"{"error":"Site not found"}"#).await);
+        let dry = dry_run_against(&fx).await;
+        assert_eq!(dry.owner, answered(crate::deploy::dry_run::SiteAccess::NotFound));
+        assert!(dry.render().contains("Publishing: not known"), "{}", dry.render());
+        assert!(dry.refusal.is_none(), "{dry:?}");
+    }
+
+    /// A 401 is a clock or signing fault, not another owner: `--email` would
+    /// not fix it, so it refuses nothing and says what the server said.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_rejected_signature_is_unchecked_not_a_refusal() {
+        let fx = Fixture::answered_by(false, StandIn::json(401, r#"{"error":"Request timestamp expired"}"#).await);
+        let dry = dry_run_against(&fx).await;
+        assert!(unchecked_reason(&dry).contains("Request timestamp expired"), "{dry:?}");
+        assert!(dry.render().contains("and whether another copy published since"), "{}", dry.render());
+        assert!(dry.refusal.is_none(), "{dry:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_edge_challenge_is_unchecked_not_a_refusal() {
+        let fx = Fixture::answered_by(false, StandIn::new(403, &[("cf-mitigated", "challenge")], |_, _| String::new()).await);
+        let dry = dry_run_against(&fx).await;
+        unchecked_reason(&dry);
+        assert!(dry.refusal.is_none(), "{dry:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreachable_server_is_unchecked_and_the_dry_run_still_reports() {
+        let fx = Fixture::new(false).await;
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        std::env::set_var("MOSS_SETA_URL", format!("http://{closed}"));
+        let dry = dry_run_against(&fx).await;
+        assert!(unchecked_reason(&dry).contains("could not be asked"), "{dry:?}");
+        assert!(dry.refusal.is_none(), "{dry:?}");
+    }
+
+    /// Loading an identity in the format before the current one rewrites it,
+    /// so a dry run does not sign with it and leaves the file as it was.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_older_identity_format_is_not_asked_with_and_not_rewritten() {
+        let fx = Fixture::new(false).await;
+        let public = fx.dir.path().join(".moss/identity/public.json");
+        let mut raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&public).unwrap()).unwrap();
+        raw["version"] = 2.into();
+        std::fs::write(&public, raw.to_string()).unwrap();
+        let before = std::fs::read(&public).unwrap();
+        let dry = dry_run_against(&fx).await;
+        assert!(unchecked_reason(&dry).contains("current format"), "{dry:?}");
+        assert_eq!(std::fs::read(&public).unwrap(), before, "the dry run must not migrate it");
+        assert!(fx.requests().is_empty(), "{:?}", fx.requests());
+    }
+
+    /// A deploy refuses a key file from a newer moss, so a dry run does not ask with it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_newer_identity_format_is_not_asked_with() {
+        let fx = Fixture::new(false).await;
+        let public = fx.dir.path().join(".moss/identity/public.json");
+        let mut raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&public).unwrap()).unwrap();
+        raw["version"] = 99.into();
+        std::fs::write(&public, raw.to_string()).unwrap();
+        let before = std::fs::read(&public).unwrap();
+        let dry = dry_run_against(&fx).await;
+        assert!(unchecked_reason(&dry).contains("a newer moss"), "{dry:?}");
+        assert_eq!(std::fs::read(&public).unwrap(), before);
+        assert!(fx.requests().is_empty(), "{:?}", fx.requests());
+    }
+
+    /// The same answer says whether another copy published after this one,
+    /// which a deploy refuses unless `--overwrite-newer`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_newer_publish_from_another_copy_is_refused_unless_overwrite_newer() {
+        // 2026-09-24, after this folder's record.
+        let fx = Fixture::answered_by(false, StandIn::json(200, r#"{"generation_id":"theirs","deployed_at":1790258580}"#).await);
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(fx.dir.path()),
+            &PublishedSnapshot {
+                generation_id: "ours".into(),
+                target: "moss:dry-test".into(),
+                published_at: "2026-09-20T09:12:30+00:00".into(),
+                asset_source_to_output: Some(Default::default()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let dry = dry_run_against(&fx).await;
+        let refusal = dry.refusal.as_ref().expect("a real deploy would be refused");
+        assert_eq!(refusal.kind, crate::deploy::RefusalKind::StaleCopy, "{}", refusal.text);
+        assert!(refusal.text.contains("--overwrite-newer"), "{}", refusal.text);
+
+        let dry = dry_run_with(&fx, DeployFlags { dry_run: true, overwrite_newer: true, ..DeployFlags::default() }).await;
+        assert!(dry.refusal.is_none(), "{dry:?}");
+    }
+
     /// A folder that never published: no `site_id`, and `moss env` run or not.
-    fn unpublished(environment: bool) -> Fixture {
-        let fx = Fixture::new(false);
+    async fn unpublished(environment: bool) -> Fixture {
+        let fx = Fixture::new(false).await;
         std::fs::remove_file(fx.dir.path().join(".moss/state.toml")).unwrap();
         std::fs::remove_dir_all(fx.dir.path().join(".moss/identity")).unwrap();
         if environment {
@@ -900,32 +1077,32 @@ mod dry_run_tests {
     /// environment is what a real deploy needs first, named as its refusal.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_folder_with_no_site_and_no_environment_dry_run_builds_and_names_the_missing_environment() {
-        let fx = unpublished(false);
+        let fx = unpublished(false).await;
         let report = fx.run(true).await.expect("a dry run reports the plan");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
         let refusal = dry.refusal.as_ref().map(|r| r.text.as_str()).expect("a real deploy would stop here");
         assert!(refusal.contains("has no site yet") && refusal.contains("moss env"), "{refusal}");
-        assert!(!fx.contacted_the_server());
+        assert!(fx.requests().is_empty());
     }
 
     /// The refusal a first publish would meet is knowable from the folder: no
     /// email is recorded for its key. Saying so sends nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_first_publish_dry_run_says_verification_would_be_needed_and_sends_nothing() {
-        let fx = unpublished(true);
+        let fx = unpublished(true).await;
         let report = fx.run(true).await.expect("a dry run reports");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
         assert!(dry.needs_verification, "{dry:?}");
         assert!(dry.render().contains("--email <address>"), "{}", dry.render());
-        assert!(!fx.contacted_the_server(), "a dry run must not contact the server");
+        assert!(fx.requests().is_empty(), "a dry run must not contact the server");
     }
 
     /// A deploy creates a signing key when the site has none, so the dry run
     /// says that rather than refusing, and creates nothing.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_registered_site_with_no_key_is_told_a_deploy_would_create_one() {
-        let fx = Fixture::new(false);
+        let fx = Fixture::new(false).await;
         std::fs::remove_dir_all(fx.dir.path().join(".moss/identity")).unwrap();
         let report = fx.run(true).await.expect("a deploy would go on and create the key");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
@@ -939,7 +1116,7 @@ mod dry_run_tests {
     /// not say a new one would be created (a new key is a different owner).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_legacy_identity_with_its_key_in_public_json_is_not_reported_as_missing() {
-        let fx = Fixture::new(false);
+        let fx = Fixture::new(false).await;
         std::fs::remove_file(fx.dir.path().join(".moss/identity/secret-key")).unwrap();
         std::fs::write(
             fx.dir.path().join(".moss/identity/public.json"),
@@ -959,7 +1136,7 @@ mod dry_run_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_config_from_a_newer_moss_fails_the_dry_run_as_it_fails_a_deploy() {
-        let fx = Fixture::new(false);
+        let fx = Fixture::new(false).await;
         let future = crate::config::migrations::CURRENT_VERSION + 1;
         std::fs::write(fx.dir.path().join(".moss/config.toml"), format!("schema_version = {future}\n")).unwrap();
         assert!(fx.run(true).await.is_err());
@@ -969,7 +1146,7 @@ mod dry_run_tests {
     /// neither, and says what it would do.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_first_publish_dry_run_registers_nothing_and_creates_no_key() {
-        let fx = unpublished(true);
+        let fx = unpublished(true).await;
         let report = fx.run(true).await.expect("a dry run reports");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
@@ -977,24 +1154,16 @@ mod dry_run_tests {
         assert!(dry.render().contains("would register the site"), "{}", dry.render());
         assert!(!fx.dir.path().join(".moss/identity").exists(), "no key may be created");
         assert!(!fx.dir.path().join(".moss/state.toml").exists(), "no site may be registered");
-        assert!(!fx.contacted_the_server());
+        assert!(fx.requests().is_empty());
     }
 
     /// A prebuilt folder is described from the files on disk, not refused.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_dry_run_of_a_prebuilt_folder_describes_it_and_contacts_no_server() {
-        let fx = Fixture::new(true);
-        let site = fx.dir.path().join("_site");
-        std::fs::create_dir_all(&site).unwrap();
-        std::fs::write(site.join("index.html"), "<p>hi</p>").unwrap();
-        let flags = DeployFlags { dry_run: true, ..DeployFlags::default() };
-        let route = DeployRoute::Prebuilt { dir: site };
-        let report = dispatch(fx.dir.path(), &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing())
-            .await
-            .expect("a prebuilt dry run reports");
-        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+    async fn a_dry_run_of_a_prebuilt_folder_describes_it_and_uploads_nothing() {
+        let fx = Fixture::new(true).await;
+        let dry = prebuilt_dry_run(&fx).await;
         assert!(dry.prebuilt && dry.refusal.is_some(), "{dry:?}");
-        assert!(!fx.contacted_the_server());
+        assert_eq!(fx.requests(), [GENERATION], "one read, no upload");
     }
 
     /// The plugin route reads the same gate: refused without the flag, and
@@ -1002,22 +1171,57 @@ mod dry_run_tests {
     /// comes back after the gate is the plugin route's own "no plugin").
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_plugin_route_honours_accept_removals() {
-        let fx = Fixture::new(true);
+        let fx = Fixture::new(true).await;
         let sink = crate::deploy::progress::silent();
+        let (host, mut warnings) = crate::ops::serve::events::collect_removal_warnings();
         let run = |accept| {
             crate::deploy::plugin_push::run_plugin_deploy(
                 fx.dir.path(),
-                &crate::cli::host::cli_host_ports,
+                &host,
                 crate::build::PluginMode::Skip,
-                accept,
+                crate::deploy::push::PublishOverrides { accept_removals: accept, ..Default::default() },
                 &sink,
             )
         };
         let refused = run(false).await.expect_err("an unexplained removal stops a plugin publish too");
         assert!(refused.contains("/legacy-feed.xml"), "{refused}");
 
+        assert!(warnings().iter().any(|w| w.contains("/legacy-feed.xml")));
+
         let past = run(true).await;
         assert!(!matches!(&past, Err(e) if e.contains("legacy-feed.xml")), "accepted, so not the gate: {past:?}");
+        assert!(warnings().is_empty(), "accepted removals must not ask for action");
+        let removed = crate::system::build_records::records()
+            .removed_addresses(&fx.dir.path().to_string_lossy()).unwrap();
+        assert!(removed.iter().any(|r| r.path == "legacy-feed.xml"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stale_content_is_reported_by_dry_run_and_accepted_on_the_plugin_route() {
+        let fx = Fixture::new(false).await;
+        let dir = &fx.dir;
+        let history = dir.path().join(".moss/history/publishes");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("2026-01-01.json"), serde_json::json!({
+            "version": 1, "published_at": "2026-01-01T00:00:00Z", "target": "moss:dry-test",
+            "generation_id": "previous", "entries": {
+                "index.md": {"mode": "100644", "hash": "previous", "source_mtime": [4000000000u64, 0]}
+            }
+        }).to_string()).unwrap();
+        let flags = DeployFlags { dry_run: true, ..Default::default() };
+        let report = dispatch(dir.path(), &DeployRoute::Hosted, &crate::cli::host::cli_host_ports,
+            crate::build::PluginMode::Skip, &flags, &printing()).await.unwrap();
+        let DeployReport::DryRun(dry) = report else { panic!("expected dry run") };
+        assert_eq!(dry.refusal.unwrap().kind, crate::deploy::RefusalKind::StaleContent);
+        let sink = crate::deploy::progress::silent();
+        let run = |accept| crate::deploy::plugin_push::run_plugin_deploy(
+            dir.path(), &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip,
+            crate::deploy::push::PublishOverrides { accept_stale_content: accept, ..Default::default() }, &sink,
+        );
+        let error = run(false).await.unwrap_err();
+        assert!(error.contains("--accept-stale-content"), "{error}");
+        let result = run(true).await;
+        assert!(matches!(result, Ok(crate::plugins::types::DeployResult::NoPlugin { .. })), "{result:?}");
     }
 
     fn report_code(report: DeployReport) -> i32 {
@@ -1067,6 +1271,40 @@ mod email_wiring_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_publish_records_the_account_its_key_now_belongs_to_and_leaves_the_key() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+        std::fs::write(folder.dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"my-site\"\n").unwrap();
+        let key_file = folder.dir.path().join(".moss/identity/secret-key");
+        let key_before = (std::fs::read(&key_file).unwrap(), std::fs::metadata(&key_file).unwrap().modified().unwrap());
+        *seta.account.lock().unwrap() = Some("moved@example.test");
+
+        let _ = deploy(&folder, None).await;
+
+        assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("moved@example.test"));
+        assert_eq!(seta.count_exact("GET /auth/whoami"), 1, "one whoami per publish");
+        let key_after = (std::fs::read(&key_file).unwrap(), std::fs::metadata(&key_file).unwrap().modified().unwrap());
+        assert_eq!(key_after, key_before, "the refresh never rewrites the secret key");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_fresh_key_on_an_existing_site_is_signed_in_with_email_and_only_with_it() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+        std::fs::write(folder.dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"my-site\"\n").unwrap();
+
+        let _ = deploy(&folder, None).await;
+        assert_eq!(seta.count("POST /auth/request"), 0, "no link without --email");
+
+        let _ = deploy(&folder, Some("ada@example.test")).await;
+        assert_eq!(seta.count("POST /auth/request"), 1, "the unlinked key is signed in");
+
+        *seta.account.lock().unwrap() = Some("ada@example.test");
+        let _ = deploy(&folder, Some("ada@example.test")).await;
+        assert_eq!(seta.count("POST /auth/request"), 1, "a linked key is never re-sent a link");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_refused_first_publish_without_email_requests_nothing_and_names_the_flag() {
         let seta = Seta::start(1, "verified").await;
         let folder = Folder::new(&seta);
@@ -1076,4 +1314,63 @@ mod email_wiring_tests {
         assert_eq!(seta.count("POST /auth/request"), 0);
         assert!(err.contains("--email <address>"), "{err}");
     }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn deploy_profile_prebuilt_dry_run_is_one_record() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+        let site = dir.path().join("output");
+        std::fs::create_dir(&site).unwrap();
+        std::fs::write(site.join("index.html"), "<p>private-page</p>").unwrap();
+        let route = DeployRoute::Prebuilt { dir: site };
+        let result = dispatch(dir.path(), &route, &crate::cli::host::cli_host_ports,
+            crate::build::PluginMode::Skip, &DeployFlags { dry_run: true, ..Default::default() },
+            &crate::deploy::progress::silent()).await;
+        assert!(matches!(result, Ok(DeployReport::DryRun(_))), "{result:?}");
+        let text = std::fs::read_to_string(crate::moss_paths::MossPaths::new(dir.path()).profile()).unwrap();
+        assert_eq!(text.lines().count(), 1);
+        let row: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(row["kind"], "deploy");
+        assert_eq!(row["outcome"], "ok");
+        assert_eq!(row["target"], "prebuilt");
+        assert_eq!(row["dry_run"], true);
+        assert_eq!(row["counts"]["manifest_files"], 1);
+        assert_eq!(row["counts"]["body_requests"], 0);
+        assert!(!text.contains("private-page"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deploy_profile_build_and_plugin_dry_runs_reference_the_build() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        for route in [DeployRoute::Hosted, DeployRoute::Plugin { id: "fixture".into() }] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir(dir.path().join(".moss")).unwrap();
+            std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+            std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\nuid: dry-home\n---\n\nHello.\n").unwrap();
+            let result = dispatch(dir.path(), &route, &crate::cli::host::cli_host_ports,
+                crate::build::PluginMode::Skip, &DeployFlags { dry_run: true, ..Default::default() },
+                &crate::deploy::progress::silent()).await;
+            let Ok(DeployReport::DryRun(dry)) = result else { panic!("{result:?}") };
+            let text = std::fs::read_to_string(crate::moss_paths::MossPaths::new(dir.path()).profile()).unwrap();
+            let rows: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+            let deploys: Vec<_> = rows.iter().filter(|r| r["kind"] == "deploy").collect();
+            assert_eq!(deploys.len(), 1);
+            let row = deploys[0];
+            assert_eq!(row["target"], crate::deploy::profile::target(&route));
+            assert_eq!(row["dry_run"], true);
+            assert_eq!(row["counts"]["pages_added"], dry.change_set.added);
+            assert_eq!(row["counts"]["pages_edited"], dry.change_set.edited);
+            assert_eq!(row["counts"]["pages_deleted"], dry.change_set.deleted);
+            assert_eq!(row["counts"]["pages_restyled"], dry.change_set.restyled);
+            assert!(rows.iter().any(|b| b["kind"] == "build" && b["started_at"] == row["build_started_at"]));
+        }
+    }
+
 }

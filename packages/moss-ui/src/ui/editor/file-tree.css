@@ -1,0 +1,654 @@
+/* moss File Tree — Breadcrumb tree navigation styles.
+ * Uses moss design tokens for consistent theming.
+ */
+
+.no-transition {
+  transition: none !important;
+}
+
+/* ── Breadcrumb strip = "row 0" of the tree ──────────────────────────
+ * Full-bleed, non-scrolling block. padding-left/right inset the CONTENT
+ * only, so border-bottom (the hairline) spans the full panel width — the
+ * fix for the recurring "hairline stops short" bug (fecce08c1 / f565458a1).
+ * Height = titlebar so segs vertically center against the traffic lights. */
+.nav-bc-strip {
+  position: relative; /* positioning context for .nav-bc-strip__mode (round six) */
+  height: var(--moss-titlebar-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding-inline-start: var(--ft-tl);
+  padding-inline-end: var(--ft-pr);
+  border-bottom: 1px solid var(--moss-border-light);
+  min-width: 0;
+}
+
+/* Breadcrumb segment: width is set inline per-render by the spine allocator
+ * (flex: 0 0 W[d]px in file-tree.ts). ALL segments — including the current/leaf
+ * — are fixed to their allocated width so the JS offset is the single source of
+ * truth and the spine aligns by construction. NO bc-current override:
+ * the leaf is flex:0 0 W like the others, NOT flex:1 1 auto (CSS-grown leaf width
+ * would diverge from the JS offset and shear the spine). min-inline-size is the
+ * floor; truncation happens on the inline-end via the text span's ellipsis. */
+.seg.bc { min-inline-size: var(--ft-seg-min); min-width: 0; padding-inline-start: var(--ft-base); }
+
+/* Icon-only ancestor. When the panel is too narrow for every crumb to stay
+ * legible, the allocator demotes ancestors root-first and drops this class on
+ * them (file-tree.ts applySpineAllocation) — the crumb keeps its column, and so
+ * the tree rows beneath keep their indent, but gives up its label rather than
+ * shrinking to an unreadable two-character stub. The full name moves to a
+ * tooltip. min-inline-size has to come off with it: --ft-seg-min is the LEGIBLE
+ * floor, and leaving it on would hold the demoted crumb at a width the demotion
+ * exists to reclaim. */
+.seg.bc.is-iconified { min-inline-size: 0; }
+.seg.bc.is-iconified > .seg-name,
+.seg.bc.is-iconified > .ext-hint { display: none; }
+
+/* Tree-row indentation: per-depth offset O[d] (px) set by place() in
+ * file-tree.ts — the SAME rounded array the breadcrumb consumes,
+ * so depth-d rows align under breadcrumb section[d]. Logical inset for RTL
+ * safety. Origin (--ft-tl + --ft-base) matches the breadcrumb strip's
+ * inline-start padding.
+ *
+ * Spine constant note: --ft-base is the chevron inset that BOTH the breadcrumb
+ * strip (.seg.bc padding-inline-start) and tree rows add on top of --ft-tl. It
+ * is the spine constant and is INDEPENDENT of .seg's cosmetic `padding: 0 4px`.
+ * Do NOT consolidate them — coupling --ft-base to the cosmetic padding shears
+ * the spine by 4px (the bug fixed in commit 2030746ed). The cosmetic `padding`
+ * on .seg is an interactive-surface affordance and must remain separate.
+ *
+ * Pill highlight: the depth indent lives in margin-inline-start
+ * (TRANSPARENT — outside the seg's background box) so .seg:hover / .seg.selected
+ * paint a PILL around icon+name only, not a full-width row bar. A matching 4px
+ * padding-inline-start adds the cosmetic gap back INSIDE the box, so the icon's
+ * absolute left = container-content-left + (--ft-tl + --ft-base + --ft-offset)
+ * — IDENTICAL to the old padding-only form (margin (X-4px) + padding (4px) = X).
+ * The icon x is therefore a pure function of --ft-offset, which is exactly what
+ * the connector rail keys off (via --ft-rail-offset), so the rail and the rows
+ * cannot shear. .nav-body uses align-items:flex-start so rows shrink-wrap their
+ * content instead of stretching to full width. */
+.nav-body .seg {
+  margin-inline-start: calc(var(--ft-tl) + var(--ft-base) + var(--ft-offset, 0px) - 4px);
+  padding-inline-start: 4px;
+  padding-inline-end: 4px;
+  /* Bound the shrink-wrapped pill to the container so a long name ellipsizes
+   * (the row no longer stretches full-width, so it would otherwise grow to
+   * max-content and overflow). The text span's text-overflow:ellipsis needs a
+   * bounded box to clip against. */
+  max-width: 100%;
+  /* Rows keep their 28px height when the panel shrinks below content (the
+   * divider drag-up): WITHOUT this, flex-shrink:1 in the .nav-body flex column
+   * compresses the rows ("squeezes the text") instead of scrolling. With
+   * flex-shrink:0 the rows stay full-size and .nav-body's overflow-y:auto shows
+   * a scrollbar — the tree stays static during the drag. */
+  flex-shrink: 0;
+}
+/* Same for the folder-note pair row (it's a flex child of .nav-body too). */
+.nav-body .seg-pair { flex-shrink: 0; }
+
+/* Folder-note pair: folder + self-named home file on one row ("docs · index").
+ * The folder keeps its depth padding and sizes to its own content; the home file
+ * flows INLINE right after it with a small gap. We do NOT column-lock the home
+ * file to the child column — that earlier approach (absolute-positioned at
+ * --home-col, folder name clipped to fit before it) squeezed the folder name to
+ * ZERO width at any real indent depth and made the folder appear to vanish when
+ * expanded. Natural flow keeps both names always visible. */
+.nav-body .seg-pair { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+/* Folder sizes to its content (icon + name), never clipped. */
+.nav-body .seg-pair > .seg:not(.home-inline) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* Specificity note: this rule (0,4,0) must out-specify the base .nav-body .seg
+ * (0,2,0) so the home file gets the small inline gap, not a full depth indent.
+ * The home file has NO --ft-offset of its own. Do NOT flatten the selector. */
+.nav-body .seg-pair > .seg.home-inline {
+  /* The home file flows inline right after the folder — it must NOT inherit
+   * the folder's depth margin, or it would jump a full indent to the right.
+   * margin reset + a small padding gap keeps it snug against the folder pill. */
+  margin-inline-start: 0;
+  padding-inline-start: 6px;  /* small gap after the folder name, NOT a depth indent */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* ── Segment: universal nav element (folder or file) ─────────────────── */
+
+.seg {
+  display: flex;
+  align-items: center;
+  height: var(--ft-row-h, 28px);
+  padding: 0 4px;
+  position: relative;
+  z-index: 1;
+  font-size: 14px;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: color .1s, background .1s;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  color: var(--moss-color-text-secondary);
+}
+
+/* Ellipsis on the text span (not the flex container, which can't render "...") */
+.seg > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The label span is ALWAYS the clip element, even when a trailing .ext-hint
+ * (non-.md file leaf, e.g. `name.canvas`) follows it and becomes span:last-child.
+ * Without this the ellipsis rule above lands on .ext-hint (short — never clips)
+ * and leaves the name unclipped, so a truncated non-md leaf would report
+ * scrollWidth == clientWidth and never get its truncation tooltip (BUG 16). The
+ * name flex-shrinks (min-width:0) and ellipsizes while .ext-hint stays visible
+ * (no min-width:0 → keeps its content size). */
+.seg > .seg-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.seg:hover {
+  /* active-overlay, not hover-overlay: the 6% wash is calibrated for a 28px
+     icon and disappears across a full-width labeled row. */
+  background: var(--moss-active-overlay);
+}
+
+.seg.open {
+  color: var(--moss-color-muted);
+}
+
+.seg.leaf {
+  color: var(--moss-color-text-secondary);
+}
+
+/* ── State row: an open level with nothing to show ──────────────────────
+ *
+ * "Collapsed is not a state" (sash model) means a gesture that
+ * opens an empty or degenerate folder must still render a visible
+ * consequence rather than zero pixels. Mirrors .nav-body .seg's indent/height
+ * math (same --ft-offset, --ft-tl, --ft-base contract) but is deliberately
+ * NOT interactive: no cursor, no hover, no chevron/dot icon slot.
+ */
+.nav-state-row {
+  display: flex;
+  align-items: center;
+  height: var(--ft-row-h, 28px);
+  margin-inline-start: calc(var(--ft-tl) + var(--ft-base) + var(--ft-offset, 0px) - 4px);
+  padding: 0 4px;
+  font-size: 14px;
+  font-style: italic;
+  color: var(--moss-color-text-secondary);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Derivation hint row: the first line under a folder that can show its
+ * files as pages ("23 PDFs · Show as pages · Keep as files"), or reports files
+ * it could not read ("1 PDF can't be read · Why?").
+ *
+ * Like the state row, it is NOT a `.seg`: no hover, no selection, no drag.
+ * It starts where the children's NAMES start (icon box 18px + its 3px margin
+ * after the children's icon column), so it sits to the right of the sibling
+ * rail (at the icon's centre) and lines up with the file list, never crossing
+ * the guide line. `align-self: stretch` bounds it to the panel so its two
+ * actions wrap under the count in a narrow tree instead of overflowing. */
+.nav-hint-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: stretch;
+  column-gap: 6px;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--ft-row-h, 28px);
+  margin-inline-start: calc(var(--ft-tl) + var(--ft-base) + var(--ft-offset, 0px) + 18px + 3px - 4px);
+  padding: 2px 4px;
+  font-size: 12.5px;
+  color: var(--moss-color-muted);
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* The separator after the count stays with it, so a wrapped second line never opens with one. */
+.nav-hint-label { white-space: nowrap; flex-shrink: 0; }
+.nav-hint-actions { display: inline-flex; flex-wrap: wrap; align-items: center; column-gap: 6px; }
+.nav-hint-nowrap { display: inline-flex; align-items: center; column-gap: 6px; }
+.nav-hint-sep { color: var(--moss-border-medium); }
+.nav-hint-row--failed { color: var(--moss-color-danger); }
+
+/* ── Multi-select state ──────────────────────────────────────────────────
+ *
+ * `.selected` is toggled by FileTree.renderSelectionVisualState() on every
+ * row whose path is in FileSelection.selected. Goes through the same
+ * accent surface tokens the rest of the editor uses. Background overrides
+ * `.seg:hover` via specificity (one extra class).
+ */
+.seg.selected {
+  background: var(--moss-accent-soft, color-mix(in srgb, var(--moss-accent, currentColor) 14%, transparent));
+}
+
+.seg.leaf.selected {
+  background: var(--moss-accent-soft, color-mix(in srgb, var(--moss-accent, currentColor) 14%, transparent));
+}
+
+.seg.selected:hover {
+  background: var(--moss-accent-soft-hover, color-mix(in srgb, var(--moss-accent, currentColor) 22%, transparent));
+}
+
+/* Drop the dot's surface-colored square frame when its seg is selected: the
+ * seg's own accent background already covers the rail at this row, so the
+ * dot's masking background becomes a contrasting square against the accent.
+ * Same goes for the chev (folder rows) for visual consistency. */
+.seg.selected .dot,
+.seg.selected .chev {
+  background: transparent;
+}
+
+.seg:focus-visible {
+  outline: 1px solid var(--moss-accent, currentColor);
+  outline-offset: -1px;
+}
+
+/* ── Multi-row drag ghost ────────────────────────────────────────────────
+ *
+ * Built by FileTree.startMultiRowDrag() when N>1 selected rows are dragged.
+ * Positioned off-screen because the browser only needs to snapshot it once
+ * for setDragImage(); after the drag starts the user sees the OS-rendered
+ * drag image, not this element. Visual: a flat surface with a count badge
+ * on the right matching the design-system accent pill. The .drag-ghost__badge
+ * is round-cornered text, not the cleanest possible stack illusion, but
+ * conveys "N items" clearly without runtime canvas rendering.
+ */
+.drag-ghost {
+  position: absolute;
+  top: -1000px;
+  left: -1000px;
+  padding: 4px 10px;
+  background: var(--moss-surface, white);
+  border: 1px solid var(--moss-border, rgba(0, 0, 0, 0.1));
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--moss-text, currentColor);
+  box-shadow: var(--moss-elevation-1);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.drag-ghost__badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  background: var(--moss-accent, currentColor);
+  color: var(--moss-surface, white);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+/* ── Chevron: SVG icon, background masks connector line ──────────────── */
+
+.chev {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--moss-color-surface);
+  border-radius: 50%;                 /* round, distinct toggle hit-zone */
+  cursor: pointer;
+  transition: transform .18s, color .1s, background .1s;
+  color: var(--moss-color-text-secondary);
+}
+
+/* Hit-target extender: the 18px disc is the visual toggle, but its CLICK
+   target meets the WCAG 2.2 SC 2.5.8 24px floor. Transparent, so the
+   connector-line mask behind the chevron is unaffected; clicks landing on it
+   still target .chev, so the row/chev click split is preserved. */
+.chev::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+
+.chev:hover {
+  /* Layer the (semi-transparent) hover overlay over the opaque surface so the
+     hover tint shows without unmasking the connector line behind the chevron. */
+  background: var(--moss-hover-overlay), var(--moss-color-surface);
+  color: var(--moss-color-muted);
+}
+
+.chev svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+.seg.open .chev {
+  transform: rotate(90deg);
+  color: var(--moss-color-muted);
+}
+
+/* The title bar as a navigation stack (tree/title-bar.ts). The strip is REPLACED, not
+ * relabeled. `.is-mode` on the strip fades every crumb that is a DIRECT
+ * child of the strip (the `>` combinator is load-bearing: `mkBackCrumb`
+ * builds its own `.seg.bc`, one level deeper inside `.nav-bc-strip__mode`,
+ * which this must NOT also catch) to `opacity:0; visibility:hidden;
+ * pointer-events:none` — opacity transitions over the crumb layer's fade,
+ * visibility delayed to the end of it so the crumbs stay hit-testable for
+ * the full 160ms fade-out. Leaving mode reverses through the SAME base
+ * transition (immediate visibility this time — no delay — since the crumbs
+ * must be interactive again right away, opacity catching up visually). */
+.nav-bc-strip > .seg.bc {
+  transition: opacity 160ms, visibility 0s;
+}
+.nav-bc-strip.is-mode > .seg.bc {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 160ms, visibility 0s 160ms;
+}
+
+/* The title-bar content layer itself — absolutely positioned over the crumb
+ * layer (`.nav-bc-strip`'s own `position: relative` above), same
+ * `padding-inline-start`/`-end` as the crumbs so whatever lands in it starts
+ * and ends at the same x. Fades in/out with `.is-mode`; `pointer-events`
+ * flips immediately (not transitioned) so there's no dead-click window on
+ * either edge, matching `.is-chrome-faded`'s (editor.css) convention. */
+.nav-bc-strip__mode {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-inline-start: var(--ft-tl);
+  padding-inline-end: var(--ft-pr);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms;
+}
+.nav-bc-strip.is-mode .nav-bc-strip__mode {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The mode layer's one child: back link + subject + optional trailing
+ * actions, built by `mkTitleBarRow` (tree/title-bar.ts). `width: 100%` so a
+ * caller's trailing actions (`margin-inline-start: auto`) can reach the
+ * strip's own trailing edge. */
+.nav-bc-strip__mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* A mode's subject — the thing being viewed, in the strip's own chrome
+ * typography (matching `.seg`'s 14px, not a "reading" size: this is chrome,
+ * not content). `.mode-subject-name` is the emphasized last segment: the
+ * bold file/folder/site name Versions mode ends its path on, or the whole
+ * moment/label string on a detail screen. The path prefix uses
+ * `--moss-color-muted`, not `.seg`'s own `--moss-color-text-secondary` —
+ * matching it would paint inert path text in the same ink as a clickable
+ * breadcrumb crumb, undoing the point of replacing the strip. */
+.mode-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--moss-color-muted);
+}
+.mode-subject-name {
+  color: var(--moss-color-text);
+  font-weight: 600;
+}
+
+/* A mode's trailing actions (e.g. Versions mode's Restore button) — pushed
+ * to the strip's own trailing edge. */
+.mode-actions {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* The back link's own chevron (mkBackCrumb) — a static "‹", not a toggle,
+ * so it rotates once and stays put rather than reacting to `.seg.open`. */
+.chev.chev--back {
+  transform: rotate(180deg);
+}
+
+/* ── Dot: file marker, same footprint as chevron ─────────────────────── */
+/* Width/height MUST match .chev (18px) so file and folder row labels align
+   at the same depth — the leading icon box is the shared indent unit. */
+
+.dot {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--moss-color-surface);
+  border-radius: 2px;
+}
+
+.dot::after {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--moss-color-muted);
+  opacity: 0.5;
+}
+
+/* Completed-build evidence, not progress-panel advisory state. */
+.seg[data-preflight-count] > .dot::after { background: var(--moss-color-warning, #b7791f); opacity: 1; }
+.tree-preflight-count {
+  margin-inline-start: 5px;
+  color: var(--moss-color-warning, #b7791f);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Sibling-group wrapper (WAI-ARIA role="group") = the connector rail host ─
+ * Was display:contents (layout-transparent). It is now a REAL box so it can
+ * host the rail ::before, but it is LAYOUT-NEUTRAL by construction — it mirrors
+ * .nav-body's flex column so rows/pills/gaps/scroll behave exactly as when the
+ * rows were direct .nav-body children.
+ *   • align-items:flex-start keeps each ROW shrink-wrapped (pill hugs icon+name)
+ *   • align-self:stretch + width:100% keep the WRAPPER at panel width, so a row's
+ *     max-width:100% / rename align-self:stretch / --ft-offset margin still
+ *     resolve against the panel — long nested names ellipsize as before
+ *   • gap:1px matches .nav-body's inter-row spacing (nav-body's gap only reaches
+ *     its DIRECT children; nested rows would otherwise pack 1px tighter)
+ *   • flex-shrink:0 keeps divider drag-up scrolling (rows don't compress)
+ * Do NOT add z-index / transform / opacity / filter / will-change here: any of
+ * those makes the wrapper a stacking context and traps the rail out of the
+ * rows' context, unmasking or hiding it. */
+.nav-body [role="group"] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  align-self: stretch;
+  width: 100%;
+  gap: 1px;
+  flex-shrink: 0;
+  position: relative;
+  min-width: 0;
+}
+
+/* ── Sibling connector rail ───────────────────────────────────────────────
+ * One rail per sibling group, at the CHILDREN's icon column, BEHIND their
+ * .dot/.chev markers (whose opaque backgrounds mask it — "connects without
+ * touching"). Column = --ft-rail-offset, which syncRailOffsets() copies from
+ * the group's first child's live --ft-offset, so the rail tracks the rows (incl.
+ * the home-pair delta) by construction. Painted with the rows, never in a rAF,
+ * so it can't go missing/stale. The +9px is HALF the 18px .chev/.dot box —
+ * keep in lockstep with .chev/.dot { width } (guarded by a unit test).
+ *
+ * TOP per group kind (--ft-rail-extend-top, 0/1; set by syncRailOffsets):
+ *   • OUTERMOST group (levelWrapper directly under .nav-body) → 0: top:0 = the
+ *     wrapper's top edge, one gap below the breadcrumb hairline. Its parent
+ *     folder lives in the BREADCRUMB, not as an adjacent row, so the rail must
+ *     NOT reach up (the breadcrumb hairline + .nav-body's overflow clip keep it
+ *     from crossing into the breadcrumb). The first segment is intentionally
+ *     SHORT (half a row).
+ *   • NESTED group (parent folder is the tree ROW right above it) → 1: raise the
+ *     top by half a row + the 1px group gap so it reaches the parent row's
+ *     icon-center. Then first-child→parent equals the inter-child pitch — a
+ *     normal tree, no short first segment.
+ *
+ * VERTICAL CAP (--ft-rail-rows, BUG 12): the rail ends AT the group's LAST
+ * DIRECT-CHILD row's icon-center — NOT the wrapper's bottom. The wrapper also
+ * contains each child folder's nested [role="group"], so measuring off its
+ * bottom (the old `bottom: rowH/2`) ran the rail PAST the last direct child and
+ * through its expanded subtree, dangling below the folder's chevron. syncRail-
+ * Offsets() sets --ft-rail-rows = that child's 0-based visual row index in the
+ * wrapper; row pitch = --ft-row-h + 1px (the gap above), the child's center is
+ * half a row below its top, and the top may be raised by extend-top (above) →
+ *   height = rows*(rowH+1px) + rowH/2 + extendTop*(rowH/2 + 1px).
+ * The -9999px left fallback keeps an un-synced group's rail off-screen. */
+.nav-body [role="group"]::before {
+  content: '';
+  position: absolute;
+  top: calc(-1 * var(--ft-rail-extend-top, 0) * (var(--ft-row-h) / 2 + 1px));
+  height: calc(
+    var(--ft-rail-rows, 0) * (var(--ft-row-h) + 1px)
+    + var(--ft-row-h) / 2
+    + var(--ft-rail-extend-top, 0) * (var(--ft-row-h) / 2 + 1px)
+    + var(--ft-rail-extra, 0px)
+  );
+  left: calc(var(--ft-tl) + var(--ft-base) + var(--ft-rail-offset, -9999px) + 9px);
+  width: 1px;
+  background: var(--moss-border-light);
+  pointer-events: none;
+  z-index: 0;                 /* behind rows (.seg is z-index:1); icons mask it */
+}
+
+/* ── Inline rename input ─────────────────────────────────────────────── */
+
+/* While a rename is active, the segment takes the full available width so the
+ * flex:1 input is comfortably editable — otherwise it shrink-wraps to the
+ * original (often short) name and the input is cramped. Two contexts, two axes:
+ *   - a tree row (.nav-body flex COLUMN, align-items:flex-start) stretches on
+ *     the cross axis to fill the panel width;
+ *   - a breadcrumb seg (.seg.bc in the horizontal spine strip) grows on the
+ *     main axis to claim the strip's free space.
+ * The `ft-renaming` class is added/removed by startRename() in file-tree.ts.
+ * render() is deferred during rename, so these overrides aren't clobbered. */
+.nav-body .seg.ft-renaming { align-self: stretch; max-width: 100%; }
+.seg.bc.ft-renaming { flex: 1 1 auto; }
+/* While a breadcrumb seg is being edited, let its ancestor segs collapse fully
+ * so the edited seg can claim their room (reinforces the inline flex-shrink
+ * beginSegEdit() writes on the sibling segs). */
+.nav-bc-strip:has(.ft-renaming) .seg.bc:not(.ft-renaming) { min-inline-size: 0; }
+
+.moss-tree-rename-input {
+  /* 12rem is an ASK, not a floor: the basis makes the host seg claim that
+   * much room from its breadcrumb siblings, and shrink + min-width:0 let the
+   * input yield the moment the seg has less. It used to be
+   * `min-width: min(12rem, 100%)`, but that 100% resolves against the seg's
+   * own box — it never subtracts the dot or the `.md` hint — so a narrow
+   * breadcrumb pushed the input past the strip. */
+  flex: 1 1 12rem;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--moss-color-text);
+  background: var(--moss-color-bg);
+  border: 1px solid var(--moss-color-accent);
+  border-radius: 3px;
+  outline: none;
+}
+
+/* ── Inline error message ────────────────────────────────────────────── */
+
+.moss-tree-error {
+  font-size: 11px;
+  color: var(--moss-error, #e53e3e);
+  padding: 2px 8px;
+  animation: moss-tree-error-fade 3s ease forwards;
+}
+
+@keyframes moss-tree-error-fade {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+
+.moss-tree-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--moss-color-muted);
+}
+
+/* OS drag-over feedback is the per-row .moss-tree-row--drop-target only
+ * (see setDropHighlight in file-tree.ts). */
+
+.ext-hint {
+  color: var(--moss-color-muted);
+  opacity: 0.55;
+  font-size: 0.92em;
+  margin-left: 2px;
+  pointer-events: none;
+  /* Never the thing that yields. During a rename the input is the seg's
+   * last element, so the hint becomes `span:last-child` and inherits that
+   * rule's `min-width: 0` — in a narrow breadcrumb with a deep path it shrank
+   * to 2px and its glyphs spilled past the strip. */
+  flex-shrink: 0;
+}
+
+/* ── Drag-over drop-target highlight (class toggled by JS in file-tree.ts) ─ */
+
+.seg.moss-tree-row--drop-target {
+  background: var(--moss-accent-light, rgba(45, 90, 45, 0.15));
+  outline: 2px dashed var(--moss-color-accent, #2d5a2d);
+  outline-offset: -2px;
+  border-radius: 4px;
+  transition: background-color 120ms ease, outline-color 120ms ease;
+}
+
+/* Arrival flash: applied by JS on a successful drop, removed on animationend */
+@keyframes moss-drop-flash {
+  0%   { background: var(--moss-accent-light, rgba(45, 90, 45, 0.15)); }
+  100% { background: transparent; }
+}
+
+.moss-drop-target--flash {
+  animation: moss-drop-flash 600ms cubic-bezier(.25,.1,.25,1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seg.moss-tree-row--drop-target { transition: none; }
+  .moss-drop-target--flash { animation-duration: 1ms; }
+}
+
+/* ── Seal lock — file tree non-interactive while shipping ─ */
+/* Toggled by FileTree.setSealed(boolean) via editor-main.ts on editor:seal. */
+.moss-tree--sealed {
+  pointer-events: none;
+  cursor: not-allowed;
+}

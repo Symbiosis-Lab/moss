@@ -89,6 +89,15 @@ pub struct ViewerActivity {
 
 static ACTIVITY: OnceLock<watch::Sender<ViewerActivity>> = OnceLock::new();
 
+/// Held by every test that opens an event stream or navigates to a page:
+/// both move the one process-global viewer-activity signal, so what a test
+/// reads of it is only meaningful while no sibling can move it.
+#[cfg(test)]
+pub(crate) fn viewer_signal_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Watch the preview's viewers. The first call installs the signal; before
 /// it, a request skips it after one atomic load, so a process that never asks
 /// pays nothing for it.
@@ -195,11 +204,20 @@ pub fn publish(event: &MossEvent) {
 /// subscription. The gap is logged so it is not invisible.
 fn event_stream(
     sub: Subscription,
+    browser: Option<super::ui::auth::BrowserSession>,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    futures::stream::unfold(sub, |mut sub| async move {
+    futures::stream::unfold((sub, browser), |(mut sub, browser)| async move {
         loop {
-            match sub.rx().recv().await {
-                Ok(json) => return Some((Ok(Event::default().data(json)), sub)),
+            if browser.as_ref().is_some_and(|b| !b.admits()) { return None; }
+            let received = tokio::select! {
+                result = sub.rx().recv() => result,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => continue,
+            };
+            match received {
+                Ok(json) => {
+                    if browser.as_ref().is_some_and(|b| !b.admits()) { return None; }
+                    return Some((Ok(Event::default().data(json)), (sub, browser)));
+                },
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     log::warn!(target: "preview", "carrier: SSE subscriber lagged, {n} events skipped");
                 }
@@ -215,15 +233,19 @@ fn event_stream(
 /// The stream ends when the session it was admitted under is retired by a
 /// folder switch: these events describe the vault, and a subscriber holding
 /// the previous vault's token must not keep reading the next one's. The
-/// browser's reconnect then re-presents its token and is 401.
-pub async fn handle_events(
+/// browser's reconnect then re-presents its token and is 401. Browser sessions
+/// are also rechecked before each event and every 30 seconds while idle;
+/// those checks do not count as activity or extend the session's lifetime.
+pub(crate) async fn handle_events(
     axum::Extension(session): axum::Extension<Arc<super::invoke::Session>>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    browser: Option<axum::Extension<super::ui::auth::BrowserSession>>,
+) -> impl axum::response::IntoResponse {
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
-    let stream = event_stream(Subscription::open()).take_until(session.retired().clone().cancelled_owned());
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    let stream = event_stream(Subscription::open(), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned());
+    // A reverse proxy that buffers responses (nginx by default) would hold events back.
+    ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 /// Printed when a served build's `current` has caught up with the preview.
@@ -244,7 +266,9 @@ pub(crate) fn promoted_line(generation_id: &str) -> String {
 /// headless process — deploy in a later process reads `hashes.json`, and no
 /// webview exists to pull a stashed change set — so both drop, like
 /// [`LogAnnouncer`](crate::build::ports::announcer::LogAnnouncer).
-pub struct CarrierAnnouncer;
+pub struct CarrierAnnouncer {
+    pub(crate) reporter: Arc<dyn crate::build::ports::reporter::BuildReporter>,
+}
 
 #[async_trait::async_trait]
 impl crate::build::ports::announcer::SealAnnouncer for CarrierAnnouncer {
@@ -271,7 +295,7 @@ impl crate::build::ports::announcer::SealAnnouncer for CarrierAnnouncer {
             let mut announced = ANNOUNCED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let announced = announced.get_or_insert_with(Default::default);
             if let Some(event) = removal_announcement(announced, project_root, &cs.removed) {
-                crate::build::ports::reporter::BuildReporter::report(&CarrierReporter, &event);
+                self.reporter.report(&event);
             }
         }
     }
@@ -288,7 +312,9 @@ fn removal_announcement(
     folder: &std::path::Path,
     removed: &[crate::build::manifest::change_set::RemovedAddress],
 ) -> Option<crate::build::progress::PipelineEvent> {
-    let event = crate::build::progress::make_removed_addresses_advisory(removed);
+    let accepted = crate::system::build_records::records().accepted_removals(&folder.to_string_lossy());
+    let unaccepted: Vec<_> = removed.iter().filter(|r| !accepted.contains(&r.path)).cloned().collect();
+    let event = crate::build::progress::make_removed_addresses_advisory(&unaccepted);
     if shows_on_terminal(&event) {
         announced.insert(folder.to_path_buf());
         Some(event)
@@ -307,7 +333,7 @@ pub fn shows_on_terminal(event: &crate::build::progress::PipelineEvent) -> bool 
     use crate::build::progress::PipelineEvent;
     matches!(event, PipelineEvent::PluginProgress(_) | PipelineEvent::PluginNeedsConnection { .. })
         || matches!(event, PipelineEvent::BackgroundProgress { task, advisories, .. }
-            if task == "derive" || (task == "addresses" && !advisories.is_empty()))
+            if task == "derive" || task.starts_with("plugin-offer-") || (task == "addresses" && !advisories.is_empty()))
 }
 
 pub struct CarrierReporter;
@@ -335,6 +361,32 @@ impl crate::build::ports::reporter::BuildReporter for CarrierReporter {
 }
 
 #[cfg(test)]
+pub(crate) fn collect_removal_warnings() -> (impl Fn(&str) -> crate::build::HostPorts, impl FnMut() -> Vec<String>) {
+    #[derive(Default)]
+    struct Warnings(std::sync::Mutex<Vec<String>>);
+
+    impl crate::build::ports::reporter::BuildReporter for Warnings {
+        fn report(&self, event: &crate::build::progress::PipelineEvent) {
+            if let crate::build::progress::PipelineEvent::BackgroundProgress { task, advisories, .. } = event {
+                if task == "addresses" {
+                    self.0.lock().unwrap().extend(advisories.iter().map(|a| a.what.clone()));
+                }
+            }
+            CarrierReporter.report(event);
+        }
+    }
+
+    let warnings = Arc::new(Warnings::default());
+    let reporter = warnings.clone();
+    let host = move |folder: &str| {
+        let mut host = crate::cli::host::cli_host_ports(folder);
+        host.announcer = Arc::new(CarrierAnnouncer { reporter: reporter.clone() });
+        host
+    };
+    (host, move || std::mem::take(&mut *warnings.0.lock().unwrap()))
+}
+
+#[cfg(test)]
 mod removal_announcement_tests {
     use super::removal_announcement;
     use crate::build::manifest::change_set::{RemovalReason, RemovedAddress};
@@ -357,6 +409,47 @@ mod removal_announcement_tests {
             PipelineEvent::BackgroundProgress { advisories, .. } => advisories.len(),
             other => panic!("expected a background tick, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn removal_warning_collectors_are_isolated() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let (first_host, mut first_warnings) = super::collect_removal_warnings();
+        let (second_host, mut second_warnings) = super::collect_removal_warnings();
+        let first_host = first_host(&first.path().to_string_lossy());
+        let second_host = second_host(&second.path().to_string_lossy());
+        let changes = crate::build::manifest::change_set::ChangeSet { removed: lost(), ..Default::default() };
+
+        first_host.announcer.publish_change_set(first.path(), Some(changes.clone())).await;
+        assert!(first_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(second_warnings().is_empty(), "another test's advisories must not leak in");
+        second_host.announcer.publish_change_set(second.path(), Some(changes)).await;
+        assert!(second_warnings().iter().any(|w| w.contains("/feed.xml")));
+        assert!(first_warnings().is_empty(), "another test's advisories must not leak in");
+    }
+
+    #[test]
+    fn accepted_removals_are_quiet_without_hiding_unaccepted_addresses() {
+        let folder = tempfile::tempdir().unwrap();
+        let key = folder.path().to_string_lossy();
+        let records = crate::system::build_records::records();
+        let mut removed = lost();
+        let mut other = removed[0].clone();
+        other.path = "other.xml".into();
+        removed.push(other);
+        records.record_removed_addresses(&key, removed.clone());
+        records.accept_unexplained_removals(&key, &["feed.xml".into()]);
+        let mut announced = HashSet::new();
+        let event = removal_announcement(&mut announced, folder.path(), &removed).unwrap();
+        let PipelineEvent::BackgroundProgress { advisories: notices, .. } = event else { panic!("expected advisory") };
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].what.contains("/other.xml"));
+        assert!(!notices[0].what.contains("/feed.xml"), "accepted removals must not ask for action");
+        records.accept_all_pending_removals(&key);
+        assert_eq!(advisories(removal_announcement(&mut announced, folder.path(), &removed).unwrap()), 0);
+        assert_eq!(records.removed_addresses(&key).unwrap().len(), 2);
+        assert!(removal_announcement(&mut announced, folder.path(), &removed).is_none());
     }
 
     /// A folder that never had removals puts nothing on the shared bus.
@@ -422,6 +515,12 @@ mod shows_on_terminal_tests {
     fn other_background_tasks_stay_off_the_terminal() {
         assert!(!shows_on_terminal(&tick("images")));
     }
+    /// A headless build is the only place a CLI user hears that a plugin has
+    /// work waiting for them to start.
+    #[test]
+    fn a_plugin_offer_shows_on_the_terminal() {
+        assert!(shows_on_terminal(&tick("plugin-offer-matters")));
+    }
 }
 
 #[cfg(test)]
@@ -447,5 +546,29 @@ mod promoted_line_tests {
     #[test]
     fn promotion_names_its_generation() {
         assert_eq!(promoted_line("g1"), "current updated to generation g1");
+    }
+}
+
+#[cfg(test)]
+mod source_content_tests {
+    use super::*;
+
+    #[test]
+    fn source_content_changes_keep_their_wire_shape_on_the_carrier() {
+        let mut receiver = bus().subscribe();
+        let payload = serde_json::json!({
+            "kind": "SourceContentChanged",
+            "payload": { "paths": ["notes/page.md", ".moss/config.toml"] },
+        });
+        let event = MossEvent::SourceContentChanged {
+            paths: vec!["notes/page.md".into(), ".moss/config.toml".into()],
+        };
+        publish(&event);
+        let expected = serde_json::json!({ "name": MOSS_EVENT_CHANNEL, "payload": payload });
+        while let Ok(frame) = receiver.try_recv() {
+            let actual: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            if actual == expected { return; }
+        }
+        panic!("the carrier must deliver the source event without build or output fields");
     }
 }

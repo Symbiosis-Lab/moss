@@ -53,7 +53,24 @@ export interface ProcessContext extends BaseContext {
  * @category Hook contexts
  */
 export interface DeployContext extends BaseContext {
+  /** The files to deploy, relative to `site_dir`. */
   site_files: string[];
+  /**
+   * Absolute path of a read-only directory holding exactly `site_files`,
+   * made for this hook call and removed when it returns. Read the site here
+   * (pass it as `executeBinary`'s `workingDir`, or to `tar -C`), not through
+   * `readSiteFile`, whose tree the next build can advance mid-publish.
+   * Set from moss 0.15.20: a plugin that reads it declares
+   * `min_moss_version` "0.15.20", and should stop if it is missing rather
+   * than fall back to the project folder.
+   */
+  site_dir?: string;
+  /**
+   * Absolute path beside `site_dir` to pass to git as `GIT_INDEX_FILE`, so
+   * staging `site_dir` leaves the project's own index alone. Not created
+   * until git writes it; removed with `site_dir`. Set from moss 0.15.20.
+   */
+  index_file?: string;
   /** Custom domain from .moss/config.toml [deployment] section (if configured) */
   domain?: string;
 }

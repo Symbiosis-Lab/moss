@@ -272,9 +272,7 @@ fn project_child(
     // no card renders — narrower than a site-wide render, but still a false
     // positive of the exact same shape.
     stripped.lang = crate::i18n::Language::default();
-    // Minted fresh on every parse for a page with no frontmatter block; left
-    // in, it would move every digest on every build. Same normalization the
-    // facade applies, and for the same reason (`facade::normalized`).
+    // No card renders a page's uid.
     stripped.uid = None;
 
     // Mirrors `child_list::props_for_document`: the card's count is always

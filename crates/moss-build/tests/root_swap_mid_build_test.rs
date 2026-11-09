@@ -130,6 +130,7 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     })
     .await
     .expect("build");
@@ -187,10 +188,12 @@ async fn a_rename_aside_mid_build_still_promotes_under_the_renamed_directory() {
 
     // A live preview request must serve the promoted page.
     use moss_build::ops::serve::{start_server, ServeConfig};
-    let (port, shutdown) = start_server(ServeConfig::new(served.clone(), 62_532))
+    let (port, _, shutdown) = start_server(ServeConfig::new(served.clone(), 62_532))
         .await
         .expect("server starts");
-    let response = reqwest::get(format!("http://127.0.0.1:{port}/"))
+    let response = moss_build::system::proxy_reqwest::client()
+        .get(format!("http://127.0.0.1:{port}/"))
+        .send()
         .await
         .expect("request completes");
     assert_eq!(response.status(), reqwest::StatusCode::OK);

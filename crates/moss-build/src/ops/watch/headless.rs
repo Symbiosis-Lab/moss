@@ -22,8 +22,6 @@
 
 use std::sync::Arc;
 
-use crate::build::ports::reporter::BuildReporter;
-use crate::build::watch::{baseline_for_rebuild, decide_rebuild_event};
 use crate::build::{run_pipeline, BuildTrigger, HostPorts, PipelineConfig, PluginMode};
 use crate::ops::serve::events::CarrierReporter;
 use crate::ops::watch::{worker, EventRelay, RebuildAttempt, RebuildDispatch, WatchConfig};
@@ -210,7 +208,7 @@ async fn inline_with_pump_gate(
     if !req.gate_admits(folder_path, "inline").await {
         return;
     }
-    do_rebuild_and_notify(folder_path, host_ports, plugins, &req.rename_pairs, req.trigger, None)
+    do_rebuild(folder_path, host_ports, plugins, &req.rename_pairs, req.trigger, None)
         .await;
 }
 
@@ -256,7 +254,7 @@ async fn attempt_admitted_rebuild(
         worker::OverdueWatchdog::arm(handle.clone(), folder_path, worker::REBUILD_OVERDUE_AFTER);
 
     let diag_rebuild_start = std::time::Instant::now();
-    let built = do_rebuild_and_notify(
+    let built = do_rebuild(
         folder_path,
         host_ports,
         plugins,
@@ -278,12 +276,10 @@ async fn attempt_admitted_rebuild(
     worker::AttemptOutcome::Completed
 }
 
-/// Run one watch rebuild and publish its refresh event to the SSE carrier.
-/// The headless half of the app's `do_rebuild_and_notify`: same baseline
-/// capture, same pipeline call shape (`start_server: false` — the server is
-/// already running and shares the session's serve state), same post-build
-/// stash diff.
-async fn do_rebuild_and_notify(
+/// Run one watch rebuild; its FileChanged reaches the SSE carrier from inside
+/// the pipeline. `start_server: false`: the server is already running and
+/// shares the session's serve state.
+async fn do_rebuild(
     folder_path: &str,
     host_ports: &HostPortsFactory,
     plugins: PluginMode,
@@ -292,20 +288,10 @@ async fn do_rebuild_and_notify(
     admission_epoch: Option<u64>,
 ) -> bool {
     let source = std::path::PathBuf::from(folder_path);
-    // Post-generations: the pipeline writes to .moss/build.nosync/staging/. A stable
-    // path reference for the baseline diff lookup.
-    let output = crate::moss_paths::MossPaths::new(&source).staging_dir();
-
-    // Baseline for the change-detection diff: prefer the PREVIOUS build's
-    // race-free in-memory hashes over re-reading the asynchronously-sealed
-    // hashes.json. Captured before `run_pipeline` overwrites the stash.
-    let in_memory_baseline = crate::system::build_records::records().content_hashes(folder_path);
-    let previous_hashes = baseline_for_rebuild(in_memory_baseline, folder_path, &output);
-
     let result = run_pipeline(PipelineConfig {
         root: crate::vault::paths::VaultRoot::resolve(&source),
         // Tier-1 progress goes to the carrier too, so an attached browser
-        // hears the rebuild's BuildComplete — its refresh signal.
+        // hears the rebuild's BuildComplete receipt.
         progress: Arc::new(CarrierReporter),
         plugins,
         watch: false,         // don't restart watching from within a rebuild
@@ -318,32 +304,15 @@ async fn do_rebuild_and_notify(
         exits_after_build: false,
         site_url_override: None,
         admission_epoch,
+        // The pipeline sends this rebuild's FileChanged to the carrier itself,
+        // when it shows the render.
+        rename_pairs: rename_pairs.to_vec(),
     })
     .await;
 
     if let Err(e) = result {
         log::error!("❌ Rebuild failed: {}", e);
         return false;
-    }
-
-    // PEEK (clone, retain) the hashes THIS build stashed synchronously — the
-    // slot survives as the race-free baseline for the NEXT rebuild's diff.
-    let stash = crate::system::build_records::records().content_hashes(folder_path);
-    let had_stash = stash.is_some();
-    let rebuild_event = decide_rebuild_event(stash, folder_path, &previous_hashes, rename_pairs);
-
-    match rebuild_event {
-        None => {
-            log::info!(
-                "Rebuild completed with no output changes (suppressing refresh) [baseline content-stash {}]",
-                if had_stash { "present" } else { "absent — diffed against on-disk hashes" }
-            );
-        }
-        Some(event) => {
-            // Once per rebuild cycle: the SSE carrier is the headless tier-2
-            // bus, so the browser's preview refresh hears the change set.
-            CarrierReporter.report(&crate::build::progress::PipelineEvent::FileChanged(event));
-        }
     }
     true
 }

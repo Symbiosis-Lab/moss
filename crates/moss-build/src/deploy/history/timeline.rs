@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::build::manifest::change_set::{self, ChangedPage, PageVerb};
-use crate::build::manifest::SealedManifest;
+use super::tree::SourceTree;
 
 use super::record::{self, PublishRecord, Trigger};
 use super::store;
@@ -135,13 +135,13 @@ fn diff_counts(prev: Option<&PublishRecord>, cur: &PublishRecord) -> (usize, usi
 /// carry-gap and no output hash, so the shared core is the whole answer with
 /// nothing layered on top (unlike `classify`, which needs its own restyle
 /// pass and its own deletion loop).
-pub(crate) fn site_version_pages(root: &Path, id: &str, current: &SealedManifest) -> Result<SiteVersionPages, String> {
+pub(crate) fn site_version_pages(root: &Path, id: &str, current: &SourceTree) -> Result<SiteVersionPages, String> {
     let record = store::load_record(root, id).ok_or_else(|| format!("no such version: {id}"))?;
     if record.trigger == Trigger::Displaced {
         return Err(format!("{id} is one page's kept outside edit, not a site version"));
     }
     let record_hashes = record::flat_hashes(&record);
-    let current_hashes = record::current_entry_hashes(current);
+    let current_hashes = current.hashes();
 
     let changed_since = change_set::diff_hashes(&record_hashes, &current_hashes);
     let changed_paths: HashSet<&str> = changed_since.iter().map(|c| c.source_path.as_str()).collect();

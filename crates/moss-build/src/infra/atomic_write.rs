@@ -35,6 +35,15 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// is only atomic within one filesystem, and `/tmp` is routinely a different
 /// one from app data.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    write_with_permissions(path, contents, false)
+}
+
+/// Atomic replacement whose temporary and final file are owner-only on Unix.
+pub fn write_private_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    write_with_permissions(path, contents, true)
+}
+
+fn write_with_permissions(path: &Path, contents: &str, private: bool) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
@@ -63,7 +72,16 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     {
         use std::io::Write;
         // allow:raw_write writes a sibling temp file then renames; callers are app-data and vault state, never .moss/build.nosync/
-        let mut f = std::fs::File::create(&tmp)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        let mut f = options.open(&tmp)
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
         f.write_all(contents.as_bytes())
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;

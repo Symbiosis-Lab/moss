@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run the CSS cascade / theme render gates for published-page CSS.
 #
-# Some of them build a throwaway moss site with `target/debug/moss-cli`,
+# Some of them build a throwaway moss site with `target/debug/moss-cli`
+# (built by `bash scripts/build-moss-cli.sh`: a plain cargo build leaves out
+# the browser editor, and its gate fails),
 # serve it, and assert computed styles in BOTH chromium and webkit —
 # assertions jsdom cannot make, because it does not implement @layer
 # precedence. Most build no site at all: they either serve a vite harness or
@@ -56,6 +58,7 @@ GATES_BUILD=(
   nav-split-order
   nav-split-pack
   nav-one-row
+  nav-current-mark
   header-hit-areas
   lightbox-github-shapes
   grid-card-no-cover
@@ -89,6 +92,7 @@ GATES_BUILD=(
   header-none
   header-scroll
   folded-callouts
+  header-over-ink
   edge-clamp
   vertical-nav-chrome
   video-embed-shape
@@ -124,6 +128,7 @@ GATES_BUILD=(
   archival-footer
   type-defaults
   diagrams
+  browser-editor
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads
@@ -146,6 +151,7 @@ GATES_NOBUILD=(
   footer-subscribe-alignment
   float-mobile-collapse
   prose-spacing-ladder
+  round-marks
 )
 
 # One linear-search helper, not three copies of the same loop. No namerefs —
@@ -298,7 +304,7 @@ if [ "$needs_bin" = true ]; then
     fi
   fi
   test -x "$MOSS_BIN" || {
-    echo "no executable moss-cli at $MOSS_BIN — run \`cargo build -p moss-cli\` (or \`cargo build --release -p moss-cli\`), or set MOSS_BIN" >&2
+    echo "no executable moss-cli at $MOSS_BIN — run \`bash scripts/build-moss-cli.sh\` (or \`bash scripts/build-moss-cli.sh --release\`), or set MOSS_BIN" >&2
     echo "  (most gates need no binary: bash scripts/render-gates.sh --group nobuild, or npx playwright test -c playwright/<name>.config.ts)" >&2
     exit 1
   }

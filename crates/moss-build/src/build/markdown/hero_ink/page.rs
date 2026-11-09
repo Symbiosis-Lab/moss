@@ -61,9 +61,10 @@ impl PageGround {
 
     /// moss's colours as the theme's stylesheet overrides them. Read only
     /// where the authoring guide tells a theme to set a token: `:root {}`,
-    /// which wins in both themes, and `:root[data-theme="dark"] {}`. A
-    /// declaration anywhere else, or a value that is not a plain colour
-    /// (`var()`, `color-mix()`), leaves both themes unresolved.
+    /// which wins in both themes, and `:root[data-theme="dark"] {}`, following
+    /// `var()` through other properties set there. A declaration anywhere else
+    /// of the token or of a property it goes through, or a value that is not a
+    /// plain colour (`color-mix()`), leaves it unresolved.
     pub fn of_theme(theme_css: Option<&str>) -> Self {
         let (light, dark) = theme_colours(theme_css, "--moss-color-bg", *BACKGROUNDS);
         let (credit_light, credit_dark) = theme_colours(theme_css, "--moss-color-text-secondary", *CREDIT_INK);
@@ -73,28 +74,11 @@ impl PageGround {
 }
 
 /// A colour token's value in the light and the dark theme: moss's own where the
-/// theme does not set it, and `None` in both where it sets it somewhere the
-/// build cannot follow or to a value it cannot read.
+/// theme does not set it, and `None` where the build cannot read it or some
+/// pages set it differently from the root (a faded picture's maths must hold
+/// on every page).
 fn theme_colours(theme_css: Option<&str>, token: &str, default: (Rgb, Rgb)) -> (Option<Rgb>, Option<Rgb>) {
-    use crate::build::theme_lint::{token_declarations, Scope};
-    let (mut root, mut dark) = (None, None);
-    for (scope, prop, value) in token_declarations(&crate::build::theme_lint::strip_comments(theme_css.unwrap_or_default())) {
-        if prop != token {
-            continue;
-        }
-        let colour = crate::build::components::color_extract::parse_css_color(value.trim_end_matches("!important").trim());
-        match scope {
-            Scope::Light => root = Some(colour),
-            Scope::Dark => dark = Some(colour),
-            Scope::Other => return (None, None),
-        }
-    }
-    let (mut light_theme, mut dark_theme) = (Some(default.0), Some(default.1));
-    if let Some(colour) = root {
-        (light_theme, dark_theme) = (colour, colour);
-    }
-    if let Some(colour) = dark {
-        dark_theme = colour;
-    }
-    (light_theme, dark_theme)
+    let (light, dark) = crate::build::theme_lint::root_colours(theme_css, token, default);
+    let steady = |c: crate::build::theme_lint::RootColour| c.root.filter(|_| !c.varies);
+    (steady(light), steady(dark))
 }

@@ -413,9 +413,12 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
         }
     }
 
+    // Runs before the hard-break pass so a `==` pair spans a soft break.
+    super::inline::highlight::apply(&mut doc);
+
     // Obsidian parity: a single newline inside a paragraph becomes `<br>`.
     // Runs last, over the finished tree, because pulldown-cmark 0.13 has no
-    // hard-break option — see `ast/line_breaks.rs` for why a post-parse
+    // hard-break option — see `ast/inline/line_breaks.rs` for why a post-parse
     // transform is the only mechanism and why it is exact.
     if config.hard_line_breaks {
         super::line_breaks::apply(&mut doc);

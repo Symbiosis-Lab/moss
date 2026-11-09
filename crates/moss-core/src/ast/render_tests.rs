@@ -4,6 +4,20 @@ use super::super::shortcode::{GridShortcode, Shortcode};
 use super::super::url::{Url, UrlKind};
 use super::*;
 
+/// `## Setup` and `## More`, each over a paragraph of 80 words: long enough for permalinks.
+fn two_long_sections() -> Vec<Block> {
+    let heading = |text: &str, id: &str| Block::Heading {
+        level: 2,
+        children: vec![Inline::Text(text.into())],
+        id: Some(id.into()),
+        legacy_id: None,
+        contents_end: false,
+        contents_label: None,
+    };
+    let prose = || Block::Paragraph(vec![Inline::Text(vec!["word"; 80].join(" "))]);
+    vec![heading("Setup", "setup"), prose(), heading("More", "more"), prose()]
+}
+
 fn render(blocks: Vec<Block>) -> String {
     let doc = Document::from_blocks(blocks);
     render_document(&doc, &DefaultHooks::new())
@@ -28,15 +42,8 @@ fn renders_the_contents_end_marker_on_the_heading_element() {
 
 #[test]
 fn renders_heading_with_id() {
-    let html = render(vec![Block::Heading {
-        level: 2,
-        children: vec![Inline::Text("Setup".into())],
-        id: Some("setup".into()),
-        legacy_id: None,
-        contents_end: false,
-        contents_label: None,
-    }]);
-    assert_eq!(html, "<h2 id=\"setup\">Setup<a class=\"moss-heading-anchor\" href=\"#setup\" aria-label=\"Permalink to this section\"></a></h2>\n");
+    let html = render(two_long_sections());
+    assert!(html.starts_with("<h2 id=\"setup\">Setup<a class=\"moss-heading-anchor\" href=\"#setup\" aria-label=\"Permalink to this section\"></a></h2>\n"), "{html}");
 }
 
 /// A level-1 heading is a page's own title, not a section of it — it never
@@ -1018,17 +1025,8 @@ fn paragraph_emits_data_source_line_when_meta_set() {
 #[test]
 fn heading_emits_data_source_line_through_hook() {
     let html = render_with_meta(
-        vec![Block::Heading {
-            level: 2,
-            children: vec![Inline::Text("Setup".into())],
-            id: Some("setup".into()),
-            legacy_id: None,
-            contents_end: false,
-            contents_label: None,
-        }],
-        vec![BlockMeta {
-            source_line: Some(3),
-        }],
+        two_long_sections(),
+        vec![BlockMeta { source_line: Some(3) }, BlockMeta::default(), BlockMeta::default(), BlockMeta::default()],
     );
     assert!(
             html.contains(r##"<h2 id="setup" data-source-line="3">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##),
@@ -1341,7 +1339,8 @@ fn no_data_source_line_when_meta_none() {
 #[test]
 fn end_to_end_parse_with_config_emits_data_source_line() {
     // The full path: parse_with_config → visit_urls_mut → render_document.
-    let md = "# Title\n\nfirst paragraph\n\n## Sub\n\nsecond paragraph\n";
+    let tail = vec!["word"; 80].join(" ");
+    let md = format!("# Title\n\nfirst paragraph\n\n## Sub\n\nsecond paragraph\n\n## A\n\n{tail}\n\n## B\n\n{tail}\n");
     let config = super::super::parser::ParseConfig {
         emit_source_lines: true,
         implicit_figure: true,
@@ -1350,7 +1349,7 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
         math: false,
         hard_line_breaks: false,
     };
-    let mut doc = super::super::parser::parse_with_config(md, &config);
+    let mut doc = super::super::parser::parse_with_config(&md, &config);
     super::super::visit::visit_urls_mut(&mut doc, |u| match u {
         Url::Unresolved(s) => *u = Url::resolved(s.clone(), UrlKind::Internal),
         _ => {}
@@ -1671,5 +1670,43 @@ fn a_sentence_or_a_picture_link_is_not_marked_moss_links() {
     ] {
         let html = render_resolved(md);
         assert!(!html.contains("moss-links"), "{md:?} gave {html}");
+    }
+}
+
+fn long_section(word_count: usize) -> String {
+    vec!["word"; word_count].join(" ")
+}
+
+fn parsed(sections: usize, word_count: usize) -> Document {
+    let md: String = (1..=sections).map(|i| format!("## Part {i}\n\n{}\n\n", long_section(word_count))).collect();
+    crate::ast::parser::parse(&md)
+}
+
+/// The same walk moss-build drives: one `FootnoteCtx` for the document, one block at a time.
+fn render_by_block(doc: &Document) -> String {
+    let hooks = DefaultHooks::new();
+    let mut ctx = footnotes::FootnoteCtx::for_document(&doc.blocks);
+    let mut out = String::new();
+    for (block, meta) in doc.blocks.iter().zip(&doc.block_meta) {
+        render_block_with_meta(&hooks, &mut out, block, meta, &mut ctx);
+    }
+    out
+}
+
+#[test]
+fn a_short_page_keeps_heading_ids_and_shows_no_permalinks() {
+    let doc = parsed(1, 200);
+    for html in [render_document(&doc, &DefaultHooks::new()), render_by_block(&doc)] {
+        assert!(html.contains(r#"<h2 id="part-1">Part 1"#), "{html}");
+        assert!(!html.contains("moss-heading-anchor"), "{html}");
+    }
+}
+
+#[test]
+fn a_long_page_shows_permalinks() {
+    let doc = parsed(2, 80);
+    for html in [render_document(&doc, &DefaultHooks::new()), render_by_block(&doc)] {
+        assert_eq!(html.matches("moss-heading-anchor").count(), 2, "{html}");
+        assert!(html.contains(r##"<h2 id="part-1">Part 1<a class="moss-heading-anchor" href="#part-1" aria-label="Permalink to this section"></a></h2>"##), "{html}");
     }
 }

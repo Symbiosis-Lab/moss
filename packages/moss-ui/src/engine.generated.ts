@@ -188,7 +188,26 @@ what: string;
 /**
  * The recovery affordance, expressed as data.
  */
-action: Action }
+action: Action; 
+/**
+ * How long the app keeps it.
+ */
+lifetime?: AdvisoryLifetime }
+
+/**
+ * How long the app keeps an advisory once raised.
+ */
+export type AdvisoryLifetime = 
+/**
+ * A condition of this build: the next build start clears it.
+ */
+"Build" | 
+/**
+ * Kept across build starts until its own task's next tick, for an
+ * advisory that a rebuild not running its task cannot speak for (a
+ * plugin's Sync offer: save-rebuilds run no process hook).
+ */
+"UntilTaskRestates"
 
 /**
  * The quantity a Job reports on success: "142 pages", "3 posts". Present iff
@@ -227,7 +246,11 @@ export type AppOp =
 /**
  * Download a command-line tool moss needs, after the user asked for it; `args` is `{"tool": "ffmpeg"|"git"}`.
  */
-"DownloadTool"
+"DownloadTool" | 
+/**
+ * Run a plugin's process hook as the person's own act, which may write the folder; `args` is `{"plugin": "<id>"}`, and the app names the plugin from its manifest.
+ */
+"RunPluginProcess"
 
 /**
  * One condition under which a field takes effect.
@@ -699,30 +722,20 @@ root_name: string | null;
 editor_root: string | null }
 
 /**
- * A validation diagnostic exposed to the frontend.
- * 
- * Lives here rather than in the app crate because both carriers return it:
- * the desktop `validate_content` command and the HTTP arm.
+ * The wire shape every host's editor reads: [`Diagnostic`] with an
+ * LSP-compatible severity number (1 error, 2 warning, 3 info, 4 hint).
  */
-export type EditorDiagnostic = { 
-/**
- * Severity: 1=Error, 2=Warning, 3=Info, 4=Hint (LSP-compatible).
- */
-severity: number; 
-/**
- * Human-readable message.
- */
-message: string; 
+export type EditorDiagnostic = { severity: number; message: string; 
 /**
  * Frontmatter field path (e.g. "title", "also_in[0]").
  */
 path: string | null; 
 /**
- * Source line (1-based), if available.
+ * 1-based line in the whole file, when known.
  */
 line: number | null; 
 /**
- * Source column (1-based), if available.
+ * 1-based column, when known.
  */
 column: number | null }
 
@@ -804,6 +817,7 @@ kind: ReferenceKind;
 resolved: ResolvedAsset | null; 
 /**
  * For Link kinds: the resolved deployed URL (carried from the classifier).
+ * None on a site with no URL map, whose links answer `resolved_path`.
  */
 url: string | null; 
 /**
@@ -811,14 +825,20 @@ url: string | null;
  */
 anchor: string | null; 
 /**
- * The absolute source FILE this reference opens when followed, for the two
- * kinds that have one: a resolved internal Link (via `source_path_for_url`)
- * and a FolderListing embed (via `FolderFacts::index_source_for`, which is
- * the folder's index source, NOT the folder directory).
+ * The source FILE this reference opens when followed: root-relative from
+ * moss-core, absolute once a desktop host's adapter has joined it to the
+ * site root. Set for:
+ * * `Link` and `Moved`: the page's source, from the URL map, or the page
+ * file itself on a site with no map;
+ * * `FolderListing`: the folder's index source, NOT the folder directory;
+ * with no index source in the map, the folder's home file;
+ * * `FolderIndexIframe`: the folder's static `index.html`;
+ * * `Transclusion`, `Notebook` and `Table`: the embedded file.
  * 
- * Always a file, never a directory — every consumer opens it. A folder that
- * publishes no index source of its own leaves this `None`, so the editor
- * shows no follow affordance rather than one that lands nowhere.
+ * Always a listed file, never a directory — every consumer opens it. A
+ * folder with neither an index source nor a home file leaves this `None`,
+ * so the editor shows no follow affordance rather than one that lands
+ * nowhere.
  */
 resolved_path: string | null; 
 /**
@@ -988,6 +1008,11 @@ file_kinds?: ExtKind[] | null;
 applies_when?: AppliesWhen[] | null }
 
 /**
+ * A top-level frontmatter key, with one-based line and UTF-8 byte offsets.
+ */
+export type FieldSpan = { key: string; line: number; from: number; to: number }
+
+/**
  * Supported field types.
  */
 export type FieldType = "string" | "boolean" | "integer" | "number" | "array" | "object" | 
@@ -1026,8 +1051,13 @@ export type FileArgs = { filePath: VaultPath }
  */
 export type FileChangeEvent = { 
 /**
- * Output files whose content hash changed (relative to the staging dir).
- * This is the definitive list - frontend refreshes only if current page is here.
+ * Output files whose content hash changed (relative to the staging dir),
+ * named in the event sent when their new bytes become servable: a page
+ * the render wrote, at the show; a file the background writes (a copied
+ * asset, an image variant, a video), at the seal tail. A key can be named
+ * again: a page the tail repaired, or a key a newer render's tail lists
+ * when an older render's tail left to it. The refresh signal: a client
+ * refreshes when this names the page it shows or anything that page loads.
  */
 changed_output_files: string[] | null; 
 /**
@@ -1085,8 +1115,16 @@ source_renames: ([string, string])[] | null;
  * edits); the preview ignores it — `changed_output_files` is the refresh
  * signal. Populated by `build_rebuild_event_with_renames` in `watch.rs`,
  * which emits it even when no output changed.
+ * See `MossEvent::SourceContentChanged` for the pre-rebuild announcement.
  */
-modified_paths: string[] | null }
+modified_paths: string[] | null; 
+/**
+ * The render this event belongs to (`lifecycle::show_render`'s number):
+ * a render sends one event when it is shown and one from its seal tail.
+ * Nothing dedupes on it: a key named twice is a second change, or at
+ * worst a second refresh. `None` when no render was minted.
+ */
+render_seq: number | null }
 
 /**
  * One reference found in a file that points to a given target.
@@ -1131,12 +1169,12 @@ stubs_missing: number; skipped: SkippedDerivedFile[]; failed: FailedDerivedFile[
 export type FolderDerivationChoice = { show: string } | "keep"
 
 /**
- * What the LAST BUILD listed under a folder, read from the `ArticleMap`.
+ * What the LAST BUILD listed under a folder, read from the build's URL map.
  * Attached to `FolderListing` embeds so the editor's card can state what will
  * be listed and how, without reimplementing the build's selection.
  * 
  * The fidelity limits of the underlying derivation are documented on
- * [`crate::editor::resolve::url_index::FolderFacts`]; the editor renders these
+ * [`super::urls::FolderFacts`]; the editor renders these
  * counts as a bare number and makes no prose claim about build output.
  */
 export type FolderEmbedInfo = { 
@@ -1410,6 +1448,21 @@ export type MossEvent = { kind: "BackgroundProgress"; payload: BackgroundProgres
  * Project-root-relative path with a leading `/`, e.g. `/assets/photo.jpg`.
  */
 path: string } } | 
+/**
+ * Reload-tracked source bytes changed according to a watcher batch, before
+ * any rebuild gate. Includes pages and the four synchronous `.moss` sources
+ * selected by `manifest::is_reload_tracked_source_key`; not hash-confirmed.
+ * The editor listens to reload its open file (deferred while it has unsaved
+ * edits). This is not a build result and carries no output facts; tree and
+ * preview consumers do not subscribe. A build's `FileChanged.modified_paths`
+ * may repeat these paths.
+ */
+{ kind: "SourceContentChanged"; payload: { 
+/**
+ * Project-relative keys, forward slashes, no leading slash: the
+ * `FileChangeEvent.modified_paths` domain.
+ */
+paths: string[] } } | 
 /**
  * A file was created on disk via a RAW FS event (outside a process-hook build).
  * Emitted before the rebuild-eligibility gate so the editor can flash the deepest
@@ -1688,6 +1741,16 @@ title: string }
 export type PagePosition = "page" | "folder" | "home"
 
 /**
+ * A one-page preview as hosts receive it: a full document, its title and the
+ * renderer's diagnostics. Page checks come from [`check_page`].
+ */
+export type PagePreview = { 
+/**
+ * [`content_hash`] of the text this render came from.
+ */
+revision: string; html: string; title: string; diagnostics: EditorDiagnostic[] }
+
+/**
  * Result of resolving a preview URL to its source file and page type.
  */
 export type PageSource = { 
@@ -1826,7 +1889,7 @@ parent: string | null; state: TaskState }
  */
 export type ParsedFrontmatter = { 
 /**
- * [`content_hash`] of the file's bytes as read, before any newline
+ * [`crate::page::content_hash`] of the file's bytes as read, before any newline
  * normalisation. Empty while [`still_arriving`](Self::still_arriving).
  */
 hash: string; 
@@ -1857,7 +1920,7 @@ frontmatter_error?: string | null;
  * this document: an empty CM6 buffer over a file with content is the same
  * lie as the errno toast this replaced.
  * 
- * Set only by [`classify_source_read`], which is the one place in the
+ * Set only by [`super::classify_source_read`], which is the one place in the
  * editor that reads the cloud's answer. Never true together with content.
  */
 still_arriving?: boolean }
@@ -2242,7 +2305,13 @@ export type ResolveAssetArgs = { target: string; fromFile: VaultPath }
 
 export type ResolveReferencesArgs = { targets: RefTarget[]; fromFile: VaultPath }
 
-export type ResolvedAsset = { absolute_path: string; request_url: string; mime_type: string; width: number | null; height: number | null; size_bytes: number; 
+export type ResolvedAsset = { 
+/**
+ * The asset's file: root-relative from moss-core, absolute once a desktop
+ * host's adapter has joined it to the site root (and filled in its size
+ * and dimensions).
+ */
+absolute_path: string; request_url: string; mime_type: string; width: number | null; height: number | null; size_bytes: number; 
 /**
  * How the path was resolved: literal, bare-fuzzy, separator-fallback, or
  * case-mismatch. Carried from the shared engine.
@@ -2250,9 +2319,23 @@ export type ResolvedAsset = { absolute_path: string; request_url: string; mime_t
  * Read by the editor off the unified reference envelope
  * (`EditorReferenceResolution`), which marks a separator-fallback or
  * case-mismatch path as a problem and offers the file's real path.
- * Also exposed by the singular `editor_resolve_asset` (chip-bar) command.
+ * The single-asset lookup (`resolve_asset`) returns it too.
  */
-provenance: AssetProvenance }
+provenance: AssetProvenance; 
+/**
+ * The ladder widths the current build holds for this image and can still
+ * vouch for, narrowest first: each is what `request_url?w=<width>` serves.
+ * Empty when there is no fresh rung or the host has no build; the original
+ * is never listed.
+ */
+rung_widths: number[]; 
+/**
+ * The ladder stopped short of this image: a rung is built, and the source
+ * is no wider than the ladder's widest step, so no rung reaches its full
+ * width. The editor may then offer the original as its widest `srcset`
+ * candidate. A camera-sized original never qualifies.
+ */
+offers_original: boolean }
 
 /**
  * One path [`restore_version`] could not carry through — a field-named struct
@@ -2293,7 +2376,7 @@ export type SaveEditorContentArgs = { filePath: VaultPath; frontmatter: JsonValu
  */
 export type SaveResult = 
 /**
- * Written. `hash` is the [`content_hash`] of the bytes now on disk, the
+ * Written. `hash` is the [`crate::page::content_hash`] of the bytes now on disk, the
  * base the editor's next save must name. `displaced` is the history
  * version that keeps the bytes this save replaced, when the save was
  * asked to keep them.
@@ -3008,15 +3091,14 @@ publish_date: string | null;
 date_source: DateSource; 
 /**
  * Whether this node is its parent folder's ELECTED home file — the single
- * winner of `moss_core::home::detect_home_file_in_folder_marked` (order:
+ * winner of `crate::home::detect_home_file_in_folder_marked` (order:
  * `home: true` frontmatter marker › index stems › self-named folder note ›
  * first document alphabetically), computed per folder in
- * `list_tree_inner_cached` with the folder's REAL basename (so the project
+ * `build_tree_root` with the folder's REAL basename (so the project
  * root's self-named home is recognized too). At most one child per folder
  * is `true`; always `false` for directories. The frontend consumes this
  * flag (`entries.find(e => e.is_home)`) instead of re-deriving the
- * election — the backend owns the home decision (consolidation-map
- * homeRank row).
+ * election — the core owns the home decision.
  */
 is_home: boolean; 
 /**
@@ -3029,7 +3111,7 @@ children: TreeNode[] | null; hidden: number;
 file_id: string | null; 
 /**
  * The file's role on the site when it has a special one, decided by
- * `classify::special_file_kind`. Always `None` for folders.
+ * `super::policy::special_file_kind`. Always `None` for folders.
  */
 special?: SpecialFileKind | null }
 
@@ -3082,9 +3164,7 @@ export type VersionContent = { kept: boolean; text: string | null }
  * for a site-scope drill-down (`scope: "site"`, `path: Some(<version id>)`)
  * — the "A site version" sub-view's Changed-since/Unchanged groups — and
  * `rows` is empty in that mode. One command rather than two: the drill-down
- * reuses [`HistoryStore::site_version_pages`], which needs the live sealed
- * manifest exactly like the top-level list's `live_id` does, so the two
- * share one body instead of duplicating the manifest plumbing.
+ * reuses [`HistoryStore::site_version_pages`] in the same body as the list.
  */
 export type VersionList = { rows: VersionRow[]; 
 /**

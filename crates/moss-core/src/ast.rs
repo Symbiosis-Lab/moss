@@ -40,7 +40,10 @@ pub mod extract_form;
 pub mod extract_hero;
 pub mod footnotes;
 pub mod grid_parts;
-pub mod line_breaks;
+pub mod inline;
+// The old paths of the two passes that moved into `inline`; drop these
+// re-exports in the next breaking release of moss-core.
+pub use inline::{line_breaks, tags};
 pub mod link_card;
 pub mod linked_embed;
 pub mod hooks;
@@ -56,7 +59,6 @@ pub mod render;
 pub mod resolve_urls;
 pub mod shortcode;
 pub mod shortcode_extract;
-pub mod tags;
 pub mod url;
 pub mod visit;
 
@@ -65,13 +67,14 @@ pub use document::{BlockMeta, Document};
 pub use extract_hero::{extract_hero, HeroDrawnFrom, HeroExtraction};
 pub use grid_parts::{card_parts, render_grid_parts, GridCellParts, GridParts};
 pub use extract_form::{FieldKind, FormField, FormShortcode};
+pub use crate::heading::anchor_rule::{shows_heading_anchors, wants_heading_anchors};
 pub use hooks::{DefaultHooks, RenderHooks, RequestFormFn, SubscribeFormFn};
 pub use node::{is_link_row, is_text_link_row, Block, CalloutKind, Fold, Inline};
 pub use parser::{clear_heading_ids, parse, parse_with_config, parser_options, unwrap_implicit_figures, ParseConfig};
 pub use plain_text::{inlines_to_plain_text, render_plain_text};
 pub use query::{block_images, find_first_block_image, has_raw_style_block, has_viewable_picture_recursive, images_without_text, marked_media_at, image_word_warnings, MarkedMedia, MediaMarker};
 pub use render::{render_block_with_meta, render_blocks, render_blocks_with_meta, render_document};
-pub use resolve_urls::{classify_remaining_urls, resolve_urls, UrlResolution};
+pub use resolve_urls::{classify_remaining_urls, classify_url, resolve_document, resolve_urls, transform_markdown_link, UrlResolution};
 pub use shortcode::{
     ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode, HeroShortcode,
     RecentShortcode, Shortcode, ShortcodeKind, ShortcodeSource, SourceFragment, SubscribeShortcode,
@@ -79,3 +82,4 @@ pub use shortcode::{
 pub use tags::extract_inline_tags;
 pub use url::{ResolvedUrl, Url, UrlKind};
 pub use visit::{for_each_child_sequence, forms_recursive, has_callout_recursive, has_diagram_recursive, is_diagram_lang, has_scroll_row_recursive, has_marquee_recursive, has_shortcode_recursive, visit_block_raw_html_mut, visit_blocks, visit_urls_mut};
+

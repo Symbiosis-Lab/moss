@@ -13,6 +13,14 @@ The full size scale runs `--moss-size-{2xs,xs,sm,md,lg,xl,2xl,3xl}`.
 <!-- auto:start:css-tokens -->
 | Category | Variable | Default | Description |
 |---|---|---|---|
+| chart | `--moss-chart-1` | `#046bd0` | Chart series 1 (blue) |
+| chart | `--moss-chart-2` | `#c24100` | Chart series 2 (rust) |
+| chart | `--moss-chart-3` | `#007c59` | Chart series 3 (teal) |
+| chart | `--moss-chart-4` | `#d81428` | Chart series 4 (red) |
+| chart | `--moss-chart-5` | `#824ae4` | Chart series 5 (violet) |
+| chart | `--moss-chart-6` | `#8f6504` | Chart series 6 (ochre) |
+| chart | `--moss-chart-7` | `#ca1d87` | Chart series 7 (magenta) |
+| chart | `--moss-chart-8` | `#257d04` | Chart series 8 (green) |
 | code | `--moss-code-accent-primary` | `#2d5a2d` | Code accent primary — moss green, systems/primary languages. Dark: pinned to #6a9a5a (was color-mix(accent 80%, white)) — since --moss-color-accent now carries its own lightened dark value, re-deriving here would double-lighten the syntax green; pinning keeps code colors stable. |
 | code | `--moss-code-accent-quaternary` | `#6b5b4f` | Code accent quaternary — deeper brown, config/data |
 | code | `--moss-code-accent-secondary` | `#5d5853` | Code accent secondary — warm gray, web languages |
@@ -26,11 +34,13 @@ The full size scale runs `--moss-size-{2xs,xs,sm,md,lg,xl,2xl,3xl}`.
 | color | `--moss-color-accent-hover` | `color-mix(in oklch, var(--moss-color-accent) 85%, black)` | Accent color on hover — auto-derived from --moss-color-accent. Light: darkens accent by mixing 85% accent + 15% black (hover = press-down cue). Dark: lightens accent by mixing 80% accent + 20% white (hover = surface lift). Override only if the mix produces a wrong result for a custom palette. |
 | color | `--moss-color-accent-quiet` | `rgba(45, 90, 45, 0.28)` | Quiet accent for ambient indicators (hairlines, tree-row left-borders). ~28% opacity of moss-color-accent. Consumed by the breadcrumb and preview hairlines (the ambient renderer). Ambient only — never a focus indicator: it composites too close to the page to satisfy 1.4.11. Use moss-color-ui-accent for focus. |
 | color | `--moss-color-bg` | `#faf8f5` | Page background |
+| color | `--moss-color-highlight` | `#fbe98a` | Background of ==highlighted== text (the mark element). The page text colour on it reaches 4.5:1 in both schemes. |
 | color | `--moss-color-muted` | `#716d69` | Secondary/muted text. Light value meets 4.5:1 on bg, surface and code backgrounds (WCAG 1.4.3) — it is body text at 14px in ~32 places, not decoration. |
 | color | `--moss-color-surface` | `#f4f1ec` | Card and surface background |
 | color | `--moss-color-text` | `#2c2825` | Primary text |
 | color | `--moss-color-text-secondary` | `#5d5853` | Secondary text color — darker than --moss-color-muted, used for readable secondary content (nav links, dates, excerpts). Renamed from --moss-text-secondary in v1.3. |
 | color | `--moss-color-ui-accent` | `var(--moss-color-accent)` | Accent for navigation, buttons, and site controls (chrome). Defaults to the content accent; set to a neutral (e.g. var(--moss-color-text)) for quiet chrome. |
+| color | `--moss-focus-ring` | `var(--moss-color-ui-accent)` | Colour a focused text field draws on its own edge (an underline or a border, doubled to 2px), the one focus treatment of every text field moss ships. Defaults to the UI accent; keep at least 3:1 against the page. |
 | elevation | `--moss-edge-light` | `rgba(255, 255, 255, 0.45)` | The hairline highlight on the edge that faces the light. Nearly invisible on paper; on the dark ground it is what lifts a surface, since the shadow alone cannot. |
 | elevation | `--moss-elevation-1` | `inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -6.8px) calc(var(--moss-light-y) * -6.8px) 4.8px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(32% * var(--moss-shadow-strength)), transparent)` | A resting control on its parent: pills, toggle thumbs, close buttons, a hovered card. The lit edge plus Ambient's sheet cast at elevation 1: 6.8px along the light, 4.8px blur, 32% × strength. |
 | elevation | `--moss-elevation-2` | `inset calc(var(--moss-light-x) * -1px) calc(var(--moss-light-y) * -1px) 0 var(--moss-edge-light), calc(var(--moss-light-x) * -13.6px) calc(var(--moss-light-y) * -13.6px) 9.6px 0.8px color-mix(in srgb, var(--moss-shadow-color) calc(24% * var(--moss-shadow-strength)), transparent)` | Floating chrome over the shell or page: tooltips, menus, popovers, toasts, the nav island. Elevation 2: 13.6px along the light, 9.6px blur, 24% × strength. |

@@ -16,6 +16,16 @@ pub(super) fn list_directory_counted(
     project_path: &str,
     show_internal: bool,
 ) -> Result<(Vec<DirEntry>, u32), crate::build::cloud_readiness::storage::Unavailable> {
+    list_directory_sized(path, project_path, show_internal)
+        .map(|(entries, hidden)| (entries.into_iter().map(|(entry, _)| entry).collect(), hidden))
+}
+
+/// Retain sizes from the same metadata snapshot for the core tree listing.
+pub(super) fn list_directory_sized(
+    path: &str,
+    project_path: &str,
+    show_internal: bool,
+) -> Result<(Vec<(DirEntry, u64)>, u32), crate::build::cloud_readiness::storage::Unavailable> {
     let dir = std::path::Path::new(path);
 
     let session = crate::system::folder_session::registry().get(project_path);
@@ -30,7 +40,7 @@ pub(super) fn list_directory_counted(
     let crate::build::cloud_readiness::storage::StorageValue::Directory { entries: raw_entries, hidden } = &*snapshot else {
         unreachable!("editor-listing requests return a directory snapshot");
     };
-    let mut entries: Vec<DirEntry> = Vec::new();
+    let mut entries: Vec<(DirEntry, u64)> = Vec::new();
     for (entry, metadata) in raw_entries {
         let name = entry.file_name().to_string_lossy().to_string();
 
@@ -42,16 +52,16 @@ pub(super) fn list_directory_counted(
 
         let file_id = extract_file_id(&metadata);
 
-        entries.push(DirEntry {
+        entries.push((DirEntry {
             name,
             path: entry.path().to_string_lossy().to_string(),
             is_dir: metadata.is_dir(),
             modified,
             file_id,
-        });
+        }, metadata.len()));
     }
 
-    entries.sort_by(cmp_dir_entry);
+    entries.sort_by(|a, b| cmp_dir_entry(&a.0, &b.0));
 
     Ok((entries, *hidden))
 }

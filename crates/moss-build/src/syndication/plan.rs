@@ -2,7 +2,6 @@
 //! happens here, so planning costs a publish nothing it has to wait for.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
 
 use serde::Serialize;
 
@@ -51,9 +50,6 @@ pub struct Planned {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostPlan {
     pub uid: String,
-    /// The uid is not in the file yet and must be written before any copy is
-    /// due: a page with no stored note id gets a new one at every build.
-    pub stamp_uid: bool,
     pub entries: Vec<Planned>,
 }
 
@@ -78,10 +74,8 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
             channel: channel.to_string(),
             action,
         };
-        let stored_uid = post.frontmatter.get("uid").and_then(|u| u.as_str()).map(str::to_string);
-        // A page whose note id was not minted (a dry run writes no source)
-        // gets one at publish: plan it as it would be planned then.
-        let uid = stored_uid.clone().or_else(|| post.uid.clone()).unwrap_or_default();
+        // The uid the page was built under, which its live copy carries.
+        let uid = post.uid.clone().unwrap_or_default();
         let own: Vec<String> =
             post.frontmatter.get("syndicate").and_then(|v| super::parse_choice(v).ok()).unwrap_or_default();
         let listed = crate::build::types::syndicated_urls(post.frontmatter.get("syndicated"));
@@ -120,8 +114,7 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
             entries.push(entry(channel, action));
         }
         if !entries.is_empty() {
-            let needs_copy = entries.iter().any(|e| matches!(e.action, Action::Due | Action::Adopt { .. }));
-            plans.push(PostPlan { uid, stamp_uid: stored_uid.is_none() && needs_copy, entries });
+            plans.push(PostPlan { uid, entries });
         }
     }
     plans
@@ -137,22 +130,13 @@ fn on_host(url: &str, domains: &[String]) -> bool {
     domains.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
-/// Carry the plan out: write the uid where a post lacks one, then the records.
-/// A post whose uid cannot be written gets no record, and says why.
-pub fn apply(folder: &Path, plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>) -> Vec<Planned> {
+/// Carry the plan out: write the copy records.
+pub fn apply(plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>) -> Vec<Planned> {
     let mut out = Vec::new();
     for mut plan in plans {
         if plan.uid.is_empty() {
             for entry in &mut plan.entries {
                 entry.action = Action::Skip { reason: "the page has no note id".into() };
-            }
-        } else if plan.stamp_uid {
-            if let Err(e) = stamp_uid(folder, &plan.entries[0].source_path, &plan.uid) {
-                for entry in &mut plan.entries {
-                    if matches!(entry.action, Action::Due | Action::Adopt { .. }) {
-                        entry.action = Action::Skip { reason: format!("its note id could not be written into the page ({e})") };
-                    }
-                }
             }
         }
         for entry in plan.entries {
@@ -186,21 +170,6 @@ pub fn apply(folder: &Path, plans: Vec<PostPlan>, records: &Records, site_url: O
         }
     }
     out
-}
-
-/// Write `uid:` into a page, creating its frontmatter if it has none. Every
-/// other byte stays as written.
-fn stamp_uid(folder: &Path, source_path: &str, uid: &str) -> Result<(), String> {
-    let path = folder.join(source_path);
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let edited = moss_core::frontmatter::edit_fields(
-        &content,
-        &[moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.into()) }],
-    )?;
-    if edited != content {
-        crate::infra::atomic_write::write_atomic(&path, &edited)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

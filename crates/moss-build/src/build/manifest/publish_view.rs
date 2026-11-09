@@ -53,6 +53,15 @@ impl SealedManifest {
         )
     }
 
+    /// Every published page's metadata by source path, whose uids a landing
+    /// stamps into frontmatter.
+    pub fn published_uids(&self) -> impl Iterator<Item = (&str, &crate::types::content::PageMeta)> + '_ {
+        let published = self.published_source_to_output();
+        self.inner.page_meta.iter()
+            .filter(move |(source, _)| published.contains_key(*source))
+            .map(|(source, meta)| (source.as_str(), meta))
+    }
+
     /// Output paths built for preview only: the pages whose source says
     /// `draft: true`. Derived from the persisted page metadata, so a page
     /// carried forward unrendered stays withheld.

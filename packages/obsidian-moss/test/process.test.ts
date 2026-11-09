@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
-import { MossProcess, type SpawnFn } from "../src/process";
+import { MossProcess, type SpawnFn } from "../src/desktop/process";
 
 class FakeChild extends EventEmitter {
   stderr = new EventEmitter();

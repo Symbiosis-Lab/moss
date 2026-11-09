@@ -350,7 +350,7 @@ fn heading_contents_end_leaves_no_trailing_space_after_inline_markup() {
         &parse("## **Bold** {contents=end}\n"),
         &crate::ast::hooks::DefaultHooks::new(),
     );
-    assert!(html.starts_with(r#"<h2 id="bold" data-contents-end><strong>Bold</strong><a"#), "{html}");
+    assert!(html.starts_with(r#"<h2 id="bold" data-contents-end><strong>Bold</strong></h2>"#), "{html}");
     match first_block("## **Bold** {contents=end}\n") {
         Block::Heading { children, id, .. } => {
             assert_eq!(id.as_deref(), Some("bold"));
@@ -2643,7 +2643,7 @@ fn heading_contents_label_is_an_attribute_not_text() {
     ] {
         let html = crate::ast::render::render_document(&parse(src), &crate::ast::hooks::DefaultHooks::new());
         assert!(
-            html.starts_with(r#"<h2 id="hours" data-contents-label="Opening hours">Opening hours of the reading room<a"#),
+            html.starts_with(r#"<h2 id="hours" data-contents-label="Opening hours">Opening hours of the reading room</h2>"#),
             "{src:?}: {html}"
         );
         assert!(parse(src).warnings.is_empty(), "{src:?}");

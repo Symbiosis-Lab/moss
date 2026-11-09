@@ -106,16 +106,35 @@ pub const SIZES_BODY: &str = "auto, (min-width: 48rem) 47.25rem, 100vw";
 /// evaluating this list, which is correct in every writing mode and every
 /// layout, not just vertical-rl. The comma-separated remainder is the
 /// mandatory fallback: `auto` binds only when the `img` carries
-/// `loading="lazy"` (the HTML spec's own constraint — an eager, high-
-/// fetchpriority first card falls through to it unconditionally, same as
-/// an engine that doesn't support `auto` yet, e.g. WebKit as of 2026-09).
+/// `loading="lazy"`, so the emitter drops the `auto,` lead from an eager
+/// image (Chromium reads an eager `auto,` lead as `100vw` instead of skipping
+/// it). WebKit 26.5 honours `auto` on an `<img>` but not on a `<picture>`
+/// `<source>`, where the WebP ladder sits, so it reads this remainder too.
 /// It stays a viewport-width guess, and stays safe only because a
 /// generic <picture> `sizes` overstatement over-fetches rather than
 /// blurs — see the module doc's caveat on theme overrides.
 pub const SIZES_CARD: &str = "auto, (min-width: 48rem) 24rem, 100vw";
 
-/// Gallery thumbnails: 2–3 across on desktop.
-pub const SIZES_GALLERY: &str = "(min-width: 48rem) 33vw, 100vw";
+/// Gallery thumbnails: 2–3 across on desktop. Leads with `auto,` for the
+/// reason [`SIZES_CARD`] gives: a gallery's track comes from auto-fill,
+/// `data-columns` or justified rows, and keeps several across on a phone, so
+/// the viewport fallback below overstates a phone thumbnail several times.
+pub const SIZES_GALLERY: &str = "auto, (min-width: 48rem) 33vw, 100vw";
+
+/// A gallery with an author count of two or more (`:::gallery N`). Below 48rem
+/// site.css keeps it at least two across (tracks floored at 88px), so `50vw`
+/// never understates a thumbnail there; it is the value WebKit, which has no
+/// `sizes=auto`, reads. A 3-across strip of 110px thumbnails otherwise fetched
+/// the top rung on an iPhone.
+pub const SIZES_GALLERY_COUNTED: &str = "auto, (min-width: 48rem) 33vw, 50vw";
+
+/// The `sizes=` value for a gallery thumbnail, by the gallery's author count.
+pub fn sizes_for_gallery(columns: Option<u32>) -> &'static str {
+    match columns {
+        Some(n) if n >= 2 => SIZES_GALLERY_COUNTED,
+        _ => SIZES_GALLERY,
+    }
+}
 
 /// The `sizes=` value for a figure carrying a canonical `data-width` token
 /// (`body | wide | page | screen`; `full` is canonicalized to `screen` at
@@ -220,7 +239,7 @@ mod tests {
                     .map(move |w| sizes_for_grid_cell(n, w))
             })
             .collect();
-        for s in [SIZES_FULL_BLEED, SIZES_BODY, SIZES_CARD, SIZES_GALLERY, SIZES_WIDE, SIZES_PAGE]
+        for s in [SIZES_FULL_BLEED, SIZES_BODY, SIZES_CARD, SIZES_GALLERY, SIZES_GALLERY_COUNTED, SIZES_WIDE, SIZES_PAGE]
             .into_iter()
             .chain(grid_samples.iter().map(String::as_str))
         {
@@ -243,6 +262,16 @@ mod tests {
                 }
             }
             assert_eq!(depth, 0, "unbalanced parentheses: {s}");
+        }
+    }
+
+    #[test]
+    fn contexts_whose_width_layout_decides_lead_with_auto() {
+        // A lazy image in these contexts has a laid-out width no viewport
+        // formula names; without `auto` a 110px gallery thumb on a phone
+        // resolves `100vw` and fetches the top rung.
+        for s in [SIZES_BODY, SIZES_CARD, SIZES_GALLERY, SIZES_GALLERY_COUNTED] {
+            assert!(s.starts_with("auto, "), "{s}");
         }
     }
 

@@ -4,10 +4,11 @@
  * See tests/e2e/helpers/gate-sites.ts → HEADING_ANCHOR_GATE for why this needs
  * a browser, and why it needs both of them.
  *
- * A home-page `##` section carries the same permalink as any page's, so a
- * site owner can link to a section of the home page; only a level-1 title
- * goes without one. The selection tests run against `/page/`; the home page
- * is checked separately.
+ * A page carries permalinks only when two of its sections hold 80 words each;
+ * the fixture's pages are written to fire, and `/short/` to fall under it.
+ * Every `##` section of a page that fires, the home page's included, carries
+ * one; a level-1 title never does. The selection tests run against `/page/`;
+ * the home page is checked separately.
  */
 import { test, expect } from "@playwright/test";
 
@@ -62,9 +63,7 @@ test.describe("heading anchor", () => {
     page,
   }) => {
     // Removing the glyph from the document must not remove the affordance —
-    // this is what stops the fix above from being "delete the anchor". A
-    // non-home page, not the home page: d0b0be5f strips the anchor from
-    // every home-page heading, so this claim only holds elsewhere.
+    // this is what stops the fix above from being "delete the anchor".
     await page.goto("/page/");
 
     const anchor = page.locator("h2#introduction .moss-heading-anchor");
@@ -77,7 +76,7 @@ test.describe("heading anchor", () => {
         "::after",
       ).content,
     );
-    expect(painted).toBe('"#"');
+    expect(painted).toBe('"\u2060#"');
   });
 
   test("a home-page section carries a permalink, like any page's", async ({
@@ -139,11 +138,10 @@ test.describe("heading anchor", () => {
       const ring = await anchor.evaluate((a) => {
         const cs = getComputedStyle(a);
         const r = a.getBoundingClientRect();
-        return { style: cs.outlineStyle, width: parseFloat(cs.outlineWidth), offset: parseFloat(cs.outlineOffset), left: r.left, right: r.right };
+        return { style: cs.outlineStyle, width: parseFloat(cs.outlineWidth), left: r.left, right: r.right };
       });
       expect(ring.style, `${width}px: a focus ring`).not.toBe("none");
       expect(ring.width).toBeGreaterThan(0);
-      expect(ring.offset, `${width}px: the ring is inset`).toBeLessThan(0);
       expect(ring.left, `${width}px: the mark's start is in the window`).toBeGreaterThanOrEqual(0);
       expect(ring.right, `${width}px: the mark's end is in the window`).toBeLessThanOrEqual(width);
       await anchor.blur();
@@ -152,10 +150,10 @@ test.describe("heading anchor", () => {
     await expect(anchor).toHaveCSS("opacity", "1");
   });
 
-  test("the mark sits on the baseline of the heading's first line", async ({ page }) => {
+  test("the mark trails the heading text on the same baseline, wrapped or not", async ({ page }) => {
     // A zero-size inline-block's bottom edge is its line's baseline, so a
-    // probe at the start of the heading's text and one inside the permalink
-    // give the two baselines without reading glyph metrics.
+    // probe after the heading's last word and one inside the permalink give
+    // the two baselines without reading glyph metrics.
     const baselines = (selector: string) =>
       page.locator(selector).evaluateAll((headings) =>
         headings.map((h) => {
@@ -167,9 +165,14 @@ test.describe("heading anchor", () => {
           const a = h.querySelector(".moss-heading-anchor")!;
           const text = probe();
           const mark = probe();
-          h.insertBefore(text, h.firstChild);
+          h.insertBefore(text, a);
           a.insertBefore(mark, a.firstChild);
-          const out = { text: text.getBoundingClientRect().bottom, mark: mark.getBoundingClientRect().bottom };
+          const out = {
+            text: text.getBoundingClientRect().bottom,
+            mark: mark.getBoundingClientRect().bottom,
+            markLeft: a.getBoundingClientRect().left,
+            textRight: text.getBoundingClientRect().right,
+          };
           text.remove();
           mark.remove();
           return out;
@@ -184,9 +187,10 @@ test.describe("heading anchor", () => {
     });
     for (const b of await baselines("h2#introduction")) {
       expect(Math.abs(b.mark - b.text), "ruled h2").toBeLessThanOrEqual(1);
+      expect(b.markLeft, "the mark follows the text").toBeGreaterThanOrEqual(b.textRight);
     }
 
-    // Headings that wrap on a phone: the mark stays on the first line.
+    // Headings that wrap on a phone: the mark stays on the last line.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/edge/");
     const wrapped = await baselines("article h2:has(> .moss-heading-anchor)");
@@ -194,5 +198,83 @@ test.describe("heading anchor", () => {
     for (const b of wrapped) {
       expect(Math.abs(b.mark - b.text), "wrapped h2").toBeLessThanOrEqual(1);
     }
+  });
+
+  test("a CJK heading keeps its mark on the last line, beside the last character", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto("/edge/");
+    const heading = page.locator("article h2", { hasText: "港口" });
+    const lines = await heading.evaluate((h) => {
+      const a = h.querySelector(".moss-heading-anchor")!.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(h.firstChild!);
+      const text = [...range.getClientRects()];
+      const last = text[text.length - 1];
+      return { lines: new Set(text.map((r) => Math.round(r.top))).size, markTop: a.top, lastTop: last.top, lastBottom: last.bottom };
+    });
+    expect(lines.lines, "the heading wraps at 360px").toBeGreaterThan(1);
+    expect(lines.markTop).toBeGreaterThanOrEqual(lines.lastTop - 1);
+    expect(lines.markTop).toBeLessThanOrEqual(lines.lastBottom);
+  });
+
+  test("revealing the mark changes no heading's box", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/edge/");
+    const boxes = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll("article h2")].map((h) => {
+          const r = h.getBoundingClientRect();
+          const a = h.querySelector(".moss-heading-anchor")!.getBoundingClientRect();
+          return [r.width, r.height, a.left - r.left, a.top - r.top, a.width, a.height];
+        }),
+      );
+    await page.mouse.move(0, 0);
+    const rest = await boxes();
+    const headings = page.locator("article h2");
+    for (let i = 0; i < (await headings.count()); i++) {
+      await headings.nth(i).hover();
+      expect((await boxes())[i], `heading ${i} hovered`).toEqual(rest[i]);
+    }
+  });
+
+  test("the mark's hit area is at least 24 by 24 px, whatever the glyph's size", async ({ page }) => {
+    await page.goto("/page/");
+    const anchor = page.locator("h2#introduction .moss-heading-anchor");
+    const target = await anchor.evaluate((a) => {
+      const cs = getComputedStyle(a, "::before");
+      const r = a.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const hit = (x: number, y: number) => document.elementFromPoint(x, y) === a;
+      return {
+        width: parseFloat(cs.width),
+        height: parseFloat(cs.height),
+        edges: [hit(cx - 11, cy), hit(cx + 11, cy), hit(cx, cy - 11), hit(cx, cy + 11)],
+      };
+    });
+    expect(target.width).toBeGreaterThanOrEqual(24);
+    expect(target.height).toBeGreaterThanOrEqual(24);
+    expect(target.edges, "points 11px from the glyph's centre reach the link").toEqual([true, true, true, true]);
+  });
+
+  test("a page under the length rule has heading ids and no permalinks", async ({ page }) => {
+    await page.goto("/short/");
+    await expect(page.locator("h2#introduction")).toHaveCount(1);
+    await expect(page.locator("h2#background")).toHaveCount(1);
+    await expect(page.locator(".moss-heading-anchor")).toHaveCount(0);
+  });
+
+  test.describe("on a touch screen", () => {
+    test.use({ hasTouch: true, isMobile: true });
+
+    test("the mark is visible at rest, faintly", async ({ page }) => {
+      await page.goto("/page/");
+      expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true);
+      const opacity = await page
+        .locator("h2#introduction .moss-heading-anchor")
+        .evaluate((a) => parseFloat(getComputedStyle(a).opacity));
+      expect(opacity).toBeGreaterThan(0.2);
+      expect(opacity).toBeLessThan(0.7);
+    });
   });
 });

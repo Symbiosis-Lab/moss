@@ -124,6 +124,9 @@ pub struct BuildRecords {
     /// acceptance could straddle a seal and accept an address the seal had
     /// just stopped reporting.
     removals: FolderSlot<FolderRemovals>,
+    /// Rollbacks `--accept-stale-content` accepted, keyed by page with the
+    /// published and proposed hashes, so changed bytes need accepting again.
+    accepted_stale: FolderSlot<BTreeMap<String, String>>,
     /// `(old, served)` output paths the last seal kept answering — see
     /// `feeds::kept_addresses`.
     kept: FolderSlot<Vec<(String, String)>>,
@@ -172,7 +175,7 @@ impl BuildRecords {
     /// Retaining (not consuming) is load-bearing: the same value serves as
     /// BOTH the `new` side of the just-finished rebuild's diff and the
     /// `previous` (baseline) side of the NEXT rebuild's — see
-    /// `crate::build::watch::baseline_for_rebuild`. `None` means no build of
+    /// `crate::build::watch::RefreshPlan`. `None` means no build of
     /// this folder has finished in this process yet; callers fall back to
     /// `load_previous_hashes`.
     pub fn content_hashes(&self, folder_path: &str) -> Option<SiteHashes> {
@@ -265,6 +268,15 @@ impl BuildRecords {
         })
     }
 
+    pub(crate) fn accept_stale_content(&self, folder: &str, stale: BTreeMap<String, String>) {
+        self.accepted_stale.update(Self::key(folder), |accepted| *accepted = stale);
+    }
+
+    pub(crate) fn unaccepted_stale_content(&self, folder: &str, stale: BTreeMap<String, String>) -> Vec<String> {
+        let accepted = self.accepted_stale.get(&Self::key(folder)).unwrap_or_default();
+        stale.into_iter().filter(|(path, pair)| accepted.get(path) != Some(pair)).map(|(path, _)| path).collect()
+    }
+
     /// The removals that would refuse a publish of `folder_path` now.
     pub fn pending_removals(&self, folder_path: &str) -> Vec<crate::build::manifest::change_set::PendingRemoval> {
         let r = self.removals.get(&Self::key(folder_path)).unwrap_or_default();
@@ -292,7 +304,7 @@ impl BuildRecords {
         })
     }
 
-    #[cfg(test)]
+    /// Announcers omit accepted paths while retaining the seal's full removal record.
     pub(crate) fn accepted_removals(&self, folder_path: &str) -> BTreeSet<String> {
         self.removals.get(&Self::key(folder_path)).unwrap_or_default().accepted
     }

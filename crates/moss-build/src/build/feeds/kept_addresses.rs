@@ -16,9 +16,9 @@
 //!   gets a forwarding page (an `.html` file) or a copy of its served bytes at
 //!   the same path under the old one.
 //!
-//! The next build's stale-page sweep removes these forwarding pages from the
-//! stage before this pass writes them again, so a preview can miss them for
-//! that moment; a publish always ships the sealed set.
+//! The next build's stale-page sweep spares what this pass will write again
+//! ([`moved_folder_files`] over the live addresses), so the preview keeps
+//! serving them.
 
 use crate::build::assets::paths::{compute_binary_hash, compute_binary_hash_file};
 use crate::build::cli_output::log_warn_problem;
@@ -93,20 +93,37 @@ enum Origin<'a> {
     Kept,
 }
 
+/// The output addresses a build serves: the sealed files, or before seal the
+/// manifest's live keys.
+pub(crate) trait Served {
+    fn addresses(&self) -> Box<dyn Iterator<Item = &String> + '_>;
+    fn serves(&self, address: &str) -> bool;
+}
+
+impl Served for HashMap<String, String> {
+    fn addresses(&self) -> Box<dyn Iterator<Item = &String> + '_> { Box::new(self.keys()) }
+    fn serves(&self, address: &str) -> bool { self.contains_key(address) }
+}
+
+impl Served for std::collections::HashSet<String> {
+    fn addresses(&self) -> Box<dyn Iterator<Item = &String> + '_> { Box::new(self.iter()) }
+    fn serves(&self, address: &str) -> bool { self.contains(address) }
+}
+
 /// `(old, served)` output paths for every public output under a moved
 /// folder's new address whose counterpart under the old one `files` does not
 /// serve. The most specific move wins an address two of them reach, and an
 /// output already under a move's old folder is not aliased again (a folder
 /// moved up into its parent would otherwise nest copies of itself).
-pub(crate) fn moved_folder_files(moves: &[FolderMove], files: &HashMap<String, String>) -> Vec<(String, String)> {
+pub(crate) fn moved_folder_files(moves: &[FolderMove], files: &(impl Served + ?Sized)) -> Vec<(String, String)> {
     let mut by_specificity: Vec<&FolderMove> = moves.iter().collect();
     by_specificity.sort_by_key(|m| std::cmp::Reverse(m.from.len()));
     let mut kept: BTreeMap<String, String> = BTreeMap::new();
     for m in by_specificity {
         let nests = m.from.starts_with(&m.to);
-        for served in files.keys().filter(|k| k.starts_with(&m.to) && !(nests && k.starts_with(&m.from)) && is_public_address(k)) {
+        for served in files.addresses().filter(|k| k.starts_with(&m.to) && !(nests && k.starts_with(&m.from)) && is_public_address(k)) {
             let old = format!("{}{}", m.from, &served[m.to.len()..]);
-            if !files.contains_key(&old) {
+            if !files.serves(&old) {
                 kept.entry(old).or_insert_with(|| served.clone());
             }
         }

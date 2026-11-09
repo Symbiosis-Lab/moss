@@ -261,6 +261,16 @@ pub fn write_output(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
 }
 
+/// Append telemetry without truncating a destination; evicted output starts fresh.
+pub(crate) fn append_output(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    ensure_parent(path)?;
+    if crate::build::icloud::is_evicted(path) {
+        return write_output(path, bytes);
+    }
+    fs::OpenOptions::new().create(true).append(true).open(path)?.write_all(bytes)
+}
+
 /// Copy `src` onto `dst` in the output tree, atomically and without ever
 /// materializing `dst`.
 ///

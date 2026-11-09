@@ -80,7 +80,7 @@ impl<'a> PageKey<'a> {
 /// `ParsedDocument` still lands in the `Debug` half by default. A new field
 /// carrying a large body would merely be slow again, never unhashed.
 pub fn compute_page_facade(doc: &ParsedDocument) -> String {
-    let mut doc = normalized(doc);
+    let mut doc = doc.clone();
     let mut hasher = Sha256::new();
     // Length-prefixed, so no two adjacent fields can trade bytes across the
     // boundary and collide (`content="ab", html=""` vs `content="a", html="b"`).
@@ -121,27 +121,6 @@ pub fn debug_hash<T: std::fmt::Debug>(value: &T) -> String {
 fn hash_str(rendered: &str) -> String {
     let digest = Sha256::digest(rendered.as_bytes());
     format!("{digest:x}")
-}
-
-/// Strip the one field that is not a function of the page's bytes.
-///
-/// `uid` is minted by `generate_uid()` — a fresh random value on every parse —
-/// for any page whose source carries no `uid:`. moss normally writes the
-/// minted value straight back into the frontmatter, so the churn lasts one
-/// build. It lasts FOREVER for a page with no frontmatter block at all
-/// (`footer.md` in the riverbend/河灣 reference vault is exactly this), because
-/// there is nowhere to write it: that one page then reports as changed on
-/// every build, and since slot pages are global invalidators it would force a
-/// full render every single save, silently reducing this whole feature to a
-/// no-op.
-///
-/// Dropping `uid` costs no detection: an authored `uid:` is also carried in
-/// `raw_frontmatter`, which is fingerprinted, so a real uid edit still moves
-/// both fingerprints.
-fn normalized(doc: &ParsedDocument) -> ParsedDocument {
-    let mut normalized = doc.clone();
-    normalized.uid = None;
-    normalized
 }
 
 /// Compute a page's **surface** fingerprint: everything in the facade except
@@ -300,7 +279,10 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // dedicated field removes exactly that duplication, not the catch-all
     // itself — see `dependents::strip_typed_frontmatter_keys`.
     crate::build::render::incremental::dependents::strip_typed_frontmatter_keys(&mut stripped.raw_frontmatter);
-    format!("{:?}", normalized(&stripped))
+    // A page's uid reaches only its own HTML (its comment thread's key), which
+    // the page facade covers.
+    stripped.uid = None;
+    format!("{:?}", stripped)
 }
 
 /// Width of one per-field digest inside [`PageFingerprints::fields`].
@@ -1035,14 +1017,13 @@ mod tests {
     }
 
     #[test]
-    fn a_freshly_minted_uid_does_not_move_either_fingerprint() {
-        // `footer.md` in the riverbend/河灣 reference vault has no frontmatter
-        // block, so the uid moss mints for it can never be written back and is
-        // random on every build. Left in the fingerprint it forced a full
-        // render on every save forever — see `normalized`.
+    fn a_uid_moves_the_page_but_not_its_surface() {
+        // The uid is in the page's own HTML, and a page with none in its file
+        // can be built under a different one without its bytes moving; no
+        // other page shows it.
         let a = ParsedDocument { uid: Some("aaaaaaaa".to_string()), ..Default::default() };
         let b = ParsedDocument { uid: Some("bbbbbbbb".to_string()), ..Default::default() };
-        assert_eq!(compute_page_facade(&a), compute_page_facade(&b));
+        assert_ne!(compute_page_facade(&a), compute_page_facade(&b));
         assert_eq!(compute_page_surface(&a), compute_page_surface(&b));
     }
 

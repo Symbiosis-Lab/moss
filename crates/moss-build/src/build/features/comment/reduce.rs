@@ -15,14 +15,15 @@ use super::NormalizedComment;
 /// A comment is hidden if the latest *verified* visibility event for its
 /// `(source, id)` is `hide`, OR any ancestor (via `reply_to_id`, same source) is
 /// hidden. "Latest" = max `(seq, ts)`. Unhiding a parent restores only the
-/// descendants that are not independently hidden. Events not signed by
-/// `owner_pubkey`, and `pin`/`unpin` (v1), are ignored.
+/// descendants that are not independently hidden. Events not signed by one of
+/// `owners` (the folder's current key and its previous ones,
+/// `Identity::read_trusted_pubkeys`), and `pin`/`unpin` (v1), are ignored.
 pub fn resolve<'a>(
     comments: &'a [NormalizedComment],
     events: &[ModEvent],
-    owner_pubkey: &str,
+    owners: &[String],
 ) -> Vec<&'a NormalizedComment> {
-    resolve_detailed(comments, events, owner_pubkey).0
+    resolve_detailed(comments, events, owners).0
 }
 
 /// [`resolve`], plus the `(source, id)` of every comment whose own latest
@@ -30,12 +31,12 @@ pub fn resolve<'a>(
 pub fn resolve_detailed<'a, 'e>(
     comments: &'a [NormalizedComment],
     events: &'e [ModEvent],
-    owner_pubkey: &str,
+    owners: &[String],
 ) -> (Vec<&'a NormalizedComment>, HashSet<(&'e str, &'e str)>) {
     // Latest verified visibility event per (source, target), ordered by (seq, ts).
     let mut latest: HashMap<(&'e str, &'e str), &'e ModEvent> = HashMap::new();
     for e in events {
-        if (e.kind != "hide" && e.kind != "unhide") || !e.verify(owner_pubkey) {
+        if (e.kind != "hide" && e.kind != "unhide") || !owners.contains(&e.pubkey) || !e.verify(&e.pubkey) {
             continue;
         }
         let key = (e.source.as_str(), e.target.as_str());
@@ -81,11 +82,11 @@ pub fn resolve_detailed<'a, 'e>(
 /// Drop hidden comments from an owned vec in place — the build-path convenience
 /// over [`resolve`]. No events → no work (and the caller need not even load the
 /// identity). Lean: mutates the already-owned comment map, no clone of the kept set.
-pub fn retain_visible(comments: &mut Vec<NormalizedComment>, events: &[ModEvent], owner_pubkey: &str) {
+pub fn retain_visible(comments: &mut Vec<NormalizedComment>, events: &[ModEvent], owners: &[String]) {
     if events.is_empty() {
         return;
     }
-    let visible: HashSet<(String, String)> = resolve(comments, events, owner_pubkey)
+    let visible: HashSet<(String, String)> = resolve(comments, events, owners)
         .iter()
         .map(|c| (c.source.clone(), c.id.clone()))
         .collect();
@@ -138,10 +139,31 @@ mod tests {
     }
 
     #[test]
+    fn an_earlier_key_keeps_its_hides_and_the_current_key_can_lift_them() {
+        let (old, current) = (owner(), owner());
+        let comments = vec![mk("1", None), mk("2", None)];
+        let owners = [current.pubkey.clone(), old.pubkey.clone()];
+        let hides = [ev(&old, "hide", "1", 1, 100), ev(&old, "hide", "2", 2, 100)];
+        assert_eq!(resolve(&comments, &hides, &owners).len(), 0);
+        let lifted = [hides[0].clone(), hides[1].clone(), ev(&current, "unhide", "1", 3, 90)];
+        assert_eq!(ids(&resolve(&comments, &lifted, &owners)), vec!["1"], "seq orders across keys, not ts");
+        assert_eq!(resolve(&comments, &hides, std::slice::from_ref(&current.pubkey)).len(), 2, "an untrusted earlier key's hides do not apply");
+    }
+
+    #[test]
+    fn a_chain_of_keys_trusts_every_one_of_them() {
+        let (a, b, c) = (owner(), owner(), owner());
+        let comments = vec![mk("1", None), mk("2", None), mk("3", None)];
+        let events = [ev(&a, "hide", "1", 1, 1), ev(&b, "hide", "2", 2, 2), ev(&c, "hide", "3", 3, 3)];
+        assert_eq!(resolve(&comments, &events, &[c.pubkey.clone(), a.pubkey.clone(), b.pubkey.clone()]).len(), 0);
+        assert_eq!(ids(&resolve(&comments, &events, std::slice::from_ref(&c.pubkey))), vec!["1", "2"]);
+    }
+
+    #[test]
     fn hide_removes_comment() {
         let id = owner();
         let comments = vec![mk("1", None)];
-        assert_eq!(resolve(&comments, &[ev(&id, "hide", "1", 1, 100)], &id.pubkey).len(), 0);
+        assert_eq!(resolve(&comments, &[ev(&id, "hide", "1", 1, 100)], std::slice::from_ref(&id.pubkey)).len(), 0);
     }
 
     #[test]
@@ -149,7 +171,7 @@ mod tests {
         let id = owner();
         let comments = vec![mk("1", None)];
         let events = vec![ev(&id, "hide", "1", 1, 100), ev(&id, "unhide", "1", 2, 90)];
-        assert_eq!(resolve(&comments, &events, &id.pubkey).len(), 1);
+        assert_eq!(resolve(&comments, &events, std::slice::from_ref(&id.pubkey)).len(), 1);
     }
 
     #[test]
@@ -158,14 +180,14 @@ mod tests {
         let other = owner();
         let comments = vec![mk("1", None)];
         // hide signed by `other`, resolved against `id` → ignored, comment visible.
-        assert_eq!(resolve(&comments, &[ev(&other, "hide", "1", 1, 100)], &id.pubkey).len(), 1);
+        assert_eq!(resolve(&comments, &[ev(&other, "hide", "1", 1, 100)], std::slice::from_ref(&id.pubkey)).len(), 1);
     }
 
     #[test]
     fn hidden_parent_hides_subtree() {
         let id = owner();
         let comments = vec![mk("1", None), mk("2", Some("1")), mk("3", Some("2"))];
-        assert_eq!(resolve(&comments, &[ev(&id, "hide", "1", 1, 100)], &id.pubkey).len(), 0);
+        assert_eq!(resolve(&comments, &[ev(&id, "hide", "1", 1, 100)], std::slice::from_ref(&id.pubkey)).len(), 0);
     }
 
     #[test]
@@ -177,7 +199,7 @@ mod tests {
             ev(&id, "hide", "2", 2, 10),
             ev(&id, "unhide", "1", 3, 10),
         ];
-        assert_eq!(ids(&resolve(&comments, &events, &id.pubkey)), vec!["1"]);
+        assert_eq!(ids(&resolve(&comments, &events, std::slice::from_ref(&id.pubkey))), vec!["1"]);
     }
 
     #[test]
@@ -185,6 +207,6 @@ mod tests {
         let id = owner();
         let comments = vec![mk("1", None)];
         // a pin event must not hide and must not error
-        assert_eq!(resolve(&comments, &[ev(&id, "pin", "1", 1, 100)], &id.pubkey).len(), 1);
+        assert_eq!(resolve(&comments, &[ev(&id, "pin", "1", 1, 100)], std::slice::from_ref(&id.pubkey)).len(), 1);
     }
 }

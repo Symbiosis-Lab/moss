@@ -6,7 +6,7 @@ fn test_render_basic_article() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "My Post".to_string(),
         ..Default::default()
     };
@@ -26,7 +26,7 @@ fn render_shows_the_resolved_place_next_to_the_date() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "My Post".to_string(),
         place: Some("Cambridge".to_string()),
         ..Default::default()
@@ -46,7 +46,7 @@ fn render_omits_the_place_when_no_date_is_shown() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "Series Item".to_string(),
         place: Some("Cambridge".to_string()),
         ..Default::default()
@@ -59,7 +59,7 @@ fn render_omits_the_place_when_no_date_is_shown() {
 fn test_render_escapes_html_in_title() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "<script>alert('xss')</script>".to_string(),
         ..Default::default()
     };
@@ -73,7 +73,7 @@ fn test_render_escapes_html_in_title() {
 fn test_render_escapes_html_in_url() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
-        url: "post.html?a=1&b=2".to_string(),
+        url: Some("post.html?a=1&b=2".to_string()),
         title: "Test".to_string(),
         ..Default::default()
     };
@@ -87,7 +87,7 @@ fn test_render_minimal_shows_month_only() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "My Post".to_string(),
         ..Default::default()
     };
@@ -102,7 +102,7 @@ fn test_render_minimal_shows_month_only() {
 fn test_render_minimal_fallback_without_raw_date() {
     let props = ArticleListItemProps {
         date_display: "2025-11-17".to_string(),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "Test".to_string(),
         ..Default::default()
     };
@@ -119,7 +119,7 @@ fn test_render_uses_prefix_link_classes() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "My Post".to_string(),
         ..Default::default()
     };
@@ -149,7 +149,7 @@ fn test_render_no_date_omits_date_span() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "Series Item".to_string(),
         ..Default::default()
     };
@@ -180,7 +180,7 @@ fn test_render_no_date_omits_date_span() {
 fn test_render_child_article() {
     let props = ChildItemProps {
         title: "My Article".to_string(),
-        url: "/blog/my-article/".to_string(),
+        url: Some("/blog/my-article/".to_string()),
         date_display: Some("2025 · 11".to_string()),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         ..Default::default()
@@ -200,7 +200,7 @@ fn test_render_child_article() {
 fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     let props = ChildItemProps {
         title: "Lecture".to_string(),
-        url: "/lectures/1924.html".to_string(),
+        url: Some("/lectures/1924.html".to_string()),
         date_raw: Some("1924-10-01".to_string()),
         place: Some("Cambridge".to_string()),
         ..Default::default()
@@ -228,7 +228,7 @@ fn render_child_puts_the_listed_names_after_the_date_and_place() {
     let props = ChildItemProps {
         credits: Some(credits.to_string()),
         title: "Lecture".to_string(),
-        url: "/lectures/1924.html".to_string(),
+        url: Some("/lectures/1924.html".to_string()),
         date_raw: Some("1924-10-01".to_string()),
         place: Some("Cambridge".to_string()),
         ..Default::default()
@@ -260,7 +260,7 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
     );
     let props = ChildItemProps {
         title: "Opening".to_string(),
-        url: "/events/opening.html".to_string(),
+        url: Some("/events/opening.html".to_string()),
         date_raw: Some("2026-11-01".to_string()),
         place: Some("Example Hall".to_string()),
         when_html: Some(when),
@@ -281,7 +281,7 @@ fn render_child_event_row_with_only_online_links_title_and_carries_its_online_li
     let props = ChildItemProps {
         online: Some("https://example.test/live".to_string()),
         title: "Spring Gala".to_string(),
-        url: "spring-gala.html".to_string(),
+        url: Some("spring-gala.html".to_string()),
         date_raw: Some("2026-11-01".to_string()),
         ..Default::default()
     };
@@ -300,7 +300,7 @@ fn render_child_event_row_with_only_online_links_title_and_carries_its_online_li
 fn render_child_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
         title: "Kyoto Walk".to_string(),
-        url: "/works/kyoto-walk/".to_string(),
+        url: Some("/works/kyoto-walk/".to_string()),
         child_count: Some(2),
         place: Some("Kyoto".to_string()),
         ..Default::default()
@@ -320,7 +320,7 @@ fn render_child_never_shows_a_place_beside_a_folders_count() {
 fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
         title: "June Entry".to_string(),
-        url: "/writings/journal/june.html".to_string(),
+        url: Some("/writings/journal/june.html".to_string()),
         date_raw: Some("1793-06".to_string()),
         ..Default::default()
     };
@@ -338,7 +338,7 @@ fn flat_row_shows_year_for_month_precision_date() {
 fn flat_row_passes_through_display_only_date_as_is() {
     let props = ChildItemProps {
         title: "Display Only".to_string(),
-        url: "/writings/display-only.html".to_string(),
+        url: Some("/writings/display-only.html".to_string()),
         date_display: Some("1793 · 06".to_string()),
         ..Default::default()
     };
@@ -354,7 +354,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
 fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
         title: "1793 Entry".to_string(),
-        url: "/writings/journal/year.html".to_string(),
+        url: Some("/writings/journal/year.html".to_string()),
         date_raw: Some("1793".to_string()),
         ..Default::default()
     };
@@ -372,7 +372,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
 fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
     let props = ChildItemProps {
         title: "書".to_string(),
-        url: "/書/".to_string(),
+        url: Some("/書/".to_string()),
         child_count: Some(38),
         ..Default::default()
     };
@@ -387,7 +387,7 @@ fn test_render_child_folder_without_description() {
     // Folders WITHOUT description: count in prefix slot (like date for articles)
     let props = ChildItemProps {
         title: "Tutorials".to_string(),
-        url: "/tutorials/".to_string(),
+        url: Some("/tutorials/".to_string()),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         child_count: Some(4),
         ..Default::default()
@@ -407,7 +407,7 @@ fn test_render_child_folder_with_description() {
     // Folders WITH description: title + count suffix on first line, description below
     let props = ChildItemProps {
         title: "Tutorials".to_string(),
-        url: "/tutorials/".to_string(),
+        url: Some("/tutorials/".to_string()),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         child_count: Some(4),
         description: Some("Learn the basics of moss".to_string()),
@@ -429,7 +429,7 @@ fn test_render_child_folder_with_description() {
 fn test_render_child_folder_escapes_html() {
     let props = ChildItemProps {
         title: "<b>Bold</b> & \"Quoted\"".to_string(),
-        url: "/test/?a=1&b=2".to_string(),
+        url: Some("/test/?a=1&b=2".to_string()),
         child_count: Some(2),
         ..Default::default()
     };
@@ -443,7 +443,7 @@ fn test_render_child_folder_escapes_html() {
 fn test_render_child_article_no_date() {
     let props = ChildItemProps {
         title: "Dateless Article".to_string(),
-        url: "/blog/dateless/".to_string(),
+        url: Some("/blog/dateless/".to_string()),
         ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
@@ -460,7 +460,7 @@ fn test_render_no_date_ignores_minimal_flag() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        url: "post.html".to_string(),
+        url: Some("post.html".to_string()),
         title: "Series Item".to_string(),
         ..Default::default()
     };
@@ -563,7 +563,7 @@ fn an_external_url_takes_the_card_href_and_the_local_one_becomes_the_permalink()
     );
     let docs = vec![d];
     let p = props(&docs[0], &docs);
-    assert_eq!(p.url, "https://example.com/piece");
+    assert_eq!(p.url.as_deref(), Some("https://example.com/piece"));
     assert_eq!(p.permalink.as_deref(), Some("/links/elsewhere/"));
     assert_eq!(p.kicker.as_deref(), Some("The Paper"));
 }
@@ -572,7 +572,7 @@ fn an_external_url_takes_the_card_href_and_the_local_one_becomes_the_permalink()
 fn an_ordinary_card_has_no_permalink() {
     let docs = vec![doc("posts/local/index.html", "Local")];
     let p = props(&docs[0], &docs);
-    assert_eq!(p.url, "/posts/local/");
+    assert_eq!(p.url.as_deref(), Some("/posts/local/"));
     assert_eq!(p.permalink, None);
 }
 
@@ -746,7 +746,7 @@ fn event_row_props(tickets: Option<&str>) -> ChildItemProps {
     ChildItemProps {
         tickets: tickets.map(str::to_string),
         title: "Spring Gala".to_string(),
-        url: "spring-gala.html".to_string(),
+        url: Some("spring-gala.html".to_string()),
         date_display: Some("2026 · 11".to_string()),
         ..Default::default()
     }

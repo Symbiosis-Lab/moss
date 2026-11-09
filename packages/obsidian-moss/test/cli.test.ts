@@ -12,7 +12,7 @@ import {
   publishInAppUrl,
   splitFlags,
   type DetectEnv,
-} from "../src/cli";
+} from "../src/desktop/cli";
 
 // Verbatim stderr from `moss build /tmp/moss-smoke-vault --serve --no-plugins`
 // (moss 0.11.1, captured 2026-08-11). The parser contract is this text.

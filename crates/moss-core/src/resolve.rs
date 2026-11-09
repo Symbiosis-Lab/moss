@@ -14,6 +14,9 @@ use crate::asset_snapshot::AssetSnapshot;
 use crate::content_graph::ContentGraph;
 use std::collections::HashMap;
 
+pub mod editor;
+pub use editor::resolve_references;
+
 pub mod asset_class;
 pub mod asset_registry;
 pub mod block_refs;
@@ -29,6 +32,9 @@ pub mod title_params;
 pub mod wikilink_dispatch;
 pub mod md_extract;
 pub mod authored_assets;
+/// Text-level passes before parsing: CriticMarkup and `%%` comments.
+pub mod source;
+pub use source::prepare_markdown_source;
 
 /// A link going out from a document.
 #[derive(Debug, Clone)]
@@ -111,7 +117,7 @@ pub struct ResolveResult {
 /// markdown link resolution (`[text](target.md)`) are not done here; they
 /// belong to the typed AST (`crates/moss-core/src/ast/`). For standard
 /// markdown links, the AST visitor (`ast/resolve_urls::resolve_link_urls`)
-/// emits a `moss-resolved:` sentinel, so moss-build's `classify_url_prod`
+/// emits a `moss-resolved:` sentinel, so `classify_url`
 /// decoder drives page_map / external_url_map / wikilink-class decoding.
 pub fn resolve_content(
     source_path: &str,
@@ -228,7 +234,7 @@ pub fn resolve_content_with_derivations(
 
     // Standard markdown links are not resolved here. The typed AST
     // visitor (`crates/moss-core/src/ast/resolve_urls.rs::resolve_link_urls`)
-    // does it, emitting the `moss-resolved:<path>` sentinel that moss-build's `classify_url_prod`
+    // does it, emitting the `moss-resolved:<path>` sentinel that `classify_url`
     // decoder consumes for `page_map` / `external_url_map` / wikilink-class
     // decoding. `outgoing_links` remains empty at this layer; the AST
     // visitor's OutgoingLink Vec is consumed downstream in
@@ -1647,7 +1653,7 @@ mod tests {
         // the typed AST visitor
         // (`ast/resolve_urls::resolve_link_urls`) emits the
         // `moss-resolved:文字/文字.md` sentinel later in
-        // `process_markdown_file`, and moss-build's `classify_url_prod`
+        // `process_markdown_file`, and `classify_url`
         // decodes the sentinel into the final pretty URL. Visitor
         // coverage lives in
         // `resolve_urls.rs::tests::standard_markdown_link_emits_sentinel`.

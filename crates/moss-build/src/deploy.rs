@@ -16,6 +16,7 @@
 //! session state. A terminal publish has neither. So the Tauri commands, that
 //! resolution, and the build-liveness listener stayed.
 
+pub(crate) mod profile;
 pub mod dry_run;
 pub(crate) mod removal_gate;
 pub mod freeze;
@@ -337,7 +338,11 @@ pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(
 
 /// [`publish_refusal`] as text, for the callers that only stop.
 pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
-    publish_refusal(folder_path).map_or(Ok(()), |r| Err(r.text))
+    let _phase = crate::build::phase::PhaseTrace::start("local_checks");
+    publish_refusal(folder_path).map_or(Ok(()), |r| {
+        profile::refused(r.kind);
+        Err(r.text)
+    })
 }
 
 /// A refused publish: which rule refused it and the text a person reads.
@@ -359,8 +364,14 @@ pub enum RefusalKind {
     LinksInFlight,
     PendingDerivations,
     Removals,
+    StaleContent,
+    OutputCollision,
     NoEnvironment,
     ForeignInputs,
+    /// The server says this folder's key does not own the site.
+    NotOwner,
+    /// Another copy of the folder published after this one.
+    StaleCopy,
 }
 
 impl Refusal {
@@ -596,6 +607,20 @@ pub(crate) fn stale_copy_refusal(
     ))
 }
 
+/// The client a publish uploads with, built once per publish by both routes
+/// (the hosted push, the app's included, and `--prebuilt`). It also records in
+/// the folder the account its key now belongs to, since a site transfer can
+/// move a key to another account.
+pub(crate) async fn publish_client(
+    folder: &std::path::Path,
+    identity: &crate::identity::Identity,
+    environment: &crate::config::environment::HostingEnvironment,
+) -> crate::seta::client::MossSetaClient {
+    let client = crate::seta::client::MossSetaClient::for_environment(identity, environment);
+    crate::identity::verify_email::refresh_recorded_email(folder, identity, &client).await;
+    client
+}
+
 /// Refuse `moss deploy` from a copy that is behind the live site — see
 /// [`stale_copy_refusal`]. With no record there is nothing to compare, so the
 /// server is not asked; a probe that fails goes ahead, as `push`'s no-op check
@@ -605,20 +630,33 @@ pub async fn refuse_stale_copy(
     site_id: &str,
     identity: &crate::identity::Identity,
 ) -> Result<(), String> {
-    let record = crate::config::deployment::slot_for("moss", Some(site_id)).and_then(|target| {
-        crate::build::manifest::published_record::load_for(
-            &crate::moss_paths::MossPaths::new(folder),
-            Some(&target),
-        )
-    });
-    let Some(record) = record else { return Ok(()) };
+    let Some(record) = publish_record_for(folder, site_id) else { return Ok(()) };
     let environment = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
     let client = crate::seta::client::MossSetaClient::for_environment(identity, &environment);
     let Ok(live) = client.live_generation(site_id).await else { return Ok(()) };
     match stale_copy_refusal(&record, &live) {
-        Some(refusal) => Err(refusal),
+        Some(refusal) => { profile::refusal("stale_copy"); Err(refusal) },
         None => Ok(()),
     }
+}
+
+/// [`stale_copy_refusal`] against this folder's record of its last publish
+/// to `site_id`; `None` when there is no record.
+pub(crate) fn stale_copy_against(
+    folder: &std::path::Path,
+    site_id: &str,
+    live: &crate::seta::sites::LiveGeneration,
+) -> Option<String> {
+    stale_copy_refusal(&publish_record_for(folder, site_id)?, live)
+}
+
+fn publish_record_for(folder: &std::path::Path, site_id: &str) -> Option<crate::build::manifest::change_set::PublishedSnapshot> {
+    crate::config::deployment::slot_for("moss", Some(site_id)).and_then(|target| {
+        crate::build::manifest::published_record::load_for(
+            &crate::moss_paths::MossPaths::new(folder),
+            Some(&target),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -730,6 +768,7 @@ pub async fn resolve_publish_inputs(
     overwrite_newer: bool,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
 ) -> Result<Option<(String, crate::identity::Identity)>, String> {
+    let _phase = crate::build::phase::PhaseTrace::start("resolve_inputs");
     let folder_str = folder.to_string_lossy().to_string();
     // NOT `unwrap_or_default()`: this read is what decides whether to register,
     // and an unparsable `state.toml` defaults to `site_id: None` — "this folder
@@ -1049,6 +1088,7 @@ pub async fn register_moss_host_site(
     let result = match client.register_site(site_id).await {
         Ok(r) => r,
         Err(crate::seta::client::SetaError::SiteLimitReached { limit, contact }) => {
+            profile::refusal("site_limit");
             return Err(site_limit_message(limit, contact.as_deref()));
         }
         Err(e) => return Err(register_failure_message(site_id, e)),
@@ -1073,6 +1113,7 @@ pub async fn register_moss_host_site(
 /// get them — which the app half never had, and the CLI `--site-id` half needs
 /// most, since only the app pre-checks a name with `check_site_id_available`.
 fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) -> String {
+    profile::seta_error(&e);
     let msg = e.to_string();
     // Seta checks the key's email before its ACLs, so this is the typical
     // first publish of a new folder.

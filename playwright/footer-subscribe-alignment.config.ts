@@ -15,5 +15,5 @@ import { defineGateConfig } from './define-gate-config';
 export default defineGateConfig({
   gate: 'footer-subscribe-alignment',
   fullyParallel: true,
-  use: { reducedMotion: 'reduce' },
+  use: { contextOptions: { reducedMotion: 'reduce' } },
 });

@@ -23,7 +23,7 @@ fn stage_page(mp: &MossPaths, page: &str) {
     std::fs::write(dir.join("index.html"), format!("<html>staged {page}</html>")).unwrap();
 }
 
-async fn serve(cell: &ServedCell, port: u16) -> (u16, tokio::sync::oneshot::Sender<()>) {
+async fn serve(cell: &ServedCell, port: u16) -> (u16, Option<u16>, tokio::sync::oneshot::Sender<()>) {
     crate::ops::serve::start_server(crate::ops::serve::ServeConfig::new(cell.clone(), port))
         .await
         .expect("server starts")
@@ -130,7 +130,7 @@ async fn a_withheld_render_is_never_shown_and_its_workers_block_the_next_sweep()
     assert_eq!(read(&cell), mp.current_ptr(), "a withheld render must not be shown");
     assert_eq!(snapshot(&mp).0, Some(r1));
     assert_eq!(announced, Some(mp.current_ptr()), "and the served tree announced is current");
-    let (port, stop) = serve(&cell, 63100).await;
+    let (port, _, stop) = serve(&cell, 63100).await;
     assert_eq!(status(port, "only-in-render-2/"), 404);
     assert_eq!(status(port, "in-g1/"), 200);
     let _ = stop.send(());
@@ -176,7 +176,7 @@ async fn render_numbers_from_before_this_record_are_never_compared() {
     adopt_server(&mp_b, &cell_b);
     assert!(park_for_rebuild(&mp_b, false, Default::default()).is_none(), "an unnumbered render on staging is no licence");
     assert_eq!(read(&cell_b), mp_b.staging_dir());
-    let (port, stop) = serve(&cell_b, 63200).await;
+    let (port, _, stop) = serve(&cell_b, 63200).await;
     assert_eq!(status(port, "fresh/"), 200);
     let _ = stop.send(());
 

@@ -67,8 +67,13 @@ pub struct SystemInfo {
 ///   changed in place — what the editor reloads an open file from
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct FileChangeEvent {
-    /// Output files whose content hash changed (relative to the staging dir).
-    /// This is the definitive list - frontend refreshes only if current page is here.
+    /// Output files whose content hash changed (relative to the staging dir),
+    /// named in the event sent when their new bytes become servable: a page
+    /// the render wrote, at the show; a file the background writes (a copied
+    /// asset, an image variant, a video), at the seal tail. A key can be named
+    /// again: a page the tail repaired, or a key a newer render's tail lists
+    /// when an older render's tail left to it. The refresh signal: a client
+    /// refreshes when this names the page it shows or anything that page loads.
     pub changed_output_files: Option<Vec<String>>,
     /// Output paths (relative to the staging dir) that were deleted in
     /// the rebuild. Frontend triggers redirect-home when the current iframe
@@ -114,7 +119,13 @@ pub struct FileChangeEvent {
     /// edits); the preview ignores it — `changed_output_files` is the refresh
     /// signal. Populated by `build_rebuild_event_with_renames` in `watch.rs`,
     /// which emits it even when no output changed.
+    /// See `MossEvent::SourceContentChanged` for the pre-rebuild announcement.
     pub modified_paths: Option<Vec<String>>,
+    /// The render this event belongs to (`lifecycle::show_render`'s number):
+    /// a render sends one event when it is shown and one from its seal tail.
+    /// Nothing dedupes on it: a key named twice is a second change, or at
+    /// worst a second refresh. `None` when no render was minted.
+    pub render_seq: Option<u64>,
 }
 
 impl FileChangeEvent {
@@ -128,7 +139,20 @@ impl FileChangeEvent {
             source_deletes: None,
             source_renames: None,
             modified_paths: None,
+            render_seq: None,
         }
+    }
+
+    /// True when the event says nothing: no field is set but `render_seq`.
+    pub fn is_empty(&self) -> bool {
+        let Self { changed_output_files, deleted_paths, moved_output_paths, source_creates, source_deletes, source_renames, modified_paths, render_seq: _ } = self;
+        changed_output_files.is_none()
+            && deleted_paths.is_none()
+            && moved_output_paths.is_none()
+            && source_creates.is_none()
+            && source_deletes.is_none()
+            && source_renames.is_none()
+            && modified_paths.is_none()
     }
 
     /// Set the changed output files
@@ -302,6 +326,18 @@ pub enum MossEvent {
     SourceAssetChanged {
         /// Project-root-relative path with a leading `/`, e.g. `/assets/photo.jpg`.
         path: String,
+    },
+    /// Reload-tracked source bytes changed according to a watcher batch, before
+    /// any rebuild gate. Includes pages and the four synchronous `.moss` sources
+    /// selected by `manifest::is_reload_tracked_source_key`; not hash-confirmed.
+    /// The editor listens to reload its open file (deferred while it has unsaved
+    /// edits). This is not a build result and carries no output facts; tree and
+    /// preview consumers do not subscribe. A build's `FileChanged.modified_paths`
+    /// may repeat these paths.
+    SourceContentChanged {
+        /// Project-relative keys, forward slashes, no leading slash: the
+        /// `FileChangeEvent.modified_paths` domain.
+        paths: Vec<String>,
     },
     /// A file was created on disk via a RAW FS event (outside a process-hook build).
     /// Emitted before the rebuild-eligibility gate so the editor can flash the deepest

@@ -233,6 +233,11 @@ pub struct PendingManifest {
     /// registered again since: their bytes in the stage are the previous build's
     /// final ones. See [`carried_pages`][Self::carried_pages].
     carried_pages: HashSet<String>,
+    /// `Some` once the preview serves this render
+    /// ([`note_shown`][Self::note_shown]): the keys registered after that with
+    /// an entry other than the one they had, which are the bytes that landed
+    /// after the show. `None` for a render never shown.
+    late: Option<HashSet<String>>,
 }
 
 /// Is this `SiteHashes.sources` key in the page half?
@@ -293,6 +298,13 @@ pub(crate) fn is_reload_tracked_source_key(src: &str) -> bool {
 }
 
 impl PendingManifest {
+    pub(crate) fn record_output_collisions(&mut self, messages: Vec<String>) {
+        for message in &messages {
+            crate::build::cli_output::log_warn_problem!("{}", message);
+        }
+        self.inner.output_collisions.extend(messages);
+    }
+
     /// Create a new pending manifest seeded with the previous build's hashes.
     ///
     /// Pass [`SiteHashes::default()`] for first builds.
@@ -318,17 +330,9 @@ impl PendingManifest {
     /// instead.
     pub fn new(carry_forward: SiteHashes) -> Self {
         let mut inner = carry_forward;
-        // git's "smudge". A source entry this build does not re-read is carried
-        // under the new, later clock below, which would vouch for it as if it
-        // had been read after that clock started. For a real sub-second mtime
-        // that changes nothing (equality already proves the write); for an
-        // exact-zero one it would trust a same-tick rewrite that landed after
-        // the old read. So a zero reading the OLD clock could not vouch for is
-        // dropped: the entry fails open to the hash tier until re-recorded.
+        inner.output_collisions.clear();
         for meta in inner.sources.values_mut() {
-            if meta.mtime_nanos == Some(0) && !crate::build::stat::zero_stamp_settled(meta.mtime, inner.captured_at) {
-                meta.mtime_nanos = None;
-            }
+            meta.stat = meta.stat.without_unsettled_zero_stamps(inner.captured_at);
         }
         // THIS build's racily-clean clock, not the carried-forward one: the
         // sweep compares file mtimes against the moment hashing began, and a
@@ -352,6 +356,7 @@ impl PendingManifest {
             preview_originals: std::collections::BTreeMap::new(),
             blocking_keys: HashSet::new(),
             touched: HashSet::new(),
+            late: None,
             carried_source_to_output,
             carried_page_meta,
             carried_page_sources,
@@ -401,7 +406,7 @@ impl PendingManifest {
     ///
     /// A cloud-evicted page emits nothing, so it never reaches
     /// `register_with_hash` and the mark-and-sweep reads it as deleted — at
-    /// which point three separate passes remove it: `stale_carried_forward`
+    /// which point three separate passes remove it: `AssetWalkTally::prune`
     /// drops the hash, `seal` prunes the bucket, and `remove_stale_files`
     /// unlinks the file. The page 404s, and because `sealed.files()` is what
     /// deploy uploads, **publishing while a page is offline un-publishes it.**
@@ -483,6 +488,15 @@ impl PendingManifest {
 
     pub(crate) fn take_unwritten_pages(&mut self) -> std::collections::BTreeMap<String, String> {
         std::mem::take(&mut self.unwritten_pages)
+    }
+
+    /// Mark the moment the preview starts serving this render. The slot pass
+    /// has written the rendered pages by then, so every key registered so far
+    /// is bytes on disk; from here on a registration that changes a key's
+    /// entry is recorded as landing late.
+    pub(crate) fn note_shown(&mut self) {
+        debug_assert!(self.unwritten_pages.is_empty(), "a page shown before the slot pass wrote it");
+        self.late = Some(HashSet::new());
     }
 
     /// Apply a manifest registration from a pre-computed xxHash3 hex digest.
@@ -589,11 +603,10 @@ impl PendingManifest {
         self.inner.sources.insert(source_path, meta);
     }
 
-    /// Carry a page's source hash forward from the previous manifest, for pages
-    /// this build did not re-read: the render skip set, a parse-cache hit, or
-    /// an iCloud deferral. The bytes are unchanged by definition on all three
-    /// paths — that is *why* they were skipped — so the previous hash is the
-    /// current hash.
+    /// Carry a page's source hash forward from the previous manifest, for a
+    /// page this build neither read nor replayed because the cloud deferred it.
+    /// Its bytes are unknown, so the last recorded hash stands until a build
+    /// can read them.
     ///
     /// `source_rel` is project-relative, matching `register_source_mapping`'s
     /// key domain. Returns `None` when the previous manifest has no hash for
@@ -635,19 +648,10 @@ impl PendingManifest {
         self.inner.site_url.as_deref()
     }
 
-    /// Clone the accumulated state into legacy parts without consuming `self`.
-    ///
-    /// A `pub(crate)` escape hatch for the blocking phase: after all Pattern A
-    /// emits have routed through `BuildContext::emit`, `generate_blocking_content`
-    /// needs the accumulated state back as `(SiteHashes, HashSet<String>)` for
-    /// `SiteResult` and `BackgroundContext::blocking_keys`. It
-    /// clones because `pending` is `&mut` there, not owned, and the hatch is
-    /// deliberately narrow — `inner` and `blocking_keys` stay private.
-    /// Superseded by `seal()` once every background phase routes through
-    /// `BuildContext`.
-    pub(crate) fn as_parts_clone(&self) -> (SiteHashes, HashSet<String>) {
-        (self.inner.clone(), self.blocking_keys.clone())
-    }
+    /// Snapshot the accumulated hashes before the background phase seals them.
+    pub(crate) fn hashes_clone(&self) -> SiteHashes { self.inner.clone() }
+
+    pub(crate) fn blocking_keys(&self) -> &HashSet<String> { &self.blocking_keys }
 
     /// Read-only access to the accumulated `files` map — this build's
     /// registrations AND, until `seal` sweeps them, every entry the previous
@@ -769,8 +773,8 @@ impl PendingManifest {
     /// Attach, not register, and the refusal is the point. The slot pass walks
     /// every `.html` under `stage_dir`, and the stage keeps what the previous
     /// build left there: `sweep_staging` spares anything the previous manifest
-    /// listed, and `remove_stale_html` runs AFTER the pass and deletes only
-    /// `index*.html`. Registering a stale page would mark it `touched`, keep it
+    /// listed, and `remove_stale_html` runs AFTER the pass, and only when the
+    /// output changed. Registering a stale page would mark it `touched`, keep it
     /// through `seal`, and — because a live CAS blob counts as present to
     /// `drop_absent_outputs` — ship a deleted page from the CAS for good.
     ///
@@ -842,6 +846,11 @@ impl PendingManifest {
         } else {
             file_entry(hash)
         };
+        if let Some(late) = self.late.as_mut() {
+            if self.inner.files.get(&rel_path) != Some(&entry) {
+                late.insert(rel_path.clone());
+            }
+        }
         self.inner.files.insert(rel_path.clone(), entry);
 
         // Bucket-specific tracking: stale-cleanup sets and blocking_keys only.
@@ -934,6 +943,7 @@ impl PendingManifest {
             generation_id,
             unverified: self.unverified,
             ship_sources,
+            late: self.late,
         }
     }
 }
@@ -979,9 +989,22 @@ pub struct SealedManifest {
     /// any disagreement — see `ship::verify_ship_integrity`. Never
     /// persisted; exists only to make a seal-to-ship race audible.
     ship_sources: HashMap<String, ShipSource>,
+    /// See [`PendingManifest::late`].
+    late: Option<HashSet<String>>,
 }
 
 impl SealedManifest {
+    /// Whether the preview served this render when it was shown.
+    pub fn was_shown(&self) -> bool {
+        self.late.is_some()
+    }
+
+    /// Whether `key`'s bytes landed after the show: written or rewritten
+    /// since, or any key of a render never shown.
+    pub fn landed_after_show(&self, key: &str) -> bool {
+        self.late.as_ref().is_none_or(|late| late.contains(key))
+    }
+
     /// The generated files this build left out because a site setting says so.
     pub fn withdrawn(&self) -> change_set::Withdrawn {
         self.withdrawn

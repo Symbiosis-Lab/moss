@@ -40,6 +40,7 @@ pub mod site_guard;
 // The client crossed into this crate, and every other door this file opens
 // (VaultRoot, site_config, Identity::load_for_signing) was already here.
 pub mod domain;
+pub mod site;
 // Argument parsing for `moss import`, over the engine in
 // `vault::import::scrape::run`.
 pub mod import;
@@ -55,3 +56,69 @@ pub mod deploy;
 // The `HostPorts` a terminal build runs with, moved from `moss-cli` at C4f so
 // that `deploy`'s build route — which is in this crate — can reach it.
 pub mod host;
+
+// The hosting-service verbs (`domain`, `site`) share how they sign in as the
+// folder and how they print a result.
+use std::path::Path;
+
+use crate::build::site_config::resolve_environment;
+use crate::identity::keypair::Identity;
+use crate::seta::client::MossSetaClient;
+
+/// Build a MossSetaClient for `folder`, loading the project's identity.
+pub(crate) fn client_for_folder(folder: &Path) -> Result<MossSetaClient, String> {
+    if !folder.exists() {
+        return Err(format!("folder does not exist: {}", folder.display()));
+    }
+    // Loads the signing key now, so a missing key fails here rather than at
+    // the first signed request. It never regenerates one: a new pubkey would
+    // make seta stop recognizing this account as the owner of the site.
+    let identity = Identity::load_for_signing(folder).map_err(|e| {
+        format!(
+            "signing key unavailable: {} (expected identity at {}/.moss/identity/secret-key)",
+            e,
+            folder.display()
+        )
+    })?;
+    let env = resolve_environment(&folder.to_string_lossy());
+    Ok(MossSetaClient::for_environment(&identity, &env))
+}
+
+pub(crate) fn run_async<F: std::future::Future<Output = i32>>(fut: F) -> i32 {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt.block_on(fut),
+        Err(e) => {
+            eprintln!("failed to start tokio runtime: {}", e);
+            2
+        }
+    }
+}
+
+/// What a command prints and how it exits, so the flows are testable without
+/// capturing the process's own streams.
+pub(crate) struct Outcome {
+    pub code: i32,
+    pub out: String,
+    pub err: String,
+}
+
+impl Outcome {
+    /// With `--json` an error is an object on stdout, like every other result.
+    pub(crate) fn fail(json: bool, code: i32, msg: impl std::fmt::Display) -> Self {
+        if json {
+            let v = serde_json::json!({ "error": msg.to_string(), "exit": code });
+            Outcome { code, out: format!("{}\n", v), err: String::new() }
+        } else {
+            Outcome { code, out: String::new(), err: format!("error: {}\n", msg) }
+        }
+    }
+}
+
+pub(crate) fn emit(o: Outcome) -> i32 {
+    print!("{}", o.out);
+    eprint!("{}", o.err);
+    o.code
+}

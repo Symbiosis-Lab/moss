@@ -62,7 +62,7 @@ impl HostPorts {
             metadata_dedup: None,
             scan_events: None,
             events: carrier.clone(),
-            announcer: Arc::new(serve::events::CarrierAnnouncer),
+            announcer: Arc::new(serve::events::CarrierAnnouncer { reporter: carrier.clone() }),
             spawner: Arc::new(crate::build::ports::spawner::TokioSpawner),
             store,
             plugins: Arc::new(crate::plugins::manager::ManagerCache::headless(carrier)),
@@ -348,7 +348,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                         serve::HeadlessServe { standby_on_conflict, yield_notify, ..host_serve },
                     )
                     .await {
-                        Ok((port, shutdown_tx)) => {
+                        Ok((port, _ui_port, shutdown_tx)) => {
                             *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(shutdown_tx);
                             Ok(port)
@@ -382,6 +382,7 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
             site_url_override: run.flags.site_url_override,
             server_port: None,
             live_port: None,
+            rename_pairs: Vec::new(),
             admission_epoch: None,
         })
         .await;

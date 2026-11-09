@@ -13,11 +13,9 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use futures::future::BoxFuture;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::build::manifest::SealedManifest;
 use crate::editor::resolve::asset_resolver::EditorScope;
 use crate::types::events::MossEvent;
 use rename_undo::RenameUndoStore;
@@ -81,9 +79,6 @@ pub trait CommandHost: Send + Sync {
 
     /// Tell the folder's listeners what a command did.
     fn publish(&self, event: &MossEvent);
-
-    /// The site as it stands now, sealed. A host without a live build builds.
-    fn sealed_now(&self) -> BoxFuture<'_, Result<SealedManifest, String>>;
 
     /// Run the write `save_editor_content` makes to `file_path`, for a host
     /// that shows saving as a status of its own. `save` may panic; a host that

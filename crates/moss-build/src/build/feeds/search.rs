@@ -384,7 +384,15 @@ struct SegmentedPage {
     html: Arc<str>,
 }
 
-/// Read every `.html` page under `site_dir` and segment it, in walk order.
+/// One page of a tree as the indexer reads it, before segmentation.
+pub(crate) struct PageSource {
+    rel_path: String,
+    /// Content key of `source` (see [`SEGMENTED`]).
+    key: u128,
+    source: String,
+}
+
+/// Read every `.html` page under `site_dir`, in walk order, for [`segment_pages`].
 /// Only `.html` files are read — Pagefind's own default glob — and everything
 /// else in the build output (assets, JSON, the bundle itself) is irrelevant to
 /// indexing. A future exclusion (e.g. skipping `_moss/`) belongs in this walk.
@@ -400,41 +408,20 @@ struct SegmentedPage {
 /// unsorted walk follows the filesystem's directory order, which differs
 /// between filesystems (and, on tmpfs, between runs).
 ///
-/// A file that fails to read or rewrite is skipped with a warning rather than
-/// failing the build: one malformed page should cost its own indexing, not the
-/// whole site's. The second value is how many were skipped — the census
+/// A file that fails to read is skipped with a warning rather than failing the
+/// build: one unreadable page should cost its own indexing, not the whole
+/// site's. The second value is how many were skipped — the census
 /// [`SearchIndex`] carries onward. A skip is a *shortfall*, not a detail: the
 /// bundle covers fewer pages than the tree, and only the caller can decide
 /// whether that is publishable.
 ///
-/// Pages whose bytes are unchanged since the previous build replay their
-/// segmentation from [`SEGMENTED`]; the third value is how many did not.
-///
-/// Segmentation runs on rayon's global pool, like the markdown-parse and
-/// HTML-render loops in `render/blocking.rs`. It runs to completion *before*
-/// Pagefind is handed the pages, so the two never contend for the pool. Keep
-/// them sequential phases — see `scan/scan.rs` and `media/image.rs`, which
-/// both carry scars from nesting.
-fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
-    /// One walked page on its way to Pagefind.
-    enum Slot {
-        Ready(SegmentedPage),
-        Unsegmented { rel_path: String, key: u128, source: String },
-        Skipped,
-        /// A redirect stub: left out of the walk, not counted as skipped.
-        Stub,
-    }
-
-    // Taken, not locked for the pass: a concurrent index build finds the map
-    // empty and misses, which costs time and never correctness.
-    let prior = std::mem::take(&mut *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-
-    // Read and key every page on this thread, replaying the ones the cache
-    // has. After an edit that is every page but one, and fanning ~500 small
-    // reads out over the pool cost several times their own CPU in worker
-    // wake-ups and contention.
+/// Read and keyed on the calling thread: after an edit every page but one
+/// replays [`SEGMENTED`], and fanning ~500 small reads out over the pool cost
+/// several times their own CPU in worker wake-ups and contention.
+pub(crate) fn read_pages(site_dir: &Path) -> (Vec<PageSource>, usize) {
+    let mut skipped = 0;
     let walk = walkdir::WalkDir::new(site_dir).sort_by_file_name().into_iter().filter_map(Result::ok);
-    let mut slots: Vec<Slot> = walk
+    let pages = walk
         .filter(|e| e.file_type().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("html"))
         // The not-found page, at both of its addresses, is not content a
         // reader searches for. Left out of the walk, not counted as skipped.
@@ -442,60 +429,91 @@ fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
             let rel = moss_core::slug::normalize_separators(&e.path().strip_prefix(site_dir).unwrap_or(e.path()).to_string_lossy());
             !crate::build::served_path::is_not_found_address(&rel)
         })
-        .map(|entry| {
+        .filter_map(|entry| {
             let Ok(rel) = entry.path().strip_prefix(site_dir) else {
-                return Slot::Skipped;
+                skipped += 1;
+                return None;
             };
             let source = match std::fs::read_to_string(entry.path()) {
                 Ok(source) => source,
                 Err(e) => {
                     log::info!(target: "search", "skipping {:?} for search index: {}", rel, e);
-                    return Slot::Skipped;
+                    skipped += 1;
+                    return None;
                 }
             };
             // A redirect stub is an old address, not a page to find.
             if crate::build::feeds::redirects::is_redirect_stub(&source) {
-                return Slot::Stub;
+                return None;
             }
             let key = xxhash_rust::xxh3::xxh3_128(source.as_bytes());
-            let rel_path = rel.to_string_lossy().into_owned();
-            match prior.get(&key) {
-                Some(html) => Slot::Ready(SegmentedPage { rel_path, key, html: Arc::clone(html) }),
-                None => Slot::Unsegmented { rel_path, key, source },
-            }
+            Some(PageSource { rel_path: rel.to_string_lossy().into_owned(), key, source })
         })
-        .filter(|slot| !matches!(slot, Slot::Stub))
+        .collect();
+    (pages, skipped)
+}
+
+/// What a bundle indexed from `pages` is a function of: their paths and bytes,
+/// in walk order, and the binary that segments and indexes them. Equal keys
+/// mean byte-identical bundles, so a build that finds the key of the bundle it
+/// holds can serve that bundle instead of indexing again.
+pub(crate) fn corpus_key(pages: &[PageSource]) -> String {
+    let builder = crate::plugins::fingerprint::builder_fingerprint();
+    let mut buf: Vec<u8> = Vec::with_capacity(builder.len() + pages.len() * 80);
+    buf.extend_from_slice(builder.as_bytes());
+    for page in pages {
+        buf.push(b'\n');
+        buf.extend_from_slice(page.rel_path.as_bytes());
+        buf.push(b'\x00');
+        buf.extend_from_slice(&page.key.to_le_bytes());
+    }
+    format!("{:032x}", xxhash_rust::xxh3::xxh3_128(&buf))
+}
+
+/// Segment `pages`, replaying [`SEGMENTED`] for every page whose bytes it holds.
+/// Returns the segmented pages, how many failed to rewrite (skipped, like an
+/// unreadable page), and how many were segmented afresh.
+///
+/// Segmentation runs on rayon's global pool, like the markdown-parse and
+/// HTML-render loops in `render/blocking.rs`. It runs to completion *before*
+/// Pagefind is handed the pages, so the two never contend for the pool. Keep
+/// them sequential phases — see `scan/scan.rs` and `media/image.rs`, which
+/// both carry scars from nesting.
+fn segment_pages(pages: Vec<PageSource>) -> (Vec<SegmentedPage>, usize, usize) {
+    // Taken, not locked for the pass: a concurrent index build finds the map
+    // empty and misses, which costs time and never correctness.
+    let prior = std::mem::take(&mut *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let slots: Vec<Result<SegmentedPage, PageSource>> = pages
+        .into_iter()
+        .map(|page| match prior.get(&page.key) {
+            Some(html) => Ok(SegmentedPage { rel_path: page.rel_path, key: page.key, html: Arc::clone(html) }),
+            None => Err(page),
+        })
         .collect();
     drop(prior);
 
     // Segment the rest in parallel — jieba is the expensive part.
-    let resegmented = slots.iter().filter(|s| matches!(s, Slot::Unsegmented { .. })).count();
-    slots.par_iter_mut().for_each(|slot| {
-        if !matches!(slot, Slot::Unsegmented { .. }) {
-            return;
-        }
-        let Slot::Unsegmented { rel_path, key, source } = std::mem::replace(slot, Slot::Skipped) else {
-            return;
-        };
-        match segment_html(&source, &JIEBA) {
-            Ok(html) => *slot = Slot::Ready(SegmentedPage { rel_path, key, html: html.into() }),
-            Err(e) => log::info!(target: "search", "skipping {:?} for search index: {}", rel_path, e),
-        }
-    });
-
-    let skipped = slots.iter().filter(|s| matches!(s, Slot::Skipped)).count();
-    let pages: Vec<SegmentedPage> = slots
-        .into_iter()
-        .filter_map(|slot| match slot {
-            Slot::Ready(page) => Some(page),
-            _ => None,
+    let resegmented = slots.iter().filter(|s| s.is_err()).count();
+    let segmented: Vec<Option<SegmentedPage>> = slots
+        .into_par_iter()
+        .map(|slot| match slot {
+            Ok(page) => Some(page),
+            Err(PageSource { rel_path, key, source }) => match segment_html(&source, &JIEBA) {
+                Ok(html) => Some(SegmentedPage { rel_path, key, html: html.into() }),
+                Err(e) => {
+                    log::info!(target: "search", "skipping {:?} for search index: {}", rel_path, e);
+                    None
+                }
+            },
         })
         .collect();
+    let failed = segmented.iter().filter(|page| page.is_none()).count();
+    let pages: Vec<SegmentedPage> = segmented.into_iter().flatten().collect();
     let held: usize = pages.iter().map(|p| p.html.len()).sum();
     log::debug!(target: "search", "segmentation cache: {} pages, {} KiB", pages.len(), held / 1024);
     *SEGMENTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
         pages.iter().map(|p| (p.key, Arc::clone(&p.html))).collect();
-    (pages, skipped, resegmented)
+    (pages, failed, resegmented)
 }
 
 /// Forget every cached segmentation, so the next index build is a cold one.
@@ -544,12 +562,29 @@ pub fn build_search_index_cancellable(
     site_dir: &Path,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<SearchIndex>, String> {
+    let _phase = crate::build::phase::PhaseTrace::start("search_index");
+    let t_read = std::time::Instant::now();
+    let (pages, unreadable) = read_pages(site_dir);
+    index_pages(pages, unreadable, t_read, cancelled)
+}
+
+/// [`build_search_index_cancellable`] over pages already read, `unreadable` of
+/// them having failed to read; `t_read` is when the read started, for the
+/// segment timing.
+pub(crate) fn index_pages(
+    pages: Vec<PageSource>,
+    unreadable: usize,
+    t_read: std::time::Instant,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Option<SearchIndex>, String> {
     INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    let t_segment = std::time::Instant::now();
-    let (pages, skipped, resegmented) = segment_pages(site_dir);
+    let (pages, failed, resegmented) = segment_pages(pages);
+    let skipped = unreadable + failed;
     let readable = pages.len();
-    let segment_ms = t_segment.elapsed().as_millis();
+    crate::build::phase::record_count("search_pages", readable);
+    crate::build::phase::record_count("search_resegmented", resegmented);
+    let segment_ms = t_read.elapsed().as_millis();
     if cancelled() {
         return Ok(None);
     }

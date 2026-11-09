@@ -286,7 +286,7 @@ pub fn site_languages(site_root: &Path) -> Result<SiteLanguages, String> {
         .to_str()
         .ok_or_else(|| format!("'{}' is not a UTF-8 path", site_root.display()))?;
     let config = crate::build::site_config::read_project_config(project)?;
-    let default_lang = config.site_str("lang").unwrap_or_default().to_string();
+    let default_lang = config.site_lang().unwrap_or_default().to_string();
 
     let entries = std::fs::read_dir(site_root)
         .map_err(|e| format!("Failed to read '{}': {e}", site_root.display()))?;

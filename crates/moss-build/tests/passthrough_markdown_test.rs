@@ -47,6 +47,7 @@ fn build_sync(folder: &Path) -> Result<String, String> {
         server_port: None,
         admission_epoch: None,
         live_port: None,
+        rename_pairs: Vec::new(),
     }))
 }
 
@@ -73,6 +74,16 @@ impl Drop for Site {
 }
 
 fn build(config_extra: &str, files: &[(&str, &str)]) -> Site {
+    try_build(config_extra, files).unwrap_or_else(|e| panic!("build failed: {e}"))
+}
+
+fn collision(config_extra: &str, files: &[(&str, &str)], parts: &[&str]) {
+    let site = build(config_extra, files);
+    assert!(site.warned(parts), "{:?}", site.warnings);
+    assert!(site.problems > 0, "collisions must count for --strict");
+}
+
+fn try_build(config_extra: &str, files: &[(&str, &str)]) -> Result<Site, String> {
     let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
     LOGGER.call_once(|| {
         log::set_logger(&CAPTURE).unwrap();
@@ -90,8 +101,8 @@ fn build(config_extra: &str, files: &[(&str, &str)]) -> Site {
     CAPTURE.0.lock().unwrap().clear();
     let _ = take_cli_problems();
     let built = build_sync(&root);
-    assert!(built.is_ok(), "build failed: {built:?}");
-    Site { warnings: CAPTURE.0.lock().unwrap().clone(), problems: take_cli_problems(), root, _turn: turn }
+    let site = Site { warnings: CAPTURE.0.lock().unwrap().clone(), problems: take_cli_problems(), root, _turn: turn };
+    built.map(|_| site)
 }
 
 const APP_FILES: [(&str, &str); 7] = [
@@ -99,8 +110,8 @@ const APP_FILES: [(&str, &str); 7] = [
     ("app/index.html", APP),
     ("app/app.js", "console.log(1)"),
     ("app/README.md", "# App readme\n\nReadme text.\n"),
-    ("app/README.en.md", "# App readme in English\n\nEnglish text.\n"),
-    ("app/notes.md", "# Notes\n\nNotes text. [English readme](README.en.md)\n"),
+    ("app/english-readme.md", "# App readme in English\n\nEnglish text.\n"),
+    ("app/notes.md", "# Notes\n\nNotes text. [English readme](english-readme.md)\n"),
     ("app/vendor/kit/LICENSE.md", "# Licence\n\nLicence text.\n"),
 ];
 
@@ -109,14 +120,14 @@ fn app_index_survives_its_markdown_and_the_readme_gets_its_own_address() {
     let site = build("", &APP_FILES);
 
     assert_eq!(fs::read_to_string(site.out("app/index.html")).unwrap(), APP);
-    let readmes: String = ["app/readme/index.html", "app/readme-2/index.html"]
+    let readmes: String = ["app/readme/index.html", "app/english-readme/index.html"]
         .iter()
         .map(|p| fs::read_to_string(site.out(p)).unwrap())
         .collect();
     assert!(readmes.contains("Readme text.") && readmes.contains("English text."));
     let notes = fs::read_to_string(site.out("app/notes/index.html")).unwrap();
     assert!(notes.contains("Notes text."));
-    assert!(notes.contains(r#"href="../readme/""#), "a link to a README must not point at the app: {notes}");
+    assert!(notes.contains(r#"href="../english-readme/""#), "a link to a README must not point at the app: {notes}");
     assert!(fs::read_to_string(site.out("app/vendor/kit/license/index.html")).unwrap().contains("Licence text."));
     assert!(
         site.warned(&["app/README.md", "app/index.html"]),
@@ -131,7 +142,7 @@ fn declaring_the_app_a_passthrough_root_keeps_its_index_too() {
     let site = build("\n[build]\npassthrough = [\"app\"]\n", &APP_FILES);
 
     assert_eq!(fs::read_to_string(site.out("app/index.html")).unwrap(), APP);
-    assert!(site.out("app/readme/index.html").exists() || site.out("app/readme-2/index.html").exists());
+    assert!(site.out("app/readme/index.html").exists() || site.out("app/english-readme/index.html").exists());
     assert!(site.warned(&["app/README.md", "app/index.html"]), "got: {:?}", site.warnings);
 }
 
@@ -151,61 +162,30 @@ fn a_marked_home_inside_the_app_does_not_take_the_folder_address_either() {
 }
 
 #[test]
-fn a_page_keeps_its_address_over_a_nested_app_page_and_the_clash_is_a_problem() {
-    let site = build(
-        "",
-        &[
-            ("index.md", "---\ntitle: Home\n---\n\nHello.\n"),
-            ("app/index.html", APP),
-            ("app/docs/index.html", "<!doctype html><p>nested app</p>"),
-            ("app/docs.md", "# Docs\n\nPage text.\n"),
-        ],
-    );
-
-    assert!(fs::read_to_string(site.out("app/docs/index.html")).unwrap().contains("Page text."));
-    assert!(
-        site.warned(&["app/docs.md", "app/docs/index.html", "/app/docs/", "the page is served"]),
-        "got: {:?}",
-        site.warnings
-    );
-    assert!(site.problems >= 1, "silently dropping a file is a problem");
+fn a_page_and_a_nested_app_page_report_a_collision() {
+    collision("", &[
+        ("index.md", "Welcome."),
+        ("app/index.html", APP),
+        ("app/docs/index.html", "<!doctype html><p>nested app</p>"),
+        ("app/docs.md", "# Docs\n\nPage text.\n"),
+    ], &["app/docs.md", "app/docs/index.html", "/app/docs/"]);
 }
 
-fn sibling_page_keeps_the_address(config_extra: &str) {
-    let site = build(
-        config_extra,
-        &[
-            ("index.md", "---\ntitle: Home\n---\n\nHello.\n"),
+#[test]
+fn a_sibling_page_reports_a_collision_with_the_app_address() {
+    for config in ["", "\n[build]\npassthrough = [\"app\"]\n"] {
+        collision(config, &[
+            ("index.md", "Welcome."),
             ("app/index.html", APP),
             ("app.md", "# App page\n\nSibling text.\n"),
-        ],
-    );
-
-    assert!(fs::read_to_string(site.out("app/index.html")).unwrap().contains("Sibling text."));
-    assert!(site.warned(&["app.md", "app/index.html", "/app/", "the page is served"]), "got: {:?}", site.warnings);
-    assert!(site.problems >= 1);
+        ], &["app.md", "app/index.html", "/app/"]);
+    }
 }
 
 #[test]
-fn a_sibling_page_keeps_the_app_address_it_always_had() {
-    sibling_page_keeps_the_address("");
-}
-
-#[test]
-fn a_sibling_page_keeps_the_app_address_with_the_app_declared_passthrough() {
-    sibling_page_keeps_the_address("\n[build]\npassthrough = [\"app\"]\n");
-}
-
-#[test]
-fn a_page_and_a_loose_html_file_at_one_address_are_reported_by_name() {
-    let site = build(
-        "",
-        &[("index.md", "---\ntitle: Home\n---\n\nHello.\n"), ("index.html", "<!doctype html><p>loose</p>")],
-    );
-
-    assert!(fs::read_to_string(site.out("index.html")).unwrap().contains("Hello."));
-    assert!(site.warned(&["index.md", "`index.html`", "/"]), "got: {:?}", site.warnings);
-    assert!(site.problems >= 1);
+fn a_page_and_a_loose_html_file_report_a_collision() {
+    collision("", &[("index.md", "Welcome."), ("index.html", "<!doctype html><p>loose</p>")],
+        &["index.md", "index.html", "/"]);
 }
 
 #[test]

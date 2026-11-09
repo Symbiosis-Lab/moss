@@ -124,37 +124,184 @@ pub(super) fn caller_declared<'h>(
 
 /// The `execute_binary` gate, per binary: `requires` names each executable as
 /// `execute_binary:<basename>`, and the call's `binaryPath` must carry a
-/// granted basename. The blanket `execute_binary` token predates the naming
-/// (2026-08-30) and still grants every binary, with a deprecation warning:
-/// an installed plugin keeps working, but a reviewed manifest says what it
-/// runs. Fail-closed like every gate — no basename, no grant, no run.
+/// granted basename and name the binary moss itself would run for it
+/// ([`is_binary_moss_would_run`]), so a grant for `git` never runs some other
+/// file called `git`. The blanket `execute_binary` token still grants every
+/// name, with a deprecation warning: an installed plugin keeps working, but a
+/// reviewed manifest says what it runs. Fail-closed like every gate — no
+/// basename, no grant, no run.
 pub(super) fn require_binary_grant(
     host: &EngineHost<'_>,
     binary_path: &str,
 ) -> std::result::Result<(), String> {
     let (plugin, declared) = caller_declared(host, "execute_binary")?;
     let grants = &declared.requires;
-    let basename = std::path::Path::new(binary_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .filter(|n| !n.is_empty())
-        .ok_or_else(|| {
-            format!("'execute_binary' refused: '{binary_path}' has no resolvable basename")
-        })?;
+    let basename = grant_name(binary_path, std::env::consts::EXE_SUFFIX).ok_or_else(|| {
+        format!("'execute_binary' refused: '{binary_path}' has no resolvable basename")
+    })?;
     let named = format!("{}:{basename}", crate::plugins::types::EXECUTE_BINARY_GRANT);
-    if grants.iter().any(|entry| entry == &named) {
-        return Ok(());
+    let named_grant = grants.iter().any(|entry| entry == &named);
+    let blanket = grants.iter().any(|entry| entry == crate::plugins::types::EXECUTE_BINARY_GRANT);
+    if !named_grant && !blanket {
+        return Err(format!(
+            "'execute_binary' refused: plugin '{plugin}' does not declare `{named}` \
+             in manifest `requires`"
+        ));
     }
-    if grants.iter().any(|entry| entry == crate::plugins::types::EXECUTE_BINARY_GRANT) {
+    if !named_grant {
         log::warn!(
             target: "plugin",
             "plugin '{plugin}' runs '{basename}' under the deprecated blanket \
              `execute_binary` grant — name each binary in `requires` (`{named}`)"
         );
+    }
+    let moss_bin = crate::infra::home::moss_home().ok().map(|home| home.join("bin"));
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let exe = std::env::consts::EXE_SUFFIX;
+    if is_binary_moss_would_run(binary_path, basename, exe, &search_dirs(&path), moss_bin.as_deref()) {
         return Ok(());
     }
     Err(format!(
-        "'execute_binary' refused: plugin '{plugin}' does not declare `{named}` \
-         in manifest `requires`"
+        "'execute_binary' refused: '{binary_path}' is not the `{basename}` moss runs; \
+         pass the bare name `{basename}`, or the path moss resolved for it"
     ))
+}
+
+/// Where moss finds an installed binary: the PATH, then the standard install
+/// directories an app launched from the Finder does not inherit. An empty or
+/// relative PATH entry means the working directory, which a plugin can write,
+/// so it is left out.
+fn search_dirs(path: &std::ffi::OsStr) -> Vec<std::path::PathBuf> {
+    std::env::split_paths(path)
+        .chain(crate::build::assets::binary_resolver::standard_install_dirs())
+        .filter(|dir| dir.is_absolute())
+        .collect()
+}
+
+/// The name a grant is written with: `binary_path`'s file name, less the
+/// platform's executable suffix (`exe`, `.exe` on Windows), so
+/// `execute_binary:git` grants `C:\…\git.exe` there as it grants `/usr/bin/git`
+/// elsewhere.
+fn grant_name<'p>(binary_path: &'p str, exe: &str) -> Option<&'p str> {
+    let file = std::path::Path::new(binary_path).file_name()?.to_str()?;
+    let name = match file.len().checked_sub(exe.len()) {
+        Some(cut) if !exe.is_empty() && file.get(cut..).is_some_and(|tail| tail.eq_ignore_ascii_case(exe)) => {
+            file.get(..cut)?
+        }
+        _ => file,
+    };
+    (!name.is_empty()).then_some(name)
+}
+
+/// Whether `binary_path` is the `name` moss itself would run: the bare name
+/// (looked up on the PATH at spawn), `name` (with the platform's executable
+/// suffix `exe`) in one of `search_dirs`, or a file called that under
+/// `moss_bin`, where moss keeps the tools it downloads. Paths are compared
+/// with symlinks resolved, so `/bin/sh` matches wherever `/bin` points; a
+/// relative path with a separator matches nothing. The check trusts those
+/// directories not to change before the spawn: a plugin that can write into
+/// one already chooses what runs.
+fn is_binary_moss_would_run(
+    binary_path: &str,
+    name: &str,
+    exe: &str,
+    search_dirs: &[std::path::PathBuf],
+    moss_bin: Option<&std::path::Path>,
+) -> bool {
+    let file = format!("{name}{exe}");
+    if binary_path == name || binary_path == file {
+        return true;
+    }
+    let path = std::path::Path::new(binary_path);
+    if !path.is_absolute() {
+        return false;
+    }
+    let named = grant_name(binary_path, exe) == Some(name);
+    let Ok(real) = path.canonicalize() else {
+        return false;
+    };
+    search_dirs
+        .iter()
+        .any(|dir| dir.join(&file).canonicalize().is_ok_and(|found| found == real))
+        || moss_bin
+            .and_then(|dir| dir.canonicalize().ok())
+            .is_some_and(|dir| named && real.starts_with(dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{grant_name, is_binary_moss_would_run, search_dirs};
+    use std::path::PathBuf;
+
+    fn file(dir: &std::path::Path, rel: &str) -> String {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn only_the_binary_moss_would_run_matches_a_grant() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let on_path = tmp.path().join("bin");
+        let installed = file(tmp.path(), "bin/git");
+        let elsewhere = file(tmp.path(), "project/git");
+        let moss_bin = tmp.path().join("moss-bin");
+        let downloaded = file(tmp.path(), "moss-bin/git-2.47/bin/git");
+        let dirs = [PathBuf::from("/nonexistent"), on_path];
+        let run = |p: &str| is_binary_moss_would_run(p, "git", "", &dirs, Some(&moss_bin));
+
+        assert!(run("git"), "a bare name is looked up on the PATH");
+        assert!(run(&installed));
+        assert!(run(&downloaded), "a tool moss downloaded");
+        assert!(!run(&file(tmp.path(), "moss-bin/ffmpeg")), "another tool moss downloaded");
+        assert!(!run(&elsewhere), "a file named git outside where moss looks");
+        assert!(!run("./git"));
+        assert!(!run("project/git"));
+        assert!(!run(&tmp.path().join("bin/missing/git").to_string_lossy()));
+    }
+
+    /// Windows names an executable `git.exe`, and that is the path moss's own
+    /// resolver hands a plugin; the grant still says `execute_binary:git`.
+    #[test]
+    fn an_executable_suffix_is_not_part_of_the_grant_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installed = file(tmp.path(), "cmd/git.exe");
+        let downloaded = file(tmp.path(), "moss-bin/git/cmd/git.exe");
+        let dirs = [tmp.path().join("cmd")];
+        let moss_bin = tmp.path().join("moss-bin");
+        let run = |p: &str| is_binary_moss_would_run(p, "git", ".exe", &dirs, Some(&moss_bin));
+
+        assert_eq!(grant_name(&installed, ".exe"), Some("git"));
+        assert_eq!(grant_name("GIT.EXE", ".exe"), Some("GIT"), "the name keeps its case: a grant for git does not cover it");
+        assert_eq!(grant_name(&installed, ""), Some("git.exe"), "only the platform's suffix is dropped");
+        assert_eq!(grant_name(".exe", ".exe"), None);
+        assert!(run(&installed), "the resolved git.exe");
+        assert!(run(&downloaded), "a git.exe moss downloaded");
+        assert!(run("git") && run("git.exe"), "bare names, looked up on the PATH");
+        assert!(!run(&file(tmp.path(), "project/git.exe")), "a git.exe outside where moss looks");
+    }
+
+    #[test]
+    fn an_empty_or_relative_path_entry_is_not_searched() {
+        // Absolute on every platform; "/usr/bin" is not absolute on Windows.
+        let (first, last) = (std::env::temp_dir().join("usr-bin"), std::env::temp_dir().join("bin"));
+        let path = std::env::join_paths([first.clone(), PathBuf::new(), PathBuf::from("bin"), last.clone()]).unwrap();
+        let dirs = search_dirs(&path);
+        assert!(dirs.starts_with(&[first, last]), "{dirs:?}");
+        assert!(dirs.iter().all(|d| d.is_absolute()), "{dirs:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_matches_the_binary_it_resolves_to() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installed = file(tmp.path(), "usr/bin/sh");
+        std::os::unix::fs::symlink(tmp.path().join("usr/bin"), tmp.path().join("bin")).unwrap();
+        let via_link = tmp.path().join("bin/sh");
+        let dirs = [tmp.path().join("usr/bin")];
+
+        assert!(is_binary_moss_would_run(&installed, "sh", "", &dirs, None));
+        assert!(is_binary_moss_would_run(via_link.to_str().unwrap(), "sh", "", &dirs, None));
+    }
 }

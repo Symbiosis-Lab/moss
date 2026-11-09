@@ -486,6 +486,8 @@ pub enum Inline {
     LineBreak,
     /// `~~struck~~`
     Strikethrough(Vec<Inline>),
+    /// `==highlighted==`, rendered as `<mark>`.
+    Mark(Vec<Inline>),
     /// `[^label]` — a GFM footnote marker. Carries the author's label, not
     /// the printed number: numbering is first-reference order over the whole
     /// document, which is a render-time fact (same rule as

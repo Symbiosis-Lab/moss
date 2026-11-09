@@ -97,7 +97,8 @@ pub fn push_inlines_text(out: &mut String, inlines: &[Inline]) {
     for inline in inlines {
         match inline {
             Inline::Text(t) | Inline::Code(t) => out.push_str(t),
-            Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
+            Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children)
+            | Inline::Mark(children) => {
                 push_inlines_text(out, children)
             }
             Inline::Link { children, .. } => push_inlines_text(out, children),

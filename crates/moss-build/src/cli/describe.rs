@@ -437,11 +437,12 @@ mod tests {
                 }
             }
         }
-        const HELPERS: [&str; 7] = ["site_bool", "site_str", "site_string", "site_table", "site_value", "get_site_bool_field", "get_site_field"];
+        const HELPERS: [&str; 6] = ["site_bool", "site_str", "site_string", "site_table", "site_value", "get_site_bool_field"];
 
         let mut files = Vec::new();
         walk(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")), &mut files);
-        let listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+        let mut listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+        listed.extend(crate::config::site_settings::UNLISTED_SITE_KEYS);
 
         let mut missing = Vec::new();
         for file in &files {

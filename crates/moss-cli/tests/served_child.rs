@@ -133,7 +133,7 @@ pub fn spawn_served_build_sigint_ignored(site_dir: &Path, moss_home: &Path, extr
     spawn_piped(command, moss_home)
 }
 
-fn spawn_piped(mut command: Command, moss_home: &Path) -> ServedChild {
+pub fn spawn_piped(mut command: Command, moss_home: &Path) -> ServedChild {
     let mut child = command
         .env("MOSS_HOME", moss_home)
         .env("MOSS_LOG_LEVEL", "info")

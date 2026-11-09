@@ -1,7 +1,7 @@
-//! Tests for the Versions command bodies: the pure row mappings, the two
-//! rules the bodies add on top of the store (a caller-supplied version id is
-//! checked against the records the store lists; the read path never asks for a
-//! sealed manifest), and the trash wiring a site restore hands down.
+//! Tests for the Versions command bodies: the pure row mappings, the rules
+//! the bodies add on top of the store (a caller-supplied version id is
+//! checked against the records the store lists; saving and restoring read the
+//! disk, never a build), and the trash wiring a site restore hands down.
 //!
 //! What is deliberately NOT here: a second copy of the store's own coverage.
 //! `record_tests`, `restore_tests`, `timeline_tests` and `store_tests` already
@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use sha2::Digest;
 
 use super::*;
-use crate::build::manifest::{HashBucket, PendingManifest};
+use crate::build::manifest::{HashBucket, PendingManifest, SealedManifest};
 use crate::build::served_path::ServedPath;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -38,25 +39,11 @@ fn manifest_of(pages: &[(&str, &[u8])]) -> SealedManifest {
             src.to_string(),
             SourceMetadata {
                 hash: format!("{:x}", sha2::Sha256::digest(bytes)),
-                size: bytes.len() as u64,
-                mtime: 1,
-                mtime_nanos: None,
-                ctime: None,
-                inode: None,
+                stat: FileStat::whole_second(bytes.len() as u64, 1),
             },
         );
     }
     pending.seal()
-}
-
-fn ready(manifest: SealedManifest) -> impl std::future::Future<Output = Result<SealedManifest, String>> {
-    async move { Ok(manifest) }
-}
-
-/// A sealed-manifest provider that fails if it is ever awaited — the shape of
-/// "this path must not build".
-fn never() -> impl std::future::Future<Output = Result<SealedManifest, String>> {
-    async { Err::<SealedManifest, String>("this path must not ask for a sealed manifest".to_string()) }
 }
 
 fn empty_record(target: &str, trigger: Trigger, label: Option<&str>) -> PublishRecord {
@@ -123,23 +110,25 @@ fn version_row_from_record_reads_a_publish_trigger_as_publish() {
 
 // ── What the bodies decide ────────────────────────────────────────────────
 
-/// Opening the Versions panel reads records off disk and nothing else. This is
-/// what lets the HTTP carrier answer a list without building the site, so it
-/// is asserted rather than assumed: the provider here fails if awaited, and
-/// both list shapes still return.
-#[tokio::test]
-async fn neither_timeline_asks_for_a_sealed_manifest() {
+/// Saving, comparing and restoring work with no build at all: the folder has
+/// never been built, so there is no manifest, and each answers from the disk.
+#[test]
+fn save_compare_and_restore_need_no_build() {
     let (_dir, vault) = tmp_vault();
-    std::fs::write(vault.join("a.md"), b"hello").unwrap();
-    HistoryStore::in_vault(&vault)
-        .snapshot(&vault, &manifest_of(&[("a.md", b"hello")]), "moss", "2026-01-01T00:00:00Z")
-        .unwrap();
+    std::fs::write(vault.join("a.md"), b"first").unwrap();
 
-    let site = list_versions(&vault, "site", None, never()).await.unwrap();
-    assert_eq!(site.rows.len(), 1, "the site timeline must answer from records alone");
+    let saved = save_version(&vault, Some("First draft".to_string())).unwrap();
+    std::fs::write(vault.join("a.md"), b"second").unwrap();
 
-    let page = list_versions(&vault, "page", Some("a.md".to_string()), never()).await.unwrap();
-    assert_eq!(page.rows.len(), 1, "a page timeline must answer from records alone");
+    let drill = list_versions(&vault, "site", Some(saved.id.clone())).unwrap();
+    assert_eq!(drill.changed_since.len(), 1, "the edit since the save is seen without a build");
+    assert_eq!(drill.changed_since[0].source_path, "a.md");
+
+    let report = restore_version(&vault, &saved.id, Some("a.md".to_string()), "in_place").unwrap();
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(std::fs::read(vault.join("a.md")).unwrap(), b"first");
+    let undo = report.undo_id.expect("the edited page was saved before the restore");
+    assert_eq!(read_version(&vault, &undo, "a.md").unwrap().text.as_deref(), Some("second"));
 }
 
 /// A version id is joined into a filename by the store, so an id the store
@@ -147,13 +136,13 @@ async fn neither_timeline_asks_for_a_sealed_manifest() {
 /// is always a row moss listed; over the HTTP carrier it is whatever the
 /// request body said, and `../` would otherwise escape `publishes/` and
 /// restore a file the caller planted.
-#[tokio::test]
-async fn a_version_id_the_store_does_not_list_never_reaches_the_filesystem() {
+#[test]
+fn a_version_id_the_store_does_not_list_never_reaches_the_filesystem() {
     let (_dir, vault) = tmp_vault();
     std::fs::write(vault.join("a.md"), b"present").unwrap();
     let store = HistoryStore::in_vault(&vault);
     store
-        .snapshot(&vault, &manifest_of(&[("a.md", b"present")]), "moss", "2026-01-01T00:00:00Z")
+        .snapshot(&vault, &SourceTree::from_sealed(&manifest_of(&[("a.md", b"present")])), "moss", "2026-01-01T00:00:00Z")
         .unwrap();
 
     // The escape target: a real, loadable record one directory above
@@ -165,16 +154,14 @@ async fn a_version_id_the_store_does_not_list_never_reaches_the_filesystem() {
     assert!(outside.exists(), "the escape target must exist for this to mean anything");
 
     for escape in ["../planted", &format!("../publishes/{real_id}")] {
-        let err = restore_version(&vault, escape, None, "in_place", ready(manifest_of(&[])))
-            .await
+        let err = restore_version(&vault, escape, None, "in_place")
             .expect_err("an unlisted id must be refused");
         assert!(err.contains("no such version"), "got: {err}");
     }
     let err = read_version(&vault, "../planted", "a.md").expect_err("unlisted id");
     assert!(err.contains("no such version"), "got: {err}");
 
-    let err = list_versions(&vault, "site", Some("../planted".to_string()), never())
-        .await
+    let err = list_versions(&vault, "site", Some("../planted".to_string()))
         .expect_err("unlisted id");
     assert!(err.contains("no such version"), "got: {err}");
 
@@ -184,67 +171,65 @@ async fn a_version_id_the_store_does_not_list_never_reaches_the_filesystem() {
 }
 
 /// A site restore trashes what the site has gained since the version, and the
-/// paths it hands the trash closure are vault-relative — so the closure has to
+/// paths it hands the trash closure are vault-relative, so the closure has to
 /// join them onto the root before the delete core's containment check sees
 /// them. `restore::real_trash` does; a closure that forwarded the relative path
 /// unchanged (which the app's command used to pass) failed every such page and
 /// reported it under `failed` instead of `trashed`.
 ///
-/// `since.md` is absent from disk on purpose: the delete core treats an
-/// already-gone path as the goal state, so the join is exercised without this
-/// test moving a real file into the developer's OS Trash.
-#[tokio::test]
-async fn a_site_restore_trashes_pages_added_since_the_version() {
+/// The restore runs with a recording trash, so no real file reaches the
+/// developer's OS Trash; the join itself is checked on an already-gone path,
+/// which the delete core treats as the goal state.
+#[test]
+fn a_site_restore_trashes_pages_added_since_the_version() {
     let (_dir, vault) = tmp_vault();
     std::fs::write(vault.join("a.md"), b"hello").unwrap();
     let store = HistoryStore::in_vault(&vault);
     store
-        .snapshot(&vault, &manifest_of(&[("a.md", b"hello")]), "moss", "2026-01-01T00:00:00Z")
+        .snapshot(&vault, &SourceTree::from_sealed(&manifest_of(&[("a.md", b"hello")])), "moss", "2026-01-01T00:00:00Z")
         .unwrap();
     let (id, _) = store.list_records().pop().unwrap();
+    std::fs::write(vault.join("since.md"), b"new page").unwrap();
 
-    let now = manifest_of(&[("a.md", b"hello"), ("since.md", b"new page")]);
-    let report = restore_version(&vault, &id, None, "in_place", ready(now)).await.unwrap();
+    let trashed = std::sync::Mutex::new(Vec::new());
+    let trash = |_: &Path, rel: &str| -> Result<(), String> {
+        trashed.lock().unwrap().push(rel.to_string());
+        Ok(())
+    };
+    let report = restore_version_with(&vault, &id, None, "in_place", &trash).unwrap();
 
     assert_eq!(report.trashed, vec!["since.md".to_string()], "failed: {:?}", report.failed);
-    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(*trashed.lock().unwrap(), vec!["since.md".to_string()]);
+    assert_eq!(restore::real_trash(&vault, "gone.md"), Ok(()), "the default trash joins the path onto the root");
 }
 
 /// A whole-site restore to a kept outside edit is refused before anything is
 /// saved: no backup record, no Undo for a restore that did nothing.
-#[tokio::test]
-async fn a_site_restore_to_a_kept_outside_edit_is_refused_before_any_backup() {
+#[test]
+fn a_site_restore_to_a_kept_outside_edit_is_refused_before_any_backup() {
     let (_dir, vault) = tmp_vault();
     std::fs::write(vault.join("a.md"), b"mine").unwrap();
     let store = HistoryStore::in_vault(&vault);
     let id = store.keep_displaced(&vault, "a.md", b"theirs").unwrap().unwrap();
 
-    let err = restore_version(&vault, &id, None, "in_place", never()).await.unwrap_err();
+    let err = restore_version(&vault, &id, None, "in_place").unwrap_err();
 
     assert!(err.contains("kept outside edit"), "{err}");
     assert_eq!(store.list_records().len(), 1, "nothing but the kept edit itself");
 }
 
 /// A page restore answers the backup it wrote as `undo_id`, read from the
-/// writer itself: a record another writer lands meanwhile is never mistaken
-/// for it.
-#[tokio::test]
-async fn a_page_restore_names_its_own_backup_even_when_another_record_lands_meanwhile() {
+/// writer itself: a newer record of another kind is never mistaken for it.
+#[test]
+fn a_page_restore_names_its_own_backup_even_when_another_record_is_newer() {
     let (_dir, vault) = tmp_vault();
     std::fs::write(vault.join("a.md"), b"v2").unwrap();
     let store = HistoryStore::in_vault(&vault);
-    store.snapshot(&vault, &manifest_of(&[("a.md", b"v1")]), "moss", "2026-01-01T00:00:00Z").unwrap();
+    store.snapshot(&vault, &SourceTree::from_sealed(&manifest_of(&[("a.md", b"v1")])), "moss", "2026-01-01T00:00:00Z").unwrap();
     let (id, _) = store.list_records().pop().unwrap();
+    store.keep_displaced(&vault, "b.md", b"an agent's page").unwrap();
 
-    let sealed = {
-        let (vault, store) = (vault.clone(), store.clone());
-        async move {
-            // An editor save keeps an outside edit while the restore waits on its manifest.
-            store.keep_displaced(&vault, "b.md", b"an agent's page").unwrap();
-            Ok(manifest_of(&[("a.md", b"v2")]))
-        }
-    };
-    let report = restore_version(&vault, &id, Some("a.md".to_string()), "in_place", sealed).await.unwrap();
+    let report = restore_version(&vault, &id, Some("a.md".to_string()), "in_place").unwrap();
 
     let undo = store.load_record(report.undo_id.as_deref().expect("a backup was written")).unwrap();
     assert_eq!(undo.trigger, Trigger::Restore);

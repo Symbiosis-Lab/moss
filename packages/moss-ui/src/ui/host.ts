@@ -186,6 +186,13 @@ export interface UiHost {
    */
   pickFiles(filters: FileFilter[], multiple: boolean, dirFor?: (fileName: string) => Promise<string>): Promise<string[]>;
 
+  /**
+   * The address the preview server is reached at, where the host knows it
+   * better than `http://localhost:<port>`: a browser reaches it at the host
+   * it reached the UI by, or at a public origin.
+   */
+  previewUrl?: () => string;
+
   // ── What a host with files on disk and windows of its own adds (the desktop) ──
 
   /** The editor beside the preview. */
@@ -281,6 +288,13 @@ export interface UiHost {
   dragOut?: (paths: string[]) => Promise<void>;
   /** Downloads a tool the build needs (ffmpeg, git). */
   downloadTool?: (tool: string) => Promise<EngineResult<null>>;
+  /**
+   * Runs a plugin's process hook as the person's own act (a Sync), which may
+   * write the folder. Calls `say(true, name)` while it waits for a hook a build
+   * started in that plugin and `say(false, name)` once it runs, `name` being
+   * what the plugin's manifest calls it.
+   */
+  runPlugin?: (plugin: string, say: (waiting: boolean, name: string) => void) => Promise<EngineResult<null>>;
 }
 
 /** Filled by `fillHost` before the UI mounts; read through it, never before. */

@@ -50,7 +50,6 @@ fn a_new_post_is_due_on_every_channel_it_names() {
         actions(&plans),
         [("notes/a/".into(), "bluesky".into(), Action::Due), ("notes/a/".into(), "mastodon".into(), Action::Due)]
     );
-    assert!(plans[0].stamp_uid, "a page with no stored uid gets one before any copy is due");
 }
 
 #[test]
@@ -60,7 +59,7 @@ fn a_post_live_before_its_folder_named_the_channel_waits_unless_it_names_it_itse
     let m = map(vec![
         post("notes/old.md", "notes/old/", "0a0a0a0a", &["bluesky"], serde_json::json!({"uid": "0a0a0a0a"})),
         post("notes/own.md", "notes/own/", "0b0b0b0b", &["bluesky"], serde_json::json!({"uid": "0b0b0b0b", "syndicate": ["bluesky"]})),
-        // A page with no stored uid has a new one each build, so its address says it was live.
+        // Live before under another uid: its address says it was live.
         post("notes/bare.md", "notes/bare/", "0c0c0c0c", &["bluesky"], serde_json::json!({})),
     ]);
     let before = [live("0a0a0a0a", "notes/old/"), live("0b0b0b0b", "notes/own/"), live("99999999", "notes/bare/")];
@@ -99,7 +98,7 @@ fn a_copy_already_listed_in_syndicated_is_adopted_not_posted() {
     let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
     assert_eq!(actions(&plans)[0].2, Action::Adopt { url: "https://bsky.app/profile/a/post/1".into() });
 
-    let applied = apply(dir.path(), plans, &records, None);
+    let applied = apply(plans, &records, None);
     assert_eq!(applied.len(), 1);
     assert_eq!(records.get("aa11aa11", "bluesky").unwrap().state, State::Posted);
 }
@@ -158,7 +157,7 @@ fn a_handed_off_copy_is_adopted_once_the_author_lists_its_address() {
     let after = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["mastodon"], fm)]);
     let plans = decide(&inputs(&after), &records);
     assert_eq!(actions(&plans)[0].2, Action::Adopt { url: "https://example.social/@a/9".into() });
-    apply(dir.path(), plans, &records, None);
+    apply(plans, &records, None);
     assert_eq!(records.get("aa11aa11", "mastodon").unwrap().state, State::Posted);
 }
 
@@ -171,28 +170,16 @@ fn email_in_the_list_is_the_newsletter_and_plans_nothing() {
     assert_eq!(actions(&plans), [("notes/a/".into(), "bluesky".into(), Action::Due)]);
 }
 
+/// A copied note still carries the original's uid in its file until it is
+/// published, but is built under its own: its copy is keyed by that one, which
+/// is the uid the publish writes into the file.
 #[test]
-fn apply_writes_the_uid_into_a_bare_page_before_its_record() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join("notes")).unwrap();
-    std::fs::write(dir.path().join("notes/a.md"), "Hello.\n").unwrap();
-    let records = Records::at(dir.path().join(".moss/deploy/copies"));
-    let m = map(vec![post("notes/a.md", "notes/a/", "aa11aa11", &["bluesky"], serde_json::json!({}))]);
-    let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
-    apply(dir.path(), plans, &records, None);
-    let page = std::fs::read_to_string(dir.path().join("notes/a.md")).unwrap();
-    assert!(page.starts_with("---\nuid: "), "{page}");
-    assert!(page.ends_with("Hello.\n"));
-    assert_eq!(records.get("aa11aa11", "bluesky").unwrap().state, State::Due);
-}
-
-#[test]
-fn a_page_whose_uid_cannot_be_written_gets_no_record() {
+fn a_copy_is_keyed_by_the_uid_its_page_was_built_under() {
     let dir = tempfile::tempdir().unwrap();
     let records = Records::at(dir.path().join("copies"));
-    let m = map(vec![post("notes/missing.md", "notes/missing/", "aa11aa11", &["bluesky"], serde_json::json!({}))]);
+    let m = map(vec![post("notes/copy.md", "notes/copy/", "bb22bb22", &["bluesky"], serde_json::json!({"uid": "aa11aa11"}))]);
     let plans = decide(&PlanInputs { articles: &m, previously_live: None, edited_sources: &HashSet::new(), channels: &channels() }, &records);
-    let applied = apply(dir.path(), plans, &records, None);
-    assert!(matches!(&applied[0].action, Action::Skip { reason } if reason.contains("note id")));
-    assert!(!records.exists("aa11aa11", "bluesky"));
+    apply(plans, &records, None);
+    assert!(records.exists("bb22bb22", "bluesky"));
+    assert!(!records.exists("aa11aa11", "bluesky"), "the original's uid belongs to the original's copies");
 }

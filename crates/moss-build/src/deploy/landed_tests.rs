@@ -11,11 +11,13 @@
 //! The other half of `record_landed` — recomputing the publish read model — is
 //! `AppState`-shaped and its tests stayed with it in `deploy::app_seam`.
 
+use std::collections::HashMap;
 use crate::build::manifest::change_set::PublishedSnapshot;
 use crate::build::manifest::{published_record, PendingManifest, SealedManifest};
 use crate::build::manifest::live_baseline::{self, Baseline};
 use crate::build::served_path::ServedPath;
 use crate::moss_paths::MossPaths;
+use crate::build::stat::FileStat;
 use crate::build::types::SourceMetadata;
 use crate::types::content::SiteHashes;
 
@@ -29,7 +31,7 @@ fn sealed(pages: &[(&str, &str, &str, &[u8])]) -> SealedManifest {
         pending.register_source_mapping(src.to_string(), &sp);
         pending.register_page_source_hash(
             src.to_string(),
-            SourceMetadata { hash: hash.to_string(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: hash.to_string(), stat: FileStat::whole_second(1, 1) },
         );
     }
     pending.seal()
@@ -59,7 +61,7 @@ async fn a_landed_publish_records_what_went_live() {
     let history_dir = tempfile::tempdir().unwrap();
     let manifest = sealed(&[("posts/hello.md", "posts/hello/index.html", "h-a", b"A")]);
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
-    super::record_what_is_live(&mp, &manifest, TARGET, &history).await;
+    super::record_what_is_live(&mp, &manifest, TARGET, &history, &HashMap::new()).await;
 
     let Baseline::Present(live) = live_baseline::load(&mp) else {
         panic!("a landed publish must leave a readable record")
@@ -90,7 +92,7 @@ async fn a_publish_of_a_site_with_no_tracked_pages_leaves_a_baseline() {
     let history_dir = tempfile::tempdir().unwrap();
     let manifest = sealed(&[("index.md", "index.html", "h-home", b"H")]);
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
-    super::record_what_is_live(&mp, &manifest, TARGET, &history).await;
+    super::record_what_is_live(&mp, &manifest, TARGET, &history, &HashMap::new()).await;
 
     assert_eq!(live_baseline::load(&mp), Baseline::Present(live_baseline::LiveBaseline::default()));
 }
@@ -115,7 +117,7 @@ async fn an_unreadable_article_map_does_not_erase_the_note_ids() {
 
     let history_dir = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
-    super::record_what_is_live(&mp, &manifest, TARGET, &history).await;
+    super::record_what_is_live(&mp, &manifest, TARGET, &history, &HashMap::new()).await;
 
     let Baseline::Present(live) = live_baseline::load(&mp) else {
         panic!("the standing note IDs must survive")
@@ -179,7 +181,7 @@ async fn a_publish_summarizes_a_rename_and_a_new_page_since_the_last_one() {
     let manifest_1 = sealed(&[("a.md", "a/index.html", "h-a", b"A")]);
     let history_dir = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
-    let first = super::record_what_is_live(&mp, &manifest_1, TARGET, &history).await;
+    let first = super::record_what_is_live(&mp, &manifest_1, TARGET, &history, &HashMap::new()).await;
     assert!(first.records.is_empty(), "a first publish has nothing to have moved or added yet");
 
     // "a/" renames to "a-new/" (same uid, same source, content unchanged);
@@ -193,7 +195,7 @@ async fn a_publish_summarizes_a_rename_and_a_new_page_since_the_last_one() {
         ("a.md", "a-new/index.html", "h-a", b"A"),
         ("b.md", "b/index.html", "h-b", b"B"),
     ]);
-    let second = super::record_what_is_live(&mp, &manifest_2, TARGET, &history).await;
+    let second = super::record_what_is_live(&mp, &manifest_2, TARGET, &history, &HashMap::new()).await;
 
     assert_eq!(second.pages_moved, 1);
     assert_eq!(second.pages_added, 1);
@@ -224,15 +226,15 @@ async fn a_publish_names_a_folder_file_the_author_deleted() {
     let page = ServedPath::from_source("a/index.html").unwrap();
     pending.register(&page, b"A", crate::build::manifest::HashBucket::Files);
     pending.register_source_mapping("a.md".into(), &page);
-    let meta = |h: &str| SourceMetadata { hash: h.into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None };
+    let meta = |h: &str| SourceMetadata { hash: h.into(), stat: FileStat::whole_second(1, 1) };
     pending.register_page_source_hash("a.md".into(), meta("h-a"));
     let pdf = ServedPath::from_source("guide.pdf").unwrap();
     pending.register(&pdf, b"%PDF", crate::build::manifest::HashBucket::Files);
     pending.register_page_source_hash("guide.pdf".into(), meta("h-pdf"));
-    super::record_what_is_live(&mp, &pending.seal(), TARGET, &history).await;
+    super::record_what_is_live(&mp, &pending.seal(), TARGET, &history, &HashMap::new()).await;
 
     std::fs::remove_file(dir.path().join("guide.pdf")).unwrap();
-    let second = super::record_what_is_live(&mp, &sealed(&[("a.md", "a/index.html", "h-a", b"A")]), TARGET, &history).await;
+    let second = super::record_what_is_live(&mp, &sealed(&[("a.md", "a/index.html", "h-a", b"A")]), TARGET, &history, &HashMap::new()).await;
 
     assert_eq!(address_records(&second), [("/guide.pdf".to_string(), crate::build::manifest::change_set::RemovalReason::AuthorRemoved)]);
     assert!(second.records.is_empty(), "a file is not a page row: {:?}", second.records);
@@ -267,15 +269,15 @@ async fn second_publish_summary(
         pending.register_source_mapping("a.md".into(), &page);
         pending.register_page_source_hash(
             "a.md".into(),
-            SourceMetadata { hash: "h".into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode: None },
+            SourceMetadata { hash: "h".into(), stat: FileStat::whole_second(1, 1) },
         );
         for out in extra {
             pending.register(&ServedPath::from_source(out).unwrap(), b"x", crate::build::manifest::HashBucket::Files);
         }
         pending.seal()
     };
-    super::record_what_is_live(&mp, &build(first_outputs), TARGET, &history).await;
-    super::record_what_is_live(&mp, &build(second_outputs), TARGET, &history).await
+    super::record_what_is_live(&mp, &build(first_outputs), TARGET, &history, &HashMap::new()).await;
+    super::record_what_is_live(&mp, &build(second_outputs), TARGET, &history, &HashMap::new()).await
 }
 
 /// A generated file whose loss the author accepted is named, with its reason.
@@ -326,4 +328,22 @@ async fn a_landed_publish_snapshots_into_publish_history() {
 
     let blob_count = crate::deploy::history::count_blob_files_for_tests(&history_root.path().join("objects"));
     assert!(blob_count >= 1, "the published file's bytes must be kept in the object store");
+}
+
+/// A minted uid can read as a YAML number (`753659e7` is a float, `46160604` an
+/// integer); stamped unquoted, the next build would read another uid and the
+/// page would lose its comment thread.
+#[test]
+fn a_stamped_uid_reads_back_as_written_whatever_its_digits() {
+    let dir = tempfile::tempdir().unwrap();
+    for (i, uid) in ["753659e7", "46160604", "12e45678", "abcd1234"].iter().enumerate() {
+        let source = format!("p{i}.md");
+        let text = "---\ntitle: T\n---\nBody\n";
+        std::fs::write(dir.path().join(&source), text).unwrap();
+        let published_hash = crate::build::render::blocking::source_metadata(None, text.as_bytes()).hash;
+        let stamps = [super::UidStamp { source: source.clone(), uid: uid.to_string(), published_hash }];
+        assert_eq!(super::stamp_published_uids(dir.path(), &stamps).len(), 1);
+        let after = std::fs::read_to_string(dir.path().join(&source)).unwrap();
+        assert_eq!(crate::build::markdown::parse_typed_frontmatter(&after).uid.as_deref(), Some(*uid), "{after}");
+    }
 }

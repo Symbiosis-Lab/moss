@@ -119,6 +119,8 @@ describe("Type Definitions", () => {
         project_info: baseProjectInfo,
         config: {},
         site_files: ["index.html", "post1.html"],
+        site_dir: "/site/.moss/build.nosync/deploy/g-1",
+        index_file: "/site/.moss/build.nosync/deploy/g-1.index",
       };
       expect(ctx.site_files).toHaveLength(2);
     });
@@ -128,6 +130,8 @@ describe("Type Definitions", () => {
         project_info: baseProjectInfo,
         config: {},
         site_files: ["index.html"],
+        site_dir: "/site/.moss/build.nosync/deploy/g-1",
+        index_file: "/site/.moss/build.nosync/deploy/g-1.index",
         domain: "example.com",
       };
       expect(ctxWithDomain.domain).toBe("example.com");
@@ -136,6 +140,8 @@ describe("Type Definitions", () => {
         project_info: baseProjectInfo,
         config: {},
         site_files: ["index.html"],
+        site_dir: "/site/.moss/build.nosync/deploy/g-1",
+        index_file: "/site/.moss/build.nosync/deploy/g-1.index",
       };
       expect(ctxWithoutDomain.domain).toBeUndefined();
     });

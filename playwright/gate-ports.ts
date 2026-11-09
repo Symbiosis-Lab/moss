@@ -112,6 +112,7 @@ const GATE_PORT_KEYS = [
   'places-explorer-perf',
   'places-explorer-vertical',
   'places-explorer-single',
+  'header-over-ink',
   'hero-pause',
   'hero-caption-stack',
   'bridge-capture',
@@ -119,6 +120,7 @@ const GATE_PORT_KEYS = [
   'nav-split-order',
   'nav-split-pack',
   'nav-one-row',
+  'nav-current-mark',
   'theme-floor-hooks',
   'hls-short-clip',
   'request-form',
@@ -157,6 +159,8 @@ const GATE_PORT_KEYS = [
   'type-defaults',
   'closing-picture:wordless',
   'hero-links',
+  'browser-editor:ui',
+  'browser-editor:preview',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

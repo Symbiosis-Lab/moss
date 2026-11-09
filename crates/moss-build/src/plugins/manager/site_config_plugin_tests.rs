@@ -1,12 +1,11 @@
-//! A fixture `process` plugin driven through the real engine: it reads
-//! `site_config` from its hook context and writes binary and text files into
-//! the project, so the context field, the base64 boundary and the sandbox are
-//! exercised together.
+//! A fixture `process` plugin driven through the real manager and engine as
+//! the person's run: it reads `site_config` from its hook context and writes
+//! binary and text files into the project, so the context field, the base64
+//! boundary and the sandbox are exercised together.
 
-use super::engine_adapter::{HookInvocation, HookSignalSink, PluginEngine, QuickJsEngineAdapter};
-use super::hook_context::context_for_plugin;
-use super::signal_route::HookSignal;
-use crate::plugins::types::{ProcessContext, ProjectInfo};
+use super::PluginManager;
+use crate::plugins::adapter_host::AdapterHost;
+use crate::plugins::types::{ProcessContext, ProjectInfo, TriggerContext};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plugins/site-config-writer");
 
@@ -28,42 +27,13 @@ async fn a_process_plugin_reads_site_config_and_writes_binary_files() {
     .unwrap();
     let pp = project.to_str().unwrap();
 
-    let plugins = crate::plugins::bundled::discover_plugins(pp).expect("discovery");
-    let plugin = plugins.iter().find(|p| p.manifest.name == "site-config-writer").expect("fixture discovered");
     let info = ProjectInfo { total_files: 0, homepage_file: None, folder_name: None, site_name: None, lang: "en".into() };
-    let ctx = context_for_plugin(pp, &ProcessContext::for_build(pp.to_string(), info), plugin);
-
-    let bundle = std::fs::read_to_string(plugin_dir.join("main.bundle.js")).unwrap();
-    let adapter = QuickJsEngineAdapter::new_for_test_multi_in(pp, vec![("site-config-writer", &bundle, "SiteConfigWriter")]);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let sink = HookSignalSink::new(move |s| { let _ = tx.send(s); });
-    adapter
-        .dispatch_hook(
-            HookInvocation {
-                plugin_name: "site-config-writer".into(),
-                hook_name: "process".into(),
-                context: serde_json::to_value(&ctx).unwrap(),
-                project_path: pp.into(),
-                moss_dir: format!("{pp}/.moss"),
-            },
-            sink,
-        )
+    let manager = PluginManager::new(pp, AdapterHost::headless(crate::build::ports::reporter::discard_owned())).unwrap();
+    manager
+        .execute_process_for_plugin("site-config-writer", &ProcessContext::new(pp.into(), info, TriggerContext::SettingsManual))
         .await
-        .unwrap();
-    let (success, error) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            match rx.recv().await {
-                Some(HookSignal::Complete { success, error, .. }) => break (success, error),
-                Some(_) => continue,
-                None => panic!("sink closed before Complete"),
-            }
-        }
-    })
-    .await
-    .expect("hook completes");
-    adapter.teardown().await;
+        .expect("the person's run writes the folder");
 
-    assert!(success, "hook failed: {error:?}");
     assert_eq!(std::fs::read(project.join("maps/sheet.bin")).unwrap(), vec![3u8, 0xff, 0x00]);
     assert_eq!(std::fs::read_to_string(project.join("maps/credential-visible.txt")).unwrap(), "undefined");
     assert_eq!(std::fs::read_to_string(project.join("maps/fence.txt")).unwrap(), "refused");

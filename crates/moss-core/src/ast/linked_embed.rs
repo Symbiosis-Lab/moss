@@ -433,7 +433,8 @@ impl Restore<'_> {
         match inline {
             Inline::Emphasis(children)
             | Inline::Strong(children)
-            | Inline::Strikethrough(children) => self.in_inlines(children),
+            | Inline::Strikethrough(children)
+            | Inline::Mark(children) => self.in_inlines(children),
             // `url` and `title` are reachable: `[![[a.png]]]([![[b.png]]](/u))`
             // puts a sentinel inside the outer link's DESTINATION, and an
             // `href` holding a private-use codepoint is not a URL.

@@ -1,30 +1,16 @@
-//! The open moss CLI: `moss build` with no window system in
-//! the dependency graph. `preview` and `edit` hand off to moss desktop rather
-//! than running a window here (`desktop.rs`).
-//!
-//! `build` drives the same headless driver the app binary's CLI interception
-//! does (`moss_build::ops::run_headless_build` — the server relocation
-//! folded the two mirrored bodies into it), so a `moss-cli build`
-//! and an app-binary `moss build` are byte-identical (the build-parity
-//! harness runs this binary as one leg). `--serve`/`--watch` run the crossed
-//! preview server and watch driver (`moss_build::ops::{serve,watch}`), and
-//! plugin hooks run through the crossed manager: plugins follow
-//! `--no-plugins`/`--allow-plugins`/`--wait-plugins` exactly as they do in
-//! the app binary, because the one headless driver decides.
+//! The windowless moss CLI.
 
 use std::sync::Arc;
 
 use moss_build::ops::{run_headless_build, BuildArgs, HeadlessBuildRun};
 
 mod desktop;
+mod edit;
+mod bundle;
 
-/// The verbs that crossed to moss-build, dispatched and advertised from this
-/// one table so the usage text and the match arms cannot disagree — two
-/// hand-kept lists of the same fact had to move in step once already. `build`
-/// is its own arm below; `preview` and `edit` hand off to moss desktop
-/// (`desktop.rs`) instead of needing it directly; every other name in the
-/// shared command table needs the moss app.
+/// Commands implemented by the windowless engine.
 const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
+    ("sessions", moss_build::ops::serve::ui::sessions::run),
     ("guide", moss_build::cli::guide::run),
     ("agents", moss_build::cli::agents::run),
     ("list", moss_build::cli::list::run),
@@ -38,6 +24,7 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("env", moss_build::cli::env::run),
     ("tools", moss_build::cli::tools::run),
     ("domain", moss_build::cli::domain::run),
+    ("site", moss_build::cli::site::run),
     ("map", moss_build::cli::map::run),
     ("import", moss_build::cli::import::run),
     ("deploy", moss_build::cli::deploy::run),
@@ -56,11 +43,10 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
 ];
 
 fn answers(name: &str) -> bool {
-    name == "build" || name == "desktop" || CROSSED.iter().any(|(crossed, _)| *crossed == name)
+    matches!(name, "build" | "desktop" | "edit") || CROSSED.iter().any(|(crossed, _)| *crossed == name)
 }
 
-/// `moss --help`, from the shared table — the same text the app binary prints,
-/// minus the two commands that need a window. The parity test compares them.
+/// Help and describe share the engine's command table.
 fn usage() -> String {
     moss_build::cli::commands::top_level_help(env!("CARGO_PKG_VERSION"), &answers)
 }
@@ -132,20 +118,21 @@ fn main() {
         std::process::exit(run(&args[2..]));
     }
     match args.get(1).map(String::as_str) {
-        // A window is the whole point of these two; hand off to moss desktop
-        // when it is installed, or say how to get it when it is not.
-        Some(verb @ ("preview" | "edit")) => {
+        // A preview window is the whole point; hand off to moss desktop when
+        // it is installed, or say how to get it when it is not.
+        Some("preview") => {
             let Some(path) = args.get(2) else {
-                eprintln!("Usage: moss {verb} <path>");
+                eprintln!("Usage: moss preview <path>");
                 eprintln!("  <path> can be a folder or a .md/.markdown file");
                 std::process::exit(1);
             };
-            let code = desktop::hand_off(verb, path);
-            if code != 0 && verb == "preview" {
+            let code = desktop::hand_off("preview", path);
+            if code != 0 {
                 eprintln!("For a served build, `moss build <folder_path> --serve`.");
             }
             std::process::exit(code);
         }
+        Some("edit") => std::process::exit(edit::run(&args[2..])),
         Some("build") => {
             // Folder, flags and every refusal from the one parser the app
             // binary also reads: a usage error either binary spelled itself is
