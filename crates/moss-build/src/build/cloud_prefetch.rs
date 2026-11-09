@@ -130,14 +130,13 @@ use operations::{structural_reader_loop, finish_operation};
 /// minutes those threads are wedged and more readers would only widen the loss.
 pub const READERS: usize = 8;
 
-/// Readers for cache-record publications, on top of [`READERS`]. A publication
-/// rereads one small record that a provider may hold only in the cloud, so its
-/// cost is the provider's round trip, not bandwidth: measured on Google Drive at
-/// about a second each one at a time, 17 a second eight at a time and 27 a
-/// second thirty-two at a time. These threads count toward the blast radius
-/// above; a provider that stops answering costs them their reads, and the stall
-/// bound turns the rest into refusals.
-pub const PUBLICATION_READERS: usize = 24;
+/// Readers for cache-record publications, on top of [`READERS`]. The system
+/// downloads a record the build finds in the cloud ([`crate::platform::request_download`]),
+/// so these mostly read and write files that are already local, and the byte
+/// readers' width serves: on an evicted Google Drive folder, a first build took
+/// 90 s with six and 94 s with twenty-four. They count toward the blast radius
+/// above.
+pub const PUBLICATION_READERS: usize = 6;
 
 /// Publications admitted without waiting. A queued publication is its record
 /// edit (at most `MAX_RECORD_BYTES`, about 1–2 KB in practice) and a closure, so
