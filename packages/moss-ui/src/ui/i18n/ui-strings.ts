@@ -507,6 +507,7 @@ const EN = {
   'status.failed': 'Failed: {error}',           // {error} placeholder
   'status.cancelled': 'Cancelled',
   'action.failed': "That didn't work: {error}",           // {error}; runAction's last-resort wording
+  'action.go_back': 'Go back',
 
   // Services settings section
   'services.analytics.label': 'Analytics',
@@ -1246,7 +1247,6 @@ const EN = {
   'composer.recapPreview': "Preview",
   'composer.recapSendNow': "Send now → {count}",
   'composer.recapConfirmAria': "Confirm: send newsletter to {count} subscribers",
-  'composer.recapGoBack': "Go back",
   'composer.audienceMenuAria': "Choose who receives this send",
   'composer.audienceFilterHint': "Type to filter",
   'composer.audienceNoMatch': "No matching subscribers",
@@ -1581,7 +1581,6 @@ const EN = {
   'threshold.make_root_title': "Set up “{folder}” as a new site?",     // {folder}
   'threshold.make_root_body': "moss will create its workspace folder inside “{folder}” and build a page for everything in it. The site at “{path}” will stay separate.",      // {folder} {path}
   'threshold.make_root_confirm': "Set up this folder",
-  'threshold.back': "Go back",
   'threshold.which_title': "Which folder is your site?",
   'threshold.suggest_title': "This looks like your site: “{name}”",      // {name} — Amendment 2's guess-led title
   'threshold.which_body_one': "moss made “{folder}” a site, but it contains a site of its own. Choose the folder that is your site — moss will open it, and remove its own files from the other.",      // {folder}
@@ -1698,7 +1697,6 @@ const EN = {
   // [static-html]
   'toolbar.edit_page': "Edit page",
   'toolbar.open_editor': "Open editor",
-  'toolbar.nav_back': "Go back",
   'toolbar.nav_forward': "Go forward",
   'toolbar.device_toggle': "Toggle desktop/mobile preview",
   'toolbar.add_channel': "Add channel",
@@ -2267,6 +2265,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'status.failed': 'Fehlgeschlagen: {error}',
     'status.cancelled': 'Abgebrochen',
     'action.failed': 'Das hat nicht geklappt: {error}',
+    'action.go_back': 'Zurück',
     'services.analytics.label': 'Statistiken',
     'services.analytics.desc': 'Seitenaufrufe, Herkunft, Länder',
     'services.comments.label': 'Kommentare',
@@ -2891,7 +2890,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'composer.recapPreview': 'Vorschau',
     'composer.recapSendNow': 'Jetzt senden → {count}',
     'composer.recapConfirmAria': 'Bestätigen: Newsletter an {count} Abonnierende senden',
-    'composer.recapGoBack': 'Zurück',
     'composer.audienceMenuAria': 'Wähle, wer diese Sendung erhält',
     'composer.audienceFilterHint': 'Tippen zum Filtern',
     'composer.audienceNoMatch': 'Keine passenden Abonnierenden',
@@ -3194,7 +3192,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'threshold.make_root_title': '„{folder}“ als neue Website einrichten?',
     'threshold.make_root_body': 'moss legt darin seinen Arbeitsordner an und baut eine Seite für alles, was in „{folder}“ liegt. Die Website unter „{path}“ bleibt getrennt.',
     'threshold.make_root_confirm': 'Diesen Ordner einrichten',
-    'threshold.back': 'Zurück',
     'threshold.which_title': 'Welcher Ordner ist deine Website?',
     'threshold.suggest_title': 'Das sieht nach deiner Website aus: „{name}“',
     'threshold.which_body_one': 'moss hat „{folder}“ zur Website gemacht, aber darin liegt eine eigene Website. Wähle den Ordner, der deine Website ist – moss öffnet ihn und entfernt die eigenen Dateien aus dem anderen.',
@@ -3298,7 +3295,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'progress.working': 'Wird bearbeitet …',
     'toolbar.edit_page': 'Seite bearbeiten',
     'toolbar.open_editor': 'Editor öffnen',
-    'toolbar.nav_back': 'Zurück',
     'toolbar.nav_forward': 'Vor',
     'toolbar.device_toggle': 'Vorschau für Desktop/Mobil umschalten',
     'toolbar.add_channel': 'Kanal hinzufügen',
@@ -3832,6 +3828,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'status.failed': '失败：{error}',
     'status.cancelled': '已取消',
     'action.failed': '没能完成：{error}',
+    'action.go_back': '返回',
 
     'services.analytics.label': '流量统计',
     'services.analytics.desc': '浏览量、来源、国家/地区',
@@ -4474,7 +4471,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'composer.recapPreview': "预览",
     'composer.recapSendNow': "立即发送 → {count}",
     'composer.recapConfirmAria': "确认：将电子报发送给 {count} 位订阅者",
-    'composer.recapGoBack': "返回",
     'composer.audienceMenuAria': "选择谁会收到本次发送",
     'composer.audienceFilterHint': "输入以筛选",
     'composer.audienceNoMatch': "没有匹配的订阅者",
@@ -4788,7 +4784,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'threshold.make_root_title': "把“{folder}”设为一个新网站？",
     'threshold.make_root_body': "青苔会在“{folder}”里创建它的工作文件夹，并为其中的所有内容生成页面。“{path}”处的网站将保持独立。",
     'threshold.make_root_confirm': "设置这个文件夹",
-    'threshold.back': "返回",
     'threshold.which_title': "哪个文件夹才是你的网站？",
     'threshold.suggest_title': "这看起来才是你的网站：“{name}”",
     'threshold.which_body_one': "青苔曾把“{folder}”整个设为网站，但它里面还有一个自己的网站。请选择哪个才是你的网站——青苔会打开它，并把自己的文件从另一个文件夹中移除。",
@@ -4905,7 +4900,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     // [static-html]
     'toolbar.edit_page': "编辑页面",
     'toolbar.open_editor': "打开编辑器",
-    'toolbar.nav_back': "返回",
     'toolbar.nav_forward': "前进",
     'toolbar.device_toggle': "切换桌面/移动预览",
     'toolbar.add_channel': "添加渠道",
@@ -5452,6 +5446,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'status.failed': '失敗：{error}',
     'status.cancelled': '已取消',
     'action.failed': '沒能完成：{error}',
+    'action.go_back': '返回',
 
     'services.analytics.label': '流量統計',
     'services.analytics.desc': '瀏覽量、來源、國家/地區',
@@ -6094,7 +6089,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'composer.recapPreview': "預覽",
     'composer.recapSendNow': "立即傳送 → {count}",
     'composer.recapConfirmAria': "確認：將電子報傳送給 {count} 位訂閱者",
-    'composer.recapGoBack': "返回",
     'composer.audienceMenuAria': "選擇誰會收到本次發送",
     'composer.audienceFilterHint': "輸入以篩選",
     'composer.audienceNoMatch': "沒有符合的訂閱者",
@@ -6408,7 +6402,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'threshold.make_root_title': "把「{folder}」設為一個新網站？",
     'threshold.make_root_body': "青苔會在「{folder}」裡建立它的工作資料夾，並為其中的所有內容產生頁面。「{path}」處的網站將保持獨立。",
     'threshold.make_root_confirm': "設定這個資料夾",
-    'threshold.back': "返回",
     'threshold.which_title': "哪個資料夾才是你的網站？",
     'threshold.suggest_title': "這看起來才是你的網站：「{name}」",
     'threshold.which_body_one': "青苔曾把「{folder}」整個設為網站，但它裡面還有一個自己的網站。請選擇哪個才是你的網站——青苔會開啟它，並把自己的檔案從另一個資料夾中移除。",
@@ -6525,7 +6518,6 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     // [static-html]
     'toolbar.edit_page': "編輯頁面",
     'toolbar.open_editor': "開啟編輯器",
-    'toolbar.nav_back': "返回",
     'toolbar.nav_forward': "前進",
     'toolbar.device_toggle': "切換桌面／行動裝置預覽",
     'toolbar.add_channel': "新增管道",
