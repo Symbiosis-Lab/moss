@@ -516,10 +516,17 @@ pub(crate) fn append_record(path: &std::path::Path, record: &serde_json::Value) 
     crate::build::io_utils::write_output(path, &kept)
 }
 
-pub(crate) fn append_profile(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, config: &crate::build::PipelineConfig) {
-    let record = collector.lock().map(|t| build_record(&t, total, if result.is_ok() { "ok" } else { "error" }, &config.trigger));
+/// Where a build of `source` keeps its profile: nowhere without a folder, since
+/// an empty or missing path would put `.moss/` wherever the process runs.
+fn profile_path(source: &std::path::Path) -> Option<std::path::PathBuf> {
+    source.is_dir().then(|| crate::moss_paths::MossPaths::new(source).profile())
+}
+
+pub(crate) fn append_profile(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, source: &std::path::Path, trigger: &crate::build::BuildTrigger) {
+    let Some(path) = profile_path(source) else { return };
+    let record = collector.lock().map(|t| build_record(&t, total, if result.is_ok() { "ok" } else { "error" }, trigger));
     let written = record.map_err(|e| std::io::Error::other(e.to_string()))
-        .and_then(|record| append_record(&crate::moss_paths::MossPaths::new(config.source()).profile(), &record));
+        .and_then(|record| append_record(&path, &record));
     if let Err(e) = written { log::debug!("could not append build profile: {e}"); }
 }
 
@@ -601,6 +608,19 @@ macro_rules! phase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_build_without_a_folder_keeps_no_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(profile_path(std::path::Path::new("")), None);
+        let collector: PhaseCollector = Arc::new(Mutex::new(BuildTelemetry::default()));
+        let refused = Err("no such folder".to_string());
+        let gone = dir.path().join("gone");
+        append_profile(&collector, Duration::ZERO, &refused, &gone, &crate::build::BuildTrigger::Full);
+        assert!(!gone.exists(), "a refused build makes no folder to keep its record in");
+        append_profile(&collector, Duration::ZERO, &refused, dir.path(), &crate::build::BuildTrigger::Full);
+        assert!(crate::moss_paths::MossPaths::new(dir.path()).profile().exists(), "a folder keeps the record");
+    }
 
     #[tokio::test]
     async fn video_phase_reaches_collector_through_worker_and_nested_spawn() {

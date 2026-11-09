@@ -692,7 +692,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         if result.is_ok() { "ok" } else { "error" },
         &config.trigger,
     );
-    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, &config);
+    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger);
     result
 }
 
