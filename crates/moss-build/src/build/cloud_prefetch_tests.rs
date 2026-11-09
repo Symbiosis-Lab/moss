@@ -410,6 +410,20 @@ fn a_record_publication_is_single_flight_and_publishes_the_newest_edit() {
     assert_eq!(peak.load(Ordering::SeqCst), 1, "two attempts of one record ran at once");
 }
 
+/// No caller waits for a publication's outcome, so one that fails for good is
+/// counted where it ends, once, and not run again.
+#[test]
+fn a_publication_that_fails_for_good_is_counted_once() {
+    use crate::build::cloud_readiness::{StorageFailure, StorageOperation, storage::Operation};
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false);
+    let refused: Operation = Arc::new(|| Err(StorageFailure::new(Some("/folder/.moss/cache/x".into()), StorageOperation::CacheWrite, std::io::Error::from(std::io::ErrorKind::PermissionDenied))));
+    let (key, _) = publication("refused", published());
+    p.cache_publication(key, refused).expect("taken");
+    assert!(wait_until(|| p.publication_failures() == 1), "the failure was not counted");
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(p.publication_failures(), 1, "a failure that ends a publication is counted once");
+}
+
 /// A deep queue drains at the readers' pace, not at a cost that grows with its length.
 #[test]
 fn a_deep_publication_queue_drains_quickly() {

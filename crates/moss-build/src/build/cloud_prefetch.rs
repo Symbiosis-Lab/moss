@@ -387,6 +387,10 @@ thread_local! {
 pub(crate) static PUBLICATIONS_ADMITTED: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PUBLICATIONS_FINISHED: AtomicU64 = AtomicU64::new(0);
 
+/// Publications that ended in a failure they will not be retried after,
+/// process-wide, for the build record. Each is also logged once, where it ends.
+pub(crate) static PUBLICATION_FAILURES: AtomicU64 = AtomicU64::new(0);
+
 /// How long a publication waiting for room waits with no job taken before it gives up.
 pub(crate) const PUBLICATION_STALL: Duration = Duration::from_secs(5);
 
@@ -407,6 +411,8 @@ struct Inner {
     publication_limit: usize,
     /// Publications admitted without waiting.
     admission: usize,
+    /// This pool's share of [`PUBLICATION_FAILURES`].
+    publication_failures: AtomicU64,
 }
 
 /// A fixed set of expendable workers for byte reads and owned native file
@@ -459,6 +465,7 @@ impl Prefetcher {
             bytes_limit: background,
             publication_limit: if publication_readers == 0 { background } else { publication_readers },
             admission: if publication_readers == 0 { BACKGROUND_WAITING } else { PUBLICATION_WAITING },
+            publication_failures: AtomicU64::new(0),
         });
         for i in 0..readers + publication_readers {
             let inner = Arc::clone(&inner);
@@ -687,6 +694,11 @@ impl Prefetcher {
         drop(q);
         drop(dropped);
         n
+    }
+
+    /// Publications of this pool that ended in a failure.
+    pub(crate) fn publication_failures(&self) -> u64 {
+        self.inner.publication_failures.load(Ordering::Relaxed)
     }
 
     /// Queue depth and in-flight count, for the stall diagnosis.

@@ -238,15 +238,12 @@ pub(crate) enum PublicationOutcome {
 /// Optional writes prove availability by completing their owned transaction.
 /// Deadline and admission refusal retain the caller's complete local object;
 /// neither can certify a shared publication or reclaim a native slot.
+///
+/// A blob's publication copies bytes already usable in this machine's store,
+/// so it is refused at once when the queue is full.
 pub(crate) fn await_publication(key: OperationKey, attempt: Operation) -> PublicationOutcome {
-    await_publication_in(&super::PREFETCH, key, attempt, None, 0)
+    await_publication_in(&super::PREFETCH, key, attempt, None, 0, Duration::ZERO)
 }
-
-/// How long a record publication waits for room in a full queue. A refused
-/// blob stays usable in this machine's store; a refused record is lost, and on
-/// a folder whose records are cloud placeholders a build queues more of them
-/// than the readers can fetch, so each one dropped is work the next build redoes.
-const RECORD_ADMISSION_WAIT: Duration = Duration::from_secs(60);
 
 /// A process about to exit lets its cache publications land while they keep
 /// landing, so the next build finds the records this one wrote, calling
@@ -266,35 +263,33 @@ pub(crate) fn drop_cache_publications_under(folder: &Path) -> usize {
     super::PREFETCH.drop_publications_under(folder)
 }
 
-/// A record's publication: as [`await_publication_in`], waiting for room in a
-/// full queue but not for the outcome. The build does not need the record to
-/// have landed: one publication per record runs at a time, and one a newer edit
-/// overtook is followed by one that carries it.
+/// How long a record publication waits for room in a full queue. A refused
+/// blob stays usable in this machine's store; a refused record is lost, and on
+/// a folder whose records are cloud placeholders a build queues more of them
+/// than the readers can fetch, so each one dropped is work the next build redoes.
+const RECORD_ADMISSION_WAIT: Duration = Duration::from_secs(60);
+
+/// A record's publication: waits for room in a full queue, then returns. One
+/// publication per record runs at a time, and one a newer edit overtook is
+/// followed by one that carries it, so the build need not wait for it to land.
 pub(crate) fn await_publication_revision(key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
-    await_admitted(&super::PREFETCH, key, attempt, revision, expected, RECORD_ADMISSION_WAIT, Duration::ZERO)
+    await_publication_in(&super::PREFETCH, key, attempt, revision, expected, RECORD_ADMISSION_WAIT)
 }
 
-pub(crate) fn await_publication_in(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
-    await_admitted(pool, key, attempt, revision, expected, Duration::ZERO, Duration::from_millis(20))
-}
-
-fn await_admitted(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64, admission: Duration, outcome_wait: Duration) -> PublicationOutcome {
+/// Queue `attempt` on `pool`, waiting up to `admission` for room, and say where
+/// it stands now without waiting for it: a failure that ends it is reported by
+/// the pool where it ends.
+pub(crate) fn await_publication_in(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64, admission: Duration) -> PublicationOutcome {
     let path = key.path.clone();
     let Some(task) = pool.cache_publication_within(key, attempt, revision, admission, crate::build::cloud_prefetch::PUBLICATION_STALL) else {
         return PublicationOutcome::Fatal(Arc::new(StorageFailure::new(Some(path), StorageOperation::CachePublish,
             io::Error::new(io::ErrorKind::WouldBlock, "optional cache publication skipped: admission capacity exhausted"))));
     };
-    let started = Instant::now();
-    loop {
-        if let Some(result) = &task.state.lock().unwrap_or_else(|e| e.into_inner()).result {
-            return match result {
-                Ok(value) if matches!(value.as_ref(), StorageValue::Published(version) if *version >= expected) => PublicationOutcome::Completed,
-                Ok(_) => PublicationOutcome::PendingOptionalCache,
-                Err(failure) => PublicationOutcome::Fatal(failure.clone()),
-            };
-        }
-        if started.elapsed() >= outcome_wait { return PublicationOutcome::PendingOptionalCache; }
-        std::thread::sleep(Duration::from_millis(1));
+    let state = task.state.lock().unwrap_or_else(|e| e.into_inner());
+    match &state.result {
+        Some(Ok(value)) if matches!(value.as_ref(), StorageValue::Published(version) if *version >= expected) => PublicationOutcome::Completed,
+        Some(Err(failure)) => PublicationOutcome::Fatal(failure.clone()),
+        _ => PublicationOutcome::PendingOptionalCache,
     }
 }
 

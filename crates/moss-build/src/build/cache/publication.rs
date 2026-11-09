@@ -108,7 +108,7 @@ fn availability_rejected_replica_admission_is_not_pending_and_local_blob_stays_u
         let job = Arc::new(BlobPublication::new(paths.cache_objects(), oid.clone(), source.clone(), crate::build::lifecycle::detached_cache_lease(&paths)));
         let dest = ObjectStore::blob_path_in(&job.root, &oid);
         let op: Operation = Arc::new(move || job.run());
-        let result = await_publication_in(&pool, OperationKey { path: dest.clone(), policy: OperationPolicy::CachePublication { root: paths.cache_objects() } }, op, None, 0);
+        let result = await_publication_in(&pool, OperationKey { path: dest.clone(), policy: OperationPolicy::CachePublication { root: paths.cache_objects() } }, op, None, 0, std::time::Duration::ZERO);
         assert_eq!(pool.snapshot().waiting, 12, "rejection retains no extra publication");
         assert_eq!(std::fs::read(&source).unwrap(), b"complete local asset");
         assert!(!dest.exists());
