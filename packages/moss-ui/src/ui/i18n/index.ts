@@ -268,9 +268,4 @@ export function formatNumber(n: number, opts?: Intl.NumberFormatOptions): string
   return f.format(n);
 }
 
-/** @deprecated Use `t('tree.reveal')`, which this returns. */
-export function revealMenuLabel(): string {
-  return t('tree.reveal');
-}
-
 export type { AppLocale, UiStringMap };

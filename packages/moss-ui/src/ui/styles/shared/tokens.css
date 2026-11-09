@@ -225,11 +225,10 @@
      `max-height: calc(100% - titlebar - 16px)` this yields an 8px gap above
      AND below the frame. Vertical sibling of --moss-safe-center-x. */
   --moss-safe-center-y: calc(50% + var(--moss-titlebar-height) / 2);
-  /* Window corner radius. Keep in sync with the desktop app's native window
-     corner (its WINDOW_CORNER_RADIUS); that constant applies to the NSWindow
-     CALayer, this token applies
-     in CSS for nested surfaces (mobile preview frame) that should visually
-     match the window corner. */
+  /* The desktop app's macOS window corner (its WINDOW_CORNER_RADIUS), for
+     nested surfaces that echo it, such as the mobile preview frame. Nothing
+     overrides it at runtime, so it stays 24px on Windows and Linux, where the
+     window itself is rounded at 8px (--moss-window-radius follows that). */
   --moss-radius-window: 24px;
   /* Overridden at runtime from Rust TITLEBAR_HEIGHT (see generate_compile_init_script).
      The value here is a fallback for browser-preview / standalone CSS inspection;
