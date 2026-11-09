@@ -378,9 +378,8 @@ impl MossPaths {
         self.root.join("build.nosync")
     }
 
-    /// `.moss/build.nosync/cache/` — the PER-MACHINE caches: `hash-index.json`,
-    /// `dep-cache.json`, `frontmatter-scan.json`, `folder-lang.json`,
-    /// `link-meta/`, `manifest-hash-memo.json`, `tmp/`, `local-objects/`.
+    /// `.moss/build.nosync/cache/` — the PER-MACHINE caches; each path method
+    /// below names its own file.
     ///
     /// The local fallback object store is here; the optional shared replica
     /// lives in [`store_dir`] (`.moss/cache/`). Use
@@ -438,6 +437,13 @@ impl MossPaths {
     /// stat. Machine-local: the key and the inode mean nothing on another machine.
     pub fn cache_verified_blobs(&self) -> PathBuf {
         self.cache_dir().join("verified-blobs.json")
+    }
+
+    /// `.moss/build.nosync/cache/verified-video-blobs.json` — the same record for
+    /// the video passes. Its own file, because the seal's save drops every blob
+    /// the seal did not check.
+    pub fn cache_verified_video_blobs(&self) -> PathBuf {
+        self.cache_dir().join("verified-video-blobs.json")
     }
 
     /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from

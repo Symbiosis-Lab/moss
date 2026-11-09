@@ -112,8 +112,7 @@ pub(crate) fn record<'a, T: Outcome + 'a>(
         let history = timings["history_snapshot"];
         if let Some(after) = timings.get_mut("after_publish") { *after = after.saturating_sub(history); }
         let outcome = if refusal.is_some() { "refused" } else if result.is_ok() { "ok" } else { "error" };
-        let record = serde_json::json!({
-            "schema": 1, "kind": "deploy", "moss_version": crate::system::app_version(),
+        let record = crate::build::phase::profile_record_of("deploy", serde_json::json!({
             "started_at": started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "total_ms": started.elapsed().as_millis(), "outcome": outcome,
             "refusal_kind": refusal, "target": target, "dry_run": dry_run,
@@ -121,7 +120,7 @@ pub(crate) fn record<'a, T: Outcome + 'a>(
             "phases": timings.iter().map(|(name, ms)| serde_json::json!({"name": name, "ms": ms})).collect::<Vec<_>>(),
             "counts": counts,
             "transfer_counts_available": target != "plugin" && !dry_run,
-        });
+        }));
         log::info!(target: "deploy", "deploy.summary {}", record);
         if let Err(e) = phase::append_record(&crate::moss_paths::MossPaths::new(folder).profile(), &record) {
             log::debug!("could not append deploy profile: {e}");

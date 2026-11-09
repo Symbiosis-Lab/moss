@@ -75,6 +75,7 @@ async fn publish_twice(prebuilt: bool) {
         assert_eq!(record["outcome"], "ok");
         assert_eq!(record["target"], if prebuilt { "prebuilt" } else { "seta" });
         assert_eq!(record["dry_run"], false);
+        assert_eq!(record["build_profile"], crate::system::build_profile());
         let c = &record["counts"];
         let needed = c["files_needed"].as_u64().unwrap();
         assert!(needed <= c["manifest_files"].as_u64().unwrap());

@@ -113,6 +113,13 @@ impl ObjectStore {
         Self::for_site(mp).remembering_verified(&mp.cache_verified_blobs())
     }
 
+    /// `mp`'s store for one video run, remembering what earlier runs verified:
+    /// a cached video is gigabytes, so its blobs are read again only when their
+    /// stat moves.
+    pub(crate) fn for_video_run(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_video_blobs())
+    }
+
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
         self.site.as_ref().map(|site| Self::blob_path_in(&site.cache_local_objects(), oid))
     }
@@ -685,6 +692,12 @@ impl TransformCache {
     /// hand-assembling `TransformCache::new(mp.cache_transforms(), ObjectStore::new(mp.cache_objects()))`.
     pub fn for_site(mp: &crate::moss_paths::MossPaths) -> Self {
         Self { base: mp.cache_transforms(), objects: ObjectStore::for_site(mp) }
+    }
+
+    /// `mp`'s transform cache over `objects`, for a caller that also links
+    /// through that store: one store checks a blob once.
+    pub(crate) fn over(mp: &crate::moss_paths::MossPaths, objects: &ObjectStore) -> Self {
+        Self { base: mp.cache_transforms(), objects: objects.clone() }
     }
 
     /// Returns the root directory of this transform cache — typically `.moss/cache/transforms/`.

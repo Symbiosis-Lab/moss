@@ -437,15 +437,26 @@ const BUILD_COUNTS: &[&str] = &[
 /// The video counts, which also make up a detached encode's own record.
 const VIDEO_COUNTS: &[&str] = &["videos_cache_hit", "video_blobs_validated", "videos_converted", "videos_detached"];
 
+/// A profile record of `kind`, build or deploy: the fields every record opens
+/// with, then `fields`.
+pub(crate) fn profile_record_of(kind: &str, fields: serde_json::Value) -> serde_json::Value {
+    let mut record = serde_json::json!({
+        "schema": 1, "kind": kind, "moss_version": crate::system::app_version(), "build_profile": crate::system::build_profile(),
+    });
+    if let (Some(record), serde_json::Value::Object(fields)) = (record.as_object_mut(), fields) {
+        record.extend(fields);
+    }
+    record
+}
+
 fn profile_record(t: &BuildTelemetry, kind: &str, keys: &[&[&'static str]], total: Duration, outcome: &str) -> serde_json::Value {
     let mut counts: std::collections::BTreeMap<_, _> = keys.iter().flat_map(|k| k.iter()).map(|&k| (k, 0)).collect();
     counts.extend(t.counts.iter().copied());
-    let mut record = serde_json::json!({
-        "schema": 1, "kind": kind, "moss_version": crate::system::app_version(),
+    let mut record = profile_record_of(kind, serde_json::json!({
         "started_at": t.started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "total_ms": total.as_millis(), "outcome": outcome,
         "passes": t.passes, "phases": t.phases, "counts": counts,
-    });
+    }));
     #[cfg(unix)]
     {
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
@@ -627,6 +638,7 @@ mod tests {
         assert_eq!(record["schema"], 1);
         assert_eq!(record["kind"], "build");
         assert_eq!(record["moss_version"], crate::system::app_version());
+        assert_eq!(record["build_profile"], crate::system::build_profile());
         chrono::DateTime::parse_from_rfc3339(record["started_at"].as_str().unwrap()).unwrap();
         assert_eq!(record["total_ms"], 42);
         assert_eq!(record["outcome"], "ok");
