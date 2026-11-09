@@ -11,7 +11,7 @@ use super::job::{CopyJob, Op, PostRef, Previous};
 use super::record::{Cause, CopyOutcome, CopyRecord, PublishedPost, Records, State};
 use super::shape::{idempotency_key, page_url, shape};
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
-use crate::build::scan::path_collision::on_disk;
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::plugins::manager::copies::{CopyCall, CopyChannel};
 use crate::plugins::manager::PluginManager;
 
@@ -62,8 +62,8 @@ pub struct SendOptions<'a> {
     pub retry: &'a [String],
     /// Told about each copy as it starts and as it ends, in order.
     pub emit: &'a (dyn Fn(&Sent) + Sync),
-    /// Only this post's copies (by note id), and only on this channel.
-    pub only_post: Option<&'a str>,
+    /// Only this post's copies (by its source file), and only on this channel.
+    pub only_source: Option<&'a str>,
     pub only_channel: Option<&'a str>,
     /// New copies per channel this run; [`PER_RUN`] unless the author asked
     /// for the held rest now.
@@ -82,7 +82,7 @@ pub async fn after_publish(
     retry: &[String],
     emit: &(dyn Fn(&Sent) + Sync),
 ) -> Vec<Sent> {
-    let opts = SendOptions { site_url, retry, emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: true };
+    let opts = SendOptions { site_url, retry, emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: true };
     let folder_str = folder.to_string_lossy();
     after_live(folder, &opts, || host_ports(&folder_str).plugins.get_or_create(&folder_str)).await
 }
@@ -100,7 +100,8 @@ pub async fn after_live(
         return Vec::new();
     }
     let Some(_turn) = records.turn() else { return Vec::new() };
-    // Only a record from before copies kept their post reads this.
+    // The latest build's pages: which post a host asks for, and which channels
+    // each post still names. A record that keeps its post answers without them.
     let articles: ArticleMap = match std::fs::read(mp.article_map()).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string())) {
         Ok(map) => map,
         Err(e) => {
@@ -108,6 +109,10 @@ pub async fn after_live(
             ArticleMap::default()
         }
     };
+    let latest = latest_by_uid(&articles);
+    if !records.all().iter().any(|r| asked_for(r, post_now(r, &latest), opts)) {
+        return Vec::new();
+    }
     let manager = match manager() {
         Ok(m) => m,
         Err(e) => {
@@ -131,7 +136,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
     let mp = crate::moss_paths::MossPaths::new(folder);
     let records = Records::in_vault(&mp);
     let channels = manager.copy_channels();
-    let by_uid: HashMap<String, &ArticleInfo> = articles.articles.values().filter_map(|a| Some((a.uid.clone()?, a))).collect();
+    let by_uid = latest_by_uid(articles);
 
     // Post by post, each post's channels in the order its `syndicate:` names them.
     let mut due = records.all();
@@ -148,7 +153,13 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         out.push(s);
     };
     for mut record in due {
-        if opts.only_post.is_some_and(|u| u != record.uid) || opts.only_channel.is_some_and(|c| c != record.channel) {
+        let now = post_now(&record, &by_uid);
+        if !asked_for(&record, now, opts) {
+            continue;
+        }
+        // The latest build is the author's latest word: a channel the post no
+        // longer names gets nothing more, and its record keeps its history.
+        if now.is_some_and(|p| !p.syndicate.as_ref().is_some_and(|c| c.contains(&record.channel))) {
             continue;
         }
         let Some(channel) = channels.get(&record.channel) else { continue };
@@ -221,6 +232,22 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         }
     }
     out
+}
+
+fn latest_by_uid(articles: &ArticleMap) -> HashMap<String, &ArticleInfo> {
+    articles.articles.values().filter_map(|a| Some((a.uid.clone()?, a))).collect()
+}
+
+/// A record's post as the author last left it: the latest build's page, else
+/// the post the record keeps.
+fn post_now<'a>(record: &'a CopyRecord, latest: &HashMap<String, &'a ArticleInfo>) -> Option<&'a ArticleInfo> {
+    latest.get(&record.uid).copied().or(record.post.as_ref().map(|p| &p.article))
+}
+
+/// A host may hand over the disk's spelling of the source; pages are keyed by
+/// its logical path.
+fn asked_for(record: &CopyRecord, now: Option<&ArticleInfo>, opts: &SendOptions<'_>) -> bool {
+    opts.only_source.is_none_or(|s| now.is_some_and(|p| p.source_path == logical_path(s))) && opts.only_channel.is_none_or(|c| c == record.channel)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -502,7 +529,7 @@ pub fn render(sent: &[Sent]) -> String {
             ),
             Outcome::Refused { cause, reason } => format!("not posted to {} ({}): {reason}", s.channel, serde_json::to_value(cause).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
             Outcome::Unconfirmed { reason } => format!(
-                "unconfirmed on {}: {reason}. If the copy is there, add its address to syndicated:; otherwise run moss deploy --retry-copies={}",
+                "unconfirmed on {}: {reason}. If the copy is there, add its address to syndicated: (for a thread, the first post's: moss tracks only that one). If it is not, run moss deploy --retry-copies={}; any part of a thread that did get through is posted a second time",
                 s.channel, s.channel
             ),
             Outcome::Held { reason } => format!("held for {}: {reason}", s.channel),
@@ -520,6 +547,18 @@ pub fn render(sent: &[Sent]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unconfirmed_copy_names_what_each_recovery_costs_a_thread() {
+        let line = render(&[Sent {
+            source_path: "a.md".into(),
+            channel: "bluesky".into(),
+            outcome: Outcome::Unconfirmed { reason: INTERRUPTED.into() },
+            write_back: None,
+        }]);
+        assert!(line.contains("syndicated: (for a thread, the first post's"), "{line}");
+        assert!(line.contains("--retry-copies=bluesky; any part of a thread that did get through is posted a second time"), "{line}");
+    }
 
     #[test]
     fn a_copy_address_is_added_to_syndicated_and_nothing_else_changes() {
@@ -582,7 +621,7 @@ mod tests {
         let held = records.turn().expect("the turn is free");
 
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
         assert!(after_live(root, &opts, || panic!("no channel may load")).await.is_empty());
         let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
         assert!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await.is_empty());
@@ -590,6 +629,68 @@ mod tests {
 
         drop(held);
         assert_eq!(delete_copies(root, &manager, "ab12cd34", "https://example.org", &emit).await[0].outcome, Outcome::Deleted);
+    }
+
+    /// A post is asked for by its source file, which the latest build names
+    /// (a page renamed since its copy was planned answers to its new name),
+    /// and a post no record has loads no channel.
+    #[tokio::test]
+    async fn a_post_is_asked_for_by_its_source_and_one_without_copies_loads_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        records.save(&CopyRecord::due("aaaa0001", "one", "notes/old.md", "notes/old/")).unwrap();
+        let mut articles = ArticleMap::default();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "notes/new.md", "title": "", "content": "Hello.\n", "url_path": "notes/new/", "date": null,
+            "uid": "aaaa0001", "syndicate": ["one"]
+        }))
+        .unwrap();
+        articles.articles.insert(post.url_path.clone(), post);
+        let mp = crate::moss_paths::MossPaths::new(root);
+        std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
+        std::fs::write(mp.article_map(), serde_json::to_vec(&articles).unwrap()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = |only_source| SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source, only_channel: None, cap: PER_RUN, check_pages: false };
+
+        assert!(after_live(root, &opts(Some("notes/other.md")), || panic!("no channel may load")).await.is_empty());
+        assert!(after_live(root, &opts(Some("notes/old.md")), || panic!("no channel may load")).await.is_empty());
+        let loaded = std::sync::atomic::AtomicBool::new(false);
+        after_live(root, &opts(Some("notes/new.md")), || {
+            loaded.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err("no channels here".into())
+        })
+        .await;
+        assert!(loaded.into_inner(), "the renamed post's copy is asked for by its new name");
+    }
+
+    /// A host may hand over the name a sync client wrote decomposed; the page
+    /// is keyed by its composed spelling.
+    #[tokio::test]
+    async fn a_post_asked_for_by_its_decomposed_name_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        records.save(&CopyRecord::due("aaaa0001", "one", "notes/caf\u{e9}.md", "notes/cafe/")).unwrap();
+        let mut articles = ArticleMap::default();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "notes/caf\u{e9}.md", "title": "", "content": "Hello.\n", "url_path": "notes/cafe/", "date": null,
+            "uid": "aaaa0001", "syndicate": ["one"]
+        }))
+        .unwrap();
+        articles.articles.insert(post.url_path.clone(), post);
+        let mp = crate::moss_paths::MossPaths::new(root);
+        std::fs::create_dir_all(mp.article_map().parent().unwrap()).unwrap();
+        std::fs::write(mp.article_map(), serde_json::to_vec(&articles).unwrap()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: Some("notes/cafe\u{301}.md"), only_channel: None, cap: PER_RUN, check_pages: false };
+        let loaded = std::sync::atomic::AtomicBool::new(false);
+        after_live(root, &opts, || {
+            loaded.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err("no channels here".into())
+        })
+        .await;
+        assert!(loaded.into_inner());
     }
 
     /// What a host asks for: one post's copy on one channel now, or the held
@@ -623,11 +724,11 @@ mod tests {
         let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
         let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
         let emit = |_: &Sent| {};
-        let opts = |only_post, only_channel, cap| SendOptions {
+        let opts = |only_source, only_channel, cap| SendOptions {
             site_url: "https://publish.example.net",
             retry: &[],
             emit: &emit,
-            only_post,
+            only_source,
             only_channel,
             cap,
             check_pages: false,
@@ -635,7 +736,7 @@ mod tests {
         let outcomes = |sent: &[Sent]| sent.iter().map(|s| (s.source_path.clone(), s.channel.clone(), s.outcome.clone())).collect::<Vec<_>>();
         let posted = |path: &str| Outcome::Posted { url: format!("https://example.social/{path}") };
 
-        let one = send_due(root, &manager, &articles, &opts(Some("aaaa0002"), Some("two"), PER_RUN)).await;
+        let one = send_due(root, &manager, &articles, &opts(Some("notes/b.md"), Some("two"), PER_RUN)).await;
         assert_eq!(outcomes(&one), [("notes/b.md".into(), "two".into(), posted("notes/b.md"))]);
         assert_eq!(records.get("aaaa0002", "two").unwrap().remote.unwrap().id, "https://notes.example.org/notes/b/");
 
@@ -645,6 +746,59 @@ mod tests {
         assert_eq!(got.iter().filter(|s| matches!(s.2, Outcome::Posted { .. })).count(), 2, "one new copy per channel: {got:?}");
         assert_eq!(got.iter().filter(held).count(), 3, "{got:?}");
         assert_eq!(records.get("aaaa0001", "two").unwrap().remote.unwrap().id, "https://publish.example.net/notes/a/");
+    }
+
+    /// The author's latest word decides: a channel the post's `syndicate:` no
+    /// longer names is sent nothing, though the post the record keeps named it,
+    /// and its record, posted copy included, stays as it was.
+    #[tokio::test]
+    async fn a_channel_the_post_no_longer_names_is_sent_nothing_and_keeps_its_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let posts = "{ publish_copy: async function (job) { return { success: true, copy: { id: job.post.url, url: 'https://example.social/' + job.post.source_path } }; }, update_copy: async function () { return { success: true, copy: { id: 'x', url: 'https://example.social/updated' } }; } }";
+        super::super::test_channel(root, "one", posts);
+        super::super::test_channel(root, "two", posts);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        let article = |uid: &str, name: &str, syndicate: &[&str]| -> ArticleInfo {
+            std::fs::write(root.join(format!("notes/{name}.md")), "Hello.\n").unwrap();
+            serde_json::from_value(serde_json::json!({
+                "source_path": format!("notes/{name}.md"), "title": "", "content": "Hello.\n", "url_path": format!("notes/{name}/"), "date": null,
+                "uid": uid, "syndicate": syndicate
+            }))
+            .unwrap()
+        };
+        let mut landed = ArticleMap::default();
+        for a in [article("aaaa0001", "a", &["one", "two"]), article("aaaa0002", "b", &["two"])] {
+            landed.articles.insert(a.url_path.clone(), a);
+        }
+        let records = Records::in_vault(&crate::moss_paths::MossPaths::new(root));
+        for channel in ["one", "two"] {
+            let mut r = CopyRecord::due("aaaa0001", channel, "notes/a.md", "notes/a/");
+            r.post = Some(Box::new(PublishedPost::new(&landed.articles["notes/a/"], &landed)));
+            records.save(&r).unwrap();
+        }
+        let mut posted = CopyRecord::due("aaaa0002", "two", "notes/b.md", "notes/b/");
+        posted.state = State::Posted;
+        posted.update_due = true;
+        posted.remote = Some(super::super::record::RemoteRef { id: "b-1".into(), url: "https://example.social/b-1".into() });
+        posted.post = Some(Box::new(PublishedPost::new(&landed.articles["notes/b/"], &landed)));
+        records.save(&posted).unwrap();
+
+        let mut latest = ArticleMap::default();
+        for a in [article("aaaa0001", "a", &["one"]), article("aaaa0002", "b", &[])] {
+            latest.articles.insert(a.url_path.clone(), a);
+        }
+        let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
+        let manager = cache.get_or_create(&root.to_string_lossy()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: "https://publish.example.net", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let sent = send_due(root, &manager, &latest, &opts).await;
+
+        let got: Vec<_> = sent.iter().map(|s| (s.source_path.as_str(), s.channel.as_str(), &s.outcome)).collect();
+        assert_eq!(got, [("notes/a.md", "one", &Outcome::Posted { url: "https://example.social/notes/a.md".into() })]);
+        assert_eq!(records.get("aaaa0001", "two").unwrap().state, State::Due);
+        let kept = records.get("aaaa0002", "two").unwrap();
+        assert!(kept.state == State::Posted && kept.update_due && kept.remote.unwrap().id == "b-1");
     }
 
     /// Two runs in one folder, the second started once the first has read its
@@ -668,7 +822,7 @@ mod tests {
         articles.articles.insert(post.url_path.clone(), post);
         async fn run(root: &Path, articles: &ArticleMap, emit: &(dyn Fn(&Sent) + Sync)) -> Vec<Sent> {
             let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
-            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: false };
+            let opts = SendOptions { site_url: "https://example.org", retry: &[], emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
             send_due(root, &manager, articles, &opts).await
         }
         let posted = |sent: &[Sent]| sent.iter().filter(|s| matches!(s.outcome, Outcome::Posted { .. })).count();
@@ -728,7 +882,7 @@ mod tests {
         let mut articles = ArticleMap::default();
         articles.articles.insert(post.url_path.clone(), post);
         let emit = |_: &Sent| {};
-        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
         let opts = &opts;
         let send = |state: &str| {
             std::fs::write(root.join(".moss/plugins/drafts/main.bundle.js"), format!("window.DRAFTSPlugin = {};", finds(state))).unwrap();

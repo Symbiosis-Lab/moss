@@ -99,7 +99,12 @@ function platformWords(platforms: string[]): string {
     }),
   );
   if (words.size === 0) return t('platform.other');
-  return new Intl.ListFormat(localeTag(), { type: 'conjunction' }).format([...words]);
+  return andList([...words]);
+}
+
+/** Names joined the reader's way: "Bluesky, Mastodon, and Matters", "Bluesky、Mastodon和Matters". */
+export function andList(words: readonly string[]): string {
+  return new Intl.ListFormat(localeTag(), { type: 'conjunction' }).format(words);
 }
 
 export function refusalTooltip(refusal: RefusalLike, name: string): string {

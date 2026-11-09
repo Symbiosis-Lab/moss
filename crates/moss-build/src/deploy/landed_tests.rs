@@ -589,7 +589,7 @@ async fn send_all(root: &std::path::Path) -> Vec<crate::syndication::send::Sent>
     use crate::syndication::send::{after_live, SendOptions, Sent, PER_RUN};
     let cache = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned());
     let emit = |_: &Sent| {};
-    let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_post: None, only_channel: None, cap: PER_RUN, check_pages: false };
+    let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
     after_live(root, &opts, || cache.get_or_create(&root.to_string_lossy())).await
 }
 
