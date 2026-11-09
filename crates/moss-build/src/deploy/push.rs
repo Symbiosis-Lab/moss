@@ -189,7 +189,9 @@ async fn push_site_inner_impl(
     }
     drop(probe_phase);
 
-    let diff = super::profile::sync(folder_path, client.sync_manifest(&site_id, &manifest, sealed.generation_id())).await?;
+    let site_dir = MossPaths::new(folder_path).generation_dir(sealed.generation_id());
+    let sizes = upload::regular_file_sizes(&site_dir, &manifest).await?;
+    let diff = super::profile::sync(folder_path, client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {
         let url = view_site_url(&folder_path_str, &site_id, environment);
@@ -230,8 +232,6 @@ async fn push_site_inner_impl(
 
     // 8. Upload needed files
     let total = diff.need.len() as u32;
-    let mp = MossPaths::new(folder_path);
-    let site_dir = mp.generation_dir(sealed.generation_id());
     // Own the generation_id string once; every upload task clones it in.
     // This is the value threaded into X-Moss-Generation on sync, upload, and
     // chunked-create requests so the server routes all writes to the correct
@@ -241,28 +241,11 @@ async fn push_site_inner_impl(
     let generation_id_str = sealed.generation_id().to_string();
 
 
-    // Sum the bytes to upload (regular files only — symlinks transfer instantly
-    // and would otherwise keep the byte total from ever being reached). One stat
-    // per needed file: negligible vs the upload. (File-count progress is
-    // misleading for video-heavy sites — it hits ~97% before the videos start.)
-    //
-    // The same pass records each file's size, because the upload window admits
-    // by BYTES (see deploy/upload.rs) and needs the size before it can decide
-    // whether to let a task start. Symlinks count as 0: they transfer instantly.
-    let mut upload_sizes: std::collections::HashMap<String, u64> =
-        std::collections::HashMap::with_capacity(diff.need.len());
-    let bytes_total: u64 = {
-        let mut sum = 0u64;
-        for p in &diff.need {
-            let size = match tokio::fs::symlink_metadata(site_dir.join(p)).await {
-                Ok(m) if !m.file_type().is_symlink() => m.len(),
-                _ => 0,
-            };
-            upload_sizes.insert(p.clone(), size);
-            sum += size;
-        }
-        sum
-    };
+    // The bytes to upload, from the sizes the sync sent (regular files only —
+    // symlinks transfer instantly and would otherwise keep the byte total from
+    // ever being reached). File-count progress is misleading for video-heavy
+    // sites: it hits ~97% before the videos start.
+    let bytes_total: u64 = diff.need.iter().filter_map(|p| sizes.get(p)).sum();
     // Shared upload accounting: the per-file tasks update the atomics, a 4 Hz
     // ticker reads them and emits (so the nav-pill hairline fills by real bytes).
     let upload_state = std::sync::Arc::new(progress::UploadProgressState::new(
@@ -334,10 +317,10 @@ async fn push_site_inner_impl(
     > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     for file_path in &diff.need {
-        // Symlinks report 0 bytes, which is honest: they carry a short target
-        // string, not file content.
-        let file_size = upload_sizes.get(file_path).copied().unwrap_or(0);
-        let admit_size = window.admission_cost(file_size);
+        // The window admits by bytes (see deploy/upload.rs). Symlinks report 0,
+        // which is honest: they carry a short target string, not file content.
+        let size = sizes.get(file_path).copied();
+        let admit_size = window.admission_cost(size.unwrap_or(0));
         window.reserve(admit_size).await?;
 
         {
@@ -407,10 +390,8 @@ async fn push_site_inner_impl(
                         // of single-PUT vs chunked all live in deploy/upload.rs
                         // — shared with deploy/prebuilt.rs, which had no size
                         // routing at all and would send a 100 MB video as one
-                        // PUT.
-                        let file_size = tokio::fs::metadata(&canonical).await
-                            .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
-                            .len();
+                        // PUT. The size is the one the sync sent.
+                        let file_size = size.ok_or_else(|| format!("Failed to stat {}", file_path))?;
                         let st_bytes = std::sync::Arc::clone(&upload_state);
                         let healed_hash = upload::upload_regular_file(
                             &client,
@@ -908,6 +889,15 @@ mod tests {
     async fn mock_seta_sequence_capturing(
         responses: Vec<&'static [u8]>,
     ) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<Vec<u8>>) {
+        let last = responses.len().saturating_sub(1);
+        mock_seta_sequence_capturing_at(responses, last).await
+    }
+
+    /// Same as [`mock_seta_sequence_capturing`], for the request at `capture`.
+    async fn mock_seta_sequence_capturing_at(
+        responses: Vec<&'static [u8]>,
+        capture: usize,
+    ) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<Vec<u8>>) {
         use tokio::net::TcpListener;
 
         let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
@@ -917,12 +907,11 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
-            let last = responses.len().saturating_sub(1);
             let mut tx = Some(tx);
             for (i, resp) in responses.into_iter().enumerate() {
                 let (mut stream, raw) = crate::test_accept_skipping_whoami(&listener).await;
                 crate::test_respond_and_close(&mut stream, resp).await;
-                if i == last {
+                if i == capture {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send(raw);
                     }
@@ -1342,6 +1331,106 @@ mod tests {
             !body.contains(stale_hash),
             "the stale sealed hash must not survive into the committed manifest: {body}"
         );
+    }
+
+    /// The sync sends the size of every regular file in the manifest, and the
+    /// upload's byte total is read from the same sizes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_sync_sends_regular_file_sizes_and_the_upload_counts_them() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+        let page = b"<html>Home</html>";
+
+        let (addr, sync_rx) = mock_seta_sequence_capturing_at(vec![
+            // 1. get_live_generation short-circuit: 404 -> Ok(None).
+            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            // 2. sync_manifest — captured below.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"need\":[\"index.html\"],\"remove\":[]}",
+            // 3. the file's PUT.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+            // 4. commit_sync.
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 101\r\n\r\n{\"url\":\"https://symlink-test.mosspub.com\",\"files_updated\":1,\"files_removed\":0,\"timestamp\":1700000000}",
+        ], 1)
+        .await;
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(dir.path()));
+        pending.register(&ServedPath::from_source("index.html").unwrap(), page, HashBucket::Files);
+        pending.register_hashed(&ServedPath::from_source("link").unwrap(), &crate::types::content::symlink_entry("index.html"), HashBucket::Files);
+        let sealed = pending.seal();
+        let gen_dir = MossPaths::new(dir.path()).generation_dir(sealed.generation_id());
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        std::fs::write(gen_dir.join("index.html"), page).unwrap();
+        std::os::unix::fs::symlink("index.html", gen_dir.join("link")).unwrap();
+
+        let identity = Identity::generate().expect("generate identity");
+        let recorder = std::sync::Arc::new(progress::RecordingSink::default());
+        let sink: std::sync::Arc<dyn progress::DeploySink> = recorder.clone();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(),
+            identity: &identity,
+            site_id: "symlink-test",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+        let result = push_site_inner(&sealed, &cx).await;
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        assert!(result.is_ok(), "{result:?}");
+
+        let request = sync_rx.await.expect("the sync was sent");
+        let body = &request[request.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
+        let body: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert!(body["files"].get("link").is_some(), "{body}");
+        assert_eq!(body["sizes"], serde_json::json!({ "index.html": page.len() }), "regular files only");
+        let bytes_total = recorder.take().iter().find_map(|e| e.bytes_total);
+        assert_eq!(bytes_total, Some(page.len() as f64), "the upload counts the sizes the sync sent");
+    }
+
+    /// A needed file the sync sent no size for fails its upload with a plain
+    /// error rather than going out as 0 bytes. A directory where the manifest
+    /// names a file is one: it resolves, but it is not a regular file.
+    #[tokio::test]
+    async fn a_needed_file_without_a_size_fails_its_upload() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+        let addr = mock_seta_sequence(vec![
+            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"need\":[\"index.html\"],\"remove\":[]}",
+        ])
+        .await;
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let sealed = sealed_fixture(dir.path());
+        let gen_dir = MossPaths::new(dir.path()).generation_dir(sealed.generation_id());
+        std::fs::create_dir_all(gen_dir.join("index.html")).unwrap();
+
+        let identity = Identity::generate().expect("generate identity");
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(),
+            identity: &identity,
+            site_id: "sizeless-test",
+            sink: &sink,
+            ports: &spy,
+            events_lock: &events_lock,
+        };
+        let result = push_site_inner(&sealed, &cx).await;
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        assert_eq!(result.err().as_deref(), Some("Failed to stat index.html"));
     }
 
     // ── a copy behind the live site ────────────────────────────────────────

@@ -1187,22 +1187,81 @@ async fn transport_policy_blocks_remote_http_redirects_before_connecting() {
 #[test]
 fn site_limit_reached_parses_with_and_without_contact() {
     let with = r#"{"error":"site_limit_reached","limit":3,"contact":"help@example.com"}"#;
-    assert_eq!(
+    assert!(matches!(
         parse_site_limit_reached(403, with),
-        Some((3, Some("help@example.com".to_string())))
-    );
+        Some(SetaError::SiteLimitReached { limit: 3, contact: Some(c) }) if c == "help@example.com"
+    ));
     let without = r#"{"error":"site_limit_reached","limit":1}"#;
-    assert_eq!(parse_site_limit_reached(403, without), Some((1, None)));
+    assert!(matches!(parse_site_limit_reached(403, without), Some(SetaError::SiteLimitReached { limit: 1, contact: None })));
     let blank = r#"{"error":"site_limit_reached","limit":2,"contact":"  "}"#;
-    assert_eq!(parse_site_limit_reached(403, blank), Some((2, None)));
+    assert!(matches!(parse_site_limit_reached(403, blank), Some(SetaError::SiteLimitReached { limit: 2, contact: None })));
 }
 
 #[test]
 fn unknown_403_bodies_are_not_site_limit_reached() {
-    assert_eq!(parse_site_limit_reached(403, r#"{"error":"forbidden"}"#), None);
-    assert_eq!(parse_site_limit_reached(403, r#"{"error":"site_limit_reached"}"#), None);
-    assert_eq!(parse_site_limit_reached(403, "<html>nope</html>"), None);
-    assert_eq!(parse_site_limit_reached(400, r#"{"error":"site_limit_reached","limit":1}"#), None);
+    assert!(parse_site_limit_reached(403, r#"{"error":"forbidden"}"#).is_none());
+    assert!(parse_site_limit_reached(403, r#"{"error":"site_limit_reached"}"#).is_none());
+    assert!(parse_site_limit_reached(403, "<html>nope</html>").is_none());
+    assert!(parse_site_limit_reached(400, r#"{"error":"site_limit_reached","limit":1}"#).is_none());
+}
+
+// ── Refusals named by `code` ────────────────────────────────────────────────
+
+const CAP_SENTENCE: &str = "This folder is over the 1 GB limit. Remove some files and try again.";
+const SUPERSEDED_SENTENCE: &str = "Another publish of this site started after this one. Publish again.";
+
+async fn failed_sync(status: usize, body: &'static str) -> SetaError {
+    let server = StandIn::json(status, body).await;
+    MossSetaClient::with_identity_and_url(&test_identity(), &server.url())
+        .sync_manifest("s1", &Default::default(), &Default::default(), "g1")
+        .await
+        .expect_err("a refusal is an error")
+}
+
+#[tokio::test]
+async fn a_storage_cap_413_is_storage_cap_exceeded_and_shows_the_server_sentence() {
+    let err = failed_sync(
+        413,
+        r#"{"code":"storage_cap_exceeded","error":"This folder is over the 1 GB limit. Remove some files and try again.","cap_bytes":1073741824,"site_bytes":1586736868}"#,
+    )
+    .await;
+    assert!(
+        matches!(&err, SetaError::StorageCapExceeded { cap_bytes: 1073741824, site_bytes: Some(1586736868), message } if message == CAP_SENTENCE),
+        "{err:?}"
+    );
+    assert_eq!(err.to_string(), CAP_SENTENCE);
+}
+
+/// A per-file or per-chunk refusal carries no site total.
+#[test]
+fn a_storage_cap_refusal_without_a_site_total_still_parses() {
+    let body = r#"{"code":"storage_cap_exceeded","error":"over","cap_bytes":10}"#;
+    assert!(matches!(
+        parse_coded_refusal(413, body),
+        Some(SetaError::StorageCapExceeded { cap_bytes: 10, site_bytes: None, .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_superseded_409_is_deploy_superseded_and_shows_the_server_sentence() {
+    let err = failed_sync(
+        409,
+        r#"{"code":"deploy_superseded","error":"Another publish of this site started after this one. Publish again."}"#,
+    )
+    .await;
+    assert!(matches!(&err, SetaError::DeploySuperseded { message } if message == SUPERSEDED_SENTENCE), "{err:?}");
+    assert_eq!(err.to_string(), SUPERSEDED_SENTENCE);
+}
+
+/// A 413 or 409 the server does not name stays a plain `Api` error, so the
+/// chunked upload's offset-resync 409 keeps its own handling.
+#[tokio::test]
+async fn an_uncoded_413_or_409_stays_an_api_error() {
+    let err = failed_sync(413, r#"{"error":"Payload too large"}"#).await;
+    assert!(matches!(&err, SetaError::Api { status: 413, .. }), "{err:?}");
+    let err = failed_sync(409, r#"{"error":"offset mismatch"}"#).await;
+    assert!(matches!(&err, SetaError::Api { status: 409, .. }), "{err:?}");
+    assert!(parse_coded_refusal(409, r#"{"code":"storage_cap_exceeded","error":"x","cap_bytes":1}"#).is_none());
 }
 
 // ── `lang` on the verification request ─────────────────────────────────────
@@ -1366,7 +1425,7 @@ signed_call! {
     assign_domain_is_signed: "PUT" "/api/domains/example.com/assign" => |c| c.assign_domain("example.com", "s1");
     get_domain_status_is_signed: "GET" "/api/domains/example.com/status" => |c| c.get_domain_status_for_host("example.com");
     register_site_is_signed: "POST" "/api/sites" => |c| c.register_site("s1");
-    sync_manifest_is_signed: "POST" "/api/sites/s1/sync" => |c| c.sync_manifest("s1", &[("a.html".to_string(), "h".to_string())].into(), "g1");
+    sync_manifest_is_signed: "POST" "/api/sites/s1/sync" => |c| c.sync_manifest("s1", &[("a.html".to_string(), "h".to_string())].into(), &[("a.html".to_string(), 1)].into(), "g1");
     upload_file_is_signed: "PUT" "/api/sites/s1/files/docs%2Fa%20b.html" => |c| c.upload_file("s1", "docs/a b.html", b"<p>".to_vec(), "g1", None);
     upload_symlink_is_signed: "PUT" "/api/sites/s1/files/latest" => |c| c.upload_symlink("s1", "latest", "v2".into(), "g1");
     list_upload_sessions_is_signed: "GET" "/api/sites/s1/uploads?generation_id=g1" => |c| c.list_upload_sessions("s1", "g1");

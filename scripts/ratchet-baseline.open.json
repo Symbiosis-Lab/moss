@@ -130,7 +130,7 @@
         "crates/moss-build/src/build/render/incremental/verdict.rs::compute": 250,
         "crates/moss-build/src/build/scan/scan.rs::scan_folder_with_dedup_emit_with_error": 400,
         "crates/moss-build/src/cli/import.rs::run": 250,
-        "crates/moss-build/src/deploy/push.rs::push_site_inner_impl": 350,
+        "crates/moss-build/src/deploy/push.rs::push_site_inner_impl": 300,
         "crates/moss-build/src/engine.rs::engine_loop": 250,
         "crates/moss-build/src/engine/host_fns.rs::dispatch_command_core": 300,
         "crates/moss-build/src/ops/serve/router.rs::start_server": 350,

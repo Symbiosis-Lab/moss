@@ -611,3 +611,106 @@ async fn two_files_larger_than_the_budget_can_share_the_window() {
         "charging the whole file is what made it inadmissible — the defect this fixes"
     );
 }
+
+/// Sizes cover regular-file entries only, at their exact length; a symlink
+/// entry and a file missing on disk get no key.
+#[cfg(unix)]
+#[tokio::test]
+async fn regular_file_sizes_cover_regular_files_only() {
+    use crate::types::content::{file_entry, symlink_entry};
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/a.html"), b"12345").unwrap();
+    std::fs::write(dir.path().join("old.html"), b"123").unwrap();
+    std::os::unix::fs::symlink("docs/a.html", dir.path().join("latest")).unwrap();
+    let manifest: std::collections::HashMap<String, String> = [
+        ("docs/a.html".to_string(), file_entry("h1")),
+        ("old.html".to_string(), "h2".to_string()),
+        ("latest".to_string(), symlink_entry("docs/a.html")),
+        ("gone.html".to_string(), file_entry("h3")),
+    ]
+    .into();
+    let sizes = regular_file_sizes(dir.path(), &manifest).await.unwrap();
+    assert_eq!(sizes, [("docs/a.html".to_string(), 5u64), ("old.html".to_string(), 3)].into());
+}
+
+/// A refusal the server words for the person reaches them as it is when it
+/// comes from an upload, not behind "Failed to upload <file>:".
+#[tokio::test]
+async fn a_worded_refusal_at_upload_is_shown_as_the_server_sentence() {
+    let refusals = [
+        (413, r#"{"code":"storage_cap_exceeded","error":"This folder is over the 1 GB limit. Remove some files and try again.","cap_bytes":1073741824}"#, "This folder is over the 1 GB limit. Remove some files and try again."),
+        (409, r#"{"code":"deploy_superseded","error":"Another publish of this site started after this one. Publish again."}"#, "Another publish of this site started after this one. Publish again."),
+    ];
+    for (status, body, sentence) in refusals {
+        let mut server = mockito::Server::new_async().await;
+        server.mock("PUT", mockito::Matcher::Any).with_status(status).with_body(body).create_async().await;
+        let bytes = b"<p>page</p>";
+        let path = tmp_file("worded-refusal.html", bytes);
+        let identity = crate::identity::Identity::generate().unwrap();
+        let client = crate::seta::client::MossSetaClient::with_identity_and_url(&identity, &server.url());
+        let result = upload_regular_file(
+            &client, "her-blog", "index.html", &path, bytes.len() as u64, "abc123def456abcd", "",
+            &upload_policy::Throughput::new(), 100, None,
+        )
+        .await;
+        assert_eq!(result.err().as_deref(), Some(sentence));
+    }
+}
+
+/// The size passed in was read before the sync. A file that changed since is
+/// shipped at the length it has now: a chunked upload declares that length,
+/// and a single PUT credits it.
+#[tokio::test]
+async fn a_file_that_changed_since_its_size_was_read_ships_at_its_current_length() {
+    use tokio::net::TcpListener;
+    const OK_EMPTY: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (create_tx, create_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        crate::test_mock_http_conn(stream, b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]").await;
+        let (stream, _) = listener.accept().await.unwrap();
+        let create = crate::test_mock_http_conn(stream, b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"uploadId\":\"t\"}").await;
+        create_tx.send(create).ok();
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let raw = crate::test_mock_http_conn(stream, OK_EMPTY).await;
+            if String::from_utf8_lossy(&raw).lines().next().is_some_and(|l| l.contains("/complete")) {
+                break;
+            }
+        }
+    });
+    let throughput = upload_policy::Throughput::new();
+    let now = throughput.plan_request_size() + 4096;
+    let bytes = vec![0xCDu8; now];
+    let path = tmp_file("changed-since-sized.bin", &bytes);
+    let identity = crate::identity::Identity::generate().unwrap();
+    let client = crate::seta::client::MossSetaClient::with_identity_and_url(&identity, &format!("http://{addr}"));
+    let result = upload_regular_file(
+        &client, "her-blog", "a.bin", &path, (now - 100) as u64, "abc123def456abcd", "0000000000000000",
+        &throughput, 100, None,
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    let create = create_rx.await.unwrap();
+    let body = &create[create.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
+    let body: serde_json::Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(body["size"], now, "the chunked upload declares the file's current length");
+
+    let mut server = mockito::Server::new_async().await;
+    server.mock("PUT", mockito::Matcher::Any).with_status(200).create_async().await;
+    let small = b"a page that grew after its size was read";
+    let path = tmp_file("changed-since-sized.html", small);
+    let client = crate::seta::client::MossSetaClient::with_identity_and_url(&identity, &server.url());
+    let credited = std::sync::atomic::AtomicU64::new(0);
+    let on_bytes = |n: u64| { credited.fetch_add(n, std::sync::atomic::Ordering::Relaxed); };
+    upload_regular_file(
+        &client, "her-blog", "a.html", &path, 3, "abc123def456abcd", "0000000000000000",
+        &upload_policy::Throughput::new(), 100, Some(&on_bytes),
+    )
+    .await
+    .unwrap();
+    assert_eq!(credited.into_inner(), small.len() as u64, "a single PUT credits the bytes it sent");
+}

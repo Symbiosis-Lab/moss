@@ -212,12 +212,16 @@ impl MossSetaClient {
     /// # Arguments
     /// * `site_id` - Site identifier
     /// * `manifest` - Map of relative file paths to content hashes
+    /// * `sizes` - Byte length of each regular file in `manifest`, so the server
+    ///   can refuse a site over its storage cap before any upload. A server
+    ///   that predates the field ignores it.
     /// * `generation_id` - The deploy generation being synced; sent as `X-Moss-Generation`
     ///   so the server scopes the diff to the correct generation directory.
     pub async fn sync_manifest(
         &self,
         site_id: &str,
         manifest: &std::collections::HashMap<String, String>,
+        sizes: &std::collections::HashMap<String, u64>,
         generation_id: &str,
     ) -> Result<SyncManifestResponse, SetaError> {
         let path = format!("/api/sites/{}/sync", urlencoding::encode(site_id));
@@ -228,7 +232,7 @@ impl MossSetaClient {
         // re-sends the identical buffer instead of re-encoding a 10k-entry map,
         // and the exact body length is what sets the deadline below.
         let body = Bytes::from(
-            serde_json::to_vec(&serde_json::json!({ "files": manifest }))
+            serde_json::to_vec(&serde_json::json!({ "files": manifest, "sizes": sizes }))
                 .map_err(|e| SetaError::Parse(e.to_string()))?,
         );
         // The deadline scales with the body (I1). A flat 150 s here was a

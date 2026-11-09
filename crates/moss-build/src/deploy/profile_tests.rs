@@ -159,3 +159,19 @@ async fn deploy_profile_prebuilt_error_is_recorded() {
     assert_eq!(rows[0]["target"], "prebuilt");
     assert_eq!(rows[0]["counts"]["files_uploaded"], 0);
 }
+
+/// The server's named refusals are recorded under the kinds their bare
+/// statuses already had.
+#[tokio::test]
+async fn named_seta_refusals_record_their_kinds() {
+    use crate::seta::client::SetaError;
+    let kind_of = |error: SetaError| {
+        let slot = Arc::new(Mutex::new(None));
+        REFUSAL.sync_scope(slot.clone(), || seta_error(&error));
+        let kind = slot.lock().unwrap().clone();
+        kind
+    };
+    let cap = SetaError::StorageCapExceeded { cap_bytes: 1, site_bytes: None, message: "over".into() };
+    assert_eq!(kind_of(cap), Some(json!("size_limit")));
+    assert_eq!(kind_of(SetaError::DeploySuperseded { message: "again".into() }), Some(json!("conflict")));
+}

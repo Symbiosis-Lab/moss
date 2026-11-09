@@ -269,7 +269,8 @@ async fn push_prebuilt_inner(
         0,
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
-    let diff = super::profile::sync(project_folder, client.sync_manifest(site_id, &manifest, &generation_id)).await?;
+    let sizes = crate::deploy::upload::regular_file_sizes(prebuilt_dir, &manifest).await?;
+    let diff = super::profile::sync(project_folder, client.sync_manifest(site_id, &manifest, &sizes, &generation_id)).await?;
 
     if !diff.needs_commit() {
         // Complete comes from `with_publish_guard` on the way out.
@@ -308,12 +309,10 @@ async fn push_prebuilt_inner(
     > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     for file_path in &diff.need {
         // Size drives window admission, so it must be known before the task
-        // starts. A path that cannot be stat'd is admitted as 0 and fails
-        // inside the task with the existing, more specific error.
-        let file_size = std::fs::metadata(prebuilt_dir.join(file_path))
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let admit_size = window.admission_cost(file_size);
+        // starts. A path that could not be stat'd is admitted as 0 and its
+        // task fails with "Failed to stat".
+        let size = sizes.get(file_path).copied();
+        let admit_size = window.admission_cost(size.unwrap_or(0));
         window.reserve(admit_size).await?;
         let entry_value = manifest.get(file_path).cloned().unwrap_or_default();
         {
@@ -341,9 +340,7 @@ async fn push_prebuilt_inner(
                     return Err(format!("Path traversal detected: {}", file_path));
                 }
                 let (_mode, expected_hash) = crate::types::content::parse_entry(&entry_value);
-                let file_size = std::fs::metadata(&canonical)
-                    .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
-                    .len();
+                let file_size = size.ok_or_else(|| format!("Failed to stat {}", file_path))?;
                 let healed_hash = crate::deploy::upload::upload_regular_file(
                     &client,
                     &site_id,

@@ -7,7 +7,7 @@ use reqwest::{header, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
-use super::wire::{auth_request_body, parse_site_limit_reached};
+use super::wire::{auth_request_body, parse_coded_refusal, parse_site_limit_reached};
 
 /// Time to wait for a TCP+TLS connection to establish. Catches dead or
 /// half-open connections (e.g. a dropped network, a wedged edge) fast without
@@ -463,6 +463,18 @@ pub enum SetaError {
     /// sentence.
     #[error("{message}")]
     TooSoon { retry_after: Duration, message: String },
+
+    /// The site is over its storage cap:
+    /// `413 {code:'storage_cap_exceeded', error, cap_bytes, site_bytes?}`.
+    /// `site_bytes` is absent when one file or one chunk is over the cap on its
+    /// own. Display is the server's sentence, which already names the cap.
+    #[error("{message}")]
+    StorageCapExceeded { cap_bytes: u64, site_bytes: Option<u64>, message: String },
+
+    /// A newer publish of the same site started after this one:
+    /// `409 {code:'deploy_superseded', error}`. Display is the server's sentence.
+    #[error("{message}")]
+    DeploySuperseded { message: String },
 }
 
 /// The folder a sign-in link is for: its site, once it has one, and its own
@@ -567,8 +579,10 @@ impl SetaError {
     /// Classify a non-success response into a [`SetaError`], consuming it.
     ///
     /// The single failed-response path for every seta endpoint: read the status
-    /// and the `cf-mitigated` header, then the body, and route to exactly one of
-    /// three outcomes — [`SetaError::SiteLimitReached`] for a used-up quota,
+    /// and the `cf-mitigated` header, then the body, and route to exactly one
+    /// outcome — [`SetaError::SiteLimitReached`] for a used-up quota, a refusal
+    /// the server names by its `code` ([`SetaError::StorageCapExceeded`],
+    /// [`SetaError::DeploySuperseded`]),
     /// [`SetaError::Challenge`] for an edge interstitial our native client can't
     /// solve, otherwise [`SetaError::Api`] carrying the authored JSON
     /// `error`/`message` or a length-capped raw body. Replaces the hand-rolled
@@ -605,9 +619,17 @@ impl SetaError {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
         let body = response.text().await.unwrap_or_default();
-        if let Some((limit, contact)) = parse_site_limit_reached(status, &body) {
-            log::warn!(target: "seta", "request to {} refused: site limit {} reached", url, limit);
-            return SetaError::SiteLimitReached { limit, contact };
+        if let Some(refusal) =
+            parse_site_limit_reached(status, &body).or_else(|| parse_coded_refusal(status, &body))
+        {
+            // A key outside its one site is refused as expected; the caller reports it.
+            let level = if matches!(refusal, SetaError::NotSignedIn { .. } | SetaError::KeyHasOtherSite { .. }) {
+                log::Level::Info
+            } else {
+                log::Level::Warn
+            };
+            log::log!(target: "seta", level, "request to {} refused ({}): {:?}", url, status, refusal);
+            return refusal;
         }
         let ray_suffix = cf_ray
             .as_ref()
@@ -625,10 +647,6 @@ impl SetaError {
             );
             return SetaError::Challenge { status };
         }
-        if let Some(refusal) = parse_key_binding_refusal(status, &body) {
-            log::info!(target: "seta", "request to {} refused ({}): {}", url, status, refusal);
-            return refusal;
-        }
         let message = extract_api_error_message(&body);
         // One diagnostic line per failure, the only seta failure record in
         // "Send logs" telemetry, which release builds keep from `info` up: at
@@ -645,18 +663,6 @@ impl SetaError {
 /// seta's 403 `error` for a key that does not own the site, from an account
 /// that is not the owner's or from no account yet.
 pub(crate) const NOT_OWNER: &str = "Not authorized for this site";
-
-/// seta's refusals of a key outside its one site, by their `code`; the
-/// `error` text beside it is for clients that predate the code.
-fn parse_key_binding_refusal(status: u16, body: &str) -> Option<SetaError> {
-    let json: serde_json::Value = serde_json::from_str(body).ok()?;
-    let site = json.get("site")?.as_str()?.to_string();
-    match (status, json.get("code")?.as_str()?) {
-        (403, "folder_not_signed_in") => Some(SetaError::NotSignedIn { site }),
-        (409, "key_has_other_site") => Some(SetaError::KeyHasOtherSite { site }),
-        _ => None,
-    }
-}
 
 /// The wait a `Retry-After` header names in seconds (the form seta sends).
 fn retry_after(response: &reqwest::Response) -> Option<Duration> {

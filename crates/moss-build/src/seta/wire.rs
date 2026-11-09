@@ -2,6 +2,8 @@
 //! recognizes and the verification request it sends. Status and body in, value
 //! out, so they test without a `reqwest::Response`.
 
+use super::client::SetaError;
+
 /// The JSON body of a 403 whose `error` field is exactly `code`.
 fn error_body(status: u16, body: &str, code: &str) -> Option<serde_json::Value> {
     if status != 403 {
@@ -9,6 +11,27 @@ fn error_body(status: u16, body: &str, code: &str) -> Option<serde_json::Value> 
     }
     let json = serde_json::from_str::<serde_json::Value>(body).ok()?;
     (json.get("error").and_then(|v| v.as_str()) == Some(code)).then_some(json)
+}
+
+/// A refusal the server names in a `code` field: `storage_cap_exceeded` on a
+/// 413 and `deploy_superseded` on a 409, whose `error` is the sentence to
+/// show; `folder_not_signed_in` on a 403 and `key_has_other_site` on a 409,
+/// which name a `site`. Any other body, or a known code on another status, is
+/// not one of these and falls through to the generic path.
+pub(super) fn parse_coded_refusal(status: u16, body: &str) -> Option<SetaError> {
+    let json = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let text = |key: &str| json.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    match (status, json.get("code")?.as_str()?) {
+        (413, "storage_cap_exceeded") => Some(SetaError::StorageCapExceeded {
+            cap_bytes: json.get("cap_bytes")?.as_u64()?,
+            site_bytes: json.get("site_bytes").and_then(|v| v.as_u64()),
+            message: text("error")?,
+        }),
+        (409, "deploy_superseded") => Some(SetaError::DeploySuperseded { message: text("error")? }),
+        (403, "folder_not_signed_in") => Some(SetaError::NotSignedIn { site: text("site")? }),
+        (409, "key_has_other_site") => Some(SetaError::KeyHasOtherSite { site: text("site")? }),
+        _ => None,
+    }
 }
 
 /// Whether `lang` looks like a language tag: `^[a-z]{2,3}(-[a-z0-9]{2,8}){0,2}$`,
@@ -75,10 +98,10 @@ pub(super) fn auth_request_body(
     body
 }
 
-/// Parse a `site_limit_reached` 403 into `(limit, contact)`. A body without a
-/// numeric `limit` is not this error and falls through to the generic path; a
-/// blank `contact` counts as absent.
-pub(super) fn parse_site_limit_reached(status: u16, body: &str) -> Option<(u32, Option<String>)> {
+/// Parse a `site_limit_reached` 403. A body without a numeric `limit` is not
+/// this error and falls through to the generic path; a blank `contact` counts
+/// as absent.
+pub(super) fn parse_site_limit_reached(status: u16, body: &str) -> Option<SetaError> {
     let json = error_body(status, body, "site_limit_reached")?;
     let limit = u32::try_from(json.get("limit")?.as_u64()?).ok()?;
     let contact = json
@@ -87,6 +110,6 @@ pub(super) fn parse_site_limit_reached(status: u16, body: &str) -> Option<(u32, 
         .map(str::trim)
         .filter(|c| !c.is_empty())
         .map(str::to_string);
-    Some((limit, contact))
+    Some(SetaError::SiteLimitReached { limit, contact })
 }
 

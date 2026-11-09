@@ -67,6 +67,8 @@ pub(super) enum FailureClass {
 /// | 4xx (except 429) | Fatal | The server's final answer, 413 quota rejections included. |
 /// | `Parse` / `Io` / `Identity` | Fatal | A local defect; the network cannot fix it. |
 /// | `SiteLimitReached` | Fatal | The plan's quota is a final answer; the user must act on it. |
+/// | `StorageCapExceeded` | Fatal | The site is over its storage cap; re-sending cannot shrink it. |
+/// | `DeploySuperseded` | Fatal | A newer publish owns the site now; this one is over. |
 /// | `Challenge` | Fatal | Unsolvable by a native client **on every status**, including the 503 the row above calls Backpressure. Retrying only deepens the edge's reputation signal against the user. |
 pub(super) fn classify(error: &SetaError) -> FailureClass {
     match error {

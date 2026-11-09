@@ -133,6 +133,8 @@ pub(crate) fn seta_error(error: &crate::seta::client::SetaError) {
     use crate::seta::client::SetaError;
     match error {
         SetaError::SiteLimitReached { .. } => refusal("site_limit"),
+        SetaError::StorageCapExceeded { .. } => refusal("size_limit"),
+        SetaError::DeploySuperseded { .. } => refusal("conflict"),
         SetaError::Api { status: 401 | 403, .. } | SetaError::NotSignedIn { .. } => refusal("access"),
         SetaError::Api { status: 409, .. } => refusal("conflict"),
         SetaError::Api { status: 413, .. } => refusal("size_limit"),

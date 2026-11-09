@@ -406,7 +406,7 @@ async fn a_folder_not_signed_in_to_its_site_is_signed_in_by_email() {
     let identity = crate::identity::Identity::load_for_signing(folder.dir.path()).unwrap();
     let client = crate::seta::client::MossSetaClient::for_environment(&identity, &crate::build::site_config::resolve_environment(&folder.dir.path().to_string_lossy()));
     let sync = || async {
-        crate::deploy::profile::sync(folder.dir.path(), client.sync_manifest("my-site", &Default::default(), "gen")).await.map(|_| ())
+        crate::deploy::profile::sync(folder.dir.path(), client.sync_manifest("my-site", &Default::default(), &Default::default(), "gen")).await.map(|_| ())
     };
 
     let err = sync().await.expect_err("not signed in");
