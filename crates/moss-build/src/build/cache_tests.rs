@@ -3128,7 +3128,7 @@ fn a_cloud_record_miss_does_not_request_optional_history() {
     let path = cache.record_path(&source);
     let _cloud = crate::build::icloud::pretend::evicted(&path);
     crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
-    assert!(matches!(cache.read(&source, RecordMode::Request), super::records::RecordRead::Unreadable));
+    assert!(matches!(cache.read(&source, RecordMode::Request), super::records::RecordRead::Offline));
     assert_eq!(crate::build::icloud::pretend::requests_for(&path), 0);
 }
 
@@ -3281,6 +3281,45 @@ fn availability_owned_merge_preserves_unreadable_record_without_invoking_borrowe
         assert_eq!(fs::read(&path).unwrap(), b"{\"source_oid\":");
         assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_ok(), "a nonadmitted unreadable record must not retain a publication lease");
     });
+}
+
+/// A record still in the cloud fails the build thread's fail-fast read. The
+/// work just done is published through the owner, whose read can wait for the
+/// provider, and merged into the full record rather than dropped: dropped, a
+/// folder whose provider keeps records as placeholders re-encodes the same
+/// images on every build.
+#[test]
+fn availability_owned_merge_publishes_over_a_record_still_in_the_cloud() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "e".repeat(64);
+        let path = cache.record_path(&oid);
+        let entry = |hash: &str| TransformEntry { validation: None, oid: hash.into(), size: 1, params: serde_json::Value::Null };
+        let _managed = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 0, std::time::Duration::from_millis(20));
+        let seed = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: [("image/webp-w800".into(), entry("other machine"))].into_iter().collect() };
+        write_record_file_for_test(&path, &seed);
+
+        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("image/webp".into(), entry("encoded here")); });
+
+        let started = std::time::Instant::now();
+        let record = loop {
+            let record: TransformRecord = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if record.transforms.contains_key("image/webp") || started.elapsed() > std::time::Duration::from_secs(10) { break record; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(record.transforms.get("image/webp").map(|e| e.oid.as_str()), Some("encoded here"), "the work is recorded");
+        assert_eq!(record.transforms["image/webp-w800"].oid, "other machine", "and merged into the record the cloud held");
+        assert!(cache.get_with(&oid, RecordMode::Request).is_some_and(|r| r.transforms.contains_key("image/webp")), "so the next build heals instead of encoding again");
+    });
+}
+
+fn write_record_file_for_test(path: &std::path::Path, record: &TransformRecord) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();
 }
 
 #[test]
