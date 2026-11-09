@@ -48,6 +48,29 @@ pub struct NestedRootInfo {
     /// preview-only · `None` = state unreadable (evicted / permissions).
     pub published: Option<bool>,
     pub site_id: Option<String>,
+    /// The site has no `.moss/`; its data sits in this copy of one.
+    pub data_in: Option<String>,
+}
+
+/// A `.moss/` under another name (see [`is_moss_copy`]) and what its own
+/// state says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MossCopy {
+    pub name: String,
+    /// Read only for a set-aside (`.moss.removed-*`): `Some(false)` when its
+    /// state is readable and records no publish; `None` when it could not be
+    /// read or is not there, or for any other copy.
+    pub published: Option<bool>,
+}
+
+impl MossCopy {
+    /// Is this the folder's site data, to be put back rather than replaced?
+    /// A conflict copy always is. A set-aside is unless it provably records
+    /// no publish: a folder set aside on purpose while unpublished stays so.
+    /// The walk asks too, since a folder holding site data is a boundary.
+    pub fn is_site_data(&self) -> bool {
+        !(self.name.starts_with(".moss.removed-") && self.published == Some(false))
+    }
 }
 
 /// The detector's whole answer, handed to the app-side decision layer.
@@ -61,8 +84,14 @@ pub struct NestedRootsReport {
     /// roots. The DECISION layer turns this into ask-or-proceed using
     /// `root_class`; the detector never silently proceeds past a cap.
     pub truncated: bool,
-    /// Telemetry: directories actually visited.
+    /// Telemetry: directories the walk listed.
     pub dirs_visited: usize,
+    /// Copies of a `.moss/` sitting directly in the root. Filled only when
+    /// the root has no `.moss/` of its own.
+    pub moss_copies: Vec<MossCopy>,
+    /// Every entry of the root itself was listed. When false, a `.moss` or a
+    /// copy of one may sit in the root unseen.
+    pub root_listing_complete: bool,
 }
 
 /// Bounds for [`find_nested_roots`]. Injectable so cap behavior is testable
@@ -195,9 +224,10 @@ fn provider_from_account_dir(acct: &str) -> String {
 /// root (opening an existing vault costs one stat; the remediation path uses
 /// [`scan_below`] directly to look inside an existing root). Otherwise a
 /// bounded BFS: never follows symlinks, skips `.git` / `node_modules` /
-/// `.moss`, prunes below a match. The trigger is `child/.moss` `is_dir()` —
+/// `.moss` and its copies, prunes below a match. The trigger is `child/.moss` `is_dir()` —
 /// one `lstat`, no file read — so an evicted cloud tree cannot hang the walk;
-/// only the ≤ `max_reported` FOUND candidates get their `state.toml` read,
+/// only the ≤ `max_reported` FOUND candidates and any set-aside copy of a
+/// `.moss` get their `state.toml` read,
 /// and a failed read labels them `published: None` instead of erroring.
 pub fn find_nested_roots(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> NestedRootsReport {
     if owns_moss(root) {
@@ -207,6 +237,8 @@ pub fn find_nested_roots(root: &Path, home: Option<&Path>, limits: &ScanLimits) 
             nested: Vec::new(),
             truncated: false,
             dirs_visited: 0,
+            moss_copies: Vec::new(),
+            root_listing_complete: true,
         };
     }
     scan_below(root, home, limits)
@@ -219,6 +251,9 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
     let mut nested: Vec<NestedRootInfo> = Vec::new();
     let mut truncated = false;
     let mut visited = 0usize;
+    let root_owned = owns_moss(root);
+    let mut moss_copies: Vec<MossCopy> = Vec::new();
+    let mut root_listing_complete = true;
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
     queue.push_back((root.to_path_buf(), 0));
 
@@ -229,21 +264,16 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
             truncated = true;
             continue;
         }
-        visited += 1;
-        if visited > limits.max_dirs {
+        if visited >= limits.max_dirs {
             truncated = true;
             break;
         }
 
         // The root itself is the caller's candidate, not a nested root.
         if depth > 0 && owns_moss(&dir) {
-            if let Ok(rel) = dir.strip_prefix(root) {
-                nested.push(nested_root_info(&dir, rel));
-            }
+            nested.push(nested_root_info(&dir, root, None));
             if nested.len() >= limits.max_reported {
-                if !queue.is_empty() {
-                    truncated = true;
-                }
+                truncated |= !queue.is_empty();
                 break;
             }
             continue; // prune: a root is a content boundary
@@ -256,14 +286,23 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
             // must not mistake this for a clean scan.
             Err(_) => {
                 truncated = true;
+                if depth == 0 {
+                    root_listing_complete = false;
+                }
                 continue;
             }
         };
+        visited += 1;
+        let mut subdirs: Vec<PathBuf> = Vec::new();
+        let mut copies: Vec<MossCopy> = Vec::new();
         for entry in entries {
-            let Ok(entry) = entry else {
-                // Same reasoning as an unlistable dir, one level down: a
-                // dropped entry is unexplored, not absent.
+            // Same reasoning as an unlistable dir, one level down: a dropped
+            // entry, or one whose type is unknown, is unexplored, not absent.
+            let Ok((entry, ft)) = entry.and_then(|e| e.file_type().map(|ft| (e, ft))) else {
                 truncated = true;
+                if depth == 0 {
+                    root_listing_complete = false;
+                }
                 continue;
             };
             let name = entry.file_name();
@@ -272,13 +311,31 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
                 continue;
             }
             // Do not follow symlinks; `file_type()` reports the link itself.
-            match entry.file_type() {
-                Ok(ft) if ft.is_dir() && !ft.is_symlink() => {
-                    queue.push_back((entry.path(), depth + 1));
-                }
-                _ => {}
+            if !ft.is_dir() || ft.is_symlink() {
+                continue;
+            }
+            if is_moss_copy(&name) {
+                copies.push(moss_copy(&entry.path(), &name));
+            } else {
+                subdirs.push(entry.path());
             }
         }
+        if depth == 0 {
+            if !root_owned {
+                moss_copies = copies;
+            }
+        } else if let Some(copy) = copies.iter().find(|c| !root_owned && c.is_site_data()) {
+            // A site whose data sits under another name is a content
+            // boundary too, and is reported so its own folder gets opened.
+            // Inside a site that owns `.moss`, a copy is its leftover instead.
+            nested.push(nested_root_info(&dir, root, Some(copy)));
+            if nested.len() >= limits.max_reported {
+                truncated |= !queue.is_empty();
+                break;
+            }
+            continue;
+        }
+        queue.extend(subdirs.into_iter().map(|d| (d, depth + 1)));
     }
 
     NestedRootsReport {
@@ -287,15 +344,53 @@ pub fn scan_below(root: &Path, home: Option<&Path>, limits: &ScanLimits) -> Nest
         nested,
         truncated,
         dirs_visited: visited,
+        moss_copies,
+        root_listing_complete,
     }
 }
 
-/// Label one found candidate. The ONLY file read in the detector, and fenced:
+/// A `.moss/` under another name: a sync client's conflict copy (`.moss 2`,
+/// `.moss (1)`, `.moss (conflicted copy …)`, `.moss.sync-conflict-…`) or
+/// the set-aside moss leaves when it takes a folder's site data out of use
+/// (`.moss.removed-<date>`). Never a site marker, and never walked: a copy
+/// holds a build cache of thousands of folders, enough to exhaust the scan on
+/// its own. A name with a path separator is never one.
+pub fn is_moss_copy(name: &str) -> bool {
+    if name.contains(['/', '\\']) {
+        return false;
+    }
+    let Some(rest) = name.strip_prefix(".moss") else { return false };
+    if let Some(stamp) = rest.strip_prefix(".removed-").or_else(|| rest.strip_prefix(".sync-conflict-")) {
+        return !stamp.is_empty();
+    }
+    let Some(rest) = rest.strip_prefix(' ') else { return false };
+    (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        || (rest.len() > 2 && rest.starts_with('(') && rest.ends_with(')'))
+}
+
+/// What a copy's own state says. Only a set-aside's state is read; one that
+/// cannot be read, or is not there, is `None`, never "unpublished": inside a
+/// cloud folder that has not been listed, a file reads as absent.
+fn moss_copy(path: &Path, name: &str) -> MossCopy {
+    let published = if name.starts_with(".moss.removed-") {
+        publish_state(&path.join("state.toml"), None).0
+    } else {
+        None
+    };
+    MossCopy { name: name.to_string(), published }
+}
+
+/// Label one found candidate. Fenced like the detector's only other read,
+/// a set-aside's state (`moss_copy`):
 /// any failure yields `published: None` ("unknown"), never an error — on an
 /// evicted File Provider tree the bytes may be unavailable while the
 /// directory metadata that triggered the match is local.
-fn nested_root_info(dir: &Path, rel: &Path) -> NestedRootInfo {
-    let (published, site_id) = read_publish_state(dir);
+fn nested_root_info(dir: &Path, root: &Path, data_in: Option<&MossCopy>) -> NestedRootInfo {
+    let rel = dir.strip_prefix(root).unwrap_or(dir);
+    let (published, site_id) = match data_in {
+        Some(copy) => (copy.published, None),
+        None => read_publish_state(dir),
+    };
     NestedRootInfo {
         rel_path: moss_core::slug::normalize_separators(&rel.to_string_lossy()),
         abs_path: dir.to_string_lossy().into_owned(),
@@ -305,24 +400,27 @@ fn nested_root_info(dir: &Path, rel: &Path) -> NestedRootInfo {
             .unwrap_or_default(),
         published,
         site_id,
+        data_in: data_in.map(|c| c.name.clone()),
     }
 }
 
-/// Routes through the no-wait guarded loader for state.toml
-/// (`build::site_config::read_deployment_state_no_wait`) instead of a second
-/// ad hoc parse, so a version-ahead file is refused there and lands here in
-/// the same "can't confidently tell" bucket as unparseable or unreadable —
-/// never a guess at site_id from a shape this build may not understand, and
-/// never an error that stops the scan. The no-wait door matters here
-/// specifically: this scan visits several candidate folders before a build or
-/// deploy even starts, and the waiting loader's materialize wait, multiplied
-/// across a handful of lazily-materialized nested sites, would turn a
-/// pre-flight check into a minutes-long stall. A genuinely absent state.toml
-/// reads back as a default (no site_id), which is `(Some(false), None)`
-/// below, same as before.
 fn read_publish_state(dir: &Path) -> (Option<bool>, Option<String>) {
-    match crate::build::site_config::read_deployment_state_no_wait(&dir.to_string_lossy()) {
-        Ok(state) => (Some(state.site_id.is_some()), state.site_id),
+    publish_state(&dir.join(".moss").join("state.toml"), Some(false))
+}
+
+/// What a `state.toml` says: `(published, site_id)`. Any publish trace counts,
+/// since a plugin publish records no `site_id`. A file still in the cloud,
+/// unreadable, unparsable or written by a newer moss is `None`, never an
+/// error that stops the scan; a provably absent one is `absent`. It never
+/// waits on a download: the scan visits several folders before a build starts.
+fn publish_state(state: &Path, absent: Option<bool>) -> (Option<bool>, Option<String>) {
+    use crate::build::site_config::{deployment_state_from_document, read_managed_toml_no_wait};
+    match read_managed_toml_no_wait(state) {
+        Ok(None) => (absent, None),
+        Ok(Some(text)) => match deployment_state_from_document(state, &text) {
+            Ok(s) => (Some(s.site_id.is_some() || s.records_publish_evidence()), s.site_id),
+            Err(_) => (None, None),
+        },
         Err(_) => (None, None),
     }
 }

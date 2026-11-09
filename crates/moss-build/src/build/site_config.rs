@@ -319,14 +319,14 @@ pub fn current_deploy_plugin(project_path: &str) -> Option<String> {
 }
 
 /// The version-ahead guard plus the typed parse, over a document a loader
-/// already produced — the part [`read_deployment_state`] and
-/// [`read_deployment_state_no_wait`] share, so a `schema_version` newer than
+/// already produced — the part [`read_deployment_state`] and the nested-site
+/// scan's no-wait read share, so a `schema_version` newer than
 /// this build's [`crate::config::migrations::STATE_CURRENT_VERSION`] is
 /// refused the same way regardless of which door read the bytes, in the same
 /// shape as `config.toml`'s `VersionAhead`. A file with no `schema_version`
 /// key still reads as v0 (pre-existing sites, and any `state.toml` never
 /// touched by a binary new enough to stamp it) and is not an error.
-fn deployment_state_from_document(
+pub(crate) fn deployment_state_from_document(
     state_path: &Path,
     content: &str,
 ) -> Result<crate::config::deployment::DeploymentState, String> {
@@ -361,27 +361,6 @@ pub fn read_deployment_state(
 ) -> Result<crate::config::deployment::DeploymentState, String> {
     let state_path = Path::new(project_path).join(".moss").join("state.toml");
     let Some(content) = read_managed_toml(&state_path)? else {
-        return Ok(Default::default());
-    };
-    deployment_state_from_document(&state_path, &content)
-}
-
-/// The no-wait twin of [`read_deployment_state`], for a caller that cannot
-/// afford to wait on a cloud download — the nested-site guard's scan, which
-/// visits several candidate folders before a build or deploy even starts.
-/// `read_managed_toml`'s 15-second materialize wait, multiplied across a
-/// handful of lazily-materialized nested sites on a Drive or iCloud root,
-/// turned that pre-flight scan into a minutes-long stall where the direct,
-/// blocking read it replaced used to fail at once; this reads through
-/// [`read_managed_toml_no_wait`] instead and shares
-/// [`deployment_state_from_document`] with the waiting door, so the two never
-/// answer the version-ahead question differently — only the I/O policy
-/// differs.
-pub fn read_deployment_state_no_wait(
-    project_path: &str,
-) -> Result<crate::config::deployment::DeploymentState, String> {
-    let state_path = Path::new(project_path).join(".moss").join("state.toml");
-    let Some(content) = read_managed_toml_no_wait(&state_path)? else {
         return Ok(Default::default());
     };
     deployment_state_from_document(&state_path, &content)
@@ -737,72 +716,6 @@ mod state_version_ahead_guard_tests {
         ));
         let path = dir.path().to_str().unwrap();
         let err = get_domain_config(path).unwrap_err();
-        assert!(
-            err.contains("schema_version") && err.contains("newer"),
-            "got: {err}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod no_wait_read_tests {
-    use super::*;
-
-    fn project_with_state(body: &str) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let moss = dir.path().join(".moss");
-        std::fs::create_dir_all(&moss).unwrap();
-        std::fs::write(moss.join("state.toml"), body).unwrap();
-        dir
-    }
-
-    /// The whole point of the no-wait door: a file the cloud provider hasn't
-    /// materialized yet must come back at once, not after
-    /// `INTERACTIVE_DEADLINE`'s 15-second wait. `pretend::evicted` is the
-    /// crate's own test seam for `is_evicted` (used throughout the cloud
-    /// tests), so this needs no real iCloud file and stays a millisecond-scale
-    /// test.
-    #[test]
-    fn read_deployment_state_no_wait_returns_at_once_on_an_evicted_file() {
-        let dir = project_with_state("[deployment]\nsite_id = \"blog\"\n");
-        let state_path = dir.path().join(".moss").join("state.toml");
-        let _cloud = crate::build::icloud::pretend::evicted(&state_path);
-
-        let start = std::time::Instant::now();
-        let result = read_deployment_state_no_wait(dir.path().to_str().unwrap());
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed < std::time::Duration::from_secs(1),
-            "no-wait must never block on a download: took {elapsed:?}"
-        );
-        // Still in the cloud is "can't confidently tell", not "absent" —
-        // an `Err`, never a guessed default site_id.
-        assert!(result.is_err(), "an evicted file must not read as present-but-empty");
-    }
-
-    /// A genuinely absent file reads as a default with no site_id, same as
-    /// the waiting door — and just as fast, since there is nothing to wait
-    /// for.
-    #[test]
-    fn read_deployment_state_no_wait_treats_a_missing_file_as_absent_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let start = std::time::Instant::now();
-        let state = read_deployment_state_no_wait(dir.path().to_str().unwrap()).unwrap();
-        assert!(start.elapsed() < std::time::Duration::from_secs(1));
-        assert_eq!(state.site_id, None);
-    }
-
-    /// Shares the version-ahead guard with the waiting door through
-    /// `deployment_state_from_document`: a stamped-ahead file is refused here
-    /// too, not just when read through `read_deployment_state`.
-    #[test]
-    fn read_deployment_state_no_wait_refuses_a_version_ahead_file() {
-        let dir = project_with_state(&format!(
-            "schema_version = {}\n\n[deployment]\nsite_id = \"from the future\"\n",
-            crate::config::migrations::STATE_CURRENT_VERSION + 1
-        ));
-        let err = read_deployment_state_no_wait(dir.path().to_str().unwrap()).unwrap_err();
         assert!(
             err.contains("schema_version") && err.contains("newer"),
             "got: {err}"
