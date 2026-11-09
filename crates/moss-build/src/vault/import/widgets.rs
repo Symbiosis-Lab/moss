@@ -332,8 +332,9 @@ fn link_html(href: &str, label: &str) -> String {
 /// (Plain text `![[url]]` would be escaped by the converter.)
 const EMBED_TAG: &str = "moss-embed";
 
-/// htmd with three changes: a heading (h2 to h6) that is plainly a paragraph
-/// is written as one (see `is_paragraph_text`), `<moss-embed data-url="…">` becomes the
+/// htmd with four changes: a heading (h2 to h6) that is plainly a paragraph
+/// is written as one (see `is_paragraph_text`), a heading with a line break
+/// stays one line with `<br>` for the break, `<moss-embed data-url="…">` becomes the
 /// remote-embed wikilink on its own paragraph, with the label and size its
 /// attributes carry, and an `<img>` whose alt is only a file name is written
 /// with an empty alt (see `describing_alt`).
@@ -349,11 +350,17 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
                 _ => handlers.fallback(el),
             }
         })
-        .add_handler(vec!["h2", "h3", "h4", "h5", "h6"], |handlers: &dyn Handlers, el: htmd::Element| {
+        .add_handler(vec!["h1", "h2", "h3", "h4", "h5", "h6"], |handlers: &dyn Handlers, el: htmd::Element| {
             let inner = handlers.walk_children(el.node).content;
             let text = inner.trim();
-            if is_paragraph_text(text) {
+            if el.tag != "h1" && is_paragraph_text(text) {
                 return Some(format!("\n\n{text}\n\n").into());
+            }
+            // A markdown hard break ends an ATX heading line; `<br>` keeps both parts in one heading.
+            if text.contains("  \n") {
+                let level = el.tag.trim_start_matches('h').parse().unwrap_or(2);
+                let line: Vec<&str> = text.split("  \n").map(str::trim).filter(|p| !p.is_empty()).collect();
+                return Some(format!("\n\n{} {}\n\n", "#".repeat(level), line.join("<br>")).into());
             }
             handlers.fallback(el)
         })

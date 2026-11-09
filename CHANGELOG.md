@@ -12,6 +12,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss import` keeps a heading with a line break as one heading: `<h3>Step 1.<br>Find the room</h3>` is written `### Step 1.<br>Find the room`, where the second part used to fall out as a paragraph.
 - `moss import` keeps every post of a page that lists posts as several `<article>` cards inside one container, when the cards share a class. Before, only the first card was imported.
 - Selecting across wrapped list items highlights every letter to the end of each row; the highlight used to stop about a letter short of the right edge on some systems.
 - A site's `tagline` can be placed again, for example as an eyebrow above an article's title. Existing `[fields.tagline]` declarations with `type = "text"` keep working.
