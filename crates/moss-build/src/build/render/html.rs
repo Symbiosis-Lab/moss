@@ -1107,7 +1107,7 @@ pub(super) fn render_page<'d>(
                         subtitle: None,
                         date_display,
                         date_raw,
-                        url: Some(crate::build::scan::article_map::to_pretty_url(&d.url_path)),
+                        url: Some(path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&d.url_path))),
                         // chrome; plain-text label
                         title: d.label.clone(),
                         url_path: d.url_path.clone(),
@@ -1151,7 +1151,7 @@ pub(super) fn render_page<'d>(
                 explicit_limit.or(if from_alias { Some(3) } else { None })
             };
 
-            let target_url = crate::build::scan::article_map::to_pretty_url(&target_doc.url_path);
+            let target_url = path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&target_doc.url_path));
             let (articles_to_show, more_url) = if is_self_ref {
                 (dated_articles, None)
             } else if let Some(n) = effective_limit {

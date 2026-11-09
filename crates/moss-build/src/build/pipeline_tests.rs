@@ -7955,6 +7955,43 @@ fn site_of(files: &[(&str, &str)]) -> (std::path::PathBuf, impl Drop) {
     (dir, cleanup)
 }
 
+#[test]
+fn latest_sidebar_links_resolve_to_built_pages_from_home_and_nested_pages() {
+    let (dir, _c) = site_of(&[
+        ("index.md", "title: Home\nsidebar: \"[[Blog]]\"\n"),
+        ("Blog/index.md", "title: Blog\nchildren_in: sidebar\nchildren_source: \"[[Blog]]\"\n"),
+        ("Blog/First.md", "title: First\ndate: 2026-01-01\n"),
+        ("Blog/Second.md", "title: Second\ndate: 2026-02-01\n"),
+        ("Blog/Third.md", "title: Third\ndate: 2026-03-01\n"),
+        ("Blog/Fourth.md", "title: Fourth\ndate: 2026-04-01\n"),
+        ("Notes/Direct.md", "title: Direct\nchildren_in: sidebar\nchildren_source: \"[[Blog]]\"\nchildren_limit: 1\n"),
+        ("Notes/Alias.md", "title: Alias\nsidebar: \"[[Blog]]\"\n"),
+    ]);
+    let sidebar_links = scraper::Selector::parse(".latest-sidebar a").unwrap();
+    let more_links = scraper::Selector::parse(".latest-sidebar .sidebar-more").unwrap();
+    for (page, expected_links, expected_more) in [
+        ("", 4, 1),
+        ("blog/", 4, 0),
+        ("notes/direct/", 2, 1),
+        ("notes/alias/", 4, 1),
+    ] {
+        let html = staged(&dir, &format!("{page}index.html"));
+        let document = scraper::Html::parse_document(&html);
+        let links: Vec<_> = document.select(&sidebar_links).collect();
+        assert_eq!(links.len(), expected_links, "sidebar link count on /{page}");
+        assert_eq!(document.select(&more_links).count(), expected_more, "More link count on /{page}");
+        let base = url::Url::parse(&format!("https://example.test/{page}")).unwrap();
+        for link in links {
+            let href = link.value().attr("href").expect("sidebar href");
+            assert!(href.starts_with('/') && href.ends_with('/'), "root-relative pretty URL: {href}");
+            let resolved = base.join(href).expect("resolve sidebar href");
+            assert_eq!(resolved.origin(), base.origin());
+            let output = format!("{}index.html", resolved.path().trim_start_matches('/'));
+            assert!(staged_exists(&dir, &output), "{href} on {base} resolves to missing {output}");
+        }
+    }
+}
+
 fn staged_calendars(dir: &std::path::Path) -> Vec<String> {
     fn walk(d: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
         for e in fs::read_dir(d).unwrap().flatten() {
