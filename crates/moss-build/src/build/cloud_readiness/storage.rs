@@ -248,22 +248,34 @@ pub(crate) fn await_publication(key: OperationKey, attempt: Operation) -> Public
 /// than the readers can fetch, so each one dropped is work the next build redoes.
 const RECORD_ADMISSION_WAIT: Duration = Duration::from_secs(60);
 
-/// A process about to exit gives its cache publications up to `deadline` to
-/// land, so the next build finds the records this one wrote. How many did not.
-pub(crate) fn drain_cache_publications(deadline: Duration) -> usize {
-    super::PREFETCH.drain_publications(deadline)
+/// A process about to exit lets its cache publications land while they keep
+/// landing, so the next build finds the records this one wrote, calling
+/// `progress` every few seconds with how many are left. How many did not land.
+pub(crate) fn drain_cache_publications(progress: &mut dyn FnMut(usize)) -> usize {
+    super::PREFETCH.drain_publications(crate::build::cloud_prefetch::PUBLICATION_STALL, Duration::from_secs(2), progress)
+}
+
+/// Publications this process has admitted and ended, for a progress line.
+pub(crate) fn cache_publication_counts() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (crate::build::cloud_prefetch::PUBLICATIONS_ADMITTED.load(Relaxed), crate::build::cloud_prefetch::PUBLICATIONS_FINISHED.load(Relaxed))
+}
+
+/// Closing a folder drops the publications still queued for its store.
+pub(crate) fn drop_cache_publications_under(folder: &Path) -> usize {
+    super::PREFETCH.drop_publications_under(folder)
 }
 
 /// A record's publication: as [`await_publication_in`], waiting for room in a full queue.
 pub(crate) fn await_publication_revision(key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
-    await_admitted(&super::PREFETCH, key, attempt, revision, expected, RECORD_ADMISSION_WAIT)
+    await_admitted(&super::PREFETCH, key, attempt, revision, expected, RECORD_ADMISSION_WAIT, Duration::from_millis(20))
 }
 
 pub(crate) fn await_publication_in(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
-    await_admitted(pool, key, attempt, revision, expected, Duration::ZERO)
+    await_admitted(pool, key, attempt, revision, expected, Duration::ZERO, Duration::from_millis(20))
 }
 
-fn await_admitted(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64, admission: Duration) -> PublicationOutcome {
+fn await_admitted(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64, admission: Duration, outcome_wait: Duration) -> PublicationOutcome {
     let path = key.path.clone();
     let Some(task) = pool.cache_publication_within(key, attempt, revision, admission, crate::build::cloud_prefetch::PUBLICATION_STALL) else {
         return PublicationOutcome::Fatal(Arc::new(StorageFailure::new(Some(path), StorageOperation::CachePublish,
@@ -278,7 +290,7 @@ fn await_admitted(pool: &crate::build::cloud_prefetch::Prefetcher, key: Operatio
                 Err(failure) => PublicationOutcome::Fatal(failure.clone()),
             };
         }
-        if started.elapsed() >= Duration::from_millis(20) { return PublicationOutcome::PendingOptionalCache; }
+        if started.elapsed() >= outcome_wait { return PublicationOutcome::PendingOptionalCache; }
         std::thread::sleep(Duration::from_millis(1));
     }
 }

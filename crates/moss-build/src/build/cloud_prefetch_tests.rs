@@ -325,41 +325,130 @@ fn a_stalled_queue_refuses_after_the_stall_and_then_at_once() {
     for _ in 0..=BACKGROUND_WAITING { let _ = release.send(()); }
 }
 
-/// A process about to exit waits for a slow publication, so the record it
-/// carries is on disk for the next build.
-#[test]
-fn draining_waits_for_a_slow_publication_to_land() {
-    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
-    let landed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let lands = Arc::clone(&landed);
-    let publish: Operation = Arc::new(move || {
-        std::thread::sleep(Duration::from_millis(300));
-        lands.store(true, Ordering::SeqCst);
-        Ok(StorageValue::Published(0))
-    });
-    let p = Prefetcher::with_materializer(1, recording().0, false);
-    let key = OperationKey { path: "/replica/slow".into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
-    p.cache_publication(key, publish).expect("queued");
-    assert_eq!(p.drain_publications(Duration::from_secs(10)), 0);
-    assert!(landed.load(Ordering::SeqCst), "the drain returned before the publication landed");
+fn publication(name: &str, attempt: crate::build::cloud_readiness::storage::Operation) -> (crate::build::cloud_readiness::storage::OperationKey, crate::build::cloud_readiness::storage::Operation) {
+    use crate::build::cloud_readiness::storage::{OperationKey, OperationPolicy};
+    (OperationKey { path: format!("/folder/.moss/cache/{name}").into(), policy: OperationPolicy::CachePublication { root: "/folder/.moss/cache".into() } }, attempt)
 }
 
-/// One that never finishes costs the deadline, not the exit.
+fn published() -> crate::build::cloud_readiness::storage::Operation {
+    Arc::new(|| Ok(crate::build::cloud_readiness::storage::StorageValue::Published(0)))
+}
+
+/// A publication that cannot start yet is still taken at once, and byte reads
+/// go on beside it: publications have their own readers.
 #[test]
-fn draining_gives_up_at_its_deadline() {
+fn publications_queue_beside_byte_reads_without_waiting() {
+    use crate::build::cloud_readiness::storage::{Operation, StorageValue};
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let held: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
+    let (m, reads) = recording();
+    let p = Prefetcher::with_lanes(3, 1, m, false);
+    let (key, attempt) = publication("held", held);
+    p.cache_publication(key, attempt).expect("taken");
+    assert!(wait_until(|| p.snapshot().in_flight == 1), "premise: the one publication reader is busy");
+    let started = std::time::Instant::now();
+    let (key, attempt) = publication("next", published());
+    p.cache_publication_within(key, attempt, None, Duration::from_secs(10), PUBLICATION_STALL).expect("taken");
+    assert!(started.elapsed() < Duration::from_millis(100), "the publication waited for a reader");
+    p.read(Path::new("/folder/photo.jpg"));
+    assert!(wait_until(|| reads.lock().unwrap().iter().any(|r| r == Path::new("/folder/photo.jpg"))), "a byte read waited behind publications");
+    release.send(()).unwrap();
+}
+
+/// Publications run on readers of their own, as many at once as there are.
+#[test]
+fn publications_run_on_their_own_readers() {
+    use crate::build::cloud_readiness::storage::{Operation, StorageValue};
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let held: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
+    let p = Prefetcher::with_lanes(2, 4, recording().0, false);
+    for i in 0..4 {
+        let (key, _) = publication(&format!("held-{i}"), published());
+        p.cache_publication(key, held.clone()).expect("taken");
+    }
+    assert!(wait_until(|| p.snapshot().in_flight == 4), "only {} ran at once", p.snapshot().in_flight);
+    for _ in 0..4 { let _ = release.send(()); }
+}
+
+/// A deep queue drains at the readers' pace, not at a cost that grows with its length.
+#[test]
+fn a_deep_publication_queue_drains_quickly() {
+    let p = Prefetcher::with_lanes(2, 4, recording().0, false);
+    for i in 0..1_000 {
+        let (key, attempt) = publication(&format!("{i}"), published());
+        p.cache_publication(key, attempt).expect("taken");
+    }
+    let started = std::time::Instant::now();
+    assert_eq!(p.drain_publications(Duration::from_secs(5), Duration::from_secs(60), &mut |_| {}), 0);
+    assert!(started.elapsed() < Duration::from_secs(5), "1,000 publications took {:?}", started.elapsed());
+}
+
+/// A process about to exit waits while its publications keep landing, and says how many are left.
+#[test]
+fn draining_waits_while_publications_land() {
+    use crate::build::cloud_readiness::storage::Operation;
+    let landed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false);
+    for i in 0..4 {
+        let lands = Arc::clone(&landed);
+        let slow: Operation = Arc::new(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            lands.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::build::cloud_readiness::storage::StorageValue::Published(0))
+        });
+        let (key, attempt) = publication(&format!("slow-{i}"), slow);
+        p.cache_publication(key, attempt).expect("taken");
+    }
+    let mut said = Vec::new();
+    // Each lands well inside the stall; the whole takes longer than it.
+    assert_eq!(p.drain_publications(Duration::from_millis(400), Duration::from_millis(100), &mut |left| said.push(left)), 0);
+    assert_eq!(landed.load(Ordering::SeqCst), 4);
+    assert!(!said.is_empty(), "no progress was reported");
+}
+
+/// One that never lands costs the stall, not the exit.
+#[test]
+fn draining_stops_once_nothing_lands_for_the_stall() {
+    use crate::build::cloud_readiness::storage::{Operation, StorageValue};
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let stuck: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false);
+    let (key, attempt) = publication("stuck", stuck);
+    p.cache_publication(key, attempt).expect("taken");
+    let started = std::time::Instant::now();
+    assert_eq!(p.drain_publications(Duration::from_millis(200), Duration::from_secs(60), &mut |_| {}), 1);
+    assert!(started.elapsed() < Duration::from_secs(2), "the drain outlived its stall");
+    release.send(()).unwrap();
+}
+
+/// Closing a folder drops its queued publications, and with them whatever
+/// their closures hold (in the build, a lease that keeps the cache from being
+/// collected). Another folder's stay queued.
+#[test]
+fn closing_a_folder_drops_its_queued_publications() {
     use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
     let (release, gate) = mpsc::channel::<()>();
     let gate = Arc::new(Mutex::new(gate));
-    let publish: Operation = Arc::new(move || {
-        let _ = gate.lock().unwrap().recv();
-        Ok(StorageValue::Published(0))
-    });
-    let p = Prefetcher::with_materializer(1, recording().0, false);
-    let key = OperationKey { path: "/replica/stuck".into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
-    p.cache_publication(key, publish).expect("queued");
-    let started = std::time::Instant::now();
-    assert_eq!(p.drain_publications(Duration::from_millis(200)), 1);
-    assert!(started.elapsed() < Duration::from_secs(2), "the drain outlived its deadline");
+    let held: Operation = Arc::new(move || { let _ = gate.lock().unwrap().recv(); Ok(StorageValue::Published(0)) });
+    let p = Prefetcher::with_lanes(2, 1, recording().0, false);
+    let (key, attempt) = publication("running", held);
+    p.cache_publication(key, attempt).expect("taken");
+    assert!(wait_until(|| p.snapshot().in_flight == 1));
+    let lease = Arc::new(());
+    for i in 0..3 {
+        let kept = Arc::clone(&lease);
+        let (key, _) = publication(&format!("queued-{i}"), published());
+        p.cache_publication(key, Arc::new(move || { let _ = &kept; Ok(StorageValue::Published(0)) })).expect("taken");
+    }
+    let other = OperationKey { path: "/other/.moss/cache/x".into(), policy: OperationPolicy::CachePublication { root: "/other/.moss/cache".into() } };
+    p.cache_publication(other, published()).expect("taken");
+    assert_eq!(Arc::strong_count(&lease), 4);
+    assert_eq!(p.drop_publications_under(Path::new("/folder")), 3);
+    assert_eq!(Arc::strong_count(&lease), 1, "a dropped publication still holds what its closure captured");
+    assert_eq!(p.snapshot().waiting, 1, "the other folder's publication stays");
     release.send(()).unwrap();
 }
 

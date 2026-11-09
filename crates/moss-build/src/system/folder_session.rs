@@ -299,9 +299,9 @@ impl FolderSession {
     }
 
     /// Fire cancel and drain the JoinSet within `grace`, then drop the
-    /// folder's seal debounce lane (`build::seal_phase::evict`), which is
-    /// keyed by folder rather than owned by this session and would otherwise
-    /// outlive it. Returns the number of tasks that did not finish before
+    /// folder's seal debounce lane (`build::seal_phase::evict`) and the cache
+    /// publications still queued for it, which are keyed by folder rather than
+    /// owned by this session and would otherwise outlive it. Returns the number of tasks that did not finish before
     /// the grace window expired.
     pub async fn shutdown(self: Arc<Self>, grace: Duration) -> usize {
         self.cancel.cancel();
@@ -322,6 +322,9 @@ impl FolderSession {
             }
         }
         crate::build::seal_phase::evict(&self.folder);
+        // Queued cache publications hold leases that keep the cache from being
+        // collected; a closed folder's are redone by its next build.
+        crate::build::cloud_readiness::storage::drop_cache_publications_under(std::path::Path::new(&self.folder));
         leaked
     }
 }
