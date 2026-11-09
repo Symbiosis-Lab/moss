@@ -42,6 +42,7 @@ All notable changes to moss will be documented here.
 - On Windows and Linux, shortcut hints in tooltips and context menus read `Ctrl+E` instead of macOS's `⌘E`, the file tree and the folder screen say "Show in folder" instead of naming the Finder, deleting a file says Recycle Bin on Windows, and the editor and app chrome use the desktop's own interface font instead of falling back to Roboto or a generic sans.
 - Taking a network out of a post's `syndicate:` list stops moss sending the post there. Before, a copy planned earlier was still posted on the next publish, or a copy already posted was updated. The copy's record is kept, so naming the network again picks up where it stopped.
 - `moss edit <folder> --no-browser` or `--port` without `--serve` now serves the editor instead of opening moss desktop and dropping the flags.
+- A build refused because its folder is missing or empty no longer creates a `.moss` folder in the directory it was run from.
 
 ## [0.15.20] - 2026-11-08
 
