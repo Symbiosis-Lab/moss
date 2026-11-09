@@ -29,6 +29,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Site search in the moss app stays current on a site that has redirects or a not-found page; before, its search index stopped updating after the first one.
 - In the moss app, in a folder kept by Google Drive, a build no longer encodes the same pictures again every time. Drive can leave the build's cache records in the cloud even after reading them, and moss used to give up on such a record, so the new result was never kept; now it waits for the record, adds the result and keeps what other computers wrote to it.
 - In the desktop app, a notice that waits for you (an update ready to install, a folder that needs a newer moss, a download under way) stays until you close it or press its button. It used to close by itself after a few seconds.
 - A folder that has a site, or was signed in, and has lost its sign-in key (`.moss/identity/secret-key`) is no longer given a new key on its next publish, which the hosting service would not accept for its site. `moss deploy` refuses with the command that signs it in again, `moss deploy <folder> --email <address>`, which makes the new key and signs it in; `--dry-run` reports the same refusal as `not_signed_in`. A key that is still downloading from a cloud drive is waited for, never replaced.
