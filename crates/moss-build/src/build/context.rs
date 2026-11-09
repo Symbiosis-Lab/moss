@@ -93,9 +93,11 @@ impl<'a> BuildContext<'a> {
 /// Write `bytes` to `dir.join(rel_path)`, creating parent directories as
 /// needed. Routed through `io_utils::write_output` — this is the busiest write
 /// into the output tree, so it is the one that most needs the rule that a
-/// dataless destination is discarded rather than materialized.
+/// dataless destination is discarded rather than materialized. A file that
+/// already holds these bytes is left as it is: rewriting it gives it a new
+/// inode and mtime, and every stat-keyed shortcut after it reads it again.
 fn write_at(dir: &Path, rel_path: &str, bytes: &[u8]) -> std::io::Result<()> {
-    crate::build::io_utils::write_output(&dir.join(rel_path), bytes)
+    crate::build::io_utils::write_output_if_changed(&dir.join(rel_path), bytes).map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +136,26 @@ mod tests {
         assert!(sealed.image_outputs().contains("og/home.png"));
         assert!(sealed.blocking_keys().contains("style.css"));
         assert!(sealed.blocking_keys().contains("og/home.png"));
+    }
+
+    /// An output whose bytes did not change keeps its file, so a later build's
+    /// stat of it still vouches for what was read from it; changed bytes are
+    /// written.
+    #[cfg(unix)]
+    #[test]
+    fn emitting_the_same_bytes_again_keeps_the_file() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempdir().unwrap();
+        let mut manifest = PendingManifest::new(SiteHashes::default());
+        let qr = crate::build::served_path::ServedPath::from_source("qr/a.svg").unwrap();
+        let ino = || std::fs::metadata(dir.path().join("qr/a.svg")).unwrap().ino();
+        BuildContext::for_render(dir.path(), &mut manifest).emit(&qr, b"<svg/>", HashBucket::Files).unwrap();
+        let first = ino();
+
+        BuildContext::for_render(dir.path(), &mut manifest).emit(&qr, b"<svg/>", HashBucket::Files).unwrap();
+        assert_eq!(ino(), first, "same bytes, same file");
+        BuildContext::for_render(dir.path(), &mut manifest).emit(&qr, b"<svg></svg>", HashBucket::Files).unwrap();
+        assert_eq!(std::fs::read(dir.path().join("qr/a.svg")).unwrap(), b"<svg></svg>");
     }
 
     #[test]
