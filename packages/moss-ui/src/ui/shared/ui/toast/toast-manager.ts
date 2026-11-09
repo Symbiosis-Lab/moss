@@ -452,6 +452,8 @@ export function updateToast(
     type?: ToastVariant;
     actions?: ToastAction[];
     duration?: number;
+    /** `true` stops the countdown: the toast stays until it is closed. */
+    persistent?: boolean;
     dismissible?: boolean;
     /** Omitted ⇒ untouched; `null` ⇒ the bar is removed. */
     progress?: number | null;
@@ -472,7 +474,7 @@ export function updateToast(
   const existing = activeToasts.get(id);
   if (!existing) return;
 
-  const { message, type, actions, duration, dismissible, progress, dot, inlineCopy, inlineLink, awaitAttention } =
+  const { message, type, actions, duration, persistent, dismissible, progress, dot, inlineCopy, inlineLink, awaitAttention } =
     updates;
   const el = existing.element;
 
@@ -513,8 +515,10 @@ export function updateToast(
     reconcileCloseButton(el, dismissible, () => removeToastById(id));
   }
 
-  // Reset auto-dismiss timeout if duration provided
-  if (duration !== undefined) {
+  if (persistent) {
+    existing.timer?.cancel();
+    existing.timer = undefined;
+  } else if (duration !== undefined) {
     existing.timer?.cancel();
     // Carry the gating forward. A partial patch promises untouched fields stay
     // untouched, and "does this countdown wait for the user?" is one of them —

@@ -96,6 +96,33 @@ describe("app-toast: the action-panel toast surface", () => {
     expect(container.querySelector(".moss-toast-progress")).toBeNull();
   });
 
+  describe("a persistent toast stays until it is closed", () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+    const offer = { ...FAILED, what: "moss v1.2.3 is ready to install.", severity: "ShippedDegraded" as const, persistent: true };
+
+    test("an advisory, and an ack", () => {
+      renderQueued(surface, { kind: "ShowToast", payload: offer });
+      renderQueued(surface, { kind: "ShowToast", payload: { ...TOAST, id: "checking", persistent: true } });
+      vi.advanceTimersByTime(60_000);
+      expect(container.querySelectorAll(".moss-toast").length).toBe(2);
+      expect(container.querySelector(".moss-toast-close")).not.toBeNull();
+    });
+
+    test("a patch that makes a toast persistent stops its countdown", () => {
+      renderQueued(surface, { kind: "ShowToast", payload: { ...offer, persistent: false, duration: "8000" } });
+      renderQueued(surface, { kind: "ShowToastUpdate", payload: offer });
+      vi.advanceTimersByTime(60_000);
+      expect(container.querySelectorAll(".moss-toast").length).toBe(1);
+    });
+
+    test("one that is not persistent still leaves", () => {
+      renderQueued(surface, { kind: "ShowToast", payload: { ...offer, persistent: false } });
+      vi.advanceTimersByTime(60_000);
+      expect(container.querySelectorAll(".moss-toast").length).toBe(0);
+    });
+  });
+
   test("ignores queued events it cannot render", async () => {
     await mountToasts(surface);
     pending.push({ kind: "PublishReceipt", payload: { url: "https://example.com" } });
