@@ -207,6 +207,12 @@ impl TransformCache {
             Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => RecordRead::Absent,
             Err(e) if crate::build::icloud::is_offline_not_absent(&path, &e) => {
                 log::debug!("[cache] record {} is in the cloud: {}", path.display(), e);
+                // In a managed folder the work it records is redone and
+                // published through the owner, which reads the whole record:
+                // ask the system for it now, so that read finds it local.
+                if self.objects.site.is_some() && crate::build::cloud_readiness::storage::managed_context(&self.base) {
+                    crate::build::cloud_readiness::request_download(&path);
+                }
                 RecordRead::Offline
             }
             Err(e) => {

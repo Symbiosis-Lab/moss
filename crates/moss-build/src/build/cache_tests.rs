@@ -3132,6 +3132,26 @@ fn a_cloud_record_miss_does_not_request_optional_history() {
     assert_eq!(crate::build::icloud::pretend::requests_for(&path), 0);
 }
 
+/// In a managed folder a record still in the cloud will be read whole by the
+/// publication that merges this build's work into it, so the build asks the
+/// system to download it at the miss rather than leaving the fetch to that read.
+#[test]
+fn a_cloud_record_miss_in_a_managed_folder_requests_its_download() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let source = "abcd".repeat(16);
+        let path = cache.record_path(&source);
+        let _managed = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 0, std::time::Duration::from_millis(20));
+        let _cloud = crate::build::icloud::pretend::evicted(&path);
+        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        assert!(matches!(cache.read(&source, RecordMode::Request), super::records::RecordRead::Offline));
+        assert_eq!(crate::build::icloud::pretend::requests_for(&path), 1);
+    });
+}
+
 #[test]
 fn generation_original_receipts_keep_this_machines_copy_and_sweep_a_shared_one() {
     let (mp, objects, _) = make_gc_test_dir("generation_original_gc");

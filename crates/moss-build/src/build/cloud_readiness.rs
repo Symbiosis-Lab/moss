@@ -134,9 +134,10 @@ fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
 static PREFETCH: std::sync::LazyLock<crate::build::cloud_prefetch::Prefetcher> =
     std::sync::LazyLock::new(crate::build::cloud_prefetch::Prefetcher::new);
 
-/// Hand a dataless file to the cloud readers, so the OS downloads it.
-/// Non-blocking and safe to call from anywhere in the build, including per-file
-/// inside a rayon fan-out.
+/// Ask the system to download a dataless file, and hand it to the cloud
+/// readers as well, which read it once it is local or make the provider fetch
+/// it where the request does not reach. Non-blocking and safe to call from
+/// anywhere in the build, including per-file inside a rayon fan-out.
 ///
 /// Requests share a bounded reader pool. Background work leaves two slots for
 /// needed page inputs, which can promote a queued request without starting a
@@ -146,6 +147,10 @@ static PREFETCH: std::sync::LazyLock<crate::build::cloud_prefetch::Prefetcher> =
 pub fn request_download(path: &Path) {
     #[cfg(test)]
     icloud::pretend::requested(path);
+    #[cfg(not(test))]
+    if let Err(error) = crate::platform::request_download(path) {
+        log::debug!("cloud: the system did not take a download request for {}: {error}", path.display());
+    }
     PREFETCH.read(path);
 }
 
