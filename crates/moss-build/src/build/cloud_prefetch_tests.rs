@@ -267,11 +267,14 @@ fn full_publication_queue() -> (Prefetcher, mpsc::Sender<()>) {
         Ok(StorageValue::Published(0))
     });
     let p = Prefetcher::with_materializer(1, recording().0, false);
-    for i in 0..=BACKGROUND_WAITING {
+    let admit = |i: usize| {
         let key = OperationKey { path: format!("/replica/{i}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
         p.cache_publication_within(key, held.clone(), None, Duration::ZERO, PUBLICATION_STALL).expect("room");
-    }
+    };
+    // The reader takes the first before the rest fill the queue behind it.
+    admit(0);
     assert!(wait_until(|| p.snapshot().in_flight == 1));
+    for i in 1..=BACKGROUND_WAITING { admit(i); }
     assert_eq!(p.snapshot().waiting, BACKGROUND_WAITING, "premise: the queue is full");
     (p, release)
 }
