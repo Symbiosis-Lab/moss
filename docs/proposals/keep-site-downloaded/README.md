@@ -6,7 +6,7 @@ In a site folder that a cloud service keeps (iCloud Drive, Google Drive, Dropbox
 
 ## Why
 
-A cloud service may keep any file only in the cloud and fetch it on first read. For a site that is a slow first build after an update, or after the service freed space: on one folder measured here, about 17,700 of moss's cache records were placeholders, and moss, reading them one at a time, would have spent about 87 minutes on one build. Asking the system to download them (`startDownloadingUbiquitousItem`) took that folder's emptied test copy from 6 min 30 s to about a minute, and that request already ships for the cache records a build finds missing. This proposal makes it happen at build start, for everything in scope, and adds Windows.
+A cloud service may keep any file only in the cloud and fetch it on first read. For a site that is a slow first build after an update, or after the service freed space: on one folder measured here, about 17,700 of moss's cache records were placeholders, and moss, reading them one at a time, would have spent about 87 minutes on one build. Asking the system to download them (`startDownloadingUbiquitousItem`) where the build meets them took that folder's emptied test copy from 6 min 30 s to about a minute, and that request already ships for the cache records a build finds missing. This proposal extends it to everything in scope and adds Windows.
 
 ## Scope: what a build reads
 
@@ -44,7 +44,7 @@ Work per operating-system layer, not per service.
 | Windows, Google Drive | Google Drive (its own virtual drive, not Cloud Files) | a read | none from outside the app | a read that succeeds |
 | Linux | most clients keep full copies | nothing to do | nothing to do | none |
 
-**At build start.** One stat walk of moss's own store asks the system for every placeholder record, then every placeholder output the last generation references. The scan already stats every page input and asks for each placeholder it meets. Nothing else changes.
+**Where the request is made: where the build meets a placeholder.** The scan stats every input and asks for each placeholder it meets, natively and per file; that is what took the first build of the emptied test copy from 389.7 s to 61.3 s. Asking earlier was measured and does not help: a walk of moss's store at build start that asked for every placeholder (6,677 files, most of them pictures) made the first build 91.3 s, because their downloads took the bandwidth the records needed, and one that asked for the records only (1,633) made it 71.9 s, no better than without it. The remaining scan time is not spent waiting for records.
 
 **Pinning.** On Windows, pinning is what a person sees as "Always keep on this device", so moss pins only its own data (`.moss/cache`), never the person's pages and media.
 
@@ -76,7 +76,7 @@ For example: "Some of this folder's pages are only online in Google Drive. Choos
 
 | Piece | Work | Coverage |
 |---|---|---|
-| macOS: build-start request for the store, per-build count of placeholder page inputs, status line | about a day | Google Drive measured; Dropbox, OneDrive, Box and iCloud expected through the same call until each is measured |
+| macOS: the request wherever a build meets a placeholder in scope, per-build count of placeholder page inputs, status line | about a day | Google Drive measured; Dropbox, OneDrive, Box and iCloud expected through the same call until each is measured |
 | Windows: hydrate the same set, pin `.moss/cache` | about three days plus a Windows test machine | OneDrive, Dropbox, iCloud for Windows; Google Drive on Windows only through the fallback |
 
 What it does not cover: keeping Google Drive's files downloaded on macOS, which only the person can choose, and a service that offers no request (none found yet).
