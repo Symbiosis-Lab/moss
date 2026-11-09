@@ -254,8 +254,8 @@ fn publish_bundle(
     staged: Option<&str>,
     produced: &search::SearchIndex,
 ) -> Result<BundleReceipt, String> {
-    if produced.skipped > 0 || produced.pages < want.pages {
-        let expected = want.pages.max(produced.pages + produced.skipped);
+    if produced.skipped > 0 || produced.pages + produced.left_out < want.pages {
+        let expected = want.pages.saturating_sub(produced.left_out).max(produced.pages + produced.skipped);
         return Err(format!(
             "indexed {} of {} pages ({} unreadable) — refusing to publish a partial \
              bundle as page set {}",
@@ -452,9 +452,9 @@ pub fn adopt_into(
 fn index_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut PendingManifest) -> Adoption {
     let _phase = crate::build::phase::PhaseTrace::start("search_index");
     let t_read = std::time::Instant::now();
-    let (pages, unreadable) = search::read_pages(stage_dir);
-    let key = search::corpus_key(&pages);
-    let held = read_receipt(index_dir).filter(|receipt| unreadable == 0 && receipt.staged.as_deref() == Some(key.as_str()));
+    let read = search::read_pages(stage_dir);
+    let key = search::corpus_key(&read.pages);
+    let held = read_receipt(index_dir).filter(|receipt| read.unreadable == 0 && receipt.staged.as_deref() == Some(key.as_str()));
     if let Some(receipt) = held {
         if receipt.files.is_empty() {
             return Adoption::Empty;
@@ -464,7 +464,7 @@ fn index_staging(h: &Holding, index_dir: &Path, stage_dir: &Path, pending: &mut 
             return Adoption::Adopted(n);
         }
     }
-    let published = search::index_pages(pages, unreadable, t_read, &|| false)
+    let published = search::index_pages(read, t_read, &|| false)
         .and_then(|produced| publish_bundle(h, index_dir, PageSet::UNKNOWN, Some(&key), &produced.unwrap_or_default()));
     lay_indexed(h, index_dir, stage_dir, pending, published)
 }

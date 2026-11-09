@@ -161,6 +161,9 @@ pub struct SearchIndex {
     /// Pages the walk found but that could not be read or rewritten. Non-zero
     /// means this bundle covers less than the tree it was pointed at.
     pub skipped: usize,
+    /// Pages the walk left out on purpose: redirect stubs and the not-found
+    /// page. They are part of the tree, so a check of coverage counts them.
+    pub left_out: usize,
 }
 
 /// Elements whose text is markup, not prose. Segmenting them would insert
@@ -410,30 +413,32 @@ pub(crate) struct PageSource {
 ///
 /// A file that fails to read is skipped with a warning rather than failing the
 /// build: one unreadable page should cost its own indexing, not the whole
-/// site's. The second value is how many were skipped — the census
-/// [`SearchIndex`] carries onward. A skip is a *shortfall*, not a detail: the
-/// bundle covers fewer pages than the tree, and only the caller can decide
-/// whether that is publishable.
+/// site's. [`PageRead::unreadable`] counts them — the census [`SearchIndex`]
+/// carries onward. A skip is a *shortfall*, not a detail: the bundle covers
+/// fewer pages than the tree, and only the caller can decide whether that is
+/// publishable. [`PageRead::left_out`] counts the pages left out on purpose,
+/// which is not a shortfall.
 ///
 /// Read and keyed on the calling thread: after an edit every page but one
 /// replays [`SEGMENTED`], and fanning ~500 small reads out over the pool cost
 /// several times their own CPU in worker wake-ups and contention.
-pub(crate) fn read_pages(site_dir: &Path) -> (Vec<PageSource>, usize) {
+pub(crate) fn read_pages(site_dir: &Path) -> PageRead {
     let mut skipped = 0;
+    let mut left_out = 0;
     let walk = walkdir::WalkDir::new(site_dir).sort_by(crate::build::scan::path_collision::nfc_name_order).into_iter().filter_map(Result::ok);
     let pages = walk
         .filter(|e| e.file_type().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("html"))
-        // The not-found page, at both of its addresses, is not content a
-        // reader searches for. Left out of the walk, not counted as skipped.
-        .filter(|e| {
-            let rel = moss_core::slug::normalize_separators(&e.path().strip_prefix(site_dir).unwrap_or(e.path()).to_string_lossy());
-            !crate::build::served_path::is_not_found_address(&rel)
-        })
         .filter_map(|entry| {
             let Ok(rel) = entry.path().strip_prefix(site_dir) else {
                 skipped += 1;
                 return None;
             };
+            // The not-found page, at both of its addresses, is not content a
+            // reader searches for.
+            if crate::build::served_path::is_not_found_address(&moss_core::slug::normalize_separators(&rel.to_string_lossy())) {
+                left_out += 1;
+                return None;
+            }
             let source = match std::fs::read_to_string(entry.path()) {
                 Ok(source) => source,
                 Err(e) => {
@@ -444,13 +449,21 @@ pub(crate) fn read_pages(site_dir: &Path) -> (Vec<PageSource>, usize) {
             };
             // A redirect stub is an old address, not a page to find.
             if crate::build::feeds::redirects::is_redirect_stub(&source) {
+                left_out += 1;
                 return None;
             }
             let key = xxhash_rust::xxh3::xxh3_128(source.as_bytes());
             Some(PageSource { rel_path: rel.to_string_lossy().into_owned(), key, source })
         })
         .collect();
-    (pages, skipped)
+    PageRead { pages, unreadable: skipped, left_out }
+}
+
+/// What [`read_pages`] found: the pages to index and the two counts of pages it did not hand on.
+pub(crate) struct PageRead {
+    pub pages: Vec<PageSource>,
+    pub unreadable: usize,
+    pub left_out: usize,
 }
 
 /// What a bundle indexed from `pages` is a function of: their paths and bytes,
@@ -564,16 +577,13 @@ pub fn build_search_index_cancellable(
 ) -> Result<Option<SearchIndex>, String> {
     let _phase = crate::build::phase::PhaseTrace::start("search_index");
     let t_read = std::time::Instant::now();
-    let (pages, unreadable) = read_pages(site_dir);
-    index_pages(pages, unreadable, t_read, cancelled)
+    index_pages(read_pages(site_dir), t_read, cancelled)
 }
 
-/// [`build_search_index_cancellable`] over pages already read, `unreadable` of
-/// them having failed to read; `t_read` is when the read started, for the
-/// segment timing.
+/// [`build_search_index_cancellable`] over pages already read; `t_read` is when
+/// the read started, for the segment timing.
 pub(crate) fn index_pages(
-    pages: Vec<PageSource>,
-    unreadable: usize,
+    PageRead { pages, unreadable, left_out }: PageRead,
     t_read: std::time::Instant,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<SearchIndex>, String> {
@@ -633,7 +643,7 @@ pub(crate) fn index_pages(
                     // Not an error and not necessarily a success — the census
                     // travels so `publish_bundle` can tell "no indexable
                     // content" from "the tree went away".
-                    return Ok(Some(SearchIndex { files: Vec::new(), pages: readable, skipped }));
+                    return Ok(Some(SearchIndex { files: Vec::new(), pages: readable, skipped, left_out }));
                 }
                 // The boundary that earns cancellation its keep: everything
                 // after this point is the uncancellable gzip.
@@ -685,6 +695,7 @@ pub(crate) fn index_pages(
                     files: files.into_iter().map(bundle_file).collect::<Result<_, _>>()?,
                     pages: readable,
                     skipped,
+                    left_out,
                 }))
             })
         })
