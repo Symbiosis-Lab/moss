@@ -80,10 +80,22 @@ impl Default for ScanLimits {
     }
 }
 
-/// Does `dir` own a `.moss/` directory — i.e. is it a moss root? One `lstat`.
+/// Does `dir` own a `.moss/` directory — i.e. is it a moss root? One `lstat`,
+/// plus two `canonicalize` calls where a `.moss/` is found.
 /// Also the subtree-boundary predicate for future scanner/watcher pruning.
+///
+/// moss's own home (`MOSS_HOME`, by default `~/.moss`) is tooling, not a site
+/// marker, so its parent is never a site, through a symlink either.
 pub fn owns_moss(dir: &Path) -> bool {
-    dir.join(".moss").is_dir()
+    let marker = dir.join(".moss");
+    marker.is_dir() && !is_moss_home(&marker)
+}
+
+fn is_moss_home(marker: &Path) -> bool {
+    let Ok(home) = crate::infra::home::moss_home() else { return false };
+    let home = crate::vault_root::resolve_input(home);
+    home == marker
+        || matches!((marker.canonicalize(), home.canonicalize()), (Ok(m), Ok(h)) if m == h)
 }
 
 /// Is this path under a known cloud-storage mount? Substring shape match,

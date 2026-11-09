@@ -228,7 +228,7 @@ impl VaultRoot {
                     break;
                 }
             }
-            if ancestor.join(".moss").is_dir() {
+            if crate::nested_roots::owns_moss(ancestor) {
                 return Some(Self::from_resolved(ancestor.to_path_buf()));
             }
         }
