@@ -64,6 +64,17 @@ impl UrlScope {
     pub fn path_prefix(&self) -> &str {
         &self.path_prefix
     }
+
+    /// The site's host without a leading `www.`, lowercase.
+    pub fn bare_host(&self) -> String {
+        bare_host(self.base_url.host_str().unwrap_or(""))
+    }
+}
+
+/// `host` lowercase and without a leading `www.`.
+pub(crate) fn bare_host(host: &str) -> String {
+    let host = host.trim().to_ascii_lowercase();
+    host.strip_prefix("www.").map(str::to_string).unwrap_or(host)
 }
 
 /// `path` with one trailing `/` removed, leaving the bare root `"/"` alone.

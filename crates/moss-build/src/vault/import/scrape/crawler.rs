@@ -220,13 +220,12 @@ pub fn host_of(url_str: &str) -> String {
 /// at different addresses must both stay).
 pub fn path_identity(url_str: &str) -> Option<String> {
     let url = Url::parse(url_str).ok()?;
-    let host = url.host_str()?;
-    let host = host.strip_prefix("www.").unwrap_or(host);
+    let host = super::scope::bare_host(url.host_str()?);
     let mut path = url.path();
     if path.len() > 1 {
         path = path.strip_suffix('/').unwrap_or(path);
     }
-    Some(format!("{}://{}{}", url.scheme(), host.to_ascii_lowercase(), path))
+    Some(format!("{}://{}{}", url.scheme(), host, path))
 }
 
 /// A fetched page's own declared identity: `<link rel="canonical" href>`,

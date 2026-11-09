@@ -270,6 +270,7 @@ pub(crate) fn compose_note(
     markdown = super::converter::rewrite_embed_links(&markdown, remote_to_local);
     if let Some(LinkScope { scope, rewrite_pages }) = links {
         markdown = rewrite_file_links(&markdown, source_url, scope, remote_to_local);
+        markdown = super::service::strip_outbound_refs(&markdown, scope);
         // Only a recursive crawl can point an in-scope link at the sibling
         // note it is also writing.
         if rewrite_pages {

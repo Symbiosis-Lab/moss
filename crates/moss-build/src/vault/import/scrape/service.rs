@@ -181,6 +181,36 @@ pub fn rewrite_links(markdown: &str, scope: &UrlScope) -> String {
         .to_string()
 }
 
+/// `url` without a `ref` query parameter whose value is the imported site's
+/// own host (with or without `www.`): some platforms tag every outbound link
+/// that way, and it names a host that means nothing after a port. Other
+/// parameters and the fragment stay as written.
+pub(crate) fn strip_outbound_ref(url: &str, site_host: &str) -> String {
+    let (without_fragment, fragment) = match url.split_once('#') {
+        Some((u, f)) => (u, Some(f)),
+        None => (url, None),
+    };
+    let Some((base, query)) = without_fragment.split_once('?') else { return url.to_string() };
+    let own = |pair: &&str| {
+        pair.split_once('=').is_some_and(|(k, v)| k == "ref" && super::scope::bare_host(v) == site_host)
+    };
+    let kept: Vec<&str> = query.split('&').filter(|p| !own(p)).collect();
+    let query = if kept.is_empty() { String::new() } else { format!("?{}", kept.join("&")) };
+    let fragment = fragment.map(|f| format!("#{f}")).unwrap_or_default();
+    format!("{base}{query}{fragment}")
+}
+
+/// [`strip_outbound_ref`] over every markdown link destination.
+pub(crate) fn strip_outbound_refs(markdown: &str, scope: &UrlScope) -> String {
+    let site = scope.bare_host();
+    LINK_PATTERN
+        .replace_all(markdown, |caps: &regex::Captures| {
+            let title = caps.get(3).map_or("", |m| m.as_str());
+            format!("[{}]({}{})", &caps[1], strip_outbound_ref(&caps[2], &site), title)
+        })
+        .to_string()
+}
+
 fn url_to_relative_md_path(url_str: &str, scope: &UrlScope) -> Option<String> {
     let url = Url::parse(url_str).ok()?;
     let path = url.path();

@@ -2457,6 +2457,31 @@ fn a_link_preview_card_becomes_one_block_link() {
     assert_eq!(picture_link, "[![](a.jpg)](./second-draft/index.md)");
 }
 
+/// A platform's outbound `?ref=<own host>` tag is dropped from every link;
+/// every other parameter, the fragment and a `ref` naming someone else stay.
+#[test]
+fn a_composed_note_drops_the_platforms_own_ref_tag_from_outbound_links() {
+    let html = r#"<html><body><article><p>Intro paragraph, long enough to be extracted as content.</p>
+        <p><a href="https://other.example.test/page?ref=notes.example.test#faq">one</a>
+        <a href="https://other.example.test/page?a=1&amp;ref=www.notes.example.test">two</a>
+        <a href="https://other.example.test/page?ref=notes.example.test">three</a>
+        <a href="https://other.example.test/page?ref=someone-else.test">four</a></p></article></body></html>"#;
+    let scope = UrlScope::new("https://notes.example.test/").unwrap();
+    let mut article = crate::vault::import::scrape::converter::extract_article(html, "https://notes.example.test/first-light/");
+    let note = compose_note(
+        &mut article,
+        &HashMap::new(),
+        None,
+        "https://notes.example.test/first-light/",
+        Some(LinkScope { scope: &scope, rewrite_pages: false }),
+    )
+    .expect("a note");
+    assert!(note.contains("](https://other.example.test/page#faq)"), "{note}");
+    assert!(note.contains("](https://other.example.test/page?a=1)"), "{note}");
+    assert!(note.contains("](https://other.example.test/page)"), "{note}");
+    assert!(note.contains("](https://other.example.test/page?ref=someone-else.test)"), "{note}");
+}
+
 /// The crawl carries a page's listing signal to the pass that knows the tags.
 #[tokio::test]
 async fn a_crawled_tag_archive_claims_its_tag() {
