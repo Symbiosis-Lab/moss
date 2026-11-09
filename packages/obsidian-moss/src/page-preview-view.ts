@@ -15,7 +15,7 @@ export class PagePreviewView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private plugin: MossPlugin) { super(leaf); }
   getViewType(): string { return PAGE_PREVIEW_VIEW_TYPE; }
-  getDisplayText(): string { return "moss page preview"; }
+  getDisplayText(): string { return "Page preview"; }
   getIcon(): string { return "file-search"; }
 
   async onOpen(): Promise<void> {

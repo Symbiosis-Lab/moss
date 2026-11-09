@@ -12,6 +12,7 @@ export class Plugin {
   registerView() {}
   registerEvent() {}
   addCommand(command: unknown) { this.commands.push(command); }
+  addRibbonIcon() { return {}; }
 }
 export class PluginSettingTab {
   containerEl: unknown = null;
@@ -40,6 +41,7 @@ export class EditorSuggest {
 }
 export class Editor {}
 export class TFile {}
+export class TFolder {}
 export class Notice {
   constructor(_message: string, _timeout?: number) {}
 }

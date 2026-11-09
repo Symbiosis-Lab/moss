@@ -2,20 +2,16 @@
 // building, and output parsing. No Obsidian imports and no I/O — everything
 // filesystem/env-shaped is injected so vitest covers it without a vault.
 //
-// Ground truth for the parsers (verified against moss 0.11.1, 2026-08-11):
-// `moss build <folder> --serve` prints ALL status to **stderr** via
+// What the parsers read: `moss build <folder> --serve` prints ALL status to **stderr** via
 // `cli_eprintln!` (crates/moss-build/src/build/cli_output.rs). The lines that matter:
 //
 //   Building website from: /path/to/vault
 //   📁 'name': Site generated at /path/.moss/build.nosync/current
 //   🌐 Preview server ready! Access at http://localhost:8080
-//   moss: 2 problems reported above — the site was still generated.
 //   Build failed: <reason>
 //
 // The port is dynamic (scan starts at 8080, crates/moss-build/src/ops/serve/port.rs),
 // so the "Access at" line is the only machine-discoverable source of the URL.
-// Every moss preview server also serves GET /__moss_health/ whose JSON body
-// contains "moss-preview-server" — used to validate a fallback port.
 
 /** Environment surface `findMossBinary` needs; injected for testability. */
 export interface DetectEnv {
@@ -52,18 +48,24 @@ export function candidateBinaryPaths(explicitPath: string, env: DetectEnv): stri
   for (const dir of env.pathVar.split(env.pathDelimiter)) {
     if (dir !== "") candidates.push(dir + sep + name);
   }
-  const extraDirs =
-    env.platform === "win32"
-      ? []
-      : [
-          "/opt/homebrew/bin",
-          "/usr/local/bin",
-          `${env.homeDir}/.local/bin`,
-          `${env.homeDir}/.npm-global/bin`,
-        ];
-  for (const dir of extraDirs) candidates.push(`${dir}/${name}`);
+  for (const dir of installDirs(env)) candidates.push(dir + sep + name);
   // De-duplicate, preserving order.
   return [...new Set(candidates)];
+}
+
+/**
+ * Where the moss app and the CLI installers put the program, per platform. The
+ * app's own binary answers the same commands as the CLI, so a writer who has
+ * the app needs nothing else.
+ */
+function installDirs(env: DetectEnv): string[] {
+  const home = env.homeDir;
+  // Windows: PATH only until the per-user app is proven to answer over pipes.
+  if (env.platform === "win32") return [];
+  const app = env.platform === "darwin"
+    ? ["/Applications/moss.app/Contents/MacOS", `${home}/Applications/moss.app/Contents/MacOS`]
+    : [];
+  return [...app, "/opt/homebrew/bin", "/usr/local/bin", `${home}/.local/bin`, `${home}/.npm-global/bin`];
 }
 
 /** First existing candidate, or null when moss is not installed. */
@@ -74,80 +76,41 @@ export function findMossBinary(explicitPath: string, env: DetectEnv): string | n
   return null;
 }
 
-export interface BuildArgsOptions {
-  serve?: boolean;
-  watch?: boolean;
-  /** Extra user-configured flags, already split (e.g. ["--no-plugins"]). */
-  extraFlags?: string[];
-}
-
-/** argv (after the binary) for a moss build of `vaultPath`. */
-export function buildArgs(vaultPath: string, opts: BuildArgsOptions = {}): string[] {
-  const args = ["build", vaultPath];
-  if (opts.serve) args.push("--serve");
-  if (opts.watch) args.push("--watch");
-  for (const f of opts.extraFlags ?? []) {
-    if (f !== "") args.push(f);
-  }
-  return args;
-}
-
-/** Split a settings-box flag string into argv entries. */
-export function splitFlags(raw: string): string[] {
-  return raw.split(/\s+/).filter((f) => f !== "");
+/**
+ * The folder a preview builds: the site `moss root` found, else the clicked
+ * folder, else the vault. Resolved with the platform's own path rules, so the
+ * vault root's menu ("/") and the palette name the same site, and Windows
+ * separators compare equal to what `moss root` prints.
+ */
+export function siteRoot(
+  p: Pick<typeof import("node:path"), "join" | "resolve">,
+  vault: string,
+  target: string | undefined,
+  found: string | null,
+): string {
+  return p.resolve(found ?? p.join(vault, target ?? ""));
 }
 
 export interface ServerAddress {
   url: string;
-  port: number;
 }
 
-// The port group requires a trailing non-digit: a chunk boundary can cut the
-// line mid-port ("Access at http://localhost:8"), and without the lookahead
-// that reads as a complete port 8, then the next chunk completes the same
-// line and reads again as port 8080 — one real event, two onServerReady
-// calls. `(?!\d)` doesn't close this: it's vacuously true at the buffer's
-// end, exactly where a cut-off chunk ends. The CLI prints a second "Access
-// at" line when it takes over serving a vault from another moss process
-// that was standing in front of it (see STANDBY_RE below and
-// `parseServerEvents`).
-const SERVER_URL_RE_ALL = /Access at (https?:\/\/(?:localhost|127\.0\.0\.1):(\d{1,5})(?=\D))/g;
-// The line a CLI invocation prints once, right after an "Access at" line that
-// names another process's URL, when it finds the vault already served:
-//   served by <kind> (pid <pid>, moss <version>); standing by
-// It then takes over and prints a fresh "Access at" line once that owner exits.
-const STANDBY_RE = /served by (.+) \(pid (\d+), moss (\S+)\); standing by/g;
+// The port requires a trailing non-digit: a chunk boundary can cut the line
+// mid-port ("Access at http://localhost:8"), and without the lookahead that
+// reads as a complete URL, then the next chunk completes the same line and
+// reads again as a different one. `(?!\d)` doesn't close this: it's vacuously
+// true at the buffer's end, exactly where a cut-off chunk ends. The CLI prints
+// a second "Access at" line when it takes over serving a folder from another
+// moss process.
+const SERVER_URL_RE_ALL = /Access at (https?:\/\/(?:localhost|127\.0\.0\.1):\d{1,5})(?=\D)/g;
 
 /**
- * Find the preview-server URL in a chunk of CLI stderr, or null.
- * Tolerates the chunk containing many lines and partial-line buffering —
- * callers feed it the accumulated stream, not single lines.
+ * Every "Access at" URL in a chunk of CLI output, in order. Callers replay
+ * this list against persisted state to tell a first announcement from a later
+ * change.
  */
-export function parseServerUrl(text: string): ServerAddress | null {
-  const m = text.matchAll(SERVER_URL_RE_ALL).next().value;
-  return m ? { url: m[1], port: Number(m[2]) } : null;
-}
-
-export type ServerEvent = { type: "url"; addr: ServerAddress } | { type: "standby" };
-
-/**
- * Every "Access at" URL and "standing by" announcement in a chunk of CLI
- * output, in the order they appear. A single `--serve --watch` run can print
- * more than one of each: a first "Access at" naming another process's URL,
- * a "standing by" line, then (once that owner exits) a second "Access at"
- * naming this process's own URL. Callers replay this list against persisted
- * state to tell a first announcement from a later change.
- */
-export function parseServerEvents(text: string): ServerEvent[] {
-  const found: Array<{ index: number; event: ServerEvent }> = [];
-  for (const m of text.matchAll(SERVER_URL_RE_ALL)) {
-    found.push({ index: m.index, event: { type: "url", addr: { url: m[1], port: Number(m[2]) } } });
-  }
-  for (const m of text.matchAll(STANDBY_RE)) {
-    found.push({ index: m.index, event: { type: "standby" } });
-  }
-  found.sort((a, b) => a.index - b.index);
-  return found.map((f) => f.event);
+export function parseServerUrls(text: string): ServerAddress[] {
+  return [...text.matchAll(SERVER_URL_RE_ALL)].map((m) => ({ url: m[1] }));
 }
 
 /** The fatal-failure line, or null. (`Build failed: <reason>` on stderr.) */
@@ -163,16 +126,6 @@ export function parseCliError(text: string): string | null {
 }
 
 /**
- * The `moss: N problem(s) reported above — …` summary count, or 0.
- * The `moss: ` prefix is load-bearing upstream (diagnostics.rs documents that
- * agents grep for it), so this anchors on it too.
- */
-export function parseProblemCount(text: string): number {
-  const m = /^moss: (\d+) problems? reported above/m.exec(text);
-  return m ? Number(m[1]) : 0;
-}
-
-/**
  * The moss app's deep link that opens a folder for building, previewing and
  * publishing. The app percent-decodes the whole path, separators included.
  */
@@ -181,12 +134,13 @@ export function publishInAppUrl(folder: string): string {
 }
 
 /**
- * The notice shown as the folder opens in the moss app, where it is published.
- * `address` is what `moss root --json` reports (see `parseRootJson`).
+ * The notice shown as the folder opens in the moss app, where it is published
+ * and where the app shows what goes public. `address` is what `moss root
+ * --json` reports (see `parseRootJson`).
  */
 export function publishNotice(folder: string, address: SiteAddress): string {
   const to = address ? ` to ${address}` : address === null ? " to mosspub.com" : "";
-  return `Opening ${folder} in moss to publish${to}: every note except draft: true.`;
+  return `Opening ${folder} in moss to publish${to}.`;
 }
 
 /** A string once the site is live, null before its first publish, undefined when the CLI cannot say. */
@@ -212,9 +166,3 @@ export function parseRootJson(stdout: string): { root: string | null; address: S
   }
   return { root: null, address: undefined };
 }
-
-/** Substring that identifies a real moss preview server's health body. */
-export const MOSS_HEALTH_MARKER = '"moss-preview-server"';
-
-/** Path every moss preview server reserves for health checks. */
-export const MOSS_HEALTH_PATH = "/__moss_health/";

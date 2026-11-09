@@ -1,17 +1,18 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, ViewStateResult, WorkspaceLeaf } from "obsidian";
 
 export const MOSS_PREVIEW_VIEW_TYPE = "moss-preview";
 
-export const PREVIEW_STOPPED = "No preview running. Run “moss: Preview site” to start one.";
+export const PREVIEW_STOPPED = "Not previewing. Choose “Preview this folder” to start.";
 
 /**
  * Right-leaf pane holding the site preview in an iframe pointed at the local
- * server the moss CLI starts. Established Obsidian practice (HTML Preview,
- * Custom Frames). The view owns no process — the plugin sets/clears the URL.
+ * server the moss CLI starts, as HTML Preview and Custom Frames do. The view
+ * owns no process: the plugin sets and clears the URL.
  */
 export class MossPreviewView extends ItemView {
   private iframe: HTMLIFrameElement | null = null;
   private messageEl: HTMLElement | null = null;
+  private folder: string | null = null;
 
   /** `onClosed` lets the plugin stop the server this pane was showing. */
   constructor(
@@ -26,7 +27,18 @@ export class MossPreviewView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "moss preview";
+    return `Preview: ${this.folder ?? this.app.vault.getName()}`;
+  }
+
+  /** The folder the pane previews names its tab; Obsidian redraws the tab after this. */
+  async setState(state: unknown, result: ViewStateResult): Promise<void> {
+    const folder = (state as { folder?: unknown } | null)?.folder;
+    if (typeof folder === "string") this.folder = folder;
+    await super.setState(state, result);
+  }
+
+  getState(): Record<string, unknown> {
+    return { ...super.getState(), folder: this.folder };
   }
 
   getIcon(): string {

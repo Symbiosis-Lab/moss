@@ -1,24 +1,23 @@
 import { App, Modal, Setting } from "obsidian";
 
-/** Asks before a first build changes a folder. Closing it any other way than Continue cancels. */
-export class FirstBuildModal extends Modal {
+/** Asked once, before moss adds `.moss/` to a folder. Closing it any other way than Preview cancels. */
+export class FirstPreviewModal extends Modal {
   private decided = false;
 
   constructor(
     app: App,
-    private title: string,
-    private lines: string[],
+    private folder: string,
     private done: (ok: boolean) => void,
   ) {
     super(app);
   }
 
   onOpen(): void {
-    this.titleEl.setText(this.title);
-    for (const line of this.lines) this.contentEl.createEl("p", { text: line });
+    this.setTitle(`Preview ${this.folder} with moss?`);
+    this.contentEl.createEl("p", { text: `moss adds a .moss folder to ${this.folder}.` });
     new Setting(this.contentEl)
       .addButton((b) => b.setButtonText("Cancel").onClick(() => this.finish(false)))
-      .addButton((b) => b.setButtonText("Continue").setCta().onClick(() => this.finish(true)));
+      .addButton((b) => b.setButtonText("Preview").setCta().onClick(() => this.finish(true)));
   }
 
   onClose(): void {

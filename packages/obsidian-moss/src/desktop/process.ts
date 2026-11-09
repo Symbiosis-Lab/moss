@@ -6,8 +6,7 @@ import type { ChildProcess } from "node:child_process";
 import {
   parseBuildFailure,
   parseCliError,
-  parseProblemCount,
-  parseServerEvents,
+  parseServerUrls,
   type ServerAddress,
 } from "./cli";
 
@@ -21,30 +20,19 @@ export type SpawnFn = (
 export interface RunCallbacks {
   /** The preview server announced its URL on stderr (first time, or a later change). */
   onServerReady?(addr: ServerAddress): void;
-  /** Another moss process already serves this vault; the CLI is standing by. */
-  onStandby?(): void;
   /** A fatal `Build failed:` / `Error:` line appeared. */
   onError?(message: string): void;
-  /** Non-fatal problem summary (`moss: N problems reported above …`). */
-  onProblems?(count: number): void;
   /** Process exited. `code` is null when killed by signal. */
   onExit?(code: number | null): void;
-  /** Raw stderr chunk, for logging. */
-  onOutput?(chunk: string): void;
 }
 
-/**
- * One running moss CLI invocation. Build-only runs exit on their own;
- * `--serve` runs live until `stop()`.
- */
+/** One running `moss build --serve --watch`; it lives until `stop()`. */
 export class MossProcess {
   private child: ChildProcess | null = null;
   /** Children stop() ended: their exit is a clean shutdown, whatever code they report. */
   private stopped = new WeakSet<object>();
   private stderrBuf = "";
   private lastServerUrl: string | null = null;
-  private standbyAnnounced = false;
-  private announcedProblems = false;
   private announcedError = false;
 
   constructor(private spawnFn: SpawnFn) {}
@@ -62,8 +50,6 @@ export class MossProcess {
     if (this.child) throw new Error("MossProcess already running");
     this.stderrBuf = "";
     this.lastServerUrl = null;
-    this.standbyAnnounced = false;
-    this.announcedProblems = false;
     this.announcedError = false;
 
     const child = this.spawnFn(binary, args, { cwd });
@@ -75,7 +61,6 @@ export class MossProcess {
     const onChunk = (data: unknown) => {
       if (!current()) return;
       const text = String(data);
-      callbacks.onOutput?.(text);
       this.append(text);
       this.scan(callbacks);
     };
@@ -115,20 +100,12 @@ export class MossProcess {
   }
 
   private scan(callbacks: RunCallbacks): void {
-    // Replayed against persisted state on every chunk, so an event already
-    // acted on (same URL, or a standby line already announced since the
-    // last URL) is a no-op the second and later times it shows up in the
-    // accumulated buffer.
-    for (const event of parseServerEvents(this.stderrBuf)) {
-      if (event.type === "url") {
-        if (event.addr.url !== this.lastServerUrl) {
-          this.lastServerUrl = event.addr.url;
-          this.standbyAnnounced = false;
-          callbacks.onServerReady?.(event.addr);
-        }
-      } else if (!this.standbyAnnounced) {
-        this.standbyAnnounced = true;
-        callbacks.onStandby?.();
+    // Replayed against persisted state on every chunk, so a URL already
+    // acted on is a no-op when it shows up again in the accumulated buffer.
+    for (const addr of parseServerUrls(this.stderrBuf)) {
+      if (addr.url !== this.lastServerUrl) {
+        this.lastServerUrl = addr.url;
+        callbacks.onServerReady?.(addr);
       }
     }
     if (!this.announcedError) {
@@ -136,13 +113,6 @@ export class MossProcess {
       if (failure) {
         this.announcedError = true;
         callbacks.onError?.(failure);
-      }
-    }
-    if (!this.announcedProblems) {
-      const n = parseProblemCount(this.stderrBuf);
-      if (n > 0) {
-        this.announcedProblems = true;
-        callbacks.onProblems?.(n);
       }
     }
   }

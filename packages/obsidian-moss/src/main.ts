@@ -19,7 +19,8 @@ export default class MossPlugin extends Plugin {
   private disposed = false;
 
   async onload(): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) ?? {}) };
+    const saved = ((await this.loadData()) ?? {}) as Partial<MossSettings>;
+    this.settings = { binaryPath: saved.binaryPath ?? DEFAULT_SETTINGS.binaryPath };
     initializeCore();
     this.site = new MossSite(JSON.stringify({ files: [], lang: "en" }));
     this.schema = siteSchema(this.site);
@@ -30,7 +31,6 @@ export default class MossPlugin extends Plugin {
     ]);
     this.registerEditorSuggest(new MossFieldSuggest(this, () => this.schema));
     this.registerView(PAGE_PREVIEW_VIEW_TYPE, (leaf) => new PagePreviewView(leaf, this));
-    this.addCommand({ id: "preview-page", name: "Preview this page", callback: () => this.openPagePreview() });
     for (const event of ["create", "delete", "rename"] as const) {
       this.registerEvent((this.app.vault as Events).on(event, () => this.scheduleRebuild()));
     }
@@ -43,11 +43,26 @@ export default class MossPlugin extends Plugin {
       if (path === ".moss" || path.startsWith(".moss/")) this.scheduleRebuild();
     }));
     this.app.workspace.onLayoutReady(() => { if (!this.disposed) this.scheduleRebuild(); });
-    if (Platform.isDesktopApp) {
+    // The mobile UI (a phone, or desktop Obsidian emulating one) gets the page door, as no program runs on a phone.
+    if (Platform.isDesktopApp && !Platform.isMobile) {
       const { DesktopCommands } = await import("./desktop");
       if (this.disposed) return;
       this.desktop = new DesktopCommands(this);
       this.desktop.load();
+    } else {
+      this.addCommand({
+        id: "preview-page",
+        name: "Preview this page",
+        checkCallback: (checking) => {
+          if (!this.canPreviewPage()) return false;
+          if (!checking) void this.openPagePreview();
+          return true;
+        },
+      });
+      this.addRibbonIcon("globe", "Preview this page", () => {
+        if (this.canPreviewPage()) void this.openPagePreview();
+        else new Notice("Open a note to preview it.");
+      });
     }
   }
 
@@ -80,7 +95,12 @@ export default class MossPlugin extends Plugin {
     }
   }
 
-  private async openPagePreview(): Promise<void> {
+  /** The page render needs an open note. */
+  canPreviewPage(): boolean {
+    return this.app.workspace.getActiveFile()?.extension === "md";
+  }
+
+  async openPagePreview(): Promise<void> {
     const workspace = this.app.workspace;
     const source = workspace.activeEditor;
     let leaf = workspace.getLeavesOfType(PAGE_PREVIEW_VIEW_TYPE)[0];
@@ -101,7 +121,6 @@ export default class MossPlugin extends Plugin {
     ++this.generation;
     clearTimeout(this.rebuildTimer);
     this.desktop?.unload();
-    this.app.workspace.detachLeavesOfType(PAGE_PREVIEW_VIEW_TYPE);
     this.site?.free();
   }
 }
