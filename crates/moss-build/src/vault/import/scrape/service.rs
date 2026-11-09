@@ -360,6 +360,7 @@ mod tests {
             chrome_images: Vec::new(),
             tags: Vec::new(),
             event: Default::default(),
+            listing: false,
         };
         let fm = generate_frontmatter(&meta, "https://x.example/post");
         assert!(fm.starts_with("---\n"));

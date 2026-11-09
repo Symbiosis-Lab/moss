@@ -12,6 +12,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss import` turns a platform's tag archive into the page of that tag. A page titled like a tag that imported pages carry, and that declares itself a listing (a `CollectionPage` or `Series` in its structured data, or a `tag` or `category` class on the page), is written with `tag_page:` and its description as the body, so moss draws the list of tagged pages and `/tags/<tag>/` forwards to it. Before, it was an ordinary page holding a flat copy of every post card with root-relative links.
 - `moss import` turns a blogging platform's link-preview card into one link, `[![](picture) Title](address)`, with its description on the next line and its publisher row dropped. Before, the card became a link whose text spanned several paragraphs, which showed as literal brackets, and a card pointing inside the site was not rewritten to the local page.
 - `moss import` keeps a heading with a line break as one heading: `<h3>Step 1.<br>Find the room</h3>` is written `### Step 1.<br>Find the room`, where the second part used to fall out as a paragraph.
 - `moss import` keeps every post of a page that lists posts as several `<article>` cards inside one container, when the cards share a class. Before, only the first card was imported.

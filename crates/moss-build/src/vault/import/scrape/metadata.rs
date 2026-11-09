@@ -57,6 +57,9 @@ pub struct ArticleMetadata {
     pub tags: Vec<String>,
     /// Fields read from a schema.org `Event` block; never touches `date`.
     pub event: EventMetadata,
+    /// The page declares itself a listing of other pages (see
+    /// [`declares_listing`]). Never written to YAML.
+    pub listing: bool,
 }
 
 const ARTICLE_TYPES: &[&str] = &[
@@ -103,7 +106,25 @@ pub fn derive(html: &str) -> ArticleMetadata {
         chrome_images: chrome_images(&doc),
         tags: article_tags(&doc),
         event: derive_event(&entries),
+        listing: declares_listing(&doc, &entries),
     }
+}
+
+/// schema.org types a listing page declares for itself.
+const LISTING_TYPES: &[&str] = &["CollectionPage", "Series"];
+
+/// `<body>` class tokens a platform puts on a tag or category archive:
+/// Ghost's `tag-template`, WordPress's `tag` and `category`.
+const ARCHIVE_BODY_CLASSES: &[&str] = &["tag-template", "tag", "category"];
+
+/// Whether the page says it lists other pages: a listing type in its JSON-LD,
+/// or an archive class on `<body>`.
+fn declares_listing(doc: &Html, entries: &[Value]) -> bool {
+    entries.iter().any(|e| has_type(e, LISTING_TYPES))
+        || Selector::parse("body")
+            .ok()
+            .and_then(|sel| doc.select(&sel).next())
+            .is_some_and(|body| body.value().classes().any(|c| ARCHIVE_BODY_CLASSES.contains(&c)))
 }
 
 /// Read every `<script type="application/ld+json">` block, parse each as JSON,
@@ -961,5 +982,16 @@ mod tests {
         assert_eq!(strip_site_name(&format!("{name} | Press"), &[name]), "Press");
         assert_eq!(strip_site_name(name, &[name]), name);
         assert_eq!(strip_site_name("Press | Studio Name", &["Studio Name"]), "Press");
+    }
+
+    #[test]
+    fn a_page_declares_a_listing_by_json_ld_type_or_archive_body_class() {
+        let ld = |t: &str| format!(r#"<html><head><script type="application/ld+json">{{"@type":"{t}","name":"Field Notes"}}</script></head><body></body></html>"#);
+        assert!(derive(&ld("Series")).listing);
+        assert!(derive(&ld("CollectionPage")).listing);
+        assert!(derive("<html><body class=\"tag-template tag-tuesdays\"></body></html>").listing);
+        assert!(!derive(&ld("Article")).listing);
+        assert!(!derive(&ld("ItemList")).listing, "an ordinary list article declares this too");
+        assert!(!derive("<html><body class=\"post-template\"></body></html>").listing);
     }
 }

@@ -47,7 +47,11 @@ struct Page {
 }
 
 /// Finish the pages in `written` (paths relative to `out_dir`).
-pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Result<(), String> {
+pub(crate) fn finalize_written_pages(
+    out_dir: &Path,
+    written: &[String],
+    listings: &HashSet<String>,
+) -> Result<(), String> {
     let mut pages = Vec::with_capacity(written.len());
     for relative in written {
         // allow:raw_read the importer's own output, written moments ago in this run — not a cloud-evictable vault input
@@ -57,6 +61,8 @@ pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Resu
         pages.push(Page { relative: relative.clone(), content, title });
     }
     let site_name = shared_site_name(&pages);
+    let tag_pages = tags_carried(&pages);
+    let mut claimed_tags: HashSet<String> = HashSet::new();
 
     for page in &pages {
         let mut updated = page.content.clone();
@@ -71,6 +77,17 @@ pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Resu
                 if let Some(next) = with_title(&updated, &stripped) {
                     updated = next;
                 }
+            }
+        }
+        // A tag archive claims its tag and lets moss draw the listing.
+        if listings.contains(&page.relative) {
+            if let Some(next) = frontmatter_text(&updated, "title")
+                .filter(|title| tag_pages.carried_elsewhere(title, &page.relative))
+                // One page can hold a tag; any other listing keeps what it imported.
+                .filter(|title| claimed_tags.insert(title.trim().to_string()))
+                .and_then(|tag| as_tag_page(&updated, &tag))
+            {
+                updated = next;
             }
         }
         // After the title is final: the heading repeating it is dropped last.
@@ -97,6 +114,37 @@ pub(crate) fn finalize_written_pages(out_dir: &Path, written: &[String]) -> Resu
         }
     }
     Ok(())
+}
+
+/// Which pages carry each tag in `tags:`.
+struct TagsCarried(HashMap<String, HashSet<String>>);
+
+impl TagsCarried {
+    /// Whether some page other than `relative` carries `tag`.
+    fn carried_elsewhere(&self, tag: &str, relative: &str) -> bool {
+        self.0.get(tag.trim()).is_some_and(|pages| pages.iter().any(|p| p != relative))
+    }
+}
+
+fn tags_carried(pages: &[Page]) -> TagsCarried {
+    let mut by_tag: HashMap<String, HashSet<String>> = HashMap::new();
+    for page in pages {
+        let map = moss_core::frontmatter::frontmatter_map(&page.content);
+        let Some(serde_yaml::Value::Sequence(tags)) = map.get("tags") else { continue };
+        for tag in tags.iter().filter_map(moss_core::frontmatter::value_as_string) {
+            by_tag.entry(tag.trim().to_string()).or_default().insert(page.relative.clone());
+        }
+    }
+    TagsCarried(by_tag)
+}
+
+/// The page as the page of `tag`: `tag_page:` added, and the body reduced to
+/// the page's description, since moss draws the listing under it.
+fn as_tag_page(content: &str, tag: &str) -> Option<String> {
+    let claimed = with_fields_absent(content, &[("tag_page", format!("\"{}\"", escape_yaml_string(tag)))])?;
+    let span = moss_core::frontmatter::frontmatter_span(&claimed)?;
+    let body = frontmatter_text(&claimed, "description").map(|d| format!("\n{d}\n")).unwrap_or_default();
+    Some(format!("{}{body}", claimed.get(..span.body)?))
 }
 
 fn frontmatter_text(content: &str, key: &str) -> Option<String> {
@@ -515,7 +563,7 @@ mod tests {
 
     fn run(root: &Path, pages: &[&str]) {
         let written: Vec<String> = pages.iter().map(|s| s.to_string()).collect();
-        finalize_written_pages(root, &written).unwrap();
+        finalize_written_pages(root, &written, &HashSet::new()).unwrap();
     }
 
     fn read(root: &Path, rel: &str) -> String {
@@ -788,5 +836,52 @@ mod tests {
         }
         run(root, &["index.md", "a.md", "b.md"]);
         assert_eq!(read(root, "a.md"), "---\ntitle: \"a\"\n---\n\nText\n");
+    }
+
+    fn post(title: &str) -> String {
+        format!("---\ntitle: \"{title}\"\ntags: [\"Field Notes\", \"Slow Reading\"]\n---\n\nBody\n")
+    }
+
+    const ARCHIVE: &str = "---\ntitle: \"Field Notes\"\ndescription: \"Tuesday notes.\"\ncover: \"./assets/imported/a.jpg\"\norigin: \"https://notes.example.test/tag/tuesdays/\"\nnav: true\nweight: 3\n---\n\n[First light](/first-light/)\n\n[Second draft](/second-draft/)\n";
+
+    #[test]
+    fn a_listing_titled_like_a_carried_tag_claims_it_and_keeps_its_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        put(root, "first-light.md", &post("First light"));
+        put(root, "second-draft.md", &post("Second draft"));
+        put(root, "tag/tuesdays.md", ARCHIVE);
+        put(root, "notes.md", ARCHIVE);
+        let written: Vec<String> =
+            ["first-light.md", "second-draft.md", "tag/tuesdays.md", "notes.md"].map(String::from).to_vec();
+        let listings = HashSet::from(["tag/tuesdays.md".to_string()]);
+
+        finalize_written_pages(root, &written, &listings).unwrap();
+
+        let claimed = read(root, "tag/tuesdays.md");
+        assert!(claimed.contains("tag_page: \"Field Notes\"\n"), "{claimed}");
+        for kept in ["title: \"Field Notes\"", "description: \"Tuesday notes.\"", "cover: \"./assets/imported/a.jpg\"",
+            "origin: \"https://notes.example.test/tag/tuesdays/\"", "nav: true", "weight: 3"] {
+            assert!(claimed.contains(kept), "{kept} lost: {claimed}");
+        }
+        assert!(claimed.ends_with("---\n\nTuesday notes.\n"), "body is the description only: {claimed}");
+        assert_eq!(read(root, "notes.md"), ARCHIVE, "no listing signal: stays as written");
+        assert_eq!(read(root, "first-light.md"), post("First light"));
+    }
+
+    #[test]
+    fn only_the_first_listing_titled_like_a_tag_claims_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        put(root, "first-light.md", &post("First light"));
+        put(root, "a.md", ARCHIVE);
+        put(root, "b.md", ARCHIVE);
+        let written: Vec<String> = ["first-light.md", "a.md", "b.md"].map(String::from).to_vec();
+        let listings = HashSet::from(["a.md".to_string(), "b.md".to_string()]);
+
+        finalize_written_pages(root, &written, &listings).unwrap();
+
+        assert!(read(root, "a.md").contains("tag_page:"));
+        assert_eq!(read(root, "b.md"), ARCHIVE, "the second listing keeps its body");
     }
 }

@@ -181,7 +181,8 @@ pub struct RateLimitedHost {
 /// What became of one URL popped from the crawl queue.
 enum PageOutcome {
     /// Composed into a note; the full markdown ready to write.
-    Written(String, WidgetCount),
+    /// The note, its widgets, and whether the page declares itself a listing.
+    Written(String, WidgetCount, bool),
     /// Fetched (or attempted) but refused with a reason — written as the
     /// error placeholder, so an in-scope link elsewhere that points at it
     /// still resolves to a real file on disk.
@@ -349,6 +350,8 @@ where
     let mut left_site: Vec<(String, String)> = Vec::new();
     // Normalised page URL → the note written for it, for the chrome pass.
     let mut written_urls: HashMap<String, String> = HashMap::new();
+    // Normalised URLs of the written pages that declare themselves listings.
+    let mut listing_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Error stubs: not finished like a page, but still pages under their folder.
     let mut error_stubs: Vec<String> = Vec::new();
     // Where the site's chrome is read from: the start page, else the first page.
@@ -625,7 +628,7 @@ where
                 // by canonical (rule 1) or by same-path body (rule 2) — is
                 // caught. See `Dedupe::record_written`.
                 state.dedupe.record_written(&url, canonical.as_deref(), body_hash);
-                PageOutcome::Written(note, article.widgets)
+                PageOutcome::Written(note, article.widgets, article.metadata.listing)
             }
             None => PageOutcome::Failed(
                 "no article content found (unsupported page or empty body)".to_string(),
@@ -634,10 +637,13 @@ where
         };
 
         match outcome {
-            PageOutcome::Written(note, widgets) => {
+            PageOutcome::Written(note, widgets, listing) => {
                 let relative = rename_for_collision(out_dir, &url_to_file_path(&url, &scope));
                 write_note(out_dir, &relative, &note)?;
                 if let Some(key) = norm_url(&url) {
+                    if listing {
+                        listing_urls.insert(key.clone());
+                    }
                     written_urls.insert(key, relative.clone());
                 }
                 written.push(relative);
@@ -706,7 +712,10 @@ where
 
     // What only the finished crawl can decide: a folder written after its
     // index page, and the site name every title shares.
-    super::finalize::finalize_written_pages(out_dir, &written)?;
+    // `written_urls` follows the layout pass, so it names each listing's final path.
+    let listings: std::collections::HashSet<String> =
+        listing_urls.iter().filter_map(|u| written_urls.get(u)).cloned().collect();
+    super::finalize::finalize_written_pages(out_dir, &written, &listings)?;
 
     on_progress(ScrapeProgress {
         pages_scraped: state.tally.scraped(),

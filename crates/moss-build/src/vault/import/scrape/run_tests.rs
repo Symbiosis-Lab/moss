@@ -2456,3 +2456,41 @@ fn a_link_preview_card_becomes_one_block_link() {
     let picture_link = rewrite_links("[![](a.jpg)](https://notes.example.test/second-draft/)", &scope);
     assert_eq!(picture_link, "[![](a.jpg)](./second-draft/index.md)");
 }
+
+/// The crawl carries a page's listing signal to the pass that knows the tags.
+#[tokio::test]
+async fn a_crawled_tag_archive_claims_its_tag() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let body = "<p>Intro paragraph, long enough to be extracted as the content of this page.</p>";
+    let mut serve = |path: &str, html: String| {
+        server.mock("GET", path).with_status(200).with_header("content-type", "text/html").with_body(html).create()
+    };
+    let post = |title: &str| {
+        format!(
+            r#"<html><head><title>{title}</title><meta property="article:tag" content="Field Notes"></head><body><article>{body}</article></body></html>"#
+        )
+    };
+    let _home = serve(
+        "/",
+        format!(
+            r#"<html><head><title>Example Notes</title></head><body><article>{body}<p><a href="{base}/first-light/">one</a> <a href="{base}/tag/tuesdays/">two</a></p></article></body></html>"#
+        ),
+    );
+    let _post = serve("/first-light/", post("First light"));
+    let _archive = serve(
+        "/tag/tuesdays/",
+        format!(
+            r#"<html><head><title>Field Notes</title><script type="application/ld+json">{{"@type":"Series","name":"Field Notes"}}</script></head><body><article>{body}<p><a href="{base}/first-light/">First light</a></p></article></body></html>"#
+        ),
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.recursive = true;
+    scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+
+    let archive = std::fs::read_to_string(tmp.path().join("tag/tuesdays.md")).unwrap();
+    assert!(archive.contains("tag_page: \"Field Notes\"\n"), "{archive}");
+    assert!(!archive.contains("Intro paragraph"), "moss draws the listing: {archive}");
+}
