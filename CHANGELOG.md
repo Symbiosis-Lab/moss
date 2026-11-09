@@ -40,6 +40,7 @@ All notable changes to moss will be documented here.
 - A file whose name stores an accented letter as a letter plus an accent mark (as a sync client may write `é`) is now built, published and edited under the one-character spelling, so every machine gives it one address. Such a file that was published before moves to that address, and the publish check lets the move through, since a Mac disk cannot hold both spellings to keep the old one answering; a link saved to the old address stops working. The editor, `moss expand` and the watcher's change keys find a file under either spelling; history restore and `moss map` on Linux still need the composed spelling.
 - On Windows and Linux, shortcut hints in tooltips and context menus read `Ctrl+E` instead of macOS's `⌘E`, the file tree and the folder screen say "Show in folder" instead of naming the Finder, deleting a file says Recycle Bin on Windows, and the editor and app chrome use the desktop's own interface font instead of falling back to Roboto or a generic sans.
 - Taking a network out of a post's `syndicate:` list stops moss sending the post there. Before, a copy planned earlier was still posted on the next publish, or a copy already posted was updated. The copy's record is kept, so naming the network again picks up where it stopped.
+- `moss edit <folder> --no-browser` or `--port` without `--serve` now serves the editor instead of opening moss desktop and dropping the flags.
 
 ## [0.15.20] - 2026-11-08
 
