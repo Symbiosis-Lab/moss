@@ -1,5 +1,14 @@
 //! HTML post-processing helpers.
 
+// The rewriters below send `src=`/`poster=`/`data-placeholder-src=` values through
+// decode → caller transform → re-encode; `split_url_path` keeps the encoder away
+// from `?query`/`#fragment`, and the encoder keeps moss-core's wikilink keep-list.
+use moss_core::resolve::fuzzy_path::{
+    decode_html_reference_path, percent_decode_path, percent_encode_path_segments, split_url_path,
+};
+use regex::Regex;
+use std::sync::LazyLock;
+
 pub use moss_core::resolve::source::{accept_criticmarkup, strip_percent_comments};
 pub(crate) use moss_core::heading::inject_article_title_h1;
 
@@ -486,6 +495,14 @@ pub fn apply_dir_overrides_to_asset_paths(
     })
 }
 
+static SRC_ATTR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"((?:src|srcset|poster|data-placeholder-src|data)=")([^"]+)"#).unwrap());
+// A start tag, or a whole `<pre>`/`<code>` element to copy through untouched.
+static START_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)(?P<skip><pre\b.*?</pre>|<code\b.*?</code>)|<[a-zA-Z](?:"[^"]*"|'[^']*'|[^'">])*>"#)
+        .unwrap()
+});
+
 /// Shared scaffolding for the two URL-attribute-rewriting post-processors.
 ///
 /// Walks every URL-bearing attribute on a renderer-emitted element
@@ -529,7 +546,6 @@ where
     // multiple comma-separated "URL descriptor" candidates —
     // `rewrite_srcset_candidates` splits those and rewrites each URL
     // independently; single-URL srcset stays on the shared path below.
-    let re = regex::Regex::new(r#"((?:src|srcset|poster|data-placeholder-src|data)=")([^"]+)"#).unwrap();
     let mut rewrite_attr = |caps: &regex::Captures| {
         let attr_prefix = &caps[1];
         let value = &caps[2];
@@ -613,16 +629,12 @@ where
     // inline code, fenced code) has no `<tag` around it, since the renderer
     // escapes a literal `<` as `&lt;`. `<pre>`/`<code>` elements match first
     // and are copied through whole, so an element written inside them is text.
-    let tag_re = regex::Regex::new(
-        r#"(?s)(?P<skip><pre\b.*?</pre>|<code\b.*?</code>)|<[a-zA-Z](?:"[^"]*"|'[^']*'|[^'">])*>"#,
-    )
-    .unwrap();
-    tag_re
+    START_TAG_RE
         .replace_all(html, |tag: &regex::Captures| {
             if tag.name("skip").is_some() {
                 return tag[0].to_string();
             }
-            re.replace_all(&tag[0], &mut rewrite_attr).to_string()
+            SRC_ATTR_RE.replace_all(&tag[0], &mut rewrite_attr).to_string()
         })
         .to_string()
 }
@@ -719,18 +731,34 @@ where
     Some(out.join(", "))
 }
 
-// Canonical URL helpers from moss-core. Both rewriting functions above flow
-// `src=`/`poster=`/`data-placeholder-src=` values through a decode →
-// caller-transform → re-encode pipeline; `split_url_path` keeps the encoder
-// away from `?query`/`#fragment` and `percent_encode_path_segments` enforces
-// the same keep-list as moss-core's wikilink resolver.
-use moss_core::resolve::fuzzy_path::{
-    decode_html_reference_path, percent_decode_path, percent_encode_path_segments, split_url_path,
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Timed against compiling the same patterns here, so machine load scales both sides.
+    #[test]
+    fn rewriting_a_segment_costs_far_less_than_compiling_its_patterns() {
+        fn fastest(runs: u32, mut f: impl FnMut()) -> std::time::Duration {
+            (0..5)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    (0..runs).for_each(|_| f());
+                    t.elapsed() / runs
+                })
+                .min()
+                .unwrap()
+        }
+        let html = r#"<p>Text</p><img src="My Photos/a.jpg"><video poster="./b.jpg"></video>"#;
+        let none = std::collections::HashMap::new();
+        let rewrite = fastest(20, || {
+            std::hint::black_box(apply_dir_overrides_to_asset_paths(html, &none));
+        });
+        let compile = fastest(2, || {
+            std::hint::black_box(Regex::new(SRC_ATTR_RE.as_str()).unwrap());
+            std::hint::black_box(Regex::new(START_TAG_RE.as_str()).unwrap());
+        });
+        assert!(rewrite * 10 < compile, "a rewrite took {rewrite:?}, compiling its patterns {compile:?}");
+    }
 
     // ── rewrite_relative_src_attrs only touches real tags ─────────────
 
