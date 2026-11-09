@@ -724,6 +724,29 @@ describe('file-tree keyboard integration', () => {
     input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   });
 
+  test('Enter pressed in a field outside the tree never renames, even when that field gives up focus', async () => {
+    // The editor heading commits on Enter, and the commit can leave nothing
+    // focused before the key reaches the document; the tree must judge the
+    // key by where it was pressed, not by where focus is afterwards.
+    mockRenameEntry.mockResolvedValue({ status: 'ok', data: null });
+    await fileTree.mount(container, PROJECT_ROOT, false);
+    fileTree.highlight(`${PROJECT_ROOT}/posts/alpha.md`);
+    enterDirMode(fileTree);
+    clickWith(findLeaf(container, 'alpha.md')!);
+    vi.advanceTimersByTime(PAST_DBLCLICK);
+
+    const heading = document.createElement('div');
+    heading.contentEditable = 'true';
+    heading.tabIndex = 0;
+    document.body.appendChild(heading);
+    heading.addEventListener('keydown', (e) => { if (e.key === 'Enter') heading.blur(); });
+    heading.focus();
+    heading.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    heading.remove();
+
+    expect(container.querySelector('input.moss-tree-rename-input')).toBeNull();
+  });
+
   test('The rename key triggers rename on single-row focus', async () => {
     mockRenameEntry.mockResolvedValue({ status: 'ok', data: null });
     await fileTree.mount(container, PROJECT_ROOT, false);
