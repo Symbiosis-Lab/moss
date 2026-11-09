@@ -132,22 +132,27 @@ fn html_refs(html: &str) -> Vec<String> {
     let all = scraper::Selector::parse("*").unwrap();
     for el in doc.select(&all) {
         let e = el.value();
+        // scraper hands an element's attributes back in hash order, which
+        // differs from one parse to the next: sort them within the element.
+        let mut here = Vec::new();
         for (name, value) in e.attrs() {
             let value = value.trim();
             match name {
                 _ if IDENTITY_ATTRS.contains(&name) => {}
-                "srcset" => out.extend(value.split(',').filter_map(|c| c.split_whitespace().next()).map(str::to_string)),
-                "style" => out.extend(css_refs(value)),
+                "srcset" => here.extend(value.split(',').filter_map(|c| c.split_whitespace().next()).map(str::to_string)),
+                "style" => here.extend(css_refs(value)),
                 "content" if e.attr("http-equiv").is_some_and(|v| v.eq_ignore_ascii_case("refresh")) => {
                     if let Some(at) = value.to_ascii_lowercase().find("url=") {
-                        out.push(value[at + 4..].trim_matches(['\'', '"', ' ']).to_string());
+                        here.push(value[at + 4..].trim_matches(['\'', '"', ' ']).to_string());
                     }
                 }
-                "href" | "src" | "poster" | "action" | "data" => out.push(value.to_string()),
-                _ if value.starts_with('/') && !value.starts_with("//") => out.push(value.to_string()),
+                "href" | "src" | "poster" | "action" | "data" => here.push(value.to_string()),
+                _ if value.starts_with('/') && !value.starts_with("//") => here.push(value.to_string()),
                 _ => {}
             }
         }
+        here.sort();
+        out.append(&mut here);
         if e.name() == "style" {
             out.extend(css_refs(&el.text().collect::<String>()));
         }
@@ -269,5 +274,17 @@ fn a_site_at_the_root_ships_its_urls_unchanged() {
         if css {
             assert_eq!(shipped, staged, "{} changed", rel.display());
         }
+    }
+}
+
+/// The same page must list its URLs in the same order every time it is parsed,
+/// or the staged-versus-shipped comparison flips on hash order.
+#[test]
+fn html_refs_come_back_in_one_order() {
+    let html = r#"<form action="https://f.example/x" data-next="/about/" poster="/p.png" src="/s.js" href="/h/"></form>"#;
+    let first = html_refs(html);
+    assert_eq!(first, ["/about/", "/h/", "/p.png", "/s.js", "https://f.example/x"].map(String::from));
+    for _ in 0..50 {
+        assert_eq!(html_refs(html), first);
     }
 }
