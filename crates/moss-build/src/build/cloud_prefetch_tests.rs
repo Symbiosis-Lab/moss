@@ -257,6 +257,74 @@ fn a_publication_is_counted_done_only_once_its_slot_is_free() {
     assert_eq!(p.snapshot().in_flight, 0);
 }
 
+/// A full queue: one publication running behind a gate, the rest waiting.
+fn full_publication_queue() -> (Prefetcher, mpsc::Sender<()>) {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let held: Operation = Arc::new(move || {
+        let _ = gate.lock().unwrap().recv();
+        Ok(StorageValue::Published(0))
+    });
+    let p = Prefetcher::with_materializer(1, recording().0, false);
+    for i in 0..=BACKGROUND_WAITING {
+        let key = OperationKey { path: format!("/replica/{i}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
+        p.cache_publication_within(key, held.clone(), None, Duration::ZERO, PUBLICATION_STALL).expect("room");
+    }
+    assert!(wait_until(|| p.snapshot().in_flight == 1));
+    assert_eq!(p.snapshot().waiting, BACKGROUND_WAITING, "premise: the queue is full");
+    (p, release)
+}
+
+/// A publication that finds the queue full waits for room instead of being
+/// dropped, so the record it carries still lands.
+#[test]
+fn a_publication_waits_for_room_in_a_full_queue() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let (p, release) = full_publication_queue();
+    let p = Arc::new(p);
+    let late: Operation = Arc::new(|| Ok(StorageValue::Published(0)));
+    let key = OperationKey { path: "/replica/late".into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
+    let waiting = Arc::clone(&p);
+    let admitted = std::thread::spawn(move || waiting.cache_publication_within(key, late, None, Duration::from_secs(10), Duration::from_secs(5)).is_some());
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!admitted.is_finished(), "admitted into a full queue");
+    for _ in 0..=BACKGROUND_WAITING { let _ = release.send(()); }
+    assert!(admitted.join().unwrap(), "dropped although room was made");
+}
+
+/// The wait is bounded: with no room made, the publication is dropped at its deadline.
+#[test]
+fn a_publication_stops_waiting_for_room_at_its_deadline() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let (p, release) = full_publication_queue();
+    let late: Operation = Arc::new(|| Ok(StorageValue::Published(0)));
+    let key = OperationKey { path: "/replica/late".into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
+    let started = std::time::Instant::now();
+    assert!(p.cache_publication_within(key, late, None, Duration::from_millis(150), Duration::from_secs(5)).is_none());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    for _ in 0..=BACKGROUND_WAITING { let _ = release.send(()); }
+}
+
+/// A queue that stops moving bounds the wait, not the deadline: the first
+/// publication gives up once no job has been taken for the stall time, and the
+/// next one at once, so a provider that stops answering cannot hold a build for
+/// a deadline per record.
+#[test]
+fn a_stalled_queue_refuses_after_the_stall_and_then_at_once() {
+    use crate::build::cloud_readiness::storage::{Operation, OperationKey, OperationPolicy, StorageValue};
+    let (p, release) = full_publication_queue();
+    let late: Operation = Arc::new(|| Ok(StorageValue::Published(0)));
+    let key = |name: &str| OperationKey { path: format!("/replica/{name}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } };
+    let started = std::time::Instant::now();
+    assert!(p.cache_publication_within(key("first"), late.clone(), None, Duration::from_secs(30), Duration::from_millis(300)).is_none());
+    assert!(started.elapsed() < Duration::from_secs(5), "waited past the stall: {:?}", started.elapsed());
+    let started = std::time::Instant::now();
+    assert!(p.cache_publication_within(key("second"), late, None, Duration::from_secs(30), Duration::from_millis(300)).is_none());
+    assert!(started.elapsed() < Duration::from_millis(100), "a stalled queue still held the next publication: {:?}", started.elapsed());
+    for _ in 0..=BACKGROUND_WAITING { let _ = release.send(()); }
+}
+
 /// A process about to exit waits for a slow publication, so the record it
 /// carries is on disk for the next build.
 #[test]

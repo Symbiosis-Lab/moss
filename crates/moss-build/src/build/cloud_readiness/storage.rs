@@ -239,8 +239,14 @@ pub(crate) enum PublicationOutcome {
 /// Deadline and admission refusal retain the caller's complete local object;
 /// neither can certify a shared publication or reclaim a native slot.
 pub(crate) fn await_publication(key: OperationKey, attempt: Operation) -> PublicationOutcome {
-    await_publication_revision(key, attempt, None, 0)
+    await_publication_in(&super::PREFETCH, key, attempt, None, 0)
 }
+
+/// How long a record publication waits for room in a full queue. A refused
+/// blob stays usable in this machine's store; a refused record is lost, and on
+/// a folder whose records are cloud placeholders a build queues more of them
+/// than the readers can fetch, so each one dropped is work the next build redoes.
+const RECORD_ADMISSION_WAIT: Duration = Duration::from_secs(60);
 
 /// A process about to exit gives its cache publications up to `deadline` to
 /// land, so the next build finds the records this one wrote. How many did not.
@@ -248,13 +254,18 @@ pub(crate) fn drain_cache_publications(deadline: Duration) -> usize {
     super::PREFETCH.drain_publications(deadline)
 }
 
+/// A record's publication: as [`await_publication_in`], waiting for room in a full queue.
 pub(crate) fn await_publication_revision(key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
-    await_publication_in(&super::PREFETCH, key, attempt, revision, expected)
+    await_admitted(&super::PREFETCH, key, attempt, revision, expected, RECORD_ADMISSION_WAIT)
 }
 
 pub(crate) fn await_publication_in(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
+    await_admitted(pool, key, attempt, revision, expected, Duration::ZERO)
+}
+
+fn await_admitted(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64, admission: Duration) -> PublicationOutcome {
     let path = key.path.clone();
-    let Some(task) = pool.cache_publication_revision(key, attempt, revision) else {
+    let Some(task) = pool.cache_publication_within(key, attempt, revision, admission, crate::build::cloud_prefetch::PUBLICATION_STALL) else {
         return PublicationOutcome::Fatal(Arc::new(StorageFailure::new(Some(path), StorageOperation::CachePublish,
             io::Error::new(io::ErrorKind::WouldBlock, "optional cache publication skipped: admission capacity exhausted"))));
     };

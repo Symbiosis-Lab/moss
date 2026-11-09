@@ -355,8 +355,19 @@ struct Queue {
     /// Reads and operations finished. Counted in the same locked step that
     /// frees their slot, so a snapshot never sees one both done and in flight.
     done: u64,
+    /// When a reader last took a job: a publication waiting for room waits
+    /// only while the queue is moving.
+    last_pop: Instant,
     shutdown: bool,
 }
+
+thread_local! {
+    /// Set on this pool's reader threads, which must never wait for room only they can make.
+    static ON_READER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// How long a publication waiting for room waits with no job taken before it gives up.
+pub(crate) const PUBLICATION_STALL: Duration = Duration::from_secs(5);
 
 impl Queue {
     fn structural_count(&self) -> usize {
@@ -406,6 +417,7 @@ impl Prefetcher {
                 background_in_flight: 0,
                 failures: HashSet::new(),
                 done: 0,
+                last_pop: Instant::now(),
                 shutdown: false,
             }),
             work: Condvar::new(),
@@ -427,6 +439,7 @@ impl Prefetcher {
                     if opt_in {
                         crate::platform::materialize_on_this_thread();
                     }
+                    ON_READER.with(|on| on.set(true));
                     reader_loop(&inner);
                 });
         }
@@ -436,6 +449,7 @@ impl Prefetcher {
                 .name(format!("moss-cloud-structure-{i}"))
                 .spawn(move || {
                     if opt_in { crate::platform::materialize_on_this_thread(); }
+                    ON_READER.with(|on| on.set(true));
                     structural_reader_loop(&inner);
                 });
         }
@@ -547,10 +561,26 @@ impl Prefetcher {
     }
 
     pub(crate) fn cache_publication_revision(&self, key: OperationKey, attempt: Operation, revision: Option<Arc<AtomicU64>>) -> Option<Arc<OperationTask>> {
+        self.cache_publication_within(key, attempt, revision, Duration::ZERO, PUBLICATION_STALL)
+    }
+
+    /// [`cache_publication_revision`](Self::cache_publication_revision), holding
+    /// the caller for up to `wait` while the queue is full instead of refusing
+    /// at once, and only while a reader has taken a job within `stall`: a
+    /// provider that stops answering costs the first waiter `stall` and the
+    /// rest nothing. A reader thread never waits, since only the readers make room.
+    pub(crate) fn cache_publication_within(&self, key: OperationKey, attempt: Operation, revision: Option<Arc<AtomicU64>>, wait: Duration, stall: Duration) -> Option<Arc<OperationTask>> {
+        let end = Instant::now() + if ON_READER.with(std::cell::Cell::get) { Duration::ZERO } else { wait };
         let mut q = self.inner.queue.lock().ok()?;
-        if q.shutdown { return None; }
-        if let Some(task) = q.operation_pending.get(&key) { return Some(task.clone()); }
-        if q.fifo.len() >= BACKGROUND_WAITING { return None; }
+        loop {
+            if q.shutdown { return None; }
+            if let Some(task) = q.operation_pending.get(&key) { return Some(task.clone()); }
+            if q.fifo.len() < BACKGROUND_WAITING { break; }
+            let until = end.min(q.last_pop + stall);
+            let now = Instant::now();
+            if now >= until { return None; }
+            q = self.inner.work.wait_timeout(q, until - now).ok()?.0;
+        }
         let mut task = OperationTask::new(&key, attempt);
         task.request.owner = OperationOwner::Host;
         task.revision = revision;
@@ -700,6 +730,9 @@ fn reader_loop(inner: &Arc<Inner>) {
                         BackgroundWork::Publication(_, _, ready_at) => *ready_at <= now,
                     }) {
                         let job = q.fifo.remove(index).unwrap();
+                        // A publication may be waiting for this room.
+                        q.last_pop = now;
+                        inner.work.notify_all();
                         match &job {
                             BackgroundWork::Bytes(path) => { q.in_flight.insert(path.clone(), now); }
                             BackgroundWork::Publication(key, _, _) => { q.cache_in_flight.insert(key.clone(), now); }
