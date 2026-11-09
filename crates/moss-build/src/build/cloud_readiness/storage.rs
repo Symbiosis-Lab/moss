@@ -266,9 +266,12 @@ pub(crate) fn drop_cache_publications_under(folder: &Path) -> usize {
     super::PREFETCH.drop_publications_under(folder)
 }
 
-/// A record's publication: as [`await_publication_in`], waiting for room in a full queue.
+/// A record's publication: as [`await_publication_in`], waiting for room in a
+/// full queue but not for the outcome. The build does not need the record to
+/// have landed: one publication per record runs at a time, and one a newer edit
+/// overtook is followed by one that carries it.
 pub(crate) fn await_publication_revision(key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
-    await_admitted(&super::PREFETCH, key, attempt, revision, expected, RECORD_ADMISSION_WAIT, Duration::from_millis(20))
+    await_admitted(&super::PREFETCH, key, attempt, revision, expected, RECORD_ADMISSION_WAIT, Duration::ZERO)
 }
 
 pub(crate) fn await_publication_in(pool: &crate::build::cloud_prefetch::Prefetcher, key: OperationKey, attempt: Operation, revision: Option<Arc<std::sync::atomic::AtomicU64>>, expected: u64) -> PublicationOutcome {
