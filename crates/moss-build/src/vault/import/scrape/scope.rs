@@ -99,22 +99,14 @@ pub fn is_same_origin(scope: &UrlScope, url_str: &str) -> bool {
 }
 
 /// Whether a crawl-discovered page's fetch ended on another host than the
-/// scope's: the start URL is the user's own choice and never counts, and an
-/// http/https switch or a leading `www.` added or dropped is the same site.
-/// Only the host is compared, so a page that moved within the site stays in.
-pub fn left_site_by_redirect(
-    scope: &UrlScope,
-    start_url: &str,
-    url: &str,
-    final_url: &str,
-) -> bool {
-    if norm_url(url) == norm_url(start_url) {
-        return false;
-    }
+/// scope's: an http/https switch or a leading `www.` added or dropped is the
+/// same site. Only the host is compared, so a page that moved within the site
+/// stays in. The start URL is the user's own choice: callers don't ask.
+pub fn left_site_by_redirect(scope: &UrlScope, final_url: &str) -> bool {
     let Ok(landed) = Url::parse(final_url) else {
         return true;
     };
-    let bare = |u: &Url| u.host_str().map(|h| h.strip_prefix("www.").unwrap_or(h).to_string());
+    let bare = |u: &Url| u.host_str().map(bare_host);
     bare(&landed) != bare(&scope.base_url) || landed.port() != scope.base_url.port()
 }
 
@@ -229,24 +221,19 @@ mod tests {
     #[test]
     fn only_a_change_of_host_leaves_the_site() {
         let scope = UrlScope::new("https://example.test/blog/").unwrap();
-        let start = "https://example.test/blog/";
-        let left = |url: &str, landed: &str| left_site_by_redirect(&scope, start, url, landed);
-        let page = "https://example.test/blog/old";
-        assert!(!left(page, "https://example.test/blog/new"));
-        assert!(!left(page, "https://example.test/news/new"), "a move within the site stays in");
-        assert!(!left(page, "http://example.test/blog/new"));
-        assert!(!left(page, "https://www.example.test/blog/new"));
-        assert!(left(page, "https://survey.example.test/form"));
-        assert!(left(page, "https://example.test:8443/blog/new"));
-        assert!(!left(start, "https://survey.example.test/form"), "the start URL is exempt");
+        let left = |landed: &str| left_site_by_redirect(&scope, landed);
+        assert!(!left("https://example.test/blog/new"));
+        assert!(!left("https://example.test/news/new"), "a move within the site stays in");
+        assert!(!left("http://example.test/blog/new"));
+        assert!(!left("https://www.example.test/blog/new"));
+        assert!(left("https://survey.example.test/form"));
+        assert!(left("https://example.test:8443/blog/new"));
     }
 
     #[test]
     fn a_redirect_keeps_an_explicit_port_comparison() {
         let scope = UrlScope::new("http://example.test:8080/").unwrap();
-        let start = "http://example.test:8080/";
-        let page = "http://example.test:8080/a";
-        assert!(!left_site_by_redirect(&scope, start, page, "http://example.test:8080/b"));
-        assert!(left_site_by_redirect(&scope, start, page, "http://example.test:9090/b"));
+        assert!(!left_site_by_redirect(&scope, "http://example.test:8080/b"));
+        assert!(left_site_by_redirect(&scope, "http://example.test:9090/b"));
     }
 }

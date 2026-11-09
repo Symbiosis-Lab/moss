@@ -15,6 +15,12 @@ pub(crate) const MAX_REDIRECT_HOPS: u32 = 5;
 /// reason in its status text; a 3xx with no usable `Location` is returned as-is.
 ///
 /// `accept` and `referer` are sent on every hop.
+///
+/// `reports` is asked about each target before it is validated. When it says
+/// yes, the target is never requested: the 3xx response is handed back as it
+/// is, and [`redirect_target`] reads where it pointed. This is how a
+/// caller learns that a link leads off its site or to a `mailto:` address
+/// without connecting there.
 pub(crate) fn get_following_redirects(
     agent: &ureq::Agent,
     start_url: &str,
@@ -23,6 +29,7 @@ pub(crate) fn get_following_redirects(
     referer: Option<&str>,
     validate: impl Fn(&str) -> Result<(), String>,
     rewrite: impl Fn(String) -> String,
+    reports: impl Fn(&str) -> bool,
 ) -> Result<ureq::Response, ureq::Error> {
     // 400 is a permanent refusal that the retry layer never repeats
     // (`should_retry_status` retries only 429/5xx), and its error text is
@@ -42,6 +49,7 @@ pub(crate) fn get_following_redirects(
     };
 
     let mut current = start_url.to_string();
+    let mut visited = vec![current.clone()];
     for _ in 0..=MAX_REDIRECT_HOPS {
         let mut req = agent.get(&current).set("User-Agent", user_agent);
         if let Some(accept) = accept {
@@ -51,20 +59,31 @@ pub(crate) fn get_following_redirects(
             req = req.set("Referer", referer);
         }
         let response = req.call()?;
-        if !(300..400).contains(&response.status()) {
+        let Some(target) = redirect_target(&response) else {
+            return Ok(response);
+        };
+        let next = rewrite(target);
+        if reports(&next) {
             return Ok(response);
         }
-        let Some(location) = response.header("Location") else {
-            return Ok(response);
-        };
-        let next = match url::Url::parse(&current).and_then(|base| base.join(location)) {
-            Ok(joined) => rewrite(joined.to_string()),
-            Err(_) => return Ok(response),
-        };
         if let Err(msg) = validate(&next) {
             return Err(refused(&format!("redirected to a disallowed URL: {msg}")));
         }
+        if visited.contains(&next) {
+            return Err(refused("the site redirects this address to itself in a loop"));
+        }
+        visited.push(next.clone());
         current = next;
     }
     Err(refused(&format!("too many redirects (> {MAX_REDIRECT_HOPS})")))
+}
+
+/// Where a 3xx response points, resolved against the URL that sent it.
+/// `None` for any other response, or one with no usable `Location`.
+pub(crate) fn redirect_target(response: &ureq::Response) -> Option<String> {
+    if !(300..400).contains(&response.status()) {
+        return None;
+    }
+    let location = response.header("Location")?;
+    url::Url::parse(response.get_url()).ok()?.join(location).ok().map(String::from)
 }

@@ -12,6 +12,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::crawl_state::HostPacer;
+use super::scope::UrlScope;
 
 /// Strip query + fragment from a URL, leaving a clean canonical form for the
 /// `origin` frontmatter. Falls back to the input if it doesn't parse.
@@ -162,14 +163,32 @@ fn is_loopback_or_link_local(ip: &std::net::IpAddr) -> bool {
 /// (including the start URL) — see [`crate::vault::import::media::MEDIA_ACCEPT`].
 /// `None` leaves ureq's own default (`Accept: */*`) in place, for a page
 /// fetch.
+///
+/// With `scope` (a link being crawled), a hop off the site or to a
+/// `mailto:`/`tel:` address is not requested but handed back as the 3xx
+/// response, so the caller sees where the link leads; every other target is
+/// still validated and followed, and a non-http(s) target still refused.
 fn fetch_with_validated_redirects(
     agent: &ureq::Agent,
     start_url: &str,
     user_agent: &str,
     accept: Option<&str>,
     referer: Option<&str>,
+    scope: Option<&UrlScope>,
 ) -> Result<ureq::Response, ureq::Error> {
-    fetch_following_redirects(agent, start_url, user_agent, accept, referer, refuse_unsafe_scrape_url)
+    fetch_following_redirects(agent, start_url, user_agent, accept, referer, refuse_unsafe_scrape_url, |next| {
+        scope.is_some_and(|scope| leaves_site(scope, next))
+    })
+}
+
+/// Whether `next` is a contact address or an http(s) URL off the site.
+fn leaves_site(scope: &UrlScope, next: &str) -> bool {
+    let Ok(url) = url::Url::parse(next) else { return false };
+    match url.scheme() {
+        "mailto" | "tel" => true,
+        "http" | "https" => super::scope::left_site_by_redirect(scope, next),
+        _ => false,
+    }
 }
 
 /// [`fetch_with_validated_redirects`]'s body, taking the per-hop validator as
@@ -201,6 +220,7 @@ fn fetch_following_redirects(
     accept: Option<&str>,
     referer: Option<&str>,
     validate: impl Fn(&str) -> Result<(), String>,
+    reports: impl Fn(&str) -> bool,
 ) -> Result<ureq::Response, ureq::Error> {
     // A redirect can land on a ruled CDN host carrying a query the table never
     // produced, so asset hops are re-canonicalized; a page fetch has no media
@@ -212,7 +232,7 @@ fn fetch_following_redirects(
             next
         }
     };
-    crate::system::redirects::get_following_redirects(agent, start_url, user_agent, accept, referer, validate, rewrite)
+    crate::system::redirects::get_following_redirects(agent, start_url, user_agent, accept, referer, validate, rewrite, reports)
 }
 
 /// A fetch's final failure, carrying the HTTP status code as DATA when the
@@ -275,6 +295,7 @@ fn call_with_retry_n(
     tries: u32,
     accept: Option<&str>,
     referer: Option<&str>,
+    scope: Option<&UrlScope>,
 ) -> Result<ureq::Response, FetchError> {
     let mut last_err = FetchError::message(String::new());
     // What the PREVIOUS attempt's response asked for via `Retry-After`,
@@ -295,7 +316,7 @@ fn call_with_retry_n(
         // (see `fetch_with_validated_redirects`) rather than trusting
         // ureq's own follower, which never re-checks a Location header.
         let agent = crate::system::proxy::proxied_ureq_agent_no_redirects(url, timeout);
-        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer) {
+        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer, scope) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
                 let err = FetchError { status: Some(code), message: format!("{} {}", code, resp.status_text()) };
@@ -324,9 +345,10 @@ fn call_with_retry(
     timeout: std::time::Duration,
     accept: Option<&str>,
     referer: Option<&str>,
+    scope: Option<&UrlScope>,
 ) -> Result<ureq::Response, FetchError> {
     const TRIES: u32 = 3;
-    call_with_retry_n(url, user_agent, timeout, TRIES, accept, referer)
+    call_with_retry_n(url, user_agent, timeout, TRIES, accept, referer, scope)
 }
 
 /// Translates a fetch's `Result` into the bare `Result<(), Option<u16>>`
@@ -348,17 +370,30 @@ pub(crate) fn observe_pace<T>(pacer: &mut HostPacer, host: &str, result: &Result
 ///
 /// `accept: None` — a page fetch is never asked to localize a transcoded
 /// variant, so it keeps ureq's own `Accept: */*` default unchanged.
+///
+/// `scope` is the imported site's when `url` is a link found on it: a
+/// redirect from such a link to another host or to a `mailto:`/`tel:` address
+/// is not requested, and the address it pointed at comes back as the final URL.
 pub(crate) async fn fetch_page(
     url: &str,
     user_agent: &str,
+    scope: Option<&UrlScope>,
 ) -> Result<(String, String, String), FetchError> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
+    let scope = scope.cloned();
     tokio::task::spawn_blocking(move || {
-        let response =
-            call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30), None, None)?;
+        let response = call_with_retry(
+            &url,
+            &user_agent,
+            std::time::Duration::from_secs(30),
+            None,
+            None,
+            scope.as_ref(),
+        )?;
         let content_type = response.content_type().to_string();
-        let final_url = response.get_url().to_string();
+        let final_url = crate::system::redirects::redirect_target(&response)
+            .unwrap_or_else(|| response.get_url().to_string());
 
         response
             .into_string()
@@ -395,6 +430,7 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
             &user_agent,
             std::time::Duration::from_secs(15),
             1,
+            None,
             None,
             None,
         )?;
@@ -536,6 +572,7 @@ async fn download_to(
             std::time::Duration::from_secs(60),
             Some(crate::vault::import::media::MEDIA_ACCEPT),
             referer.as_deref(),
+            None,
         )?;
 
         if response

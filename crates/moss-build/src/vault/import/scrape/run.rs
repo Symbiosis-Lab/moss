@@ -28,7 +28,7 @@ use super::fetch::{
     download_asset, download_linked_file, fetch_page, linked_filename, observe_pace, Downloaded, FileProgress,
 };
 use super::scope::{is_within_scope, left_site_by_redirect, UrlScope};
-use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
+use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, strip_outbound_ref, ScrapeConfig};
 use super::writer::{rename_for_collision, url_to_file_path};
 use crate::vault::import::widgets::WidgetCount;
 
@@ -390,7 +390,9 @@ where
         let outcome: PageOutcome = 'page: {
         let fetch_host = host_of(&url);
         state.pacer.wait(&fetch_host).await;
-        let page_result = fetch_page(&url, &config.user_agent).await;
+        // A link found on the site that leads off it is reported, not fetched.
+        let link_of_site = config.recursive && norm_url(&url) != norm_url(&config.start_url);
+        let page_result = fetch_page(&url, &config.user_agent, link_of_site.then_some(&scope)).await;
         observe_pace(&mut state.pacer, &fetch_host, &page_result);
         let (html, content_type, final_url) = match page_result {
             Ok(v) => v,
@@ -428,11 +430,12 @@ where
             }
         };
 
-        if config.recursive && left_site_by_redirect(&scope, &config.start_url, &url, &final_url) {
+        if link_of_site && left_site_by_redirect(&scope, &final_url) {
             log::warn!("import: {url} redirected off the site to {final_url}, not imported");
             left_site.push((
                 format!("](./{})", url_to_file_path(&url, &scope)),
-                format!("]({url})"),
+                // A `tel:` keeps its spaces through URL parsing, and a space ends a markdown destination.
+                format!("]({})", strip_outbound_ref(&final_url, &scope.bare_host()).replace(' ', "%20")),
             ));
             break 'page PageOutcome::LeftSite;
         }
@@ -498,7 +501,7 @@ where
             Some(snapshot_url) => {
                 let snapshot_host = host_of(&snapshot_url);
                 state.pacer.wait(&snapshot_host).await;
-                let snapshot_result = fetch_page(&snapshot_url, &config.user_agent).await;
+                let snapshot_result = fetch_page(&snapshot_url, &config.user_agent, None).await;
                 observe_pace(&mut state.pacer, &snapshot_host, &snapshot_result);
                 match snapshot_result {
                     Ok((s, _, _)) => Some(s),
@@ -761,8 +764,8 @@ where
 }
 
 /// Points links that `rewrite_links` aimed at a note never written (the page
-/// redirected off the site) back at the address they were written with.
-/// `left_site` holds `(](./local.md), ](original))` pairs. A fragment never
+/// redirected off the site) at the address the redirect led to.
+/// `left_site` holds `(](./local.md), ](destination))` pairs. A fragment never
 /// reaches the local link: the rewrite keeps the path alone.
 fn restore_left_links(
     out_dir: &Path,

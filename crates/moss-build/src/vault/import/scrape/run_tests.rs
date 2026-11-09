@@ -2482,6 +2482,66 @@ fn a_composed_note_drops_the_platforms_own_ref_tag_from_outbound_links() {
     assert!(note.contains("](https://other.example.test/page?ref=someone-else.test)"), "{note}");
 }
 
+/// A same-site link that redirects off the site, or to a mail address, is
+/// rewritten to where it leads; no stub is written and nothing off the site
+/// is requested.
+#[tokio::test]
+async fn a_tracking_link_is_rewritten_to_its_destination() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let _page = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            "<html><body><article><p>Intro paragraph, long enough to be extracted as content.</p>\
+             <p><a href=\"{base}/r/a1\">Fill in the form</a> or <a href=\"{base}/r/b2\">write to us</a>,\
+             <a href=\"{base}/r/c3\">with a subject</a> or <a href=\"{base}/r/d4\">by phone</a>.</p>\
+             </article></body></html>"
+        ))
+        .create_async()
+        .await;
+    let _form = server
+        .mock("GET", "/r/a1")
+        .with_status(302)
+        .with_header("Location", "https://other.example.test/form?ref=127.0.0.1")
+        .create_async()
+        .await;
+    let _mail = server
+        .mock("GET", "/r/b2")
+        .with_status(302)
+        .with_header("Location", "mailto:editor@example.test")
+        .create_async()
+        .await;
+
+    let _subject = server
+        .mock("GET", "/r/c3")
+        .with_status(302)
+        .with_header("Location", "mailto:editor@example.test?subject=Hello there")
+        .create_async()
+        .await;
+    let _phone = server
+        .mock("GET", "/r/d4")
+        .with_status(302)
+        .with_header("Location", "tel:+1 555")
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.recursive = true;
+    let res = scrape_to_folder(config, |_| {}).await.expect("the crawl itself succeeds");
+
+    assert_eq!((res.total_pages, res.failed_pages, res.left_by_redirect), (1, 0, 4));
+    let spaced = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(spaced.contains("](mailto:editor@example.test?subject=Hello%20there)"), "{spaced}");
+    assert!(spaced.contains("](tel:+1%20555)"), "{spaced}");
+    let note = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(note.contains("](https://other.example.test/form)"), "{note}");
+    assert!(note.contains("](mailto:editor@example.test)"), "{note}");
+    assert!(!tmp.path().join("r").exists(), "no stub for either link");
+}
+
 /// The crawl carries a page's listing signal to the pass that knows the tags.
 #[tokio::test]
 async fn a_crawled_tag_archive_claims_its_tag() {
@@ -2518,4 +2578,20 @@ async fn a_crawled_tag_archive_claims_its_tag() {
     let archive = std::fs::read_to_string(tmp.path().join("tag/tuesdays.md")).unwrap();
     assert!(archive.contains("tag_page: \"Field Notes\"\n"), "{archive}");
     assert!(!archive.contains("Intro paragraph"), "moss draws the listing: {archive}");
+}
+
+/// The start URL is the user's own choice: a redirect off its host is
+/// followed like any fetch (so a refused target stays refused), never counted
+/// as a page that left the site.
+#[tokio::test]
+async fn a_start_url_that_leaves_its_host_is_not_counted_as_leaving_the_site() {
+    let mut server = mockito::Server::new_async().await;
+    let _start = server.mock("GET", "/").with_status(302).with_header("Location", "http://localhost:1/home").create_async().await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{}/", server.url()), tmp.path());
+    config.recursive = true;
+    let left = scrape_to_folder(config, |_| {}).await.map_or(0, |res| res.left_by_redirect);
+
+    assert_eq!(left, 0);
 }

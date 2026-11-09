@@ -12,6 +12,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss import` rewrites a link that redirects off the site, such as a click-tracking short link, to where it leads: the off-site address, or the `mailto:` or `tel:` address it names. Before, a link to the old host was left, which dies with the old site, and one that redirected to a mail address became a "Page Unavailable" page that the post linked to. A redirect that returns to an address already visited now says the site redirects it to itself in a loop.
 - `moss import` drops the `?ref=<the site's own host>` that some platforms add to every outbound link. Other parameters and the `#fragment` stay, and a `ref` naming another host is left alone.
 - `moss import` turns a platform's tag archive into the page of that tag. A page titled like a tag that imported pages carry, and that declares itself a listing (a `CollectionPage` or `Series` in its structured data, or a `tag` or `category` class on the page), is written with `tag_page:` and its description as the body, so moss draws the list of tagged pages and `/tags/<tag>/` forwards to it. Before, it was an ordinary page holding a flat copy of every post card with root-relative links.
 - `moss import` turns a blogging platform's link-preview card into one link, `[![](picture) Title](address)`, with its description on the next line and its publisher row dropped. Before, the card became a link whose text spanned several paragraphs, which showed as literal brackets, and a card pointing inside the site was not rewritten to the local page.
