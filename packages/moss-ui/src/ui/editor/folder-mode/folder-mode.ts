@@ -16,8 +16,7 @@
  * The site-header band carries the "your folder name is your site name"
  * teaching moment and the Light/Dark toggle. It renders in the POPULATED
  * state only; keeping the empty state bare avoids competing controls. The
- * microcopy text is spec-verbatim — `FOLDER_MICROCOPY` is the authoritative
- * string and the populated-state tests assert against it.
+ * microcopy text is `folder.site_name_hint`, worded per platform.
  *
  * DOM contract: render into a host element (typically the
  * `.moss-editor-cm` slot when no file is selected). The component takes
@@ -77,18 +76,6 @@ export interface FolderModeOptions {
 }
 
 // ── Public constants ────────────────────────────────────────────────────
-
-/**
- * The microcopy under the folder-name heading. Verbatim from the spec
- * (line 224: "The folder name is your site name." + line 225: "Rename
- * in Finder to change it.") joined into one paragraph.
- *
- * **Do not paraphrase.** The dispatch plan explicitly requires this
- * string to match the spec; the test
- * `folder-mode.test.ts: microcopy matches spec verbatim` asserts on it.
- */
-export const FOLDER_MICROCOPY =
-  "The folder name is your site name. Rename in Finder to change it.";
 
 /**
  * The cards in spec-mockup order. `start-writing` renders large on top; the
@@ -155,8 +142,8 @@ export function buildSiteHeaderHtml(folderName: string): string {
           class="moss-folder-mode__reveal"
           data-folder-mode-reveal
           data-tooltip-position="bottom"
-          data-tooltip="${escapeHtml(t('onboard.reveal_finder_tooltip'))}"
-          aria-label="${escapeHtml(t('onboard.reveal_finder_aria'))}">
+          data-tooltip="${escapeHtml(t('onboard.reveal_tooltip'))}"
+          aria-label="${escapeHtml(t('onboard.reveal_aria'))}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/>
           </svg>

@@ -14,7 +14,7 @@
  * once per mount; the controller's AbortSignal closes whatever is open.
  */
 
-import { t, revealMenuLabel } from "../../i18n/index";
+import { t } from "../../i18n/index";
 import { host as uiHost } from "../../host";
 import {
   openCtxMenu,
@@ -172,7 +172,7 @@ export class TreeMenu {
       // Reveal first in Finder, where the host has a file manager.
       uiHost.reveal ? [
         {
-          label: t('tree.reveal_first', { label: revealMenuLabel() }),
+          label: t('tree.reveal_first', { label: t('tree.reveal') }),
           id: 'reveal',
           action: () => { if (selectedPaths.length > 0) void ops.revealEntry(selectedPaths[0]); },
         },
@@ -216,7 +216,7 @@ export class TreeMenu {
     const { ops } = this.host;
     return [
       // Where the host has a file manager.
-      ...(uiHost.reveal ? [{ label: revealMenuLabel(), id: 'reveal', action: () => { void ops.revealEntry(path); } }] : []),
+      ...(uiHost.reveal ? [{ label: t('tree.reveal'), id: 'reveal', action: () => { void ops.revealEntry(path); } }] : []),
       { label: t('tree.copy_path'), id: 'copy-path', action: () => { void ops.copyToClipboard(toAbsolute(path, this.host.projectRoot())); } },
     ];
   }

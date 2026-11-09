@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { kbdLabel, isMacPlatform, matchesKeySpec, UNDO_KEY, REDO_KEY } from '../kbd-label';
+import { kbdLabel, kbdChipText, isMacPlatform, matchesKeySpec, UNDO_KEY, REDO_KEY } from '../kbd-label';
 
 /** jsdom reports a Linux platform, so mac has to be simulated. */
 function withPlatform(value: string, run: () => void): void {
@@ -185,6 +185,36 @@ describe('matchesKeySpec', () => {
   it('does not fire on a bare key', () => {
     withPlatform('Linux x86_64', () => {
       expect(matchesKeySpec(UNDO_KEY, key({ key: 'z' }))).toBe(false);
+    });
+  });
+});
+
+describe('kbdChipText', () => {
+  it('leaves a glyph chip alone on macOS', () => {
+    withPlatform('MacIntel', () => {
+      expect(kbdChipText('⇧⌘N')).toBe('⇧⌘N');
+      expect(kbdChipText('⌘⌫')).toBe('⌘⌫');
+    });
+  });
+
+  it('prints a glyph chip in words on Windows and Linux', () => {
+    withPlatform('Win32', () => {
+      expect(kbdChipText('⌘E')).toBe('Ctrl+E');
+      expect(kbdChipText('⇧⌘N')).toBe('Ctrl+Shift+N');
+      expect(kbdChipText('⌘⌥2')).toBe('Ctrl+Alt+2');
+      expect(kbdChipText('⌘⌫')).toBe('Ctrl+Backspace');
+      expect(kbdChipText('⇧↩')).toBe('Shift+Enter');
+      expect(kbdChipText('↩')).toBe('Enter');
+      expect(kbdChipText('⌘,')).toBe('Ctrl+,');
+    });
+    withPlatform('Linux x86_64', () => {
+      expect(kbdChipText('⌘~')).toBe('Ctrl+~');
+    });
+  });
+
+  it('passes through a chip already in words', () => {
+    withPlatform('Win32', () => {
+      expect(kbdChipText(kbdLabel('Mod-Shift-Z'))).toBe('Ctrl+Shift+Z');
     });
   });
 });

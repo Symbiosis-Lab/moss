@@ -41,6 +41,7 @@
  */
 
 import { t } from '../../i18n';
+import { kbdChipText } from '../../utils/kbd-label';
 import { uiEvent } from './toast/toast-runtime';
 import { armOutsideDismiss } from './dismiss-outside';
 import {
@@ -480,7 +481,7 @@ export function openCtxMenu(opts: OpenCtxMenuOptions): CtxMenuHandle {
         const chip = document.createElement('span');
         chip.className = 'ctx-kbd';
         chip.setAttribute('aria-hidden', 'true');
-        chip.textContent = entry.kbd;
+        chip.textContent = kbdChipText(entry.kbd);
         item.appendChild(chip);
       }
     }

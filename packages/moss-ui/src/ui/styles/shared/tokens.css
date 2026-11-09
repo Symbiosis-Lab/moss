@@ -18,9 +18,10 @@
        Bucket C (app-only): name not in tokens.json at all — no constraint.
   */
 
-  /* [B] diverges from tokens.json: app-shell uses compact system-ui stack;
-     the site's full CJK stack (PingFang SC, Microsoft YaHei, Noto Sans SC …)
-     is not needed in app-chrome UI text. */
+  /* [B] diverges from tokens.json: app chrome and the editor's reading text
+     use the system UI font; the system's own font fallback draws CJK, so the
+     site's explicit CJK stack (PingFang SC, Microsoft YaHei, Noto Sans SC …)
+     is not repeated here. */
   --moss-font-body: "Segoe UI Variable Text", system-ui, -apple-system, sans-serif;
   /* [A] MIRRORED — must match tokens.json moss-font-heading.
      Heading font stack — serif by default for editorial weight. If the two

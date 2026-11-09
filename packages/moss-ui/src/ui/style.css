@@ -87,7 +87,7 @@ body,
 html {
   height: 100%;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  font-family: var(--moss-font-body);
   /* Transparent so the rounded .moss-app silhouette shows through.
      Native window is transparent (tauri.conf.json), CALayer corner-radius is set
      by Rust (system::utils::set_window_corner_radius). The page color is painted

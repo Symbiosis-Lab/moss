@@ -10,6 +10,7 @@
 import { onMossEvent } from './moss-events';
 import { host } from '../host';
 import { isMacPlatform } from './kbd-label';
+import { uiPlatform } from './platform';
 
 let installed = false;
 
@@ -65,19 +66,6 @@ export function __resetFullscreenClassForTest(): void {
   installed = false;
 }
 
-/** True on Windows, the one other platform (besides macOS) that ends up
- *  drawing its own caption — see `applyOwnTitlebarClass()` below. Same
- *  userAgentData-with-navigator.platform-fallback shape as `isMacPlatform()`;
- *  kept local rather than folded into kbd-label.ts because nothing outside
- *  this predicate needs it. */
-function isWindowsPlatform(): boolean {
-  const p =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-    navigator.platform ||
-    '';
-  return p.toLowerCase().includes('win');
-}
-
 /**
  * `body.own-titlebar`: does THIS webview have to draw `[icon] moss` itself.
  * `body.controls-trailing`: does the window's OWN controls (native or
@@ -100,7 +88,7 @@ function isWindowsPlatform(): boolean {
  */
 export function applyOwnTitlebarClass(): void {
   const mac = isMacPlatform();
-  document.body.classList.toggle('own-titlebar', mac || isWindowsPlatform());
+  document.body.classList.toggle('own-titlebar', mac || uiPlatform() === 'win');
   document.body.classList.toggle('controls-trailing', !mac);
 }
 

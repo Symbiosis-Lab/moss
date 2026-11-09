@@ -1,4 +1,5 @@
-import { UI_STRINGS, type AppLocale, type UiStringMap } from './ui-strings';
+import { UI_STRINGS, PLATFORM_VARIANTS, type AppLocale, type PlatformVariantKey, type UiStringMap } from './ui-strings';
+import { uiPlatform } from '../utils/platform';
 
 let locale: AppLocale = 'en';
 
@@ -65,7 +66,9 @@ export function interpolate(template: string, params: TParams): string {
  * Pass `params` to fill `{name}` placeholders, e.g. `t('publish.as', { email })`.
  */
 export function t(key: keyof UiStringMap, params?: TParams): string {
-  const template = UI_STRINGS[locale][key] ?? UI_STRINGS.en[key] ?? key;
+  const p = uiPlatform();
+  const variant = p === 'other' ? undefined : PLATFORM_VARIANTS[locale][`${key}@${p}` as PlatformVariantKey];
+  const template = variant ?? UI_STRINGS[locale][key] ?? UI_STRINGS.en[key] ?? key;
   return params ? interpolate(template, params) : template;
 }
 
@@ -265,16 +268,9 @@ export function formatNumber(n: number, opts?: Intl.NumberFormatOptions): string
   return f.format(n);
 }
 
-/** The platform's own name for revealing a path in its file manager. */
+/** @deprecated Use `t('tree.reveal')`, which this returns. */
 export function revealMenuLabel(): string {
-  const p =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-    navigator.platform ||
-    '';
-  const lower = p.toLowerCase();
-  if (lower.includes('mac')) return t('tree.reveal_finder');
-  if (lower.includes('win')) return t('tree.reveal_explorer');
-  return t('tree.reveal_filemanager');
+  return t('tree.reveal');
 }
 
 export type { AppLocale, UiStringMap };

@@ -311,7 +311,7 @@ const EN = {
   'versions.not_ready': 'The site is still finishing its last build. Wait a moment and try again.', // save/restore's failMessage when sealed_now still can't find a sealed build after settling — the backend's own message is publish-worded ("retry publishing"), wrong for this surface
 
   // Folder mode
-  'folder.site_name_hint': 'The folder name is your site name. Rename in Finder to change it.',
+  'folder.site_name_hint': "The folder name is your site name. Rename the folder to change it.",
   'folder.or_start_with': 'or start with',
 
   // Launcher window
@@ -859,8 +859,8 @@ const EN = {
   'onboard.card_url_desc': 'Import from URL',
   'onboard.card_plugin_title': 'Plugin',
   'onboard.card_plugin_desc': 'Connect a service',
-  'onboard.reveal_finder_tooltip': 'Reveal in Finder to rename',
-  'onboard.reveal_finder_aria': 'Reveal folder in Finder',
+  'onboard.reveal_tooltip': "Show the folder to rename it",
+  'onboard.reveal_aria': "Show the folder",
   'onboard.start_site_aria': 'Start your site',
 
   // Onboarding flow (template / url / plugin handlers)
@@ -1320,9 +1320,7 @@ const EN = {
   // [settings_modal]
   'settings.title': "Settings",
   // [file-tree]
-  'tree.reveal_finder': "Reveal in Finder",
-  'tree.reveal_explorer': "Show in Explorer",
-  'tree.reveal_filemanager': "Open in File Manager",
+  'tree.reveal': "Show in folder",
   'tree.reveal_first': "{label} (first)",
   'tree.state_empty': "Empty folder",
   'tree.state_unavailable': "Files unavailable",
@@ -2056,7 +2054,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'versions.restored_partial': '{done} von {total} Seiten wiederhergestellt',
     'versions.undo': 'Widerrufen',
     'versions.not_ready': 'Die Website schließt gerade ihren letzten Build ab. Warte kurz und versuch es erneut.',
-    'folder.site_name_hint': 'Der Ordnername ist der Name deiner Website. Zum Ändern in Finder umbenennen.',
+    'folder.site_name_hint': "Der Ordnername ist der Name deiner Website. Benenne den Ordner um, um ihn zu ändern.",
     'folder.or_start_with': 'oder beginne mit',
     'launcher.wordmark': 'moss',
     'launcher.tagline': 'Dein Ordner, deine Website.',
@@ -2502,8 +2500,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'onboard.card_url_desc': 'Aus einer URL importieren',
     'onboard.card_plugin_title': 'Plugin',
     'onboard.card_plugin_desc': 'Einen Dienst verbinden',
-    'onboard.reveal_finder_tooltip': 'Im Finder zeigen, um umzubenennen',
-    'onboard.reveal_finder_aria': 'Ordner im Finder zeigen',
+    'onboard.reveal_tooltip': "Ordner zeigen, um ihn umzubenennen",
+    'onboard.reveal_aria': "Ordner zeigen",
     'onboard.start_site_aria': 'Website starten',
     'onboard.flow.error_could_not_complete': 'Konnte nicht abgeschlossen werden: {err}',
     'onboard.flow.back_to_options': 'Zurück zu den Optionen',
@@ -2889,9 +2887,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'browser.no_folder': "moss edit stellt keinen Ordner bereit.",
     'dnd.import_skipped_many': '{n} Dateien konnten nicht importiert werden',
     'settings.title': 'Einstellungen',
-    'tree.reveal_finder': 'Im Finder zeigen',
-    'tree.reveal_explorer': 'Im Explorer zeigen',
-    'tree.reveal_filemanager': 'Im Dateimanager öffnen',
+    'tree.reveal': "Im Ordner zeigen",
     'tree.reveal_first': '{label} (zuerst)',
     'tree.state_empty': 'Leerer Ordner',
     'tree.state_unavailable': 'Dateien nicht verfügbar',
@@ -3554,7 +3550,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'versions.undo': '撤销',
     'versions.not_ready': '网站还在完成上一次构建，请稍等片刻后重试。',
 
-    'folder.site_name_hint': '文件夹名即站点名称，在 Finder 中重命名即可修改。',
+    'folder.site_name_hint': "文件夹名即站点名称，重命名文件夹即可修改。",
     'folder.or_start_with': '或从以下开始',
 
     'launcher.wordmark': '青苔',
@@ -4018,8 +4014,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'onboard.card_url_desc': '从 URL 导入',
     'onboard.card_plugin_title': '插件',
     'onboard.card_plugin_desc': '扩展青苔',
-    'onboard.reveal_finder_tooltip': '在 Finder 中显示以重命名',
-    'onboard.reveal_finder_aria': '在 Finder 中显示文件夹',
+    'onboard.reveal_tooltip': "显示文件夹以重命名",
+    'onboard.reveal_aria': "显示文件夹",
     'onboard.start_site_aria': '开始建站',
 
     'onboard.flow.error_could_not_complete': '操作未完成：{err}',
@@ -4419,9 +4415,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     // [settings_modal]
     'settings.title': "设置",
     // [file-tree]
-    'tree.reveal_finder': "在访达中显示",
-    'tree.reveal_explorer': "在资源管理器中显示",
-    'tree.reveal_filemanager': "在文件管理器中打开",
+    'tree.reveal': "在文件夹中显示",
     'tree.reveal_first': "{label}（第一个）",
     'tree.state_empty': "空文件夹",
     'tree.state_unavailable': "文件不可用",
@@ -5114,7 +5108,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'versions.undo': '復原',
     'versions.not_ready': '網站還在完成上一次建置，請稍等片刻後重試。',
 
-    'folder.site_name_hint': '資料夾名即網站名稱，在 Finder 中重新命名即可修改。',
+    'folder.site_name_hint': "資料夾名即網站名稱，重新命名資料夾即可修改。",
     'folder.or_start_with': '或從以下開始',
 
     'launcher.wordmark': '青苔',
@@ -5578,8 +5572,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'onboard.card_url_desc': '從 URL 匯入',
     'onboard.card_plugin_title': '插件',
     'onboard.card_plugin_desc': '擴展青苔',
-    'onboard.reveal_finder_tooltip': '在 Finder 中顯示以重新命名',
-    'onboard.reveal_finder_aria': '在 Finder 中顯示資料夾',
+    'onboard.reveal_tooltip': "顯示資料夾以重新命名",
+    'onboard.reveal_aria': "顯示資料夾",
     'onboard.start_site_aria': '開始建站',
 
     'onboard.flow.error_could_not_complete': '操作未完成：{err}',
@@ -5979,9 +5973,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     // [settings_modal]
     'settings.title': "設定",
     // [file-tree]
-    'tree.reveal_finder': "在 Finder 中顯示",
-    'tree.reveal_explorer': "在檔案總管中顯示",
-    'tree.reveal_filemanager': "在檔案管理員中開啟",
+    'tree.reveal': "在資料夾中顯示",
     'tree.reveal_first': "{label}（第一個）",
     'tree.state_empty': "空資料夾",
     'tree.state_unavailable': "檔案無法使用",
@@ -6388,5 +6380,65 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'run_plugin.running': '正在同步 {name}……',
     'run_plugin.done': '{name} 已同步。',
     'run_plugin.failed': '無法同步 {name}：{error}',
+  },
+};
+
+/**
+ * Wording that differs by platform, as `<key>@mac` or `<key>@win` overriding the
+ * base string in the same locale. The base is the wording that is right on Linux
+ * and wherever no variant exists; a platform gets its own only where it names a
+ * thing differently (the Finder, the Recycle Bin). `t()` reads this first.
+ */
+export type PlatformVariantKey = `${keyof UiStringMap}@${'mac' | 'win'}`;
+export const PLATFORM_VARIANTS: Record<AppLocale, Partial<Record<PlatformVariantKey, string>>> = {
+  'en': {
+    'folder.site_name_hint@mac': "The folder name is your site name. Rename in Finder to change it.",
+    'onboard.reveal_tooltip@mac': "Reveal in Finder to rename",
+    'onboard.reveal_aria@mac': "Reveal folder in Finder",
+    'tree.reveal@mac': "Reveal in Finder",
+    'versions.modal_body@win': "{pages} pages go back to how they were then. {added} pages added since then move to the Recycle Bin. Everything as it is now is saved as a version first, so you can undo.",
+    'tree.trash_one@win': "Move \"{name}\" to the Recycle Bin?",
+    'tree.trash_many@win': "Move {n} items to the Recycle Bin?",
+    'tree.trash_slow_one@win': "Moving “{name}” to the Recycle Bin…",
+    'tree.trash_slow_many@win': "Moving {n} items to the Recycle Bin…",
+    'tree.delete_trash_anyway@win': "Delete anyway",
+    'tree.delete_trash@win': "Move to the Recycle Bin",
+    'tree.delete_ref_note@win': "These links will point to nothing. You can remove them now, or move the file to the Recycle Bin and fix them later.",
+    'tree.delete_clean_and_trash@win': "Remove links and move to the Recycle Bin",
+    'threshold.remove_note@win': "moss's files in the folder you do not choose go to the Recycle Bin when everything in them can be rebuilt; otherwise they are kept there under a new name.",
+  },
+  'de': {
+    'folder.site_name_hint@mac': "Der Ordnername ist der Name deiner Website. Zum Ändern in Finder umbenennen.",
+    'onboard.reveal_tooltip@mac': "Im Finder zeigen, um umzubenennen",
+    'onboard.reveal_aria@mac': "Ordner im Finder zeigen",
+    'tree.reveal@mac': "Im Finder zeigen",
+  },
+  'zh-hans': {
+    'folder.site_name_hint@mac': "文件夹名即站点名称，在 Finder 中重命名即可修改。",
+    'onboard.reveal_tooltip@mac': "在 Finder 中显示以重命名",
+    'onboard.reveal_aria@mac': "在 Finder 中显示文件夹",
+    'tree.reveal@mac': "在访达中显示",
+    'versions.modal_body@win': "{pages} 个页面会恢复到当时的样子。{added} 个此后新增的页面会移到回收站。当前的一切会先保存为一个版本，方便你撤销。",
+    'tree.trash_one@win': "将“{name}”移到回收站？",
+    'tree.trash_many@win': "将 {n} 个项目移到回收站？",
+    'tree.trash_slow_one@win': "正在将“{name}”移到回收站……",
+    'tree.trash_slow_many@win': "正在将 {n} 个项目移到回收站……",
+    'tree.delete_trash@win': "移到回收站",
+    'tree.delete_ref_note@win': "这些链接将指向不存在的内容。您可以现在移除它们，或先移到回收站，稍后再修复。",
+    'threshold.remove_note@win': "未被选中的文件夹里，青苔的文件在可以完全重建时会移到回收站；否则会以新名称保留在原处。",
+  },
+  'zh-hant': {
+    'folder.site_name_hint@mac': "資料夾名即網站名稱，在 Finder 中重新命名即可修改。",
+    'onboard.reveal_tooltip@mac': "在 Finder 中顯示以重新命名",
+    'onboard.reveal_aria@mac': "在 Finder 中顯示資料夾",
+    'tree.reveal@mac': "在 Finder 中顯示",
+    'versions.modal_body@win': "{pages} 個頁面會恢復到當時的樣子。{added} 個此後新增的頁面會移到資源回收筒。目前的一切會先儲存為一個版本，方便你復原。",
+    'tree.trash_one@win': "將「{name}」移到資源回收筒？",
+    'tree.trash_many@win': "將 {n} 個項目移到資源回收筒？",
+    'tree.trash_slow_one@win': "正在將「{name}」移到資源回收筒……",
+    'tree.trash_slow_many@win': "正在將 {n} 個項目移到資源回收筒……",
+    'tree.delete_trash@win': "移到資源回收筒",
+    'tree.delete_ref_note@win': "這些連結將指向不存在的內容。您可以立即移除，或先移到資源回收筒，稍後再修正。",
+    'threshold.remove_note@win': "未被選中的資料夾裡，青苔的檔案在可以完全重建時會移到資源回收筒；否則會以新名稱保留在原處。",
   },
 };
