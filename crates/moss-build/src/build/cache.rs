@@ -44,7 +44,7 @@ pub(crate) mod blob_residency;
 mod records;
 mod publication;
 mod process_memo;
-pub(crate) use process_memo::{KeyedMemo, ProcessMemo, ROOTS};
+pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
 

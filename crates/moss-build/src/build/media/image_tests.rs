@@ -7153,3 +7153,27 @@ async fn an_image_that_left_the_site_and_came_back_unchanged_is_still_carried_fo
 fn forget_probes(transforms: &crate::build::cache::TransformCache) {
     PROBED.retain(|key| key.0 != transforms.root());
 }
+
+/// A new process's scan for suppressed variants starts from the one the last
+/// process kept in the folder's memo directory, so a one-shot build reads no
+/// unchanged page.
+#[test]
+fn a_new_process_suppression_scan_reads_no_unchanged_page() {
+    let vault = tempfile::tempdir().unwrap();
+    let paths = MossPaths::new(vault.path());
+    let staging = paths.staging_dir();
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("index.html"), r#"<img src="/assets/kept.webp">"#).unwrap();
+    let hashes = SiteHashes { pruned_image_outputs: ["assets/gone.webp".to_string()].into(), ..Default::default() };
+    std::fs::create_dir_all(paths.hashes().parent().unwrap()).unwrap();
+    std::fs::write(paths.hashes(), serde_json::to_string(&hashes).unwrap()).unwrap();
+    let reads = || crate::build::media::orphan_prune::FILES_READ.with(|n| n.get());
+
+    let before = reads();
+    assert_eq!(suppressed_variants_for(&paths, &staging), ["assets/gone.webp".to_string()].into());
+    assert_eq!(reads() - before, 1, "the first process reads the page");
+    crate::build::media::orphan_prune::new_process(&staging);
+    let before = reads();
+    assert_eq!(suppressed_variants_for(&paths, &staging), ["assets/gone.webp".to_string()].into());
+    assert_eq!(reads() - before, 0, "the next process starts from the kept scan");
+}

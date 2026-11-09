@@ -1659,6 +1659,7 @@ fn suppressed_variants_for(
     crate::build::media::orphan_prune::suppressed_variants(
         staging_dir,
         &previous.pruned_image_outputs,
+        Some(&paths.memo_dir()),
     )
 }
 

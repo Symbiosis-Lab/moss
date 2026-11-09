@@ -1150,7 +1150,7 @@ mod tests {
 
         let control_vault = tempdir().unwrap();
         let (mp, stage, mut sealed) = staged(control_vault.path());
-        let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage);
+        let scan = crate::build::media::orphan_prune::scan_stage(&stage, None);
         let control = prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
         assert!(
             control.contains("assets/orphan.webp"),
@@ -1167,7 +1167,7 @@ mod tests {
              and this test would prove nothing"
         );
 
-        let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage);
+        let scan = crate::build::media::orphan_prune::scan_stage(&stage, None);
         let removed = prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
 
         assert!(removed.is_empty(), "removed: {removed:?}");
@@ -2102,7 +2102,7 @@ mod tests {
         );
         let sealed = pending.seal();
 
-        let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage);
+        let scan = crate::build::media::orphan_prune::scan_stage(stage, None);
         let strip = unregistered_referenced_variants(&scan, &sealed, stage);
 
         assert!(strip.is_empty(), "{strip:?}");
@@ -2131,7 +2131,7 @@ mod tests {
         );
         let sealed = pending.seal();
 
-        let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage);
+        let scan = crate::build::media::orphan_prune::scan_stage(stage, None);
         let strip = unregistered_referenced_variants(&scan, &sealed, stage);
 
         assert!(strip.is_empty(), "{strip:?}");

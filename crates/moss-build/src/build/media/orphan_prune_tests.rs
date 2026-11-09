@@ -24,7 +24,7 @@ fn orphaned_webp_with_no_reference_anywhere_is_condemned() {
     write(tmp.path(), "index.html", "<html><body>no images here</body></html>");
     write(tmp.path(), "assets/orphan.webp", "fake webp bytes");
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let mut outputs = HashSet::new();
     outputs.insert("assets/orphan.webp".to_string());
 
@@ -47,7 +47,7 @@ fn file_literally_named_after_a_rung_with_no_reference_is_still_pruned() {
     write(tmp.path(), "index.html", "<html><body>no images here</body></html>");
     write(tmp.path(), "w800.webp", "fake webp bytes");
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let mut outputs = HashSet::new();
     outputs.insert("w800.webp".to_string());
 
@@ -108,7 +108,7 @@ fn image_referenced_only_from_non_html_wrapper_survives() {
         write(tmp.path(), case.file, &(case.wrapper)("../assets/wrapped.webp"));
         write(tmp.path(), asset_key, "fake webp bytes");
 
-        let referenced = extract_referenced_tails(tmp.path()).tails;
+        let referenced = scan_stage(tmp.path(), None).tails;
         let mut outputs = HashSet::new();
         outputs.insert(asset_key.to_string());
 
@@ -125,7 +125,7 @@ fn raster_fallback_tier_is_never_pruned_even_when_unreferenced() {
     write(tmp.path(), "assets/orphan.png", "fake png bytes");
     write(tmp.path(), "assets/orphan.jpg", "fake jpg bytes");
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let mut outputs = HashSet::new();
     outputs.insert("assets/orphan.png".to_string());
     outputs.insert("assets/orphan.jpg".to_string());
@@ -149,7 +149,7 @@ fn reference_at_a_different_relative_depth_still_matches() {
     );
     write(tmp.path(), "assets/deep.webp", "fake webp bytes");
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let mut outputs = HashSet::new();
     outputs.insert("assets/deep.webp".to_string());
 
@@ -168,7 +168,7 @@ fn absolute_and_data_uri_references_are_ignored_not_matched() {
     );
     write(tmp.path(), "assets/unrelated.webp", "fake webp bytes");
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     // The absolute URL must not falsely "protect" the local file of the same
     // name via a suffix collision — same basename, but the local file has no
     // real reference and should be pruned.
@@ -221,12 +221,12 @@ fn a_stylesheet_below_the_root_protects_the_asset_beside_it() {
     write(tmp.path(), "gallery/assets/hero.webp", "fake webp bytes");
     let outputs: HashSet<String> = ["gallery/assets/hero.webp".to_string()].into();
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let removed = orphaned_webp_keys(&outputs, &referenced);
 
     assert!(removed.is_empty(), "removed {removed:?}");
     assert!(
-        suppressed_variants(tmp.path(), &outputs).is_empty(),
+        suppressed_variants(tmp.path(), &outputs, None).is_empty(),
         "and a stale verdict for it must lift, or the producers stop re-making it"
     );
 }
@@ -248,7 +248,7 @@ fn a_data_file_below_the_root_listing_root_relative_keys_still_protects_them() {
     write(tmp.path(), "assets/hero.webp", "fake webp bytes");
     let outputs: HashSet<String> = ["assets/hero.webp".to_string()].into();
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let removed = orphaned_webp_keys(&outputs, &referenced);
 
     assert!(removed.is_empty(), "removed {removed:?}");
@@ -279,7 +279,7 @@ fn non_ascii_and_comma_filenames_with_a_real_variant_rung_survive_pruning() {
             &format!(r#"<img src="{key}">"#),
         );
 
-        let referenced = extract_referenced_tails(tmp.path()).tails;
+        let referenced = scan_stage(tmp.path(), None).tails;
         let mut outputs = HashSet::new();
         outputs.insert(key.clone());
 
@@ -334,7 +334,7 @@ fn a_fully_percent_encoded_reference_survives_pruning() {
             &format!(r#"<source srcset="{emitted}">"#),
         );
 
-        let referenced = extract_referenced_tails(tmp.path()).tails;
+        let referenced = scan_stage(tmp.path(), None).tails;
         let mut outputs = HashSet::new();
         outputs.insert(key.to_string());
 
@@ -368,7 +368,7 @@ fn apostrophe_entity_and_uppercase_extension_are_still_recognized() {
         r#"<img src="assets/Grandma&#39;s-House.webp"><img src="assets/Poster.WEBP">"#,
     );
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let mut outputs = HashSet::new();
     outputs.insert("assets/Grandma's-House.webp".to_string());
     outputs.insert("assets/Poster.WEBP".to_string());
@@ -408,7 +408,7 @@ fn both_a_quoted_list_and_an_apostrophe_filename_survive_in_the_same_file() {
         "{\"cover\":\"assets/grandmas'-house.webp\"}\n",
     );
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     let mut outputs = HashSet::new();
     for key in [
         "assets/a.webp",
@@ -437,7 +437,7 @@ fn an_isolated_equals_sign_does_not_become_the_start_of_a_token() {
     let tmp = tmp_dir();
     write(tmp.path(), "notes.txt", "path =assets/glued.webp end");
 
-    let referenced = extract_referenced_tails(tmp.path()).tails;
+    let referenced = scan_stage(tmp.path(), None).tails;
     assert!(referenced.contains("assets/glued.webp"));
     assert!(!referenced.contains("=assets/glued.webp"));
 }
@@ -463,7 +463,7 @@ fn start_char() -> impl Strategy<Value = char> {
 /// **derived by probing the encoder** rather than transcribed from it.
 ///
 /// This is the coupling the whole module rests on: the token class in
-/// `extract_referenced_tails` is safe precisely because every byte it treats
+/// `scan_stage` is safe precisely because every byte it treats
 /// as a delimiter (whitespace, `"`, `<`, `>`, `(`, `)`, `:`) is a byte
 /// `percent_encode_url` escapes — so that byte can never appear raw inside a
 /// moss-emitted URL, and excluding it cannot truncate a live reference. The
@@ -520,7 +520,7 @@ fn every_byte_the_encoder_leaves_literal_survives_pruning() {
         );
         write(tmp.path(), &key, "fake webp bytes");
 
-        let referenced = extract_referenced_tails(tmp.path()).tails;
+        let referenced = scan_stage(tmp.path(), None).tails;
         let outputs: HashSet<String> = std::iter::once(key.clone()).collect();
         let removed = orphaned_webp_keys(&outputs, &referenced);
         if !removed.is_empty() {
@@ -537,7 +537,7 @@ fn every_byte_the_encoder_leaves_literal_survives_pruning() {
         deleted.is_empty(),
         "the pruner CONDEMNED a live reference for {} byte(s) the URL encoder \
          leaves literal: {}\n\nEach one is a 404 on the live site. Either add \
-         the byte to the token class in `extract_referenced_tails`, or stop \
+         the byte to the token class in `scan_stage`, or stop \
          leaving it literal in `push_encoded_segment`.",
         deleted.len(),
         deleted.join(", "),
@@ -588,7 +588,7 @@ proptest::proptest! {
             &format!(r#"<img src="{escaped}">"#),
         );
 
-        let referenced = extract_referenced_tails(tmp.path()).tails;
+        let referenced = scan_stage(tmp.path(), None).tails;
         proptest::prop_assert!(
             referenced.contains(&key),
             "stem {:?} -> key {:?} not found in {:?}",
@@ -620,7 +620,7 @@ fn a_page_that_cannot_be_read_is_reported_as_unreadable() {
          this test would prove nothing"
     );
 
-    let scan = extract_referenced_tails(tmp.path());
+    let scan = scan_stage(tmp.path(), None);
 
     assert!(
         scan.unreadable.iter().any(|p| p == &locked),
@@ -645,7 +645,7 @@ fn a_directory_that_cannot_be_opened_is_reported_as_unreadable() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
     assert!(std::fs::read_dir(&locked).is_err(), "mode 0o000 must block read_dir");
 
-    let scan = extract_referenced_tails(tmp.path());
+    let scan = scan_stage(tmp.path(), None);
     let reported = scan.unreadable.iter().any(|p| p == &locked);
 
     // Restore before the TempDir drops, or the tree cannot be cleaned up.
@@ -663,7 +663,7 @@ fn non_utf8_bytes_in_a_scannable_extension_are_skipped_not_reported() {
     write(tmp.path(), "index.html", r#"<img src="assets/kept.webp">"#);
     std::fs::write(tmp.path().join("stray.json"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
 
-    let scan = extract_referenced_tails(tmp.path());
+    let scan = scan_stage(tmp.path(), None);
 
     assert!(scan.unreadable.is_empty(), "reported: {:?}", scan.unreadable);
     assert!(scan.tails.contains("assets/kept.webp"));
@@ -682,7 +682,7 @@ fn a_variant_the_last_scan_pruned_stays_suppressed() {
     write(tmp.path(), "index.html", "<html><body>no images here</body></html>");
     let previously_pruned: HashSet<String> = ["assets/orphan.webp".to_string()].into();
 
-    let suppressed = suppressed_variants(tmp.path(), &previously_pruned);
+    let suppressed = suppressed_variants(tmp.path(), &previously_pruned, None);
 
     assert!(suppressed.contains("assets/orphan.webp"));
 }
@@ -701,7 +701,7 @@ fn a_variant_this_build_references_again_is_not_suppressed() {
     );
     let previously_pruned: HashSet<String> = ["assets/orphan.webp".to_string()].into();
 
-    let suppressed = suppressed_variants(tmp.path(), &previously_pruned);
+    let suppressed = suppressed_variants(tmp.path(), &previously_pruned, None);
 
     assert!(
         suppressed.is_empty(),
@@ -719,7 +719,7 @@ fn nothing_is_suppressed_before_a_prune_has_ever_run() {
     let tmp = tmp_dir();
     write(tmp.path(), "index.html", "<html><body>no images here</body></html>");
 
-    assert!(suppressed_variants(tmp.path(), &HashSet::new()).is_empty());
+    assert!(suppressed_variants(tmp.path(), &HashSet::new(), None).is_empty());
 }
 
 /// A rescan of the same stage reads only the files whose stat moved, and an
@@ -732,20 +732,92 @@ fn a_rescan_reads_only_the_files_that_changed() {
     let reads = || FILES_READ.with(|n| n.get());
 
     let before = reads();
-    let first = extract_referenced_tails(tmp.path());
+    let first = scan_stage(tmp.path(), None);
     assert_eq!(reads() - before, 2);
     assert!(first.tails.contains("assets/one.webp") && first.tails.contains("assets/two.webp"));
 
     let before = reads();
-    let second = extract_referenced_tails(tmp.path());
+    let second = scan_stage(tmp.path(), None);
     assert_eq!(reads() - before, 0, "an unchanged stage is answered without reading it");
     assert_eq!(second.tails, first.tails);
 
     std::thread::sleep(std::time::Duration::from_millis(20));
     write(tmp.path(), "b/index.html", r#"<img src="/assets/three.webp">"#);
     let before = reads();
-    let third = extract_referenced_tails(tmp.path());
+    let third = scan_stage(tmp.path(), None);
     assert_eq!(reads() - before, 1);
     assert!(third.tails.contains("assets/three.webp") && !third.tails.contains("assets/two.webp"));
     assert!(third.tails.contains("assets/one.webp"));
+}
+
+fn kept_scan(memo: &Path) -> std::path::PathBuf {
+    memo.join("references-stage.json")
+}
+
+/// A new process starts from the scan the last one kept, and reads only the
+/// files whose stat no longer vouches for it.
+#[test]
+fn a_new_process_reads_only_the_files_that_changed_since_the_kept_scan() {
+    let (stage, memo) = (tmp_dir(), tmp_dir());
+    write(stage.path(), "a/index.html", r#"<img src="/assets/one.webp">"#);
+    write(stage.path(), "b/index.html", r#"<img src="/assets/two.webp">"#);
+    let reads = || FILES_READ.with(|n| n.get());
+    let first = scan_stage(stage.path(), Some(memo.path()));
+    new_process(stage.path());
+
+    let before = reads();
+    let second = scan_stage(stage.path(), Some(memo.path()));
+    assert_eq!(reads() - before, 0, "the kept scan answers for an unchanged stage");
+    assert_eq!(second.tails, first.tails);
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write(stage.path(), "b/index.html", r#"<img src="/assets/three.webp">"#);
+    new_process(stage.path());
+    let before = reads();
+    let third = scan_stage(stage.path(), Some(memo.path()));
+    assert_eq!(reads() - before, 1);
+    assert!(third.tails.contains("assets/three.webp") && !third.tails.contains("assets/two.webp"));
+    assert!(third.tails.contains("assets/one.webp"));
+}
+
+/// A kept scan another moss wrote, of another version, or cut short, reads as
+/// none: every file is read again.
+#[test]
+fn a_foreign_or_cut_short_kept_scan_reads_every_file_again() {
+    let reads = || FILES_READ.with(|n| n.get());
+    for tamper in ["another moss", "another version", "cut short"] {
+        let (stage, memo) = (tmp_dir(), tmp_dir());
+        write(stage.path(), "a/index.html", r#"<img src="/assets/one.webp">"#);
+        write(stage.path(), "b/index.html", r#"<img src="/assets/two.webp">"#);
+        scan_stage(stage.path(), Some(memo.path()));
+        new_process(stage.path());
+        let kept = std::fs::read_to_string(kept_scan(memo.path())).unwrap();
+        let (header, body) = kept.split_once('\n').unwrap();
+        let tampered = match tamper {
+            "another moss" => format!("moss-memo references-stage 1 another-moss\n{body}"),
+            "another version" => format!("{}\n{body}", header.replacen("references-stage 1 ", "references-stage 2 ", 1)),
+            _ => kept[..kept.len() - 1].to_string(),
+        };
+        std::fs::write(kept_scan(memo.path()), tampered).unwrap();
+
+        let before = reads();
+        let scan = scan_stage(stage.path(), Some(memo.path()));
+        assert_eq!(reads() - before, 2, "{tamper}");
+        assert!(scan.tails.contains("assets/one.webp") && scan.tails.contains("assets/two.webp"), "{tamper}");
+    }
+}
+
+/// A process that read no file has nothing new to keep, so a build that
+/// changed nothing writes nothing.
+#[test]
+fn a_process_that_read_nothing_leaves_the_kept_scan_as_it_was() {
+    let (stage, memo) = (tmp_dir(), tmp_dir());
+    write(stage.path(), "a/index.html", r#"<img src="/assets/one.webp">"#);
+    scan_stage(stage.path(), Some(memo.path()));
+    let written = std::fs::metadata(kept_scan(memo.path())).unwrap().modified().unwrap();
+    new_process(stage.path());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    scan_stage(stage.path(), Some(memo.path()));
+    assert_eq!(std::fs::metadata(kept_scan(memo.path())).unwrap().modified().unwrap(), written);
 }
