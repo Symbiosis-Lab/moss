@@ -1,6 +1,6 @@
 # Duplicate stores in a synced folder: heal them, and stop making them
 
-**Status:** Proposed. Every piece lives in this repository (`moss-build`).
+**Status:** Shipped in 0.15.21 (the heal). The prevention below was withdrawn: the native path already does its work, and the heal folds what remains.
 
 A site folder kept by a sync service can hold `.moss/cache`, `.moss/cache 2`, `.moss/cache 3` and `.moss/cache 4` side by side. Only the first is read. The others hold tens of thousands of files that every machine sharing the folder downloads, uploads and counts against its storage, and nothing ever removes them. This proposal says why they appear, how moss should fold them back into one store without asking anyone, and how it should stop making them.
 
@@ -42,32 +42,22 @@ moss sits with the second and third groups: it chose to keep its converted media
 
 ## Design
 
-### Heal, at every build start
+### Heal, at every build start (shipped)
 
-`migrate_build_tree` already runs at each build start and is idempotent. It gains one step: the siblings of `.moss/cache` that have the renamed-aside shape (`cache 2`, `cache 31`, found by the existing `renamed_aside_siblings`) are folded in and removed.
+`migrate_build_tree` already runs at each build start and is idempotent, and its loop already harvested copies of the old build root. Copies of the store itself (`cache 2`, `cache 31`, or a Dropbox or Syncthing conflict copy) now go through the same loop, recognised by the same predicate as a copy of `.moss` (`is_sync_copy_of`), guarded by `sightings` as the old root is:
 
-For each sibling, guarded by `sightings` as the old root is:
+- **Objects.** Each blob the store lacks is moved in. A move is a metadata change, so a blob the service still holds only in the cloud moves without being downloaded; it is checked when it is first read, as every blob already is. A blob the store already has is dropped.
+- **Transform records.** A record the store lacks is moved in; one it already has is kept. No record is merged: the copies are older than the store every build has used since, and a missing entry costs one encode.
+- **Then** the emptied copy is removed. If removal fails, it is logged and retried at the next build start. If the service restores it, `sightings` leaves it until the next launch.
 
-- **Objects.** Each blob the canonical store lacks is renamed into it. A rename is a metadata change, so a blob the service still holds only in the cloud moves without being downloaded, and it is verified when it is first read, as every blob already is. A blob the canonical store already has is dropped. Nothing is hashed during the heal, which matters because a fail-fast read of a placeholder would otherwise skip most of a duplicate on the very folders this is for.
-- **Transform records.** A record the canonical store lacks is renamed in. When both have one and both are readable, the duplicate's entries the canonical record lacks are merged in through `TransformCache::merge`. When either is still in the cloud, the canonical one is kept and the duplicate's is dropped (principle 2).
-- **Then** the emptied sibling is removed. If removal fails, it is logged and retried at the next build start. If the service restores it, `sightings` leaves it until the next launch, as for the old root.
-- **Logged** once per sibling: how many blobs and records moved, how many were already there, and whether the directory was removed.
+### Prevention (withdrawn)
 
-The existing `merge` hashes each blob before trusting it (`verify = true` for objects). For store siblings that check moves to the first read, for the reason in the first bullet. The old-root harvest can keep hashing, since those roots are local.
+The proposal was to create `.moss/cache` in one place, after waiting for the provider's listing, so two machines could not each create it. It was withdrawn after reading what the code already does. Every write into the shared store goes through the publication path, which runs on threads allowed to fetch from the cloud: a create inside a `.moss` whose listing is still online makes the provider fetch that listing first, so another machine's `cache` that has reached the cloud is found rather than duplicated. What remains is two machines creating it within the provider's propagation delay; a wait can only narrow that window, and the heal folds any copy at the next build. The duplicates that prompted this came from one event, the tree move running on every machine within hours. This holds only while the heal ships: if it is ever removed, the prevention is needed again.
 
-### Prevent, at the one place the store is created
+### Tests (shipped)
 
-- The store directories are created when a site's `.moss` is first laid out, by the same writer that creates `.moss/config.toml`, not by the first build that needs them.
-- `move_or_merge`, and any later code that finds `.moss/cache` missing in a folder that is not new (it has a `.moss/config.toml` older than this process), first asks the provider for the parent's listing and waits for it, as `86ea3f4650` already does for a cache folder the cloud has not downloaded. Only an answer of "absent" from the provider lets it create the directory.
-- The old-tree move stays, since older trees still exist, but it creates nothing: if `.moss/cache` does not exist after the wait, it renames the old store in as the store, the one create that cannot be avoided, and logs it.
-
-### Tests
-
-- A folder with `cache` and `cache 2`: after a build start, every blob and record from `cache 2` is in `cache`, `cache 2` is gone, and a second build start does nothing.
-- A record in both, with different entries: the merged record holds both, and the canonical entry wins on the same key.
-- A sibling blob that is a cloud placeholder (the existing `fault::refuse_dataless` and `icloud::pretend` seams): it is renamed in without a read.
-- A sibling the provider restores after removal: left alone on the second sighting.
-- Two simulated machines running the old-tree move against one folder, where the second sees no `.moss/cache` until the provider answers: one store, no sibling.
+- A folder with `cache`, `cache 2` and a Dropbox conflict copy: after a build start, every blob and record the copies held is in `cache`, the store's own record is kept, the copies are gone, and a second build start does nothing.
+- A copy the provider restores after removal: left alone on the second sighting (the existing old-root test).
 
 ## Open questions
 
