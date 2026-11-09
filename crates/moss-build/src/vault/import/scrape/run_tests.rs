@@ -2418,3 +2418,41 @@ async fn a_cart_url_linked_from_the_body_is_still_crawled() {
     }
     assert!(tmp.path().join("cart.md").exists());
 }
+
+fn bookmark_card(href: &str, title: &str, description: &str) -> String {
+    format!(
+        r#"<figure class="kg-card kg-bookmark-card"><a class="kg-bookmark-container" href="{href}"><div class="kg-bookmark-content"><div class="kg-bookmark-title">{title}</div><div class="kg-bookmark-description">{description}</div><div class="kg-bookmark-metadata"><img class="kg-bookmark-icon" src="https://notes.example.test/favicon.png"><span class="kg-bookmark-author">Example Notes</span><span class="kg-bookmark-publisher">Publisher Line</span></div></div><div class="kg-bookmark-thumbnail"><img src="https://notes.example.test/content/{title}.jpg" alt=""></div></a></figure>"#
+    )
+}
+
+/// A link-preview card is one paragraph with one link, so markdown can parse
+/// it and an in-scope target is rewritten like any other in-scope link.
+#[test]
+fn a_link_preview_card_becomes_one_block_link() {
+    let html = format!(
+        r#"<html><head><title>Example Notes</title></head><body><article><p>Intro paragraph, long enough to be extracted as content.</p>{}{}</article></body></html>"#,
+        bookmark_card("https://notes.example.test/second-draft/", "SecondDraft", "A note about drafts."),
+        bookmark_card("https://other.example.test/essay", "OutsideEssay", "An essay elsewhere."),
+    );
+    let scope = UrlScope::new("https://notes.example.test/").unwrap();
+    let mut article = crate::vault::import::scrape::converter::extract_article(&html, "https://notes.example.test/first-light/");
+    let note = compose_note(
+        &mut article,
+        &HashMap::new(),
+        None,
+        "https://notes.example.test/first-light/",
+        Some(LinkScope { scope: &scope, rewrite_pages: true }),
+    )
+    .expect("a note");
+    assert!(note.contains("](./second-draft/index.md)"), "{note}");
+    assert!(note.contains("](https://other.example.test/essay)"), "{note}");
+    assert!(note.contains("SecondDraft](./second-draft/index.md)\n\nA note about drafts."), "{note}");
+    assert!(note.contains("OutsideEssay](https://other.example.test/essay)\n\nAn essay elsewhere."), "{note}");
+    assert!(!note.contains("Publisher Line") && !note.contains("favicon"), "{note}");
+    for line in note.lines().filter(|l| l.contains('[')) {
+        assert_eq!(line.matches('[').count(), line.matches(']').count(), "a link opened and not closed: {line}");
+    }
+    assert_eq!(note.matches("](./second-draft").count(), 1, "{note}");
+    let picture_link = rewrite_links("[![](a.jpg)](https://notes.example.test/second-draft/)", &scope);
+    assert_eq!(picture_link, "[![](a.jpg)](./second-draft/index.md)");
+}

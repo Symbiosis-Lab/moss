@@ -19,7 +19,7 @@ use super::scope::{is_within_scope, UrlScope};
 // across pages. Group 3 is the title with its leading space, in any of the
 // three CommonMark forms: `"t"`, `'t'` or `(t)`.
 static LINK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\[([^\]]*)\]\(([^)\s]+)(\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#)
+    Regex::new(r#"\[((?:[^\]\[]|!\[[^\]]*\]\([^)]*\))*)\]\(([^)\s]+)(\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#)
         .expect("link regex")
 });
 
