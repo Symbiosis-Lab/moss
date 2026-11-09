@@ -1386,22 +1386,7 @@ body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay
 }
 @media (width < 48rem) {
   body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] > .moss-hero-content {
-    position: relative;
     padding-inline: var(--moss-words-inset);
-  }
-  /* A kept panel ends in a fade toward the picture's subject rather than a seam:
-     the panel's own background, faded out, hung below the words' box. `inherit`
-     leaves nothing to fade where the words sit in ink with no panel. */
-  body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] > .moss-hero-content::after {
-    content: '';
-    position: absolute;
-    inset-inline: 0;
-    inset-block-start: 100%;
-    block-size: var(--moss-space-lg);
-    background: inherit;
-    -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
-    mask-image: linear-gradient(to bottom, #000, transparent);
-    pointer-events: none;
   }
 }
 body > footer.container:has(> .moss-hero-closing) > .moss-colophon {
@@ -8124,6 +8109,40 @@ body > footer.container:has(> .moss-hero-closing) {
   background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* tinted panel; see color_extract::panel_background */
 }
 
+/* The panel's edge fades into the picture: a copy of the panel (`inherit`, so a
+   theme that clears or recolours it moves this too), masked to fade outward and
+   cut away under the words' box. Eased stops: a linear ramp shows a bright line
+   where it meets the panel. At a fractional edge the box and the mask meet in one
+   device pixel that can read a little off, accepted: overlapping them rings every
+   edge. The 4px border keeps the panel's paint inside the mask, whose own edge
+   leaves a faint line on a split pixel, and stays on the device grid. */
+@supports (mask-composite: exclude) {
+  .moss-hero[data-overlay] > .moss-hero-content::before {
+    --moss-feather: var(--moss-hero-panel-feather, 2.5rem);
+    --moss-feather-in: transparent, rgb(0 0 0 / 0.22) calc(var(--moss-feather) * 0.3), rgb(0 0 0 / 0.65) calc(var(--moss-feather) * 0.6), #000 var(--moss-feather);
+    --moss-feather-out: #000 calc(100% - var(--moss-feather)), rgb(0 0 0 / 0.65) calc(100% - var(--moss-feather) * 0.6), rgb(0 0 0 / 0.22) calc(100% - var(--moss-feather) * 0.3), transparent;
+    content: '';
+    position: absolute;
+    inset: calc(-1 * var(--moss-feather) - 4px);
+    padding: var(--moss-feather);
+    border: 4px solid transparent;
+    z-index: -1;
+    background: inherit;
+    background-clip: padding-box;
+    pointer-events: none;
+    mask-origin: padding-box;
+    mask-image: linear-gradient(#000 0 0), linear-gradient(to right, var(--moss-feather-in), var(--moss-feather-out)), linear-gradient(to bottom, var(--moss-feather-in), var(--moss-feather-out));
+    mask-clip: content-box, border-box, border-box;
+    mask-composite: exclude, intersect, add;
+  }
+  /* A stacked phone hero sets its words below the picture, not on it. */
+  @media (width < 48rem) {
+    .moss-hero[data-overlay]:not([data-mobile="overlay"]) > .moss-hero-content::before {
+      content: none;
+    }
+  }
+}
+
 /* Elements that carry their OWN colour from the base stylesheet have to hand
    it back: `h1,h2,…,h6 { color: var(--moss-color-text) }` and blockquote's
    secondary colour both out-specify the container and would otherwise paint
@@ -8265,7 +8284,7 @@ body > footer.container:has(> .moss-hero-closing) {
   position: absolute;
   inset-block: auto 0.5rem;
   inset-inline: auto 0.5rem;
-  z-index: 2; /* above the scrim (1) */
+  z-index: 3; /* above the scrim (1) and the words (2), which come later in the page */
   display: grid;
   place-items: center;
   inline-size: 2.75rem;
@@ -8408,7 +8427,7 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero:has(.moss-hero-content) .moss-hero-content {
-    position: static;
+    position: relative; /* in flow like static, and the panel's fade hangs from it */
     inset-block-end: auto;
     inset-inline-start: auto;
     z-index: 2; /* not auto: else this flex item paints below the scrim */
@@ -8613,7 +8632,8 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {
-    position: static;
+    position: relative; /* in flow like static, and the panel's fade hangs from it */
+    inset: auto;
     background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82))); /* see "Backing panel" above */
     /* Back over the image, so back to white — and the children inherit it
        via the `:is(h1…blockquote)` rule in the base block. */

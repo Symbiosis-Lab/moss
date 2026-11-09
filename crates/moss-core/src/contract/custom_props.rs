@@ -152,6 +152,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Backing panel behind overlay text in both overlaid hero layouts (desktop, and mobile under `mobile=overlay`), so the text stays legible wherever a drawn line, lettering or a face in the photo falls under it. moss does not set this itself: it publishes a per-render panel colour as `--item-hero-panel-bg`, tinted from the image's own scan-cached dominant colour (`color_extract::panel_background`) and engineered so the panel's WCAG contrast against the overlay text holds even in the worst case of its own translucency — composited over pure black or pure white, which bounds every actual pixel underneath. This token, when a theme sets it (on `:root` or `.moss-hero`), takes precedence over that computed colour. The flat default here only applies when neither exists (no media manifest). A pale ('light'-toned) hero reads this against a different literal fallback, `rgba(250, 248, 244, 0.82)` — same property, the other side of the dark/light text split `--moss-hero-tone-color` makes.",
     },
     CustomProp {
+        name: "--moss-hero-panel-feather",
+        owner: "moss-hero-content",
+        default: "2.5rem",
+        description: "How far the overlay panel's edge fades into the picture, outside the words' box, on the sides that face the picture (the picture's own edges clip the rest). The words stay on the solid panel, so the fade costs no contrast. `0px` gives the panel a hard edge (a bare `0` is not a length in the calculation). The fade copies the panel's background, so a theme that clears the panel (`background: none` on `.moss-hero-content`) gets no fade either.",
+    },
+    CustomProp {
         name: "--moss-hero-credit-font",
         owner: "moss-hero-credit",
         default: "var(--moss-font-body)",

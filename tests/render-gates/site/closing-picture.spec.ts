@@ -351,9 +351,9 @@ test.describe('a picture taller than the window', () => {
 
 // On a phone a kept panel fades out toward the picture's subject instead of
 // ending in a seam. The words' own box stays solid (their contrast is measured
-// there); the fade hangs below it, inside the room the picture keeps clear.
+// there); the fade hangs outside it, inside the room the picture keeps clear.
 for (const scheme of SCHEMES) {
-  test(`phone, ${scheme}: a kept panel fades into the picture, below the words`, async ({ browser }) => {
+  test(`phone, ${scheme}: a kept panel fades into the picture around the words`, async ({ browser }) => {
     const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 390, height: 800 } });
     const page = await context.newPage();
     await page.goto(SKY_PAGE, { waitUntil: 'load' });
@@ -362,13 +362,13 @@ for (const scheme of SCHEMES) {
       const hero = document.querySelector('footer .moss-hero-closing')!;
       const content = hero.querySelector('.moss-hero-content')!;
       const cs = getComputedStyle(content);
-      const tail = getComputedStyle(content, '::after');
+      const tail = getComputedStyle(content, '::before');
       const h = hero.getBoundingClientRect();
       const c = content.getBoundingClientRect();
       return {
         panel: cs.backgroundColor,
         ink: cs.color,
-        tail: { content: tail.content, bg: tail.backgroundColor, height: parseFloat(tail.height), mask: tail.maskImage || tail.webkitMaskImage, top: tail.top },
+        tail: { content: tail.content, bg: tail.backgroundColor, height: parseFloat(tail.paddingTop), mask: tail.maskImage || tail.webkitMaskImage },
         hero: { top: h.top, bottom: h.bottom, left: h.left, width: h.width },
         words: { bottom: c.bottom },
       };
@@ -672,7 +672,7 @@ for (const scheme of SCHEMES) {
           credit: { top: k.top, bottom: k.bottom },
           panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
           ink: getComputedStyle(credit).color,
-          tail: getComputedStyle(content, '::after').content,
+          tail: getComputedStyle(content, '::before').content,
         };
       });
       expect(parseColor(m.panels[0]).a, 'the words keep their panel').toBeGreaterThan(0.5);
@@ -681,7 +681,7 @@ for (const scheme of SCHEMES) {
       expect(m.credit.bottom).toBeLessThanOrEqual(m.hero.bottom + 1);
       const { overBlack, overWhite } = worstCaseContrast(m.panels[1], m.ink);
       expect(Math.min(overBlack, overWhite), `credit ${m.ink} on ${m.panels[1]}`).toBeGreaterThanOrEqual(4.5);
-      if (width < 768) expect(m.tail, "the words' panel ends in its fade").toBe('""');
+      expect(m.tail, "the words' panel ends in its fade").toBe('""');
       await context.close();
     });
   }
@@ -731,7 +731,6 @@ for (const scheme of SCHEMES) {
         return {
           panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
           ink: [getComputedStyle(content.querySelector('h2')!).color, getComputedStyle(credit).color],
-          tail: getComputedStyle(content, '::after').content,
           shadows: [content, content.querySelector('h2')!, content.querySelector('a')!].map((e) => getComputedStyle(e).textShadow),
         };
       });

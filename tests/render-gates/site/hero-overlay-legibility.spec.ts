@@ -16,8 +16,8 @@
  * cannot answer.
  */
 import { test, expect, Page } from "@playwright/test";
-import { inflateSync } from "node:zlib";
-import { worstCaseContrast } from "../../e2e/helpers/wcag-contrast";
+import { decodePng } from "../../e2e/helpers/decode-png";
+import { parseColor, worstCaseContrast } from "../../e2e/helpers/wcag-contrast";
 
 async function styleOf(page: Page, selector: string, prop: "color" | "backgroundColor" | "maxWidth") {
   return page.evaluate(
@@ -51,25 +51,17 @@ async function assertPanelContrast(page: Page) {
 }
 
 /**
- * A single pixel's RGB from a 1x1 `page.screenshot({ clip })`. Reading the
- * actual painted colour, not `elementFromPoint` (which reports the pseudo-
- * element's HOST node — `body`, here — rather than reflecting what's
+ * The RGB pixels of a `page.screenshot()` PNG (8-bit RGB or RGBA, any row
+ * filter), decoded here rather than in the page, whose canvas may convert
+ * colour. Reading the actual painted colour, not `elementFromPoint` (which
+ * reports the pseudo-element's HOST node — `body`, here — rather than what is
  * visually on top, so it can't tell "the theme layer is covering the hero"
- * apart from "the hero's own section is topmost"). A 1x1 image has no
- * left/up neighbour, so every PNG filter type reduces to "none": the bytes
- * right after the per-row filter byte ARE the pixel.
+ * apart from "the hero's own section is topmost").
  */
-function decodeSinglePixelPng(buf: Buffer): { r: number; g: number; b: number } {
-  let i = 8; // past the 8-byte PNG signature
-  let idat = Buffer.alloc(0);
-  while (i < buf.length) {
-    const len = buf.readUInt32BE(i);
-    const type = buf.toString("ascii", i + 4, i + 8);
-    if (type === "IDAT") idat = Buffer.concat([idat, buf.subarray(i + 8, i + 8 + len)]);
-    i += 12 + len; // length + type + data + crc
-  }
-  const raw = inflateSync(idat);
-  return { r: raw[1], g: raw[2], b: raw[3] }; // raw[0] is the filter byte
+/** The one pixel of a 1x1 screenshot. */
+function onePixel(buf: Buffer) {
+  const [r, g, b] = decodePng(buf).at(0, 0);
+  return { r, g, b };
 }
 
 /**
@@ -87,7 +79,7 @@ async function assertHeroPaintsAboveThemeLayers(page: Page) {
   const x = Math.round(hero.x + hero.width - 10);
   const y = Math.round(hero.y + 10);
   const buf = await page.screenshot({ clip: { x, y, width: 1, height: 1 } });
-  const { r, g, b } = decodeSinglePixelPng(buf);
+  const { r, g, b } = onePixel(buf);
   expect(
     [r, g, b],
     `pixel at the hero's top-right (${x}, ${y}) is rgb(${r}, ${g}, ${b}) — the fixture theme's opaque white layer, not the busy image, so it is painting over the hero`,
@@ -112,7 +104,7 @@ async function assertPanelPaintsAboveScrim(page: Page) {
   const x = Math.round(content.x + content.width / 2);
   const y = Math.round(content.y + Math.min(10, content.height / 2));
   const buf = await page.screenshot({ clip: { x, y, width: 1, height: 1 } });
-  const { r, g, b } = decodeSinglePixelPng(buf);
+  const { r, g, b } = onePixel(buf);
   expect(
     [r, g, b],
     `pixel inside the overlay panel is rgb(${r}, ${g}, ${b}) — the scrim (forced red) is painting over the panel (forced blue) instead of behind it`,
@@ -317,7 +309,7 @@ test.describe("hero overlay panel sizing and placement", () => {
       let r = 0, g = 0, b = 0;
       for (const frac of offsets) {
         const x = Math.round(hero.x + hero.width * frac);
-        const p = decodeSinglePixelPng(await page.screenshot({ clip: { x, y, width: 1, height: 1 } }));
+        const p = onePixel(await page.screenshot({ clip: { x, y, width: 1, height: 1 } }));
         r += p.r; g += p.g; b += p.b;
       }
       return { r: r / offsets.length, g: g / offsets.length, b: b / offsets.length };
@@ -334,5 +326,156 @@ test.describe("hero overlay panel sizing and placement", () => {
       delta,
       `start-quarter pixel under align=end is rgb(${scrimmed.r},${scrimmed.g},${scrimmed.b}), the undarkened image there is rgb(${plain.r},${plain.g},${plain.b}) -- the scrim is still darkening the start side`,
     ).toBeLessThan(10);
+  });
+});
+
+/**
+ * The panel's edge fades into the picture (`--moss-hero-panel-feather`) on the
+ * sides that face it, instead of cutting the picture with a line. Read off the
+ * painted pixels: a strip crossing the edge is shot with the panel set to red at
+ * 0.8 and again at 0 (the fade copies the panel, so it follows), and the panel's
+ * alpha at each device pixel is solved from the pair, `a = (A − B)·(P − B) / |P − B|²`.
+ * The busy picture's own lines cancel out.
+ */
+test.describe("hero overlay panel edge", () => {
+  type Strip = { x: number; y: number; width: number; height: number };
+
+  /** The pixels along a 1px strip, from a shot 32px across it (WebKit at 1.5x paints a mask wrongly into a 1px clip), read along its middle. */
+  async function pixels(page: Page, strip: Strip): Promise<number[][]> {
+    const along = strip.width >= strip.height;
+    const clip = along ? { ...strip, y: strip.y - 16, height: 32 } : { ...strip, x: strip.x - 16, width: 32 };
+    const png = decodePng(await page.screenshot({ clip }));
+    const mid = Math.floor((along ? png.height : png.width) / 2);
+    return Array.from({ length: along ? png.width : png.height }, (_, k) => {
+      const [r, g, b] = along ? png.at(k, mid) : png.at(mid, k);
+      return [r, g, b];
+    });
+  }
+
+  /**
+   * The panel's alpha along a 1px strip, from the box's inside outward; null where the picture is
+   * too close to the probe colour to tell. Only `--moss-hero-panel-bg` changes between the two shots,
+   * so the picture, its scrim and the layout are the same in both.
+   */
+  async function alphaAcross(page: Page, strip: Strip, outwardIsReversed: boolean) {
+    const DECLARED = 0.8;
+    // Every picture decoded and the style change painted, so the two shots differ by the panel alone.
+    const settle = () => page.evaluate(async () => {
+      await Promise.all([...document.images].map((img) => img.decode().catch(() => {})));
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    });
+    const probe = async (alpha: number) => {
+      const tag = await page.addStyleTag({ content: `:root { --moss-hero-panel-bg: rgb(255 0 0 / ${alpha}); }` });
+      await settle();
+      return tag;
+    };
+    const on = await probe(DECLARED);
+    const built = await pixels(page, strip);
+    await on.evaluate((el) => el.remove());
+    const off = await probe(0);
+    const bare = await pixels(page, strip);
+    await off.evaluate((el) => el.remove());
+    const p = [255, 0, 0];
+    const alphas = built.map((a, i) => {
+      const b = bare[i];
+      const pb = p.map((v, k) => v - b[k]);
+      const norm = pb.reduce((s, v) => s + v * v, 0);
+      if (norm < 60 * 60) return null;
+      return pb.reduce((s, v, k) => s + (a[k] - b[k]) * v, 0) / norm;
+    });
+    return { declared: DECLARED, alphas: outwardIsReversed ? alphas.reverse() : alphas };
+  }
+
+  /** Where the box's edge falls in a strip read from inside outward: `inside` pixels lie wholly in the box, and on a fractional edge the next one is split by it. */
+  type Edge = { inside: number; split: boolean };
+
+  function assertSoftEdge(label: string, run: { declared: number; alphas: (number | null)[] }, edge: Edge, dpr: number) {
+    const known = run.alphas.map((a, i) => [i, a] as const).filter((e): e is readonly [number, number] => e[1] !== null);
+    const shown = `edge ${edge.inside}${edge.split ? " (split)" : ""}: ${known.map(([i, a]) => `${i}:${a.toFixed(2)}`).join(" ")}`;
+    // The box's paint and the mask meet at the split pixel, or the one just inside it when layout rounds the edge across it. The CSS accepts one such pixel, and nowhere else.
+    const seams = edge.split ? known.filter(([i, a]) => (i === edge.inside || i === edge.inside - 1) && Math.abs(a - run.declared) >= 0.06) : [];
+    expect(seams.length, `${label}: more than one seam pixel (${shown})`).toBeLessThanOrEqual(1);
+    for (const [, a] of seams) expect(Math.abs(a - run.declared), `${label}: the seam pixel strays too far (${shown})`).toBeLessThanOrEqual(0.45);
+    const seam = seams[0]?.[0];
+    const inside = known.filter(([i]) => i < edge.inside && i !== seam);
+    expect(inside.length, `${label}: no readable pixels inside the box (${shown})`).toBeGreaterThan(2);
+    for (const [, a] of inside) expect(Math.abs(a - run.declared), `${label}: the words' panel keeps alpha ${run.declared} (${shown})`).toBeLessThan(0.06);
+    // Outward from the box: never brighter-then-darker (a seam), never a step a hard edge would make.
+    const outward = known.filter(([i]) => i >= edge.inside - 1 && i !== seam);
+    for (let k = 1; k < outward.length; k++) {
+      const [[i0, a0], [i1, a1]] = [outward[k - 1], outward[k]];
+      expect(a1 - a0, `${label}: alpha rises outward at ${i1} (${shown})`).toBeLessThan(0.06);
+      expect((a0 - a1) / (i1 - i0), `${label}: a hard step at ${i1} (${shown})`).toBeLessThan(0.12 / dpr);
+    }
+    const tail = known.filter(([i]) => i >= run.alphas.length - 4 * dpr);
+    for (const [, a] of tail) expect(a, `${label}: the fade has not ended a feather out (${shown})`).toBeLessThan(0.06);
+  }
+
+  const FEATHER = 40; // 2.5rem
+  const INSET = 12; // inside the box's padding, clear of the words
+
+  /** An even CSS coordinate is a whole device pixel at 1x, 1.5x and 2x, so a strip that starts on one has its indices on the page's device grid. */
+  const onGrid = (v: number) => Math.floor(v / 2) * 2;
+
+  /** One strip per side of the words' box that faces the picture (a feather's room from the hero's edge), from inside the box outward. */
+  async function stripsFacingPicture(page: Page, dpr: number) {
+    const [hero, box] = [await rectOf(page, ".moss-hero"), await rectOf(page, ".moss-hero-content")];
+    const room = FEATHER + 6;
+    const midX = onGrid(box.left + box.width / 2), midY = onGrid(box.top + box.height / 2);
+    const sides: { side: string; strip: Strip; reversed: boolean; edge: Edge }[] = [];
+    const add = (side: string, boxEdge: number, from: number, to: number, reversed: boolean, across: boolean) => {
+      const start = onGrid(from);
+      const length = onGrid(to - start + 1.999);
+      const strip = across ? { x: start, y: midY, width: length, height: 1 } : { x: midX, y: start, width: 1, height: length };
+      const offset = (boxEdge - start) * dpr;
+      const split = Math.abs(offset - Math.round(offset)) > 1 / 32;
+      const inside = reversed ? length * dpr - Math.ceil(split ? offset : Math.round(offset)) : Math.floor(split ? offset : Math.round(offset));
+      sides.push({ side, strip, reversed, edge: { inside, split } });
+    };
+    if (box.top - hero.top >= room) add("top", box.top, box.top - room, box.top + INSET, true, false);
+    if (hero.bottom - box.bottom >= room) add("bottom", box.bottom, box.bottom - INSET, box.bottom + room, false, false);
+    if (box.left - hero.left >= room) add("start", box.left, box.left - room, box.left + INSET, true, true);
+    if (hero.right - box.right >= room) add("end", box.right, box.right - INSET, box.right + room, false, true);
+    return sides;
+  }
+
+  // The last case moves the box's edges off the pixel grid, where a seam between
+  // the panel and its fade would show as a pixel of lower alpha.
+  const CASES = [
+    { path: "/", width: 1280, css: "" },
+    { path: "/align-center/", width: 1280, css: "" },
+    { path: "/", width: 390, css: "" },
+    { path: "/align-center/", width: 1280, css: ".moss-hero-content { padding: calc(5% + 0.37px); }" },
+  ];
+  for (const dpr of [1, 1.5, 2]) {
+    test(`${dpr}x: every side of the panel that faces the picture fades into it, and the words keep the solid panel`, async ({ browser }) => {
+      for (const c of CASES) {
+        const context = await browser.newContext({ viewport: { width: c.width, height: 900 }, deviceScaleFactor: dpr });
+        const page = await context.newPage();
+        await page.goto(c.path);
+        if (c.css) await page.addStyleTag({ content: c.css });
+        const sides = await stripsFacingPicture(page, dpr);
+        expect(sides.length, `${c.path} ${c.width}px ${c.css}: no side of the panel faces the picture`).toBeGreaterThan(0);
+        for (const { side, strip, reversed, edge } of sides) {
+          assertSoftEdge(`${c.path} ${c.width}px ${side} ${c.css}`, await alphaAcross(page, strip, reversed), edge, dpr);
+        }
+        await context.close();
+      }
+    });
+  }
+
+  test("a theme that clears the panel gets no fade, and --moss-hero-panel-feather: 0 restores the hard edge", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/");
+    const fade = () => page.evaluate(() => {
+      const cs = getComputedStyle(document.querySelector(".moss-hero-content")!, "::before");
+      return { bg: cs.backgroundColor, pad: parseFloat(cs.paddingTop) };
+    });
+    expect(parseColor((await fade()).bg).a, "the fade copies the panel").toBeGreaterThan(0.5);
+    const cleared = await page.addStyleTag({ content: ".moss-hero-content { background: none; }" });
+    expect(parseColor((await fade()).bg).a, "a cleared panel leaves nothing to fade").toBe(0);
+    await cleared.evaluate((el) => el.remove());
+    await page.addStyleTag({ content: ":root { --moss-hero-panel-feather: 0px; }" });
+    expect((await fade()).pad, "no fade at 0").toBe(0);
   });
 });
