@@ -29,6 +29,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- In a folder kept by a sync service, the extra copies of moss's cache that two computers sometimes made at once (`.moss/cache 2`, or a conflicted copy) are folded back into `.moss/cache` at the next build and removed, so they stop taking space and syncing.
 - Site search in the moss app stays current on a site that has redirects or a not-found page; before, its search index stopped updating after the first one.
 - In a folder kept by Google Drive, moss no longer converts the same pictures again on every build. Drive can keep the build's cache records only in the cloud, and moss used to give up on such a record, or drop it when too many were waiting, so the result was never kept. It now fetches the record, adds the result, keeps what other computers wrote to it, and saves it. The first build of such a folder takes longer while it fetches them; the builds after it are fast. A one-shot `moss build` also waits up to ten seconds at exit for records it is still saving.
 - In the desktop app, a notice that waits for you (an update ready to install, a folder that needs a newer moss, a download under way) stays until you close it or press its button. It used to close by itself after a few seconds.
