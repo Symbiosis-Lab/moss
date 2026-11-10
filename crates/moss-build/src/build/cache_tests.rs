@@ -3128,8 +3128,28 @@ fn a_cloud_record_miss_does_not_request_optional_history() {
     let path = cache.record_path(&source);
     let _cloud = crate::build::icloud::pretend::evicted(&path);
     crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
-    assert!(matches!(cache.read(&source, RecordMode::Request), super::records::RecordRead::Unreadable));
+    assert!(matches!(cache.read(&source, RecordMode::Request), super::records::RecordRead::Offline));
     assert_eq!(crate::build::icloud::pretend::requests_for(&path), 0);
+}
+
+/// In a managed folder a record still in the cloud will be read whole by the
+/// publication that merges this build's work into it, so the build asks the
+/// system to download it at the miss rather than leaving the fetch to that read.
+#[test]
+fn a_cloud_record_miss_in_a_managed_folder_requests_its_download() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let source = "abcd".repeat(16);
+        let path = cache.record_path(&source);
+        let _managed = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 0, std::time::Duration::from_millis(20));
+        let _cloud = crate::build::icloud::pretend::evicted(&path);
+        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        assert!(matches!(cache.read(&source, RecordMode::Request), super::records::RecordRead::Offline));
+        assert_eq!(crate::build::icloud::pretend::requests_for(&path), 1);
+    });
 }
 
 #[test]
@@ -3255,9 +3275,17 @@ fn availability_owned_record_changes_recover_without_erasing_newer_merges() {
         assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_err());
         assert!(crate::build::lifecycle::park_for_rebuild(&paths, false, Default::default()).is_some(), "optional records retain cache objects but do not own staging");
         drop(fault);
+        // A publication that started before the later merges may land first;
+        // the one that follows it carries them. Judge the record it settles on.
         let started = std::time::Instant::now();
-        while !path.is_file() && started.elapsed() < std::time::Duration::from_secs(30) { std::thread::sleep(std::time::Duration::from_millis(1)); }
-        let record: TransformRecord = serde_json::from_slice(&fs::read(&path).expect("owned record publication must retry the actual atomic write")).unwrap();
+        let record = loop {
+            let landed = fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<TransformRecord>(&bytes).ok());
+            match landed {
+                Some(record) if record.transforms.contains_key("second") && record.transforms.contains_key("third") => break record,
+                _ if started.elapsed() > std::time::Duration::from_secs(30) => panic!("owned record publication must retry the actual atomic write until it holds every merge"),
+                _ => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        };
         assert_eq!(record.source_size, 1, "owned edits preserve source metadata");
         assert_eq!(record.transforms["first"].oid, "new", "older same-entry change cannot overwrite a newer merge");
         assert_eq!(record.transforms["second"].oid, "other");
@@ -3281,6 +3309,47 @@ fn availability_owned_merge_preserves_unreadable_record_without_invoking_borrowe
         assert_eq!(fs::read(&path).unwrap(), b"{\"source_oid\":");
         assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_ok(), "a nonadmitted unreadable record must not retain a publication lease");
     });
+}
+
+/// A record still in the cloud fails the build thread's fail-fast read. The
+/// work just done is published through the owner, whose read can wait for the
+/// provider, and merged into the full record rather than dropped: dropped, a
+/// folder whose provider keeps records as placeholders re-encodes the same
+/// images on every build.
+#[test]
+fn availability_owned_merge_publishes_over_a_record_still_in_the_cloud() {
+    crate::infra::home::with_moss_home(|_| {
+        use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::new(dir.path());
+        let cache = TransformCache::for_site(&paths);
+        let oid = "e".repeat(64);
+        let path = cache.record_path(&oid);
+        let entry = |hash: &str| TransformEntry { validation: None, oid: hash.into(), size: 1, params: serde_json::Value::Null };
+        let _managed = TestFault::install(cache.root(), &path, StorageOperation::CacheWrite, 0, std::time::Duration::from_millis(20));
+        let seed = TransformRecord { source_oid: oid.clone(), source_size: 1, transforms: [("image/webp-w800".into(), entry("other machine"))].into_iter().collect() };
+        write_record_file_for_test(&path, &seed);
+
+        crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        // Only macOS reads EDEADLK as a file in the cloud; the mark says so everywhere.
+        let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&path);
+        let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("image/webp".into(), entry("encoded here")); });
+
+        let started = std::time::Instant::now();
+        let record = loop {
+            let record: TransformRecord = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if record.transforms.contains_key("image/webp") || started.elapsed() > std::time::Duration::from_secs(10) { break record; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(record.transforms.get("image/webp").map(|e| e.oid.as_str()), Some("encoded here"), "the work is recorded");
+        assert_eq!(record.transforms["image/webp-w800"].oid, "other machine", "and merged into the record the cloud held");
+        assert!(cache.get_with(&oid, RecordMode::Request).is_some_and(|r| r.transforms.contains_key("image/webp")), "so the next build heals instead of encoding again");
+    });
+}
+
+fn write_record_file_for_test(path: &std::path::Path, record: &TransformRecord) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();
 }
 
 #[test]

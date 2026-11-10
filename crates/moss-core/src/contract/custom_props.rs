@@ -340,8 +340,8 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
     CustomProp {
         name: "--moss-font-cjk",
         owner: "moss-quote",
-        default: "var(--moss-font-heading)",
-        description: "Face of a collage quote tile whose words are Chinese or Japanese (`data-script=\"cjk\"`, written by the build), set at 17px to 21px with wide tracking. The default is the heading face, whose Han serifs follow the page's Traditional or Simplified setting. `--moss-font-quote`, when set, wins.",
+        default: "var(--moss-font-heading-han)",
+        description: "Face of a collage quote tile whose words are Chinese or Japanese (`data-script=\"cjk\"`, written by the build), set at 17px to 21px with wide tracking. The default is the Han heading stack, on a page in any language, whose serifs follow the page's Traditional or Simplified setting. `--moss-font-quote`, when set, wins.",
     },
     CustomProp {
         name: "--moss-font-quote",

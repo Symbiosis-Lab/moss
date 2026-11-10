@@ -54,7 +54,7 @@ impl InputEvidence {
 
     fn key(&self, path: &Path) -> Option<String> {
         path.strip_prefix(&self.root).ok()
-            .map(|rel| if rel.as_os_str().is_empty() { ".".into() } else { moss_core::slug::normalize_separators(&rel.to_string_lossy()) })
+            .map(|rel| if rel.as_os_str().is_empty() { ".".into() } else { crate::build::scan::path_collision::logical_path(rel) })
     }
 
     fn record(&self, path: &Path, state: InputState) {
@@ -323,5 +323,17 @@ mod tests {
         assert_eq!(unresolved_preview_entries(&evidence.snapshot(), &needed, false, false, None), [".moss/theme/script.js"]);
         assert_eq!(unresolved_preview_entries(&evidence.snapshot(), &needed, false, true, None), [".moss/places.toml", ".moss/theme/script.js"]);
         assert_eq!(evidence.unresolved_structural(), [".moss/places.toml", ".moss/theme/script.js"]);
+    }
+
+    /// A source the scan names composed is one entry whichever spelling the
+    /// reader hands over, so a read clears what a decomposed path required.
+    #[test]
+    fn both_spellings_of_a_path_are_one_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let evidence = InputEvidence::new(root.path());
+        evidence.require(&root.path().join("cafe\u{301}.md"), InputRole::PageContent);
+        evidence.read(&root.path().join("caf\u{e9}.md"), "h".into());
+        assert_eq!(evidence.unresolved_structural(), Vec::<String>::new());
+        assert_eq!(evidence.snapshot().keys().collect::<Vec<_>>(), ["caf\u{e9}.md"]);
     }
 }

@@ -826,7 +826,7 @@ pub fn path_to_relative_key(folder: &Path, abs: &Path) -> Option<String> {
             _ => return None,
         }
     }
-    Some(parts.join("/"))
+    Some(crate::build::scan::path_collision::logical_path(parts.join("/")))
 }
 
 /// `abs` canonicalized as far as it exists: the nearest existing ancestor,

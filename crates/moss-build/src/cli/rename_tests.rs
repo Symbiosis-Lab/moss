@@ -89,6 +89,8 @@ fn every_refusal_of_an_unbuilt_folder_says_the_file_is_in_no_site() {
         nested: Vec::new(),
         truncated,
         dirs_visited: 4000,
+        moss_copies: Vec::new(),
+        root_listing_complete: true,
     };
     let cases = [
         report(RootClass::FilesystemRoot, false),

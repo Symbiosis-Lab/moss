@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::build::scan::path_collision::logical_path;
 use crate::types::content::FileInfo;
 pub use moss_core::source_edit::policy::{
     HIDDEN_ENTRIES, MOSS_INTERNAL_ALLOWLIST, HiddenReason, is_hidden, is_hidden_reason,
@@ -22,10 +23,11 @@ pub fn left_out_of_site(entry: &walkdir::DirEntry) -> Option<LeftOut> {
     left_out(entry.path(), entry.file_type().is_dir(), entry.depth())
 }
 
-/// [`left_out_of_site`] that also leaves out the `layer_sources`, as absolute
-/// folder paths spelled the way the walk spells them.
-pub fn left_out_with_layer_sources(entry: &walkdir::DirEntry, layer_sources: &[std::path::PathBuf]) -> Option<LeftOut> {
-    if entry.file_type().is_dir() && layer_sources.iter().any(|s| s == entry.path()) {
+/// [`left_out_of_site`] that also leaves out the `layer_sources`, logical
+/// paths under `root`.
+pub fn left_out_with_layer_sources(entry: &walkdir::DirEntry, root: &Path, layer_sources: &[String]) -> Option<LeftOut> {
+    let is_source = |rel: &Path| layer_sources.contains(&logical_path(rel));
+    if entry.file_type().is_dir() && !layer_sources.is_empty() && entry.path().strip_prefix(root).is_ok_and(is_source) {
         return Some(LeftOut::LayerSource);
     }
     left_out_of_site(entry)
@@ -337,7 +339,7 @@ pub fn folders_holding_files<'a>(files: impl Iterator<Item = &'a Path>, root: &P
             continue;
         }
         let Ok(rel) = file.strip_prefix(root) else { continue };
-        let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+        let rel = logical_path(rel);
         for (i, _) in rel.match_indices('/') {
             holding.insert(rel[..i].to_string());
         }

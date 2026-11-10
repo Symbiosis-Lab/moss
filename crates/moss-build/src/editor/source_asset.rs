@@ -30,6 +30,7 @@
 
 use crate::build::manifest::preview_originals::Originals;
 use crate::build::stat::FileStat;
+use crate::build::scan::path_collision::logical_path;
 use crate::types::content::SiteHashes;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -253,7 +254,7 @@ fn built_rungs_from(records: &BuildRecords, project_root: &Path, file: &Path) ->
         return None;
     }
     let root = std::fs::canonicalize(project_root).ok()?;
-    let source = file.strip_prefix(&root).ok()?.to_str()?.replace('\\', "/");
+    let source = logical_path(file.strip_prefix(&root).ok()?);
     let mp = crate::moss_paths::MossPaths::new(&root);
     let generation = mp.current_generation_id().ok()?;
     let generation_dir = mp.sealed_generation_dir(&generation)?;
@@ -385,11 +386,16 @@ mod tests {
     }
 
     fn built_site() -> Built {
+        built_site_at(SOURCE, SOURCE)
+    }
+
+    /// `built_site` with its photo recorded as `key` and written at `on_disk`.
+    fn built_site_at(key: &str, on_disk: &str) -> Built {
         use crate::build::manifest::PendingManifest;
         let temp = tempfile::TempDir::new_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let root = temp.path().canonicalize().unwrap();
         let mp = crate::moss_paths::MossPaths::new(&root);
-        let source = root.join(SOURCE);
+        let source = root.join(on_disk);
         fs::create_dir_all(source.parent().unwrap()).unwrap();
         fs::write(&source, png(2000, 1000)).unwrap();
         // Saved well before the build, outside the racy-write window that
@@ -397,14 +403,14 @@ mod tests {
         let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
         fs::File::options().write(true).open(&source).unwrap().set_modified(an_hour_ago).unwrap();
         let mut hashes = crate::types::content::SiteHashes::default();
-        hashes.sources.insert(SOURCE.into(), crate::build::types::SourceMetadata::from_stat(
+        hashes.sources.insert(key.into(), crate::build::types::SourceMetadata::from_stat(
             crate::build::cache::ObjectStore::hash_file(&source).unwrap(),
             crate::build::stat::FileStat::of(&fs::metadata(&source).unwrap()),
         ));
         let mut pending = PendingManifest::new(hashes);
-        pending.register_preview_original("gallery/beach.png".into(), SOURCE.into());
-        pending.register_preview_original(RUNG.into(), SOURCE.into());
-        pending.register_preview_original(RUNG_1600.into(), SOURCE.into());
+        pending.register_preview_original("gallery/beach.png".into(), key.into());
+        pending.register_preview_original(RUNG.into(), key.into());
+        pending.register_preview_original(RUNG_1600.into(), key.into());
         fs::create_dir_all(mp.staging_dir()).unwrap();
         fs::write(mp.staging_dir().join("index.html"), b"<!doctype html>").unwrap();
         pending.register(&crate::build::served_path::ServedPath::from_source("index.html").unwrap(),
@@ -538,6 +544,15 @@ mod tests {
         Originals { generation: next.into(), images: Default::default() }.bind(&mp.generations_dir()).unwrap();
         mp.set_current_ptr(next).unwrap();
         assert_eq!(widths(&records), Vec::<u32>::new(), "the new generation was not picked up");
+    }
+
+    #[test]
+    fn a_photo_the_disk_spells_decomposed_gets_the_rungs_built_from_its_composed_path() {
+        let site = built_site_at("Photos/Caf\u{e9}/beach.png", "Photos/Cafe\u{301}/beach.png").with_rung();
+        let photo = site.root.join("Photos/Cafe\u{301}/beach.png");
+        let widths: Vec<u32> = built_rungs_from(&BuildRecords::default(), &site.root, &photo)
+            .unwrap_or_default().into_iter().map(|(width, _)| width).collect();
+        assert_eq!(widths, vec![800]);
     }
 
     /// The rung is reached only through an admitted source; naming it, or

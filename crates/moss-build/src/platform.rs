@@ -9,6 +9,24 @@
 pub mod file_coordination;
 #[cfg(target_os = "macos")]
 pub mod iopolicy;
+// A site's root folder shows moss's leaf in the file manager.
+pub mod folder_icon;
+#[cfg(target_os = "macos")]
+pub mod download_request;
+
+/// Ask the system to download a cloud placeholder, without waiting for it. See
+/// [`download_request`]. Any thread may call it.
+#[cfg(target_os = "macos")]
+pub fn request_download(path: &std::path::Path) -> Result<(), String> {
+    download_request::request_download(path)
+}
+
+/// Windows placeholders hydrate on a read and Linux sync clients present
+/// ordinary files, so there is nothing to ask for here yet.
+#[cfg(not(target_os = "macos"))]
+pub fn request_download(_path: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
 
 /// Allow the calling thread to materialize dataless files, overriding the
 /// process-wide fail-fast policy. See [`iopolicy`] — only the dedicated

@@ -10,7 +10,7 @@
 // the meter is drawn on it, and everything else hangs off it — so the grid
 // alignment is layout, not a measurement any code has to repeat.
 
-import { revealMenuLabel, t } from "../../i18n/index";
+import { t } from "../../i18n/index";
 import type { VaultLocation } from "./vault-location";
 
 export function escapeHtml(str: string): string {
@@ -33,7 +33,7 @@ export const chooseFolderButton = () => actionButton("moss-waiting-choose-folder
 /** The file manager is where the user can see what the sync client thinks it
  *  is doing, and where the provider's "keep this offline" menu item lives —
  *  the one OS-level fix moss cannot apply for them. */
-export const revealFolderButton = () => actionButton("moss-waiting-reveal-folder", revealMenuLabel());
+export const revealFolderButton = () => actionButton("moss-waiting-reveal-folder", t("tree.reveal"));
 
 export interface ScreenShell {
   title: string;

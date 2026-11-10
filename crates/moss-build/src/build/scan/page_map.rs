@@ -10,6 +10,8 @@
 
 use std::path::Path;
 
+use crate::build::scan::path_collision::on_disk;
+
 use super::slug::slugify_path_segments;
 
 mod frontmatter_cache;
@@ -68,7 +70,7 @@ pub(crate) fn compute_home_overrides(
 ) -> std::collections::HashMap<String, String> {
     let source_path = root.path();
     let is_evicted = &crate::build::icloud::is_evicted_and_requested;
-    compute_home_overrides_with_evicted(markdown_files, root, &|p| source_path.join(p), is_evicted)
+    compute_home_overrides_with_evicted(markdown_files, root, &|p| on_disk(source_path, p), is_evicted)
 }
 
 /// Same as [`compute_home_overrides`] with an injectable eviction predicate,
@@ -495,7 +497,7 @@ pub(crate) fn build_page_map_with_evicted(
 
     for file_info in markdown_files {
         let file_path = &file_info.path;
-        let source_file_path = source_path.join(file_path);
+        let source_file_path = on_disk(source_path, file_path);
 
         // Cloud-dataless source: skip like a read error rather than blocking
         // this serial, single-threaded scan on materialization.
@@ -777,7 +779,7 @@ pub(crate) fn build_external_url_map_with_evicted(
 
     for file_info in markdown_files {
         let file_path = &file_info.path;
-        let source_file_path = source_path.join(file_path);
+        let source_file_path = on_disk(source_path, file_path);
         if is_evicted(&source_file_path) {
             continue;
         }

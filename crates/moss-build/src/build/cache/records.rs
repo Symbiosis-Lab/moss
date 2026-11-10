@@ -32,6 +32,10 @@ pub(crate) enum RecordRead {
     /// something that does not match this version. Overwriting it would destroy
     /// entries this machine cannot see.
     Unreadable,
+    /// The record is a cloud placeholder this thread may not wait for. A thread
+    /// that can wait for the provider reads it whole, so an owned edit can still
+    /// be merged into it.
+    Offline,
 }
 
 impl RecordRead {
@@ -201,14 +205,18 @@ impl TransformCache {
                 }
             },
             Err(e) if crate::build::icloud::is_definitely_absent(&path, &e) => RecordRead::Absent,
-            Err(e) => {
-                // An optional cloud record is a cache miss; other read
-                // failures are worth saying once.
-                if !crate::build::icloud::is_offline_not_absent(&path, &e) {
-                    report_once(&path, &format!("cannot be read ({e}); it is left as it is"));
-                } else {
-                    log::debug!("[cache] record {} is in the cloud: {}", path.display(), e);
+            Err(e) if crate::build::icloud::is_offline_not_absent(&path, &e) => {
+                log::debug!("[cache] record {} is in the cloud: {}", path.display(), e);
+                // In a managed folder the work it records is redone and
+                // published through the owner, which reads the whole record:
+                // ask the system for it now, so that read finds it local.
+                if self.objects.site.is_some() && crate::build::cloud_readiness::storage::managed_context(&self.base) {
+                    crate::build::cloud_readiness::request_download(&path);
                 }
+                RecordRead::Offline
+            }
+            Err(e) => {
+                report_once(&path, &format!("cannot be read ({e}); it is left as it is"));
                 RecordRead::Unreadable
             }
         }
@@ -217,7 +225,11 @@ impl TransformCache {
     /// Apply `edit` to the source's record — a fresh one of `source_size` when
     /// there is none — and write it back, keeping every entry `edit` leaves
     /// alone. An unreadable record is not written over, in either mode: the work
-    /// just done goes unrecorded and is found or redone by a later build.
+    /// just done goes unrecorded and is found or redone by a later build. A
+    /// record still in the cloud is not written over either, but in a managed
+    /// folder the edit is published as a patch, which the owner merges once it
+    /// has read the whole record; without that, a provider that keeps records as
+    /// placeholders would have every build redo the same work.
     pub fn merge(
         &self,
         source_oid: &str,
@@ -243,9 +255,12 @@ impl TransformCache {
             RecordRead::Absent => {
                 (TransformRecord { source_oid: source_oid.to_string(), source_size, transforms: HashMap::new() }, None)
             }
-            RecordRead::Unreadable => match &pending {
+            read @ (RecordRead::Unreadable | RecordRead::Offline) => match &pending {
                 Some(RecordEdit::Replace(record)) => (record.clone(), None),
                 Some(RecordEdit::Delete) => (TransformRecord { source_oid: source_oid.into(), source_size, transforms: HashMap::new() }, None),
+                _ if matches!(read, RecordRead::Offline) && owner.is_some() => {
+                    (TransformRecord { source_oid: source_oid.to_string(), source_size, transforms: HashMap::new() }, None)
+                }
                 _ => return Ok(Merged::Kept),
             },
         };
@@ -298,7 +313,7 @@ impl TransformCache {
             owner.revision.fetch_add(1, Ordering::AcqRel) + 1
         };
         let path = self.record_path(source_oid);
-        let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: self.base.clone() } };
+        let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: self.base.clone(), kind: crate::build::cloud_readiness::storage::PublicationKind::Record } };
         let cache = self.clone();
         let source_oid = source_oid.to_string();
         let lease = crate::build::lifecycle::detached_cache_lease(self.objects.site.as_ref().expect("owned record has a site"));
@@ -333,7 +348,7 @@ impl TransformCache {
             let mut record = match read {
                 RecordRead::Present(record) => record,
                 RecordRead::Absent => TransformRecord { source_oid: source_oid.clone(), source_size: 0, transforms: HashMap::new() },
-                RecordRead::Unreadable => return Err(read_failure.into_inner().unwrap().unwrap_or_else(|| StorageFailure::new(Some(path.clone()), StorageOperation::CacheRead, io::Error::other("existing record is unreadable; it is preserved")))),
+                RecordRead::Unreadable | RecordRead::Offline => return Err(read_failure.into_inner().unwrap().unwrap_or_else(|| StorageFailure::new(Some(path.clone()), StorageOperation::CacheRead, io::Error::other("existing record is unreadable; it is preserved")))),
             };
             intent.apply(&mut record);
             write_record(&path, &record)?;

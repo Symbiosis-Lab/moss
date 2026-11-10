@@ -207,13 +207,58 @@ fn accept_self_heal(
     Ok(())
 }
 
+/// The byte length of every regular-file entry in `manifest`, read from `dir`.
+///
+/// A sync sends this as `sizes`, so the server can refuse a publish over the
+/// site's storage cap before any upload; the upload window and the upload
+/// itself then use the same sizes. A symlink entry carries a target string,
+/// not content, so it has none. A file is stat'd through any link on disk, as
+/// its upload reads it. An entry that cannot be stat'd is left out rather than
+/// reported as 0, and its upload fails with its own error. The stats run off
+/// the async runtime: a large site has thousands.
+pub(crate) async fn regular_file_sizes(
+    dir: &Path,
+    manifest: &std::collections::HashMap<String, String>,
+) -> Result<std::collections::HashMap<String, u64>, String> {
+    use crate::types::content::{parse_entry, MODE_FILE};
+    let dir = dir.to_path_buf();
+    let files: Vec<String> = manifest
+        .iter()
+        .filter(|(_, entry)| parse_entry(entry).0 == MODE_FILE)
+        .map(|(path, _)| path.clone())
+        .collect();
+    tokio::task::spawn_blocking(move || {
+        files
+            .into_iter()
+            .filter_map(|path| {
+                let meta = std::fs::metadata(dir.join(&path)).ok()?;
+                meta.is_file().then(|| (path, meta.len()))
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("Failed to read file sizes: {e}"))
+}
+
+/// The error an upload failure reports. A refusal the server words for the
+/// person (over the storage cap, superseded by a newer publish) is shown as
+/// it is; any other failure names the file.
+fn upload_failure(file_path: &str, e: crate::seta::client::SetaError) -> String {
+    use crate::seta::client::SetaError;
+    match e {
+        SetaError::StorageCapExceeded { .. } | SetaError::DeploySuperseded { .. } => e.to_string(),
+        e => format!("Failed to upload {}: {}", file_path, e),
+    }
+}
+
 /// Upload one regular file, choosing single-PUT or chunked by size.
 ///
 /// This is the routing decision: one implementation, one place to pin with a
 /// test.
 ///
-/// `size` is the caller's already-stat'd file length; taking it as a parameter
-/// avoids a second syscall on a path the caller just measured.
+/// `size` is the length the caller read before the sync
+/// ([`regular_file_sizes`]). A file that has changed since and self-heals is
+/// measured again, because the chunk loop sends exactly `size` bytes.
 /// `throughput` is the deploy's shared link estimate. It decides the routing —
 /// "does this file fit in one request at the speed we are actually getting" —
 /// and every completed upload feeds it. Routing on a *fixed* size fails: a
@@ -237,7 +282,7 @@ pub async fn upload_regular_file(
     site_id: &str,
     file_path: &str,
     canonical: &Path,
-    size: u64,
+    mut size: u64,
     generation_id: &str,
     expected_hash: &str,
     throughput: &upload_policy::Throughput,
@@ -277,6 +322,12 @@ pub async fn upload_regular_file(
             }
             accept_self_heal(throughput, self_heal_cap, file_path, &e)?;
             healed_hash = Some(second_hash);
+            // `size` was read before the sync; the chunk loop sends exactly
+            // that many bytes, so a file that changed since needs its own.
+            size = tokio::fs::metadata(canonical)
+                .await
+                .map_err(|e| format!("Failed to stat {}: {}", file_path, e))?
+                .len();
         }
         client
             .upload_file_chunked(
@@ -289,7 +340,7 @@ pub async fn upload_regular_file(
                 on_bytes,
             )
             .await
-            .map_err(|e| format!("Failed to upload {}: {}", file_path, e))?;
+            .map_err(|e| upload_failure(file_path, e))?;
     } else {
         // allow:raw_read built output being uploaded — dataless is absent
         let mut body = tokio::fs::read(canonical)
@@ -324,6 +375,8 @@ pub async fn upload_regular_file(
             body = resettled;
             healed_hash = Some(second_hash);
         }
+        // The bytes in hand, not the size read before the sync.
+        size = body.len() as u64;
         throughput.note_single_put_file();
         // Timed across `upload_file`'s whole retry loop rather than one attempt,
         // because that is all this path can see. It biases the estimate
@@ -334,7 +387,7 @@ pub async fn upload_regular_file(
         client
             .upload_file(site_id, file_path, body, generation_id, Some(throughput))
             .await
-            .map_err(|e| format!("Failed to upload {}: {}", file_path, e))?;
+            .map_err(|e| upload_failure(file_path, e))?;
         throughput.observe(size, started.elapsed());
         // The chunked branch reports per-chunk; this branch reports once.
         if let Some(cb) = on_bytes {

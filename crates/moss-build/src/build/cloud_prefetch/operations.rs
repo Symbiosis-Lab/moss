@@ -48,7 +48,6 @@ pub(super) fn finish_operation(inner: &Arc<Inner>, key: OperationKey, task: Arc<
             let cache = matches!(key.policy, OperationPolicy::CachePublication { .. });
             if cache {
                 q.cache_in_flight.remove(&key);
-                q.background_in_flight -= 1;
             } else { q.structural_in_flight.remove(&key); }
             q.done += 1;
             let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -76,9 +75,19 @@ pub(super) fn finish_operation(inner: &Arc<Inner>, key: OperationKey, task: Arc<
                 // A returned refusal releases native capacity. Keep the dedup
                 // receipt and rejoin the FIFO after the central retry delay.
                 let ready_at = Instant::now() + crate::build::cloud_readiness::POLL_INTERVAL;
-                if cache { q.fifo.push_back(BackgroundWork::Publication(key, task.clone(), ready_at)); }
+                if cache { q.publications.push_back((key, task.clone(), ready_at)); }
                 else { q.structural.push_back((key, task.clone(), ready_at)); }
             } else {
+                if cache {
+                    super::PUBLICATIONS_FINISHED.fetch_add(1, Ordering::Relaxed);
+                    // A caller no longer waits for a publication's outcome, so
+                    // a failure is said here, where the publication ends.
+                    if let Err(failure) = &result {
+                        inner.publication_failures.fetch_add(1, Ordering::Relaxed);
+                        super::PUBLICATION_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        log::warn!("[cache] could not save {} to the shared cache: {failure}", key.path.display());
+                    }
+                }
                 q.operation_pending.remove(&key);
                 let complete = result.as_ref().map_or(true, |value| match value.as_ref() {
                     crate::build::cloud_readiness::storage::StorageValue::Sweep(snapshot) => !snapshot.deadline_blown && !snapshot.root_unreadable

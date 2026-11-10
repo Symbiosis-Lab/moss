@@ -320,7 +320,7 @@ impl FileHasher {
     /// lock is held across a miss's read (a page is small), and a hit, the usual
     /// answer, holds it only for the lookup.
     fn compute_with(&self, relative_path: &str, read: impl FnOnce(&Path) -> Option<Vec<u8>>) -> Option<Hashed> {
-        let abs = self.root.join(relative_path);
+        let abs = crate::build::scan::path_collision::on_disk(&self.root, relative_path);
         // A hit is a stat and a lookup: stat outside the lock, so the threads
         // asking about different pages do not queue behind each other's stat.
         let stat = FileStat::of(&std::fs::metadata(&abs).ok()?);

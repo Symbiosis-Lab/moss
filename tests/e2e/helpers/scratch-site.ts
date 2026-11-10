@@ -60,8 +60,10 @@ export interface ScratchSiteSpec {
   /** Directory under `target/test-tmp/`. */
   name: string;
   /**
-   * Site-relative path → contents. `null` deletes the file, which is how a
-   * gate opts OUT of a `.moss/theme/style.css` a previous run left behind.
+   * Site-relative path → contents. A file outside the dot directories that
+   * the spec no longer names is removed before the build; inside them, where
+   * moss keeps its own state, `null` deletes a file, which is how a gate opts
+   * OUT of a `.moss/theme/style.css` a previous run left behind.
    * A `Buffer` writes raw bytes (e.g. a generated video fixture) — every
    * other gate's fixtures are text, so `writeOrRemove` only reaches for the
    * binary path when a spec actually hands it one.
@@ -96,6 +98,10 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   }
 
   const siteDir = scratchSiteDir(spec.name);
+  const stampPath = path.join(siteDir, ".moss/build-stamp.json");
+  // The stamp hashes only the spec, so output built with a page now pruned
+  // would pass as fresh; without a stamp every process waits for a rebuild.
+  if (pruneUnnamed(siteDir, spec.files)) fs.rmSync(stampPath, { force: true });
   for (const [rel, content] of Object.entries(spec.files)) {
     writeOrRemove(path.join(siteDir, rel), content);
   }
@@ -112,7 +118,6 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   // the binary that renders them, and the site scripts that binary reads off
   // disk in a dev build (see `siteScriptsHash`) — so a hit cannot serve stale
   // output.
-  const stampPath = path.join(siteDir, ".moss/build-stamp.json");
   const stamp = createHash("sha256")
     .update(JSON.stringify(spec.files))
     .update(spec.siteUrl ?? "")
@@ -325,6 +330,23 @@ export function syntheticBusyImage(width: number, height: number): Buffer {
     );
   }
   return fs.readFileSync(cachePath);
+}
+
+/** A renamed or dropped page would otherwise still be built. True when it
+ *  removed one. */
+function pruneUnnamed(siteDir: string, files: ScratchSiteSpec["files"]): boolean {
+  if (!fs.existsSync(siteDir)) return false;
+  let pruned = false;
+  const named = new Set(Object.keys(files).map((rel) => path.normalize(rel)));
+  for (const rel of fs.readdirSync(siteDir, { recursive: true }) as string[]) {
+    if (rel.split(path.sep).some((part) => part.startsWith("."))) continue;
+    const abs = path.join(siteDir, rel);
+    if (!named.has(rel) && fs.statSync(abs).isFile()) {
+      fs.rmSync(abs);
+      pruned = true;
+    }
+  }
+  return pruned;
 }
 
 function writeOrRemove(filePath: string, content: string | Buffer | null): void {

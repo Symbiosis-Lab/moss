@@ -33,7 +33,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
     });
     let normalized = url_path.trim_start_matches('/');
     let existing = |rel: &str| {
-        let full = folder_path.join(rel);
+        let full = crate::build::scan::path_collision::on_disk(folder_path, rel);
         full.exists().then(|| full.to_string_lossy().to_string())
     };
 

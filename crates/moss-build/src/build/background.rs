@@ -390,6 +390,7 @@ impl BackgroundHandle {
         // The same point says what the hash index saved: every user of it has
         // finished, the image and video workers included.
         crate::build::cache::report_hash_index_activity();
+        crate::build::cache::report_publication_failures();
         Ok((sealed, self.cache_lease.take()))
     }
 }

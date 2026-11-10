@@ -169,7 +169,7 @@ pub fn resolve_layers(mut layers: Vec<MapLayer>, site_root: &Path, gazetteer: &G
     Ok(layers)
 }
 
-/// The declared layers' `source` folders as site-relative `/` paths, read
+/// The declared layers' `source` folders as logical paths (`/`, composed), read
 /// straight from `.moss/config.toml`. The scan leaves these folders out of the
 /// site (the layer warper still reads them); a config that cannot be read or
 /// parsed declares none, and the build reports it where it uses the config.
@@ -188,7 +188,7 @@ pub fn declared_sources(site_root: &Path) -> Vec<String> {
                     _ => None,
                 })
                 .collect();
-            (!parts.is_empty()).then(|| parts.join("/"))
+            (!parts.is_empty()).then(|| crate::build::scan::path_collision::logical_path(parts.join("/")))
         })
         .collect()
 }

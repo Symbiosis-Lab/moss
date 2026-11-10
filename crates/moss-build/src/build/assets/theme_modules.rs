@@ -40,12 +40,12 @@ impl ThemeModules {
     /// with a warning, since a browser could not run it as a module either.
     pub fn read(theme_dir: &Path, evidence: &InputEvidence) -> Result<Self, String> {
         let mut files = Vec::new();
-        for entry in walkdir::WalkDir::new(theme_dir).sort_by_file_name().into_iter().flatten() {
+        for entry in walkdir::WalkDir::new(theme_dir).sort_by(crate::build::scan::path_collision::nfc_name_order).into_iter().flatten() {
             if !entry.file_type().is_file() {
                 continue;
             }
             let Ok(rel) = entry.path().strip_prefix(theme_dir) else { continue };
-            let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+            let rel = crate::build::scan::path_collision::logical_path(rel);
             let is_js = rel.ends_with(".js") || rel.ends_with(".mjs");
             if !is_js || rel == "script.js" || ServedPath::for_theme_script_hashed(&rel, "").is_err() {
                 continue;

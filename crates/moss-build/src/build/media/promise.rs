@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use crate::build::PluginMode;
 use crate::build::media::image::{ImageConversionItem, SkipReason};
+use crate::build::scan::path_collision::on_disk;
 use crate::types::assets::{AssetRegistry, Failure};
 use crate::types::content::ProjectStructure;
 
@@ -113,8 +114,8 @@ pub(crate) fn promise_image_variants(
         // <img>) and, while the encoder is still working, every variant
         // URL map to the ABSOLUTE source file so the preview serves the
         // FULL ORIGINAL bytes (sharp). Resolve the source the same way
-        // run_image_conversion does (project_root.join(source_path)).
-        let source_abs = std::path::Path::new(vault_root).join(&item.source_path);
+        // run_image_conversion does.
+        let source_abs = on_disk(std::path::Path::new(vault_root), &item.source_path.to_string_lossy());
         manifest.register_preview_original(mapped.clone(), item.source_path.to_string_lossy().into_owned());
         if let Some(registry) = registry { registry.set_source_passthrough(mapped.clone(), source_abs.clone()); }
 

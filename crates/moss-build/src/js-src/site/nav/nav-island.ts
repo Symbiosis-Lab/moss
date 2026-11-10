@@ -203,7 +203,9 @@ export function initNavIsland(): void {
     // On `body`: the bar keeps this slot free, and the page's title line
     // keeps it free for the controls' place at the top.
     document.body.style.setProperty("--moss-nav-island-controls", `${width}px`);
-    placeAtTitle(controls);
+    // One row's height, for the stylesheet's place on the title line.
+    document.body.style.setProperty("--moss-nav-row", `${tallest}px`);
+    placeAtTitle(controls, tallest);
   }
 
   /** The page's title: the article's first or second child (after a kicker). */
@@ -218,9 +220,11 @@ export function initNavIsland(): void {
    * At the top the controls stand on the page's title line, centred on its
    * first line (the stylesheet ends them at the text column's end). Written as
    * that centre, in px from the controls' containing block, on `body`; a page
-   * without a title, or set vertically, keeps the bar's place.
+   * without a title, or set vertically, keeps the bar's place. Their top edge
+   * there is half a row above the centre: `box` may be standing in a column
+   * under the ruler when this measures, so its own height is not the row's.
    */
-  function placeAtTitle(box: HTMLElement): void {
+  function placeAtTitle(box: HTMLElement, rowHeight: number): void {
     const title = pageTitle();
     const range = document.createRange();
     if (title) range.selectNodeContents(title);
@@ -232,12 +236,12 @@ export function initNavIsland(): void {
     const parent = box.offsetParent as HTMLElement | null;
     const top = parent ? parent.getBoundingClientRect().top + window.scrollY + parent.clientTop : 0;
     const centre = line.top + window.scrollY + line.height / 2;
-    topEdge = centre - box.offsetHeight / 2;
+    topEdge = centre - rowHeight / 2;
     document.body.style.setProperty("--moss-nav-title-line", `${centre - top}px`);
   }
 
   stack.add(() => {
-    for (const name of ["--moss-nav-island-controls", "--moss-nav-title-line"]) document.body.style.removeProperty(name);
+    for (const name of ["--moss-nav-island-controls", "--moss-nav-row", "--moss-nav-title-line"]) document.body.style.removeProperty(name);
   });
 
   // Empty the sections panel FIRST, and unconditionally. A morph swaps the

@@ -128,7 +128,7 @@ fn the_tail_strips_a_source_whose_variant_has_no_manifest_entry() {
     // Hashing the staged bytes made deploy reject the entire upload, and a
     // hash mismatch is not a 404 — the parity gate cannot see it.
     let shipped = crate::build::ship::apply_transform(
-        crate::build::ship::transform_for("index.html"),
+        crate::build::ship::transform_for("index.html"), &Default::default(),
         on_disk.as_bytes(),
     );
     assert!(!String::from_utf8_lossy(&shipped).contains("data-moss-preview"));
@@ -261,11 +261,40 @@ fn the_tail_scan_rereads_no_unchanged_page() {
     let sealed = pending.seal();
     let reads = || crate::build::media::orphan_prune::FILES_READ.with(|n| n.get());
 
-    let scan = shipped_references(&stage, &sealed, &store);
+    let scan = shipped_references(&stage, &sealed, &store, None);
     assert!(scan.resolved.contains("assets/a.jpg") && scan.resolved.contains("twin/assets/a.jpg"));
-    crate::build::media::orphan_prune::extract_referenced_tails(&stage);
+    crate::build::media::orphan_prune::scan_stage(&stage, None);
     let before = reads();
-    let scan = shipped_references(&stage, &sealed, &store);
+    let scan = shipped_references(&stage, &sealed, &store, None);
     assert_eq!(reads() - before, 0, "both pages are unchanged since the tail last read them");
     assert!(scan.resolved.contains("assets/a.jpg") && scan.resolved.contains("twin/assets/a.jpg"), "remembered pages still count their references");
+}
+
+/// A new process's tail scan starts from the one the last process kept in the
+/// folder's memo directory, so a one-shot build reads no unchanged page.
+#[test]
+fn a_new_process_tail_scan_reads_no_unchanged_page() {
+    let vault = tempfile::tempdir().unwrap();
+    let mp = crate::moss_paths::MossPaths::new(vault.path());
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(&stage).unwrap();
+    let page = r#"<img src="assets/a.jpg">"#;
+    std::fs::write(stage.join("index.html"), page).unwrap();
+    let store = crate::build::cache::ObjectStore::for_site(&mp);
+    let oid = store.store_bytes(page.as_bytes(), crate::build::cache::RecordMode::Request).unwrap();
+    let hash = crate::build::assets::paths::compute_binary_hash(page.as_bytes());
+    let sealed = || {
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        pending.apply_message("index.html".to_string(), &hash, HashBucket::Files, Some(oid.clone()));
+        pending.seal()
+    };
+    let reads = || crate::build::media::orphan_prune::FILES_READ.with(|n| n.get());
+
+    let before = reads();
+    repair_staged_html(&mp, &stage, &mut sealed(), HashSet::new());
+    assert_eq!(reads() - before, 1, "the first process reads the page");
+    crate::build::media::orphan_prune::new_process(&stage);
+    let before = reads();
+    repair_staged_html(&mp, &stage, &mut sealed(), HashSet::new());
+    assert_eq!(reads() - before, 0, "the next process starts from the kept scan");
 }

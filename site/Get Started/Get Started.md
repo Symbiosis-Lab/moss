@@ -47,7 +47,7 @@ Create new folders and files in the editor and each becomes a new page:
 
 ## Publishing & domains
 
-Once your site takes shape, click Publish in the preview window and it goes live. The first time you publish, you verify your email and pick a subdomain for your site. Hosting at `yourname.mosspub.com` is provided by Symbiosis Lab: one site, free for six months.
+Once your site takes shape, click Publish in the preview window and it goes live. The first time you publish, you verify your email and pick a subdomain for your site. Hosting at `yourname.mosspub.com` is provided by Symbiosis Lab, free during the beta.
 
 ![[first time publish.mp4|loop|100%|First publish: verify your email and pick a subdomain]]
 

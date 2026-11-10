@@ -2,7 +2,7 @@
 //!
 //! This module provides:
 //! - [`generate_slug`] — URL-safe slug from arbitrary text (titles, headings)
-//! - [`generate_uid`] — random 8-char hex UID (opaque identifier)
+//! - [`generate_uid`] — 8-char hex UID, the same on every machine for the same page
 //! - [`resolve_duplicate_slugs`] / [`resolve_duplicate_slugs_with_lang`] — deduplication of URL paths
 
 use crate::build::types::ParsedDocument;
@@ -43,10 +43,7 @@ pub fn slugify_dir_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
-    // Normalize `\`→`/` so Windows backslash paths split into segments correctly
-    // (otherwise the whole path is one leaf and the separator/case round-trips
-    // into the output URL). moss treats `\` as a path separator everywhere.
-    let path = moss_core::slug::normalize_separators(path);
+    let path = crate::build::scan::path_collision::logical_path(path);
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return String::new();
@@ -66,28 +63,21 @@ pub fn slugify_dir_path(path: &str) -> String {
         .join("/")
 }
 
-/// Generates a random 8-character hex UID.
-///
-/// Produces a cryptographically random identifier each time it is called.
-/// The `relative_path` parameter is accepted for API compatibility but
-/// is not used — UIDs are opaque identifiers, not derived from file paths.
-///
-/// # Arguments
-/// * `_relative_path` - Ignored; kept for API compatibility
-///
-/// # Returns
-/// An 8-character lowercase hex string
-///
-/// # Examples
-/// ```ignore
-/// let uid = generate_uid("posts/my-article.md");
-/// assert_eq!(uid.len(), 8);
-/// ```
-pub fn generate_uid(_relative_path: &str) -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: [u8; 4] = rng.gen();
-    format!("{:02x}{:02x}{:02x}{:02x}", bytes[0], bytes[1], bytes[2], bytes[3])
+/// An 8-character hex UID for the page at `relative_path`: the first four
+/// bytes of SHA-256 over the composed path, a 0 byte and `salt`. For a new
+/// page the salt is the hex SHA-256 of its raw bytes, so every machine holding
+/// the same page builds it under the same uid; for a duplicate given another
+/// uid it is the contested uid and an attempt number. Once a publish writes the
+/// uid into the page it stays when the page moves or changes, so it cannot be
+/// recomputed from the page as it is later.
+pub fn generate_uid(relative_path: &str, salt: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use unicode_normalization::UnicodeNormalization;
+    let mut hasher = Sha256::new();
+    hasher.update(relative_path.nfc().collect::<String>().as_bytes());
+    hasher.update([0]);
+    hasher.update(salt.as_bytes());
+    hasher.finalize()[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// One document that lost a URL contest, and what it lost.
@@ -447,20 +437,18 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_generate_uid_consistent() {
-        // Each call produces a new random UID — two calls should differ
-        let uid1 = generate_uid("posts/my-article.md");
-        let uid2 = generate_uid("posts/my-article.md");
-        // Statistically, two random 32-bit values collide 1-in-4-billion times.
-        // We assert they are different to document the random behaviour; flakes
-        // are negligible in practice.
-        assert_ne!(uid1, uid2, "Random UIDs should be different on each call");
+    fn a_uid_is_the_same_for_the_same_page_whatever_the_name_encoding() {
+        let hash = "5e3c0a";
+        let uid = generate_uid("posts/caf\u{e9}.md", hash);
+        assert_eq!(generate_uid("posts/cafe\u{301}.md", hash), uid);
+        assert_ne!(generate_uid("posts/other.md", hash), uid);
+        assert_ne!(generate_uid("posts/caf\u{e9}.md", "77d1b4"), uid);
     }
 
     #[test]
     fn test_generate_uid_length() {
         // uid should be exactly 8 hex characters
-        let uid = generate_uid("posts/my-article.md");
+        let uid = generate_uid("posts/my-article.md", "# A page\n");
         assert_eq!(uid.len(), 8, "uid should be 8 characters long");
         assert!(uid.chars().all(|c| c.is_ascii_hexdigit()), "uid should be hex characters only");
     }

@@ -437,15 +437,26 @@ const BUILD_COUNTS: &[&str] = &[
 /// The video counts, which also make up a detached encode's own record.
 const VIDEO_COUNTS: &[&str] = &["videos_cache_hit", "video_blobs_validated", "videos_converted", "videos_detached"];
 
+/// A profile record of `kind`, build or deploy: the fields every record opens
+/// with, then `fields`.
+pub(crate) fn profile_record_of(kind: &str, fields: serde_json::Value) -> serde_json::Value {
+    let mut record = serde_json::json!({
+        "schema": 1, "kind": kind, "moss_version": crate::system::app_version(), "build_profile": crate::system::build_profile(),
+    });
+    if let (Some(record), serde_json::Value::Object(fields)) = (record.as_object_mut(), fields) {
+        record.extend(fields);
+    }
+    record
+}
+
 fn profile_record(t: &BuildTelemetry, kind: &str, keys: &[&[&'static str]], total: Duration, outcome: &str) -> serde_json::Value {
     let mut counts: std::collections::BTreeMap<_, _> = keys.iter().flat_map(|k| k.iter()).map(|&k| (k, 0)).collect();
     counts.extend(t.counts.iter().copied());
-    let mut record = serde_json::json!({
-        "schema": 1, "kind": kind, "moss_version": crate::system::app_version(),
+    let mut record = profile_record_of(kind, serde_json::json!({
         "started_at": t.started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "total_ms": total.as_millis(), "outcome": outcome,
         "passes": t.passes, "phases": t.phases, "counts": counts,
-    });
+    }));
     #[cfg(unix)]
     {
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
@@ -505,10 +516,17 @@ pub(crate) fn append_record(path: &std::path::Path, record: &serde_json::Value) 
     crate::build::io_utils::write_output(path, &kept)
 }
 
-pub(crate) fn append_profile(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, config: &crate::build::PipelineConfig) {
-    let record = collector.lock().map(|t| build_record(&t, total, if result.is_ok() { "ok" } else { "error" }, &config.trigger));
+/// Where a build of `source` keeps its profile: nowhere without a folder, since
+/// an empty or missing path would put `.moss/` wherever the process runs.
+fn profile_path(source: &std::path::Path) -> Option<std::path::PathBuf> {
+    source.is_dir().then(|| crate::moss_paths::MossPaths::new(source).profile())
+}
+
+pub(crate) fn append_profile(collector: &PhaseCollector, total: Duration, result: &Result<String, String>, source: &std::path::Path, trigger: &crate::build::BuildTrigger) {
+    let Some(path) = profile_path(source) else { return };
+    let record = collector.lock().map(|t| build_record(&t, total, if result.is_ok() { "ok" } else { "error" }, trigger));
     let written = record.map_err(|e| std::io::Error::other(e.to_string()))
-        .and_then(|record| append_record(&crate::moss_paths::MossPaths::new(config.source()).profile(), &record));
+        .and_then(|record| append_record(&path, &record));
     if let Err(e) = written { log::debug!("could not append build profile: {e}"); }
 }
 
@@ -591,6 +609,19 @@ macro_rules! phase {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_build_without_a_folder_keeps_no_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(profile_path(std::path::Path::new("")), None);
+        let collector: PhaseCollector = Arc::new(Mutex::new(BuildTelemetry::default()));
+        let refused = Err("no such folder".to_string());
+        let gone = dir.path().join("gone");
+        append_profile(&collector, Duration::ZERO, &refused, &gone, &crate::build::BuildTrigger::Full);
+        assert!(!gone.exists(), "a refused build makes no folder to keep its record in");
+        append_profile(&collector, Duration::ZERO, &refused, dir.path(), &crate::build::BuildTrigger::Full);
+        assert!(crate::moss_paths::MossPaths::new(dir.path()).profile().exists(), "a folder keeps the record");
+    }
+
     #[tokio::test]
     async fn video_phase_reaches_collector_through_worker_and_nested_spawn() {
         let ((), collector) = with_collector(async {
@@ -627,6 +658,7 @@ mod tests {
         assert_eq!(record["schema"], 1);
         assert_eq!(record["kind"], "build");
         assert_eq!(record["moss_version"], crate::system::app_version());
+        assert_eq!(record["build_profile"], crate::system::build_profile());
         chrono::DateTime::parse_from_rfc3339(record["started_at"].as_str().unwrap()).unwrap();
         assert_eq!(record["total_ms"], 42);
         assert_eq!(record["outcome"], "ok");

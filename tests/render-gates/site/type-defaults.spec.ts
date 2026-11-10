@@ -408,6 +408,8 @@ test.describe("a collage quote in Chinese or Japanese", () => {
       expect(q.line).toBeCloseTo(q.size * 1.6, 1);
       expect(q.face).toContain("Source Han Serif");
     }
+    // On this English page too: the Han stack leads, not the page's Latin-first heading stack.
+    expect((await quote(page, "海天一色")).face).toMatch(/^"?Source Han Serif SC/);
     expect((await quote(page, "朝の港に")).lang).toBe("ja");
     expect((await quote(page, "朝の港に")).face).toMatch(/^"?Hiragino Mincho ProN/);
   });
@@ -509,4 +511,47 @@ test.describe("headings in languages of compound words", () => {
     await open(page, "/hyphens-en/", 390);
     expect(await hyphens(page)).toBe("manual");
   });
+});
+
+test.describe("fonts for the page's script", () => {
+  const HAN = /Source Han|Noto Serif CJK|Songti|STSong|SimSun|PingFang|Hiragino|YaHei|Noto Sans SC|WenQuanYi/;
+  const firstHan = (fs: string[]) => fs.findIndex((f) => HAN.test(f));
+  const type = (page: Page) =>
+    page.evaluate(() => {
+      const t = getComputedStyle(document.querySelector(".moss-article-title")!);
+      const b = getComputedStyle(document.body);
+      const families = (f: string) => f.split(",").map((x) => x.trim().replace(/^["']|["']$/g, ""));
+      return {
+        heading: families(t.fontFamily),
+        body: families(b.fontFamily),
+        weight: b.fontWeight,
+        titleLeading: parseFloat(t.lineHeight) / parseFloat(t.fontSize),
+      };
+    });
+
+  for (const [path, lang] of [["/range/", "English"], ["/hyphens-de/", "German"]]) {
+    test(`a page in ${lang} sets its title and text in Latin faces, the Han faces behind them`, async ({ page }) => {
+      await open(page, path);
+      const t = await type(page);
+      expect(t.heading[0]).not.toMatch(HAN);
+      expect(firstHan(t.heading)).toBeGreaterThan(t.heading.indexOf("Georgia"));
+      expect(t.heading.indexOf("Georgia")).toBeGreaterThan(-1);
+      expect(firstHan(t.body)).toBeGreaterThan(t.body.indexOf("Segoe UI"));
+      expect(t.body.indexOf("Segoe UI")).toBeGreaterThan(-1);
+      expect(t.weight).toBe("400");
+      expect(t.titleLeading).toBeCloseTo(1.2, 1);
+    });
+  }
+
+  for (const [path, lead] of [["/han-sc/", "Source Han Serif SC"], ["/han-tc/", "Source Han Serif TC"], ["/kana/", "Source Han Serif SC"]]) {
+    test(`${path} leads with the Han faces (${lead}), at weight 320, with room between title lines`, async ({ page }) => {
+      await open(page, path);
+      const t = await type(page);
+      expect(t.heading[0]).toBe(lead);
+      expect(t.body).not.toContain("Segoe UI");
+      expect(firstHan(t.body)).toBeGreaterThan(-1);
+      expect(t.weight).toBe("320");
+      expect(t.titleLeading).toBeCloseTo(1.5, 1);
+    });
+  }
 });

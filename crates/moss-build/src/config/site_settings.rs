@@ -6,8 +6,9 @@ use moss_core::contract::describe::SiteSettingInfo;
 
 use crate::infra::edit_distance::levenshtein;
 
-/// Read but not listed: `heading_anchors = false` still turns the marks off.
-pub(crate) const UNLISTED_SITE_KEYS: [&str; 1] = ["heading_anchors"];
+/// Read but not listed: `heading_anchors = false` still turns the marks off,
+/// and `domain` is read as `url` in a folder written before `url` existed.
+pub(crate) const UNLISTED_SITE_KEYS: [&str; 2] = ["domain", "heading_anchors"];
 
 /// `[site]` table in `.moss/config.toml` — one entry per key the build reads
 /// through `site_bool` / `site_str`. The drift test in `cli::describe` fails when
@@ -79,12 +80,6 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "string",
             default: None,
             description: "The site's own one-line credit, inline Markdown, shown before moss's mark in the colophon: `Designed by [Example Studio](https://example.org) · (mark)`. Not shown when `colophon` is false.",
-        },
-        SiteSettingInfo {
-            name: "domain",
-            r#type: "string",
-            default: None,
-            description: "Custom domain the site is published under. `moss domain` reads and checks it.",
         },
         SiteSettingInfo {
             name: "floating_nav",
@@ -181,6 +176,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "string",
             default: None,
             description: "\"vertical\" sets the text in vertical columns, for CJK sites. Unset is horizontal.",
+        },
+        SiteSettingInfo {
+            name: "url",
+            r#type: "string",
+            default: None,
+            description: "The address the site is published at, path included when it is served under one: \"https://example.org/\" or \"https://example.edu/~alice/\". Canonical links, feeds and the sitemap start with it, and every link the site makes is put under its path. Replaces `domain`, which is still read when `url` is absent.",
         },
     ]
 }

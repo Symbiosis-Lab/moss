@@ -137,11 +137,11 @@ fn the_shared_helper_is_what_writes_the_record() {
          again, re-point the two ordering tests at wherever it went."
     );
     assert!(
-        src.contains("read_live_article_mapping"),
-        "`deploy::landed` must also record which note ID is live at which page — and where \
-         that page is served, so the mapping cannot drift out of step with the note IDs the \
-         way a past bug let it — for the same reason the two ordering tests exist: it is \
-         what the NEXT build diffs to find renamed pages. This lived in `push_site_inner_impl` \
+        src.contains("live_baseline::from_sealed"),
+        "`deploy::landed` must also record which note ID is live at which page, read from the \
+         generation that went live — and where that page is served, so the mapping cannot \
+         drift out of step with the note IDs the way a past bug let it — for the same reason \
+         the two ordering tests exist: it is what the NEXT build diffs to find renamed pages. This lived in `push_site_inner_impl` \
          alone until 2026-08-17, so a site published through a deploy plugin never got a \
          redirect stub when a page moved; it was a second file of its own until a fix folded \
          it into this one."

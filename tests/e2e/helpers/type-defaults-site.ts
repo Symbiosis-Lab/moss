@@ -391,6 +391,32 @@ uid: "tdg00042"
 
 ## Bürgerbeteiligungsveranstaltungen der Stadtentwicklungsgesellschaft: wer darf mitreden?
 `,
+    // Chinese and Japanese pages on the English site, for the fonts each script gets. Not
+    // named zh/ja: a root page with a language tag for a name is read as that language's edition.
+    "han-sc.md": `---
+title: 港口与灯塔 Harbour
+lang: zh-Hans
+uid: "tdg00043"
+---
+
+海天一色，灯塔独明。The keeper wrote in two languages.
+`,
+    "han-tc.md": `---
+title: 港口與燈塔 Harbour
+lang: zh-Hant
+uid: "tdg00044"
+---
+
+海天一色，燈塔獨明。
+`,
+    "kana.md": `---
+title: 港の灯台 Harbour
+lang: ja
+uid: "tdg00045"
+---
+
+朝の港に霧が降りて、船は静かに眠る。
+`,
     "quotes.md": `---
 title: Quotes
 uid: "tdg00008"

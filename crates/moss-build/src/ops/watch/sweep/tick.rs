@@ -681,7 +681,7 @@ pub(super) fn promote_focused_source(session: &FolderSession, last_revision: &mu
     if requirement.revision == *last_revision { return; }
     *last_revision = requirement.revision;
     if let crate::system::folder_session::PreviewSource::File(source) = requirement.source {
-        let path = session.folder.join(source);
+        let path = crate::build::scan::path_collision::on_disk(&session.folder, &source);
         if crate::build::icloud::is_still_in_the_cloud(&path) {
             crate::build::cloud_readiness::request_download_foreground(&path);
         }

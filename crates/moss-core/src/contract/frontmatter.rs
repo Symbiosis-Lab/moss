@@ -127,14 +127,9 @@ mod tests {
         assert!(uid.skip_schema, "uid must be skip_schema");
     }
 
-    /// `skip_schema` fields are filtered out of `moss describe`'s HUMAN
-    /// output but not out of `--json`, so this description is a published,
-    /// machine-readable contract string — and it is the SSOT that
-    /// the generated contract documentation and the hooks-site contract fixture are
-    /// generated from. It described the uid as derivable for five separate
-    /// surfaces' worth of corrections; `generate_uid` ignores its path
-    /// argument and returns random bytes, so a plugin author who recomputed a
-    /// uid to re-join `.moss/social/*.json` would miss on every key.
+    /// The description is published through `moss describe --json`; a uid
+    /// outlives the path and bytes it was minted from, so it must never read
+    /// as recomputable.
     #[test]
     fn uid_description_never_claims_the_uid_is_derivable() {
         let fields = frontmatter_fields();
@@ -142,12 +137,12 @@ mod tests {
         let lower = uid.description.to_lowercase();
         assert!(
             !lower.contains("content-addressab"),
-            "uid is RANDOM, not content-addressable: {:?}",
+            "uid is not content-addressable: {:?}",
             uid.description
         );
         assert!(
-            lower.contains("random"),
-            "the uid description must say it is random: {:?}",
+            lower.contains("cannot be recomputed"),
+            "the uid description must say it cannot be recomputed: {:?}",
             uid.description
         );
     }

@@ -36,6 +36,17 @@ fn a_folder_never_built_is_read_and_hashed_from_disk() {
     assert!(tree.generation_id().starts_with("source-"));
 }
 
+/// The walk keys a decomposed name composed; the tree reads it under its disk spelling.
+#[test]
+fn a_file_named_decomposed_on_disk_is_hashed_under_its_composed_key() {
+    let dir = tempfile::Builder::new().prefix("moss-tree-test-").tempdir().unwrap();
+    std::fs::write(dir.path().join("cafe\u{301}.md"), b"hello").unwrap();
+
+    let tree = on_disk(dir.path()).unwrap();
+
+    assert_eq!(tree.hashes().get("caf\u{e9}.md"), Some(&format!("{:x}", Sha256::digest(b"hello"))));
+}
+
 fn built_fixture() -> (tempfile::TempDir, HashMap<String, String>) {
     use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
     use crate::ops::watch::sweep::walk::read_baseline_from_disk;

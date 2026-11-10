@@ -173,6 +173,20 @@ fn folder_embed_follows_a_slug_override_to_its_real_source() {
     );
 }
 
+#[test]
+fn a_page_named_decomposed_on_disk_follows_to_a_file_that_exists() {
+    let dir = scratch_root();
+    let root = dir.path();
+    std::fs::write(root.join("index.md"), "[[Caf\u{e9}]]\n").expect("write");
+    std::fs::write(root.join("Cafe\u{301}.md"), "# Cafe\n").expect("write");
+
+    let targets = vec![RefTarget { text: "Caf\u{e9}".into(), is_embed: false }];
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
+
+    let followed = out[0].resolved_path.as_deref().expect("the page resolves a source to follow");
+    assert!(std::path::Path::new(followed).is_file(), "resolved_path is always a FILE that exists: {followed}");
+}
+
 /// The ArticleMap is the LAST build's record. An index source deleted or
 /// renamed since is still listed there, and offering to open it would land the
 /// editor on a file that is gone — so the card must go back to offering nothing.

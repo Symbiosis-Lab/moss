@@ -71,6 +71,7 @@ pub(crate) fn target(route: &super::route::DeployRoute) -> &'static str {
         super::route::DeployRoute::Hosted => "seta",
         super::route::DeployRoute::Prebuilt { .. } => "prebuilt",
         super::route::DeployRoute::Plugin { .. } => "plugin",
+        super::route::DeployRoute::Direct { .. } => "direct",
     }
 }
 
@@ -111,8 +112,7 @@ pub(crate) fn record<'a, T: Outcome + 'a>(
         let history = timings["history_snapshot"];
         if let Some(after) = timings.get_mut("after_publish") { *after = after.saturating_sub(history); }
         let outcome = if refusal.is_some() { "refused" } else if result.is_ok() { "ok" } else { "error" };
-        let record = serde_json::json!({
-            "schema": 1, "kind": "deploy", "moss_version": crate::system::app_version(),
+        let record = crate::build::phase::profile_record_of("deploy", serde_json::json!({
             "started_at": started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "total_ms": started.elapsed().as_millis(), "outcome": outcome,
             "refusal_kind": refusal, "target": target, "dry_run": dry_run,
@@ -120,7 +120,7 @@ pub(crate) fn record<'a, T: Outcome + 'a>(
             "phases": timings.iter().map(|(name, ms)| serde_json::json!({"name": name, "ms": ms})).collect::<Vec<_>>(),
             "counts": counts,
             "transfer_counts_available": target != "plugin" && !dry_run,
-        });
+        }));
         log::info!(target: "deploy", "deploy.summary {}", record);
         if let Err(e) = phase::append_record(&crate::moss_paths::MossPaths::new(folder).profile(), &record) {
             log::debug!("could not append deploy profile: {e}");
@@ -133,7 +133,9 @@ pub(crate) fn seta_error(error: &crate::seta::client::SetaError) {
     use crate::seta::client::SetaError;
     match error {
         SetaError::SiteLimitReached { .. } => refusal("site_limit"),
-        SetaError::Api { status: 401 | 403, .. } => refusal("access"),
+        SetaError::StorageCapExceeded { .. } => refusal("size_limit"),
+        SetaError::DeploySuperseded { .. } => refusal("conflict"),
+        SetaError::Api { status: 401 | 403, .. } | SetaError::NotSignedIn { .. } => refusal("access"),
         SetaError::Api { status: 409, .. } => refusal("conflict"),
         SetaError::Api { status: 413, .. } => refusal("size_limit"),
         SetaError::Api { status: 422, .. } => refusal("incomplete_generation"),
@@ -141,21 +143,31 @@ pub(crate) fn seta_error(error: &crate::seta::client::SetaError) {
     }
 }
 
+/// Record a failed seta call in the profile, and return the sentence the
+/// deploy gives for it when it has one of its own (a key not signed in to
+/// the site gets the one `--email` lifts).
+pub(crate) fn profiled_refusal(folder: &std::path::Path, error: &crate::seta::client::SetaError) -> Option<String> {
+    seta_error(error);
+    crate::identity::verify_email::server_refusal(folder, error)
+}
+
 pub(crate) async fn sync(
+    folder: &std::path::Path,
     call: impl Future<Output = Result<crate::seta::sites::SyncManifestResponse, crate::seta::client::SetaError>>,
 ) -> Result<crate::seta::sites::SyncManifestResponse, String> {
     let _phase = PhaseTrace::start("sync");
-    let diff = call.await.map_err(|e| { seta_error(&e); e.to_string() })?;
+    let diff = call.await.map_err(|e| profiled_refusal(folder, &e).unwrap_or_else(|| e.to_string()))?;
     count("files_needed", diff.need.len() as u64);
     count("removed_files", diff.remove.len() as u64);
     Ok(diff)
 }
 
 pub(crate) async fn commit(
+    folder: &std::path::Path,
     call: impl Future<Output = Result<crate::seta::sites::CommitResponse, crate::seta::client::SetaError>>,
 ) -> Result<crate::seta::sites::CommitResponse, String> {
     let _phase = PhaseTrace::start("publish");
-    let result = call.await.map_err(|e| { seta_error(&e); e.to_string() })?;
+    let result = call.await.map_err(|e| profiled_refusal(folder, &e).unwrap_or_else(|| e.to_string()))?;
     count("server_files_updated", result.files_updated as u64);
     count("removed_files", result.files_removed as u64);
     Ok(result)

@@ -74,6 +74,19 @@ describe('hero words instrument (editor half)', () => {
     expect(view.state.doc.toString()).toBe(DOC);
   });
 
+  test('a page that opens on its hero draws no box until the caret moves', () => {
+    const doc = [':::hero {image=a.jpg}', 'Title', ':::', 'body'].join('\n');
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: [markdown({ extensions: MARKDOWN_EXTENSIONS }), pictureAtCaretField, heroWordsExtension(() => 'p.md', host)] }),
+      parent: document.body,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+    view.dispatch({ changes: { from: doc.length, insert: '\nmore' } });
+    expect(wire.sent.filter(([, p]) => (p as { line: unknown }).line !== null)).toEqual([]);
+    view.dispatch({ selection: { anchor: 3 } });
+    expect(wire.sent.at(-1)).toEqual([HERO_WORDS, { path: 'p.md', line: 1 }]);
+  });
+
   test('a drop for a line the caret is no longer on is ignored', () => {
     const { view, drop, goto } = open(2);
     goto(3);

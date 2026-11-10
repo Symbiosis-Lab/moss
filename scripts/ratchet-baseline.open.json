@@ -61,11 +61,11 @@
       "armed": true,
       "value": {
         "crates/moss-build/src": 45,
-        "crates/moss-build/src/build": 79,
+        "crates/moss-build/src/build": 80,
         "crates/moss-build/src/build/media": 20,
-        "crates/moss-build/src/deploy": 19,
+        "crates/moss-build/src/deploy": 21,
         "crates/moss-build/src/js-src/bridge": 17,
-        "crates/moss-build/src/js-src/site": 27,
+        "crates/moss-build/src/js-src/site": 28,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 46,
         "crates/moss-core/src/ast": 29,
@@ -102,7 +102,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/Cargo.toml": 86,
+        "crates/moss-build/Cargo.toml": 87,
         "crates/moss-cli/Cargo.toml": 5,
         "crates/moss-core/Cargo.toml": 9,
         "crates/moss-bindings/Cargo.toml": 5
@@ -113,7 +113,7 @@
       "disposition": "permanent",
       "armed": true,
       "value": {
-        "crates/moss-build/src/build.rs::run_pipeline_body": 450,
+        "crates/moss-build/src/build.rs::run_pipeline_body": 500,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
         "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
@@ -130,7 +130,7 @@
         "crates/moss-build/src/build/render/incremental/verdict.rs::compute": 250,
         "crates/moss-build/src/build/scan/scan.rs::scan_folder_with_dedup_emit_with_error": 400,
         "crates/moss-build/src/cli/import.rs::run": 250,
-        "crates/moss-build/src/deploy/push.rs::push_site_inner_impl": 350,
+        "crates/moss-build/src/deploy/push.rs::push_site_inner_impl": 300,
         "crates/moss-build/src/engine.rs::engine_loop": 250,
         "crates/moss-build/src/engine/host_fns.rs::dispatch_command_core": 300,
         "crates/moss-build/src/ops/serve/router.rs::start_server": 350,

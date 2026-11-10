@@ -21,24 +21,44 @@ pub enum UnownedPlan {
     Proceed,
     /// Rows 4/5/6 and the truncated-Normal case: confirmation required.
     Confirm { offer_create_anyway: bool },
+    /// No `.moss/` here, but one copy of it (`report.moss_copies`): the
+    /// folder is a site whose data sits under another name. Put it back by
+    /// renaming it to `.moss`; never make a second `.moss` beside it.
+    RestoreCopy { copy: String },
+    /// Several copies and no `.moss/`: which one is the site is the
+    /// person's call, so nothing is changed.
+    RefuseCopies { copies: Vec<String> },
 }
 
 /// Decision-table rows 3–6, pure. `truncated` never degrades to "proceed":
 /// only a CLEAN scan of a Normal folder with nothing nested builds silently.
 ///
-/// "Create anyway" is offered ONLY when the folder is Normal-shaped AND
-/// either nothing was found (the truncated-Normal escape) or the single
-/// nested root is not published (`published != Some(true)` — orphaning a
-/// published identity stays off the table, 2026-06-27 locked decision #4).
+/// A copy of `.moss` in the root that is the folder's site data (see
+/// `MossCopy::is_site_data`) is put back, never replaced.
+///
+/// "Create anyway" needs a Normal-shaped folder whose own listing was
+/// complete, so no `.moss` or copy of one can be sitting in it unseen. Then
+/// it is offered when nothing was found (only deeper levels were cut short),
+/// or when a complete scan found one site that is not published (`published
+/// != Some(true)`: orphaning a published identity stays off the table) and
+/// that keeps its data in a real `.moss`.
 pub fn plan_unowned_open(report: &NestedRootsReport) -> UnownedPlan {
+    let copies: Vec<String> = report.moss_copies.iter().filter(|c| c.is_site_data()).map(|c| c.name.clone()).collect();
+    if let [copy] = copies.as_slice() {
+        return UnownedPlan::RestoreCopy { copy: copy.clone() };
+    }
+    if !copies.is_empty() {
+        return UnownedPlan::RefuseCopies { copies };
+    }
     let normal = report.root_class == RootClass::Normal;
     if report.nested.is_empty() && !report.truncated && normal {
         return UnownedPlan::Proceed;
     }
     let offer_create_anyway = normal
-        && match report.nested.len() {
-            0 => true, // truncated Normal: "anyway" IS the proceed path
-            1 => report.nested[0].published != Some(true),
+        && report.root_listing_complete
+        && match report.nested.as_slice() {
+            [] => true,
+            [only] => !report.truncated && only.published != Some(true) && only.data_in.is_none(),
             _ => false,
         };
     UnownedPlan::Confirm { offer_create_anyway }
@@ -102,7 +122,9 @@ pub fn guard_cli_open_in(folder_path: &str, subcommand: &str, home: Option<&Path
     let report = find_nested_roots(path, home, &default_limits());
     match plan_unowned_open(&report) {
         UnownedPlan::Proceed => Ok(()),
-        UnownedPlan::Confirm { .. } => Err(cli_refusal_message(&report, folder_path, subcommand)),
+        UnownedPlan::Confirm { .. } | UnownedPlan::RestoreCopy { .. } | UnownedPlan::RefuseCopies { .. } => {
+            Err(cli_refusal_message(&report, folder_path, subcommand))
+        }
     }
 }
 
@@ -125,6 +147,20 @@ pub fn cli_refusal_message(
     folder_path: &str,
     subcommand: &str,
 ) -> String {
+    match plan_unowned_open(report) {
+        UnownedPlan::RestoreCopy { copy } => {
+            return format!(
+                "'{folder_path}' has no .moss, but its site data is in '{copy}'.\n       Put it back, then run moss again:  mv \"{folder_path}/{copy}\" \"{folder_path}/.moss\""
+            );
+        }
+        UnownedPlan::RefuseCopies { copies } => {
+            return format!(
+                "'{folder_path}' has no .moss, but several copies of it: {}.\n       Rename the right one to .moss, then run moss again.",
+                copies.iter().map(|c| format!("'{c}'")).collect::<Vec<_>>().join(", ")
+            );
+        }
+        UnownedPlan::Proceed | UnownedPlan::Confirm { .. } => {}
+    }
     if let Some(primary) = pick_primary(&report.nested) {
         let id = primary
             .site_id
@@ -159,11 +195,21 @@ pub fn cli_refusal_message(
             hint = next_step(subcommand, format!("Run moss {subcommand} on the folder that holds your site instead.")),
         );
     }
+    if !report.root_listing_complete {
+        return format!(
+            "'{folder_path}' could not be listed completely, so moss cannot tell whether a site is already in it.\n       {}",
+            next_step(subcommand, "Run moss again once the folder has finished syncing.".to_string()),
+        );
+    }
     // Truncated Normal, nothing found: the scan cannot vouch for the tree.
     format!(
-        "'{folder}' is too large to check for nested moss sites ({visited} folders scanned).\n       {hint}",
+        "moss could not check every folder in '{folder}' for nested moss sites ({visited} folders scanned).\n       {hint}",
         folder = folder_path,
         visited = report.dirs_visited,
         hint = next_step(subcommand, format!("Run moss {subcommand} on the site folder itself.")),
     )
 }
+
+#[cfg(test)]
+#[path = "site_guard_tests.rs"]
+mod tests;

@@ -201,7 +201,7 @@ fn build_test_with_stash(
             progress_sender,
             &preview_port,
             services,
-            Some(Box::new(move |_, _, _| Ok(slots))),
+            Some(Box::new(move |_, _, _, _| Ok(slots))),
             &ps,
             None,
             gates,
@@ -873,7 +873,7 @@ fn test_slot_injection_manifest_hash_matches_site_file() {
     let staging_html_for_hash = fs::read(test_dir.join(".moss/build.nosync/staging/index.html"))
         .expect("staging/index.html must exist after build");
     let manifest_bytes = crate::build::ship::apply_transform(
-        crate::build::ship::transform_for("index.html"),
+        crate::build::ship::transform_for("index.html"), &Default::default(),
         &staging_html_for_hash,
     );
     let expected_hash = format!("100644:{}", compute_binary_hash(&manifest_bytes));
@@ -3525,6 +3525,25 @@ fn html_deletions_spares_the_pages_the_seal_forwards_again() {
         "a forwarding page stays staged until the seal writes it again; a deleted page under the old address goes");
 }
 
+/// A page in the cloud under a decomposed name is the composed source the
+/// last build recorded: it is offline, not deleted, and its page stays.
+#[test]
+fn html_deletions_holds_an_evicted_page_whatever_its_spelling() {
+    let folder = TempDir::new().unwrap();
+    let folder_path = folder.path().to_string_lossy().to_string();
+    let mut previous = SiteHashes::default();
+    previous.files.insert("caf\u{e9}/a.html".to_string(), "100644:hash".to_string());
+    previous.sources.insert("caf\u{e9}/a.html".to_string(), Default::default());
+    let structure = crate::types::content::ProjectStructure {
+        evicted_paths: vec![folder.path().join("cafe\u{301}/a.html")],
+        ..Default::default()
+    };
+    let (deleted, stale) = crate::build::media::pipeline::html_deletions(&previous, &PendingManifest::new(SiteHashes::default()),
+        &structure, &folder_path, &Default::default(), &Default::default());
+    assert!(!deleted);
+    assert_eq!(stale, Vec::<String>::new());
+}
+
 #[test]
 fn remove_stale_html_keeps_a_case_only_rename_and_removes_a_distinct_file() {
     use std::collections::HashSet;
@@ -5267,7 +5286,7 @@ async fn text_only_build_returns_bg_handle_for_deploy_seal() {
         None,
         &crate::build::ports::port_of_this_build(None, None),
         None,
-        Some(Box::new(|_, _, _| Ok(ResolvedSlots::empty()))),
+        Some(Box::new(|_, _, _, _| Ok(ResolvedSlots::empty()))),
         &ps,
         None,
         crate::build::render::IncrementalGates::default(),
@@ -5330,7 +5349,7 @@ fn build_test_sealed_at(folder_path: &str, site_url: Option<&str>) -> Result<Vec
             None,
             &preview_port,
             None,
-            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            Some(Box::new(move |_, _, _, _| Ok(ResolvedSlots::empty()))),
             &ps,
             site_url.map(str::to_string),
             crate::build::render::IncrementalGates::default(),
@@ -5399,7 +5418,7 @@ fn build_test_shipped(
             None,
             &preview_port,
             Some(&services),
-            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            Some(Box::new(move |_, _, _, _| Ok(ResolvedSlots::empty()))),
             &ps,
             None,
             crate::build::render::IncrementalGates::default(),
@@ -5416,7 +5435,7 @@ fn build_test_shipped(
             .map_err(|e| format!("test seal+persist failed: {}", e))?;
         let mp = crate::moss_paths::MossPaths::new(root.path());
         let stage_dir = mp.staging_dir();
-        let scan = crate::build::media::orphan_prune::extract_referenced_tails(&stage_dir);
+        let scan = crate::build::media::orphan_prune::scan_stage(&stage_dir, None);
         let pruned =
             crate::build::ship::prune_orphaned_webp_before_ship(&mp, &mut sealed, &scan);
         // Mirrors `advertise_sealed`'s `reclaim_stage_dir_when_done = true`
@@ -5485,7 +5504,7 @@ fn build_test_with_focus(
             None,
             &preview_port,
             Some(&services),
-            Some(Box::new(move |_, _, _| {
+            Some(Box::new(move |_, _, _, _| {
                 if let (Some(cell), Some(expected)) = (&served_cell, expected_served_during_render) {
                     assert_eq!(*cell.read().unwrap(), expected, "staging must be hidden while it is rewritten");
                 }
@@ -5560,7 +5579,7 @@ fn focused_build_phase(
     rt.block_on(async {
         let result = tokio::task::block_in_place(|| run(
             &root, None, None, &crate::build::ports::port_of_this_build(None, None),
-            Some(&services), Some(Box::new(|_, _, _| Ok(ResolvedSlots::empty()))),
+            Some(&services), Some(Box::new(|_, _, _, _| Ok(ResolvedSlots::empty()))),
             &ps, None, crate::build::render::IncrementalGates::default(),
             crate::build::feeds::search_lane::Freshness::Now, &test_cache_keys(),
         )).map_err(crate::build::outcome::BuildStopped::into_message)?;
@@ -6531,6 +6550,161 @@ fn a_publish_never_overwrites_a_uid_written_since_its_build() {
     assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), edited);
 }
 
+/// A page a publish put live without a `uid:` in its frontmatter builds under
+/// the uid that publish recorded, not one derived from bytes edited since.
+#[test]
+fn a_page_builds_under_the_uid_its_publish_recorded() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    fs::write(dir.join("note.md"), "Edited since it was published.\n").unwrap();
+    let paths = crate::moss_paths::MossPaths::new(&dir);
+    let live = crate::build::manifest::live_baseline::LiveEntry {
+        uid: "live0001".into(), url: "note/".into(), source_path: "note.md".into(), title: String::new(),
+    };
+    let record = crate::build::manifest::change_set::PublishedSnapshot {
+        generation_id: "g1".into(),
+        target: "moss:site-1".into(),
+        published_at: "2026-09-01T00:00:00Z".into(),
+        sources: Default::default(),
+        source_to_output: Default::default(),
+        files: Default::default(),
+        uids: Default::default(),
+        triples: Some(vec![live]),
+        asset_source_to_output: None,
+    };
+    crate::build::manifest::published_record::save(&paths, &record).unwrap();
+    build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+    let map: crate::build::scan::article_map::ArticleMap =
+        serde_json::from_slice(&fs::read(paths.article_map()).unwrap()).unwrap();
+    let note = map.articles.values().find(|a| a.source_path == "note.md").expect("note is an article");
+    assert_eq!(note.uid.as_deref(), Some("live0001"));
+    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), "Edited since it was published.\n");
+}
+
+/// A copy of a published note, resolved while the publish record cannot be
+/// read, keeps the uid it was given on every later build: a build never writes
+/// the uid, so the next build must reach the same answer from what the last
+/// one served. The copy's older date points the heuristic at the wrong file.
+#[test]
+fn a_copy_resolved_without_the_record_stays_resolved_on_the_next_build() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    fs::write(dir.join("original.md"), "---\ntitle: Original\ndate: 2026-07-01\nuid: aabbccdd\n---\nText\n").unwrap();
+    let folder_path = dir.to_str().unwrap();
+    build_test_promoted_or_withheld(folder_path).unwrap();
+
+    let paths = crate::moss_paths::MossPaths::new(&dir);
+    fs::create_dir_all(paths.deploy_records_dir()).unwrap();
+    fs::write(paths.deploy_records_dir().join("moss-site-1.json"), "{ not json").unwrap();
+    fs::write(dir.join("copy.md"), "---\ntitle: Copy\ndate: 2020-01-01\nuid: aabbccdd\n---\nText\n").unwrap();
+    let uids = || {
+        let map: crate::build::scan::article_map::ArticleMap =
+            serde_json::from_slice(&fs::read(paths.article_map()).unwrap()).unwrap();
+        let uid = |src: &str| map.articles.values().find(|a| a.source_path == src).and_then(|a| a.uid.clone());
+        (uid("original.md"), uid("copy.md"))
+    };
+
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    let (original, copy) = uids();
+    assert_eq!(original.as_deref(), Some("aabbccdd"));
+    assert!(copy.is_some() && copy != original, "the copy is given a uid of its own: {copy:?}");
+
+    build_test_promoted_or_withheld(folder_path).unwrap();
+    assert_eq!(uids(), (original, copy), "the next build keeps both answers");
+}
+
+/// A duplicate uid the build cannot resolve because the publish record is
+/// still syncing holds the publish, even when every page names its own uid
+/// and only the duplicate pass reads the record.
+#[test]
+fn a_duplicate_waiting_on_a_syncing_record_holds_the_publish() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\nuid: 11223344\n---\n# Home\n").unwrap();
+    fs::write(dir.join("a.md"), "---\nuid: aabbccdd\n---\nA\n").unwrap();
+    fs::write(dir.join("b.md"), "---\nuid: aabbccdd\n---\nB\n").unwrap();
+    // A directory where a record should be reads as a record not yet here.
+    let paths = crate::moss_paths::MossPaths::new(&dir);
+    fs::create_dir_all(paths.deploy_records_dir().join("moss-site-1.json")).unwrap();
+
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_err(), "{:?}", sealed.unresolved_inputs());
+}
+
+/// A review's catalogue item the sync client has not downloaded holds the
+/// publish of the build that drew no colophon for it.
+#[test]
+fn a_review_item_still_in_the_cloud_holds_the_publish() {
+    crate::infra::home::with_moss_home(|_| {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap().block_on(async {
+            use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+            let (dir, _cleanup) = create_test_dir();
+            fs::write(dir.join("index.md"), "# Home\n").unwrap();
+            fs::create_dir_all(dir.join(".moss")).unwrap();
+            fs::write(dir.join(".moss/config.toml"), "[services.comments]\nenabled = true\n").unwrap();
+            let url = "https://neodb.social/book/1";
+            fs::write(dir.join("read.md"), format!("---\ntitle: Read\nreview_of: {url}\n---\nGood.\n")).unwrap();
+            let item = dir.join(".moss/data/social/reviews").join(format!("{}.json", crate::build::page::link_snapshot::url_key(url)));
+            fs::create_dir_all(item.parent().unwrap()).unwrap();
+            fs::write(&item, "{}").unwrap();
+            let _cloud = crate::build::icloud::pretend::evicted(&item);
+
+            let _ = run_pipeline(PipelineConfig {
+                root: crate::vault_root::VaultRoot::resolve(&dir),
+                progress: crate::build::null_sink(), plugins: PluginMode::Skip,
+                watch: false, start_server: false,
+                host: crate::build::ports::host::test_host_ports(), trigger: BuildTrigger::Full,
+                exits_after_build: true, site_url_override: None, server_port: None,
+                admission_epoch: None, live_port: None, rename_pairs: Vec::new(),
+            }).await;
+
+            let preflight = crate::system::build_records::records().publish_preflight(dir.to_str().unwrap()).unwrap();
+            assert!(preflight.unresolved_inputs.iter().any(|path| path.contains("social/reviews")), "{:?}", preflight.unresolved_inputs);
+        });
+    });
+}
+
+/// A generation keeps the article map of the render that built it, which its
+/// publish reads instead of the file the next render replaces.
+#[test]
+fn a_generation_keeps_its_renders_article_map() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText\n").unwrap();
+    let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+
+    let paths = crate::moss_paths::MossPaths::new(&dir);
+    let kept = crate::build::manifest::publish_view::read_articles(&paths.generations_dir(), sealed.generation_id())
+        .expect("the generation's article map is kept beside it");
+    assert!(kept.articles.values().any(|a| a.source_path == "note.md" && a.title == "Note"));
+}
+
+/// A publish writes each page's uid into it, and the build after that serves
+/// the same files and has nothing left to publish: the stamp is not an edit.
+#[test]
+fn a_published_page_holds_its_uid_and_the_next_build_has_nothing_to_publish() {
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\nHi\n").unwrap();
+    fs::write(dir.join("note.md"), "---\ntitle: Note\n---\nText\n").unwrap();
+    let folder_path = dir.to_str().unwrap();
+    let (_, _, _, first) = build_test_promoted_or_withheld(folder_path).unwrap();
+    let history = tempfile::tempdir().unwrap();
+    let history = crate::deploy::history::HistoryStore::at(history.path().to_path_buf());
+    let ports = crate::deploy::one_shot::HeadlessDeployPorts;
+    tokio::runtime::Runtime::new().unwrap().block_on(crate::deploy::landed::record_landed(&dir, &first, "moss:site-1", &ports, &history));
+    for page in ["index.md", "note.md"] {
+        let text = fs::read_to_string(dir.join(page)).unwrap();
+        assert_eq!(text.lines().filter(|line| line.starts_with("uid:")).count(), 1, "{page}: {text}");
+    }
+
+    let (_, _, _, second) = build_test_promoted_or_withheld(folder_path).unwrap();
+    assert_eq!(second.files(), first.files(), "the stamped pages build to the same files");
+    let paths = crate::moss_paths::MossPaths::new(&dir);
+    let record = crate::build::manifest::published_record::load_for(&paths, Some("moss:site-1")).unwrap();
+    let left = crate::build::manifest::change_set::classify(Some(&record), &second);
+    assert!(left.pages.is_empty(), "{:?}", left.pages);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn an_arrival_after_scan_needs_a_new_render_before_it_clears_publish() {
@@ -6701,7 +6875,7 @@ fn a_cold_vault_with_unreadable_pages_still_shows_the_waiting_screen() {
             None,
             &preview_port,
             None,
-            Some(Box::new(move |_, _, _| Ok(ResolvedSlots::empty()))),
+            Some(Box::new(move |_, _, _, _| Ok(ResolvedSlots::empty()))),
             &ps,
             None,
             crate::build::render::IncrementalGates::default(),
@@ -7779,6 +7953,43 @@ fn site_of(files: &[(&str, &str)]) -> (std::path::PathBuf, impl Drop) {
     }
     build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
     (dir, cleanup)
+}
+
+#[test]
+fn latest_sidebar_links_resolve_to_built_pages_from_home_and_nested_pages() {
+    let (dir, _c) = site_of(&[
+        ("index.md", "title: Home\nsidebar: \"[[Blog]]\"\n"),
+        ("Blog/index.md", "title: Blog\nchildren_in: sidebar\nchildren_source: \"[[Blog]]\"\n"),
+        ("Blog/First.md", "title: First\ndate: 2026-01-01\n"),
+        ("Blog/Second.md", "title: Second\ndate: 2026-02-01\n"),
+        ("Blog/Third.md", "title: Third\ndate: 2026-03-01\n"),
+        ("Blog/Fourth.md", "title: Fourth\ndate: 2026-04-01\n"),
+        ("Notes/Direct.md", "title: Direct\nchildren_in: sidebar\nchildren_source: \"[[Blog]]\"\nchildren_limit: 1\n"),
+        ("Notes/Alias.md", "title: Alias\nsidebar: \"[[Blog]]\"\n"),
+    ]);
+    let sidebar_links = scraper::Selector::parse(".latest-sidebar a").unwrap();
+    let more_links = scraper::Selector::parse(".latest-sidebar .sidebar-more").unwrap();
+    for (page, expected_links, expected_more) in [
+        ("", 4, 1),
+        ("blog/", 4, 0),
+        ("notes/direct/", 2, 1),
+        ("notes/alias/", 4, 1),
+    ] {
+        let html = staged(&dir, &format!("{page}index.html"));
+        let document = scraper::Html::parse_document(&html);
+        let links: Vec<_> = document.select(&sidebar_links).collect();
+        assert_eq!(links.len(), expected_links, "sidebar link count on /{page}");
+        assert_eq!(document.select(&more_links).count(), expected_more, "More link count on /{page}");
+        let base = url::Url::parse(&format!("https://example.test/{page}")).unwrap();
+        for link in links {
+            let href = link.value().attr("href").expect("sidebar href");
+            assert!(href.starts_with('/') && href.ends_with('/'), "root-relative pretty URL: {href}");
+            let resolved = base.join(href).expect("resolve sidebar href");
+            assert_eq!(resolved.origin(), base.origin());
+            let output = format!("{}index.html", resolved.path().trim_start_matches('/'));
+            assert!(staged_exists(&dir, &output), "{href} on {base} resolves to missing {output}");
+        }
+    }
 }
 
 fn staged_calendars(dir: &std::path::Path) -> Vec<String> {

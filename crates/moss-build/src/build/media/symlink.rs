@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::build::scan::path_collision::logical_path;
+
 /// Returns true if the file at `path` looks like a macOS Finder Bookmark
 /// Data file (the modern Alias format). Detection is by magic bytes: the
 /// first 4 bytes spell `book`. Cheap — reads at most 4 bytes.
@@ -266,7 +268,7 @@ pub fn handle_symlink_entry(
     output_root: &Path,
 ) -> SymlinkOutcome {
     let rel_path = match entry_path.strip_prefix(source_root) {
-        Ok(rel) => rel.to_string_lossy().to_string(),
+        Ok(rel) => logical_path(rel),
         Err(_) => {
             log::info!("[copy] symlink entry not under source_root; skipping: {}", entry_path.display());
             return SymlinkOutcome::SkippedBroken { rel_path: entry_path.display().to_string() };
@@ -437,7 +439,7 @@ pub fn handle_alias_entry(
         AliasProbe::Unresolvable => {
             let rel_path = entry_path
                 .strip_prefix(source_root)
-                .map(|r| r.to_string_lossy().to_string())
+                .map(logical_path)
                 .unwrap_or_else(|_| entry_path.display().to_string());
             if crate::infra::warn_once::should_warn_once(entry_path.to_path_buf(), warned_aliases()) {
                 log::warn!(
@@ -453,7 +455,7 @@ pub fn handle_alias_entry(
     };
 
     let rel_path = match entry_path.strip_prefix(source_root) {
-        Ok(rel) => rel.to_string_lossy().to_string(),
+        Ok(rel) => logical_path(rel),
         Err(_) => return Some(SymlinkOutcome::SkippedBroken {
             rel_path: entry_path.display().to_string()
         }),
@@ -560,7 +562,7 @@ pub fn handle_alias_entry(
     }
     let rel_path = entry_path
         .strip_prefix(source_root)
-        .map(|r| r.to_string_lossy().to_string())
+        .map(logical_path)
         .unwrap_or_else(|_| entry_path.display().to_string());
     if crate::infra::warn_once::should_warn_once(entry_path.to_path_buf(), warned_aliases()) {
         log::warn!(

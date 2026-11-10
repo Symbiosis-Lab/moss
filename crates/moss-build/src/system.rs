@@ -38,6 +38,12 @@ pub fn seed_app_version(version: &'static str) {
     let _ = APP_VERSION.set(version);
 }
 
+/// `debug` or `release`: a debug moss builds sites many times slower, so a
+/// build record names which one timed it.
+pub fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) { "debug" } else { "release" }
+}
+
 /// The running moss's version, as seeded. Debug builds — every test binary
 /// in the workspace links this crate without `cfg(test)` — fall back to this
 /// crate's own number rather than making each test module seed. A release

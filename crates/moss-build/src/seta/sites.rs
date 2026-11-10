@@ -1,5 +1,6 @@
 //! Site registration, metadata, publish/push, and analytics endpoints for moss-seta.
 
+use super::client::NOT_OWNER;
 use bytes::Bytes;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -90,9 +91,6 @@ pub struct LiveGeneration {
     pub deployed_at: Option<i64>,
 }
 
-/// seta's refusal of a site to a key whose account does not own it.
-const NOT_THE_OWNER: &str = "Not authorized for this site";
-
 /// The owner-gated `GET /api/sites/{id}/generation`, classified once, from
 /// [`MossSetaClient::generation`].
 #[derive(Debug, PartialEq)]
@@ -101,6 +99,8 @@ pub enum Generation {
     Live(LiveGeneration),
     /// seta's own 403: the key belongs to another account, or to none.
     NotOwner,
+    /// The owner's key, not signed in to this site, named by its address.
+    NotSignedIn { site: String },
     /// A site the server does not have, or a server too old to have the route.
     NotFound,
 }
@@ -212,12 +212,16 @@ impl MossSetaClient {
     /// # Arguments
     /// * `site_id` - Site identifier
     /// * `manifest` - Map of relative file paths to content hashes
+    /// * `sizes` - Byte length of each regular file in `manifest`, so the server
+    ///   can refuse a site over its storage cap before any upload. A server
+    ///   that predates the field ignores it.
     /// * `generation_id` - The deploy generation being synced; sent as `X-Moss-Generation`
     ///   so the server scopes the diff to the correct generation directory.
     pub async fn sync_manifest(
         &self,
         site_id: &str,
         manifest: &std::collections::HashMap<String, String>,
+        sizes: &std::collections::HashMap<String, u64>,
         generation_id: &str,
     ) -> Result<SyncManifestResponse, SetaError> {
         let path = format!("/api/sites/{}/sync", urlencoding::encode(site_id));
@@ -228,7 +232,7 @@ impl MossSetaClient {
         // re-sends the identical buffer instead of re-encoding a 10k-entry map,
         // and the exact body length is what sets the deadline below.
         let body = Bytes::from(
-            serde_json::to_vec(&serde_json::json!({ "files": manifest }))
+            serde_json::to_vec(&serde_json::json!({ "files": manifest, "sizes": sizes }))
                 .map_err(|e| SetaError::Parse(e.to_string()))?,
         );
         // The deadline scales with the body (I1). A flat 150 s here was a
@@ -481,7 +485,8 @@ impl MossSetaClient {
         match self.generation(site_id, None).await? {
             Generation::Live(live) => Ok(live),
             Generation::NotFound => Ok(LiveGeneration::default()),
-            Generation::NotOwner => Err(SetaError::Api { status: 403, message: NOT_THE_OWNER.to_string() }),
+            Generation::NotOwner => Err(SetaError::Api { status: 403, message: NOT_OWNER.to_string() }),
+            Generation::NotSignedIn { site } => Err(SetaError::NotSignedIn { site }),
         }
     }
 
@@ -500,7 +505,8 @@ impl MossSetaClient {
             200..=299 => Ok(Generation::Live(response.json().await.map_err(|e| SetaError::Parse(e.to_string()))?)),
             404 => Ok(Generation::NotFound),
             _ => match SetaError::from_failed_response(response).await {
-                SetaError::Api { status: 403, message } if message == NOT_THE_OWNER => Ok(Generation::NotOwner),
+                SetaError::Api { status: 403, message } if message == NOT_OWNER => Ok(Generation::NotOwner),
+                SetaError::NotSignedIn { site } => Ok(Generation::NotSignedIn { site }),
                 other => Err(other),
             },
         }

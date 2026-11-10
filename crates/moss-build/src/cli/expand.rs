@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use moss_core::resolve::embeds::{derived::Derivations, expand::expand_page};
 
 use crate::system::derive::site::DerivedSite;
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::moss_paths::MossPaths;
 use crate::vault_root::{resolve_input_in, VaultRoot};
 
@@ -60,7 +61,7 @@ pub fn expand_in(target: &Path, cwd: &Path, dry_run: bool) -> Result<Vec<String>
     let structure = crate::build::scan::scan::scan_folder_with_dedup_emit(root.as_str(), None, None, false)?;
     let graph = crate::build::scan::scan::build_content_graph(&structure);
 
-    let scope = abs.strip_prefix(&root_path).unwrap_or(Path::new("")).to_string_lossy().replace('\\', "/");
+    let scope = logical_path(abs.strip_prefix(&root_path).unwrap_or(Path::new("")));
     let pages: Vec<String> = structure
         .markdown_files
         .iter()
@@ -81,11 +82,11 @@ pub fn expand_in(target: &Path, cwd: &Path, dry_run: bool) -> Result<Vec<String>
         None => moss_core::resolve::embeds::derived::DerivedFragment::Pending,
     };
     let derivations = Derivations { table: site.as_ref().map_or(&empty, |s| s.table()), reader: &read_derived };
-    let read_note = |path: &str| std::fs::read_to_string(root_path.join(path)).ok();
+    let read_note = |path: &str| std::fs::read_to_string(on_disk(&root_path, path)).ok();
 
     let (mut report, mut lines_total, mut pages_total) = (Vec::new(), 0usize, 0usize);
     for page in &pages {
-        let file: PathBuf = root_path.join(page);
+        let file: PathBuf = on_disk(&root_path, page);
         let Ok(raw) = std::fs::read_to_string(&file) else { continue };
         let expansion = expand_page(page, &raw, &graph, &read_note, &derivations);
         if expansion.expanded.is_empty() || expansion.content == raw {
@@ -114,4 +115,19 @@ pub fn expand_in(target: &Path, cwd: &Path, dry_run: bool) -> Result<Vec<String>
 
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_folder_argument_typed_decomposed_expands_the_pages_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join(".moss")).unwrap();
+        std::fs::create_dir_all(root.join("cafe\u{301}")).unwrap();
+        // allow:raw_write test fixture page in a temp folder
+        std::fs::write(root.join("cafe\u{301}/menu.md"), "# Menu\n").unwrap();
+        let report = super::expand_in(&root.join("cafe\u{301}"), &root, true).unwrap();
+        assert_eq!(report, ["nothing to expand"]);
+    }
 }

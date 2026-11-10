@@ -30,6 +30,9 @@ pub mod history;
 // completion's change set, its detected renames, and the article maps.
 // Pure — no filesystem, no network.
 pub mod change_record;
+// Publishing by writing files into a destination moss writes itself: the
+// upload order, the published-files record and the destinations.
+pub mod direct;
 // What a publish that builds its own site does AROUND the build: catch the
 // seal, and answer the app-shaped ports with nothing. Shared by `push` and
 // `plugin_push`, which is why it is not inside either.
@@ -182,6 +185,27 @@ pub fn view_site_url(
         None
     };
     custom.unwrap_or_else(|| format!("https://{}{}", site_id, env.site_suffix()))
+}
+
+#[cfg(test)]
+mod hosting_address_tests {
+    fn folder(site: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), format!("schema_version = 6\n\n[site]\n{site}")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn moss_hosting_refuses_an_address_with_a_path() {
+        let dir = folder("url = \"https://example.edu/~alice/\"\n");
+        let err = super::hosting_serves_this_address(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(err.contains("[site] url") && err.contains("https://example.edu/~alice/"), "{err}");
+        for ok in ["url = \"https://example.org/\"\n", "domain = \"example.org\"\n", ""] {
+            let dir = folder(ok);
+            assert!(super::hosting_serves_this_address(dir.path().to_str().unwrap()).is_ok(), "{ok}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -372,6 +396,8 @@ pub enum RefusalKind {
     NotOwner,
     /// Another copy of the folder published after this one.
     StaleCopy,
+    /// A folder with a site, or one that was signed in, has no usable key.
+    NotSignedIn,
 }
 
 impl Refusal {
@@ -456,6 +482,19 @@ pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
         return Some(Refusal::new(RefusalKind::PendingDerivations, derivations_refusal_text(pending)));
     }
     removal_gate::refusal_for(folder_path).map(|text| Refusal::new(RefusalKind::Removals, text))
+}
+
+/// Every refusal a sealed build can earn before the first byte leaves, in the
+/// order each publish route asks them. One sequence so the routes cannot
+/// disagree about what is publishable.
+pub(crate) fn refuse_before_upload(folder: &std::path::Path, sealed: &crate::build::manifest::SealedManifest) -> Result<(), String> {
+    use profile::gate;
+    gate("output_collisions", removal_gate::refuse_output_collisions(sealed))?;
+    gate("stale_generation", removal_gate::refuse_stale_generation(folder, sealed))?;
+    refuse_publish(&folder.to_string_lossy())?;
+    let _checks = crate::build::phase::PhaseTrace::start("local_checks");
+    gate("foreign_inputs", refuse_foreign_inputs(sealed, folder))?;
+    gate("unresolved_inputs", refuse_unresolved_inputs(sealed))
 }
 
 /// Refuse the exact generation selected for upload when it was rendered with
@@ -758,8 +797,34 @@ mod stale_copy_tests {
 /// without entering a function that, if the gate regressed, would go on to call
 /// a real server. A test whose failure mode is the irreversible action is the
 /// wrong shape however green it is.
+fn hosting_serves_this_address(folder_str: &str) -> Result<(), String> {
+    let Some(url) = crate::build::site_config::read_project_config(folder_str)?.site_address()? else {
+        return Ok(());
+    };
+    if crate::build::site_meta::mount::Mount::of_site_url(&url).is_root() {
+        return Ok(());
+    }
+    Err(format!(
+        "[site] url in .moss/config.toml is \"{url}\", an address with a path; moss hosting serves a site at the root \
+         of its address, so every link would miss. Take the path out of url, or publish with another host."
+    ))
+}
+
 fn first_publish_is_permitted(folder_str: &str) -> Result<bool, String> {
     Ok(crate::build::site_config::get_environment_field(folder_str)?.is_some())
+}
+
+/// Where a folder signs in: its site's address once it has one, else the
+/// hosting service it would register with.
+pub(crate) fn sign_in_host(folder_str: &str, site_id: Option<&str>) -> String {
+    let env = crate::build::site_config::resolve_environment(folder_str);
+    match site_id {
+        Some(id) => {
+            let url = view_site_url(folder_str, id, env);
+            url.split_once("://").map_or(url.clone(), |(_, host)| host.to_string())
+        }
+        None => env.site_suffix().trim_start_matches('.').to_string(),
+    }
 }
 
 pub async fn resolve_publish_inputs(
@@ -776,6 +841,7 @@ pub async fn resolve_publish_inputs(
     // pass the gate and mint a SECOND site. A missing file is `Ok(Default)`, so
     // a genuine first publish is unaffected.
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
+    hosting_serves_this_address(&folder_str)?;
 
     // Every pure refusal first, so nothing below is paid for by a publish that
     // was never going to happen. A name the server would reject is knowable at
@@ -806,15 +872,22 @@ pub async fn resolve_publish_inputs(
     // raw `Resource deadlock avoided` the identity-file bug was closed for.
     preflight_publish_inputs(folder).await?;
 
-    // Mint one if this folder has never published. A publish that cannot sign
-    // cannot start, so this fails before a byte is read off disk — and, on the
-    // hosted route, before the build. That ordering means a `moss deploy` that
-    // is later refused (a broken file, say) has still written `.moss/identity/`
-    // into a first-time vault. Deliberate: failing after a multi-minute build
-    // to say something knowable at t=0 is the worse trade, and it is what the
-    // prebuilt route always did.
+    // A first publish mints the folder's key here, before the build, so a
+    // `moss deploy` refused later (a broken file, say) still leaves
+    // `.moss/identity/` in a first-time vault: failing after a multi-minute
+    // build to say something knowable at t=0 is the worse trade. A folder that
+    // has a site, or was signed in, and lost its key is refused instead (see
+    // `IdentityService::ensure_signing_key`).
+    let host = sign_in_host(&folder_str, config.site_id.as_deref());
+    let not_signed_in = || crate::identity::verify_email::not_signed_in(folder, &host);
+    if config.site_id.is_some() && !crate::identity::Identity::exists(folder) {
+        return Err(not_signed_in());
+    }
     let mut service = crate::identity::service::IdentityService::new(folder);
-    service.ensure_signing_key().map_err(|e| e.to_string())?;
+    service.ensure_signing_key().map_err(|e| match e {
+        crate::identity::keypair::IdentityError::PrivateKeyNotFound => not_signed_in(),
+        e => e.to_string(),
+    })?;
     let identity = service.get_or_create().map_err(|e| e.to_string())?.clone();
 
     let site_id = match (config.site_id, requested) {
@@ -1091,7 +1164,7 @@ pub async fn register_moss_host_site(
             profile::refusal("site_limit");
             return Err(site_limit_message(limit, contact.as_deref()));
         }
-        Err(e) => return Err(register_failure_message(site_id, e)),
+        Err(e) => return Err(register_failure_message(folder, site_id, e)),
     };
 
     // NOT `unwrap_or_default()`: this read is followed by a write, so a
@@ -1106,33 +1179,22 @@ pub async fn register_moss_host_site(
 }
 
 /// Turn seta's registration refusals into something a person can act on.
-///
-/// Both sentences were the prebuilt route's alone until C4g, written inline
-/// beside a `register_site` call that route no longer makes. They are here
-/// because registration has one owner now, so both routes and both binaries
-/// get them — which the app half never had, and the CLI `--site-id` half needs
-/// most, since only the app pre-checks a name with `check_site_id_available`.
-fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) -> String {
-    profile::seta_error(&e);
+fn register_failure_message(folder: &std::path::Path, site_id: &str, e: crate::seta::client::SetaError) -> String {
+    if let Some(refusal) = profile::profiled_refusal(folder, &e) {
+        return refusal;
+    }
     let msg = e.to_string();
     // Seta checks the key's email before its ACLs, so this is the typical
     // first publish of a new folder.
     if matches!(&e, crate::seta::client::SetaError::Api { status, message } if crate::seta::client::asks_to_verify_email(*status, message)) {
-        return format!(
-            "{} This folder's key has not been linked to an email yet. \
-             Re-run with `--email <address>` to be sent a sign-in link \
-             (the address must be the account the site should belong to), \
-             or open the folder in the desktop app once to verify it there.\n\n\
-             Underlying error: {}",
-            crate::identity::verify_email::UNVERIFIED_REFUSAL, msg
-        );
+        return crate::identity::verify_email::not_signed_in(folder, &sign_in_host(&folder.to_string_lossy(), None));
     }
     if msg.contains("already taken") || msg.contains("must be fresh") {
+        let env = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
         return format!(
-            "Site ID '{}' is unavailable or this pubkey can't claim it. \
-             Try a different site_id or use a fresh project folder.\n\n\
-             Underlying error: {}",
-            site_id, msg
+            "{site_id}{} is taken, or this folder can't claim it. Choose another name: moss deploy {} --site-id=<name>",
+            env.site_suffix(),
+            folder.display()
         );
     }
     format!("Could not register the site: {}", msg)

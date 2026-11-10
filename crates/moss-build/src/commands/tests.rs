@@ -460,6 +460,20 @@ async fn site_facts_answer_through_a_symlinked_root() {
 }
 
 #[tokio::test]
+async fn a_page_whose_name_the_disk_spells_decomposed_finds_its_built_url() {
+    let (_d, root) = pages();
+    let page = root.join("cafe\u{301}.md");
+    // allow:raw_write test fixture page in a temp folder
+    std::fs::write(&page, "# Menu").unwrap();
+    std::fs::create_dir_all(root.join(".moss/build.nosync")).unwrap();
+    let mut map = crate::build::scan::article_map::ArticleMap::new();
+    map.pages.insert("menu/".into(), "caf\u{e9}.md".into());
+    map.save(&root.join(".moss")).unwrap();
+    let url: Option<String> = ok(session_read::dispatch(&TestHost::site(&root), "resolve_url_for_file", json!({ "filePath": page })).await).await;
+    assert_eq!(url.as_deref(), Some("/menu/"));
+}
+
+#[tokio::test]
 async fn a_loose_rename_moves_the_file_and_rewrites_no_link() {
     let (_d, root) = pages();
     let host = TestHost::loose(&root);

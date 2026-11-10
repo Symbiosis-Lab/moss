@@ -15,7 +15,7 @@
 //! counter pattern instead.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -114,8 +114,8 @@ pub struct PreviewRequirement {
 pub enum PreviewSource {
     /// A source lookup is still in flight or could not be completed.
     Unresolved,
-    /// A source file within the selected folder, relative to its root.
-    File(PathBuf),
+    /// A source file within the selected folder, by its logical path.
+    File(String),
     /// The resolver found no source. The build must still prove this URL has
     /// a current generated output before it can call the page ready.
     Generated,
@@ -149,7 +149,7 @@ impl FolderSession {
 
     /// Replace the current page requirement. Returns whether it changed, so
     /// repeated bridge echoes do not schedule duplicate work.
-    pub fn set_preview_requirement(&self, url_path: String, source: PreviewSource) -> Result<bool, String> {
+    pub fn set_preview_requirement(&self, url_path: String, mut source: PreviewSource) -> Result<bool, String> {
         if !url_path.starts_with('/') || url_path.starts_with("//") || url_path.contains(['?', '#']) {
             return Err("Preview URL must be a root-relative pathname".into());
         }
@@ -158,12 +158,14 @@ impl FolderSession {
                 .map_err(|_| "Preview URL contains an invalid path".to_string())?;
         }
         if let PreviewSource::File(file) = &source {
-            if file.is_absolute() {
+            if Path::new(file).is_absolute() {
                 return Err("Preview source must be root-relative".into());
             }
             let path = self.folder.join(file);
             let absolute = path.to_str().ok_or("Preview source path is not valid UTF-8")?;
             crate::vault::fs::validate_entry_path(&self.folder, absolute)?;
+            // The build keys sources by their logical path; the editor may hand over the disk's spelling.
+            source = PreviewSource::File(crate::build::scan::path_collision::logical_path(file));
         }
         let mut current = self.preview_requirement.lock().unwrap();
         if current.as_ref().is_some_and(|old| old.url_path == url_path && old.source == source) { return Ok(false); }
@@ -297,9 +299,9 @@ impl FolderSession {
     }
 
     /// Fire cancel and drain the JoinSet within `grace`, then drop the
-    /// folder's seal debounce lane (`build::seal_phase::evict`), which is
-    /// keyed by folder rather than owned by this session and would otherwise
-    /// outlive it. Returns the number of tasks that did not finish before
+    /// folder's seal debounce lane (`build::seal_phase::evict`) and the cache
+    /// publications still queued for it, which are keyed by folder rather than
+    /// owned by this session and would otherwise outlive it. Returns the number of tasks that did not finish before
     /// the grace window expired.
     pub async fn shutdown(self: Arc<Self>, grace: Duration) -> usize {
         self.cancel.cancel();
@@ -320,6 +322,9 @@ impl FolderSession {
             }
         }
         crate::build::seal_phase::evict(&self.folder);
+        // Queued cache publications hold leases that keep the cache from being
+        // collected; a closed folder's are redone by its next build.
+        crate::build::cloud_readiness::storage::drop_cache_publications_under(std::path::Path::new(&self.folder));
         leaked
     }
 }

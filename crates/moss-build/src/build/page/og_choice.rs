@@ -98,7 +98,7 @@ pub fn resolve(
     let bundle_dir: Option<std::path::PathBuf> = doc
         .and_then(|d| d.source_path.as_deref())
         .and_then(|sp| std::path::Path::new(sp).parent())
-        .map(|rel| source_root.join(rel));
+        .map(|rel| crate::build::scan::path_collision::on_disk(source_root, &rel.to_string_lossy()));
     let bundle_dir_ref: Option<&std::path::Path> = bundle_dir.as_deref();
     // A render with no sink is a single page outside a build: nothing to share.
     let unshared_covers;

@@ -1,8 +1,9 @@
-//! Which of the three publish routes a folder takes — one answer, one owner.
+//! Which of the four publish routes a folder takes — one answer, one owner.
 //!
-//! `moss deploy` can mean three different things depending on what is in the
+//! `moss deploy` can mean four different things depending on what is in the
 //! folder: upload a directory some other tool built, build the site and publish
-//! it to moss's own hosting, or hand the whole job to a deploy plugin.
+//! it to moss's own hosting, hand the whole job to a deploy plugin, or write
+//! the files into a destination moss reaches itself.
 //!
 //! The route is a value, so no caller works it out for itself and two callers
 //! cannot disagree about where a folder with both a `site_id` and a pinned
@@ -51,6 +52,11 @@ pub enum DeployRoute {
         /// The `[hooks] deploy` selection, which is what the dispatcher routes on.
         id: String,
     },
+    /// A target moss writes to itself, file by file ([`crate::deploy::direct`]),
+    /// named by [`crate::config::deployment::is_direct_target`].
+    Direct {
+        id: String,
+    },
 }
 
 impl DeployRoute {
@@ -58,9 +64,13 @@ impl DeployRoute {
     ///
     /// Prebuilt wins outright, and before the plugin check, because a prebuilt
     /// folder that fell through to a plugin would silently take a route that
-    /// cannot publish it. Otherwise the selector is
-    /// [`crate::build::site_config::current_deploy_plugin`] — the same one the
-    /// Publish button asks, which is what makes the two agree.
+    /// cannot publish it. A built-in direct target comes next, before the
+    /// plugin check, so its name never reaches the plugin runtime. Otherwise
+    /// the selector is [`crate::build::site_config::current_deploy_plugin`],
+    /// the same one the Publish button asks, which is what makes the two
+    /// agree. That function still answers a direct target's name as a plugin
+    /// id, because the app reads its `None` as moss hosting; the app asks the
+    /// built-in list itself once it can publish to one.
     pub fn resolve(folder: &Path, prebuilt_arg: Option<&str>) -> Self {
         let folder_str = folder.to_string_lossy().to_string();
         let config = crate::build::site_config::get_domain_config(&folder_str).unwrap_or_default();
@@ -68,6 +78,10 @@ impl DeployRoute {
         if let Some(dir) = crate::deploy::prebuilt::resolve_prebuilt_dir(folder, &config, prebuilt_arg)
         {
             return DeployRoute::Prebuilt { dir };
+        }
+
+        if let Some(id) = config.deploy_method.as_deref().filter(|m| crate::config::deployment::is_direct_target(m)) {
+            return DeployRoute::Direct { id: id.to_string() };
         }
 
         match crate::build::site_config::current_deploy_plugin(&folder_str) {
@@ -117,6 +131,15 @@ mod tests {
     fn an_unconfigured_folder_is_hosted() {
         let dir = vault("", "");
         assert_eq!(DeployRoute::resolve(dir.path(), None), DeployRoute::Hosted);
+    }
+
+    #[test]
+    fn your_own_server_is_a_direct_route_not_a_plugin() {
+        let dir = vault("[hooks]\ndeploy = \"server\"\n", "[deployment]\nsite_id = \"blog\"\n");
+        assert_eq!(
+            DeployRoute::resolve(dir.path(), None),
+            DeployRoute::Direct { id: "server".to_string() }
+        );
     }
 
     /// Prebuilt is decided before the plugin check, so `--prebuilt` on a

@@ -23,6 +23,7 @@
 //! final `hashes.json`, both happen later, only through the build's permitted
 //! sweep (`pipeline::sweep_staging`), never from this worker.
 
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::moss_paths::MossPaths;
 use crate::types::{content::SiteHashes, services::BackgroundContext};
 use std::collections::{HashMap, HashSet};
@@ -526,7 +527,7 @@ pub(crate) fn html_deletions(
 ) -> (bool, Vec<String>) {
     let held: HashSet<String> = structure.evicted_paths.iter()
         .filter_map(|path| path.strip_prefix(folder_path).ok())
-        .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+        .map(logical_path)
         .collect();
     let current: HashSet<&str> = structure.html_files.iter().map(|file| file.path.as_str()).collect();
     let deleted = previous.sources.keys().any(|key| is_html_path(key) && !key.starts_with(".moss/")
@@ -828,25 +829,25 @@ fn recall_or_hash_output(
     fallback: &str,
     log_context: &str,
     transform: crate::build::served_path::ShipTransform,
+    mount: &crate::build::site_meta::mount::Mount,
 ) -> String {
-    use crate::build::served_path::ShipTransform;
     // A transformed entry's hash describes the bytes ship writes, not the
     // blob's, so it is memoized under its own key, which also carries the
-    // transform revision: bumping it must not recall a hash of old output.
-    let key = match transform {
-        ShipTransform::CopyAsIs => memo_key.to_string(),
-        ShipTransform::StripPreviewAttrs => {
-            format!("{memo_key}+ship{}", crate::build::ship::SHIP_TRANSFORM_REV)
-        }
+    // transform revision and the mount: neither may recall a hash of other output.
+    let copies = transform.copies(mount);
+    let key = if copies {
+        memo_key.to_string()
+    } else {
+        format!("{memo_key}+ship{}", crate::build::ship::shipped_key(mount))
     };
     if let Some(hash) = memo.get(&key) {
         return hash;
     }
-    let hashed = match transform {
-        ShipTransform::CopyAsIs => crate::build::assets::paths::compute_binary_hash_file(target),
-        ShipTransform::StripPreviewAttrs => std::fs::read(target).map_err(|e| e.to_string()).map(|bytes| {
-            crate::build::assets::paths::compute_binary_hash(&crate::build::ship::apply_transform(transform, &bytes))
-        }),
+    let hashed = if copies {
+        crate::build::assets::paths::compute_binary_hash_file(target)
+    } else {
+        std::fs::read(target).map_err(|e| e.to_string()).map(|bytes| crate::build::ship::apply_transform(transform, mount, &bytes))
+            .map(|shipped| crate::build::assets::paths::compute_binary_hash(&shipped))
     };
     match hashed {
         Ok(hash) => {
@@ -906,7 +907,7 @@ fn register_alias_source(
     mut blob: impl FnMut(&Path, &str) -> Result<Option<(String, crate::build::stat::FileStat)>, String>,
 ) {
     let Ok(rel) = path.strip_prefix(source_root) else { return };
-    let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+    let rel = logical_path(rel);
     if let Ok(Some((oid, stat))) = blob(path, &rel) {
         site_hashes.sources.insert(rel.clone(), crate::build::types::SourceMetadata::from_stat(oid, stat));
         live_source_keys.insert(rel);
@@ -989,10 +990,11 @@ fn record_blob(
     hash: OutputHash,
     out_path: &crate::build::served_path::ServedPath,
     staged_oid: &str,
+    mount: &crate::build::site_meta::mount::Mount,
 ) {
     let OutputHash { memo_key, target, fallback_oid, log_context } = hash;
     let transform = crate::build::served_path::transform_for(out_path.as_str());
-    let hash = recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context, transform);
+    let hash = recall_or_hash_output(manifest_hash_memo, memo_key, target, fallback_oid, log_context, transform, mount);
     site_hashes.insert_file_hash(out_path, crate::types::content::file_entry(&hash));
     staged_oids.insert(out_path.as_str().to_string(), staged_oid.to_string());
 }
@@ -1057,7 +1059,7 @@ impl AssetCopy {
                 source_root.to_path_buf()
             }),
             converter_bases: ctx.image_items.iter().filter(|item| item.owns_source_base()).map(|item| item.source_path.clone()).collect(),
-            html_paths: html_files.iter().map(|file| source_root.join(&file.path)).collect(),
+            html_paths: html_files.iter().map(|file| on_disk(source_root, &file.path)).collect(),
             prev_hashes_mtime_secs: std::fs::metadata(paths.hashes()).ok()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1127,7 +1129,7 @@ pub(crate) fn stage_source_html(
         if let Some(entry) = ctx.previous_hashes.sources.get(&file.path) {
             site_hashes.sources.insert(file.path.clone(), entry.clone());
         }
-        let path = Path::new(&ctx.source_path).join(&file.path);
+        let path = on_disk(Path::new(&ctx.source_path), &file.path);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) => copy_asset_entry(ctx, &mut copy, &path, meta.file_type(), &mut site_hashes, &mut run, reporter, asset_registry.as_deref()),
             Err(e) => log::info!("[background-assets] Cannot stat {}: {e}", path.display()),
@@ -1209,11 +1211,11 @@ fn copy_asset_entry(
         return;
     }
 
-    // Normalize `\`→`/`: relative_path feeds `/`-form comparisons (blocking
-    // keys, prev-source asset cache, live-source prune map) — un-normalized
-    // Windows backslashes miss every match (re-hash/re-copy + duplicate-copy).
+    // The scan's logical path, `/`-separated and composed (NFC): it is
+    // compared with blocking keys, the prev-source asset cache and the
+    // live-source prune map, all keyed that way. Reads use `file_path`.
     let relative_path = match file_path.strip_prefix(source_root) {
-        Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
+        Ok(rel) => logical_path(rel),
         Err(_) => return,
     };
 
@@ -1228,7 +1230,7 @@ fn copy_asset_entry(
     // `scan.rs` does for pages via `evicted_paths`.
     if let Some(real) = crate::build::icloud::icloud_stub_target(file_path) {
         if let Ok(rel) = real.strip_prefix(source_root) {
-            let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+            let rel = logical_path(rel);
             run.live_asset_keys.insert(resolve_path_with_overrides(&rel, &ctx.dir_overrides));
             run.live_source_keys.insert(rel.clone());
             crate::build::cloud_readiness::request_download(&real);
@@ -1395,7 +1397,7 @@ fn copy_asset_entry(
                         fallback_oid: &oid,
                         log_context: "output",
                     };
-                    record_blob(manifest_hash_memo, site_hashes, &mut run.staged_oids, hash, &out_path, &staged_oid);
+                    record_blob(manifest_hash_memo, site_hashes, &mut run.staged_oids, hash, &out_path, &staged_oid, &ctx.mount);
                     run.stats.copied += 1;
                 }
                 Err(e) => {
@@ -1435,9 +1437,11 @@ pub(crate) fn copy_deferred_assets(
     let mut site_hashes = ctx.previous_hashes.clone();
     let mut copy = html.copy;
     let mut run = AssetWalkTally { stats: html.stats, ..Default::default() };
-    let layer_sources: Vec<_> = crate::config::map_layers::declared_sources(source_root).iter().map(|s| source_root.join(s)).collect();
-    for entry in WalkDir::new(source_root).into_iter()
-        .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources).is_none())
+    let layer_sources = crate::config::map_layers::declared_sources(source_root);
+    for entry in WalkDir::new(source_root)
+        .sort_by(crate::build::scan::path_collision::nfc_name_order)
+        .into_iter()
+        .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, source_root, &layer_sources).is_none())
     {
         let entry = match entry {
             Ok(e) => e,
@@ -1478,7 +1482,7 @@ pub(crate) fn copy_deferred_assets(
             let stub_target = crate::build::icloud::icloud_stub_target(file_path);
             let effective = stub_target.as_deref().unwrap_or(file_path);
             let relative_path = match effective.strip_prefix(&moss_assets_dir) {
-                Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
+                Ok(rel) => logical_path(rel),
                 Err(_) => continue,
             };
 
@@ -1534,7 +1538,7 @@ pub(crate) fn copy_deferred_assets(
                         crate::build::types::SourceMetadata::from_stat(oid.clone(), stat));
                     let hash =
                         OutputHash { memo_key: &oid, target: &target, fallback_oid: &oid, log_context: ".moss/theme output" };
-                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut run.staged_oids, hash, &out_path, &oid);
+                    record_blob(&manifest_hash_memo, &mut site_hashes, &mut run.staged_oids, hash, &out_path, &oid, &ctx.mount);
                     run.stats.copied += 1;
                 }
                 Err(e) => {

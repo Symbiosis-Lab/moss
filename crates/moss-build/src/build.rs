@@ -109,6 +109,7 @@ pub mod embed_handlers;
 pub mod emit;
 pub mod facade;
 pub mod incremental_gates;
+pub(crate) mod inputs;
 pub mod folder_embed;
 pub mod folder_index;
 pub mod feeds;
@@ -469,6 +470,7 @@ fn collect_native_slots_for_documents(
     start_server: bool,
     site_lang: &str,
     site_comments: Option<bool>, // see generate_native_slots's own param doc
+    input_evidence: Option<&crate::build::cloud_ledger::InputEvidence>,
 ) -> crate::build::enhance::ResolvedSlots {
     // `get_services_config` falls back to the home page's `analytics:` front
     // matter in memory.
@@ -578,6 +580,7 @@ fn collect_native_slots_for_documents(
         start_server,
         Some(&media_lookup),
         site_comments,
+        input_evidence,
     )
 }
 
@@ -689,7 +692,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         if result.is_ok() { "ok" } else { "error" },
         &config.trigger,
     );
-    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, &config);
+    crate::build::phase::append_profile(&collector, pipeline_start.elapsed(), &result, config.source(), &config.trigger);
     result
 }
 
@@ -802,6 +805,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let full_build = matches!(config.trigger, BuildTrigger::Full);
     if !pass.repeat {
         crate::cli::agents::sync::sync_after_build(config.source(), full_build);
+        if full_build { crate::platform::folder_icon::mark_moss_folder(config.source()) }
     }
 
     // What to serve from the moment the server is ready, before this rebuild
@@ -1160,7 +1164,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
      -> pipeline::SlotResolver {
         let start_server_for_slots = config.start_server;
         let listing_host = listing_host.clone();
-        Box::new(move |pages, site_lang, site_comments| {
+        Box::new(move |pages, site_lang, site_comments, input_evidence| {
             // The article map this build just wrote names the pages to ask about.
             if refresh_comments_first {
                 let _refresh_trace = PhaseTrace::start("comment_refresh");
@@ -1178,6 +1182,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 start_server_for_slots,
                 site_lang,
                 site_comments,
+                input_evidence,
             );
             slots.set_listing_host(listing_host);
             Ok(slots)

@@ -93,9 +93,11 @@ impl<'a> BuildContext<'a> {
 /// Write `bytes` to `dir.join(rel_path)`, creating parent directories as
 /// needed. Routed through `io_utils::write_output` — this is the busiest write
 /// into the output tree, so it is the one that most needs the rule that a
-/// dataless destination is discarded rather than materialized.
+/// dataless destination is discarded rather than materialized. A file that
+/// already holds these bytes is left as it is: rewriting it gives it a new
+/// inode and mtime, and every stat-keyed shortcut after it reads it again.
 fn write_at(dir: &Path, rel_path: &str, bytes: &[u8]) -> std::io::Result<()> {
-    crate::build::io_utils::write_output(&dir.join(rel_path), bytes)
+    crate::build::io_utils::write_output_if_changed(&dir.join(rel_path), bytes).map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +136,26 @@ mod tests {
         assert!(sealed.image_outputs().contains("og/home.png"));
         assert!(sealed.blocking_keys().contains("style.css"));
         assert!(sealed.blocking_keys().contains("og/home.png"));
+    }
+
+    /// An output whose bytes did not change keeps its file, so a later build's
+    /// stat of it still vouches for what was read from it; changed bytes are
+    /// written.
+    #[cfg(unix)]
+    #[test]
+    fn emitting_the_same_bytes_again_keeps_the_file() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempdir().unwrap();
+        let mut manifest = PendingManifest::new(SiteHashes::default());
+        let qr = crate::build::served_path::ServedPath::from_source("qr/a.svg").unwrap();
+        let ino = || std::fs::metadata(dir.path().join("qr/a.svg")).unwrap().ino();
+        BuildContext::for_render(dir.path(), &mut manifest).emit(&qr, b"<svg/>", HashBucket::Files).unwrap();
+        let first = ino();
+
+        BuildContext::for_render(dir.path(), &mut manifest).emit(&qr, b"<svg/>", HashBucket::Files).unwrap();
+        assert_eq!(ino(), first, "same bytes, same file");
+        BuildContext::for_render(dir.path(), &mut manifest).emit(&qr, b"<svg></svg>", HashBucket::Files).unwrap();
+        assert_eq!(std::fs::read(dir.path().join("qr/a.svg")).unwrap(), b"<svg></svg>");
     }
 
     #[test]
@@ -189,6 +211,24 @@ mod tests {
                 Some(&crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(bytes))),
                 "{key}: the manifest hash is of exactly the pinned bytes"
             );
+        }
+    }
+
+    /// A stylesheet can be held (a `[redirects]` copy of one is): at the root it
+    /// ships as held, and under a mount its manifest entry is of the mounted
+    /// bytes ship writes.
+    #[test]
+    fn a_stylesheet_can_be_held_at_the_root_and_under_a_mount() {
+        let sp = crate::build::served_path::ServedPath::from_source("old/style.css").unwrap();
+        let css = b"a{background:url(/a.png)}".to_vec();
+        for (site_url, shipped) in [("https://example.org", &b"a{background:url(/a.png)}"[..]), ("https://example.edu/~alice", &b"a{background:url(/~alice/a.png)}"[..])] {
+            let dir = tempdir().unwrap();
+            let mut manifest = PendingManifest::new(SiteHashes::default());
+            manifest.set_site_url(site_url);
+            BuildContext::for_render(dir.path(), &mut manifest).emit_held(&sp, css.clone(), HashBucket::Files).unwrap();
+            let entry = manifest.seal().files().get("old/style.css").cloned();
+            let expected = crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(shipped));
+            assert_eq!(entry, Some(expected), "{site_url}");
         }
     }
 

@@ -825,8 +825,9 @@ mod tests {
     }
 
     /// The card sets a title, and the page sets its titles in a serif. The
-    /// card's chain must lead with a face the page's `--moss-font-heading`
-    /// stack also names, or a Song heading shares as a gothic slab.
+    /// card's chain must lead with a face the page's Han heading stack
+    /// (`--moss-font-heading-han`) also names, or a Song heading shares as a
+    /// gothic slab.
     #[test]
     fn the_cjk_chain_leads_with_a_face_the_page_also_asks_for() {
         let css = include_str!("../../assets/css/site.css");
@@ -835,10 +836,10 @@ mod tests {
             .nth(1)
             .expect("no zh-Hant block in site.css");
         let heading = block
-            .split("--moss-font-heading:")
+            .split("--moss-font-heading-han:")
             .nth(1)
             .and_then(|rest| rest.split(';').next())
-            .expect("no --moss-font-heading in the zh-Hant block");
+            .expect("no --moss-font-heading-han in the zh-Hant block");
         let lead = TRADITIONAL_FAMILIES[0];
         assert!(
             heading.contains(lead),

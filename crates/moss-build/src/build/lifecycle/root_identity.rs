@@ -144,11 +144,11 @@ fn observe(build_root: &Path) -> RootObservation {
 }
 
 /// Sibling directories a cloud sync client left behind when it renamed the
-/// live root aside to make room for a fresh directory at the same path: the
-/// root's own name, one space, and one or more decimal digits — `build 2`,
-/// `build 31`. A suffix with no separating space (`builder`), a dotted
-/// variant (`build.nosync`), a further-renamed copy (`build 2 copy`), and a
-/// plain file sharing the shape all do not count.
+/// live root aside to make room for a fresh directory at the same path, as
+/// [`crate::nested_roots::is_sync_copy_of`] names them: `build 2`, `build 31`,
+/// a Dropbox or Syncthing conflict copy. A suffix with no separating space
+/// (`builder`), a dotted variant (`build.nosync`), a further-renamed copy
+/// (`build 2 copy`), and a plain file sharing the shape all do not count.
 fn count_renamed_aside_siblings(build_root: &Path) -> usize {
     let (Some(name), Some(parent)) = (
         build_root.file_name().and_then(|n| n.to_str()),
@@ -166,16 +166,9 @@ fn count_renamed_aside_siblings(build_root: &Path) -> usize {
             entry
                 .file_name()
                 .to_str()
-                .is_some_and(|candidate| is_renamed_aside(candidate, name))
+                .is_some_and(|candidate| crate::nested_roots::is_sync_copy_of(candidate, name))
         })
         .count()
-}
-
-pub(crate) fn is_renamed_aside(candidate: &str, name: &str) -> bool {
-    candidate
-        .strip_prefix(name)
-        .and_then(|rest| rest.strip_prefix(' '))
-        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Pure formatter for the `build.root` observability line, in the house
@@ -299,6 +292,7 @@ mod tests {
             "builder",
             "build.nosync",
             "build 2 copy",
+            "build (Ana's conflicted copy 2026-09-29)",
         ] {
             std::fs::create_dir(tmp.path().join(name)).unwrap();
         }
@@ -306,7 +300,7 @@ mod tests {
         // directory can be what a cloud client renamed the root to.
         std::fs::write(tmp.path().join("build 3"), b"not a directory").unwrap();
 
-        assert_eq!(observe(&build).siblings, 2, "only `build 2` and `build 31`");
+        assert_eq!(observe(&build).siblings, 3, "`build 2`, `build 31` and the Dropbox copy");
     }
 
     #[test]

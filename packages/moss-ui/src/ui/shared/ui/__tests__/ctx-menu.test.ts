@@ -78,7 +78,7 @@ describe('openCtxMenu — structure and ARIA', () => {
   it('renders a .ctx-kbd chip (aria-hidden) for items with a shortcut hint', () => {
     open([{ label: 'New Page', kbd: '⌘N', action: vi.fn() }]);
     const chip = document.querySelector('.ctx-item .ctx-kbd')!;
-    expect(chip.textContent).toBe('⌘N');
+    expect(chip.textContent).toBe('Ctrl+N'); // jsdom reports Linux
     expect(chip.getAttribute('aria-hidden')).toBe('true');
   });
 

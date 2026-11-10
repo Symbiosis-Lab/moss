@@ -902,3 +902,16 @@ fn the_settings_decide_what_is_withdrawn() {
     let no_switch = AiSettings::resolve(None, None, None, None);
     assert_eq!(w(no_switch, false), Withdrawn { llms_txt: false, tdmrep_json: true, qr_codes: true });
 }
+
+/// An asset the last publish served under its disk's decomposed spelling and
+/// this build serves composed is the same file at its one address now, not a
+/// removal the publish must refuse.
+#[test]
+fn a_decomposed_address_now_served_composed_is_not_a_removal() {
+    let cur = sealed_with_assets(&[("a.md", "a/index.html", "h-a", b"A")], &[], &["images/cre\u{300}me.png"], &[]);
+    assert!(cur.files().contains_key("images/cr\u{e8}me.png"));
+    let mut prev = snapshot(&cur);
+    let bytes = prev.files.remove("images/cr\u{e8}me.png").unwrap();
+    prev.files.insert("images/cre\u{300}me.png".into(), bytes);
+    assert_eq!(removed_of(&prev, &cur), vec![]);
+}

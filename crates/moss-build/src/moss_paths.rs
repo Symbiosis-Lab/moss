@@ -378,9 +378,8 @@ impl MossPaths {
         self.root.join("build.nosync")
     }
 
-    /// `.moss/build.nosync/cache/` — the PER-MACHINE caches: `hash-index.json`,
-    /// `dep-cache.json`, `frontmatter-scan.json`, `folder-lang.json`,
-    /// `link-meta/`, `manifest-hash-memo.json`, `tmp/`, `local-objects/`.
+    /// `.moss/build.nosync/cache/` — the PER-MACHINE caches; each path method
+    /// below names its own file.
     ///
     /// The local fallback object store is here; the optional shared replica
     /// lives in [`store_dir`] (`.moss/cache/`). Use
@@ -392,6 +391,12 @@ impl MossPaths {
     /// [`store_dir`]: Self::store_dir
     pub fn cache_dir(&self) -> PathBuf {
         self.build_dir().join("cache")
+    }
+
+    /// `.moss/build.nosync/cache/memo/` — what one process kept for the next
+    /// ([`crate::build::cache::MemoFile`]).
+    pub fn memo_dir(&self) -> PathBuf {
+        self.cache_dir().join("memo")
     }
 
     /// `.moss/build.nosync/deploy/` — the per-call copies a deploy hook
@@ -438,6 +443,13 @@ impl MossPaths {
     /// stat. Machine-local: the key and the inode mean nothing on another machine.
     pub fn cache_verified_blobs(&self) -> PathBuf {
         self.cache_dir().join("verified-blobs.json")
+    }
+
+    /// `.moss/build.nosync/cache/verified-video-blobs.json` — the same record for
+    /// the video passes. Its own file, because the seal's save drops every blob
+    /// the seal did not check.
+    pub fn cache_verified_video_blobs(&self) -> PathBuf {
+        self.cache_dir().join("verified-video-blobs.json")
     }
 
     /// `.moss/build.nosync/cache/dep-cache.json` — per-page facade fingerprints from
@@ -658,13 +670,6 @@ impl MossPaths {
     /// Used by syndication plugins, RSS generation, and search.
     pub fn article_map(&self) -> PathBuf {
         self.build_dir().join("article-map.json")
-    }
-
-    /// `.moss/build.nosync/provisional-uids.json` — the note IDs this machine
-    /// builds unpublished pages under, by source path. See
-    /// `build::render::uid_dedup`.
-    pub fn provisional_uids(&self) -> PathBuf {
-        self.build_dir().join("provisional-uids.json")
     }
 
     /// `.moss/build.nosync/profile.jsonl` — build performance metrics.
@@ -1195,7 +1200,7 @@ fn warned_dirs() -> &'static std::sync::Mutex<std::collections::HashSet<std::pat
 }
 
 #[cfg(target_os = "macos")]
-fn exclude_from_cloud_sync(dir: &std::path::Path) {
+pub(crate) fn exclude_from_cloud_sync(dir: &std::path::Path) {
     use std::os::unix::ffi::OsStrExt;
     let (Ok(path), Ok(name)) = (
         std::ffi::CString::new(dir.as_os_str().as_bytes()),
@@ -1273,7 +1278,7 @@ pub(crate) fn has_cloud_sync_marker(_dir: &std::path::Path) -> bool {
 
 /// No-op off macOS — File Provider is an Apple subsystem.
 #[cfg(not(target_os = "macos"))]
-fn exclude_from_cloud_sync(_dir: &std::path::Path) {}
+pub(crate) fn exclude_from_cloud_sync(_dir: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {

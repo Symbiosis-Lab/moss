@@ -56,6 +56,7 @@
 //! FFmpeg which needs per-platform binaries.
 
 use crate::types::content::FileInfo;
+use crate::build::scan::path_collision::on_disk;
 use crate::build::assets::asset_resolver::AssetConfig;
 
 // =============================================================================
@@ -102,7 +103,7 @@ pub(crate) fn register_notebook_sources(
 ) {
     use crate::build::watch::{source_metadata_verdict, SourceVerdict};
     for file in notebook_files {
-        let abs = root.join(&file.path);
+        let abs = on_disk(root, &file.path);
         let prior = previous.sources.get(&file.path);
         if let (Some(meta), Ok(md)) = (prior, std::fs::metadata(&abs)) {
             if let SourceVerdict::Unchanged { refreshed } = source_metadata_verdict(meta, &md, &abs, previous.captured_at) {

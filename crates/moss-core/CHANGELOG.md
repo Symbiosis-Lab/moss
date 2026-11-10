@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-11-09
+
+### Added
+
+- `asset_paths::published_paths(source) -> Vec<String>`: the output paths a media source is published under. A ladder image is published under its own name and its `.webp`, a video under its `.mp4`, `.thumb.jpg`, `.poster.jpg` and every file of the full HLS ladder (a narrower source publishes only a prefix of it), and any other file under its own name. Two sources that share a path overwrite each other in the output. A video extension matches in any letter case.
+
+### Changed
+
+- Design token defaults in `contract/tokens.json` are now for a page in a Latin-script language. `moss-font-body` puts `'Segoe UI'`, `Roboto` and `'Noto Sans'` ahead of the Chinese faces. `moss-font-heading` leads with `'Source Serif 4'`, `'Source Serif Pro'`, `Charter`, `'Bitstream Charter'`, `'Sitka Text'`, `Cambria`, `Georgia` and `'Noto Serif'`, with the Han serifs after them (`'NSimSun'`, `'Times New Roman'` and `Times` are dropped). `moss-font-weight-body` is `400` (was `320`). The Han-first stacks and weight 320 for a Chinese, Japanese or Korean page live in the build's site stylesheet, not in the tokens, so a host that emits the tokens alone now sets every page Latin-first at 400.
+- `contract::custom_props`: the `--moss-font-cjk` default is `var(--moss-font-heading-han)` (was `var(--moss-font-heading)`), the Han heading stack on a page in any language, and its description says so. `--moss-font-heading-han` is defined by the build's site stylesheet; it is neither a token nor a `CUSTOM_PROPS` entry.
+- The `uid` built-in field description in `schema_fields::BUILTIN_FIELDS`, published through `moss describe --json`: eight hex characters derived from the page's path and bytes, the same on every machine, kept when the page later moves or changes, so it cannot be recomputed from the current path or content. It said the uid was random.
+
 ## [0.23.0] - 2026-11-08
 
 ### Added

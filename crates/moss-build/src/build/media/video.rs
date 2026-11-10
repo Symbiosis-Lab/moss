@@ -1206,8 +1206,8 @@ pub(crate) fn run_video_conversion(
 
     use crate::build::cache::{HashIndex, ObjectStore};
     let vid_paths = MossPaths::from_moss_dir(ctx.moss_dir.clone());
-    let objects = ObjectStore::for_site(&vid_paths);
-    let transforms = crate::build::cache::TransformCache::for_site(&vid_paths);
+    let objects = ObjectStore::for_video_run(&vid_paths);
+    let transforms = crate::build::cache::TransformCache::over(&vid_paths, &objects);
     let mp4_params = compression_config.to_params();
     let thumb_params = serde_json::json!({});
 
@@ -1229,7 +1229,7 @@ pub(crate) fn run_video_conversion(
 
         // Map source path through dir_overrides for all OUTPUT operations.
         // source_file below still uses the raw filesystem path for READING.
-        let source_file = project_root.join(&item);
+        let source_file = crate::build::scan::path_collision::on_disk(project_root, &item);
         let mapped_source = resolve_path_with_overrides(&item, &dir_overrides);
 
         // The whole of one video's decision. Every exit is a value, never a
@@ -1563,6 +1563,9 @@ pub(crate) fn run_video_conversion(
     if let Err(e) = hash_index.save_merging(&hash_index_path) {
         log::info!("Failed to save HashIndex: {}", e);
     }
+    if let Err(e) = objects.save_verified_keeping_unchecked() {
+        log::info!("Failed to save the verified video blobs: {}", e);
+    }
 
     log::info!("[epoch {}] Video conversion complete ({} videos, {} converted)", epoch, total, converted_count);
     // Fold in whatever `dispatch_video_conversions` carried forward for
@@ -1658,33 +1661,13 @@ pub(crate) fn compute_video_item_fingerprint(
     Some(format!("{:x}", hasher.finalize()))
 }
 
-/// Every staging key a video's conversion COULD deliver: mp4, thumbnail, hero poster and the
-/// full HLS ladder as a candidate set, whether or not any of it exists yet.
-/// `video_ladder_rungs` truncates from the top only, so any real ladder is a
-/// prefix of this table.
-///
-/// Deliberately unfiltered by presence: the one caller (`begin_run`, below)
-/// uses it to declare what a run just dispatched is ALLOWED to still write —
-/// including a ladder file that doesn't exist yet because the encode hasn't
-/// reached it — so a concurrent build's `sweep_staging` (pipeline.rs) does not
-/// read a file that appears mid-encode as an orphan and delete it. Never feed
-/// this table straight to `emit_video_outputs_via_channel`: see
-/// `present_video_output_keys` for the registration half, which needs the
-/// opposite property.
-fn video_output_keys(mapped: &str) -> Vec<String> {
-    use moss_core::asset_paths;
-    let mut keys = vec![asset_paths::to_mp4(mapped), asset_paths::to_thumb(mapped), asset_paths::to_poster(mapped)];
-    keys.extend(asset_paths::hls_outputs(mapped, &asset_paths::VIDEO_LADDER));
-    keys
-}
-
-/// `video_output_keys`, narrowed to what's actually staged right now — for a
+/// `published_paths`, narrowed to what's actually staged right now — for a
 /// video whose outputs are being registered as ALREADY DELIVERED (skip_paths,
 /// carry_forward_paths), not merely reserved for a run in flight.
 ///
 /// Unlike mp4/thumbnail, having no HLS ladder (a narrow source) or a shorter one
 /// (a smaller source, or a long one the budget narrowed) is an everyday outcome for a
-/// video, not a coherence violation — so unlike `video_output_keys`, the
+/// video, not a coherence violation — so unlike `published_paths`, the
 /// ladder half is never the full static table. It is
 /// `hls::ladder_members_from_master`'s reading of the gate's own references
 /// — the master playlist is the one file a bigger, EARLIER ladder's now-
@@ -1746,9 +1729,10 @@ struct VideoStore {
 impl VideoStore {
     fn open(moss_dir: &Path, config: &crate::build::media::ffmpeg::VideoCompressionConfig) -> Self {
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
+        let objects = crate::build::cache::ObjectStore::for_site(&paths);
         Self {
-            objects: crate::build::cache::ObjectStore::for_site(&paths),
-            transforms: crate::build::cache::TransformCache::for_site(&paths),
+            transforms: crate::build::cache::TransformCache::over(&paths, &objects),
+            objects,
             index: crate::build::cache::HashIndex::load(&paths.cache_hash_index()),
             compression_config: config.clone(),
         }
@@ -2112,9 +2096,8 @@ pub(crate) fn dispatch_video_conversions(
             let dropped_advisory = svc.cancellation.retain_item_fingerprints(&current_paths);
 
             let root = Path::new(&background_ctx.source_path);
-            let objects = crate::build::cache::ObjectStore::for_site(&MossPaths::from_moss_dir(background_ctx.moss_dir.clone()));
             for paths in [&skip_paths, &carry_forward_paths] {
-                emit_video_outputs_via_channel(root, &tx, paths, &background_ctx.staging_dir, &objects, svc.assets.as_deref());
+                emit_video_outputs_via_channel(root, &tx, paths, &background_ctx.staging_dir, &store.objects, svc.assets.as_deref());
             }
             svc.cancellation.forget_landed(
                 skip_paths.iter().map(|(p, _)| p).chain(carry_forward_paths.iter().map(|(p, _)| p)),
@@ -2178,7 +2161,11 @@ pub(crate) fn dispatch_video_conversions(
             svc.cancellation.begin_run(
                 epoch,
                 to_dispatch.iter().filter_map(|(item, fp)| {
-                    let outputs = video_output_keys(&resolve_path_with_overrides(item, &dir_overrides));
+                    // Every name the run may still write, the full ladder included,
+                    // so a concurrent sweep never deletes a file that appears
+                    // mid-encode. Never registered as delivered: see
+                    // `present_video_output_keys`.
+                    let outputs = moss_core::asset_paths::published_paths(&resolve_path_with_overrides(item, &dir_overrides));
                     Some((item.clone(), fp.clone()?, outputs))
                 }),
             );
@@ -3294,7 +3281,7 @@ pub(crate) mod tests {
         crate::ops::watch::worker::deregister(&folder, &worker);
     }
 
-    /// `video_output_keys`' full `VIDEO_LADDER` table is a candidate set, not
+    /// `published_paths`' full `VIDEO_LADDER` table is a candidate set, not
     /// a promise every video has every file of the full table — a narrower ladder (fewer
     /// rungs, from a smaller source or the per-file budget) is
     /// an everyday outcome, not damage. The names above a real ladder's own
@@ -4720,6 +4707,58 @@ pub(crate) mod tests {
             return;
         };
         assert!(outcome.error.is_some(), "an encode that never reached staging must not be reported as success");
+    }
+
+    /// A cached video's blobs are gigabytes: one run hashes each at most once,
+    /// and a later run, a new process, trusts what an earlier one verified while
+    /// the blob's stat holds, also when the run between them saw other videos.
+    #[test]
+    fn a_rerun_over_cached_videos_hashes_none_of_their_blobs() {
+        use crate::build::cache::{blob_residency::HASH_READS, BlobValidation, ObjectStore, RecordMode, TransformCache};
+        let Some(bin) = crate::build::media::ffmpeg::real_ffmpeg() else {
+            eprintln!("skipping: ffmpeg unavailable");
+            return;
+        };
+        let tmp = portable_tmpdir();
+        let (vault, staging, moss_dir) = (tmp.path().join("vault"), tmp.path().join("stage"), tmp.path().join(".moss"));
+        std::fs::create_dir_all(&staging).unwrap();
+        let paths = MossPaths::from_moss_dir(moss_dir.clone());
+        let transforms = TransformCache::for_site(&paths);
+        let videos = ["videos/a.mov", "videos/b.mov"];
+        for item in videos {
+            seed_cached_video_entries(&vault, &moss_dir, item, format!("{item} mp4").as_bytes(), format!("{item} thumb").as_bytes(), Some(format!("{item} poster").as_bytes()));
+            // Validated by an earlier run, so no probe needs real video bytes.
+            let source_oid = ObjectStore::hash_file(&vault.join(item)).unwrap();
+            let mut record = transforms.get_with(&source_oid, RecordMode::Wait).unwrap();
+            for entry in record.transforms.values_mut() {
+                entry.validation = Some(BlobValidation { version: VALIDATOR_VERSION, size: entry.size });
+            }
+            transforms.put(&record, RecordMode::Request).unwrap();
+        }
+
+        let run = |items: &[&str]| {
+            let mp4s: Vec<_> = items.iter().map(|item| staging.join(moss_core::asset_paths::to_mp4(item))).collect();
+            for mp4 in &mp4s {
+                let _ = std::fs::remove_file(mp4);
+            }
+            let ctx = BackgroundContext {
+                video_items: items.iter().map(|item| item.to_string()).collect(),
+                source_path: vault.display().to_string(),
+                staging_dir: staging.clone(),
+                moss_dir: moss_dir.clone(),
+                ffmpeg_bin_path: Some(bin.clone()),
+                ..BackgroundContext::for_test()
+            };
+            HASH_READS.with(|count| count.set(0));
+            let end = run_video_conversion(&BuildServices::headless(), &ctx, 0, None);
+            for (item, mp4) in items.iter().zip(&mp4s) {
+                assert_eq!(std::fs::read(mp4).unwrap(), format!("{item} mp4").as_bytes(), "{end:?}");
+            }
+            HASH_READS.with(|count| count.get())
+        };
+        assert_eq!(run(&videos), 6, "each video's MP4, thumbnail and hero poster, each read once");
+        assert_eq!(run(&["videos/b.mov"]), 0, "a rerun trusts the blobs the last run verified");
+        assert_eq!(run(&["videos/a.mov"]), 0, "a run over other videos kept them");
     }
 
     /// The poster is optional, the MP4 is not: a cache hit whose MP4 links

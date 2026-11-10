@@ -207,9 +207,10 @@ fn bundle_via_scratch_copy(site_dir: &Path) -> SearchIndex {
         index.get_files().await.unwrap()
     });
     SearchIndex {
-        files: files.into_iter().map(bundle_file).collect(),
+        files: files.into_iter().map(bundle_file).collect::<Result<_, _>>().unwrap(),
         pages: rels.len(),
         skipped: 0,
+        left_out: 0,
     }
 }
 
@@ -284,6 +285,16 @@ fn entry_canonicalizes_to_one_byte_order() {
     let sorted = entry(en, zh);
     assert_eq!(canonical_entry(entry(zh, en).as_bytes()).unwrap(), sorted.as_bytes());
     assert_eq!(canonical_entry(sorted.as_bytes()).unwrap(), sorted.as_bytes());
+}
+
+/// An entry moss cannot reorder fails the bundle instead of shipping in
+/// Pagefind's run-to-run order; every other file passes through untouched.
+#[test]
+fn an_entry_of_unknown_shape_fails_the_bundle() {
+    let file = |name: &str, contents: &str| pagefind::api::SyntheticFile { filename: name.into(), contents: contents.as_bytes().to_vec() };
+    let unknown = r#"{"version":"1.6.0","languages":{},"include_characters":[],"new_field":1}"#;
+    assert!(bundle_file(file(ENTRY_FILE, unknown)).is_err());
+    assert_eq!(bundle_file(file("fragment/en_1.pf_fragment", unknown)).unwrap().bytes, unknown.as_bytes());
 }
 
 /// An edit re-segments only the page it touched; every other page replays its
@@ -424,4 +435,18 @@ fn a_redirect_stub_is_not_indexed() {
     let index = build_search_index(dir.path()).expect("index should build");
     assert_eq!(index.pages, SITE_PAGES);
     assert_eq!(index.skipped, 0, "leaving the stub out is not a skip");
+}
+
+/// Pages reach Pagefind in composed name order, so an accented name spelled
+/// decomposed on one disk and composed on another gets the same page number.
+#[test]
+fn pages_reach_the_index_in_composed_name_order() {
+    use unicode_normalization::UnicodeNormalization;
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["e\u{301}clair.html", "f.html", "\u{e9}t\u{e9}.html"] {
+        std::fs::write(dir.path().join(name), format!("<html><body><p>{name}</p></body></html>")).unwrap();
+    }
+    let pages = read_pages(dir.path()).pages;
+    let order: Vec<String> = pages.iter().map(|p| p.rel_path.nfc().collect()).collect();
+    assert_eq!(order, ["f.html", "\u{e9}clair.html", "\u{e9}t\u{e9}.html"]);
 }

@@ -384,6 +384,11 @@ pub struct SiteResult {
     #[serde(skip)]
     #[specta(skip)]
     pub term_index: crate::build::terms::TermIndex,
+    /// The moment every past/upcoming decision in this build was made as of
+    /// (`inputs::effective_now`), for passes that run after render.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub now: chrono::NaiveDateTime,
 }
 
 /// Hash map of generated site files for change detection.
@@ -565,8 +570,10 @@ pub struct PageMeta {
     /// `draft: true`: built and previewed, never published.
     #[serde(default)]
     pub draft: bool,
-    /// The note ID the page was built under, which the publish that puts it
-    /// online stamps into its frontmatter.
+    /// The uid this build gave the page. A publish writes this one into the
+    /// page and records it, so it must come from the generation being
+    /// published, not from build output a later build overwrites. `None` in a
+    /// manifest written before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
 }
@@ -575,6 +582,23 @@ impl SiteHashes {
     /// Create a new empty hash map
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether this build may have served `source` under `uid`. A manifest
+    /// that predates per-page uids answers yes for every page it built, since
+    /// it cannot rule the uid out.
+    pub fn built_under(&self, source: &str, uid: &str) -> bool {
+        match self.page_meta.get(source) {
+            Some(meta) => meta.uid.as_deref().map_or(true, |built| built == uid),
+            None => self.sources.contains_key(source),
+        }
+    }
+
+    /// The path the site is served under, from `site_url`: what
+    /// `ship::apply_transform` puts in front of every root-relative URL, so
+    /// every hash of shipped bytes depends on it.
+    pub fn mount(&self) -> crate::build::site_meta::mount::Mount {
+        self.site_url.as_deref().map_or_else(crate::build::site_meta::mount::Mount::root, crate::build::site_meta::mount::Mount::of_site_url)
     }
 
     /// Insert a file hash

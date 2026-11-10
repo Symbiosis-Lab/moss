@@ -18,17 +18,16 @@
        Bucket C (app-only): name not in tokens.json at all — no constraint.
   */
 
-  /* [B] diverges from tokens.json: app-shell uses compact system-ui stack;
-     the site's full CJK stack (PingFang SC, Microsoft YaHei, Noto Sans SC …)
-     is not needed in app-chrome UI text. */
+  /* [B] diverges from tokens.json: app chrome and the editor's reading text
+     use the system UI font; the system's own font fallback draws CJK, so the
+     site's explicit CJK stack (PingFang SC, Microsoft YaHei, Noto Sans SC …)
+     is not repeated here. */
   --moss-font-body: "Segoe UI Variable Text", system-ui, -apple-system, sans-serif;
   /* [A] MIRRORED — must match tokens.json moss-font-heading.
      Heading font stack — serif by default for editorial weight. If the two
      ever drift, surfaces like the folder-mode <h1> and the preview
-     .moss-folder-title will look like two different titles for the same string.
-     Use tokens.json's serif stack so headings keep their editorial weight
-     independently of the body font. */
-  --moss-font-heading: 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSongti', 'NSimSun', 'SimSun', 'Source Serif 4', 'Source Serif Pro', 'Times New Roman', Times, serif;
+     .moss-folder-title will look like two different titles for the same string. */
+  --moss-font-heading: 'Source Serif 4', 'Source Serif Pro', Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, 'Noto Serif', 'Source Han Serif SC', 'Noto Serif CJK SC', 'Songti SC', 'STSongti', 'SimSun', serif;
   /* [B] diverges from tokens.json: compact 3-face mono stack; site stack
      includes Cascadia Code, JetBrains Mono, Menlo, Consolas etc. */
   --moss-font-mono: ui-monospace, SFMono-Regular, monospace;
@@ -38,13 +37,13 @@
      match it — editor chrome isn't "reading" text. */
   --moss-font-size: 1.125rem;
   /* [A] MIRRORED — must match tokens.json moss-font-weight-body. */
-  --moss-font-weight-body: 320;
+  --moss-font-weight-body: 400;
 
   /* [A] MIRRORED — must match tokens.json moss-size-2xl.
      Typography scale token — kept in sync so the app-shell folder-mode
      <h1> and preview .moss-folder-title match site-rendered heading sizes.
-     Extend the existing scale (xs, sm, lg, xl) only when an app-shell
-     consumer needs an additional size. */
+     Extend the scale (xs, sm, lg, xl) only when an
+     app-shell consumer needs it. */
   --moss-size-2xl: 1.625rem; /* 26px — folder-mode site header, preview .moss-folder-title */
   /* [B] diverges from tokens.json (dark): tokens.json is single-value (#2d5a2d);
      this file adds a dark variant (#4a7c4a) in the [data-theme="dark"] block below. */
@@ -224,12 +223,11 @@
      `max-height: calc(100% - titlebar - 16px)` this yields an 8px gap above
      AND below the frame. Vertical sibling of --moss-safe-center-x. */
   --moss-safe-center-y: calc(50% + var(--moss-titlebar-height) / 2);
-  /* Window corner radius. Keep in sync with the desktop app's native window
-     corner (its WINDOW_CORNER_RADIUS); that constant applies to the NSWindow
-     CALayer, this token applies
-     in CSS for nested surfaces (mobile preview frame) that should visually
-     match the window corner. */
-  --moss-radius-window: 24px;
+  /* The window's corner, for surfaces that echo it (modals, the mobile preview
+     frame). The desktop init script sets it from the app's WINDOW_CORNER_RADIUS:
+     24px on macOS, 8px on Windows and Linux. 24px stays the default for
+     carriers with no init script (the browser, iOS). */
+  --moss-window-radius: 24px;
   /* Overridden at runtime from Rust TITLEBAR_HEIGHT (see generate_compile_init_script).
      The value here is a fallback for browser-preview / standalone CSS inspection;
      moss always sets it authoritatively via the webview initialization script. */
@@ -323,9 +321,6 @@
   --moss-verb-added: #4a7c4a;
   --moss-verb-edited: #4a80b8;
   --moss-verb-deleted: #b86a66;
-
-  /* --- Settings modal --- */
-  --moss-window-radius: 24px;               /* mirrors Rust WINDOW_CORNER_RADIUS; runtime override in init script */
 
   /* --- Analytics geo map --- */
   --moss-color-land-neutral: #eeece7;

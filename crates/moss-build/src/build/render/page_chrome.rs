@@ -261,7 +261,7 @@ impl PageOwnedAssets {
             let Some(page) = page_stems.get(stem_key(&file.path)) else { continue };
             let label = if is_css { "page stylesheet" } else { "page script" };
             let Some(text) = crate::build::cloud_readiness::read_optional_build_input(
-                &root.join(&file.path), label, evidence,
+                &crate::build::scan::path_collision::on_disk(root, &file.path), label, evidence,
             )? else { continue };
             let owned = Owned { source: file.path.clone(), hash: compute_content_hash(&text) };
             let pair = by_page.entry((*page).to_string()).or_default();

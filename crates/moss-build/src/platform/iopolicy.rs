@@ -106,9 +106,10 @@ pub fn set_dataless_fail_fast() -> bool {
 /// the same thread — silently re-arming the blocking reads the fail-fast policy
 /// exists to prevent. Apple's TN3150 handles this by saving the prior value and
 /// restoring it around the region. moss avoids the problem instead: the only
-/// callers are the dedicated, long-lived threads in `build::cloud_prefetch`,
-/// which do nothing else for their whole lifetime, so set-once at thread start
-/// is both correct and simpler than save/restore.
+/// callers are threads moss creates for this and nothing else (the long-lived
+/// readers in `build::cloud_prefetch`, or a thread spawned for one folder
+/// listing that exits after it), so set-once at thread start is both correct
+/// and simpler than save/restore.
 ///
 /// Returns `false` (and logs) if the policy could not be set — the caller then
 /// still works, but its reads fail `EDEADLK` instead of downloading, which the

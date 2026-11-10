@@ -7,6 +7,7 @@
  * WCAG 2.2 SC 1.4.13: keyboard-triggerable (focusin), dismissible (Escape),
  * hoverable (grace period), screen-reader accessible (role=tooltip, aria).
  */
+import { sitePath, siteUrl } from "./mount";
 import { clampLeft, maxSurfaceWidth, verticalSlot } from "./viewport";
 
 (function () {
@@ -70,7 +71,7 @@ import { clampLeft, maxSurfaceWidth, verticalSlot } from "./viewport";
 
   function ensureData(cb: () => void): void {
     if (data) return cb();
-    fetch("/_moss/previews.json")
+    fetch(siteUrl("/_moss/previews.json"))
       .then(r => r.json())
       .then((d: PreviewData) => { data = d; cb(); })
       .catch(() => { /* silent — previews are optional */ });
@@ -98,7 +99,7 @@ import { clampLeft, maxSurfaceWidth, verticalSlot } from "./viewport";
       // %E6%96%87%E6%A1%A3). Without decoding, the lookup misses for every CJK
       // (or space/Unicode) path and the popup silently never shows. Mirrors the
       // decode already done in thumb-swap.ts / iframe-bridge.ts / path-utils.ts.
-      let path = decodeURIComponent(new URL(link.href).pathname);
+      let path = sitePath(decodeURIComponent(new URL(link.href).pathname));
       if (path.charAt(path.length - 1) !== "/" && path.indexOf(".") === -1) {
         path = path + "/";
       }

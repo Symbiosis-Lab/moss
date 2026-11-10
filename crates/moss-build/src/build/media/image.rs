@@ -41,6 +41,7 @@
 //! follow-up (see plan "Risks & follow-ups" → wide-gamut color).
 //! TODO: preserve ICC profile via WebPMux
 
+use crate::build::scan::path_collision::on_disk;
 use crate::moss_paths::MossPaths;
 use crate::types::assets::Failure;
 use crate::types::services::{BackgroundContext, BuildServices};
@@ -692,7 +693,7 @@ pub(crate) fn collect_images_for_conversion(
     let mut items = Vec::new();
 
     for media_meta in &project_structure.image_files {
-        let file_path = Path::new(&project_structure.root_path).join(&media_meta.path);
+        let file_path = on_disk(Path::new(&project_structure.root_path), &media_meta.path);
 
         // Resolve the source OID by STAT-MATCH ONLY — never hash here. This runs
         // in the blocking phase that gates first paint, and hashing hundreds of
@@ -1658,6 +1659,7 @@ fn suppressed_variants_for(
     crate::build::media::orphan_prune::suppressed_variants(
         staging_dir,
         &previous.pruned_image_outputs,
+        Some(&paths.memo_dir()),
     )
 }
 
@@ -1962,7 +1964,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         }
 
         let rel_source_str = item.source_path.to_string_lossy().to_string();
-        let source_file = project_root.join(&item.source_path);
+        let source_file = on_disk(project_root, &item.source_path.to_string_lossy());
         let filename = item
             .source_path
             .file_name()

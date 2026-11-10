@@ -5,6 +5,7 @@
 //! Asset-heavy work (images, static dirs, video conversion) is deferred to
 //! `BackgroundContext` and handled by the background phase in `pipeline.rs`.
 
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::build::cloud_readiness;
 use crate::build::phase::PhaseTrace;
 use crate::build::cli_output::log_warn_problem;
@@ -222,6 +223,23 @@ pub(crate) fn source_metadata(stat: Option<crate::build::stat::FileStat>, bytes:
     crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat)
 }
 
+/// The publish record, for the uids a build gives pages. A record still
+/// syncing holds the publish until a build has read it, so no page is
+/// published under a uid derived without it.
+fn load_publish_record(
+    paths: &crate::moss_paths::MossPaths,
+    input_evidence: &crate::build::cloud_ledger::InputEvidence,
+) -> crate::build::manifest::live_baseline::Baseline {
+    use crate::build::manifest::live_baseline::{self, Baseline, Unreadable};
+    let baseline = live_baseline::load(paths);
+    if let Baseline::Unreadable(why @ Unreadable::Withheld) = baseline {
+        let records = paths.deploy_records_dir();
+        input_evidence.require(&records, crate::build::cloud_ledger::InputRole::GeneratedData);
+        input_evidence.read_error(&records, why.describe().to_string());
+    }
+    baseline
+}
+
 /// What the manifest remembers about a page between builds, `draft` included:
 /// that flag is how a page carried forward unrendered stays out of the publish.
 fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::content::PageMeta {
@@ -278,7 +296,7 @@ pub fn generate_blocking_content(
     let output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
         site_config, pending, false, false,
-        crate::build::folder_embed::upcoming::now(),
+        crate::build::inputs::build_instant(),
     )?;
     // No slot pass follows this entry point, so its pages are written as rendered.
     crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
@@ -295,7 +313,8 @@ pub fn generate_blocking_content(
 /// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
 /// rendered pages in `pending` for the slot pass to write. `defer_title_cards`
 /// plans sharing cards for the background phase; standalone callers pass false.
-/// `now` is the build's one clock for every past/upcoming decision.
+/// `instant` is the moment the build is as of; every past/upcoming decision
+/// reads the day it falls on in the site's zone (`inputs::effective_now`).
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -307,7 +326,7 @@ pub fn generate_blocking_content_for_build(
     pending: &mut PendingManifest,
     exits_after_build: bool,
     defer_title_cards: bool,
-    now: chrono::NaiveDateTime,
+    instant: jiff::Timestamp,
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
     let mut og_requests = Vec::new();
@@ -676,8 +695,7 @@ pub fn generate_blocking_content_for_build(
         let focused_source = services.and_then(|s| s.session.as_ref())
             .and_then(|s| s.preview_requirement())
             .and_then(|requirement| match requirement.source {
-                crate::system::folder_session::PreviewSource::File(path) =>
-                    Some(moss_core::slug::normalize_separators(&path.to_string_lossy())),
+                crate::system::folder_session::PreviewSource::File(path) => Some(path),
                 _ => None,
             });
         let rendered: Vec<Option<(ParsedDocument, Option<(String, Option<crate::build::stat::FileStat>)>)>> = project_structure
@@ -715,7 +733,7 @@ pub fn generate_blocking_content_for_build(
                             advisories: vec![],
                         });
                     }
-                    let source_file_path = Path::new(source_path).join(&file_info.path);
+                    let source_file_path = on_disk(Path::new(source_path), &file_info.path);
 
                     // Replay the previous build's parse when
                     // this page's bytes AND every file transcluded into it are
@@ -778,7 +796,7 @@ pub fn generate_blocking_content_for_build(
                         &content,
                         &content_graph,
                         &|path| {
-                            let full_path = Path::new(source_path).join(path);
+                            let full_path = on_disk(Path::new(source_path), path);
                             if focused_source.as_deref() == Some(file_info.path.as_str())
                                 && crate::build::icloud::is_still_in_the_cloud(&full_path) {
                                 crate::build::cloud_readiness::request_download_foreground(&full_path);
@@ -1030,11 +1048,17 @@ pub fn generate_blocking_content_for_build(
     // state into a parsed document.
     parse_session.finish(&documents);
 
-    // Which uid each page is built under: its own, the published one, or a
-    // provisional one. After the snapshot above, so a replayed page never
-    // carries a uid this pass assigned; nothing here writes the author's files.
+    // Which uid each page is built under: its own, the published one, or one
+    // derived from its path and bytes. After the snapshot above, so a replayed
+    // page never carries a uid this pass assigned; nothing here writes the
+    // author's files.
     let reduce_pre_start = std::time::Instant::now();
-    let resolution = super::uid_dedup::assign_note_ids(&mut documents, &paths, |src| previous_hashes.sources.contains_key(src));
+    let resolution = super::uid_dedup::assign_note_ids(
+        &mut documents,
+        || load_publish_record(&paths, &input_evidence),
+        |src, uid| previous_hashes.built_under(src, uid),
+        |src| page_source_hashes.get(src).map(|meta| meta.hash.clone()),
+    );
     // A deferral is only logged (by `resolve_duplicate_uids`): there is nothing for the author to do.
     if !resolution.reassignments.is_empty() {
         for r in &resolution.reassignments {
@@ -1107,7 +1131,7 @@ pub fn generate_blocking_content_for_build(
     // casing ("Writings") even though the URL slug is lowercased ("writings").
     let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
     let editions: moss_core::home::Editions;
-    let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar) = {
+    let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar, now) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
         // none of it is skippable by the parse cache — this is the floor on
@@ -1154,6 +1178,7 @@ pub fn generate_blocking_content_for_build(
         // from listings).
         apply_cascade(&mut documents, markdown.fields);
         log::debug!(target: "timing", "[reduce] apply_cascade: {:?}", reduce_start.elapsed());
+        let now = crate::build::inputs::effective_now(instant, crate::build::inputs::site_zone(&documents));
         crate::build::scan::section_color::apply_section_colors(&mut documents);
 
         // Populate `direct_children_sort` on every folder index. Must run AFTER
@@ -1223,6 +1248,10 @@ pub fn generate_blocking_content_for_build(
             source_path,
             site_config.site_url_override.as_deref(),
         )?;
+        // Record what this build actually resolved — the deploy guard compares
+        // it against a fresh resolution and rebuilds when they disagree. Before
+        // anything else registers: a stylesheet's hash depends on its mount.
+        pending.set_site_url(site_url.as_str());
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
         // A listing row names its page's language, so every page has its tag before any listing is drawn.
@@ -1393,12 +1422,9 @@ pub fn generate_blocking_content_for_build(
             show_rss_in_footer,
             term_index,
             calendar,
+            now,
         )
     };
-
-    // Record what this build actually resolved — the deploy guard compares
-    // it against a fresh resolution and rebuilds when they disagree.
-    pending.set_site_url(site_url.as_str());
 
     // Compute CSS hash for cache busting BEFORE HTML generation
     // This ensures the preview iframe loads fresh CSS/JS after rebuilds
@@ -1681,10 +1707,9 @@ pub fn generate_blocking_content_for_build(
     log::debug!(target: "timing", "[render] verdict computed: {:?}", total_start.elapsed());
 
     // Built once here rather than once per page. See `BuildShared`.
-    let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
+    let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides, now);
     shared.calendar = calendar;
     shared.theme_modules = theme_modules;
-    shared.now = now;
 
     let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
     let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
@@ -1889,7 +1914,7 @@ pub fn generate_blocking_content_for_build(
         // gets its cover materialized here.
         if !external_urls_this_build.is_empty() {
             let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
-            let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir);
+            let mut link_meta_cache = crate::build::page::link_meta::read_link_meta_from_cache(&url_refs, &moss_dir, Some(&input_evidence));
             let _trace = PhaseTrace::start("remote_cover_materialize");
             crate::build::media::remote_cover::materialize_remote_covers(
                 &mut link_meta_cache,
@@ -2574,7 +2599,7 @@ pub fn generate_blocking_content_for_build(
     // Build and save article map for syndication support
     // This creates a mapping from URL paths to article metadata
     generated_index_urls.sort(); // HashMap iteration order above; the persisted map must be stable
-    let article_map = build_article_map(
+    let article_map = std::sync::Arc::new(build_article_map(
         &documents,
         &project_structure.dirs,
         &dir_overrides,
@@ -2582,10 +2607,13 @@ pub fn generate_blocking_content_for_build(
         &generated_index_urls,
         &term_index,
         &editions,
-    );
+    ));
     if let Err(e) = article_map.save(&moss_dir) {
         log::info!("⚠️ Failed to save article map: {}", e);
     }
+    // The publish of this render's generation reads this map, never the file
+    // above, which the next render replaces.
+    pending.record_articles(article_map.clone());
 
     // `.moss/build.nosync/inventory.json` — what `moss list` reads back. Written here
     // rather than derived from the article map because the signals that answer
@@ -2939,7 +2967,7 @@ pub fn generate_blocking_content_for_build(
             .iter()
             .chain(project_structure.evicted_paths.iter())
             .filter_map(|p| p.strip_prefix(root_path).ok())
-            .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+            .map(logical_path)
             .collect::<std::collections::BTreeSet<_>>();
         // Fires per evicted page on every build. One INFO count; paths at DEBUG.
         let mut carried = 0usize;
@@ -3330,6 +3358,7 @@ pub fn generate_blocking_content_for_build(
         staging_dir: output_dir.to_path_buf(),
         moss_dir: moss_dir.clone(),
         previous_hashes: previous_hashes.clone(),
+        mount: pending.mount(),
         start_time: std::time::Instant::now(),
         dir_overrides,
         spa_defaults,
@@ -3356,6 +3385,7 @@ pub fn generate_blocking_content_for_build(
             deferred_paths,
             missing_references,
             term_index,
+            now,
         },
         background_ctx,
         // Surface the parsed page slice to the caller so

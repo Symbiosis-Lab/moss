@@ -224,6 +224,14 @@ impl UploadProgressState {
         }
     }
 
+    /// Credit bytes the destination confirmed: the upload phase's only proof
+    /// that the publish is moving, and so the only place it bumps the stall
+    /// clock.
+    pub fn credit_bytes(&self, n: u64) {
+        self.bytes_uploaded.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+        crate::infra::liveness::bump();
+    }
+
     /// An upload task has started work on `path`.
     pub fn begin_file(&self, path: &str, size: u64) {
         self.lock_in_flight().push((path.to_string(), size));

@@ -13,9 +13,9 @@
 //! - **Duplicate-uid resolution** ([`crate::build::render::uid_dedup`]) uses
 //!   published identity as its first tiebreak. Without it, a collision falls to
 //!   date/birth-time heuristics that a synced vault systematically reverses,
-//!   and the loser's frontmatter is rewritten with a fresh uid — which cannot
-//!   be undone, because a uid is random and joins live comment threads and
-//!   signed moderation history.
+//!   and the loser is given a fresh uid, which its next publish writes into
+//!   it and nothing can undo, because a published uid joins live comment
+//!   threads and signed moderation history.
 //!
 //! Until the uid-remint fix landed, that came from a second file, `deployed-article-map.json`: a
 //! byte copy of the working `ArticleMap`, carrying every article's full markdown
@@ -69,8 +69,8 @@ pub use crate::build::manifest::change_set::LiveEntry;
 /// anywhere is a URL someone can have linked to.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LiveBaseline {
-    /// Sorted by `url`, so the indexes below are deterministic regardless of
-    /// which record was read first.
+    /// In a deterministic order, whichever record was read first: as loaded
+    /// ([`load`]), the earliest-landed record's entries come first.
     pub entries: Vec<LiveEntry>,
 }
 
@@ -147,7 +147,7 @@ pub enum Baseline {
 
 impl LiveBaseline {
     /// uid → the URL it was published at. First entry wins, which is stable
-    /// because `entries` is sorted; a uid live at two URLs is malformed either
+    /// because `entries` is ordered; a uid live at two URLs is malformed either
     /// way.
     pub fn urls_by_uid(&self) -> HashMap<&str, &str> {
         let mut index = HashMap::new();
@@ -155,6 +155,18 @@ impl LiveBaseline {
             index.entry(e.uid.as_str()).or_insert(e.url.as_str());
         }
         index
+    }
+
+    /// Source path → the uid a publish put live there, for a build to use while
+    /// the page's own frontmatter names none. Where two targets' records
+    /// disagree (a stamp that failed after one publish), the earliest-landed
+    /// one wins, so every machine picks the same uid.
+    pub fn uid_by_path(&self) -> HashMap<String, String> {
+        let mut uids = HashMap::new();
+        for e in self.entries.iter().filter(|e| !e.source_path.is_empty()) {
+            uids.entry(e.source_path.clone()).or_insert_with(|| e.uid.clone());
+        }
+        uids
     }
 
     /// uid → every source path recorded live under it.
@@ -230,19 +242,6 @@ fn record_facts(record: &PublishedSnapshot) -> RecordFacts {
     }
 }
 
-/// Source path → uid, for every article the build placed.
-///
-/// This is the projection a publish records. It is deliberately tiny: the
-/// article map it comes from carries every page's markdown and rendered HTML,
-/// and none of that is anyone's business once the page is live.
-pub fn uids_of(map: &ArticleMap) -> HashMap<String, String> {
-    map.articles
-        .values()
-        .filter_map(|info| Some((info.source_path.clone(), info.uid.clone()?)))
-        .filter(|(source_path, _)| !source_path.is_empty())
-        .collect()
-}
-
 /// The pre-fix file, in the two places it has lived.
 ///
 /// `.moss/deploy/` since 2026-08-17, `.moss/data/` before that. A project that
@@ -264,12 +263,21 @@ fn legacy_paths(paths: &MossPaths) -> [PathBuf; 2] {
 /// disagree only by being written at different publishes, and a URL either of
 /// them knows is a URL someone can have linked to — so preferring one would
 /// drop live pages for the duration of the migration, which is the permanent
-/// 404 this module exists to prevent.
+/// 404 this module exists to prevent. The entries come in landed order,
+/// earliest record first and the pre-fix snapshot last.
 pub fn load(paths: &MossPaths) -> Baseline {
-    let records = match read_records(paths) {
+    let mut records = match read_records(paths) {
         Ok(records) => records,
         Err(why) => return Baseline::Unreadable(why),
     };
+    let landed = |r: &PublishedSnapshot| chrono::DateTime::parse_from_rfc3339(&r.published_at).ok();
+    records.sort_by(|a, b| {
+        let by_time = match (landed(a), landed(b)) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (a, b) => b.is_none().cmp(&a.is_none()),
+        };
+        by_time.then_with(|| a.target.cmp(&b.target))
+    });
 
     let mut entries: Vec<LiveEntry> = Vec::new();
     for record in &records {
@@ -315,7 +323,7 @@ pub fn load(paths: &MossPaths) -> Baseline {
     if entries.is_empty() && records.is_empty() {
         return Baseline::Absent;
     }
-    Baseline::Present(sorted(entries))
+    Baseline::Present(LiveBaseline { entries })
 }
 
 /// Every publish record on disk, or why none of them could be trusted.
@@ -425,24 +433,24 @@ fn read_legacy(paths: &MossPaths) -> Baseline {
 }
 
 /// A whole `ArticleMap`'s own view of what is live. Its keys ARE the pretty
-/// URLs, so no join is needed.
-///
-/// `pub(crate)` for the rename tests, which describe a baseline the way the
-/// build already has one in hand.
+/// URLs, so no join is needed. Only the pre-fix snapshot and the rename tests
+/// still describe a baseline this way.
 pub fn from_article_map(map: &ArticleMap) -> LiveBaseline {
-    sorted(
-        map.articles
-            .iter()
-            .filter_map(|(url, info)| {
-                Some(LiveEntry {
-                    uid: info.uid.clone()?,
-                    url: url.clone(),
-                    source_path: info.source_path.clone(),
-                    title: info.title.clone(),
-                })
-            })
-            .collect(),
-    )
+    sorted(map.articles.iter().filter_map(|(url, info)| {
+        Some(LiveEntry { uid: info.uid.clone()?, url: url.clone(), source_path: info.source_path.clone(), title: info.title.clone() })
+    }).collect())
+}
+
+/// What a generation puts live: each published page with a uid, articles and
+/// folder pages alike, at its own address. Read from the seal, so a build that
+/// replaced the article map while this generation was uploading cannot change
+/// what its publish records.
+pub fn from_sealed(sealed: &crate::build::manifest::SealedManifest) -> LiveBaseline {
+    let outputs = sealed.published_source_to_output();
+    let entries = sealed.published_uids().filter_map(|(source, page)| {
+        Some(LiveEntry { uid: page.uid.clone()?, url: to_pretty_url(outputs.get(source)?), source_path: source.to_string(), title: page.title.clone() })
+    }).collect();
+    sorted(entries)
 }
 
 fn sorted(mut entries: Vec<LiveEntry>) -> LiveBaseline {

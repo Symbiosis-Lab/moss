@@ -33,3 +33,13 @@ fn a_page_link_on_a_site_never_built_opens_the_source_the_lint_follows() {
     assert_eq!(info.title, "The page");
     assert!(!info.generated);
 }
+
+#[test]
+fn a_page_named_decomposed_on_disk_opens_under_its_composed_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("index.md"), "[[Caf\u{e9}]]\n").unwrap();
+    std::fs::write(tmp.path().join("Cafe\u{301}.md"), "---\ntitle: The cafe\n---\nBody.\n").unwrap();
+    let info = reference_card_for("Caf\u{e9}", "index.md", tmp.path()).unwrap();
+    assert_eq!(info.source_path.as_deref(), Some("Caf\u{e9}.md"));
+    assert_eq!(info.title, "The cafe");
+}

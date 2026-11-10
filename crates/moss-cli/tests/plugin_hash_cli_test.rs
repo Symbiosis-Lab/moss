@@ -53,5 +53,48 @@ fn install_without_an_id_or_outside_a_site_fails_before_any_network() {
     let tmp = tempfile::tempdir().unwrap();
     let outside = moss(&["install", "lantern", tmp.path().to_str().unwrap()]);
     assert_eq!(outside.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&outside.stderr).contains("not inside a moss site"));
+    assert!(String::from_utf8_lossy(&outside.stderr).contains("not a moss site root"));
+}
+
+#[test]
+fn install_rejects_an_explicit_nested_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let site = tmp.path().join("site");
+    let nested = site.join("posts");
+    std::fs::create_dir_all(site.join(".moss")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .args(["plugin", "install", "lantern", nested.to_str().unwrap()])
+        .env("HOME", tmp.path())
+        .env("MOSS_HOME", tmp.path().join("tooling"))
+        .output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("not a moss site root") && err.contains(nested.to_str().unwrap()), "{err}");
+    assert!(!site.join(".moss/plugins").exists());
+}
+
+#[test]
+fn install_does_not_accept_relocated_tooling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tooling = tmp.path().join("tooling/.moss");
+    let nested = tmp.path().join("tooling/notes");
+    std::fs::create_dir_all(&tooling).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    for explicit in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_moss-cli"));
+        command.args(["plugin", "install", "lantern"])
+            .env("HOME", tmp.path())
+            .env("MOSS_HOME", &tooling)
+            .current_dir(&nested);
+        if explicit {
+            command.arg(tooling.parent().unwrap());
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let err = String::from_utf8_lossy(&output.stderr);
+        let expected = if explicit { "not a moss site root" } else { "not inside a moss site" };
+        assert!(err.contains(expected) && err.contains("tooling"), "{err}");
+        assert!(!tooling.join("plugins").exists());
+    }
 }

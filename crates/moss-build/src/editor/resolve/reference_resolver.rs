@@ -1,5 +1,6 @@
 //! Host adapter for the portable editor reference resolver.
 use crate::build::scan::article_map::ArticleMap;
+use crate::build::scan::path_collision::on_disk;
 use super::asset_resolver::{compute_from_source, reference_input, enrich, EditorScope};
 pub use moss_core::resolve::editor::{RefTarget, EditorReferenceResolution, FolderEmbedInfo};
 use std::path::Path;
@@ -18,7 +19,7 @@ pub fn resolve_references_batch(targets: &[RefTarget], from_file: &str, project_
     }
     moss_core::resolve::resolve_references(&input).into_iter().map(|mut out| {
         out.resolved = out.resolved.and_then(|asset| enrich(asset, &root));
-        out.resolved_path = out.resolved_path.map(|path| root.join(path).to_string_lossy().to_string());
+        out.resolved_path = out.resolved_path.map(|path| on_disk(&root, &path).to_string_lossy().to_string());
         out
     }).collect()
 }

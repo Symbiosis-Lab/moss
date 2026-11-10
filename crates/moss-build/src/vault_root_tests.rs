@@ -260,18 +260,13 @@ fn a_folder_without_dot_moss_is_not_a_document() {
 
 #[test]
 fn containing_never_walks_up_into_the_home_directory() {
-    // Regression: right-clicking `~/repos/project/` (no `.moss/`) used to walk up and
-    // find `~/.moss/` — moss's app-level cache, not a project marker — and then build
-    // the entire home directory.
-    let home = dirs::home_dir().expect("home dir must exist for this test");
-    let project = home.join(format!("moss_test_no_walkup_{}", uuid::Uuid::new_v4()));
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let project = home.join("project");
+    fs::create_dir_all(home.join(".moss")).unwrap();
     fs::create_dir_all(&project).unwrap();
 
-    let root = VaultRoot::containing(&project);
-    assert_ne!(root.path(), home.as_path(), "must NOT elect the home directory");
-    assert_eq!(root.path(), project.as_path());
-
-    let _ = fs::remove_dir_all(&project);
+    assert_eq!(VaultRoot::find_containing_below(&project, home, Some(home)), None);
 }
 
 #[test]

@@ -48,6 +48,8 @@ pub enum Owner {
 pub enum SiteAccess {
     Authorized,
     NotOwner,
+    /// The owner's key, not signed in to this site.
+    NotSignedIn,
     /// The server does not know the site, or is too old to say.
     NotFound,
 }
@@ -67,7 +69,7 @@ pub struct DryRun {
     pub refusal: Option<crate::deploy::Refusal>,
     /// The site a first publish would register. Not registered.
     pub would_register: Option<String>,
-    /// A deploy creates a signing key when the site has none. Not created.
+    /// A first publish creates the folder's signing key. Not created.
     pub would_create_key: bool,
     /// A first publish would register a site, and this folder's key has no
     /// email recorded, so the server will most likely refuse until the key is
@@ -198,16 +200,15 @@ impl DryRun {
             Transfer::NotCounted => out.push_str("Transfer: not counted for a deploy plugin.\n"),
         }
         if let Some(site) = &self.would_register {
-            out.push_str(&format!("A first publish would register the site \"{site}\" and create a signing key. Neither was done.\n"));
-        } else if self.would_create_key {
-            out.push_str("This folder's site has no signing key; a real deploy would create a new one. It was not created.\n");
+            out.push_str(&format!("A first publish would register the site \"{site}\". Nothing was registered.\n"));
         }
         if self.needs_verification {
-            out.push_str("This folder's key is not linked to an email yet, so registering would need verification: a real deploy needs `--email <address>` (the account the site should belong to) to be sent a sign-in link. Nothing was sent.\n");
+            out.push_str("This folder isn't signed in yet: a real deploy needs `--email <address>`. Nothing was sent.\n");
         }
         out.push_str(&match &self.owner {
             Owner::Answered { site, access: SiteAccess::Authorized } => format!("Publishing: this folder's key may publish the site \"{site}\".\n"),
             Owner::Answered { site, access: SiteAccess::NotOwner } => format!("Publishing: this folder's key is not linked to the account that owns the site \"{site}\".\n"),
+            Owner::Answered { site, access: SiteAccess::NotSignedIn } => format!("Publishing: this folder isn't signed in to the site \"{site}\".\n"),
             Owner::Answered { site, access: SiteAccess::NotFound } => format!("Publishing: not known, because the server does not know the site \"{site}\".\n"),
             Owner::Unchecked { reason } => format!("Publishing: not asked, because {reason}: whether this folder's key may publish, and whether another copy published since.\n"),
         });
@@ -298,14 +299,17 @@ struct Local {
     /// Set when the folder has no site and no environment: the refusal a real
     /// deploy gives, which a dry run reports rather than stops at.
     no_environment: Option<String>,
+    /// Set when the folder has a site, or was signed in, and has no usable key:
+    /// the refusal a real deploy gives.
+    not_signed_in: Option<String>,
 }
 
 /// The checks a deploy makes before it sends anything that need nothing from
 /// the network, in the order and with the answers a deploy gives them:
 /// the plugin's setup (plugin route), the config version, whether the folder
 /// has a site (or may register one, under a valid name), and the identity
-/// files. A missing signing key is not a refusal: a deploy creates one, so the
-/// dry run says so and creates nothing.
+/// files. A first publish creates its key, so the dry run says so and creates
+/// nothing; any other folder with no usable key is refused as not signed in.
 async fn check_locally(
     folder: &Path,
     route: &DeployRoute,
@@ -317,7 +321,7 @@ async fn check_locally(
     }
     crate::build::site_config::ensure_config_current(&folder_str)?;
     if matches!(route, DeployRoute::Plugin { .. }) {
-        return Ok(Local { ask: Err("a deploy plugin publishes this folder"), would_register: None, would_create_key: false, needs_verification: false, no_environment: None });
+        return Ok(Local { ask: Err("a deploy plugin publishes this folder"), would_register: None, would_create_key: false, needs_verification: false, no_environment: None, not_signed_in: None });
     }
     let _phase = crate::build::phase::PhaseTrace::start("local_checks");
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
@@ -338,32 +342,46 @@ async fn check_locally(
     };
     // A deploy waits for a cloud-synced key to arrive before reading it; reads only.
     crate::deploy::preflight_publish_inputs(folder).await?;
-    // Read-only stand-in for `ensure_signing_key`, which creates the identity
-    // when there is none and regenerates the key when its file is missing.
+    // Read-only stand-in for what a deploy does with the identity: a first
+    // publish creates the key, any other folder without one is refused.
     use crate::identity::keypair::KeyOnDisk;
     let key = crate::identity::Identity::key_on_disk(folder);
-    let would_create_key = key == KeyOnDisk::Missing;
+    let has_identity = crate::identity::Identity::exists(folder);
+    let would_create_key = would_register.is_some() && !has_identity;
+    let not_signed_in = ((config.site_id.is_some() || has_identity) && key == KeyOnDisk::Missing).then(|| {
+        let host = crate::deploy::sign_in_host(&folder_str, config.site_id.as_deref());
+        crate::identity::verify_email::not_signed_in(folder, &host)
+    });
     let needs_verification =
         would_register.is_some() && crate::identity::Identity::read_email(folder).is_none();
     let ask = match (config.site_id, key) {
         (None, _) if would_register.is_some() => Err("the site is not registered yet"),
         (None, _) => Err("this folder has no site"),
-        (Some(_), KeyOnDisk::Missing) => Err("this folder has no signing key yet"),
+        (Some(_), KeyOnDisk::Missing) => Err("this folder isn't signed in"),
         // Loading it rewrites it, and a dry run writes nothing.
         (Some(_), KeyOnDisk::Older) => Err("a deploy first moves this folder's key to its current format"),
         (Some(_), KeyOnDisk::Newer) => Err("this folder's key was written by a newer moss"),
         (Some(site), KeyOnDisk::Current) => Ok(site),
     };
-    Ok(Local { ask, would_register, would_create_key, needs_verification, no_environment })
+    Ok(Local { ask, would_register, would_create_key, needs_verification, no_environment, not_signed_in })
+}
+
+/// What the server's one answer refuses: a copy published since this one,
+/// known before the build, and a key that may not publish the site, known
+/// only at the upload.
+struct ServerRefusals {
+    stale_copy: Option<crate::deploy::Refusal>,
+    at_upload: Option<crate::deploy::Refusal>,
 }
 
 /// Ask the server, with the owner-gated read every deploy starts with,
 /// whether this folder's key may publish its site, and with the same answer
 /// whether another copy published since this one (unless `overwrite_newer`).
-/// Returns the stale-copy refusal beside the answer.
-async fn ask_server(folder: &Path, local: &Local, overwrite_newer: bool) -> (Owner, Option<crate::deploy::Refusal>) {
+async fn ask_server(folder: &Path, local: &Local, overwrite_newer: bool) -> (Owner, ServerRefusals) {
+    use crate::deploy::{Refusal, RefusalKind};
     use crate::seta::sites::Generation;
-    let unchecked = |reason: String| (Owner::Unchecked { reason }, None);
+    let none = || ServerRefusals { stale_copy: None, at_upload: None };
+    let unchecked = |reason: String| (Owner::Unchecked { reason }, none());
     let site = match &local.ask {
         Ok(site) => site.clone(),
         Err(reason) => return unchecked(reason.to_string()),
@@ -375,35 +393,32 @@ async fn ask_server(folder: &Path, local: &Local, overwrite_newer: bool) -> (Own
     let environment = crate::build::site_config::resolve_environment(&folder.to_string_lossy());
     let client = crate::seta::client::MossSetaClient::for_environment(&identity, &environment);
     let answered = |access| Owner::Answered { site: site.clone(), access };
+    let at_upload = |kind, text| ServerRefusals { stale_copy: None, at_upload: Some(Refusal::new(kind, text)) };
     match client.generation(&site, Some(std::time::Duration::from_secs(5))).await {
         Ok(Generation::Live(live)) => {
-            let stale = (!overwrite_newer)
+            let stale_copy = (!overwrite_newer)
                 .then(|| crate::deploy::stale_copy_against(folder, &site, &live))
                 .flatten()
-                .map(|text| crate::deploy::Refusal::new(crate::deploy::RefusalKind::StaleCopy, text));
-            (answered(SiteAccess::Authorized), stale)
+                .map(|text| Refusal::new(RefusalKind::StaleCopy, text));
+            (answered(SiteAccess::Authorized), ServerRefusals { stale_copy, at_upload: None })
         }
-        Ok(Generation::NotOwner) => (answered(SiteAccess::NotOwner), None),
-        Ok(Generation::NotFound) => (answered(SiteAccess::NotFound), None),
+        Ok(Generation::NotOwner) => (
+            answered(SiteAccess::NotOwner),
+            at_upload(RefusalKind::NotOwner, format!("Nothing published — this folder's key is not linked to the account that owns \"{site}\". Deploy with `--email <address>`, the owner's address, to be sent a sign-in link for this key.")),
+        ),
+        Ok(Generation::NotSignedIn { site: address }) => (
+            answered(SiteAccess::NotSignedIn),
+            at_upload(RefusalKind::NotSignedIn, crate::identity::verify_email::not_signed_in(folder, &address)),
+        ),
+        Ok(Generation::NotFound) => (answered(SiteAccess::NotFound), none()),
         Err(e) => unchecked(format!("the server could not be asked ({e})")),
     }
 }
 
-/// The refusal a deploy would meet first: a stale copy is known before the
-/// build, the build's own checks (`local`) after it, and a key that is not
-/// linked to the owner's account (or to any account yet) only at the upload.
-fn first_refusal(
-    stale_copy: Option<crate::deploy::Refusal>,
-    local: Option<crate::deploy::Refusal>,
-    owner: &Owner,
-) -> Option<crate::deploy::Refusal> {
-    stale_copy.or(local).or_else(|| {
-        let Owner::Answered { site, access: SiteAccess::NotOwner } = owner else { return None };
-        Some(crate::deploy::Refusal::new(
-            crate::deploy::RefusalKind::NotOwner,
-            format!("Nothing published — this folder's key is not linked to the account that owns \"{site}\". Deploy with `--email <address>`, the owner's address, to be sent a sign-in link for this key."),
-        ))
-    })
+/// The refusal a deploy would meet first: a stale copy before the build, the
+/// build's own checks (`local`) after it, the key's access at the upload.
+fn first_refusal(server: ServerRefusals, local: Option<crate::deploy::Refusal>) -> Option<crate::deploy::Refusal> {
+    server.stale_copy.or(local).or(server.at_upload)
 }
 
 /// Build the folder as a deploy would and describe the publish that would
@@ -444,24 +459,25 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
-    let (owner, stale_copy) = ask_server(folder, &local, overwrite_newer).await;
+    let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
     use crate::deploy::Refusal;
     let local_refusal = crate::deploy::removal_gate::refuse_output_collisions(&sealed).err()
         .map(|t| Refusal::new(crate::deploy::RefusalKind::OutputCollision, t))
         .or_else(|| match &local.no_environment {
             Some(text) => Some(Refusal::new(crate::deploy::RefusalKind::NoEnvironment, text.clone())),
-            None => crate::deploy::publish_refusal(&folder_str)
+            None => local.not_signed_in.clone().map(|t| Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t))
+                .or_else(|| crate::deploy::publish_refusal(&folder_str))
                 .or_else(|| crate::deploy::removal_gate::refuse_stale_generation(folder, &sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::StaleContent, t)))
                 .or_else(|| crate::deploy::refuse_foreign_inputs(&sealed, folder).err().map(|t| Refusal::new(crate::deploy::RefusalKind::ForeignInputs, t)))
                 .or_else(|| crate::deploy::refuse_unresolved_inputs(&sealed).err().map(|t| Refusal::new(crate::deploy::RefusalKind::UnresolvedInputs, t))),
     });
-    let refusal = first_refusal(stale_copy, local_refusal, &owner);
+    let refusal = first_refusal(server, local_refusal);
     Ok(DryRun {
         change_set,
         transfer,
         refusal,
         would_register: local.would_register,
-        would_create_key: local.would_create_key && !matches!(route, DeployRoute::Plugin { .. }),
+        would_create_key: local.would_create_key,
         needs_verification: local.needs_verification,
         prebuilt: false,
         kept_as_redirect: kept_as_redirect(&folder_str),
@@ -515,8 +531,9 @@ pub async fn run_prebuilt_dry_run(
         }
         None => (Transfer::NoRecord, None),
     };
-    let (owner, stale_copy) = ask_server(folder, &local, overwrite_newer).await;
-    let refusal = first_refusal(stale_copy, refusal, &owner);
+    let (owner, server) = ask_server(folder, &local, overwrite_newer).await;
+    let local_refusal = local.not_signed_in.map(|t| crate::deploy::Refusal::new(crate::deploy::RefusalKind::NotSignedIn, t)).or(refusal);
+    let refusal = first_refusal(server, local_refusal);
     Ok(DryRun {
         change_set: ChangeSet::default(),
         transfer,

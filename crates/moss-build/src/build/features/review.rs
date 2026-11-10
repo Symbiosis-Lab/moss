@@ -1,38 +1,32 @@
 //! Review feature: renders book/media colophon cards for review articles.
 //!
 //! Two phases:
-//! 1. **Process** (`process_reviews`): Scans articles for `review_of` URLs,
-//!    detects the source (NeoDB, Douban, Goodreads, TMDB), fetches metadata
-//!    via NeoDB API (direct or catalog search), and writes
-//!    `.moss/data/social/review.json`. Respects a 24-hour cache TTL.
-//! 2. **Enhance** (via `render_colophon`): Reads the social data and generates
-//!    HTML colophon footers for each review article.
+//! 1. **Process** (`process_reviews`): for each `review_of` URL with no stored
+//!    item, detects the source (NeoDB, Douban, Goodreads, TMDB), fetches its
+//!    catalog entry through NeoDB (direct or catalog search), and keeps it
+//!    under `.moss/data/social/reviews/`, one file per URL (`link_snapshot`'s
+//!    store). An item is fetched once per URL and kept, so editing a review
+//!    never refetches it.
+//! 2. **Enhance** (via `render_colophon`): reads the stored item for each
+//!    review article and renders its colophon, with the writer's own rating
+//!    from the article.
 
 use super::html_escape;
+use crate::build::page::link_snapshot::{self, Entry, Kind};
 use crate::moss_paths::MossPaths;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use url::Url;
-
-/// 24-hour cache TTL in seconds.
-const CACHE_TTL_SECS: i64 = 24 * 60 * 60;
 
 // ============================================================================
 // Data types
 // ============================================================================
 
-/// Review data for the entire site, loaded from `.moss/data/social/review.json`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ReviewData {
-    #[serde(rename = "schemaVersion")]
-    pub schema_version: String,
-    #[serde(rename = "updatedAt")]
-    pub updated_at: Option<String>,
-    pub articles: HashMap<String, ReviewItem>,
-}
-
-/// Metadata for a single reviewed item (book, movie, etc.).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// One reviewed item (book, movie, etc.) as its catalog gave it. Nothing a
+/// machine or a page adds (no fetch time, no writer's rating), so two machines
+/// fetching one item write the same bytes.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ReviewItem {
     pub source_url: String,
     pub source: String,
@@ -46,9 +40,7 @@ pub struct ReviewItem {
     pub isbn: Option<String>,
     pub community_rating: Option<f64>,
     pub community_rating_count: Option<i32>,
-    pub writer_rating: Option<i32>,
-    pub external_urls: Option<HashMap<String, String>>,
-    pub fetched_at: Option<String>,
+    pub external_urls: Option<BTreeMap<String, String>>,
 }
 
 // ============================================================================
@@ -152,7 +144,7 @@ fn normalize_neodb_response(
         .map(|c| c as i32);
 
     // External URLs from external_resources
-    let mut external_urls: HashMap<String, String> = HashMap::new();
+    let mut external_urls = BTreeMap::new();
     external_urls.insert("neodb".to_string(), original_url.to_string());
     if let Some(resources) = raw.get("external_resources").and_then(|v| v.as_array()) {
         for r in resources {
@@ -196,8 +188,6 @@ fn normalize_neodb_response(
     let pages = raw.get("pages").and_then(|v| v.as_i64()).map(|p| p as i32);
     let isbn = raw.get("isbn").and_then(|v| v.as_str()).map(String::from);
 
-    let now = chrono::Utc::now().to_rfc3339();
-
     ReviewItem {
         source_url: original_url.to_string(),
         source: source_label.to_string(),
@@ -211,9 +201,7 @@ fn normalize_neodb_response(
         isbn,
         community_rating,
         community_rating_count,
-        writer_rating: None,
         external_urls: Some(external_urls),
-        fetched_at: Some(now),
     }
 }
 
@@ -283,46 +271,31 @@ pub fn fetch_review_item(url: &str) -> Option<ReviewItem> {
 }
 
 // ============================================================================
-// Cache TTL
+// The stored items
 // ============================================================================
 
-/// Check if a cached entry is still fresh (within 24-hour TTL).
-/// Returns `true` if the entry should be used from cache (still fresh).
-pub fn is_cache_fresh(fetched_at: Option<&str>) -> bool {
-    let fetched_at = match fetched_at {
-        Some(s) => s,
-        None => return false,
-    };
-
-    // Parse ISO 8601 timestamp
-    if let Ok(fetched) = chrono::DateTime::parse_from_rfc3339(fetched_at) {
-        let age = chrono::Utc::now().signed_duration_since(fetched);
-        age.num_seconds() < CACHE_TTL_SECS
-    } else {
-        false
+/// The item stored for `review_of`, if this machine holds it. One in the cloud
+/// reads as none for now, has been requested, and is marked pending in
+/// `evidence`, so a publish waits for a build that has read it.
+pub fn stored(project_path: &str, review_of: &str, evidence: Option<&crate::build::cloud_ledger::InputEvidence>) -> Option<ReviewItem> {
+    match link_snapshot::read_kind(&moss_dir(project_path), Kind::Reviews, review_of, evidence) {
+        Entry::Fetched(item) => Some(item),
+        Entry::InCloud | Entry::Absent => None,
     }
 }
 
-// ============================================================================
-// Process reviews (the main entry point for the process phase)
-// ============================================================================
-
-/// Article info needed for review processing. Mirrors the frontmatter fields
-/// that the build pipeline extracts from each article.
-pub struct ReviewArticleInput {
-    pub uid: String,
-    pub review_of: String,
-    pub rating: Option<u8>,
+fn moss_dir(project_path: &str) -> std::path::PathBuf {
+    MossPaths::new(Path::new(project_path)).root().to_path_buf()
 }
 
-/// Process all review articles: fetch metadata from sources, update cache.
+/// Fetch and keep the item for each URL that has none stored. A stored item is
+/// never refetched, whatever its age: it is an input every build reads, so one
+/// that refreshed itself would differ between machines that synced at
+/// different times. One still in the cloud is waited for, not refetched,
+/// since fetching it here would overwrite another machine's. One item that
+/// cannot be written is retried next time and does not stop the others.
 ///
-/// This is the native Rust equivalent of the JS review plugin's `process` hook.
-/// It reads the existing `.moss/data/social/review.json`, checks each article's
-/// `review_of` URL, fetches metadata if the cache is stale or missing, and
-/// writes the updated data back.
-///
-/// Returns the number of items fetched (0 if all were cached).
+/// Returns the number of items fetched and kept.
 ///
 /// # Visibility
 ///
@@ -330,105 +303,59 @@ pub struct ReviewArticleInput {
 /// Always go through
 /// [`crate::build::features::sync::start_background_sync`] or
 /// `refresh_comments_for_exiting_build`.
-pub(in crate::build::features) fn process_reviews(
-    project_path: &str,
-    articles: &[ReviewArticleInput],
-) -> Result<usize, String> {
-    if articles.is_empty() {
-        return Ok(0);
-    }
-
-    // Load existing social data (or create empty)
-    let mut data = load_review_data(project_path).unwrap_or_else(|| ReviewData {
-        schema_version: "2.0.0".to_string(),
-        updated_at: None,
-        articles: HashMap::new(),
-    });
-
-    let mut fetch_count = 0;
-
-    for article in articles {
-        let existing = data.articles.get(&article.uid);
-
-        // Check cache: skip if URL unchanged and fetched within TTL
-        if let Some(existing_item) = existing {
-            if existing_item.source_url == article.review_of
-                && is_cache_fresh(existing_item.fetched_at.as_deref())
-            {
-                // Still update writer_rating if changed
-                if let Some(rating) = article.rating {
-                    let item = data.articles.get_mut(&article.uid).unwrap();
-                    item.writer_rating = Some(rating as i32);
-                }
-                continue;
-            }
-        }
-
-        // Fetch from detected source
-        match fetch_review_item(&article.review_of) {
-            Some(mut item) => {
-                // Set writer rating from frontmatter
-                item.writer_rating = article.rating.map(|r| r as i32);
-                data.articles.insert(article.uid.clone(), item);
-                fetch_count += 1;
-            }
-            None => {
-                // Network error — update writer_rating on cached data if available
-                if let Some(item) = data.articles.get_mut(&article.uid) {
-                    if let Some(rating) = article.rating {
-                        item.writer_rating = Some(rating as i32);
-                    }
-                } else {
-                    log::info!(
-                        "Review: Failed to fetch {}, no cache available",
-                        article.review_of
-                    );
-                }
-                continue;
-            }
-        }
-    }
-
-    // Save updated data
-    if fetch_count > 0 {
-        data.updated_at = Some(chrono::Utc::now().to_rfc3339());
-        save_review_data(project_path, &data)?;
-    }
-
-    Ok(fetch_count)
+pub(in crate::build::features) fn process_reviews(project_path: &str, review_ofs: &[String]) -> usize {
+    keep_fetched(project_path, review_ofs, fetch_review_item)
 }
 
-// ============================================================================
-// Data persistence
-// ============================================================================
-
-/// Load review data from `.moss/data/social/review.json`.
-pub fn load_review_data(project_path: &str) -> Option<ReviewData> {
-    let path = MossPaths::new(std::path::Path::new(project_path))
-        .social_dir()
-        .join("review.json");
-
-    if !path.exists() {
-        return None;
+fn keep_fetched(project_path: &str, review_ofs: &[String], fetch: impl Fn(&str) -> Option<ReviewItem>) -> usize {
+    let moss_dir = moss_dir(project_path);
+    let mut kept = 0;
+    for url in review_ofs {
+        if !matches!(link_snapshot::read_kind::<ReviewItem>(&moss_dir, Kind::Reviews, url, None), Entry::Absent) {
+            continue;
+        }
+        match fetch(url) {
+            Some(item) => match link_snapshot::write_kind(&moss_dir, Kind::Reviews, url, &item) {
+                Ok(()) => kept += 1,
+                Err(e) => log::info!("Review: could not keep {url}: {e}"),
+            },
+            None => log::info!("Review: could not fetch {url}"),
+        }
     }
-
-    let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
+    kept
 }
 
-/// Save review data to `.moss/data/social/review.json`.
-pub fn save_review_data(project_path: &str, data: &ReviewData) -> Result<(), String> {
-    let social_dir = MossPaths::new(std::path::Path::new(project_path)).social_dir();
+/// The single file moss kept every review item in, keyed by the page's uid.
+#[derive(Deserialize)]
+struct Legacy {
+    articles: HashMap<String, ReviewItem>,
+}
 
-    // allow:raw_write .moss/data/social, not the build tree
-    std::fs::create_dir_all(&social_dir)
-        .map_err(|e| format!("Failed to create social dir: {}", e))?;
-
-    let path = social_dir.join("review.json");
-    let content =
-        serde_json::to_string_pretty(data).map_err(|e| format!("Failed to serialize: {}", e))?;
-
-    std::fs::write(&path, content).map_err(|e| format!("Failed to write review.json: {}", e))  // allow:raw_write user state under .moss/data, not regenerable output
+/// Move the items of the old single file into the per-URL store once, then
+/// remove it, only after every item it held is stored. An item already stored
+/// for its URL is kept. Never writes when the old file is unreadable, so one
+/// still in the cloud is moved when it arrives.
+pub fn migrate_legacy(project_path: &str) {
+    use crate::build::cloud_readiness::{probe_input, Found};
+    let moss_dir = moss_dir(project_path);
+    let path = MossPaths::new(Path::new(project_path)).social_dir().join("review.json");
+    let Ok(Found::Bytes(bytes)) = probe_input(&path) else { return };
+    let Ok(legacy) = serde_json::from_slice::<Legacy>(&bytes) else {
+        log::warn!("Review: {} does not parse; left in place", path.display());
+        return;
+    };
+    let mut moved = true;
+    for item in legacy.articles.values() {
+        if matches!(link_snapshot::read_kind::<ReviewItem>(&moss_dir, Kind::Reviews, &item.source_url, None), Entry::Absent) {
+            moved &= link_snapshot::write_kind(&moss_dir, Kind::Reviews, &item.source_url, item).is_ok();
+        }
+    }
+    if moved {
+        // allow:unlink .moss/data/social/review.json, user data outside staging, removed only once every item it held is stored
+        if let Err(e) = std::fs::remove_file(&path) {
+            log::info!("Review: could not remove {} after moving its items: {e}", path.display());
+        }
+    }
 }
 
 // ============================================================================
@@ -466,6 +393,7 @@ pub fn render_stars(rating: u8) -> String {
 /// in this module.
 pub fn render_colophon(
     review: &ReviewItem,
+    writer_rating: Option<u8>,
     cover_path: Option<&str>,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
 ) -> String {
@@ -555,11 +483,11 @@ pub fn render_colophon(
     }
 
     // Writer rating (stars)
-    if let Some(rating) = review.writer_rating {
+    if let Some(rating) = writer_rating {
         if rating > 0 {
             html.push_str(&format!(
                 "    <div class=\"review-rating\">{}</div>\n",
-                render_stars(rating as u8)
+                render_stars(rating)
             ));
         }
     }
@@ -593,7 +521,7 @@ pub fn render_colophon(
 }
 
 /// Render the external links navigation for a review.
-fn render_links(external_urls: &HashMap<String, String>) -> String {
+fn render_links(external_urls: &BTreeMap<String, String>) -> String {
     // Sort links for deterministic output: Douban first, then NeoDB, then others
     let order = ["douban", "neodb", "goodreads", "openlibrary", "imdb", "tmdb"];
     let mut links: Vec<(&str, &str)> = Vec::new();
@@ -648,8 +576,7 @@ mod tests {
             isbn: Some("9780262681155".into()),
             community_rating: None,
             community_rating_count: Some(0),
-            writer_rating: None,
-            external_urls: Some(HashMap::from([
+            external_urls: Some(BTreeMap::from([
                 (
                     "neodb".into(),
                     "https://neodb.social/book/7dnJWlkxN5dT6DyO0MGLpO".into(),
@@ -659,7 +586,6 @@ mod tests {
                     "https://book.douban.com/subject/2847996/".into(),
                 ),
             ])),
-            fetched_at: Some("2026-03-27T12:44:20.608Z".into()),
         }
     }
 
@@ -865,237 +791,114 @@ mod tests {
         assert_eq!(item.title, "Test");
     }
 
-    // =====================================================================
-    // Cache TTL tests
-    // =====================================================================
-
-    #[test]
-    fn test_cache_fresh_recent() {
-        let now = chrono::Utc::now().to_rfc3339();
-        assert!(is_cache_fresh(Some(&now)));
+    fn project() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        dir
     }
 
-    #[test]
-    fn test_cache_stale_old() {
-        let old = (chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339();
-        assert!(!is_cache_fresh(Some(&old)));
+    fn store(project: &Path, item: &ReviewItem) {
+        link_snapshot::write_kind(&project.join(".moss"), Kind::Reviews, &item.source_url, item).unwrap();
     }
 
+    /// Nothing a machine adds is stored, and the links are in a fixed order,
+    /// so two machines fetching one item write the same bytes.
     #[test]
-    fn test_cache_fresh_23h() {
-        let recent = (chrono::Utc::now() - chrono::Duration::hours(23)).to_rfc3339();
-        assert!(is_cache_fresh(Some(&recent)));
-    }
-
-    #[test]
-    fn test_cache_none() {
-        assert!(!is_cache_fresh(None));
-    }
-
-    #[test]
-    fn test_cache_invalid_timestamp() {
-        assert!(!is_cache_fresh(Some("not-a-timestamp")));
-    }
-
-    // =====================================================================
-    // Serialization round-trip tests
-    // =====================================================================
-
-    #[test]
-    fn test_review_data_serialize_roundtrip() {
-        let data = ReviewData {
-            schema_version: "2.0.0".to_string(),
-            updated_at: Some("2026-03-27T12:00:00Z".to_string()),
-            articles: HashMap::from([(
-                "abc123".to_string(),
-                sample_review(),
-            )]),
+    fn two_identical_fetches_store_identical_bytes() {
+        let (one, two) = (project(), project());
+        store(one.path(), &sample_review());
+        store(two.path(), &sample_review());
+        let file = |p: &Path| {
+            let dir = p.join(".moss/data/social/reviews");
+            std::fs::read(std::fs::read_dir(dir).unwrap().next().unwrap().unwrap().path()).unwrap()
         };
-
-        let json = serde_json::to_string_pretty(&data).unwrap();
-        let parsed: ReviewData = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.schema_version, "2.0.0");
-        assert_eq!(parsed.updated_at, Some("2026-03-27T12:00:00Z".to_string()));
-        assert!(parsed.articles.contains_key("abc123"));
-        assert_eq!(parsed.articles["abc123"].title, "Tools for Thought");
-        assert_eq!(
-            parsed.articles["abc123"].fetched_at,
-            Some("2026-03-27T12:44:20.608Z".to_string())
-        );
+        assert_eq!(file(one.path()), file(two.path()));
+        let text = String::from_utf8(file(one.path())).unwrap();
+        assert!(!text.contains("fetched_at") && !text.contains("writer_rating"), "{text}");
+        assert!(text.find("douban").unwrap() < text.find("\"neodb\":").unwrap(), "{text}");
+        assert_eq!(stored(one.path().to_str().unwrap(), &sample_review().source_url, None), Some(sample_review()));
     }
 
+    /// The single uid-keyed file older moss kept moves into the per-URL store
+    /// and is removed; an item already stored for a URL is kept.
     #[test]
-    fn test_review_data_deserialize_existing_format() {
-        // Verify we can deserialize the actual file format that already exists on disk
-        let json = r#"{
+    fn the_old_single_file_moves_into_the_per_url_store_once() {
+        let dir = project();
+        let path = dir.path().to_str().unwrap();
+        let mut kept = sample_review();
+        kept.title = "Fetched on another machine".into();
+        store(dir.path(), &kept);
+        let mut other = sample_review();
+        other.source_url = "https://neodb.social/movie/other".into();
+        let legacy = serde_json::json!({
             "schemaVersion": "2.0.0",
             "updatedAt": "2026-03-27T18:25:10.855Z",
             "articles": {
-                "41109bd2": {
-                    "source_url": "https://neodb.social/book/7dnJWlkxN5dT6DyO0MGLpO",
-                    "source": "neodb",
-                    "category": "book",
-                    "title": "Tools for Thought",
-                    "subtitle": "The History and Future of Mind-Expanding Technology",
-                    "creator": ["Howard Rheingold"],
-                    "year": 2000,
-                    "publisher": "MIT University Press",
-                    "pages": 360,
-                    "isbn": "9780262681155",
-                    "community_rating": null,
-                    "community_rating_count": 0,
-                    "external_urls": {
-                        "neodb": "https://neodb.social/book/7dnJWlkxN5dT6DyO0MGLpO",
-                        "douban": "https://book.douban.com/subject/2847996/"
-                    },
-                    "writer_rating": null,
-                    "fetched_at": "2026-03-27T12:44:20.608Z"
-                }
+                "41109bd2": serde_json::to_value(sample_review()).unwrap(),
+                "a0a0a0a0": {"writer_rating": 4, "fetched_at": "2026-03-27T12:44:20.608Z", "source_url": other.source_url, "source": "neodb",
+                    "category": null, "title": other.title, "subtitle": other.subtitle, "creator": other.creator, "year": other.year,
+                    "publisher": other.publisher, "pages": other.pages, "isbn": other.isbn, "community_rating": null,
+                    "community_rating_count": 0, "external_urls": other.external_urls},
             }
-        }"#;
+        });
+        let old = dir.path().join(".moss/data/social/review.json");
+        std::fs::write(&old, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        other.category = None;
 
-        let data: ReviewData = serde_json::from_str(json).unwrap();
-        assert_eq!(data.schema_version, "2.0.0");
-        assert_eq!(
-            data.updated_at,
-            Some("2026-03-27T18:25:10.855Z".to_string())
-        );
-        let item = &data.articles["41109bd2"];
-        assert_eq!(item.title, "Tools for Thought");
-        assert_eq!(item.fetched_at, Some("2026-03-27T12:44:20.608Z".to_string()));
-        assert_eq!(item.source, "neodb");
+        migrate_legacy(path);
+        assert_eq!(stored(path, &kept.source_url, None), Some(kept));
+        assert_eq!(stored(path, &other.source_url, None), Some(other));
+        assert!(!old.exists());
     }
 
-    // =====================================================================
-    // process_reviews tests (filesystem-based)
-    // =====================================================================
-
+    /// An item the sync client has not downloaded is requested and held from
+    /// the publish, as a link card is: the build that draws no colophon for it
+    /// cannot ship.
     #[test]
-    fn test_process_reviews_empty_articles() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = process_reviews(dir.path().to_str().unwrap(), &[]);
-        assert_eq!(result.unwrap(), 0);
-    }
-
-    #[test]
-    fn test_process_reviews_creates_social_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_path = dir.path().to_str().unwrap();
-
-        // Create .moss dir
-        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
-
-        // This will try to fetch from a non-existent URL and fail,
-        // but it should still create the social directory structure
-        let articles = vec![ReviewArticleInput {
-            uid: "test123".to_string(),
-            review_of: "https://neodb.social/book/nonexistent".to_string(),
-            rating: Some(4),
-        }];
-
-        // Fetch will fail (no mock server), but process should not error
-        let result = process_reviews(project_path, &articles);
-        assert!(result.is_ok());
-        // fetch_count = 0 because the fetch failed
-        assert_eq!(result.unwrap(), 0);
+    fn an_item_in_the_cloud_is_requested_and_holds_the_publish() {
+        let dir = project();
+        let item = sample_review();
+        store(dir.path(), &item);
+        let entry = dir.path().join(".moss/data/social/reviews").join(format!("{}.json", link_snapshot::url_key(&item.source_url)));
+        let _cloud = crate::build::icloud::pretend::evicted(&entry);
+        let evidence = crate::build::cloud_ledger::InputEvidence::new(dir.path());
+        assert_eq!(stored(dir.path().to_str().unwrap(), &item.source_url, Some(&evidence)), None);
+        assert_eq!(crate::build::icloud::pretend::requests_for(&entry), 1);
+        assert_eq!(evidence.unresolved_structural(), [format!(".moss/data/social/reviews/{}.json", link_snapshot::url_key(&item.source_url))]);
     }
 
     #[test]
-    fn test_process_reviews_respects_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_path = dir.path().to_str().unwrap();
-
-        // Pre-populate cache with fresh data
-        let social_dir = dir.path().join(".moss").join("data").join("social");
-        std::fs::create_dir_all(&social_dir).unwrap();
-
-        let mut review = sample_review();
-        review.fetched_at = Some(chrono::Utc::now().to_rfc3339());
-
-        let data = ReviewData {
-            schema_version: "2.0.0".to_string(),
-            updated_at: Some(chrono::Utc::now().to_rfc3339()),
-            articles: HashMap::from([("test123".to_string(), review)]),
-        };
-
-        let json = serde_json::to_string_pretty(&data).unwrap();
-        std::fs::write(social_dir.join("review.json"), &json).unwrap();
-
-        // Process with same URL — should skip (cache is fresh)
-        let articles = vec![ReviewArticleInput {
-            uid: "test123".to_string(),
-            review_of: "https://neodb.social/book/7dnJWlkxN5dT6DyO0MGLpO".to_string(),
-            rating: Some(5),
-        }];
-
-        let result = process_reviews(project_path, &articles);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0); // 0 fetches — all cached
-
-        // Note: writer_rating update happens in-memory but only saves if fetch_count > 0.
-        // Since we didn't fetch, the file wasn't rewritten. This is intentional --
-        // the rating update will be persisted on the next fetch cycle.
+    fn an_old_file_that_does_not_parse_is_left_in_place() {
+        let dir = project();
+        let old = dir.path().join(".moss/data/social/review.json");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, "not json").unwrap();
+        migrate_legacy(dir.path().to_str().unwrap());
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "not json");
     }
 
+    /// An item that cannot be written leaves the next one to be fetched and kept.
     #[test]
-    fn test_process_reviews_stale_cache_triggers_fetch_attempt() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_path = dir.path().to_str().unwrap();
+    fn one_item_that_cannot_be_kept_does_not_stop_the_rest() {
+        let dir = project();
+        let path = dir.path().to_str().unwrap();
+        let (blocked, open) = ("https://neodb.social/book/blocked".to_string(), "https://neodb.social/book/open".to_string());
+        let moss_dir = moss_dir(path);
+        let blocked_file = moss_dir.join(format!("data/social/reviews/{}.json", link_snapshot::url_key(&blocked)));
+        std::fs::create_dir_all(blocked_file.join("in-the-way")).unwrap();
 
-        // Pre-populate with STALE data (25 hours old)
-        let social_dir = dir.path().join(".moss").join("data").join("social");
-        std::fs::create_dir_all(&social_dir).unwrap();
+        let kept = keep_fetched(path, &[blocked.clone(), open.clone()], |_| Some(sample_review()));
 
-        let mut review = sample_review();
-        // Use a URL that definitely won't resolve via NeoDB API
-        review.source_url = "https://neodb.social/book/ZZZZZZ_nonexistent_9999".to_string();
-        review.fetched_at =
-            Some((chrono::Utc::now() - chrono::Duration::hours(25)).to_rfc3339());
-
-        let data = ReviewData {
-            schema_version: "2.0.0".to_string(),
-            updated_at: None,
-            articles: HashMap::from([("test123".to_string(), review)]),
-        };
-
-        let json = serde_json::to_string_pretty(&data).unwrap();
-        std::fs::write(social_dir.join("review.json"), &json).unwrap();
-
-        // Process with same URL — cache is stale, will try to fetch but fail (404)
-        let articles = vec![ReviewArticleInput {
-            uid: "test123".to_string(),
-            review_of: "https://neodb.social/book/ZZZZZZ_nonexistent_9999".to_string(),
-            rating: Some(3),
-        }];
-
-        let result = process_reviews(project_path, &articles);
-        assert!(result.is_ok());
-        // Fetch fails (404) -> falls back to cached data -> fetch_count = 0
-        assert_eq!(result.unwrap(), 0);
-
-        // Verify the stale cached data is still there (not deleted)
-        let loaded = load_review_data(project_path).unwrap();
-        assert!(loaded.articles.contains_key("test123"));
+        assert_eq!(kept, 1);
+        assert!(matches!(link_snapshot::read_kind::<ReviewItem>(&moss_dir, Kind::Reviews, &open, None), Entry::Fetched(_)));
     }
 
+    /// The writer's rating is the article's own, never stored with the item.
     #[test]
-    fn test_save_and_load_review_data() {
-        let dir = tempfile::tempdir().unwrap();
-        let project_path = dir.path().to_str().unwrap();
-
-        let data = ReviewData {
-            schema_version: "2.0.0".to_string(),
-            updated_at: Some("2026-03-27T12:00:00Z".to_string()),
-            articles: HashMap::from([("uid1".to_string(), sample_review())]),
-        };
-
-        save_review_data(project_path, &data).unwrap();
-
-        let loaded = load_review_data(project_path).unwrap();
-        assert_eq!(loaded.schema_version, "2.0.0");
-        assert_eq!(loaded.articles.len(), 1);
-        assert_eq!(loaded.articles["uid1"].title, "Tools for Thought");
+    fn the_writer_rating_comes_from_the_article() {
+        let review = sample_review();
+        assert!(render_colophon(&review, Some(4), None, None).contains("★★★★☆"));
+        assert!(!render_colophon(&review, None, None, None).contains("review-rating"));
     }
 
     // =====================================================================
@@ -1129,7 +932,7 @@ mod tests {
     #[test]
     fn test_colophon_contains_title() {
         let review = sample_review();
-        let html = render_colophon(&review, None, None);
+        let html = render_colophon(&review, None, None, None);
         assert!(html.contains("review-colophon-title"));
         assert!(html.contains("Tools for Thought"));
     }
@@ -1137,7 +940,7 @@ mod tests {
     #[test]
     fn test_colophon_contains_subtitle() {
         let review = sample_review();
-        let html = render_colophon(&review, None, None);
+        let html = render_colophon(&review, None, None, None);
         assert!(html.contains("review-colophon-subtitle"));
         assert!(html.contains("The History and Future of Mind-Expanding Technology"));
     }
@@ -1145,7 +948,7 @@ mod tests {
     #[test]
     fn test_colophon_contains_creator_and_year() {
         let review = sample_review();
-        let html = render_colophon(&review, None, None);
+        let html = render_colophon(&review, None, None, None);
         assert!(html.contains("review-colophon-identity"));
         assert!(html.contains("Howard Rheingold"));
         assert!(html.contains("2000"));
@@ -1154,7 +957,7 @@ mod tests {
     #[test]
     fn test_colophon_contains_biblio() {
         let review = sample_review();
-        let html = render_colophon(&review, None, None);
+        let html = render_colophon(&review, None, None, None);
         assert!(html.contains("review-biblio"));
         assert!(html.contains("MIT University Press"));
         assert!(html.contains("360 pages"));
@@ -1164,7 +967,7 @@ mod tests {
     #[test]
     fn test_colophon_contains_links() {
         let review = sample_review();
-        let html = render_colophon(&review, None, None);
+        let html = render_colophon(&review, None, None, None);
         assert!(html.contains("review-links"));
         assert!(html.contains("Douban"));
         assert!(html.contains("NeoDB"));
@@ -1178,7 +981,7 @@ mod tests {
         // and the class identifier still survives (it's structural identity,
         // not manifest data).
         let review = sample_review();
-        let html = render_colophon(&review, Some("/image/cover.jpg"), None);
+        let html = render_colophon(&review, None, Some("/image/cover.jpg"), None);
         assert!(html.contains("review-colophon-cover"));
         assert!(html.contains("src=\"/image/cover.jpg\""));
     }
@@ -1203,7 +1006,7 @@ mod tests {
             lqip_data_uri: None,
         }];
         let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None);
-        let html = render_colophon(&review, Some("/image/cover.jpg"), Some(&lookup));
+        let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&lookup));
         assert!(
             html.contains("review-colophon-cover"),
             "class preserved through synthesizer, got: {}", html
@@ -1257,7 +1060,7 @@ mod tests {
         dir_overrides.insert("图片".to_string(), "image".to_string());
         let lookup = MediaDimensionLookup::new(&images, &[], &dir_overrides, None);
         // info.cover is the resolved (ASCII) form — what article-map stores.
-        let html = render_colophon(&review, Some("/image/cover.jpg"), Some(&lookup));
+        let html = render_colophon(&review, None, Some("/image/cover.jpg"), Some(&lookup));
         assert!(
             html.contains("<picture>"),
             "CJK-remapped manifest must still produce <picture> wrap, got: {}", html
@@ -1290,42 +1093,15 @@ mod tests {
     fn test_colophon_no_subtitle() {
         let mut review = sample_review();
         review.subtitle = None;
-        let html = render_colophon(&review, None, None);
+        let html = render_colophon(&review, None, None, None);
         assert!(!html.contains("review-colophon-subtitle"));
     }
 
     #[test]
     fn test_colophon_structure_is_footer() {
         let review = sample_review();
-        let html = render_colophon(&review, None, None);
+        let html = render_colophon(&review, None, None, None);
         assert!(html.starts_with("<footer class=\"review-colophon\">"));
         assert!(html.ends_with("</footer>"));
-    }
-
-    // =====================================================================
-    // Data loading tests
-    // =====================================================================
-
-    #[test]
-    fn test_load_review_data_missing_file() {
-        let result = load_review_data("/nonexistent/path");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_load_review_data_from_real_file() {
-        // Test with the actual test folder data
-        let data = load_review_data(
-            "/Users/alice/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/Notes",
-        );
-        if let Some(data) = data {
-            assert_eq!(data.schema_version, "2.0.0");
-            assert!(data.articles.contains_key("41109bd2"));
-            let review = &data.articles["41109bd2"];
-            assert_eq!(review.title, "Tools for Thought");
-            assert!(review.fetched_at.is_some());
-            assert_eq!(data.updated_at.is_some(), true);
-        }
-        // OK if file doesn't exist in CI
     }
 }

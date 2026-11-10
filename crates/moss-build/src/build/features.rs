@@ -67,7 +67,7 @@ pub(crate) fn mark_deploy_only(script_tag: &str) -> String {
 }
 
 use crate::build::slots::Slot;
-use crate::build::render::resolve_comments_pref;
+use crate::build::render::shows_comments;
 use crate::config::services::ServicesConfig;
 use crate::config::deployment::DomainDeploymentConfig;
 use crate::build::enhance::{EnhanceContent, EnhanceResult, ResolvedSlots};
@@ -205,6 +205,9 @@ pub fn generate_native_slots(
     // the same file is a second ladder that can drift from the first, not a
     // saved read (H-config already made this ONE read for the whole build).
     site_comments: Option<bool>,
+    // The build's input ledger: a review item the sync client has not
+    // downloaded is marked pending in it, as a link card's is.
+    input_evidence: Option<&crate::build::cloud_ledger::InputEvidence>,
 ) -> ResolvedSlots {
     // Convert the raw site-config tag to a typed Language ONCE at this
     // boundary; everything below matches on `Language` (zh-hant safe).
@@ -275,26 +278,12 @@ pub fn generate_native_slots(
     }
 
     // Review CSS + colophon → head-end + after-title (per-page)
-    let review_data = review::load_review_data(project_path);
-    if let Some(ref data) = review_data {
+    review::migrate_legacy(project_path);
+    {
         let mut per_page: HashMap<String, String> = HashMap::new();
-        for (uid, info) in article_map {
-            if let Some(ref review_of) = info.review_of {
-                // Find review by source_url matching review_of, or by uid
-                let review_item = data
-                    .articles
-                    .get(uid.as_str())
-                    .or_else(|| {
-                        data.articles
-                            .values()
-                            .find(|r| r.source_url == *review_of)
-                    });
-
-                if let Some(item) = review_item {
-                    let colophon = review::render_colophon(item, info.cover.as_deref(), media_lookup);
-                    per_page.insert(info.url_path.clone(), colophon);
-                }
-            }
+        for info in article_map.values() {
+            let Some(item) = info.review_of.as_deref().and_then(|url| review::stored(project_path, url, input_evidence)) else { continue };
+            per_page.insert(info.url_path.clone(), review::render_colophon(&item, info.rating, info.cover.as_deref(), media_lookup));
         }
 
         if !per_page.is_empty() {
@@ -330,19 +319,11 @@ pub fn generate_native_slots(
     // Load ALL social sources (comment.json, matters.json, douban.json, etc.)
     // All keyed by uid.
     //
-    // Honor explicit `enabled = false` by filtering the Option itself: a
-    // present-but-disabled section behaves like an absent section (comments
-    // are opt-in on every host — see ServicesConfig::is_enabled).
-    // Found while dogfooding a real site, 2026-04-30.
-    //
     // Design §7: the baked artifact is mode-independent. The preview shim
     // (injected at serve time by iframe_bridge.rs, never written to disk)
     // handles the preview-specific behavior — there is no reason to skip
     // comment rendering here based on start_server.
-    if let Some(ref comments_config) = services.comments
-        .as_ref()
-        .filter(|c| c.common.enabled != Some(false))
-    {
+    if let Some(comments_config) = services.comments_on() {
         // Self-hosted override wins; otherwise the moss-operated server derives
         // from the environment (config can never strand a site on a dead host
         // again — see migration v4). Undeployed sites render the inactive form.
@@ -424,33 +405,14 @@ pub fn generate_native_slots(
             .collect();
 
         let mut per_page: HashMap<String, String> = HashMap::new();
-        // `[site] comments` sets the ARTICLE default only: an author can dial
-        // comments off site-wide without touching every article's
-        // frontmatter. Folder pages stay opt-in-only regardless of the
-        // site-wide value (`site_default: None` below) — a site owner
-        // turning comments ON site-wide should not suddenly grow a comment
-        // section under every listing page, only under articles. `page_value`
-        // (an explicit per-page `comments:`) always wins over either default,
-        // via the same `resolve_comments_pref` ladder `resolve_comments_attr`
-        // uses for the `data-comments` JS hint — one resolution, not two that
-        // can drift (that drift is how `[site] comments = false` used to
-        // leave the section rendered while only the JS attribute went false).
-        //
-        // Articles default ON (`comments: false` opts out); folder pages —
-        // the homepage among them — default OFF (`comments: true` opts in).
-        // A fix that let folder pages show comments at all
-        // chained them onto the article loop with the article default, so an
-        // author who never touched `comments:` got a section on every folder
-        // page including the homepage. The homepage having no explicit
-        // frontmatter is the common case, not the exception, so that default
-        // put a comment button under every generated site's landing page.
-        for (uid, info, default_on, site_default) in article_map
+        // One ladder with `resolve_comments_attr`'s `data-comments` hint, so the
+        // section and the attribute cannot disagree.
+        for (uid, info, is_folder) in article_map
             .iter()
-            .map(|(u, i)| (u, i, true, site_comments))
-            .chain(folder_targets.iter().map(|(u, i)| (u, i, false, None)))
+            .map(|(u, i)| (u, i, false))
+            .chain(folder_targets.iter().map(|(u, i)| (u, i, true)))
         {
-            let show = resolve_comments_pref(info.comments, site_default).unwrap_or(default_on);
-            if !show {
+            if !shows_comments(info.comments, is_folder, site_comments) {
                 continue;
             }
 

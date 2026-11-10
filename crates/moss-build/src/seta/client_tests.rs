@@ -387,7 +387,7 @@ fn test_extract_api_error_handles_empty_body() {
 fn test_extract_api_error_extracts_message_field() {
     // Auth endpoints sometimes return `{"message": "..."}` instead of
     // `{"error": ...}`; both must be surfaced (preserves the old auth-flow
-    // extraction that request_auth/request_reverify did inline).
+    // extraction that request_auth did inline).
     let body = r#"{"message":"Invalid verification code"}"#;
     assert_eq!(extract_api_error_message(body), "Invalid verification code");
 }
@@ -574,34 +574,6 @@ fn test_client_is_send_and_sync() {
     assert_send_sync::<MossSetaClient>();
 }
 
-#[tokio::test]
-async fn test_request_reverify_sends_mode_and_site_id() {
-    let server = StandIn::json(200, r#"{"success":true}"#).await;
-    MossSetaClient::with_url(&server.url())
-        .request_reverify("user@example.com", "abcd1234", "sess-xyz", "my-site")
-        .await
-        .expect("reverify request should succeed");
-    let req = &server.requests()[0];
-    assert_eq!((req.method.as_str(), req.path_and_query.as_str()), ("POST", "/auth/request"));
-    let body = req.body_json();
-    assert_eq!(body["mode"], "re_verify");
-    assert_eq!(body["site_id"], "my-site");
-    assert!(body["client"].is_object(), "the confirm page names the app: {body}");
-    assert_eq!(body["email"], "user@example.com");
-    assert_eq!(body["pubkey"], "abcd1234");
-    assert_eq!(body["session_id"], "sess-xyz");
-}
-
-#[tokio::test]
-async fn test_request_reverify_forwards_caller_supplied_email() {
-    let server = StandIn::json(200, r#"{"success":true}"#).await;
-    MossSetaClient::with_url(&server.url())
-        .request_reverify("caller-supplied@example.com", "pk", "sid", "site")
-        .await
-        .expect("reverify ok");
-    assert_eq!(server.requests()[0].body_json()["email"], "caller-supplied@example.com");
-}
-
 /// Every request through the shared seta client must carry moss's
 /// User-Agent. reqwest's default is NO User-Agent header at all — the exact
 /// signal that made Cloudflare Bot Fight Mode issue managed challenges
@@ -613,7 +585,7 @@ async fn test_request_reverify_forwards_caller_supplied_email() {
 async fn test_shared_client_sends_moss_user_agent() {
     let server = StandIn::json(200, r#"{"success":true}"#).await;
     MossSetaClient::with_url(&server.url())
-        .request_reverify("ua@example.com", "pk", "sid", "site")
+        .request_auth("ua@example.com", "pk", "sid", None, &SignInFolder::default())
         .await
         .expect("request ok");
     let ua_value = server.requests()[0].header("user-agent").expect("a User-Agent header").to_string();
@@ -1215,29 +1187,88 @@ async fn transport_policy_blocks_remote_http_redirects_before_connecting() {
 #[test]
 fn site_limit_reached_parses_with_and_without_contact() {
     let with = r#"{"error":"site_limit_reached","limit":3,"contact":"help@example.com"}"#;
-    assert_eq!(
+    assert!(matches!(
         parse_site_limit_reached(403, with),
-        Some((3, Some("help@example.com".to_string())))
-    );
+        Some(SetaError::SiteLimitReached { limit: 3, contact: Some(c) }) if c == "help@example.com"
+    ));
     let without = r#"{"error":"site_limit_reached","limit":1}"#;
-    assert_eq!(parse_site_limit_reached(403, without), Some((1, None)));
+    assert!(matches!(parse_site_limit_reached(403, without), Some(SetaError::SiteLimitReached { limit: 1, contact: None })));
     let blank = r#"{"error":"site_limit_reached","limit":2,"contact":"  "}"#;
-    assert_eq!(parse_site_limit_reached(403, blank), Some((2, None)));
+    assert!(matches!(parse_site_limit_reached(403, blank), Some(SetaError::SiteLimitReached { limit: 2, contact: None })));
 }
 
 #[test]
 fn unknown_403_bodies_are_not_site_limit_reached() {
-    assert_eq!(parse_site_limit_reached(403, r#"{"error":"forbidden"}"#), None);
-    assert_eq!(parse_site_limit_reached(403, r#"{"error":"site_limit_reached"}"#), None);
-    assert_eq!(parse_site_limit_reached(403, "<html>nope</html>"), None);
-    assert_eq!(parse_site_limit_reached(400, r#"{"error":"site_limit_reached","limit":1}"#), None);
+    assert!(parse_site_limit_reached(403, r#"{"error":"forbidden"}"#).is_none());
+    assert!(parse_site_limit_reached(403, r#"{"error":"site_limit_reached"}"#).is_none());
+    assert!(parse_site_limit_reached(403, "<html>nope</html>").is_none());
+    assert!(parse_site_limit_reached(400, r#"{"error":"site_limit_reached","limit":1}"#).is_none());
+}
+
+// ── Refusals named by `code` ────────────────────────────────────────────────
+
+const CAP_SENTENCE: &str = "This folder is over the 1 GB limit. Remove some files and try again.";
+const SUPERSEDED_SENTENCE: &str = "Another publish of this site started after this one. Publish again.";
+
+async fn failed_sync(status: usize, body: &'static str) -> SetaError {
+    let server = StandIn::json(status, body).await;
+    MossSetaClient::with_identity_and_url(&test_identity(), &server.url())
+        .sync_manifest("s1", &Default::default(), &Default::default(), "g1")
+        .await
+        .expect_err("a refusal is an error")
+}
+
+#[tokio::test]
+async fn a_storage_cap_413_is_storage_cap_exceeded_and_shows_the_server_sentence() {
+    let err = failed_sync(
+        413,
+        r#"{"code":"storage_cap_exceeded","error":"This folder is over the 1 GB limit. Remove some files and try again.","cap_bytes":1073741824,"site_bytes":1586736868}"#,
+    )
+    .await;
+    assert!(
+        matches!(&err, SetaError::StorageCapExceeded { cap_bytes: 1073741824, site_bytes: Some(1586736868), message } if message == CAP_SENTENCE),
+        "{err:?}"
+    );
+    assert_eq!(err.to_string(), CAP_SENTENCE);
+}
+
+/// A per-file or per-chunk refusal carries no site total.
+#[test]
+fn a_storage_cap_refusal_without_a_site_total_still_parses() {
+    let body = r#"{"code":"storage_cap_exceeded","error":"over","cap_bytes":10}"#;
+    assert!(matches!(
+        parse_coded_refusal(413, body),
+        Some(SetaError::StorageCapExceeded { cap_bytes: 10, site_bytes: None, .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_superseded_409_is_deploy_superseded_and_shows_the_server_sentence() {
+    let err = failed_sync(
+        409,
+        r#"{"code":"deploy_superseded","error":"Another publish of this site started after this one. Publish again."}"#,
+    )
+    .await;
+    assert!(matches!(&err, SetaError::DeploySuperseded { message } if message == SUPERSEDED_SENTENCE), "{err:?}");
+    assert_eq!(err.to_string(), SUPERSEDED_SENTENCE);
+}
+
+/// A 413 or 409 the server does not name stays a plain `Api` error, so the
+/// chunked upload's offset-resync 409 keeps its own handling.
+#[tokio::test]
+async fn an_uncoded_413_or_409_stays_an_api_error() {
+    let err = failed_sync(413, r#"{"error":"Payload too large"}"#).await;
+    assert!(matches!(&err, SetaError::Api { status: 413, .. }), "{err:?}");
+    let err = failed_sync(409, r#"{"error":"offset mismatch"}"#).await;
+    assert!(matches!(&err, SetaError::Api { status: 409, .. }), "{err:?}");
+    assert!(parse_coded_refusal(409, r#"{"code":"storage_cap_exceeded","error":"x","cap_bytes":1}"#).is_none());
 }
 
 // ── `lang` on the verification request ─────────────────────────────────────
 
 #[test]
 fn auth_request_body_sends_lang_only_when_valid() {
-    let body = |l| auth_request_body("a@example.com", "pk", "sid", l);
+    let body = |l| auth_request_body("a@example.com", "pk", "sid", l, &SignInFolder::default());
     assert!(body(None).get("lang").is_none());
     assert_eq!(body(Some("zh-hans"))["lang"], "zh-hans");
     assert_eq!(body(Some("EN"))["lang"], "EN");
@@ -1250,7 +1281,7 @@ fn auth_request_body_sends_lang_only_when_valid() {
 
 #[test]
 fn auth_request_body_names_this_app_for_the_confirm_page() {
-    let body = auth_request_body("a@example.com", "pk", "sid", None);
+    let body = auth_request_body("a@example.com", "pk", "sid", None, &SignInFolder::default());
     let name = body["client"]["name"].as_str().unwrap();
     assert_eq!(name, device_name("moss", crate::system::device_kind()));
     assert_eq!(body["client"]["version"], crate::system::app_version());
@@ -1258,17 +1289,52 @@ fn auth_request_body_names_this_app_for_the_confirm_page() {
     assert!(!os.is_empty() && os != "macos", "a person's name for the OS, got {os:?}");
 }
 
+#[test]
+fn auth_request_body_names_the_folder_only_with_what_it_knows() {
+    let folder = |site_id: Option<&str>, name: Option<&str>| SignInFolder { site_id: site_id.map(Into::into), name: name.map(Into::into) };
+    let both = auth_request_body("a@example.com", "pk", "sid", None, &folder(Some("her-blog"), Some("Blog")));
+    assert_eq!((both["site_id"].as_str(), both["folder_name"].as_str()), (Some("her-blog"), Some("Blog")));
+    let new_site = auth_request_body("a@example.com", "pk", "sid", None, &folder(None, Some("Blog")));
+    assert!(new_site.get("site_id").is_none());
+    let unnamed = auth_request_body("a@example.com", "pk", "sid", None, &SignInFolder::default());
+    assert!(unnamed.get("site_id").is_none() && unnamed.get("folder_name").is_none());
+}
+
 #[tokio::test]
 async fn a_site_limit_403_through_the_failed_response_path_is_site_limit_reached() {
     let server = StandIn::json(403, r#"{"error":"site_limit_reached","limit":2,"contact":"help@example.com"}"#).await;
     let err = MossSetaClient::with_url(&server.url())
-        .request_auth("user@example.com", "pk", "sid", None)
+        .request_auth("user@example.com", "pk", "sid", None, &SignInFolder::default())
         .await
         .expect_err("a 403 is an error");
     assert!(
         matches!(&err, SetaError::SiteLimitReached { limit: 2, contact: Some(c) } if c == "help@example.com"),
         "{err:?}"
     );
+}
+
+/// A sign-in naming a site the key isn't signed in to is refused with the
+/// other site's address; a 429 naming its wait carries the wait, and one that
+/// names none stays an `Api` error.
+#[tokio::test]
+async fn a_sign_in_refused_for_another_site_or_as_too_soon_is_typed() {
+    let request = |server: &StandIn| {
+        let url = server.url();
+        async move { MossSetaClient::with_url(&url).request_auth("user@example.com", "pk", "sid", None, &SignInFolder::default()).await }
+    };
+    let server = StandIn::json(409, r#"{"error":"This folder's key is signed in to old-blog.mosspub.com.","code":"key_has_other_site","site":"old-blog.mosspub.com"}"#).await;
+    let err = request(&server).await.expect_err("refused");
+    assert!(matches!(&err, SetaError::KeyHasOtherSite { site } if site == "old-blog.mosspub.com"), "{err:?}");
+
+    let just_sent = || r#"{"error":"A verification email was just sent."}"#.to_string();
+    let server = StandIn::new(429, &[("content-type", "application/json"), ("retry-after", "17")], move |_, _| just_sent()).await;
+    let err = request(&server).await.expect_err("too soon");
+    assert!(matches!(&err, SetaError::TooSoon { retry_after, .. } if *retry_after == Duration::from_secs(17)), "{err:?}");
+    assert_eq!(err.to_string(), "A verification email was just sent.");
+
+    let server = StandIn::json(429, r#"{"error":"slow down"}"#).await;
+    let err = request(&server).await.expect_err("too soon");
+    assert!(matches!(&err, SetaError::Api { status: 429, .. }), "{err:?}");
 }
 
 /// The refusal a sign-in link lifts is logged at info, so the command line
@@ -1280,13 +1346,13 @@ async fn a_refusal_to_verify_the_email_is_no_warning() {
     use crate::build::cache::tests::logged_count;
     logged_count(log::Level::Info, "");
     let server = StandIn::json(403, r#"{"error":"Email verification required (refusal-4b1e)"}"#).await;
-    let err = MossSetaClient::with_url(&server.url()).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
+    let err = MossSetaClient::with_url(&server.url()).request_auth("user@example.com", "pk", "sid", None, &SignInFolder::default()).await.expect_err("a 403 is an error");
     assert!(matches!(&err, SetaError::Api { status: 403, message } if asks_to_verify_email(403, message)), "{err:?}");
     assert_eq!(logged_count(log::Level::Warn, "refusal-4b1e"), 0);
     assert_eq!(logged_count(log::Level::Info, "refusal-4b1e"), 1);
 
     let server = StandIn::json(403, r#"{"error":"Not the owner of this site (refusal-7c2d)"}"#).await;
-    MossSetaClient::with_url(&server.url()).request_auth("user@example.com", "pk", "sid", None).await.expect_err("a 403 is an error");
+    MossSetaClient::with_url(&server.url()).request_auth("user@example.com", "pk", "sid", None, &SignInFolder::default()).await.expect_err("a 403 is an error");
     assert_eq!(logged_count(log::Level::Warn, "refusal-7c2d"), 1);
 }
 
@@ -1359,7 +1425,7 @@ signed_call! {
     assign_domain_is_signed: "PUT" "/api/domains/example.com/assign" => |c| c.assign_domain("example.com", "s1");
     get_domain_status_is_signed: "GET" "/api/domains/example.com/status" => |c| c.get_domain_status_for_host("example.com");
     register_site_is_signed: "POST" "/api/sites" => |c| c.register_site("s1");
-    sync_manifest_is_signed: "POST" "/api/sites/s1/sync" => |c| c.sync_manifest("s1", &[("a.html".to_string(), "h".to_string())].into(), "g1");
+    sync_manifest_is_signed: "POST" "/api/sites/s1/sync" => |c| c.sync_manifest("s1", &[("a.html".to_string(), "h".to_string())].into(), &[("a.html".to_string(), 1)].into(), "g1");
     upload_file_is_signed: "PUT" "/api/sites/s1/files/docs%2Fa%20b.html" => |c| c.upload_file("s1", "docs/a b.html", b"<p>".to_vec(), "g1", None);
     upload_symlink_is_signed: "PUT" "/api/sites/s1/files/latest" => |c| c.upload_symlink("s1", "latest", "v2".into(), "g1");
     list_upload_sessions_is_signed: "GET" "/api/sites/s1/uploads?generation_id=g1" => |c| c.list_upload_sessions("s1", "g1");
@@ -1419,7 +1485,7 @@ fn this_mac_is_named_by_the_family_system_information_gives() {
 /// nothing taken from the computer's name.
 #[test]
 fn the_owners_computer_name_never_reaches_the_sign_in_request() {
-    let body = auth_request_body("a@example.com", "pk", "sid", None);
+    let body = auth_request_body("a@example.com", "pk", "sid", None, &SignInFolder::default());
     let sent = body["client"]["name"].as_str().unwrap().to_string();
     let allowed: Vec<String> = std::iter::once("moss".to_string())
         .chain(crate::system::DEVICE_KINDS.iter().map(|k| format!("moss on {k}")))

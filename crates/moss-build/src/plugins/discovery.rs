@@ -185,6 +185,12 @@ pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
     let manifest: PluginManifest = PluginManifest::parse(&manifest_content)
         .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
 
+    // A plugin named after a built-in target would be shadowed by it at
+    // publish, so it never loads.
+    if crate::config::deployment::is_built_in_target(&manifest.name) {
+        return Err(format!("\"{}\" is the name of a host built into moss; a plugin cannot use it", manifest.name));
+    }
+
     // Whether this plugin may run at all is the app's call, not the build
     // tree's, and it is asked before anything else touches the plugin. Here
     // rather than in `discover_installed_plugins` because four of this
@@ -624,6 +630,20 @@ mod tests {
         let result = load_plugin(&plugin_dir);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("manifest.json not found"));
+    }
+
+    /// A plugin called `server` would be shadowed at publish by the host of
+    /// that name moss owns, so it is refused where every plugin loads.
+    #[test]
+    fn a_plugin_named_after_a_built_in_host_does_not_load() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("server");
+        fs::create_dir(&plugin_dir).unwrap();
+        fs::write(plugin_dir.join("manifest.json"), r#"{"name": "server", "version": "1.0.0", "entry": "main.js"}"#).unwrap();
+        fs::write(plugin_dir.join("main.js"), "// plugin code").unwrap();
+
+        let refused = load_plugin(&plugin_dir).err().expect("refused");
+        assert!(refused.contains("built into moss"), "{refused}");
     }
 
     #[test]

@@ -92,3 +92,14 @@ fn terminal_opens_loopback_and_print_modes_only_print_public_link_and_qr() {
         }
     }
 }
+
+#[test]
+fn a_flag_for_the_served_editor_is_never_handed_to_the_app() {
+    let installed = || true;
+    assert!(hands_off(&parse(&["garden"]).unwrap(), true, installed));
+    for flags in [&["--serve", "garden"][..], &["--no-browser", "garden"], &["--port", "9000", "garden"]] {
+        assert!(!hands_off(&parse(flags).unwrap(), true, installed), "{flags:?} went to the app");
+    }
+    assert!(!hands_off(&parse(&["garden"]).unwrap(), false, installed), "no terminal still went to the app");
+    assert!(!hands_off(&parse(&["garden"]).unwrap(), true, || false), "no app to hand to");
+}

@@ -816,7 +816,7 @@ pub(crate) fn expand_markers_in_documents(
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     site_typesetting: Option<&str>,
 ) {
-    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None, upcoming::now())
+    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None, crate::build::inputs::now())
 }
 
 /// Whether a folder-embed marker on the page asks for `motion:marquee`.
@@ -929,7 +929,7 @@ pub(crate) fn resolve_markers(
 ) -> String {
     resolve_markers_with_place_maps(
         html, from_md_path, all_docs, project, dir_overrides, site_lang,
-        typesetting, media_lookup, math, None, None, upcoming::now(),
+        typesetting, media_lookup, math, None, None, crate::build::inputs::now(),
     )
 }
 

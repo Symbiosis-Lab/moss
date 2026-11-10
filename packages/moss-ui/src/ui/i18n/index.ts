@@ -1,4 +1,5 @@
-import { UI_STRINGS, type AppLocale, type UiStringMap } from './ui-strings';
+import { UI_STRINGS, PLATFORM_VARIANTS, type AppLocale, type PlatformVariantKey, type UiStringMap } from './ui-strings';
+import { uiPlatform } from '../utils/platform';
 
 let locale: AppLocale = 'en';
 
@@ -65,7 +66,9 @@ export function interpolate(template: string, params: TParams): string {
  * Pass `params` to fill `{name}` placeholders, e.g. `t('publish.as', { email })`.
  */
 export function t(key: keyof UiStringMap, params?: TParams): string {
-  const template = UI_STRINGS[locale][key] ?? UI_STRINGS.en[key] ?? key;
+  const p = uiPlatform();
+  const variant = p === 'other' ? undefined : PLATFORM_VARIANTS[locale][`${key}@${p}` as PlatformVariantKey];
+  const template = variant ?? UI_STRINGS[locale][key] ?? UI_STRINGS.en[key] ?? key;
   return params ? interpolate(template, params) : template;
 }
 
@@ -96,7 +99,12 @@ function platformWords(platforms: string[]): string {
     }),
   );
   if (words.size === 0) return t('platform.other');
-  return new Intl.ListFormat(localeTag(), { type: 'conjunction' }).format([...words]);
+  return andList([...words]);
+}
+
+/** Names joined the reader's way: "Bluesky, Mastodon, and Matters", "Bluesky、Mastodon和Matters". */
+export function andList(words: readonly string[]): string {
+  return new Intl.ListFormat(localeTag(), { type: 'conjunction' }).format(words);
 }
 
 export function refusalTooltip(refusal: RefusalLike, name: string): string {
@@ -263,18 +271,6 @@ export function formatNumber(n: number, opts?: Intl.NumberFormatOptions): string
     nfCache.set(key, f);
   }
   return f.format(n);
-}
-
-/** The platform's own name for revealing a path in its file manager. */
-export function revealMenuLabel(): string {
-  const p =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-    navigator.platform ||
-    '';
-  const lower = p.toLowerCase();
-  if (lower.includes('mac')) return t('tree.reveal_finder');
-  if (lower.includes('win')) return t('tree.reveal_explorer');
-  return t('tree.reveal_filemanager');
 }
 
 export type { AppLocale, UiStringMap };

@@ -44,7 +44,7 @@ pub(crate) mod blob_residency;
 mod records;
 mod publication;
 mod process_memo;
-pub(crate) use process_memo::{KeyedMemo, ProcessMemo, ROOTS};
+pub(crate) use process_memo::{KeyedMemo, MemoFile, ProcessMemo, ROOTS};
 use crate::build::cloud_readiness::StorageOperation;
 pub use records::{Merged, RecordMode};
 
@@ -111,6 +111,13 @@ impl ObjectStore {
     /// the copy reads no blob the presence pass just verified.
     pub(crate) fn for_seal(mp: &crate::moss_paths::MossPaths) -> Self {
         Self::for_site(mp).remembering_verified(&mp.cache_verified_blobs())
+    }
+
+    /// `mp`'s store for one video run, remembering what earlier runs verified:
+    /// a cached video is gigabytes, so its blobs are read again only when their
+    /// stat moves.
+    pub(crate) fn for_video_run(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_video_blobs())
     }
 
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
@@ -687,6 +694,12 @@ impl TransformCache {
         Self { base: mp.cache_transforms(), objects: ObjectStore::for_site(mp) }
     }
 
+    /// `mp`'s transform cache over `objects`, for a caller that also links
+    /// through that store: one store checks a blob once.
+    pub(crate) fn over(mp: &crate::moss_paths::MossPaths, objects: &ObjectStore) -> Self {
+        Self { base: mp.cache_transforms(), objects: objects.clone() }
+    }
+
     /// Returns the root directory of this transform cache — typically `.moss/cache/transforms/`.
     pub fn root(&self) -> &Path {
         &self.base
@@ -1191,6 +1204,12 @@ fn count_hit<T>(hit: Option<T>) -> Option<T> {
         HITS.fetch_add(1, Ordering::Relaxed);
     }
     hit
+}
+
+/// Record in the build how many shared-cache publications failed since the last call.
+pub(crate) fn report_publication_failures() {
+    let failed = crate::build::cloud_prefetch::PUBLICATION_FAILURES.swap(0, Ordering::Relaxed);
+    crate::build::phase::record_count("cache_publication_failures", failed as usize);
 }
 
 /// Print, at `info`, what the index did since the last call, and start over.

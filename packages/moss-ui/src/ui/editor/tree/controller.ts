@@ -1137,12 +1137,15 @@ export class FileTree {
       return;
     }
 
-    // For non-cross-pane actions: only handle if focus is inside the tree
-    // or on the document body (no element focused). This prevents the tree
-    // from stealing keystrokes when CM6 editor has focus.
-    const activeEl = document.activeElement;
-    const treeHasFocus = this.container?.contains(activeEl) || activeEl === document.body || activeEl === document.documentElement;
-    if (!treeHasFocus) return;
+    // For non-cross-pane actions: only handle a key pressed inside the tree or
+    // with nothing focused, so the tree never takes keystrokes meant for the
+    // editor. Judged by the event's target, the element focused when the key
+    // went down: an earlier handler (the heading committing on Enter) can drop
+    // focus to the body before the key reaches this listener.
+    const origin = event.target instanceof Node ? event.target : null;
+    const pressedInTree = origin === null || origin === document || origin === document.body
+      || origin === document.documentElement || this.container?.contains(origin) === true;
+    if (!pressedInTree) return;
 
     switch (action.kind) {
       case 'moveFocus': {

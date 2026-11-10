@@ -26,7 +26,9 @@ struct Gate {
     must_precede: Option<&'static str>,
 }
 
-const PUBLISH_PREFLIGHT: &str = "deploy::refuse_publish(";
+/// Both routes ask `refuse_before_upload`, which owns the publish preflight;
+/// `the_shared_refusals_still_ask_the_publish_preflight` pins that link.
+const PUBLISH_PREFLIGHT: &str = "refuse_before_upload(";
 const PUBLISH_SETUP: &str = "publish_setup::refuse_publish(";
 const BROKEN_FILE: &str = "a site with a broken file can be published from it. Restore the \
      call AFTER the in-flight drain and the pre-publish rebuild — earlier reads \
@@ -84,4 +86,21 @@ fn every_publish_path_asks_its_gates() {
             );
         }
     }
+}
+
+/// The routes above only prove they ask the shared sequence; this proves the
+/// sequence still asks the publish preflight.
+#[test]
+fn the_shared_refusals_still_ask_the_publish_preflight() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(root.join("src/deploy.rs")).expect("src/deploy.rs must be readable");
+    let helper = src
+        .split("fn refuse_before_upload(")
+        .nth(1)
+        .expect("deploy.rs must define refuse_before_upload");
+    let body = helper.split("\n}\n").next().unwrap_or(helper);
+    assert!(
+        body.contains("refuse_publish("),
+        "refuse_before_upload no longer calls refuse_publish — {BROKEN_FILE}"
+    );
 }

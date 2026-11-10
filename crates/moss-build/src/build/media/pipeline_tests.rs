@@ -213,6 +213,59 @@ fn copy_deferred_assets_preserves_directory_symlink() {
     assert_eq!(through_alias, b"<h1>app</h1>");
 }
 
+/// The manifest a copy seals for a site whose `resources/app` folder is linked
+/// from `cafe\u{301}/link` by `make_link(target, link)`.
+#[cfg(unix)]
+fn sealed_with_a_link_in_a_decomposed_folder(make_link: impl Fn(&Path, &Path)) -> crate::build::manifest::SealedManifest {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = tmp.path().join("source");
+    let moss = tmp.path().join(".moss");
+    let staging = moss.join("build/site-stage");
+    for dir in [&source.join("resources/app"), &source.join("cafe\u{301}"), &staging, &moss.join("cache/objects")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(source.join("resources/app/index.html"), b"<h1>app</h1>").unwrap();
+    make_link(&source.join("resources/app"), &source.join("cafe\u{301}/link"));
+    let ctx = crate::types::services::BackgroundContext {
+        source_path: source.to_string_lossy().to_string(),
+        staging_dir: staging,
+        moss_dir: moss,
+        ..crate::types::services::BackgroundContext::for_test()
+    };
+    let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
+    copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
+    drained_sealed(rx)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_in_a_folder_the_disk_spells_decomposed_is_published() {
+    let sealed = sealed_with_a_link_in_a_decomposed_folder(|_, link| std::os::unix::fs::symlink("../resources/app", link).unwrap());
+    assert!(sealed.files().contains_key("caf\u{e9}/link"), "{:?}", sealed.files().keys().collect::<Vec<_>>());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_finder_alias_in_a_folder_the_disk_spells_decomposed_is_published() {
+    use core_foundation::{base::TCFType, data::CFData, url::CFURL};
+    use core_foundation_sys::url::{kCFURLBookmarkCreationSuitableForBookmarkFile, CFURLCreateBookmarkData, CFURLWriteBookmarkDataToFile};
+    let write_alias = |target: &Path, alias: &Path| {
+        let target = CFURL::from_path(target, true).unwrap();
+        let alias = CFURL::from_path(alias, false).unwrap();
+        // SAFETY: both URLs are live for the block; the bookmark is taken under
+        // the Create Rule, and a null error out-pointer is allowed.
+        unsafe {
+            let data = CFURLCreateBookmarkData(std::ptr::null(), target.as_concrete_TypeRef(),
+                kCFURLBookmarkCreationSuitableForBookmarkFile, std::ptr::null(), std::ptr::null(), std::ptr::null_mut());
+            assert!(!data.is_null());
+            let data = CFData::wrap_under_create_rule(data);
+            assert_ne!(CFURLWriteBookmarkDataToFile(data.as_concrete_TypeRef(), alias.as_concrete_TypeRef(), 0, std::ptr::null_mut()), 0);
+        }
+    };
+    let sealed = sealed_with_a_link_in_a_decomposed_folder(write_alias);
+    assert!(sealed.files().contains_key("caf\u{e9}/link"), "{:?}", sealed.files().keys().collect::<Vec<_>>());
+}
+
 /// Integration test: a preserved symlink registers a manifest entry
 /// under MODE_SYMLINK so the deploy uploader will ship it as a symlink
 /// to seta. Without this, the symlink would be silently dropped from
@@ -792,7 +845,7 @@ async fn seal_hand_written_page(builds: usize, stale_memo: bool) -> (Vec<Option<
 
     let raw = b"<html><body data-moss-preview=\"\"><p>hand written</p></body></html>";
     fs::write(source.join("page.html"), raw).unwrap();
-    let shipped = crate::build::ship::apply_transform(crate::build::served_path::ShipTransform::StripPreviewAttrs, raw);
+    let shipped = crate::build::ship::apply_transform(crate::build::served_path::ShipTransform::StripPreviewAttrs, &Default::default(), raw);
     assert_ne!(shipped.as_slice(), &raw[..], "fixture must actually change under the transform");
     let expected = crate::types::content::file_entry(&crate::build::assets::paths::compute_binary_hash(&shipped));
 
@@ -1830,7 +1883,7 @@ fn recall_or_hash_output_memoizes_the_real_hash() {
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let got = recall_or_hash_output(&memo, "oid-x", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let got = recall_or_hash_output(&memo, "oid-x", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
 
     assert_eq!(got, expected, "a miss must return exactly what compute_binary_hash_file returns");
     assert_eq!(
@@ -1850,7 +1903,7 @@ fn recall_or_hash_output_hit_does_not_read_the_file() {
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let first = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let first = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(first, expected);
 
     // Delete the file entirely. A second call that reads it would fail
@@ -1858,7 +1911,7 @@ fn recall_or_hash_output_hit_does_not_read_the_file() {
     // so returning the real hash here is proof the memo hit short-circuited
     // before any file I/O.
     std::fs::remove_file(&target).unwrap();
-    let second = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let second = recall_or_hash_output(&memo, "oid-y", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(second, expected, "a memo hit must not touch the (now-deleted) file");
 }
 
@@ -1871,7 +1924,7 @@ fn recall_or_hash_output_never_memoizes_the_fallback() {
     let target = tmp.path().join("missing.bin");
 
     let memo = ManifestHashMemo::load(&tmp.path().join("no-such-memo.json"));
-    let failed = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let failed = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(failed, "fallback-oid", "a hash failure must return the fallback");
     assert_eq!(memo.get("oid-z"), None, "a failed hash must never be memoized");
 
@@ -1879,7 +1932,7 @@ fn recall_or_hash_output_never_memoizes_the_fallback() {
     // is looked up again — this must be a genuine miss, not a poisoned hit.
     std::fs::write(&target, b"now it exists").unwrap();
     let expected = crate::build::assets::paths::compute_binary_hash_file(&target).unwrap();
-    let recovered = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs);
+    let recovered = recall_or_hash_output(&memo, "oid-z", &target, "fallback-oid", "output", crate::build::served_path::ShipTransform::CopyAsIs, &Default::default());
     assert_eq!(recovered, expected, "a subsequent successful read must record the real xxh3");
     assert_eq!(memo.get("oid-z").as_deref(), Some(expected.as_str()));
 }

@@ -1355,8 +1355,9 @@ pub fn make_removed_addresses_advisory(
 // the tombstone in `infra::app_advisory` for why. It is a log fact now.
 
 // `make_uid_deferred_advisory` stood here and was deleted on 2026-08-30. A
-// deferral is now rare — `resolve_duplicate_uids` re-mints any contender this
-// install has never built, which is the shape a duplicated note makes — and
+// deferral is now rare — `resolve_duplicate_uids` gives a new uid to any
+// contender no build served under the contested one, which is the shape a
+// duplicated note makes — and
 // what is left is not the author's to diagnose or fix. A note ID is moss's to
 // manage; the remaining collisions go to the log.
 

@@ -11,6 +11,8 @@ use moss_core::slug::generate_slug;
 use moss_core::template::{normalise_folder, SiteLanguages, Template, TemplateFile, TemplateKind};
 use serde_yaml::Value;
 
+use crate::build::scan::path_collision::on_disk;
+
 pub const FOLDER_KEY: &str = "_template_folder";
 const NAME_KEY: &str = "_template_name";
 const KIND_KEY: &str = "_template_kind";
@@ -171,7 +173,7 @@ fn page_path(site_root: &Path, rel: &str) -> Result<PathBuf, String> {
     if rel_path.is_absolute() || rel_path.components().any(|c| !matches!(c, Component::Normal(_))) {
         return Err(format!("'{rel}' is not a page inside the site"));
     }
-    let path = site_root.join(rel_path);
+    let path = on_disk(site_root, rel);
     let real = path.canonicalize().map_err(|e| format!("Failed to read '{rel}': {e}"))?;
     let root = site_root.canonicalize().map_err(|e| format!("Failed to read the site: {e}"))?;
     if !real.starts_with(&root) {

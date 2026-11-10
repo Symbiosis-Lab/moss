@@ -16,7 +16,6 @@ import {
 import { t } from "../i18n/index";
 import type { UiStringMap } from "../i18n/index";
 import { openCtxMenu } from "../shared/ui/ctx-menu";
-import { isMacPlatform } from "../utils/kbd-label";
 import { count as diagCount } from "../lib/diag";
 
 export type ResolveImageFn = (target: string) => {
@@ -201,11 +200,6 @@ const KIND_LABEL_KEYS: Record<MediaEmbedKind, keyof UiStringMap> = {
   table: 'editmisc.kind.table',
   embed: 'editmisc.kind.embed',
 };
-
-/** The follow chord as a `.ctx-kbd` chip: the platform's own modifier. */
-function modifierChip(): string {
-  return isMacPlatform() ? '⌘↩' : 'Ctrl+↩';
-}
 
 function labelFor(kind: string): string {
   return t(KIND_LABEL_KEYS[kind as MediaEmbedKind] ?? KIND_LABEL_KEYS.embed);
@@ -406,7 +400,7 @@ export class MediaEmbedBlockWidget extends WidgetType {
       openCtxMenu({
         entries: [{
           label: t('editmisc.open_reference'),
-          kbd: modifierChip(),
+          kbd: '⌘↩',
           action: () => follow(),
         }],
         position: { kind: 'point', x: e.clientX, y: e.clientY },

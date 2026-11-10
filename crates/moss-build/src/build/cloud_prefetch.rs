@@ -130,6 +130,20 @@ use operations::{structural_reader_loop, finish_operation};
 /// minutes those threads are wedged and more readers would only widen the loss.
 pub const READERS: usize = 8;
 
+/// Readers for cache-record publications, on top of [`READERS`]. The system
+/// downloads a record the build finds in the cloud ([`crate::platform::request_download`]),
+/// so these mostly read and write files that are already local, and the byte
+/// readers' width serves: on an evicted Google Drive folder, a first build took
+/// 90 s with six and 94 s with twenty-four. They count toward the blast radius
+/// above.
+pub const PUBLICATION_READERS: usize = 6;
+
+/// Publications admitted without waiting. A queued publication is its record
+/// edit (at most `MAX_RECORD_BYTES`, about 1–2 KB in practice) and a closure, so
+/// this is a memory bound of a few tens of megabytes, sized for a folder whose
+/// whole cache is in the cloud. Past it, an admission waits under the stall rule.
+pub const PUBLICATION_WAITING: usize = 32_768;
+
 /// Structural reads cannot be starved by wedged byte downloads. Native calls
 /// remain bounded to eight byte readers plus these two reserved workers.
 const STRUCTURAL_READERS: usize = 2;
@@ -336,8 +350,10 @@ struct Queue {
     structural_arrivals: HashMap<OperationKey, OperationOwner>,
     capacity_waiters: HashMap<PathBuf, OperationOwner>,
     editor_intents: VecDeque<(OperationKey, OperationOwner)>,
-    /// Background FIFO; the sweep feeds it in bounded batches.
-    fifo: VecDeque<BackgroundWork>,
+    /// Background byte reads; the sweep feeds them in bounded batches.
+    bytes: VecDeque<PathBuf>,
+    /// Cache publications, each with the time it may run (a retry waits).
+    publications: VecDeque<(OperationKey, Arc<OperationTask>, Instant)>,
     /// Requested page inputs can overtake files already waiting in `fifo`.
     foreground: VecDeque<PathBuf>,
     /// Paths queued or being read. Not a scheduling structure — it just stops
@@ -349,14 +365,34 @@ struct Queue {
     /// counted so a stall can name the file and its age — see
     /// [`Snapshot::oldest_read`].
     in_flight: HashMap<PathBuf, Instant>,
-    background_in_flight: usize,
+    bytes_in_flight: usize,
     /// Active concrete read failures, pruned by the folder’s next sweep.
     failures: HashSet<PathBuf>,
     /// Reads and operations finished. Counted in the same locked step that
     /// frees their slot, so a snapshot never sees one both done and in flight.
     done: u64,
+    /// When a reader last took a job: a publication waiting for room waits
+    /// only while the queue is moving.
+    last_pop: Instant,
     shutdown: bool,
 }
+
+thread_local! {
+    /// Set on this pool's reader threads, which must never wait for room only they can make.
+    static ON_READER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Publications admitted and publications ended for good, process-wide, for the
+/// progress line a build shows while it saves records a provider kept in the cloud.
+pub(crate) static PUBLICATIONS_ADMITTED: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PUBLICATIONS_FINISHED: AtomicU64 = AtomicU64::new(0);
+
+/// Publications that ended in a failure they will not be retried after,
+/// process-wide, for the build record. Each is also logged once, where it ends.
+pub(crate) static PUBLICATION_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// How long a publication waiting for room waits with no job taken before it gives up.
+pub(crate) const PUBLICATION_STALL: Duration = Duration::from_secs(5);
 
 impl Queue {
     fn structural_count(&self) -> usize {
@@ -371,7 +407,12 @@ struct Inner {
     structural_work: Condvar,
     materialize: Materializer,
     settlement_emitter: Mutex<Option<crate::ops::watch::EventRelay>>,
-    background_limit: usize,
+    bytes_limit: usize,
+    publication_limit: usize,
+    /// Publications admitted without waiting.
+    admission: usize,
+    /// This pool's share of [`PUBLICATION_FAILURES`].
+    publication_failures: AtomicU64,
 }
 
 /// A fixed set of expendable workers for byte reads and owned native file
@@ -384,12 +425,19 @@ impl Prefetcher {
     /// Start the real thing: threads that opt themselves in to materialization
     /// and then read whatever they are handed.
     pub fn new() -> Self {
-        Self::with_materializer(READERS, Arc::new(materialize), true)
+        Self::with_lanes(READERS, PUBLICATION_READERS, Arc::new(materialize), true)
     }
 
     /// Test seam. `opt_in` is false so a test's threads do not touch the
-    /// process's I/O policy.
+    /// process's I/O policy. Byte reads and publications share the `readers`.
     pub fn with_materializer(readers: usize, materialize: Materializer, opt_in: bool) -> Self {
+        Self::with_lanes(readers, 0, materialize, opt_in)
+    }
+
+    /// `readers` threads for byte reads, of which all but two may serve the
+    /// background, plus `publication_readers` more that publications may use.
+    fn with_lanes(readers: usize, publication_readers: usize, materialize: Materializer, opt_in: bool) -> Self {
+        let background = readers.saturating_sub(2).max(1);
         let inner = Arc::new(Inner {
             queue: Mutex::new(Queue {
                 structural: VecDeque::new(),
@@ -399,22 +447,27 @@ impl Prefetcher {
                 structural_arrivals: HashMap::new(),
                 capacity_waiters: HashMap::new(),
                 editor_intents: VecDeque::new(),
-                fifo: VecDeque::new(),
+                bytes: VecDeque::new(),
+                publications: VecDeque::new(),
                 foreground: VecDeque::new(),
                 pending: HashSet::new(),
                 in_flight: HashMap::new(),
-                background_in_flight: 0,
+                bytes_in_flight: 0,
                 failures: HashSet::new(),
                 done: 0,
+                last_pop: Instant::now(),
                 shutdown: false,
             }),
             work: Condvar::new(),
             structural_work: Condvar::new(),
             materialize,
             settlement_emitter: Mutex::new(None),
-            background_limit: readers.saturating_sub(2).max(1),
+            bytes_limit: background,
+            publication_limit: if publication_readers == 0 { background } else { publication_readers },
+            admission: if publication_readers == 0 { BACKGROUND_WAITING } else { PUBLICATION_WAITING },
+            publication_failures: AtomicU64::new(0),
         });
-        for i in 0..readers {
+        for i in 0..readers + publication_readers {
             let inner = Arc::clone(&inner);
             // Deliberately not retained for `join`: a thread blocked in the
             // kernel on a provider that has stopped answering cannot be
@@ -427,6 +480,7 @@ impl Prefetcher {
                     if opt_in {
                         crate::platform::materialize_on_this_thread();
                     }
+                    ON_READER.with(|on| on.set(true));
                     reader_loop(&inner);
                 });
         }
@@ -436,6 +490,7 @@ impl Prefetcher {
                 .name(format!("moss-cloud-structure-{i}"))
                 .spawn(move || {
                     if opt_in { crate::platform::materialize_on_this_thread(); }
+                    ON_READER.with(|on| on.set(true));
                     structural_reader_loop(&inner);
                 });
         }
@@ -471,9 +526,8 @@ impl Prefetcher {
         }
         if q.pending.contains(path) {
             if foreground {
-                if let Some(index) = q.fifo.iter().position(|job| matches!(job, BackgroundWork::Bytes(p) if p == path)) {
-                    if let Some(queued) = q.fifo.remove(index) {
-                        let BackgroundWork::Bytes(queued) = queued else { unreachable!("foreground promotion selects bytes") };
+                if let Some(index) = q.bytes.iter().position(|p| p == path) {
+                    if let Some(queued) = q.bytes.remove(index) {
                         q.foreground.push_back(queued);
                         drop(q);
                         self.inner.work.notify_one();
@@ -483,14 +537,14 @@ impl Prefetcher {
             }
             return;
         }
-        if !foreground && q.fifo.len() >= BACKGROUND_WAITING {
+        if !foreground && q.bytes.len() >= BACKGROUND_WAITING {
             return;
         }
         q.pending.insert(path.to_path_buf());
         if foreground {
             q.foreground.push_back(path.to_path_buf());
         } else {
-            q.fifo.push_back(BackgroundWork::Bytes(path.to_path_buf()));
+            q.bytes.push_back(path.to_path_buf());
         }
         drop(q);
         self.inner.work.notify_one();
@@ -547,17 +601,34 @@ impl Prefetcher {
     }
 
     pub(crate) fn cache_publication_revision(&self, key: OperationKey, attempt: Operation, revision: Option<Arc<AtomicU64>>) -> Option<Arc<OperationTask>> {
+        self.cache_publication_within(key, attempt, revision, Duration::ZERO, PUBLICATION_STALL)
+    }
+
+    /// [`cache_publication_revision`](Self::cache_publication_revision), holding
+    /// the caller for up to `wait` while [`PUBLICATION_WAITING`] are queued
+    /// instead of refusing at once, and only while a reader has taken a job within `stall`: a
+    /// provider that stops answering costs the first waiter `stall` and the
+    /// rest nothing. A reader thread never waits, since only the readers make room.
+    pub(crate) fn cache_publication_within(&self, key: OperationKey, attempt: Operation, revision: Option<Arc<AtomicU64>>, wait: Duration, stall: Duration) -> Option<Arc<OperationTask>> {
+        let end = Instant::now() + if ON_READER.with(std::cell::Cell::get) { Duration::ZERO } else { wait };
         let mut q = self.inner.queue.lock().ok()?;
-        if q.shutdown { return None; }
-        if let Some(task) = q.operation_pending.get(&key) { return Some(task.clone()); }
-        if q.fifo.len() >= BACKGROUND_WAITING { return None; }
+        loop {
+            if q.shutdown { return None; }
+            if let Some(task) = q.operation_pending.get(&key) { return Some(task.clone()); }
+            if q.publications.len() < self.inner.admission { break; }
+            let until = end.min(q.last_pop + stall);
+            let now = Instant::now();
+            if now >= until { return None; }
+            q = self.inner.work.wait_timeout(q, until - now).ok()?.0;
+        }
         let mut task = OperationTask::new(&key, attempt);
         task.request.owner = OperationOwner::Host;
         task.revision = revision;
         task.state.lock().unwrap().waiters = 0;
         let task = Arc::new(task);
         q.operation_pending.insert(key.clone(), task.clone());
-        q.fifo.push_back(BackgroundWork::Publication(key, task.clone(), Instant::now()));
+        q.publications.push_back((key, task.clone(), Instant::now()));
+        PUBLICATIONS_ADMITTED.fetch_add(1, Ordering::Relaxed);
         drop(q);
         self.inner.work.notify_all();
         Some(task)
@@ -586,12 +657,80 @@ impl Prefetcher {
         StructuralArrivals { retry_admission, completed }
     }
 
+    /// Wait for the cache publications queued or being written, retries
+    /// included, for as long as they keep landing: the wait ends when none is
+    /// left or none has finished for `stall`. `progress` is called at most every
+    /// `every` with how many are left. How many had not landed.
+    pub(crate) fn drain_publications(&self, stall: Duration, every: Duration, progress: &mut dyn FnMut(usize)) -> usize {
+        self.drain_where(stall, None, &|_| true, every, progress)
+    }
+
+    /// [`drain_publications`](Self::drain_publications) for the publications
+    /// `wanted` names only, ending at `cap` as well as at the stall.
+    pub(crate) fn drain_where(&self, stall: Duration, cap: Option<Duration>, wanted: &dyn Fn(&OperationKey) -> bool, every: Duration, progress: &mut dyn FnMut(usize)) -> usize {
+        let pending = |q: &Queue| q.cache_in_flight.keys().filter(|key| wanted(key)).count() + q.publications.iter().filter(|(key, _, _)| wanted(key)).count();
+        let mut q = self.inner.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let started = Instant::now();
+        let end = cap.map(|cap| started + cap);
+        let (mut left, mut landed_at, mut said_at) = (pending(&q), started, started);
+        loop {
+            let now = Instant::now();
+            if left == 0 || now >= landed_at + stall || end.is_some_and(|end| now >= end) { return left; }
+            if now >= said_at + every { progress(left); said_at = now; }
+            // Every finished job notifies `work`.
+            let until = end.map_or(landed_at + stall, |end| end.min(landed_at + stall)).min(said_at + every);
+            q = match self.inner.work.wait_timeout(q, until.saturating_duration_since(now)) { Ok((q, _)) => q, Err(e) => e.into_inner().0 };
+            let now_left = pending(&q);
+            if now_left < left { landed_at = Instant::now(); }
+            left = now_left;
+        }
+    }
+
+    /// Drop the publications still queued for a store under `folder`, and the
+    /// cache leases their closures hold, when the folder is closed. Ones already
+    /// running finish.
+    pub(crate) fn drop_publications_under(&self, folder: &Path) -> usize {
+        self.drop_publications_where(&|key| matches!(&key.policy, OperationPolicy::CachePublication { root, .. } if root.starts_with(folder)))
+    }
+
+    /// Before the process ends: drop the queued copies of stored outputs, which
+    /// would hold readers the records need and are lost at exit anyway, then let
+    /// the records land while they keep landing, for at most `cap`. How many
+    /// records did not land.
+    pub(crate) fn drain_records_for_exit(&self, stall: Duration, cap: Duration) -> usize {
+        let is_record = |key: &OperationKey| matches!(&key.policy, OperationPolicy::CachePublication { kind: crate::build::cloud_readiness::storage::PublicationKind::Record, .. });
+        self.drop_publications_where(&|key| !is_record(key));
+        self.drain_where(stall, Some(cap), &is_record, cap, &mut |_| {})
+    }
+
+    /// Drop the queued publications `which` names, and what their closures hold.
+    /// Ones already running finish.
+    fn drop_publications_where(&self, which: &dyn Fn(&OperationKey) -> bool) -> usize {
+        let Ok(mut q) = self.inner.queue.lock() else { return 0 };
+        let mut dropped = Vec::new();
+        q.publications.retain(|(key, task, _)| {
+            let ours = which(key);
+            if ours { dropped.push((key.clone(), task.clone())); }
+            !ours
+        });
+        for (key, _) in &dropped { q.operation_pending.remove(key); }
+        let n = dropped.len();
+        drop(q);
+        drop(dropped);
+        n
+    }
+
+    /// Publications of this pool that ended in a failure.
+    pub(crate) fn publication_failures(&self) -> u64 {
+        self.inner.publication_failures.load(Ordering::Relaxed)
+    }
+
     /// Queue depth and in-flight count, for the stall diagnosis.
     pub fn snapshot(&self) -> Snapshot {
         let now = Instant::now();
         match self.inner.queue.lock() {
             Ok(q) => Snapshot {
-                waiting: q.fifo.len() + q.foreground.len() + q.structural.len(),
+                waiting: q.bytes.len() + q.publications.len() + q.foreground.len() + q.structural.len(),
                 in_flight: q.in_flight.len() + q.structural_in_flight.len() + q.cache_in_flight.len(),
                 done: q.done,
                 oldest_read: q
@@ -643,7 +782,8 @@ impl Prefetcher {
     pub fn shutdown(&self) {
         if let Ok(mut q) = self.inner.queue.lock() {
             q.shutdown = true;
-            q.fifo.clear();
+            q.bytes.clear();
+            q.publications.clear();
             q.foreground.clear();
             q.pending.clear();
             q.structural.clear();
@@ -678,26 +818,24 @@ fn reader_loop(inner: &Arc<Inner>) {
                     q.in_flight.insert(path.clone(), Instant::now());
                     break (BackgroundWork::Bytes(path), false);
                 }
-                let available = q.background_in_flight < inner.background_limit;
                 let now = Instant::now();
-                if available {
-                    if let Some(index) = q.fifo.iter().position(|job| match job {
-                        BackgroundWork::Bytes(_) => true,
-                        BackgroundWork::Publication(_, _, ready_at) => *ready_at <= now,
-                    }) {
-                        let job = q.fifo.remove(index).unwrap();
-                        match &job {
-                            BackgroundWork::Bytes(path) => { q.in_flight.insert(path.clone(), now); }
-                            BackgroundWork::Publication(key, _, _) => { q.cache_in_flight.insert(key.clone(), now); }
-                        }
-                        q.background_in_flight += 1;
-                        break (job, true);
+                if q.bytes_in_flight < inner.bytes_limit {
+                    if let Some(path) = q.bytes.pop_front() {
+                        q.in_flight.insert(path.clone(), now);
+                        q.bytes_in_flight += 1;
+                        break (BackgroundWork::Bytes(path), true);
                     }
                 }
-                let delay = available.then(|| q.fifo.iter().filter_map(|job| match job {
-                    BackgroundWork::Publication(_, _, at) => Some(at.saturating_duration_since(now)),
-                    _ => None,
-                }).min()).flatten();
+                let publishing = q.cache_in_flight.len() < inner.publication_limit;
+                if publishing && q.publications.front().is_some_and(|(_, _, ready_at)| *ready_at <= now) {
+                    let (key, task, at) = q.publications.pop_front().unwrap();
+                    // A publication may be waiting for this room.
+                    q.last_pop = now;
+                    inner.work.notify_all();
+                    q.cache_in_flight.insert(key.clone(), now);
+                    break (BackgroundWork::Publication(key, task, at), true);
+                }
+                let delay = publishing.then(|| q.publications.front().map(|(_, _, at)| at.saturating_duration_since(now))).flatten();
                 q = match delay {
                     Some(delay) => match inner.work.wait_timeout(q, delay) { Ok((q, _)) => q, Err(_) => return },
                     None => match inner.work.wait(q) { Ok(q) => q, Err(_) => return },
@@ -719,7 +857,7 @@ fn reader_loop(inner: &Arc<Inner>) {
                         Ok(()) => { q.failures.remove(&path); }
                         Err(_) => { q.failures.insert(path); }
                     }
-                    if background { q.background_in_flight -= 1; }
+                    if background { q.bytes_in_flight -= 1; }
                     q.done += 1;
                 }
                 inner.work.notify_all();

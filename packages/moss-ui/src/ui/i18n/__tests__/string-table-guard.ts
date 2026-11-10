@@ -62,6 +62,7 @@ const GERMAN_IDENTICAL = [
   'versions.back_editor',
   'analytics.col_medium',
   'progress.details',
+  'copies.details',
   'onboard.card_plugin_title',
   'publish_receipt.row_newsletter',
   'deployment.label.host',
@@ -70,6 +71,7 @@ const GERMAN_IDENTICAL = [
   'domain.label_name',
   'pubmgr.website.label',
   'toolbar.website',
+  'publish_receipt.row_website',
   'toolbar.code',
   'toolbar.link',
   // acronyms and abbreviations that are the same word in German

@@ -3,7 +3,7 @@
  *
  * Two layers exercised:
  *   - Pure helpers (`buildSiteHeaderHtml`, `buildCardsHtml`,
- *     `buildPopulatedBodyHtml`, `escapeHtml`, `FOLDER_MICROCOPY`,
+ *     `buildPopulatedBodyHtml`, `escapeHtml`, `t("folder.site_name_hint")`,
  *     `FOLDER_CARDS`, `stubCardHandler`) — directly, no DOM mount needed.
  *   - `mountFolderMode` DOM behaviour via jsdom — empty vs populated
  *     state, card click wiring, reveal-button click, theme radio change,
@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index";
 import {
   FOLDER_CARDS,
-  FOLDER_MICROCOPY,
   buildCardsHtml,
   buildPopulatedBodyHtml,
   buildSiteHeaderHtml,
@@ -29,18 +28,6 @@ import { host } from "../../host";
 
 // A host with starters, unless a test says otherwise.
 host.starterPicker = { open: async () => {}, takeRequest: async () => false };
-
-// ── FOLDER_MICROCOPY (spec contract) ─────────────────────────────────────
-
-describe("FOLDER_MICROCOPY", () => {
-  it("matches the spec verbatim", () => {
-    // CHANGING THIS STRING REQUIRES A SPEC UPDATE — this assertion is the
-    // wire that keeps copy and UI in lockstep.
-    expect(FOLDER_MICROCOPY).toBe(
-      "The folder name is your site name. Rename in Finder to change it.",
-    );
-  });
-});
 
 // ── FOLDER_CARDS (mockup contract) ───────────────────────────────────────
 
@@ -93,7 +80,7 @@ describe("buildSiteHeaderHtml", () => {
 
   it("includes the spec microcopy", () => {
     const html = buildSiteHeaderHtml("my-blog");
-    expect(html).toContain(FOLDER_MICROCOPY);
+    expect(html).toContain(t("folder.site_name_hint"));
   });
 
   it("uses data-tooltip for the reveal affordance (NOT native title)", () => {
@@ -391,7 +378,7 @@ describe("mountFolderMode (populated state)", () => {
       revealEntry: revealSpy,
     });
     expect(host.querySelector(".moss-folder-mode__microcopy")?.textContent).toBe(
-      FOLDER_MICROCOPY,
+      t("folder.site_name_hint"),
     );
   });
 });

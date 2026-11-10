@@ -42,12 +42,18 @@ pub(crate) fn migrate_build_tree(mp: &MossPaths) {
 
     // Roots left beside the live one: the legacy root, when `build.nosync`
     // was already there (the authoring docs once told iCloud users to make
-    // it by hand), and every root a sync client renamed aside.
-    let mut leftovers = renamed_aside_siblings(&legacy);
+    // it by hand), and every root a sync client renamed aside, each with its
+    // store under `cache/` and its blobs hashed before they are trusted. Then
+    // copies of the store itself, which a sync client makes when two machines
+    // create it at once; their blobs move unread, so a placeholder is not
+    // downloaded to be moved, and are checked when first read.
+    let mut leftovers: Vec<(PathBuf, PathBuf, bool)> =
+        renamed_aside_siblings(&legacy).into_iter().map(|root| (root.join("cache"), root, true)).collect();
     if legacy.is_dir() {
-        leftovers.push(legacy);
+        leftovers.push((legacy.join("cache"), legacy, true));
     }
-    for root in leftovers {
+    leftovers.extend(renamed_aside_siblings(&mp.store_dir()).into_iter().map(|copy| (copy.clone(), copy, false)));
+    for (store, root, verify_blobs) in leftovers {
         match sightings(&root) {
             1 => {}
             2 => {
@@ -59,10 +65,10 @@ pub(crate) fn migrate_build_tree(mp: &MossPaths) {
             }
             _ => continue,
         }
-        for (sub, verify) in [("objects", true), ("transforms", false)] {
-            merge(&root.join("cache").join(sub), &mp.store_dir().join(sub), verify);
+        for (sub, verify) in [("objects", verify_blobs), ("transforms", false)] {
+            merge(&store.join(sub), &mp.store_dir().join(sub), verify);
         }
-        // allow:unlink a root the sync client renamed aside, or the legacy root, after harvest
+        // allow:unlink a root or store copy the sync client left, or the legacy root, after harvest
         match remove_output_dir_all(&root) {
             Ok(()) => log::info!("[tree] harvested and removed {}", root.display()),
             Err(e) => log::info!("[tree] harvested {} but could not remove it: {e}", root.display()),
@@ -82,8 +88,7 @@ fn sightings(root: &Path) -> u32 {
     *n
 }
 
-/// `<name> <digits>` directories beside `root`, the shape a sync client's
-/// rename-aside leaves.
+/// Directories beside `root` named as a sync client names its copy of it.
 fn renamed_aside_siblings(root: &Path) -> Vec<PathBuf> {
     let (Some(name), Some(parent)) = (root.file_name().and_then(|n| n.to_str()), root.parent()) else {
         return Vec::new();
@@ -94,7 +99,7 @@ fn renamed_aside_siblings(root: &Path) -> Vec<PathBuf> {
     entries
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter(|e| e.file_name().to_str().is_some_and(|c| super::root_identity::is_renamed_aside(c, name)))
+        .filter(|e| e.file_name().to_str().is_some_and(|c| crate::nested_roots::is_sync_copy_of(c, name)))
         .map(|e| e.path())
         .collect()
 }
@@ -222,6 +227,48 @@ mod tests {
         assert!(!store.blob_path(&forged).exists(), "a blob that does not hash to its name was not");
         assert!(!aside.exists(), "the sibling is gone");
         assert!(!legacy.exists(), "and so is the legacy root");
+    }
+
+    fn put_record(dir: &Path, oid: &str, text: &str) -> PathBuf {
+        let shard = dir.join(&oid[..2]).join(&oid[2..4]);
+        std::fs::create_dir_all(&shard).unwrap();
+        let path = shard.join(format!("{oid}.json"));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// Two machines that each created the store leave a sync client's copies of
+    /// it beside the one every build reads. Their blobs and records join it,
+    /// what it already holds is kept, and the copies go.
+    #[test]
+    fn copies_of_the_store_are_folded_into_it_and_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mp = MossPaths::new(tmp.path());
+        std::fs::create_dir_all(mp.build_dir()).unwrap();
+        let store = mp.store_dir();
+        let kept = blob(&store.join("objects"), b"encoded here");
+        let drive_copy = mp.root().join("cache 2");
+        let dropbox_copy = mp.root().join("cache (Ana's conflicted copy 2026-09-29)");
+        let only_in_drive_copy = blob(&drive_copy.join("objects"), b"encoded on the other machine");
+        let only_in_dropbox_copy = blob(&dropbox_copy.join("objects"), b"encoded on a third machine");
+        let both = "ab".repeat(32);
+        let ours = put_record(&store.join("transforms"), &both, "ours");
+        put_record(&drive_copy.join("transforms"), &both, "theirs");
+        let theirs_only = "cd".repeat(32);
+        put_record(&drive_copy.join("transforms"), &theirs_only, "theirs");
+
+        migrate_build_tree(&mp);
+
+        let objects = ObjectStore::new(mp.cache_objects());
+        for oid in [&kept, &only_in_drive_copy, &only_in_dropbox_copy] {
+            assert!(objects.blob_path(oid).exists(), "{oid} is in the store");
+        }
+        assert_eq!(std::fs::read_to_string(&ours).unwrap(), "ours", "a record the store has is kept");
+        let moved = store.join("transforms").join(&theirs_only[..2]).join(&theirs_only[2..4]).join(format!("{theirs_only}.json"));
+        assert_eq!(std::fs::read_to_string(moved).unwrap(), "theirs", "a record only the copy had joins the store");
+        assert!(!drive_copy.exists() && !dropbox_copy.exists(), "the copies are gone");
+        migrate_build_tree(&mp);
+        assert!(objects.blob_path(&kept).exists(), "a second run changes nothing");
     }
 
     /// A sync client that has not taken the delete puts the root back before

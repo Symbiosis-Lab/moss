@@ -303,23 +303,6 @@ pub fn emit_redirect_table(
         .collect();
     planned.extend(table::plan(kept_qr, &probe).entries);
 
-    // Every build re-derives the table regardless (no I/O of its own), but
-    // writing every stub's bytes to stage on every build — the loop below — is
-    // waste once a site has accumulated more than a handful of redirects and
-    // nothing about them changed: the same bytes land on the same paths every
-    // time. The stub set (old address to link) is the one value every input —
-    // a rename, an edited redirects.json, a `[redirects]` line — can only reach
-    // the stubs by changing, so comparing it against what the last build of
-    // this folder in this process emitted from is the whole gate. Carrying
-    // stub paths forward, rather than skipping them outright, is not optional:
-    // `seal`'s mark-and-sweep and `remove_stale_html` both delete any
-    // HTML page this build did not register. Copies are not gated: their
-    // bytes follow their target, which this signature does not see.
-    let stubs: BTreeMap<String, String> = planned
-        .iter()
-        .filter(|p| p.form == Form::Stub)
-        .map(|p| (p.from.served(), p.to.href()))
-        .collect();
     let records = crate::system::build_records::records();
     let folder_key = project_root.to_string_lossy().into_owned();
     // A copy of a file this build generated (the feed) is written now, from the
@@ -340,39 +323,17 @@ pub fn emit_redirect_table(
         }
     }
     records.record_late_redirects(&folder_key, super::kept_addresses::LateRedirects { copies, folder_moves });
-    let unchanged = records.redirect_signature(&folder_key).as_ref() == Some(&stubs)
-        && planned
-            .iter()
-            .filter(|p| p.form == Form::Stub)
-            .all(|p| crate::build::io_utils::output_present(&output_dir.join(p.from.key())));
-
+    // A stub whose bytes are already staged is registered without being
+    // written again (`BuildContext::emit`).
     for p in planned.iter().filter(|p| p.form == Form::Stub) {
         let sp = p.from.served_path();
         let html = generate_redirect_html(&p.to.href());
-        if unchanged {
-            // Same bytes already on disk from a previous build in this
-            // session — re-register without rewriting or re-hashing off a
-            // fresh write, so the manifest still carries the path through
-            // `seal`.
-            let hash = compute_binary_hash(html.as_bytes());
-            pending.register_hashed(sp, &hash, crate::build::manifest::HashBucket::Files);
-        } else {
-            BuildContext::for_render(output_dir, pending)
-                .emit(sp, html.as_bytes(), HashBucket::Files)
-                .map_err(|e| format!("Failed to emit redirect stub '{}': {}", sp.as_str(), e))?;
-        }
+        BuildContext::for_render(output_dir, pending)
+            .emit(sp, html.as_bytes(), HashBucket::Files)
+            .map_err(|e| format!("Failed to emit redirect stub '{}': {}", sp.as_str(), e))?;
     }
-    records.record_redirect_signature(&folder_key, stubs);
-
     if !planned.is_empty() {
-        if unchanged {
-            log::debug!(
-                "build: {} redirect(s) unchanged since the last build in this session — stubs not re-written",
-                planned.len()
-            );
-        } else {
-            log::info!("build: emitted {} redirect(s) into pending manifest", planned.len());
-        }
+        log::debug!("build: emitted {} redirect(s) into pending manifest", planned.len());
     }
 
     Ok(BaselineHealth::of(paths, &baseline))
@@ -1063,6 +1024,16 @@ mod tests {
             &expected_hash,
             "stub hash must equal file_entry(compute_binary_hash(redirect_html))"
         );
+
+        // A rebuild in the same process re-registers the unchanged stub without
+        // writing it; under a mount its entry is still of the bytes that ship.
+        let mut again = PendingManifest::new(SiteHashes::default());
+        again.set_site_url("https://example.edu/~alice");
+        BuildContext::for_render(&output_dir, &mut again).emit(&new_sp, b"<html>new</html>", HashBucket::Files).unwrap();
+        emit_redirect_table(&paths, &current_map, &TableInputs::default(), &output_dir, &mut again).unwrap();
+        let mount = crate::build::site_meta::mount::Mount::of_site_url("https://example.edu/~alice");
+        let shipped = file_entry(&crate::build::ship::shipped_hash(stub_key, &mount, expected_html.as_bytes()));
+        assert_eq!(again.seal().files().get(stub_key), Some(&shipped), "the re-registered stub names what ships under the mount");
     }
 
 
@@ -1336,9 +1307,8 @@ mod tests {
 
     /// A second build with the same baseline and the same article map — no
     /// rename detected, `redirects.json` untouched between the two calls —
-    /// must not rewrite the stub already on disk. Reverting the gate (always
-    /// taking the `emit` branch) turns this red: the second call's write
-    /// bumps the mtime.
+    /// must not rewrite the stub already on disk: an unconditional write in
+    /// `BuildContext::emit` turns this red, since it bumps the mtime.
     #[test]
     fn emit_redirect_table_skips_rewrite_when_nothing_relevant_changed() {
         use crate::build::manifest::PendingManifest;

@@ -454,12 +454,49 @@ fn a_symlink_entry_is_never_reused_where_ship_copies_its_target() {
 }
 
 
+/// Every record kept beside a generation goes with it: its original
+/// identities, its preview-only list, its article map and its seed record.
 #[test]
-fn generation_original_receipt_lifetime_follows_its_generation() {
+fn generation_receipts_lifetime_follows_their_generation() {
     let (_temp, generations) = make_generations(&["old", "current"]);
-    let receipt = crate::build::manifest::preview_originals::receipt_path(&generations, "old");
-    std::fs::write(&receipt, b"receipt").unwrap();
+    let receipts = [
+        crate::build::manifest::preview_originals::receipt_path(&generations, "old"),
+        crate::build::manifest::publish_view::receipt_path(&generations, "old"),
+        crate::build::manifest::publish_view::articles_path(&generations, "old"),
+        WholeGeneration::record_path(&generations, "old"),
+    ];
+    for receipt in &receipts {
+        std::fs::write(receipt, b"receipt").unwrap();
+    }
     gc(&generations, &roots_of(&["current"]), 0).unwrap();
-    assert!(!receipt.exists());
+    for receipt in &receipts {
+        assert!(!receipt.exists(), "{}", receipt.display());
+    }
     assert_eq!(surviving(&generations), vec!["current"]);
+}
+
+/// A kept seed record is read back only whole and of this version; anything
+/// else reads as none, and the next copy is a full one.
+#[cfg(unix)]
+#[test]
+fn a_kept_seed_record_is_read_back_only_whole_and_of_this_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let generations = tmp.path();
+    let gen_dir = generations.join("g1");
+    std::fs::create_dir_all(&gen_dir).unwrap();
+    std::fs::write(gen_dir.join("a.html"), b"<p>a</p>").unwrap();
+    let files: std::collections::HashMap<String, String> = [("a.html".to_string(), "100644:abc".to_string())].into();
+    let whole = WholeGeneration::record(&gen_dir, "g1", &files).expect("a unix directory has an identity");
+    whole.save(generations);
+    let back = WholeGeneration::load(generations, "g1").expect("kept and read back");
+    assert!(back.still_holds("a.html", "100644:abc", &gen_dir.join("a.html")));
+    let path = WholeGeneration::record_path(generations, "g1");
+    std::fs::copy(&path, WholeGeneration::record_path(generations, "g2")).unwrap();
+    assert!(WholeGeneration::load(generations, "g2").is_none(), "another id's record is not this one");
+
+    let json = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, json.replacen("\"version\":1", "\"version\":999", 1)).unwrap();
+    assert!(WholeGeneration::load(generations, "g1").is_none(), "another version");
+    std::fs::write(&path, &json[..json.len() / 2]).unwrap();
+    assert!(WholeGeneration::load(generations, "g1").is_none(), "cut short");
 }

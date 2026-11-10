@@ -35,6 +35,7 @@ use super::restore::{self, RestoreMode, RestoreReport};
 use super::store;
 use super::{HistoryStore, SourceTree};
 use crate::build::manifest::published_record;
+use crate::build::scan::path_collision::logical_path;
 use crate::cli::list::fail;
 use crate::moss_paths::MossPaths;
 use crate::vault_root::{resolve_input, VaultRoot};
@@ -259,7 +260,7 @@ fn relative_source_path(root: &VaultRoot, raw: &str) -> Result<String, String> {
     if rel.as_os_str().is_empty() {
         return Err(format!("'{raw}' names the site itself, not a page inside it"));
     }
-    Ok(moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+    Ok(logical_path(rel))
 }
 
 /// `<id>` is a record filename stem, or an unambiguous prefix of one — typed
@@ -899,6 +900,14 @@ mod tests {
         let root = VaultRoot::resolve(&vault);
         let rel = relative_source_path(&root, vault.join("gone.md").to_str().unwrap()).unwrap();
         assert_eq!(rel, "gone.md");
+    }
+
+    #[test]
+    fn a_page_path_typed_decomposed_names_the_composed_history_key() {
+        let (_dir, vault) = tmp_vault();
+        let root = VaultRoot::resolve(&vault);
+        let rel = relative_source_path(&root, vault.join("cafe\u{301}/menu.md").to_str().unwrap()).unwrap();
+        assert_eq!(rel, "caf\u{e9}/menu.md");
     }
 
     #[test]

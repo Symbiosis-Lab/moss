@@ -17,6 +17,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::editor::resolve::asset_resolver::EditorScope;
+use crate::build::scan::path_collision::logical_path;
 use crate::types::events::MossEvent;
 use rename_undo::RenameUndoStore;
 
@@ -186,7 +187,7 @@ fn site_relative<'h>(host: &'h dyn CommandHost, path: &VaultPath) -> Result<(&'h
         .strip_prefix(root.canonicalize().as_deref().unwrap_or(root))
         .or_else(|_| abs.strip_prefix(root))
         .map_err(|_| format!("File '{}' is not inside project '{}'", path.as_written(), root.display()))?;
-    Ok((root, rel.to_string_lossy().into_owned()))
+    Ok((root, logical_path(rel)))
 }
 
 /// Run `apply` with its page moves announced to the host first, and withdrawn

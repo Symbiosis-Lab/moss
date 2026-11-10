@@ -2,6 +2,7 @@
 //! [`super::build_external_url_map`] — see [`FrontmatterScanCache`] for the
 //! corpus-scaled cost this closes.
 
+use crate::build::scan::path_collision::on_disk;
 use crate::build::stat::{recording_clock, FileStat};
 use std::path::{Path, PathBuf};
 
@@ -93,7 +94,7 @@ impl FrontmatterScanCache {
         source_path: &Path,
     ) -> Self {
         let mut cache = Self::default();
-        scan_frontmatter_urls_with_evicted(files, &|p| source_path.join(p), &mut cache, &|_| false);
+        scan_frontmatter_urls_with_evicted(files, &|p| on_disk(source_path, p), &mut cache, &|_| false);
         cache
     }
 
@@ -309,7 +310,7 @@ pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     std::collections::HashMap<String, String>,
     std::collections::HashMap<String, String>,
 ) {
-    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &|p| source_path.join(p), cache, is_evicted);
+    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &|p| on_disk(source_path, p), cache, is_evicted);
     let (entries, dir_overrides, external_url_map) =
         assemble_page_map(markdown_files, &scanned, root_folder_name, home_file_winners, home_overrides);
     let page_map = entries.into_iter().map(|(k, v, _)| (k, v)).collect();

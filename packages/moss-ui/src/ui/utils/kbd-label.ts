@@ -7,13 +7,11 @@
 // misnames a working key, on the two platforms where the keymap is the ONLY
 // path to it (there is no Edit menu).
 
+import { uiPlatform } from './platform';
+
 /** True on macOS, where modifiers render as glyphs and Mod is Command. */
 export function isMacPlatform(): boolean {
-  const p =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
-    navigator.platform ||
-    '';
-  return p.toLowerCase().includes('mac');
+  return uiPlatform() === 'mac';
 }
 
 /**
@@ -53,12 +51,35 @@ export function kbdLabel(spec: string): string {
       key.toUpperCase()
     );
   }
-  const mods = [
+  return wordsLabel(has, key.toUpperCase());
+}
+
+/** Windows and Linux: `+`-joined words in Ctrl, Alt, Shift order. */
+function wordsLabel(has: (name: string) => boolean, key: string): string {
+  return [
     has('mod') || has('ctrl') ? 'Ctrl' : '',
     has('alt') ? 'Alt' : '',
     has('shift') ? 'Shift' : '',
-  ].filter(Boolean);
-  return [...mods, key.toUpperCase()].join('+');
+    key,
+  ].filter(Boolean).join('+');
+}
+
+const GLYPH_MODS: Record<string, string> = { '⌃': 'ctrl', '⌥': 'alt', '⇧': 'shift', '⌘': 'mod' };
+const GLYPH_KEYS: Record<string, string> = { '⌫': 'Backspace', '⌦': 'Delete', '↩': 'Enter', '⎋': 'Esc', '⇥': 'Tab' };
+
+/**
+ * A chip written in macOS glyphs (`'⇧⌘N'`, `'⌘⌫'`, `'↩'`), as it reads on the
+ * platform it is shown on. Every chip renderer passes its text through here, so
+ * a chip literal can stay in the one notation the keymap comments use and still
+ * print `Ctrl+Shift+N` on Windows and Linux.
+ */
+export function kbdChipText(chip: string): string {
+  if (isMacPlatform()) return chip;
+  const chars = [...chip];
+  if (!chars.some((c) => c in GLYPH_MODS || c in GLYPH_KEYS)) return chip;
+  const mods = new Set(chars.filter((c) => c in GLYPH_MODS).map((c) => GLYPH_MODS[c]));
+  const rest = chars.filter((c) => !(c in GLYPH_MODS)).map((c) => GLYPH_KEYS[c] ?? c).join('');
+  return wordsLabel((name) => mods.has(name), rest.length === 1 ? rest.toUpperCase() : rest);
 }
 
 /**

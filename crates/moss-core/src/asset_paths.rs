@@ -989,6 +989,38 @@ pub fn hls_outputs(source: &str, rungs: &[VideoRung]) -> Vec<String> {
         .collect()
 }
 
+/// The names a media source is published under: a ladder image under its own
+/// name and its `.webp`, a video under its MP4, thumbnail, poster and every
+/// file of the full HLS ladder (a narrow source gets a prefix of it). Any other
+/// file is published under its own name. Two sources that share one of these
+/// overwrite each other in the output. A video extension counts in any letter
+/// case, as the media pipeline dispatches it.
+///
+/// # Examples
+/// ```
+/// # use moss_core::asset_paths::published_paths;
+/// assert_eq!(published_paths("a/photo.png"), ["a/photo.png", "a/photo.webp"]);
+/// assert_eq!(published_paths("photo.webp"), ["photo.webp"]);
+/// assert_eq!(published_paths("logo.gif"), ["logo.gif"]);
+/// let clip = published_paths("clip.mov");
+/// assert_eq!(clip[..4], ["clip.mp4", "clip.thumb.jpg", "clip.poster.jpg", "clip.hls/master.m3u8"]);
+/// assert_eq!(published_paths("clip.Mov")[1], "clip.Mov.thumb.jpg");
+/// ```
+pub fn published_paths(source: &str) -> Vec<String> {
+    let lower = source.to_ascii_lowercase();
+    if ALL_VIDEO_SUFFIXES.iter().any(|suffix| lower.ends_with(suffix)) {
+        let mut paths = vec![to_mp4(source), to_thumb(source), to_poster(source)];
+        paths.extend(hls_outputs(source, &VIDEO_LADDER));
+        return paths;
+    }
+    let ext = source.rsplit_once('.').map_or("", |(_, ext)| ext);
+    let mut paths = vec![source.to_string()];
+    if is_ladder_source_ext(ext) && to_webp(source) != source {
+        paths.push(to_webp(source));
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

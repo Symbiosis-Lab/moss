@@ -64,13 +64,14 @@ function renderToast(payload: ToastPayload, onAction: OnToastAction): void {
     : 5000;
 
   const opts = {
-    duration: persistent ? undefined : boundedDuration,
+    duration: boundedDuration,
+    persistent: persistent ?? undefined,
     actions: toButtons(actions, onAction),
     inlineCopy: sendLogTicketId(what),
     inlineLink: inline_link ?? undefined,
     // Spend the duration on attention rather than wall-clock — see
-    // ToastOptions.awaitAttention. Only meaningful with a duration, which is
-    // exactly when `persistent` is unset.
+    // ToastOptions.awaitAttention. Only meaningful for a toast that is not
+    // persistent.
     awaitAttention: await_attention ?? undefined,
     dismissible: dismissible ?? true,
     id: id ?? undefined,
@@ -111,7 +112,8 @@ function renderToastUpdate(payload: ToastPayload, onAction: OnToastAction): void
     // one — an update is a faithful statement of the toast's current shape.
     inlineLink: inline_link ?? null,
     awaitAttention: await_attention ?? undefined,
-    duration: persistent ? undefined : (duration ? Number(duration) : undefined),
+    duration: duration ? Number(duration) : undefined,
+    persistent: persistent ?? undefined,
     dismissible: dismissible ?? undefined,
     dot: dot ?? undefined,
     // `null` removes a bar the update no longer carries, like `inlineLink`.

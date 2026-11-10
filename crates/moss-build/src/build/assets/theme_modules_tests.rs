@@ -40,3 +40,21 @@ fn a_lt_in_a_file_name_never_reaches_the_script_block_raw() {
     assert!(map.contains("a\\u003cb.js"), "{map}");
     assert_eq!(map.matches('<').count(), 2, "only the script tag's own brackets: {map}");
 }
+
+/// Modules are read in composed name order, so their hashes enter the render
+/// fingerprint in one order on every machine.
+#[test]
+fn modules_are_read_in_composed_name_order() {
+    let (_root, m) = theme(&[("e\u{301}clair.js", "export const a = 1;"), ("f.js", "export const b = 2;")]);
+    let rels: Vec<&str> = m.files.iter().map(|f| f.rel.as_str()).collect();
+    assert_eq!(rels, ["f.js", "\u{e9}clair.js"]);
+}
+
+/// A module whose name the disk stores decomposed is mapped at its composed
+/// address, the one every machine serves.
+#[test]
+fn a_decomposed_module_name_is_mapped_composed() {
+    let (_root, m) = theme(&[("script.mjs", "import './cafe\u{301}.js';"), ("cafe\u{301}.js", "export const c = 1;")]);
+    let map = m.importmap_tag();
+    assert!(map.contains("\"/_moss/theme/caf\u{e9}.js\":\"/_moss/theme/caf\u{e9}."), "{map}");
+}

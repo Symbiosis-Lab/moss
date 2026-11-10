@@ -35,7 +35,13 @@ pub fn run(args: &[String]) -> i32 {
     let folder = match folder {
         Some(f) => std::path::PathBuf::from(f),
         None => match std::env::current_dir() {
-            Ok(dir) => dir,
+            Ok(dir) => match VaultRoot::find_containing(&dir) {
+                Some(site) => site.path().to_path_buf(),
+                None => {
+                    eprintln!("moss plugin install: {} is not inside a moss site (no .moss folder above it)", dir.display());
+                    return 1;
+                }
+            },
             Err(e) => {
                 eprintln!("moss plugin install: could not determine the current directory: {e}");
                 return 1;
@@ -58,12 +64,13 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 /// [`run`] without the process: `origin` is a parameter so a test can point at
-/// a local registry. The app-data directory is the app's own.
+/// a local registry. `folder` must be the site root. The app-data directory is the app's own.
 pub fn install(id: &str, folder: &Path, origin: &str) -> Result<Installed, String> {
     let folder = crate::vault_root::resolve_input(folder);
-    let site = VaultRoot::find_containing(&folder)
-        .ok_or_else(|| format!("{} is not inside a moss site (no .moss folder above it)", folder.display()))?;
-    let site = site.path().to_string_lossy().into_owned();
+    if !crate::nested_roots::owns_moss(&folder) {
+        return Err(format!("{} is not a moss site root (no site .moss folder here)", folder.display()));
+    }
+    let site = folder.to_string_lossy().into_owned();
     // Without app data an approval cannot be kept, and saying "approved" for
     // one that was not would be false.
     let app_data = crate::infra::app_data::app_data_dir_early()
@@ -93,7 +100,7 @@ pub fn install(id: &str, folder: &Path, origin: &str) -> Result<Installed, Strin
     let version = crate::plugins::bundled::read_installed_manifest(&dir).map(|m| m.version).unwrap_or_default();
     Ok(Installed {
         notice,
-        line: format!("Installed {id} {version} and approved it for this user on this machine"),
+        line: format!("Installed {id} {version} into {site} and approved it for this user on this machine"),
     })
 }
 

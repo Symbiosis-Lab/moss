@@ -1,5 +1,4 @@
 use super::{FolderSession, PreviewSource};
-use std::path::PathBuf;
 
 #[test]
 fn focus_revision_changes_only_when_the_requirement_changes() {
@@ -11,7 +10,7 @@ fn focus_revision_changes_only_when_the_requirement_changes() {
     assert_eq!(first.revision, 1);
     assert!(!session.set_preview_requirement("/posts/one/".into(), PreviewSource::Unresolved).unwrap());
     assert_eq!(session.preview_requirement().unwrap().revision, first.revision);
-    assert!(session.set_preview_requirement("/posts/one/".into(), PreviewSource::File(PathBuf::from("posts/one.md"))).unwrap());
+    assert!(session.set_preview_requirement("/posts/one/".into(), PreviewSource::File("posts/one.md".into())).unwrap());
     assert_eq!(session.preview_requirement().unwrap().revision, first.revision + 1);
     assert!(session.set_preview_requirement("/posts/two/".into(), PreviewSource::Unresolved).unwrap());
     assert_eq!(session.preview_requirement().unwrap().revision, first.revision + 2);
@@ -21,8 +20,8 @@ fn focus_revision_changes_only_when_the_requirement_changes() {
 fn source_paths_cannot_escape_the_folder() {
     let root = tempfile::tempdir().unwrap();
     let session = FolderSession::new(root.path().to_path_buf());
-    for source in [PathBuf::from("../outside.md"), PathBuf::from("/outside.md")] {
-        assert!(session.set_preview_requirement("/posts/one/".into(), PreviewSource::File(source)).is_err());
+    for source in ["../outside.md", "/outside.md"] {
+        assert!(session.set_preview_requirement("/posts/one/".into(), PreviewSource::File(source.into())).is_err());
         assert!(session.preview_requirement().is_none());
     }
 }
@@ -45,4 +44,14 @@ fn preview_url_cannot_traverse_the_output() {
     let session = FolderSession::new(root.path().to_path_buf());
     assert!(session.set_preview_requirement("/../outside".into(), PreviewSource::Generated).is_err());
     assert!(session.preview_requirement().is_none());
+}
+
+/// The build keys a page by its composed path, so a source the editor names
+/// in the disk's decomposed spelling is held composed.
+#[test]
+fn a_decomposed_source_is_held_composed() {
+    let root = tempfile::tempdir().unwrap();
+    let session = FolderSession::new(root.path().to_path_buf());
+    session.set_preview_requirement("/cafe/".into(), PreviewSource::File("cafe\u{301}/a.md".into())).unwrap();
+    assert_eq!(session.preview_requirement().unwrap().source, PreviewSource::File("caf\u{e9}/a.md".into()));
 }

@@ -308,7 +308,7 @@ fn a_bundle_that_covers_fewer_pages_than_its_page_set_is_refused() {
     let want = PageSet { fp: PageSetFp(0xfeed), pages: 3 };
 
     // Nothing could be read at all — a generation GC'd or evicted mid-walk.
-    let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0 };
+    let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0, left_out: 0 };
     let err = with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, None, &nothing))
         .expect_err("a zero-page bundle must not be stamped with a 3-page fingerprint");
     assert!(err.contains("0 of 3"), "unhelpful refusal: {err}");
@@ -320,12 +320,37 @@ fn a_bundle_that_covers_fewer_pages_than_its_page_set_is_refused() {
         files: vec![search::SearchIndexFile { rel_path: "pagefind.js".into(), bytes: vec![1] }],
         pages: 2,
         skipped: 1,
+        left_out: 0,
     };
     assert!(
         with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, None, &partial)).is_err(),
         "a bundle missing one page must not be stamped with the whole page set"
     );
     assert!(!mp.index_receipt().exists());
+}
+
+/// The pages the walk leaves out on purpose, an old address's redirect stub and
+/// the not-found page at both its addresses, are in the page set but are not
+/// missing from the bundle. A site with renamed pages or a not-found page would
+/// otherwise have every bundle of its generations refused.
+#[test]
+fn pages_left_out_on_purpose_do_not_make_a_bundle_partial() {
+    let _serialize = search::lock_index_counter();
+    let (_root, mp) = project(PAGE);
+    let stage = mp.staging_dir();
+    std::fs::create_dir_all(stage.join("old-name")).unwrap();
+    std::fs::write(stage.join("old-name/index.html"), crate::build::feeds::redirects::generate_redirect_html("/")).unwrap();
+    std::fs::write(stage.join(crate::build::served_path::NOT_FOUND_FILE), PAGE).unwrap();
+    let files: HashMap<String, String> = ["index.html", "old-name/index.html", crate::build::served_path::NOT_FOUND_FILE]
+        .into_iter()
+        .map(|p| (p.to_string(), "hash".to_string()))
+        .collect();
+    let want = PageSet::of(&files);
+    let index_dir = mp.index_dir();
+
+    let produced = search::build_search_index(&stage).unwrap();
+    with_holding(&index_dir, |h| publish_bundle(h, &index_dir, want, None, &produced))
+        .expect("a stub and the not-found page are left out, not missing");
 }
 
 /// A refusal must not disturb the bundle already published: the previous
@@ -340,7 +365,7 @@ fn a_refused_publish_leaves_the_previous_bundle_adoptable() {
     let one = PageSet { fp: PageSetFp(0x1111), pages: 1 };
     with_holding(&index_dir, |h| publish_bundle(h, &index_dir, one, None, &good)).unwrap();
 
-    let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0 };
+    let nothing = search::SearchIndex { files: vec![], pages: 0, skipped: 0, left_out: 0 };
     let two = PageSet { fp: PageSetFp(0x2222), pages: 2 };
     assert!(with_holding(&index_dir, |h| publish_bundle(h, &index_dir, two, None, &nothing)).is_err());
 

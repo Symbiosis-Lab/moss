@@ -20,16 +20,18 @@ import { pictureAtCaretField } from './picture-context';
 export function heroWordsExtension(path: () => string, host: Bus): Extension {
   const plugin = ViewPlugin.fromClass(class {
     private line: number | null = null;
+    /** A page whose body opens with a hero starts with the caret on it; the box waits until the caret is put there. */
+    private caretMoved = false;
     private readonly off: () => void;
     private readonly onVisible = () => this.say(document.hidden ? null : this.openerLine(), true);
 
     constructor(private readonly view: EditorView) {
       this.off = host.on<HeroAlignRequest>(HERO_ALIGN, (r) => this.align(r));
       document.addEventListener('visibilitychange', this.onVisible);
-      this.say(this.openerLine());
     }
 
     update(u: ViewUpdate): void {
+      if (u.selectionSet) this.caretMoved = true;
       if (u.selectionSet || u.docChanged) this.say(this.openerLine());
     }
 
@@ -40,6 +42,7 @@ export function heroWordsExtension(path: () => string, host: Bus): Extension {
     }
 
     private openerLine(): number | null {
+      if (!this.caretMoved) return null;
       const hero = this.view.state.field(pictureAtCaretField);
       return hero?.opener ? hero.frameLine : null;
     }

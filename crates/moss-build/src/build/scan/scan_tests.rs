@@ -441,7 +441,8 @@ fn test_video_extensions_categorization() {
     // same matches! arm that extract_media_metadata_cached uses.
     let video_exts = ["mov", "mp4", "webm", "avi", "mkv", "m4v"];
     for ext in &video_exts {
-        fs::write(temp_dir.join(format!("clip.{ext}")), "fake video").unwrap();
+        // One stem each: two videos with one stem share a thumbnail and are refused.
+        fs::write(temp_dir.join(format!("clip-{ext}.{ext}")), "fake video").unwrap();
     }
 
     let result = scan_folder(&temp_dir.to_string_lossy()).unwrap();
@@ -3012,4 +3013,82 @@ fn svg_dimensions_follow_the_files_own_aspect_ratio() {
     assert_eq!(extract_image_dimensions(&extreme), Some((800, 1)));
     let doctype = write("doctype.svg", "<?xml version=\"1.0\"?><!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\"><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 4 3\"/>");
     assert_eq!(extract_image_dimensions(&doctype), Some((800, 600)));
+}
+
+/// Each folder is walked in composed-name order, whatever order the disk
+/// lists it in and whichever way the names are encoded on it.
+#[test]
+fn a_folder_is_walked_in_composed_name_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let names = ["zeta.md", "e\u{301}clair.md", "alpha.md", "\u{e9}t\u{e9}.md", "mid.md", "b.md", "y.md"];
+    for name in names {
+        fs::write(dir.path().join(name), "# Page\n").unwrap();
+    }
+    let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+    let order: Vec<String> = found.markdown_files.iter().map(|f| {
+        use unicode_normalization::UnicodeNormalization;
+        f.path.nfc().collect()
+    }).collect();
+    let mut sorted = order.clone();
+    sorted.sort();
+    assert_eq!(order, sorted);
+}
+
+/// A folder holding two files whose names differ only by case, or by how an
+/// accented letter is encoded, is refused by the scan every build starts with.
+#[test]
+#[cfg_attr(target_os = "macos", ignore = "an APFS volume cannot hold both names of a pair")]
+fn the_scan_refuses_a_folder_holding_a_colliding_pair() {
+    let pairs = [("Photo.png", "photo.png"), ("caf\u{e9}.png", "cafe\u{301}.png"), ("caf\u{e9}.md", "cafe\u{301}.md"), ("caf\u{e9}.txt", "cafe\u{301}.txt")];
+    for (first, second) in pairs {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
+        fs::write(dir.path().join(first), b"one").unwrap();
+        fs::write(dir.path().join(second), b"two").unwrap();
+        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(refusal.contains("differ only by letter case"), "{refusal}");
+    }
+}
+
+/// Two pictures that would both be published as one WebP, or two videos as
+/// one ladder, are refused on every disk, since both names fit on each.
+#[test]
+fn the_scan_refuses_two_sources_published_under_one_name() {
+    for (first, second, name) in [("photo.jpg", "photo.png", "photo.webp"), ("clip.mov", "clip.mp4", "clip.mp4")] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
+        fs::write(dir.path().join(first), b"one").unwrap();
+        fs::write(dir.path().join(second), b"two").unwrap();
+        let refusal = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(refusal.contains(&format!("rename `{first}` or `{second}`, which are both published as `{name}`")), "{refusal}");
+    }
+}
+
+/// A file a sync client stored under a decomposed name is named by its
+/// composed path from the scan on, so every machine addresses it alike.
+#[test]
+fn a_decomposed_name_is_scanned_as_its_composed_path() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("cafe\u{301}")).unwrap();
+    fs::write(dir.path().join("cafe\u{301}/cre\u{300}me.md"), "# Page\n").unwrap();
+    fs::write(dir.path().join("cafe\u{301}/notes.txt"), "x").unwrap();
+    let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+    assert_eq!(found.markdown_files[0].path, "caf\u{e9}/cr\u{e8}me.md");
+    assert_eq!(found.other_files[0].path, "caf\u{e9}/notes.txt");
+    assert_eq!(found.dirs, vec!["caf\u{e9}"]);
+}
+
+/// A map layer's source folder is left out of the site whichever way the disk
+/// spells its name and the config writes it.
+#[test]
+fn a_decomposed_map_layer_source_is_left_out() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".moss")).unwrap();
+    fs::write(dir.path().join(".moss/config.toml"), "schema_version = 6\n\n[map.layers.atlas]\nkind = \"historical\"\nsource = \"caf\u{e9}\"\n").unwrap();
+    fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
+    fs::create_dir_all(dir.path().join("cafe\u{301}")).unwrap();
+    fs::write(dir.path().join("cafe\u{301}/plate.md"), "# Plate\n").unwrap();
+    let found = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
+    let pages: Vec<&str> = found.markdown_files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(pages, ["index.md"]);
 }

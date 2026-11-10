@@ -136,6 +136,18 @@ async fn test_generation_403_is_not_owner_and_live_generation_keeps_the_error() 
     assert!(matches!(live, Err(crate::seta::client::SetaError::Api { status: 403, .. })), "{live:?}");
 }
 
+/// seta's coded 403 is the owner's key not signed in to this site, named by
+/// its address; the same words without the code stay another owner.
+#[tokio::test]
+async fn a_coded_403_is_not_signed_in_and_names_the_address() {
+    let server = StandIn::json(403, r#"{"error":"Not authorized for this site","code":"folder_not_signed_in","site":"her-blog.mosspub.com","detail":"This folder isn't signed in to her-blog.mosspub.com."}"#).await;
+    let client = client_for(&server);
+    let result = client.generation("her-blog", None).await;
+    assert!(matches!(&result, Ok(crate::seta::sites::Generation::NotSignedIn { site }) if site == "her-blog.mosspub.com"), "{result:?}");
+    let live = client.live_generation("her-blog").await;
+    assert!(matches!(live, Err(crate::seta::client::SetaError::NotSignedIn { .. })), "{live:?}");
+}
+
 /// A proxy's 403 is not seta saying the key is another account's.
 #[tokio::test]
 async fn test_generation_403_not_in_setas_words_stays_an_error() {
@@ -263,10 +275,23 @@ async fn test_live_generation_200_carries_id_and_deployed_at() {
 async fn sync_manifest_sends_generation_header() {
     let identity = crate::identity::Identity::generate().unwrap();
     let requests = signed_requests(&identity, |c| async move {
-        c.sync_manifest("her-blog", &std::collections::HashMap::new(), "deadbeef12345678").await
+        c.sync_manifest("her-blog", &std::collections::HashMap::new(), &std::collections::HashMap::new(), "deadbeef12345678").await
     })
     .await;
     assert_eq!(requests[0].header("x-moss-generation"), Some("deadbeef12345678"));
+}
+
+/// The sync sends each file's size beside its manifest entry, so the server
+/// can refuse a site over its storage cap before any upload.
+#[tokio::test]
+async fn sync_manifest_sends_sizes_beside_files() {
+    let identity = crate::identity::Identity::generate().unwrap();
+    let files = [("a.html".to_string(), "100644:h1".to_string()), ("latest".to_string(), "120000:h2".to_string())].into();
+    let sizes = [("a.html".to_string(), 1234u64)].into();
+    let requests = signed_requests(&identity, |c| async move { c.sync_manifest("her-blog", &files, &sizes, "g1").await }).await;
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["files"]["latest"], "120000:h2");
+    assert_eq!(body["sizes"], serde_json::json!({ "a.html": 1234 }));
 }
 
 /// upload_file (PUT /files) must send `X-Moss-Generation` with the given generation_id.

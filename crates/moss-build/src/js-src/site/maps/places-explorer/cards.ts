@@ -9,6 +9,7 @@
  * one that can expand a detail region (`moss-places-card-detail`) in place.
  */
 import { reducedMotion } from "../media";
+import { siteUrl } from "../../mount";
 import type { Place, Work } from "./types";
 import type { PlacesStrings } from "./strings";
 
@@ -196,7 +197,7 @@ export class CardRow {
       const frame = document.createElement("div");
       frame.className = "moss-card-cover";
       const img = document.createElement("img");
-      img.src = work.cover;
+      img.src = siteUrl(work.cover);
       img.alt = "";
       img.loading = "lazy";
       frame.append(img);
@@ -239,7 +240,7 @@ export class CardRow {
       placeList.forEach((place, index) => {
         if (index) places.append(META_SEPARATOR);
         const link = document.createElement("a");
-        link.href = `/${place.id}/`;
+        link.href = siteUrl(`/${place.id}/`);
         openInTopWhenEmbedded(link);
         link.textContent = place.name;
         places.append(link);
@@ -252,7 +253,7 @@ export class CardRow {
       for (const companion of work.companions) {
         const item = document.createElement("li");
         const link = document.createElement("a");
-        link.href = companion.url;
+        link.href = siteUrl(companion.url);
         openInTopWhenEmbedded(link);
         link.textContent = companion.title;
         item.append(link);
@@ -263,7 +264,7 @@ export class CardRow {
 
     const read = document.createElement("a");
     read.className = "moss-places-card-read";
-    read.href = work.url;
+    read.href = siteUrl(work.url);
     openInTopWhenEmbedded(read);
     read.textContent = this.strings.readArticle;
     detail.append(read);

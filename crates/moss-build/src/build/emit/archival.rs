@@ -19,6 +19,7 @@ use crate::build::assets::paths::compute_binary_hash;
 use crate::build::context::BuildContext;
 use crate::build::features::html_escape;
 use crate::build::manifest::{HashBucket, PendingManifest};
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::build::served_path::{served_address, ServedPath};
 use crate::build::site_url::SiteUrl;
 use crate::build::types::ParsedDocument;
@@ -71,29 +72,19 @@ pub(crate) struct Rendered {
     pub block: String,
 }
 
-/// The date an edition carries: `SOURCE_DATE_EPOCH` when set (the
-/// reproducible-builds convention, and how a test pins it), otherwise the
-/// build's own local date.
-pub fn build_date(source_date_epoch: Option<&str>, now: chrono::NaiveDateTime) -> String {
-    let date = source_date_epoch
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
-        .map_or(now.date(), |moment| moment.date_naive());
-    date.format("%Y-%m-%d").to_string()
-}
 
-/// The files the source copy holds, relative to the site root, sorted. A map
-/// layer's source folder is out of the scanned structure but is source a
-/// rebuilt folder needs, so all its files join the copy here, scans included:
-/// the published site carries a scan only as warped tiles.
+/// The files the source copy holds, relative to the site root, in composed
+/// name order. A map layer's source folder is out of the scanned structure but
+/// is source a rebuilt folder needs, so all its files join the copy here, scans
+/// included: the published site carries a scan only as warped tiles.
 fn source_files(structure: &ProjectStructure) -> Vec<String> {
     let root = Path::new(&structure.root_path);
     let layer_files = crate::config::map_layers::declared_sources(root).into_iter().flat_map(|source| {
-        walkdir::WalkDir::new(root.join(source))
+        walkdir::WalkDir::new(on_disk(root, &source))
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
-            .filter_map(|e| e.path().strip_prefix(root).ok().map(|r| moss_core::slug::normalize_separators(&r.to_string_lossy())))
+            .filter_map(|e| e.path().strip_prefix(root).ok().map(logical_path))
             .collect::<Vec<_>>()
     });
     let mut files: Vec<String> = structure
@@ -105,7 +96,7 @@ fn source_files(structure: &ProjectStructure) -> Vec<String> {
         .chain(layer_files)
         .filter(|path| !path.split('/').any(|segment| segment == "_moss" || segment == "node_modules"))
         .collect();
-    files.sort_unstable();
+    files.sort_unstable_by(|a, b| crate::build::scan::path_collision::nfc_order(a, b));
     files.dedup();
     files
 }
@@ -160,7 +151,7 @@ pub fn from_build(
         site_url: site_url.as_ref(),
         author: site.author,
         license: site.license,
-        date: build_date(std::env::var("SOURCE_DATE_EPOCH").ok().as_deref(), site.now),
+        date: site.now.date().format("%Y-%m-%d").to_string(),
         site_title,
         style_link: style_link(),
     };
@@ -176,7 +167,7 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     for rel in source_files(inputs.structure) {
         // A file the sync client has not materialised yet is left out of this
         // edition rather than failing the build.
-        let Ok(bytes) = std::fs::read(root.join(&rel)) else { continue };
+        let Ok(bytes) = std::fs::read(on_disk(root, &rel)) else { continue };
         let Ok(served) = ServedPath::for_source_copy(&rel) else { continue };
         BuildContext::for_render(stage_dir, pending).emit(&served, &bytes, HashBucket::Files)?;
         inventory.push_str(&format!("{rel}\0{}\n", compute_binary_hash(&bytes)));
@@ -185,7 +176,7 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     let id: String = compute_binary_hash(inventory.as_bytes()).chars().take(7).collect();
     let site_url = inputs.site_url.filter(|url| url.is_deployed()).map(|url| url.as_str().to_string());
     if site_url.is_none() {
-        crate::build::cli_output::log_note!("no published site address is known ([site] domain), so the page citations name no address");
+        crate::build::cli_output::log_note!("no published site address is known ([site] url), so the page citations name no address");
     }
     let readme = readme(Path::new(&inputs.structure.root_path), &copied, inputs.documents, inputs.license.as_deref(), &inputs.date, &id);
     let served = ServedPath::from_cached(SOURCE_README).map_err(std::io::Error::other)?;
@@ -235,13 +226,13 @@ fn layer_sections(root: &Path) -> String {
         out.push_str(&format!(
             "\n## Map layer `{source}`\n\nA historical map the site draws under its places. For each plate, `<id>.annotation.json` is its georeference (control points tying the scan to places on the earth), the image is the part of the scan the site uses, and `<id>.region.json` says which part, at what scale, where it came from and under what rights.\n\n"
         ));
-        let mut regions: Vec<_> = walkdir::WalkDir::new(root.join(&source))
+        let mut regions: Vec<_> = walkdir::WalkDir::new(on_disk(root, &source))
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file() && e.file_name().to_string_lossy().ends_with(".region.json"))
             .map(|e| e.into_path())
             .collect();
-        regions.sort();
+        regions.sort_by(|a, b| crate::build::scan::path_collision::nfc_order(&a.to_string_lossy(), &b.to_string_lossy()));
         for path in regions {
             let id = path.file_name().map(|n| n.to_string_lossy().trim_end_matches(".region.json").to_string()).unwrap_or_default();
             let region: serde_json::Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();

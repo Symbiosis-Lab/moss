@@ -310,7 +310,7 @@ pub fn detect_drift(
             report.offline += 1;
             continue;
         }
-        match probe(&folder.join(rel)) {
+        match probe(&crate::build::scan::path_collision::on_disk(folder, rel)) {
             MissingProbe::Gone => {
                 // Gone: no walk entry, so no stat — the zero stamp, and a
                 // reappearance moves it.

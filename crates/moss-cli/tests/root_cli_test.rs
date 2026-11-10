@@ -5,6 +5,7 @@ fn root_command(home: &std::path::Path, args: &[&str]) -> Output {
         .args(["root"])
         .args(args)
         .env("HOME", home)
+        .env("MOSS_HOME", home.join("tooling/.moss"))
         .current_dir(home)
         .output()
         .unwrap()
@@ -64,4 +65,39 @@ fn root_rejects_missing_path_and_unknown_flags() {
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("Usage: moss root"));
     }
+}
+
+#[test]
+fn root_excludes_relocated_tooling_marker() {
+    let home = tempfile::tempdir().unwrap();
+    let tooling = home.path().join("tooling/.moss");
+    let loose = home.path().join("tooling/notes");
+    std::fs::create_dir_all(&tooling).unwrap();
+    std::fs::create_dir_all(&loose).unwrap();
+    let output = root_command(home.path(), &[loose.to_str().unwrap(), "--json"]);
+    assert!(output.status.success());
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(), serde_json::json!({"root": null}));
+}
+
+#[cfg(unix)]
+#[test]
+fn root_excludes_tooling_marker_alias_but_preserves_site_alias() {
+    use std::os::unix::fs::symlink;
+    let home = tempfile::tempdir().unwrap();
+    let tooling = home.path().join("tooling/.moss");
+    let alias = home.path().join("alias");
+    std::fs::create_dir_all(&tooling).unwrap();
+    std::fs::create_dir_all(&alias).unwrap();
+    symlink(&tooling, alias.join(".moss")).unwrap();
+    let output = root_command(home.path(), &[alias.to_str().unwrap(), "--json"]);
+    assert!(output.status.success());
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(), serde_json::json!({"root": null}));
+
+    let site = home.path().join("site");
+    std::fs::create_dir_all(site.join(".moss")).unwrap();
+    let site_alias = home.path().join("site-alias");
+    symlink(&site, &site_alias).unwrap();
+    let output = root_command(home.path(), &[site_alias.to_str().unwrap(), "--json"]);
+    assert!(output.status.success());
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(), serde_json::json!({"root": site_alias}));
 }

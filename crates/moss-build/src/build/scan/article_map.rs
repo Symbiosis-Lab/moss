@@ -64,7 +64,7 @@ pub fn to_pretty_url(file_path: &str) -> String {
 // the type name rather than the module path, so the emitted shape is unchanged
 // by the move.
 /// Article information for syndication plugins
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct ArticleInfo {
     /// Relative path to source file
     pub source_path: String,
@@ -93,7 +93,7 @@ pub struct ArticleInfo {
     #[serde(default)]
     pub tags: Vec<String>,
 
-    /// Stable note identity: 8 random hex chars, stored in frontmatter by the publish that first puts the page online — NOT derived from the path, and unrecoverable once lost.
+    /// The note identity the build used (`ParsedDocument::uid`): written into the page only by a publish.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
 

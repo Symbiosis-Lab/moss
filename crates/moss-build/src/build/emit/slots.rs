@@ -56,7 +56,8 @@ pub fn apply_to_stage_and_manifest(
     // A carried page holds the previous pass's output only if that pass ran with
     // these same slots and shipping transform; otherwise every page is re-read.
     let slots_hash = crate::build::enhance::resolved_slots_hash(slots);
-    let pass_key = format!("{slots_hash}:{}", crate::build::ship::SHIP_TRANSFORM_REV);
+    let mount = pending.mount();
+    let pass_key = format!("{slots_hash}:{}", crate::build::ship::shipped_key(&mount));
     let pass_record = paths.cache_dir().join("slot-pass.json");
     let same_pass = std::fs::read_to_string(&pass_record).is_ok_and(|previous| previous == pass_key);
     let carried = if same_pass { pending.carried_pages() } else { Default::default() };
@@ -65,6 +66,7 @@ pub fn apply_to_stage_and_manifest(
         stage_dir,
         slots,
         &slots_hash,
+        &mount,
         &object_store,
         &transform_cache,
         pending.take_unwritten_pages(),

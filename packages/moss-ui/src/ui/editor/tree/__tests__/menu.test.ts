@@ -546,7 +546,7 @@ describe('file-tree context menu — N-aware', () => {
       .map(el => el.classList.contains('ctx-sep') ? '—' : (el.querySelector('.ctx-label') ?? el).textContent ?? '');
   }
 
-  const REVEAL_LABELS = ['Reveal in Finder', 'Show in Explorer', 'Open in File Manager'];
+  const REVEAL_LABELS = ['Reveal in Finder', 'Show in folder'];
   /** The platform-dependent reveal label, whichever this jsdom reports. */
   const reveal = () => ctxMenuRows().find(r => REVEAL_LABELS.includes(r))!;
 
@@ -1332,7 +1332,7 @@ describe('context menu actions on the vault operations', () => {
     // Click whichever reveal label exists on this platform.
     const labels = ctxMenuItems();
     const revealLabel = labels.find(l =>
-      l === 'Reveal in Finder' || l === 'Show in Explorer' || l === 'Open in File Manager',
+      l === 'Reveal in Finder' || l === 'Show in folder',
     );
     expect(revealLabel).toBeDefined();
     clickMenuItem(revealLabel!);

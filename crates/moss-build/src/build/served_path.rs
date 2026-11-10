@@ -177,8 +177,9 @@ const SEARCH_MOUNT: &str = "_moss/pagefind";
 pub const SOURCE_COPY_MOUNT: &str = "_moss/source";
 
 impl ServedPath {
-    /// Normalize a source-derived path. Slugs directory segments, preserves
-    /// the final basename verbatim. Idempotent — re-wrapping is safe.
+    /// Normalize a source-derived path. Composes it (NFC), slugs directory
+    /// segments and keeps the basename's letters and case. Idempotent —
+    /// re-wrapping is safe.
     ///
     /// Returns `Err` if the input is empty, absolute, contains `..`, or
     /// contains the reserved segment `.moss/` or `_moss/`.
@@ -191,7 +192,8 @@ impl ServedPath {
     /// Cached paths are already generated and normalized, so unlike source
     /// paths they may use moss's reserved `_moss/` namespace.
     pub(crate) fn from_cached(s: &str) -> Result<Self, ServedPathError> {
-        let normalized = Self::normalize_relative(s)?;
+        // A cached path may hold the disk's spelling.
+        let normalized = crate::build::scan::path_collision::logical_path(Self::normalize_relative(s)?);
         if normalized.split('/').any(|segment| segment == ".") {
             return Err(ServedPathError::InvalidInput("cached path contains '.' segment"));
         }
@@ -717,26 +719,33 @@ impl AsRef<std::path::Path> for ServedPath {
 /// How a file should be transformed when the ship pass writes it into a generation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShipTransform {
-    /// Copy the file byte-for-byte. Used for all non-HTML artifacts.
+    /// Copy the file byte-for-byte.
     CopyAsIs,
-    /// Strip preview-only source-annotation attributes before writing to the generation.
-    /// Used for `.html` / `.htm` files.
+    /// `.html` / `.htm`: strip preview-only source annotations, then put its
+    /// URLs under the site's mount.
     StripPreviewAttrs,
+    /// `.css`: put its URLs under the site's mount; a plain copy at the root.
+    MountCss,
 }
 
-/// Classify a relative path into the transform that the ship pass should apply.
-///
-/// It used to take an `annotations_present` flag, for a publish build that
-/// emitted no `data-source-*` attributes and could skip the regex. No such
-/// build exists: `emit_source_lines` (`pipeline.rs:1251`) is a literal `true`,
-/// so every caller passed `true` and the other arm was a no-op waiting to be
-/// wrong — it also skipped `ship`'s `STRIP_NO_PREVIEW_MARKER`, which is not
-/// annotation-dependent at all.
-///
-/// Public so tests can verify classification without running a full ship.
+impl ShipTransform {
+    /// True when ship can copy the file without reading it (`fs::copy` is COW
+    /// on APFS/Btrfs, and the assets are large).
+    pub fn copies(self, mount: &crate::build::site_meta::mount::Mount) -> bool {
+        match self {
+            Self::CopyAsIs => true,
+            Self::MountCss => mount.is_root(),
+            Self::StripPreviewAttrs => false,
+        }
+    }
+}
+
+/// Classify a relative path, by extension, into the transform ship applies.
 pub fn transform_for(rel_path: &str) -> ShipTransform {
     if rel_path.ends_with(".html") || rel_path.ends_with(".htm") {
         ShipTransform::StripPreviewAttrs
+    } else if rel_path.ends_with(".css") {
+        ShipTransform::MountCss
     } else {
         ShipTransform::CopyAsIs
     }
@@ -745,6 +754,14 @@ pub fn transform_for(rel_path: &str) -> ShipTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_decomposed_name_is_served_composed() {
+        let composed = "photos/caf\u{e9}/cr\u{e8}me.png";
+        assert_eq!(ServedPath::from_source("photos/cafe\u{301}/cre\u{300}me.png").unwrap().as_str(), composed);
+        assert_eq!(ServedPath::from_source(composed).unwrap().as_str(), composed);
+        assert_eq!(ServedPath::from_cached("photos/cafe\u{301}/cre\u{300}me.png").unwrap().as_str(), composed);
+    }
 
     #[test]
     fn transform_for_html_returns_strip() {
@@ -764,7 +781,7 @@ mod tests {
 
     #[test]
     fn transform_for_non_html_returns_copy() {
-        assert_eq!(transform_for("style.css"), ShipTransform::CopyAsIs);
+        assert_eq!(transform_for("style.css"), ShipTransform::MountCss);
         assert_eq!(transform_for("og/home.png"), ShipTransform::CopyAsIs);
         assert_eq!(transform_for("rss.xml"), ShipTransform::CopyAsIs);
         assert_eq!(transform_for("data.json"), ShipTransform::CopyAsIs);

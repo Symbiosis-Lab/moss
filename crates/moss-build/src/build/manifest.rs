@@ -201,6 +201,9 @@ pub struct PendingManifest {
     /// generation carrying any of these is withheld — see
     /// `ship::ShipVerdict`.
     unverified: std::collections::BTreeMap<String, String>,
+    /// The article map this render built, which its generation's publish reads
+    /// (`publish_view::read_articles`).
+    articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
     /// Output path → how `ship_phase` should resolve these staged bytes, for
     /// entries where a producer already knows more than "read `stage_dir`".
     /// Every entry inserted here is immutable, a [`ShipSource::Cas`] or a
@@ -362,6 +365,7 @@ impl PendingManifest {
             carried_page_sources,
             page_sources: HashSet::new(),
             unverified: std::collections::BTreeMap::new(),
+            articles: None,
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
             carried_pages: HashSet::new(),
@@ -399,6 +403,10 @@ impl PendingManifest {
     /// Record that `rel_path`'s output could not be verified this build.
     pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
         self.unverified.insert(rel_path, detail);
+    }
+
+    pub(crate) fn record_articles(&mut self, articles: std::sync::Arc<crate::build::scan::article_map::ArticleMap>) {
+        self.articles = Some(articles);
     }
 
     /// Keep a page's already-published HTML alive when this build could not read
@@ -459,7 +467,14 @@ impl PendingManifest {
     /// makes the deploy-time canonicalize match what's on disk regardless
     /// of source case. See `build::served_path` for design.
     pub fn register(&mut self, rel_path: &crate::build::served_path::ServedPath, bytes: &[u8], bucket: HashBucket) {
-        let hash = compute_binary_hash(bytes);
+        // Under a mount a stylesheet or page ships with its URLs prefixed, and
+        // the manifest records what ships. At the root nothing here changes.
+        let mount = self.mount();
+        let hash = if mount.is_root() {
+            compute_binary_hash(bytes)
+        } else {
+            crate::build::ship::shipped_hash(rel_path.as_str(), &mount, bytes)
+        };
         self.register_with_hash(rel_path.as_str().to_string(), &hash, bucket, None);
     }
 
@@ -646,6 +661,11 @@ impl PendingManifest {
     /// The site URL recorded by [`set_site_url`][Self::set_site_url].
     pub(crate) fn site_url(&self) -> Option<&str> {
         self.inner.site_url.as_deref()
+    }
+
+    /// See [`SiteHashes::mount`].
+    pub(crate) fn mount(&self) -> crate::build::site_meta::mount::Mount {
+        self.inner.mount()
     }
 
     /// Snapshot the accumulated hashes before the background phase seals them.
@@ -942,6 +962,7 @@ impl PendingManifest {
             blocking_keys: self.blocking_keys,
             generation_id,
             unverified: self.unverified,
+            articles: self.articles,
             ship_sources,
             late: self.late,
         }
@@ -974,6 +995,9 @@ pub struct SealedManifest {
     /// Every output a producer or the presence pass could not verify, with the
     /// error — never persisted; it exists to withhold this generation.
     unverified: std::collections::BTreeMap<String, String>,
+    /// The render's own article map, written beside the generation when it is
+    /// materialized; never persisted with the manifest.
+    articles: Option<std::sync::Arc<crate::build::scan::article_map::ArticleMap>>,
     /// Output path → how `ship_phase` resolves this entry's bytes. An entry
     /// carries a `Cas` source or a `Fingerprint`, never both — that is a
     /// property of the map itself now, rather than two same-keyed maps kept
@@ -1033,10 +1057,7 @@ impl SealedManifest {
                 None => false,
             },
             PreviewSource::Generated => self.preview_readiness(requirement) == PreviewReadiness::Usable,
-            PreviewSource::File(source) => {
-                let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
-                self.inner.source_to_output.get(&rel) == Some(output)
-            }
+            PreviewSource::File(source) => self.inner.source_to_output.get(source) == Some(output),
         }
     }
 
@@ -1110,6 +1131,11 @@ impl SealedManifest {
     /// manifest predates the field (pre-upgrade hashes.json).
     pub fn site_url(&self) -> Option<&str> {
         self.inner.site_url.as_deref()
+    }
+
+    /// See [`SiteHashes::mount`].
+    pub(crate) fn mount(&self) -> crate::build::site_meta::mount::Mount {
+        self.inner.mount()
     }
 
     /// The content-derived generation identity computed at seal time.

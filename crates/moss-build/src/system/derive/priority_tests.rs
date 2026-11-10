@@ -64,3 +64,19 @@ fn a_navigation_while_reads_run_never_cancels_them() {
     }), |_, _| {});
     assert!(results.iter().all(|r| r.as_ref().is_some_and(|r| r.is_ok())), "every started read finished");
 }
+
+#[test]
+fn an_arrival_is_noted_under_its_composed_name() {
+    let dir = TempDir::new().unwrap();
+    note_arrived(dir.path(), &[dir.path().join("cafe\u{301}.png")]);
+    assert!(arrived_in_session(dir.path(), "caf\u{e9}.png", &[]));
+}
+
+#[test]
+fn a_decomposed_page_on_screen_is_viewed() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("cafe\u{301}.md"), "c").unwrap();
+    note_viewed(dir.path(), "/caf\u{e9}");
+    let s = schedule(&dir, vec![vec!["caf\u{e9}.md".to_string()]], vec![false]);
+    assert_eq!(s.tier(0), Tier::Viewed);
+}

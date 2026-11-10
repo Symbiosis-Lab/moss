@@ -46,7 +46,7 @@
   --moss-editor-reading-size: calc(1.0625rem * var(--moss-editor-font-scale, 1));  /* 17px at scale 1 */
   --moss-editor-measure: calc(42 * var(--moss-editor-reading-size));
   --moss-editor-spine: 16px;
-  --moss-editor-reading-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --moss-editor-reading-font: var(--moss-font-body);
 
   /* Provisional, tuned against Dropbox Paper's text (#1b2733). Separate from
      --moss-color-text (app chrome) for the same reason reading-size and

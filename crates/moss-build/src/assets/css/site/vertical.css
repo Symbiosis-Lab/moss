@@ -519,7 +519,7 @@ body[data-typesetting="vertical"] .moss-collection-cover-body {
    status copy collapses onto the same vertical position instead of
    advancing down the column (a broken/zero vertical advance in whichever
    fallback the stack resolves to). WebKit renders the identical markup
-   correctly. `--moss-font-heading` has correct CJK vertical metrics and
+   correctly. The Han heading stack has correct CJK vertical metrics and
    fixes it with no WebKit regression — everything else about the form
    (input/button orientation, sizing, the block-end underline, status
    placement) already transposes truthfully from logical properties in
@@ -527,7 +527,7 @@ body[data-typesetting="vertical"] .moss-collection-cover-body {
 body[data-typesetting="vertical"] .moss-input,
 body[data-typesetting="vertical"] .moss-btn,
 body[data-typesetting="vertical"] .moss-subscribe-status {
-  font-family: var(--moss-font-heading);
+  font-family: var(--moss-font-heading-han);
 }
 
   /* A vertical page reserves no lane for the contents list (site.css, under

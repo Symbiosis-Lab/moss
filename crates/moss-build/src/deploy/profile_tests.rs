@@ -50,6 +50,7 @@ async fn publish_twice(prebuilt: bool) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".moss")).unwrap();
     std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"profile-test\"\n").unwrap();
+    crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
     let output = dir.path().join("output");
     std::fs::create_dir(&output).unwrap();
     std::fs::write(output.join("index.html"), "<html>private-page-content</html>").unwrap();
@@ -74,6 +75,7 @@ async fn publish_twice(prebuilt: bool) {
         assert_eq!(record["outcome"], "ok");
         assert_eq!(record["target"], if prebuilt { "prebuilt" } else { "seta" });
         assert_eq!(record["dry_run"], false);
+        assert_eq!(record["build_profile"], crate::system::build_profile());
         let c = &record["counts"];
         let needed = c["files_needed"].as_u64().unwrap();
         assert!(needed <= c["manifest_files"].as_u64().unwrap());
@@ -157,4 +159,20 @@ async fn deploy_profile_prebuilt_error_is_recorded() {
     assert_eq!(rows[0]["outcome"], "error");
     assert_eq!(rows[0]["target"], "prebuilt");
     assert_eq!(rows[0]["counts"]["files_uploaded"], 0);
+}
+
+/// The server's named refusals are recorded under the kinds their bare
+/// statuses already had.
+#[tokio::test]
+async fn named_seta_refusals_record_their_kinds() {
+    use crate::seta::client::SetaError;
+    let kind_of = |error: SetaError| {
+        let slot = Arc::new(Mutex::new(None));
+        REFUSAL.sync_scope(slot.clone(), || seta_error(&error));
+        let kind = slot.lock().unwrap().clone();
+        kind
+    };
+    let cap = SetaError::StorageCapExceeded { cap_bytes: 1, site_bytes: None, message: "over".into() };
+    assert_eq!(kind_of(cap), Some(json!("size_limit")));
+    assert_eq!(kind_of(SetaError::DeploySuperseded { message: "again".into() }), Some(json!("conflict")));
 }

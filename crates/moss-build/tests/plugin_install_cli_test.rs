@@ -74,6 +74,10 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
     let tmp = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", tmp.path());
     std::env::set_var("XDG_DATA_HOME", tmp.path().join("data"));
+    let tooling_parent = tmp.path().join("tooling");
+    let tooling = tooling_parent.join(".moss");
+    std::fs::create_dir_all(&tooling).unwrap();
+    std::env::set_var("MOSS_HOME", &tooling);
     moss_build::system::seed_app_version("0.0.0");
     let app_data = moss_build::infra::app_data::app_data_dir_early().unwrap();
     assert!(app_data.starts_with(tmp.path()), "{}", app_data.display());
@@ -90,9 +94,31 @@ fn installing_checks_the_catalog_every_time_and_approves_in_app_data() {
         r.insert("/gamma.zip", zip("gamma"));
     }
 
+    // Invalid destinations must fail before app data or the registry is touched.
+    let nested = site.join("posts");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    for folder in [&nested, &outside, &tooling_parent] {
+        let err = install("alpha", folder, &origin).err().expect("requires the exact site root");
+        assert!(err.contains("not a moss site root") && err.contains(&folder.display().to_string()), "{err}");
+        assert!(!app_data.exists(), "invalid destination touched app data");
+        assert!(!site.join(".moss/plugins").exists());
+    }
+
+    #[cfg(unix)]
+    {
+        let alias = tmp.path().join("alias");
+        std::fs::create_dir_all(&alias).unwrap();
+        std::os::unix::fs::symlink(&tooling, alias.join(".moss")).unwrap();
+        let err = install("alpha", &alias, &origin).err().expect("tooling alias is not a site");
+        assert!(err.contains("not a moss site root") && err.contains(alias.to_str().unwrap()), "{err}");
+        assert!(!app_data.exists());
+    }
+
     // Online: installed, one line said, consent kept in app data and not in the site.
     let done = install("alpha", &site, &origin).unwrap();
-    assert_eq!(done.line, "Installed alpha 1.2.0 and approved it for this user on this machine");
+    assert_eq!(done.line, format!("Installed alpha 1.2.0 into {} and approved it for this user on this machine", site.display()));
     assert!(done.notice.is_none());
     assert!(site.join(".moss/plugins/alpha/main.js").exists());
     let approvals = std::fs::read_to_string(app_data.join("plugin-approvals.json")).unwrap();

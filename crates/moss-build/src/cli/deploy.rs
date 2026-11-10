@@ -5,13 +5,15 @@
 //! arguments. What each supplies is a `host_ports` factory and, in the app's
 //! case, the Finder stamp that cannot cross.
 //!
-//! Three routes, and the folder decides which:
+//! Four routes, and the folder decides which:
 //! [`crate::deploy::route::DeployRoute`] reads the answer once and both
 //! binaries act on it. A **prebuilt** folder — one whose site was produced by
 //! another tool (Quire, Hugo, Jekyll, Astro), named by `--prebuilt=<dir>` or by
 //! `[deployment].prebuilt_output` — is uploaded as-is. A folder whose
 //! `[hooks] deploy` names a **plugin** is built and then handed to that plugin.
-//! Everything else takes the **moss-hosted** route, where moss builds the site
+//! A folder whose `[hooks] deploy` names a host built into moss takes the
+//! **direct** route, refused before the build while this version has no
+//! destination for it. Everything else takes the **moss-hosted** route, where moss builds the site
 //! and publishes what it sealed, registering it first if this is the folder's
 //! first publish.
 //!
@@ -315,6 +317,9 @@ async fn dispatch(
     sink: &Arc<dyn DeploySink>,
 ) -> Result<DeployReport, String> {
     crate::deploy::profile::record(folder, crate::deploy::profile::target(route), flags.dry_run, async {
+    if let DeployRoute::Direct { id } = route {
+        return Err(unavailable(id));
+    }
     // Before the route's own send: a dry run is the same build with
     // everything after the gate left out, so it never reaches the match.
     if flags.dry_run {
@@ -409,7 +414,14 @@ async fn send(
                 crate::deploy::plugin_push::report_for(&published)
             })
         }
+        DeployRoute::Direct { id } => Err(unavailable(id)),
     }
+}
+
+/// Why a built-in target this version has no destination for is refused.
+/// Known at once, so asked before the build and before a dry run.
+fn unavailable(id: &str) -> String {
+    format!("this version of moss cannot publish to [hooks] deploy = \"{id}\" yet")
 }
 
 /// Turn a publish outcome into what the terminal sees and the exit code.
@@ -426,7 +438,7 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
     match result {
         Ok(DeployReport::Push(PushResult::Success { url, files_uploaded, files_removed })) => {
             println!("{}", url);
-            eprintln!("published — {} uploaded, {} removed", files_uploaded, files_removed);
+            eprintln!("{}", published_line(folder_display, &url, files_uploaded, files_removed));
             eprint!("{}", removed_by_author(folder_display));
             0
         }
@@ -461,6 +473,20 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str, json: 
             1
         }
     }
+}
+
+/// The line a landed publish prints on stderr: which folder went where.
+fn published_line(folder: &str, url: &str, uploaded: u32, removed: u32) -> String {
+    let name = crate::vault::paths::VaultRoot::resolve(folder).name().to_string();
+    format!("Published {name} to {url} — {uploaded} uploaded, {removed} removed")
+}
+
+#[test]
+fn a_landed_publish_names_the_folder_and_where_it_went() {
+    assert_eq!(
+        published_line("/Users/me/Sites/My Blog/", "https://my-blog.mosspub.com", 3, 1),
+        "Published My Blog to https://my-blog.mosspub.com — 3 uploaded, 1 removed"
+    );
 }
 
 /// The addresses the author deleted, named, for after a publish: what the
@@ -956,6 +982,20 @@ mod dry_run_tests {
         assert!(refusal.text.contains("--email"), "{}", refusal.text);
     }
 
+    /// The owner's key not signed in to this site is refused with the sentence
+    /// `--email` lifts, naming the address the server gave.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_folder_not_signed_in_to_its_site_is_refused_with_the_sign_in_sentence() {
+        let body = r#"{"error":"Not authorized for this site","code":"folder_not_signed_in","site":"dry-test.example.org","detail":"This folder isn't signed in to dry-test.example.org."}"#;
+        let fx = Fixture::answered_by(false, StandIn::json(403, body).await);
+        let dry = dry_run_against(&fx).await;
+        assert_eq!(dry.owner, answered(crate::deploy::dry_run::SiteAccess::NotSignedIn));
+        let refusal = dry.refusal.as_ref().expect("a real deploy would be refused");
+        assert_eq!(refusal.kind, crate::deploy::RefusalKind::NotSignedIn);
+        assert_eq!(refusal.text, crate::identity::verify_email::not_signed_in(fx.dir.path(), "dry-test.example.org"));
+        assert!(crate::identity::verify_email::is_unverified_refusal(&refusal.text));
+    }
+
     /// The prebuilt route asks the same question and refuses the same way.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_prebuilt_dry_run_refuses_a_key_that_does_not_own_the_site() {
@@ -1098,17 +1138,47 @@ mod dry_run_tests {
         assert!(fx.requests().is_empty(), "a dry run must not contact the server");
     }
 
-    /// A deploy creates a signing key when the site has none, so the dry run
-    /// says that rather than refusing, and creates nothing.
+    /// A registered site whose key is gone is not signed in: a new key would be
+    /// one the hosting service has never seen. A deploy refuses before it reaches
+    /// the server and writes no key; a dry run names the same refusal.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_registered_site_with_no_key_is_told_a_deploy_would_create_one() {
+    async fn a_registered_site_that_lost_its_key_is_refused_as_not_signed_in() {
         let fx = Fixture::new(false).await;
-        std::fs::remove_dir_all(fx.dir.path().join(".moss/identity")).unwrap();
-        let report = fx.run(true).await.expect("a deploy would go on and create the key");
+        let identity = fx.dir.path().join(".moss/identity");
+        std::fs::remove_dir_all(&identity).unwrap();
+        crate::identity::Identity::generate().unwrap().save(fx.dir.path()).unwrap();
+        let pubkey = crate::identity::Identity::read_pubkey(fx.dir.path());
+        std::fs::remove_file(identity.join("secret-key")).unwrap();
+
+        let name = crate::vault::paths::VaultRoot::resolve(fx.dir.path()).name().to_string();
+        let host = crate::deploy::sign_in_host(&fx.dir.path().to_string_lossy(), Some("dry-test"));
+        assert!(host.starts_with("dry-test."), "the site's address, not the service: {host}");
+        let expected = format!("{name} isn't signed in to {host}. Sign it in: moss deploy {} --email <address>", fx.dir.path().display());
+        let err = fx.run(false).await.expect_err("a lost key must refuse");
+        assert_eq!(err, expected);
+        assert!(crate::identity::verify_email::is_unverified_refusal(&err), "--email must lift it");
+        assert_eq!(crate::identity::Identity::read_pubkey(fx.dir.path()), pubkey, "the old key stays named");
+        assert!(!identity.join("secret-key").exists(), "no new key may be written");
+        assert!(fx.requests().is_empty(), "nothing may reach the server");
+
+        let report = fx.run(true).await.expect("a dry run reports");
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
-        assert!(dry.would_create_key && dry.refusal.is_none(), "{dry:?}");
-        assert!(dry.render().contains("would create a new one"), "{}", dry.render());
-        assert!(!fx.dir.path().join(".moss/identity").exists(), "the dry run must not create it");
+        let refusal = dry.refusal.as_ref().expect("a real deploy would stop here");
+        assert_eq!((refusal.kind, refusal.text.as_str()), (crate::deploy::RefusalKind::NotSignedIn, expected.as_str()));
+        assert!(!dry.would_create_key, "{dry:?}");
+    }
+
+    /// The same for a site folder with no identity at all, as a git clone has.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_registered_site_with_no_identity_is_refused_and_given_none() {
+        let fx = Fixture::new(false).await;
+        let identity = fx.dir.path().join(".moss/identity");
+        std::fs::remove_dir_all(&identity).unwrap();
+
+        let err = fx.run(false).await.expect_err("no identity must refuse");
+        assert!(err.contains(" isn't signed in to dry-test."), "{err}");
+        assert!(!identity.exists(), "no identity may be written");
+        assert!(fx.requests().is_empty(), "nothing may reach the server");
     }
 
     /// An old identity keeps its private key inside `public.json`; a deploy
@@ -1326,6 +1396,7 @@ mod profile_tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".moss")).unwrap();
         std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+        crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
         let site = dir.path().join("output");
         std::fs::create_dir(&site).unwrap();
         std::fs::write(site.join("index.html"), "<p>private-page</p>").unwrap();
@@ -1353,6 +1424,7 @@ mod profile_tests {
             let dir = tempfile::tempdir().unwrap();
             std::fs::create_dir(dir.path().join(".moss")).unwrap();
             std::fs::write(dir.path().join(".moss/state.toml"), "[deployment]\nsite_id = \"dry-profile\"\n").unwrap();
+            crate::identity::Identity::generate().unwrap().save(dir.path()).unwrap();
             std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\nuid: dry-home\n---\n\nHello.\n").unwrap();
             let result = dispatch(dir.path(), &route, &crate::cli::host::cli_host_ports,
                 crate::build::PluginMode::Skip, &DeployFlags { dry_run: true, ..Default::default() },

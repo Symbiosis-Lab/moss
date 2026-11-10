@@ -20,7 +20,7 @@
   max-width: min(22rem, calc(100vw - 2rem));
   padding: 1.25rem;
   border: 0;
-  border-radius: var(--moss-radius-window);
+  border-radius: var(--moss-window-radius);
   background: var(--moss-color-bg);
   color: var(--moss-color-text);
   text-align: center;

@@ -46,11 +46,22 @@ fn preview_only_root_fires() {
 #[test]
 fn preview_only_state_without_site_id_is_not_published() {
     let tmp = tempfile::tempdir().unwrap();
-    make_root(&tmp.path().join("draft"), Some("[deployment]\ndeploy_method = \"moss\"\n"));
+    make_root(&tmp.path().join("draft"), Some("[deployment]\n"));
 
     let report = find_nested_roots(tmp.path(), None, &limits());
     assert_eq!(report.nested[0].published, Some(false));
     assert_eq!(report.nested[0].site_id, None);
+}
+
+/// An older moss stored the chosen publish method; that is publish evidence
+/// too, so the guard errs toward keeping the site.
+#[test]
+fn a_stored_publish_method_counts_as_published() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_root(&tmp.path().join("draft"), Some("[deployment]\ndeploy_method = \"moss\"\n"));
+
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.nested[0].published, Some(true));
 }
 
 #[test]
@@ -96,6 +107,31 @@ fn version_ahead_state_is_unknown_never_a_guessed_site_id() {
     let report = find_nested_roots(tmp.path(), None, &limits());
     assert_eq!(report.nested[0].published, None);
     assert_eq!(report.nested[0].site_id, None);
+}
+
+/// A nested site published through a plugin records no `site_id`.
+#[test]
+fn a_plugin_publish_without_site_id_is_published() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_root(&tmp.path().join("blog"), Some("[deployment]\ndeploy_method = \"github\"\nsite_url = \"https://u.github.io\"\n"));
+
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.nested[0].published, Some(true));
+    assert_eq!(report.nested[0].site_id, None);
+}
+
+/// A state file still in the cloud is unknown, and the scan never waits for it.
+#[test]
+fn evicted_state_is_unknown_and_never_waited_on() {
+    let tmp = tempfile::tempdir().unwrap();
+    let child = tmp.path().join("blog");
+    published(&child, "blog");
+    let _in_cloud = crate::build::icloud::pretend::evicted(&child.join(".moss/state.toml"));
+
+    let start = std::time::Instant::now();
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
+    assert_eq!(report.nested[0].published, None);
 }
 
 #[test]
@@ -205,13 +241,26 @@ fn depth_cap_sets_truncated_instead_of_silently_proceeding() {
 #[test]
 fn dir_cap_sets_truncated() {
     let tmp = tempfile::tempdir().unwrap();
+    for name in ["d1", "d2", "d3"] {
+        fs::create_dir_all(tmp.path().join(name)).unwrap();
+    }
+    let small = ScanLimits { max_depth: 6, max_dirs: 2, max_reported: 5 };
+    let report = find_nested_roots(tmp.path(), None, &small);
+    assert!(report.truncated, "a cap hit must never read as a clean scan");
+    assert_eq!(report.dirs_visited, 2, "the count is the folders listed, never more than the cap");
+}
+
+#[test]
+fn a_found_site_is_not_counted_as_a_listed_folder() {
+    let tmp = tempfile::tempdir().unwrap();
     for name in ["s1", "s2", "s3"] {
         make_root(&tmp.path().join(name), None);
     }
     let small = ScanLimits { max_depth: 6, max_dirs: 2, max_reported: 5 };
     let report = find_nested_roots(tmp.path(), None, &small);
-    assert!(report.nested.len() <= 1);
-    assert!(report.truncated, "a cap hit must never read as a clean scan");
+    assert_eq!(report.nested.len(), 3);
+    assert!(!report.truncated);
+    assert_eq!(report.dirs_visited, 1, "only the root was listed; the sites were pruned");
 }
 
 #[test]
@@ -242,6 +291,27 @@ fn unlistable_dir_sets_truncated_instead_of_reading_as_clean() {
 
     if denied {
         assert!(report.truncated, "an unlistable subtree must not read as a clean scan");
+        assert!(report.root_listing_complete, "the root itself was listed in full");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn an_unlistable_root_is_an_incomplete_root_listing() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let locked = tmp.path().join("locked");
+    fs::create_dir_all(locked.join("inside")).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root runs list anyway; only assert when the denial applied.
+    let denied = fs::read_dir(&locked).is_err();
+
+    let report = find_nested_roots(&locked, None, &limits());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    if denied {
+        assert!(report.truncated);
+        assert!(!report.root_listing_complete, "a .moss or a copy may sit in it unseen");
     }
 }
 
@@ -359,6 +429,29 @@ fn owns_moss_requires_a_directory() {
 }
 
 #[test]
+fn owns_moss_skips_moss_home_and_a_symlink_to_it() {
+    crate::infra::home::with_moss_home(|_| {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+        fs::create_dir_all(user.join(".moss")).unwrap();
+        std::env::set_var("MOSS_HOME", user.join(".moss"));
+        assert!(!owns_moss(&user), "moss's own home is not a site marker");
+
+        let alias = tmp.path().join("alias");
+        fs::create_dir_all(&alias).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(user.join(".moss"), alias.join(".moss")).unwrap();
+            assert!(!owns_moss(&alias), "nor is a symlink to it");
+        }
+
+        let site = tmp.path().join("site");
+        fs::create_dir_all(site.join(".moss")).unwrap();
+        assert!(owns_moss(&site));
+    });
+}
+
+#[test]
 fn cloud_storage_path_predicate_covers_known_mounts() {
     // Vectors moved here from build/pipeline_tests.rs with the predicate.
     assert!(is_cloud_storage_path("/Users/a/Library/CloudStorage/GoogleDrive-x/My Drive/site"));
@@ -378,4 +471,140 @@ fn cloud_storage_path_predicate_covers_known_mounts() {
     assert!(!is_cloud_storage_path("/tmp/build-fixture"));
     assert!(!is_cloud_storage_path("/var/folders/abc/site"));
     assert!(!is_cloud_storage_path("/Users/a/MyDropboxBackup/site"));
+}
+
+// ---- copies of .moss ----
+
+#[test]
+fn moss_copy_names() {
+    for name in [".moss 2", ".moss 13", ".moss (1)", ".moss (conflicted copy 2026-11-09)", ".moss.removed-20261030", ".moss.removed-20261030-1", ".moss.sync-conflict-20261109-120000-ABCDEFG"] {
+        assert!(is_moss_copy(name), "{name}");
+    }
+    for name in [".moss", ".mossy", ".moss-cache", ".moss ", ".moss ()", ".moss 2a", ".moss.removed-", "moss 2", ".moss.bak", ".moss (/../x)", ".moss (a\\b)"] {
+        assert!(!is_moss_copy(name), "{name}");
+    }
+}
+
+#[test]
+fn sync_copy_names_of_any_entry() {
+    for name in ["cache 2", "cache (1)", "cache (conflicted copy 2026-11-09)", "cache.sync-conflict-20261109-120000-ABCDEFG"] {
+        assert!(is_sync_copy_of(name, "cache"), "{name}");
+    }
+    for name in ["cache", "cached 2", "cache-host", "cache.removed-20261030", "cache (a/b)", "cache ()"] {
+        assert!(!is_sync_copy_of(name, "cache"), "{name}");
+    }
+}
+
+fn filled_copy(root: &Path, name: &str, state: Option<&str>, dirs: usize) {
+    let copy = root.join(name);
+    for i in 0..dirs {
+        fs::create_dir_all(copy.join(format!("cache/objects/{i:02x}"))).unwrap();
+    }
+    if let Some(body) = state {
+        fs::write(copy.join("state.toml"), body).unwrap();
+    }
+}
+
+#[test]
+fn a_copy_is_never_walked_and_is_reported_when_the_root_has_no_moss() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("pages")).unwrap();
+    filled_copy(tmp.path(), ".moss 2", None, 50);
+    let small = ScanLimits { max_depth: 6, max_dirs: 20, max_reported: 5 };
+    let report = find_nested_roots(tmp.path(), None, &small);
+    assert!(!report.truncated, "the copy's cache must not exhaust the scan");
+    assert_eq!(report.dirs_visited, 2);
+    assert_eq!(report.moss_copies, vec![MossCopy { name: ".moss 2".into(), published: None }]);
+}
+
+#[test]
+fn a_set_aside_counts_only_when_it_records_a_published_site() {
+    let tmp = tempfile::tempdir().unwrap();
+    filled_copy(tmp.path(), ".moss.removed-20261030", Some("[deployment]\nsite_id = \"real-site\"\n"), 3);
+    assert!(find_nested_roots(tmp.path(), None, &limits()).moss_copies.iter().filter(|c| c.is_site_data()).count() == 1);
+
+    let tmp = tempfile::tempdir().unwrap();
+    filled_copy(tmp.path(), ".moss.removed-20261030", Some("last_build = \"x\"\n"), 3);
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.moss_copies.len(), 1);
+    assert!(!report.moss_copies[0].is_site_data(), "an unpublished folder set aside on purpose stays set aside");
+    assert_eq!(report.dirs_visited, 1, "and its cache is still not walked");
+}
+
+/// A set-aside with no state file may be one whose state has not been
+/// listed yet in a cloud folder: it counts.
+#[test]
+fn a_set_aside_without_state_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    filled_copy(tmp.path(), ".moss.removed-20261030", None, 1);
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.moss_copies, vec![MossCopy { name: ".moss.removed-20261030".into(), published: None }]);
+    assert!(report.moss_copies[0].is_site_data());
+}
+
+/// Inside a site that owns `.moss`, a folder holding only a copy is that
+/// site's content, never a site of its own to offer.
+#[test]
+fn a_copy_inside_a_site_is_not_a_nested_site() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_root(tmp.path(), None);
+    filled_copy(&tmp.path().join("inner"), ".moss 2", None, 3);
+    fs::create_dir_all(tmp.path().join("inner/pages")).unwrap();
+    let report = scan_below(tmp.path(), None, &limits());
+    assert!(report.nested.is_empty(), "{:?}", report.nested);
+    assert_eq!(report.dirs_visited, 3, "inner is walked; its copy is not");
+}
+
+#[test]
+fn a_root_with_its_own_moss_reports_no_copies() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_root(tmp.path(), None);
+    filled_copy(tmp.path(), ".moss 2", None, 1);
+    assert!(find_nested_roots(tmp.path(), None, &limits()).moss_copies.is_empty());
+    assert!(scan_below(tmp.path(), None, &limits()).moss_copies.is_empty());
+}
+
+/// A set-aside whose state cannot be read, or that records a publish with no
+/// `site_id` (a plugin publish), is the site's data: never skipped as junk.
+#[test]
+fn a_set_aside_with_unreadable_or_plugin_publish_state_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    filled_copy(tmp.path(), ".moss.removed-20261030", Some("[deployment]\nsite_id = \"real-site\"\n"), 1);
+    let _in_cloud = crate::build::icloud::pretend::evicted(&tmp.path().join(".moss.removed-20261030/state.toml"));
+    assert!(find_nested_roots(tmp.path(), None, &limits()).moss_copies.iter().filter(|c| c.is_site_data()).count() == 1);
+
+    let tmp = tempfile::tempdir().unwrap();
+    filled_copy(
+        tmp.path(),
+        ".moss.removed-20261030",
+        Some("[deployment]\ndeploy_method = \"github\"\nsite_url = \"https://u.github.io\"\n"),
+        1,
+    );
+    assert!(find_nested_roots(tmp.path(), None, &limits()).moss_copies.iter().filter(|c| c.is_site_data()).count() == 1);
+}
+
+/// A copy deeper down is a site inside whose data sits under another name:
+/// reported as a nested site with `data_in`, and not walked into.
+#[test]
+fn a_copy_below_the_root_is_reported_as_a_nested_site() {
+    let tmp = tempfile::tempdir().unwrap();
+    filled_copy(&tmp.path().join("inner"), ".moss 2", None, 30);
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(rel_paths(&report), vec!["inner"]);
+    assert_eq!(report.nested[0].data_in.as_deref(), Some(".moss 2"));
+    assert!(report.moss_copies.is_empty(), "only the root's own copies are offered back");
+    assert_eq!(report.dirs_visited, 2, "the inner site is a boundary");
+}
+
+/// Only a real directory is a copy; a file or a symlink with the name is not.
+#[test]
+fn a_file_or_symlink_named_like_a_copy_is_not_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join(".moss 2"), "not a folder").unwrap();
+    #[cfg(unix)]
+    {
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), tmp.path().join(".moss (1)")).unwrap();
+    }
+    assert!(find_nested_roots(tmp.path(), None, &limits()).moss_copies.is_empty());
 }

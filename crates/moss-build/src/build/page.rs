@@ -7,6 +7,7 @@ pub(crate) mod default_width;
 pub(crate) mod event_json_ld;
 pub(crate) mod layout;
 pub mod link_meta;
+pub(crate) mod link_snapshot;
 pub mod meta;
 pub mod og_card;
 pub mod og_choice;

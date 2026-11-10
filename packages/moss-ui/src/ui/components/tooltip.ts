@@ -15,6 +15,7 @@
  */
 
 import { zTier } from "../shared/z-tier";
+import { kbdChipText } from "../utils/kbd-label";
 
 /** The requestable placements (`data-tooltip-position=`; absent = "left"). */
 export const TOOLTIP_PLACEMENTS = ["left", "right", "top", "bottom"] as const;
@@ -363,7 +364,7 @@ function renderContent(trigger: Element, text: string) {
   if (kbd) {
     const chip = document.createElement("kbd");
     chip.className = "moss-tooltip-kbd";
-    chip.textContent = kbd;
+    chip.textContent = kbdChipText(kbd);
     tooltipEl.appendChild(chip);
   }
 }

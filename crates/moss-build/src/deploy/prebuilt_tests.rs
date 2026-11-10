@@ -381,6 +381,60 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
     );
 }
 
+// ── A site over its storage cap is refused at the sync ──────────────────────
+
+/// The sync carries each file's size, and a server that refuses the site as
+/// over its storage cap stops the publish before any upload with its own
+/// sentence.
+#[tokio::test]
+async fn a_prebuilt_sync_sends_sizes_and_shows_the_storage_cap_refusal() {
+    use tokio::net::TcpListener;
+
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+    let project = tmp_dir();
+    let prebuilt = tmp_dir();
+    let page = b"<html>a page</html>";
+    std::fs::write(prebuilt.path().join("index.html"), page).unwrap();
+
+    const SENTENCE: &str = "This folder is over the 1 GB limit. Remove some files and try again.";
+    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = crate::test_accept_skipping_whoami(&listener).await;
+        crate::test_respond_and_close(
+            &mut stream,
+            b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        )
+        .await;
+        let (mut stream, raw) = crate::test_accept_skipping_whoami(&listener).await;
+        let body = format!(r#"{{"code":"storage_cap_exceeded","error":"{SENTENCE}","cap_bytes":1073741824,"site_bytes":1586736868}}"#);
+        let resp = format!(
+            "HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
+        sync_tx.send(raw).ok();
+    });
+
+    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    let identity = Identity::generate().expect("generate identity");
+    let result = push_prebuilt(project.path(), prebuilt.path(), "capped-site", &identity, false, &silent()).await;
+    match prev_url {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+
+    assert_eq!(result.err().as_deref(), Some(SENTENCE));
+    let raw = sync_rx.await.expect("the sync was sent");
+    let body = &raw[raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
+    let body: serde_json::Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(body["sizes"], serde_json::json!({ "index.html": page.len() }));
+}
+
 // ── A removal that only touched `_moss/` still publishes ────────────────────
 //
 // The server leaves `_moss/` paths out of `remove` (they are not wipe

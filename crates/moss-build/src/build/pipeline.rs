@@ -60,6 +60,7 @@
 //!                              └── AssetRegistry key            // placeholder lookup
 //! ```
 
+use crate::build::scan::path_collision::{logical_path, on_disk};
 use crate::moss_paths::MossPaths;
 use crate::build::enhance::ResolvedSlots;
 use crate::{build::types::ParsedDocument, types::{content::{ProjectStructure, SiteHashes}, runtime::SiteDirectoryState, services::BuildServices}};
@@ -176,10 +177,7 @@ fn previous_route_present(
         .find(|key| crate::build::served_path::served_address(key) == requirement.url_path);
     output.is_some_and(|key| {
         let source_matches = match &requirement.source {
-            PreviewSource::File(source) => {
-                let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
-                previous.source_to_output.get(&rel).is_some_and(|mapped| mapped == key)
-            }
+            PreviewSource::File(source) => previous.source_to_output.get(source).is_some_and(|mapped| mapped == key),
             PreviewSource::Generated => !previous.source_to_output.values().any(|mapped| mapped == key),
             // The old route counts once this attempt's evidence proves its
             // mapped source. An old generated page can share this URL with a
@@ -198,7 +196,10 @@ fn previous_route_present(
                 .is_ok_and(|bytes| format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&bytes)) == hash)
         });
         source_matches && matches_current
-            && crate::build::manifest::required_page_outputs_present(&previous.files, key, current_dir)
+            // `current` holds shipped bytes, which the root transform leaves as
+            // they are. Under a mount its references carry the prefix, so this
+            // answers no and the preview waits for the stage instead.
+            && crate::build::manifest::required_page_outputs_present(&previous.files, key, current_dir, &Default::default())
     })
 }
 
@@ -210,7 +211,7 @@ fn request_preview_inputs(
 ) {
     use crate::system::folder_session::PreviewSource;
     if let Some(crate::system::folder_session::PreviewRequirement { source: PreviewSource::File(source), .. }) = requirement {
-        let focused = root.join(source);
+        let focused = on_disk(root, source);
         if crate::build::icloud::is_still_in_the_cloud(&focused) {
             crate::build::cloud_readiness::request_download_foreground(&focused);
         }
@@ -239,7 +240,7 @@ fn home_page_is_a_substitute(project_structure: &ProjectStructure, folder_path: 
     // page that is entirely fine. Reading the marker costs a bounded head read
     // of a file this build just rendered, so it is already local.
     if let Some(elected) = project_structure.homepage_file.as_deref() {
-        if crate::build::scan::scan::file_has_home_marker(&root.join(elected)) {
+        if crate::build::scan::scan::file_has_home_marker(&on_disk(root, elected)) {
             return false;
         }
     }
@@ -252,7 +253,7 @@ fn home_page_is_a_substitute(project_structure: &ProjectStructure, folder_path: 
         .iter()
         .filter(|p| is_home_candidate_path(p))
         .filter_map(|p| p.strip_prefix(root).ok())
-        .map(|rel| moss_core::slug::normalize_separators(&rel.to_string_lossy()))
+        .map(logical_path)
         .filter(|rel| !rel.contains('/'))
         .collect();
     if evicted_root.is_empty() {
@@ -430,7 +431,7 @@ fn run_notebook_processing(
             // Fallback: copy .ipynb files as-is without JupyterLite
             let mut fallback_paths = Vec::new();
             for item in &items {
-                let source = std::path::Path::new(source_path).join(&item.source_path);
+                let source = on_disk(std::path::Path::new(source_path), &item.source_path);
                 // .unwrap(): source_path comes from the notebook scanner which
                 // produces relative paths under the source folder — known valid.
                 let out_path = crate::build::served_path::ServedPath::from_source(&item.source_path).unwrap();
@@ -606,7 +607,7 @@ fn run_notebook_processing(
         // wait. The closure captures owned PathBuf clones of the
         // staging/canonical dirs because the detached worker thread may
         // outlive this iteration's borrow.
-        let source = std::path::Path::new(source_path).join(&item.source_path);
+        let source = on_disk(std::path::Path::new(source_path), &item.source_path);
         let item_source_path = item.source_path.clone();
         let staging_owned = staging_dir.to_path_buf();
         let evidence_for_copy = evidence.clone();
@@ -718,7 +719,7 @@ fn run_notebook_processing(
     {
         let mut seen_dirs = std::collections::HashSet::new();
         for item in &items {
-            let source_file = std::path::Path::new(source_path).join(&item.source_path);
+            let source_file = on_disk(std::path::Path::new(source_path), &item.source_path);
             if let Some(parent) = source_file.parent() {
                 if seen_dirs.insert(parent.to_path_buf()) {
                     if let Ok(entries) = fs::read_dir(parent) {
@@ -755,7 +756,7 @@ fn run_notebook_processing(
         let mut filenames: Vec<&str> = Vec::new();
         let mut contents: Vec<String> = Vec::new();
         for item in &items {
-            let source = std::path::Path::new(source_path).join(&item.source_path);
+            let source = on_disk(std::path::Path::new(source_path), &item.source_path);
             if let Some(content) = read_notebook_sibling(&source, evidence) {
                 let fname = std::path::Path::new(&item.source_path)
                     .file_name()
@@ -906,8 +907,9 @@ pub struct PipelineRunOutput {
 /// The `&str` is the site's resolved language code and the `Option<bool>`
 /// is the site-wide `[site] comments` default, both handed DOWN rather than
 /// re-derived — each is one fact a second read could tell twice, disagreeing.
+/// The input ledger is the build's own, for the inputs slots read.
 pub type SlotResolver = Box<
-    dyn FnOnce(&[ParsedDocument], &str, Option<bool>) -> Result<ResolvedSlots, String> + Send + 'static,
+    dyn FnOnce(&[ParsedDocument], &str, Option<bool>, Option<&crate::build::cloud_ledger::InputEvidence>) -> Result<ResolvedSlots, String> + Send + 'static,
 >;
 
 /// [`run_leased`] for a caller that holds no cache-write lease — tests and
@@ -1156,7 +1158,7 @@ fn build_inner(
     let elected_home = crate::system::folder_session::PreviewRequirement {
         url_path: "/".into(),
         source: project_structure.homepage_file.as_ref()
-            .map(|path| crate::system::folder_session::PreviewSource::File(path.into()))
+            .map(|path| crate::system::folder_session::PreviewSource::File(path.clone()))
             .unwrap_or(crate::system::folder_session::PreviewSource::Generated),
         revision: 0,
     };
@@ -1542,11 +1544,12 @@ fn build_inner(
     // `build.rs` so native slot generation can read typed feature flags and
     // slot-only files without rescanning the filesystem.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
-    let build_now = crate::build::folder_embed::upcoming::now();
+    let build_instant = crate::build::inputs::build_instant();
     // Read again by the notebook viewers, after `site_config` is consumed.
     let site_ai = site_config.ai;
     let color_scheme = site_config.color_scheme;
-    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_now)?;
+    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_instant)?;
+    let build_now = site_result.now;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
@@ -1576,7 +1579,7 @@ fn build_inner(
     // rewrites those entries so all downstream artifact boundaries see the
     // final HTML bytes.
     let mut resolved_slots = match slot_resolver {
-        Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
+        Some(resolve) => resolve(&documents, &site_lang, site_comments, pending.input_evidence().as_ref())?,
         None => ResolvedSlots::empty(),
     };
     crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots, build_now);

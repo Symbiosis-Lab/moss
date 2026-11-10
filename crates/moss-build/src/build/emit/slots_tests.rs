@@ -78,7 +78,7 @@ impl Site {
                 None,
                 &port,
                 None,
-                Some(Box::new(move |_, _, _| Ok(slots))),
+                Some(Box::new(move |_, _, _, _| Ok(slots))),
                 &ps,
                 None,
                 gates,
@@ -100,7 +100,7 @@ impl Site {
 
 /// The hash the manifest holds for bytes: the shipped (stripped) form, mode-tagged.
 fn entry_for(key: &str, bytes: &[u8]) -> String {
-    format!("100644:{}", compute_binary_hash(&apply_transform(transform_for(key), bytes)))
+    format!("100644:{}", compute_binary_hash(&apply_transform(transform_for(key), &Default::default(), bytes)))
 }
 
 /// The invariant a rendered page must satisfy once the slot pass has run: it
@@ -137,6 +137,7 @@ fn empty_site_result() -> crate::types::content::SiteResult {
         deferred_paths: Vec::new(),
         missing_references: Vec::new(),
         term_index: Default::default(),
+        now: Default::default(),
     }
 }
 
@@ -412,7 +413,7 @@ fn materialize_and_promote_ships_the_sealed_bytes_of_a_page_the_stage_no_longer_
     let shipped = std::fs::read(mp.generation_dir(sealed.generation_id()).join(key)).unwrap();
     assert_eq!(
         String::from_utf8_lossy(&shipped),
-        String::from_utf8_lossy(&apply_transform(transform_for(key), &sealed_bytes)),
+        String::from_utf8_lossy(&apply_transform(transform_for(key), &Default::default(), &sealed_bytes)),
         "the generation must hold the bytes this build sealed, not what the stage holds now"
     );
     assert_eq!(

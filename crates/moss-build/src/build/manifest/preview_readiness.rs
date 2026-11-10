@@ -32,7 +32,7 @@ pub(crate) fn proven_unresolved_source(
     let Some(source) = mapped else { return Some(PreviewSource::Generated); };
     evidence.get(source).is_some_and(|entry| matches!(entry.state,
         InputState::Read { .. } | InputState::Pending { retained: true } | InputState::ReadError { retained: true, .. }))
-        .then(|| PreviewSource::File(source.into()))
+        .then(|| PreviewSource::File(source.clone()))
 }
 
 pub(super) fn preview_readiness_for(
@@ -65,15 +65,14 @@ pub(super) fn preview_readiness_for(
     // set, every page depends on the page metadata it could not read.
     let mut source_pending = false;
     let mut source_rel = None;
-    if let PreviewSource::File(source) = &requirement.source {
-        let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());
+    if let PreviewSource::File(rel) = &requirement.source {
         source_rel = Some(rel.clone());
         needed.insert(rel.clone());
-        needed.extend(embeds.get(&rel).into_iter().flat_map(|deps| deps.iter().cloned()));
-        source_pending = evidence.get(&rel).is_some_and(|entry|
+        needed.extend(embeds.get(rel).into_iter().flat_map(|deps| deps.iter().cloned()));
+        source_pending = evidence.get(rel).is_some_and(|entry|
             matches!(entry.state, InputState::Pending { .. } | InputState::ReadError { .. }));
         if let Some(output) = output {
-            if source_to_output.get(&rel).is_none_or(|mapped| mapped != output) {
+            if source_to_output.get(rel).is_none_or(|mapped| mapped != output) {
                 return if source_pending { PreviewReadiness::Pending } else { PreviewReadiness::Missing };
             }
         }
@@ -94,6 +93,8 @@ pub(crate) fn required_page_outputs_present(
     files: &HashMap<String, String>,
     page: &str,
     served_root: &Path,
+    // What `files` hashes `page` under (`SiteHashes::mount`).
+    mount: &crate::build::site_meta::mount::Mount,
 ) -> bool {
     use lol_html::{element, HtmlRewriter, Settings};
 
@@ -105,7 +106,7 @@ pub(crate) fn required_page_outputs_present(
     // manifest receipt describes the exact transformed bytes materialize will
     // promote. Compare the same transformed form without changing served HTML.
     let shipped_page = crate::build::ship::apply_transform(
-        crate::build::ship::transform_for(page), &page_bytes,
+        crate::build::ship::transform_for(page), mount, &page_bytes,
     );
     if format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&shipped_page)) != expected { return false; }
     let Ok(html) = std::str::from_utf8(&page_bytes) else { return false; };
@@ -143,7 +144,8 @@ pub(crate) fn required_page_outputs_present(
         let Some(entry) = files.get(&key) else { return false; };
         let (mode, expected) = crate::types::content::parse_entry(entry);
         let bytes = std::fs::read(served_file_path(served_root, &key));
-        let matches = bytes.as_ref().is_ok_and(|bytes| format!("{:016x}", xxhash_rust::xxh3::xxh3_64(bytes)) == expected);
+        let shipped = bytes.map(|bytes| crate::build::ship::apply_transform(crate::build::ship::transform_for(&key), mount, &bytes));
+        let matches = shipped.is_ok_and(|bytes| format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&bytes)) == expected);
         mode == crate::types::content::MODE_FILE && matches
     })
 }
@@ -212,7 +214,7 @@ impl super::PendingManifest {
         if readiness != PreviewReadiness::Usable { return readiness; }
         let output = self.inner.files.keys()
             .find(|key| crate::build::served_path::served_address(key) == requirement.url_path);
-        if output.is_some_and(|key| required_page_outputs_present(&self.inner.files, key, served_root)) {
+        if output.is_some_and(|key| required_page_outputs_present(&self.inner.files, key, served_root, &self.mount())) {
             PreviewReadiness::Usable
         } else {
             PreviewReadiness::Pending
@@ -239,7 +241,7 @@ impl super::SealedManifest {
         let readiness = self.preview_readiness(requirement);
         if readiness != PreviewReadiness::Usable { return readiness; }
         self.preview_output_key(requirement)
-            .filter(|key| required_page_outputs_present(&self.inner.files, key, served_root))
+            .filter(|key| required_page_outputs_present(&self.inner.files, key, served_root, &self.mount()))
             .map_or(PreviewReadiness::Pending, |_| PreviewReadiness::Usable)
     }
 
@@ -250,7 +252,7 @@ impl super::SealedManifest {
         served_root: &Path,
     ) -> Option<String> {
         let page = self.preview_output_key(requirement)?.to_owned();
-        if required_page_outputs_present(&self.inner.files, &page, served_root) { return None; }
+        if required_page_outputs_present(&self.inner.files, &page, served_root, &self.mount()) { return None; }
         let detail = "selected page has a missing or mismatched local stylesheet/script output";
         self.mark_unverified(page.clone(), detail.to_string());
         Some(format!("{page} ({detail})"))

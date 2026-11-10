@@ -91,11 +91,23 @@ impl ObjectStore {
     /// pass's blobs. A concurrent process's save can replace it; that costs the
     /// next build a re-hash, never a wrong answer.
     pub(crate) fn save_verified(&self) -> Result<(), String> {
+        self.save_verified_keeping(|_| false)
+    }
+
+    /// [`save_verified`](Self::save_verified) for a pass that checks only some
+    /// of the blobs, such as a video run over the videos that changed: what an
+    /// earlier save holds for a blob this pass did not check stays while the
+    /// blob's file exists.
+    pub(crate) fn save_verified_keeping_unchecked(&self) -> Result<(), String> {
+        self.save_verified_keeping(|key| Path::new(key).exists())
+    }
+
+    fn save_verified_keeping(&self, keep: impl Fn(&str) -> bool) -> Result<(), String> {
         let Some(remembered) = self.remembered.as_deref() else {
             return Err("this store remembers no verified-blob index".into());
         };
         let index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        index.save(&remembered.path)
+        index.save_pruned(&remembered.path, keep)
     }
 }
 

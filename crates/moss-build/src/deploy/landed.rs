@@ -8,9 +8,12 @@
 //! the plugin one gated its change-set clear on having a seal, the seta one
 //! did not, and only one of them was right.
 //!
-//! The things are: record what went live, stamp each newly live page's note ID
-//! into its frontmatter, and **recompute** what is left to publish. Recompute, not discard — a landed publish moves one of the change
-//! set's two inputs, so it owes the same re-derivation a seal does.
+//! The two things are: record what went live, and **recompute** what is left to
+//! publish. Recompute, not discard — a landed publish moves one of the change
+//! set's two inputs, so it owes the same re-derivation a seal does. Recording
+//! includes writing each published page's uid into the page itself: a build
+//! never writes a source, so the publish is the first moment a uid is anchored
+//! to something outside the folder.
 //!
 //! **Call only once the publish is known to have landed.** Each path has its
 //! own proof of that — the server's commit returning 200, or the plugin
@@ -25,6 +28,8 @@ use std::path::Path;
 
 use crate::build::feeds::redirects;
 use crate::build::manifest::{change_set, change_set::PublishedSnapshot, live_baseline, published_record, SealedManifest};
+use crate::build::scan::article_map::ArticleMap;
+use crate::build::scan::path_collision::on_disk;
 use crate::deploy::change_record::{self, PageChangeSummary};
 use crate::deploy::history::HistoryStore;
 use crate::moss_paths::MossPaths;
@@ -69,25 +74,27 @@ pub async fn record_landed(
     // Read before the record moves: a copy is due only for a post that was
     // not live before.
     let copies_before = crate::syndication::landing::Before::capture(&mp, sealed, Some(target));
-
+    let published = live_baseline::from_sealed(sealed);
+    let live = match crate::build::manifest::publish_view::read_articles(&mp.generations_dir(), sealed.generation_id()) {
+        Some(map) => Some(map),
+        // A generation sealed before its article map was kept beside it. Delete
+        // this arm, `read_live_article_map` and `pinned_to` once no such
+        // generation can still be published.
+        None => read_live_article_map(&mp).await.map(|map| pinned_to(map, &published)),
+    };
+    let copies = match (&copies_before, &live) {
+        (Some(before), Some(live)) => before.decide(folder, live),
+        _ => Vec::new(),
+    };
     // Stamped before the record is written, so the record holds the stamped
     // bytes' hash: otherwise the next change set reads every newly published
     // page as edited, and syndication updates its copies.
-    let stamps: Vec<UidStamp> = sealed.published_uids().filter_map(|page| UidStamp::of(sealed, page)).collect();
-    let root = folder.to_path_buf();
-    let stamped = tokio::task::spawn_blocking(move || stamp_published_uids(&root, &stamps))
-        .await
-        .unwrap_or_else(|e| {
-            log::warn!("deploy: stamping note IDs did not finish: {e}");
-            HashMap::new()
-        });
+    let stamps = stamp_published_uids(folder, sealed).await;
 
-    let summary = record_what_is_live(&mp, sealed, target, history, &stamped).await;
+    let summary = record_what_is_live(&mp, sealed, target, history, live.as_ref(), published, &stamps.hashes).await;
 
     if let Some(before) = copies_before {
-        if let Some(live) = read_live_article_mapping(&mp).await {
-            before.plan(folder, &live.article_map);
-        }
+        before.apply(folder, copies, live.as_ref(), &stamps.failed);
     }
 
     ports.after_landing(folder, target, &summary).await;
@@ -95,69 +102,12 @@ pub async fn record_landed(
     summary
 }
 
-/// A published page's note ID, and the hash of the source bytes it published.
-pub(crate) struct UidStamp {
-    source: String,
-    uid: String,
-    published_hash: String,
-}
-
-impl UidStamp {
-    fn of(sealed: &SealedManifest, (source, meta): (&str, &crate::types::content::PageMeta)) -> Option<Self> {
-        Some(Self { source: source.to_string(), uid: meta.uid.clone()?, published_hash: sealed.sources().get(source)?.hash.clone() })
-    }
-}
-
-/// Write each published page's uid into its frontmatter, creating the block
-/// when the note has none, so from now on the uid moves with the file through
-/// renames. The uid is the one the uploaded page was built under, so the file
-/// and its live comment thread agree.
-///
-/// Only a file that still holds the bytes that were published is stamped: one
-/// edited since the build may carry a newer uid, or an edit the record must
-/// still read as unpublished. It keeps the record's uid until a later publish
-/// stamps it.
-///
-/// Returns each stamped file's new source hash, for the record.
-pub(crate) fn stamp_published_uids(root: &Path, stamps: &[UidStamp]) -> HashMap<String, String> {
-    let hash = |text: &str| crate::build::render::blocking::source_metadata(None, text.as_bytes()).hash;
-    let mut stamped = HashMap::new();
-    for stamp in stamps {
-        let path = root.join(&stamp.source);
-        let published = |text: &String| hash(text) == stamp.published_hash;
-        // allow:raw_read the author's note; a read that is not the published bytes, an evicted file's included, skips the stamp
-        let Some(before) = std::fs::read_to_string(&path).ok().filter(published) else { continue };
-        if crate::build::markdown::parse_typed_frontmatter(&before).uid.as_deref() == Some(stamp.uid.as_str()) {
-            continue;
-        }
-        let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(stamp.uid.clone()) };
-        let written = moss_core::frontmatter::edit_fields(&before, &[set]).and_then(|after| {
-            // Narrows, without closing, the race with an author's save landing now.
-            // allow:raw_read the same note, re-read to see whether a save landed meanwhile
-            if !std::fs::read_to_string(&path).ok().is_some_and(|now| now == before) {
-                return Err("the file changed while it was being stamped".to_string());
-            }
-            crate::infra::atomic_write::write_atomic(&path, &after).map(|()| after)
-        });
-        match written {
-            Ok(after) => {
-                stamped.insert(stamp.source.clone(), hash(&after));
-            }
-            Err(e) => log::warn!("deploy: could not stamp the note ID into '{}': {e}", stamp.source),
-        }
-    }
-    if !stamped.is_empty() {
-        log::info!("deploy: stamped the note ID into {} newly published page(s)", stamped.len());
-    }
-    stamped
-}
-
 /// Write the publish record, including which note ID is live at which page.
 ///
 /// The record is one artifact carrying two facts, because one publish
 /// establishes both at the same instant: the page hashes the next change set
-/// diffs against, and the `{source path → uid}` map that rename detection and
-/// duplicate-uid resolution read (`manifest::live_baseline`).
+/// diffs against, and `published`, the `{source path → uid}` map that rename
+/// detection and duplicate-uid resolution read (`manifest::live_baseline`).
 ///
 /// There is no sealless variant: a publish with no manifest is refused
 /// upstream, and a branch that quietly degraded the rename baseline would
@@ -174,17 +124,22 @@ pub(crate) fn stamp_published_uids(root: &Path, stamps: &[UidStamp]) -> HashMap<
 /// the same reason. `PageChangeSummary::default()` when this build's own
 /// article map cannot be read: with no `current_map` there is nothing to
 /// diff, and guessing here would corrupt the rename baseline.
+///
+/// `stamped` is source path → the hash of the bytes the uid stamp left, for a
+/// page whose bytes were the sealed ones: the record takes that hash, so the
+/// next build sees the page unchanged and plans no resend for the stamp.
 async fn record_what_is_live(
     mp: &MossPaths,
     sealed: &SealedManifest,
     target: &str,
     history: &HistoryStore,
+    live: Option<&ArticleMap>,
+    published: live_baseline::LiveBaseline,
     stamped: &HashMap<String, String>,
 ) -> PageChangeSummary {
     let now = chrono::Utc::now().to_rfc3339();
-    let live = read_live_article_mapping(mp).await;
 
-    let summary = match &live {
+    let summary = match live {
         Some(live) => {
             // Both pure reads of the standing record, made before `save`
             // below moves it — `prev_snapshot` is this target's own last
@@ -203,11 +158,11 @@ async fn record_what_is_live(
                 .unwrap_or_else(|| crate::build::manifest::backfill::removed_for_seal(mp, sealed));
             match live_baseline::load(mp) {
                 live_baseline::Baseline::Present(projection) => {
-                    let renames = redirects::detect_renames(&projection, &live.article_map);
+                    let renames = redirects::detect_renames(&projection, live);
                     change_record::build_page_change_records(
                         &prev_change_set,
                         &renames,
-                        &live.article_map,
+                        live,
                         &projection.entries,
                         &removed,
                     )
@@ -216,7 +171,7 @@ async fn record_what_is_live(
                     change_record::build_page_change_records(
                         &prev_change_set,
                         &HashMap::new(),
-                        &live.article_map,
+                        live,
                         &[],
                         &removed,
                     )
@@ -227,24 +182,13 @@ async fn record_what_is_live(
     };
 
     let mut record = PublishedSnapshot::from_sealed(sealed, target, now.clone());
-    record.sources.extend(stamped.iter().map(|(source, hash)| (source.clone(), hash.clone())));
-    // An unreadable article map must not CLEAR what is live: the standing
-    // record's note IDs are stale by one publish, which costs a missed rename,
-    // where an empty map costs the whole rename baseline and every
-    // duplicate-uid tiebreak with it. `triples` falls back the same way and for
-    // the same reason — a stale set of triples still answers; `None` does not.
-    match live {
-        Some(live) => {
-            record.uids = live.uids;
-            record.triples = Some(live.triples);
-        }
-        None => {
-            if let Some(prev) = published_record::load_for(mp, Some(target)) {
-                record.uids = prev.uids;
-                record.triples = prev.triples;
-            }
+    for (path, hash) in stamped {
+        if let Some(recorded) = record.sources.get_mut(path) {
+            recorded.clone_from(hash);
         }
     }
+    record.uids = published.entries.iter().map(|e| (e.source_path.clone(), e.uid.clone())).collect();
+    record.triples = Some(published.entries);
 
     // Rebuilt rather than moved: `MossPaths` is a path wrapper, and this keeps
     // the borrow out of the blocking task.
@@ -272,15 +216,94 @@ async fn record_what_is_live(
     summary
 }
 
+/// What the uid stamp did, by source path.
+#[derive(Default)]
+struct Stamps {
+    /// The hash of the stamped bytes, which the record takes.
+    hashes: HashMap<String, String>,
+    /// Why the uid could not be written; the next publish tries again.
+    failed: HashMap<String, String>,
+}
+
+/// Write each published page's uid into its frontmatter, creating the block
+/// when the note has none, so from now on the uid moves with the file through
+/// renames. The uid is the one the sealed generation was built under, so the
+/// file and its live comment thread agree.
+///
+/// Only a file that still holds the bytes that were published is stamped: one
+/// edited since the build may carry a newer uid, or an edit the record must
+/// still read as unpublished. It keeps the record's uid until a later publish
+/// stamps it.
+async fn stamp_published_uids(folder: &Path, sealed: &SealedManifest) -> Stamps {
+    let pages: Vec<(String, String, String)> = sealed
+        .published_uids()
+        .filter_map(|(source, meta)| Some((source.to_string(), meta.uid.clone()?, sealed.sources().get(source)?.hash.clone())))
+        .collect();
+    let root = folder.to_path_buf();
+    let stamped = tokio::task::spawn_blocking(move || {
+        let mut stamps = Stamps::default();
+        for (source, uid, published_hash) in pages {
+            match stamp_one(&root, &source, &uid, &published_hash) {
+                Ok(Some(hash)) => {
+                    stamps.hashes.insert(source, hash);
+                }
+                Ok(None) => {}
+                Err(why) => {
+                    log::warn!("deploy: could not stamp the note ID into '{source}': {why}");
+                    stamps.failed.insert(source, why);
+                }
+            }
+        }
+        if !stamps.hashes.is_empty() {
+            log::info!("deploy: stamped the note ID into {} newly published page(s)", stamps.hashes.len());
+        }
+        stamps
+    })
+    .await;
+    stamped.unwrap_or_else(|e| {
+        log::warn!("deploy: stamping note IDs did not finish: {e}");
+        Stamps::default()
+    })
+}
+
+/// Write `uid` into the page at `source_path` if it still holds the published
+/// bytes: the stamped bytes' hash, or `None` when the page was edited since
+/// the build or already names the uid.
+fn stamp_one(root: &Path, source_path: &str, uid: &str, published_hash: &str) -> Result<Option<String>, String> {
+    use crate::build::cloud_readiness::{probe_input, Found};
+    let path = on_disk(root, source_path);
+    let read = || match probe_input(&path) {
+        Ok(Found::Bytes(bytes)) => Ok(bytes),
+        Ok(Found::InCloud) => Err("it is still in the cloud".to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    let hash = |b: &[u8]| crate::build::render::blocking::source_metadata(None, b).hash;
+    let bytes = read()?;
+    if hash(&bytes) != published_hash {
+        return Ok(None);
+    }
+    let before = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+    if crate::build::markdown::parse_typed_frontmatter(before).uid.as_deref() == Some(uid) {
+        return Ok(None);
+    }
+    let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };
+    let after = moss_core::frontmatter::edit_fields(before, &[set])?;
+    // Narrows, without closing, the race with an author's save landing now.
+    if read()? != bytes {
+        return Err("it changed while its note ID was being written".into());
+    }
+    crate::infra::atomic_write::write_atomic(&path, &after)?;
+    Ok(Some(hash(after.as_bytes())))
+}
+
 /// Write the publish record for a prebuilt tree that just went live.
 ///
 /// Another tool built it, so moss knows no pages behind it: `sources` and
 /// `source_to_output` are empty, which is the truth. `files` is the tree as
 /// sent to the server. The next moss-built publish therefore counts every page
 /// as added, because to the live site every page is. The note IDs last seen
-/// live are carried forward from the standing record, as
-/// [`record_what_is_live`] does when it has no article map to read: forgetting
-/// them would drop the rename forwarding the site has earned.
+/// live are carried forward from the standing record: forgetting them would
+/// drop the rename forwarding the site has earned.
 ///
 /// Best-effort like the hosted record: a failed write costs a degraded change
 /// set, never the publish.
@@ -303,34 +326,11 @@ pub fn record_prebuilt_landed(folder: &Path, generation_id: &str, target: &str, 
     }
 }
 
-/// What one publish record advances together, read off the same article map so
-/// none of it can land out of step with the rest (the sealless
-/// writer, deleted at track P slice P3, used to advance `uids` alone and leave
-/// `source_to_output` frozen as of the last SEALED publish). `triples` is that
-/// pair's replacement as `live_baseline`'s source — read here
-/// beside `uids` rather than derived from it, because deriving it would be
-/// exactly the join this struct exists to make unnecessary.
-///
-/// `article_map` is the same parsed value `uids`/`triples` were themselves
-/// derived from, kept whole here too (publish-receipt design, step 4) — it is
-/// `change_record::build_page_change_records`'s `current_map`, and re-reading
-/// the same bytes a second time to get it back would be the join this struct
-/// already exists to avoid, one field over.
-struct LiveArticleMapping {
-    uids: HashMap<String, String>,
-    triples: Vec<crate::build::manifest::change_set::LiveEntry>,
-    article_map: crate::build::scan::article_map::ArticleMap,
-}
-
-/// Both halves of what the tree that just went live says about itself, or
-/// `None` when this build wrote no article map to read it from.
-///
-/// `None` leaves the standing record alone rather than clearing it: an empty
-/// map reads as "nothing was ever published" and would suppress every
-/// redirect the site has earned.
+/// The article map the latest build wrote, or `None` when there is none to
+/// read: for a generation sealed before its own map was kept beside it.
 ///
 /// Async fs so a slow (e.g. iCloud-syncing) file cannot block a runtime worker.
-async fn read_live_article_mapping(mp: &MossPaths) -> Option<LiveArticleMapping> {
+async fn read_live_article_map(mp: &MossPaths) -> Option<ArticleMap> {
     let src = mp.article_map();
     // allow:raw_read regenerable build output under `.moss/build.nosync/`,
     // where dataless is absent — and an unreadable one is handled either way.
@@ -338,25 +338,33 @@ async fn read_live_article_mapping(mp: &MossPaths) -> Option<LiveArticleMapping>
         Ok(bytes) => bytes,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
-                log::warn!("deploy: could not read the article map to record what is live: {e}");
+                log::warn!("deploy: could not read the article map: {e}");
             }
             return None;
         }
     };
-    match serde_json::from_slice::<crate::build::scan::article_map::ArticleMap>(&bytes) {
-        Ok(map) => Some(LiveArticleMapping {
-            uids: live_baseline::uids_of(&map),
-            triples: live_baseline::from_article_map(&map).entries,
-            article_map: map,
-        }),
-        Err(e) => {
-            log::warn!(
-                "deploy: the article map does not parse ({e}) — leaving the standing \
-                 record of what is live alone"
-            );
-            None
-        }
-    }
+    serde_json::from_slice(&bytes)
+        .map_err(|e| log::warn!("deploy: the article map does not parse ({e})"))
+        .ok()
+}
+
+/// The article map cut to the generation being published: its articles only,
+/// at the addresses and under the uids it gave them. The map on disk belongs to
+/// the latest build, and a preview rebuild may have replaced it while this
+/// generation uploaded.
+fn pinned_to(mut map: ArticleMap, published: &live_baseline::LiveBaseline) -> ArticleMap {
+    let by_source: HashMap<&str, &live_baseline::LiveEntry> =
+        published.entries.iter().map(|e| (e.source_path.as_str(), e)).collect();
+    map.articles = std::mem::take(&mut map.articles)
+        .into_values()
+        .filter_map(|mut article| {
+            let entry = by_source.get(article.source_path.as_str())?;
+            article.uid = Some(entry.uid.clone());
+            article.url_path.clone_from(&entry.url);
+            Some((entry.url.clone(), article))
+        })
+        .collect();
+    map
 }
 
 #[cfg(test)]

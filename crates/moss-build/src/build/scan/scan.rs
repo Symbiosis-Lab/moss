@@ -19,6 +19,7 @@ use crate::build::cache::{CachedMediaMeta, HashIndex, ObjectStore, TransformCach
 use super::classify::{classify_extension, left_out_of_site, LeftOut, ScanBucket};
 use crate::build::media::ffmpeg::FFmpegManager;
 use walkdir::WalkDir;
+use crate::build::scan::path_collision::{logical_path, nfc_name_order, on_disk};
 use std::cell::OnceCell;
 use std::path::Path;
 use std::time::Instant;
@@ -911,7 +912,7 @@ pub fn detect_homepage_file_in_folder_marked(
     let marked: Vec<String> = files
         .iter()
         .filter(|f| !f.path.contains('/') && f.file_type == "md")
-        .filter(|f| file_has_home_marker(&root.join(&f.path)))
+        .filter(|f| file_has_home_marker(&on_disk(root, &f.path)))
         .map(|f| f.path.clone())
         .collect();
     let marked_refs: Vec<&str> = marked.iter().map(|s| s.as_str()).collect();
@@ -1009,9 +1010,8 @@ fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::sto
     }
     let mut nested_boundaries = Vec::new();
     let mut entries = Vec::new();
-    let layer_sources: Vec<std::path::PathBuf> =
-        crate::config::map_layers::declared_sources(path).iter().map(|s| path.join(s)).collect();
-    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources) {
+    let layer_sources = crate::config::map_layers::declared_sources(path);
+    for entry in WalkDir::new(path).sort_by(nfc_name_order).into_iter().filter_entry(|e| match crate::build::scan::classify::left_out_with_layer_sources(e, path, &layer_sources) {
         None => true,
         Some(LeftOut::LayerSource) => {
             let pages: Vec<String> = WalkDir::new(e.path())
@@ -1122,7 +1122,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
     let mut video_files = Vec::new();
     let mut notebook_files = Vec::new();
     let mut other_files = Vec::new();
-    // Every non-excluded directory (project-relative, raw path) that holds a
+    // Every non-excluded directory (its logical path) that holds a
     // file beneath it. Narrowed to those after the walk.
     let mut dirs: Vec<String> = Vec::new();
     let folders_holding_files = crate::build::scan::classify::folders_holding_files(
@@ -1132,6 +1132,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
     let mut evicted_count: usize = 0;
     let mut evicted_paths: Vec<std::path::PathBuf> = Vec::new();
     let mut found_count: usize = 0;
+    let mut spellings = crate::build::scan::path_collision::Spellings::default();
 
     let scan_walk_start = std::time::Instant::now();
 
@@ -1148,10 +1149,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         if !entry.file_type().is_file() {
             if entry.file_type().is_dir() && entry.depth() > 0 {
                 let dir_path = entry.path();
-                let dir_rel = match dir_path.strip_prefix(path) {
-                    Ok(rel) => moss_core::slug::normalize_separators(&rel.to_string_lossy()),
-                    Err(_) => moss_core::slug::normalize_separators(&dir_path.to_string_lossy()),
-                };
+                let dir_rel = logical_path(dir_path.strip_prefix(path).unwrap_or(dir_path));
                 if !dir_rel.is_empty() {
                     dirs.push(dir_rel);
                 }
@@ -1172,14 +1170,8 @@ pub fn scan_folder_with_dedup_emit_with_error(
             evicted_count += 1;
             evicted_paths.push(real);
         }
-        // Normalize `\`→`/` so FileInfo.path (which flows into URLs, manifest keys,
-        // and path comparisons) is OS-independent. On Windows strip_prefix yields
-        // backslash-separated relative paths; left raw they collapse nested URLs
-        // and pollute manifest keys. moss treats `\` as a separator everywhere.
-        let relative_path = match file_path.strip_prefix(path) {
-            Ok(rel_path) => moss_core::slug::normalize_separators(&rel_path.to_string_lossy()),
-            Err(_) => moss_core::slug::normalize_separators(&file_path.to_string_lossy()),
-        };
+        // Reads by this key go through `path_collision::on_disk`.
+        let relative_path = spellings.logical(file_path.strip_prefix(path).unwrap_or(file_path));
 
         let metadata = metadata.as_ref().expect("file metadata is collected with the complete walk");
 
@@ -1611,7 +1603,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         empty_folders,
         storage_folders,
     };
-    crate::build::scan::case_collision::warn_case_colliding_files(&structure);
+    crate::build::scan::path_collision::refuse_colliding_files(&structure, &spellings).map_err(ScanFailure::Message)?;
     crate::build::template_check::warn_template_problems(Path::new(folder_path));
     Ok(structure)
 }

@@ -196,9 +196,10 @@ describe("Tooltip", () => {
 
       const tooltip = document.querySelector(".moss-tooltip")!;
       const chip = tooltip.querySelector("kbd.moss-tooltip-kbd");
-      expect(chip?.textContent).toBe("⌘B");
+      // jsdom reports Linux, where a glyph chip prints in words.
+      expect(chip?.textContent).toBe("Ctrl+B");
       // Text stays first; the chip is appended after it.
-      expect(tooltip.textContent).toBe("Initial text⌘B");
+      expect(tooltip.textContent).toBe("Initial textCtrl+B");
     });
 
     test("a trigger without data-tooltip-kbd renders no chip (plain text path)", () => {
@@ -238,8 +239,8 @@ describe("Tooltip", () => {
       await Promise.resolve();
 
       const tooltip = document.querySelector(".moss-tooltip")!;
-      expect(tooltip.querySelector(".moss-tooltip-kbd")?.textContent).toBe("⌘B");
-      expect(tooltip.textContent).toBe("Updated⌘B");
+      expect(tooltip.querySelector(".moss-tooltip-kbd")?.textContent).toBe("Ctrl+B");
+      expect(tooltip.textContent).toBe("UpdatedCtrl+B");
     });
 
     test("changing data-tooltip value updates on next hover", () => {

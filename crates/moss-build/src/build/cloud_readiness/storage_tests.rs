@@ -485,9 +485,9 @@ fn availability_wedged_optional_publications_preserve_critical_source_and_foregr
         while !*release { release = held_gate.1.wait(release).unwrap(); }
         Ok(StorageValue::Published(0))
     });
-    for i in 0..6 { pool.cache_publication(OperationKey { path: format!("/replica/{i}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } }, held.clone()).unwrap(); }
+    for i in 0..6 { pool.cache_publication(OperationKey { path: format!("/replica/{i}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } }, held.clone()).unwrap(); }
     wait_until(|| native.load(Ordering::SeqCst) == 6);
-    for i in 6..30 { pool.cache_publication(OperationKey { path: format!("/replica/{i}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into() } }, held.clone()); }
+    for i in 6..30 { pool.cache_publication(OperationKey { path: format!("/replica/{i}").into(), policy: OperationPolicy::CachePublication { root: "/replica".into(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } }, held.clone()); }
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("complete.md"), "# complete").unwrap();
     let task = pool.structural_operation(OperationKey { path: root.path().into(), policy: OperationPolicy::SourceWalk }, directory_operation(root.path(), root.path(), false)).unwrap();
@@ -560,7 +560,7 @@ fn availability_new_record_revision_during_native_publish_requires_another_compl
         std::fs::write(&output, version.to_string()).unwrap();
         Ok(StorageValue::Published(version))
     });
-    let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: root.path().into() } };
+    let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: root.path().into(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } };
     let task = pool.cache_publication_revision(key.clone(), operation.clone(), Some(revision.clone())).unwrap();
     wait_until(|| calls.load(Ordering::SeqCst) == 1);
     revision.store(2, Ordering::Release);
@@ -687,7 +687,7 @@ fn availability_new_record_delete_intent_survives_an_older_native_read_error() {
         std::fs::remove_file(&target).unwrap();
         Ok(StorageValue::Published(version))
     });
-    let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: root.path().into() } };
+    let key = OperationKey { path: path.clone(), policy: OperationPolicy::CachePublication { root: root.path().into(), kind: crate::build::cloud_readiness::storage::PublicationKind::Blob } };
     let task = pool.cache_publication_revision(key.clone(), operation.clone(), Some(revision.clone())).unwrap();
     wait_until(|| calls.load(Ordering::SeqCst) == 1);
     revision.store(2, Ordering::Release);

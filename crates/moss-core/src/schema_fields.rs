@@ -1340,14 +1340,9 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "uid",
         field_type: FieldType::String,
         widget: Widget::TextInput,
-        // NOT "content-addressable": `generate_uid` ignores its path argument
-        // and returns 8 RANDOM hex chars, so a uid can never be recomputed
-        // from the path or the bytes. This string is the SSOT that
-        // `frontmatter_fields()` copies into `moss describe --json`,
-        // the generated contract documentation and the hooks-site contract fixture —
-        // a plugin author who believed it was derivable and recomputed it to
-        // re-join `.moss/social/*.json` would miss on every single key.
-        description: "Stable note identity: 8 random hex chars, written into the page's frontmatter by the publish that first puts it online (a build or preview never writes it). NOT derived from the path or the content, and unrecoverable once lost (auto-generated)",
+        // Published through `moss describe --json`: it must never call the
+        // uid derivable, since it outlives the path and bytes it was derived from.
+        description: "Stable note identity: 8 hex chars derived from the page's path and bytes, the same on every machine, and written into the page's frontmatter by the publish that first puts it online (a build or preview never writes it). Once written it stays when the page moves or changes, so it cannot be recomputed from the current path or content, and is unrecoverable once lost (auto-generated)",
         skip_schema: true, // auto-generated, not user-editable
         ..FIELD_DEFAULTS
     },

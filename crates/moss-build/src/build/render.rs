@@ -23,10 +23,9 @@ pub use blocking::generate_blocking_content_for_build;
 pub use blocking::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
 
-// From config — the page/site comments-preference ladder, also needed by
-// features::generate_native_slots to decide whether to render a comments
-// section at all (not just the `data-comments` JS hint this module emits).
-pub(crate) use config::resolve_comments_pref;
+// From config — the page/site comments-preference ladder, which the comments
+// section in features and a publish's uid stamp also ask.
+pub(crate) use config::shows_comments;
 
 // From html — renders one page outside a build, for tests
 #[cfg(test)]

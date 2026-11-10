@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn regenerating_a_lost_key_keeps_its_hides_in_the_same_save() {
+    fn signing_in_over_a_lost_key_keeps_its_hides_in_the_same_save() {
         crate::infra::home::with_moss_home(|_home| {
         let d = project();
         let p = d.path();
@@ -398,7 +398,7 @@ mod tests {
         append_owner_event(ps, ModKind::Hide, "artalk", "7", "page1", "localhost").unwrap();
 
         std::fs::remove_file(p.join(".moss/identity/secret-key")).unwrap();
-        crate::identity::service::IdentityService::new(p).ensure_signing_key().unwrap();
+        crate::identity::service::IdentityService::new(p).key_for_sign_in().unwrap();
 
         let owners = crate::identity::keypair::Identity::read_trusted_pubkeys(p);
         assert_ne!(owners[0], old.pubkey, "a new key");

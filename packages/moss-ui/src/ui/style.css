@@ -87,7 +87,7 @@ body,
 html {
   height: 100%;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  font-family: var(--moss-font-body);
   /* Transparent so the rounded .moss-app silhouette shows through.
      Native window is transparent (tauri.conf.json), CALayer corner-radius is set
      by Rust (system::utils::set_window_corner_radius). The page color is painted
@@ -1539,7 +1539,7 @@ body.starter-picker-active .moss-preview-container.action-panel-open.mobile-mode
   left: 50%;
   top: var(--moss-safe-center-y);
   transform: translate(-50%, -50%);
-  border-radius: var(--moss-radius-window);
+  border-radius: var(--moss-window-radius);
   box-shadow: var(--moss-elevation-3);
   /* Match container background to prevent white line showing through gaps */
   background: var(--moss-color-surface);
@@ -1553,7 +1553,7 @@ body.starter-picker-active .moss-preview-container.action-panel-open.mobile-mode
   left: 50%;
   top: var(--moss-safe-center-y);
   transform: translate(-50%, -50%);
-  border-radius: var(--moss-radius-window);
+  border-radius: var(--moss-window-radius);
   box-shadow: var(--moss-elevation-3);
   background: var(--moss-color-surface);
 }
@@ -2469,6 +2469,13 @@ body.moss-action-panel-below-titlebar #moss-titlebar {
      (see window-drag.ts), which only the bare titlebar carries. The pill,
      advisory panel, seam, and dot are their own mousedown targets, so they are
      never draggable — no CSS drag carve-outs needed. */
+}
+
+/* A panel filling the window leaves no preview to navigate; the layout
+   button stays as the way back. */
+body.moss-panel-fills .moss-nav-pill,
+body.moss-panel-fills #moss-webview-divider {
+  display: none;
 }
 
 .moss-nav-pill {
@@ -5849,6 +5856,44 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   font-size: 0.8125rem;
   color: var(--moss-color-text-secondary);
   overflow-wrap: anywhere;
+}
+/* The Copies line: a summary row, then its places on the receipt's own grid,
+   their labels indented one step so they read as belonging to it. */
+.receipt-copies-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--moss-space-xs);
+}
+.receipt-copies-group > .receipt-row,
+.receipt-copies > .receipt-row {
+  list-style: none;
+}
+.receipt-copies {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--moss-space-xs);
+}
+.receipt-copies[hidden] {
+  display: none;
+}
+.receipt-copies .receipt-label {
+  padding-inline-start: var(--moss-space-sm);
+}
+.receipt-copy-form {
+  font-size: 0.8125rem;
+  color: var(--moss-color-text-secondary);
+}
+.receipt-copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--moss-space-sm);
+  margin-block-start: var(--moss-space-2xs);
+  font-size: 0.8125rem;
+}
+.receipt-copies-group .receipt-detail-line1 > .receipt-copy-actions {
+  margin-block-start: 0;
 }
 .fineprint,
 .surface-note {
