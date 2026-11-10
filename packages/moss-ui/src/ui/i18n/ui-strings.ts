@@ -412,6 +412,7 @@ const EN = {
   'changeset.deleted': '{count} deleted',      // {count} placeholder
   'changeset.restyled': '{count} restyled',     // {count} placeholder
   'changeset.nothing': 'Nothing to publish',
+  'changeset.copies_due': 'To send: {places}',
   // Composition-ring caption's accessible name — the on-screen text is just
   // the number (progress rule 5: the number is visible, aria names it).
   'changeset.pending_one': '1 pending change',
@@ -2224,6 +2225,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'changeset.deleted': '{count} gelöscht',
     'changeset.restyled': '{count} neu gestaltet',
     'changeset.nothing': 'Nichts zu veröffentlichen',
+    'changeset.copies_due': 'Zu senden: {places}',
     'changeset.pending_one': '1 ausstehende Änderung',
     'changeset.pending_many': '{count} ausstehende Änderungen',
     'changeset.upload_one': '1 Datei zum Hochladen',
@@ -3811,6 +3813,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'changeset.deleted': '删除 {count} 项',
     'changeset.restyled': '重新排版 {count} 项',
     'changeset.nothing': '没有需要发布的内容',
+    'changeset.copies_due': '待发送：{places}',
     'changeset.pending_one': '1 项待发布更改',
     'changeset.pending_many': '{count} 项待发布更改',
     'changeset.upload_one': '1 个文件待上传',
@@ -5457,6 +5460,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'changeset.deleted': '刪除 {count} 項',
     'changeset.restyled': '重新排版 {count} 項',
     'changeset.nothing': '沒有需要發佈的內容',
+    'changeset.copies_due': '待發送：{places}',
     'changeset.pending_one': '1 項待發佈變更',
     'changeset.pending_many': '{count} 項待發佈變更',
     'changeset.upload_one': '1 個檔案待上傳',

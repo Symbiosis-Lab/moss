@@ -227,6 +227,8 @@ export interface SyndicationStateChangedEvent {
    * email send instead of re-deriving the source from the preview URL.
    */
   articleSourcePath: string | null;
+  /** This post's chosen places, other than the site, that publishing would send to now. */
+  copiesDue?: string[];
 }
 
 export interface DeployStateChangedEvent {
