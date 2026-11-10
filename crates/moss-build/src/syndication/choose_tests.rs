@@ -199,6 +199,18 @@ fn a_folder_page_writes_its_own_cascade_key_and_keeps_the_others() {
 }
 
 #[test]
+fn a_folder_page_is_never_its_own_ancestor() {
+    let dir = site("---\ntitle: A\n---\n");
+    std::fs::write(dir.path().join("notes/index.md"), "---\ntitle: Notes\n---\n").unwrap();
+    let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+    map.pages.insert("notes/".into(), "notes/index.md".into());
+    map.save(&dir.path().join(".moss")).unwrap();
+    std::fs::write(dir.path().join("notes/index.md"), "---\ntitle: Notes\ncascade:\n  syndicate: false\n---\n").unwrap();
+    assert_eq!(set_folder(dir.path(), "notes/index.html", "notes/index.md", "bluesky", true).unwrap(), strings(&["bluesky"]));
+    assert_eq!(read_folder(dir.path(), "notes/index.html", "notes/index.md"), Some(strings(&["bluesky"])));
+}
+
+#[test]
 fn clearing_a_folder_under_one_that_names_channels_writes_false() {
     let dir = site("---\ntitle: A\n---\n");
     std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\ncascade:\n  syndicate: [mastodon]\n---\n").unwrap();

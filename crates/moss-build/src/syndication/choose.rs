@@ -13,7 +13,7 @@ use super::plan::{self, ChannelInfo, PostFacts, Verdict};
 use super::record::{Records, State};
 use crate::build::cloud_readiness::{probe_input_to_string, rewrite_input};
 use crate::build::manifest::live_baseline::{self, Baseline};
-use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
+use crate::build::scan::article_map::{to_pretty_url, ArticleInfo, ArticleMap};
 use crate::build::scan::path_collision::on_disk;
 use crate::moss_paths::MossPaths;
 
@@ -214,17 +214,18 @@ pub fn set_post(folder: &Path, source: &str, channel: &str, on: bool) -> Result<
 /// The channels a folder's own page sets for new posts: its own list, or the
 /// nearest folder's above it.
 pub fn read_folder(folder: &Path, url_path: &str, index_source: &str) -> Option<Vec<String>> {
+    let url_path = to_pretty_url(url_path);
     let content = read_page(folder, index_source)?;
     Some(match folder_own(&content) {
         Some(own) => own,
-        None => inherited(folder, &load_map(folder)?, url_path),
+        None => inherited(folder, &load_map(folder)?, &url_path),
     })
 }
 
 /// Set one channel in a folder page's `cascade: syndicate:`. Returns the
 /// folder's list after the write.
 pub fn set_folder(folder: &Path, url_path: &str, index_source: &str, channel: &str, on: bool) -> Result<Vec<String>, String> {
-    let above = inherited(folder, &load_map(folder).ok_or("this site has not been built yet")?, url_path);
+    let above = inherited(folder, &load_map(folder).ok_or("this site has not been built yet")?, &to_pretty_url(url_path));
     let mut result = Vec::new();
     rewrite_input(&on_disk(folder, index_source), |bytes| {
         let content = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
