@@ -3331,6 +3331,8 @@ fn availability_owned_merge_publishes_over_a_record_still_in_the_cloud() {
         write_record_file_for_test(&path, &seed);
 
         crate::build::io_utils::fault::fail_reads(&path, libc::EDEADLK, 1);
+        // Only macOS reads EDEADLK as a file in the cloud; the mark says so everywhere.
+        let _in_cloud = crate::build::icloud::pretend::evicted_until_requested(&path);
         let _ = cache.merge(&oid, 1, RecordMode::Request, |record| { record.transforms.insert("image/webp".into(), entry("encoded here")); });
 
         let started = std::time::Instant::now();
