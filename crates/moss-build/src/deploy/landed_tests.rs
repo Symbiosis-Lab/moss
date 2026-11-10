@@ -608,6 +608,53 @@ fn rebuild_with_an_edit(root: &std::path::Path) {
     std::fs::write(map, serde_json::to_vec(&rebuilt).unwrap()).unwrap();
 }
 
+/// Post `a` sealed with `own` as its `syndicate:`, its output the same bytes
+/// whatever `own` says: choosing a channel changes no page.
+fn seal_post_naming(root: &std::path::Path, own: Option<&[&str]>) -> SealedManifest {
+    let line = own.map(|c| format!("syndicate: [{}]\n", c.join(", "))).unwrap_or_default();
+    let text = format!("---\ntitle: A\nuid: aaaa0001\n{line}---\nWords.\n");
+    std::fs::create_dir_all(root.join("posts")).unwrap();
+    std::fs::write(root.join("posts/a.md"), &text).unwrap();
+    let out = ServedPath::from_source("posts/a/index.html").unwrap();
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    pending.register(&out, b"<p>Words.</p>", crate::build::manifest::HashBucket::Files);
+    pending.register_source_mapping("posts/a.md".into(), &out);
+    pending.register_page_source_hash("posts/a.md".into(), crate::build::render::blocking::source_metadata(None, text.as_bytes()));
+    pending.register_page_meta("posts/a.md".into(), built_under("aaaa0001"));
+    let mut info = syndicated("a", "aaaa0001", "A", "Words.");
+    info.syndicate = own.map(|c| c.iter().map(|s| s.to_string()).collect());
+    if let Some(c) = own {
+        info.frontmatter.insert("syndicate".into(), serde_json::json!(c));
+    }
+    let mut built = crate::build::scan::article_map::ArticleMap::default();
+    built.articles.insert("posts/a/".into(), info);
+    pending.record_articles(std::sync::Arc::new(built));
+    let sealed = pending.seal();
+    let generations = MossPaths::new(root).generations_dir();
+    std::fs::create_dir_all(&generations).unwrap();
+    sealed.write_publish_view(&generations).unwrap();
+    sealed
+}
+
+/// Naming a channel on a live post changes no output, so the next publish
+/// seals the same generation. Its copy is still planned at that landing and sent.
+#[tokio::test]
+async fn a_live_post_that_newly_names_a_channel_gets_its_copy_though_no_page_changed() {
+    let vault = syndicating_vault();
+    let root = vault.path();
+    let first = seal_post_naming(root, None);
+    land(root, &first).await;
+    let records = crate::syndication::record::Records::in_vault(&MossPaths::new(root));
+    assert!(!records.exists("aaaa0001", "notes"), "nothing names the channel yet");
+
+    let second = seal_post_naming(root, Some(&["notes"]));
+    assert_eq!(second.generation_id(), first.generation_id(), "the test's premise: no output changed");
+    land(root, &second).await;
+
+    assert!(records.exists("aaaa0001", "notes"), "the landing plans the copy the post now names");
+    assert_eq!(send_copies(root).await.len(), 1);
+}
+
 /// A rebuild during the upload can edit a published article and delete
 /// another. The copies are planned and sent from the generation that went
 /// live: the deleted article still gets its copy, and every copy carries the
