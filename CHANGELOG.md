@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A build no longer injects and saves every page again on a large site. The cache cleanup, which starts once the cache has grown enough, could not see the finished pages the cache keeps and deleted them, so the next build redid them all, which grew the cache enough to delete them again. It now keeps the pages the last build used and clears the ones from a style you have moved on from.
 - A page no longer links automatically to its syndicated copies, including hidden markup and comment reply links; each copy links back to the page. Copy records remain available for deduplication, edits and deletion.
 
 ### Fixed

@@ -333,7 +333,7 @@ fn log_residual_slot_markers(page_path: &str, residual: &[&str]) {
 }
 
 /// Transform name used for cached `html/slots` output in the `TransformCache`.
-const SLOT_INJECT_TRANSFORM: &str = "html/slots";
+use crate::build::cache::page_sources::SLOT_INJECT_TRANSFORM;
 
 /// Cached record for an `html/slots` transform: the page's shipped bytes (the
 /// blob holding them and their manifest hash), whether injection changed them,
@@ -360,7 +360,7 @@ const SLOT_INJECT_TRANSFORM: &str = "html/slots";
 /// this record is keyed on: a hit `link_to`s them into place when they do, and
 /// leaves the render's own bytes alone when they do not.
 ///
-/// A shape change here needs no version gate: `read_slot_inject_record` returns
+/// A shape change here needs no version gate: `TransformCache::summary` returns
 /// `None` on a deserialize failure and falls through to a live re-run — which is
 /// how records written before these fields existed are retired.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,51 +432,6 @@ pub(crate) fn resolved_slots_hash(slots: &ResolvedSlots) -> String {
         .and_then(|canonical| serde_json::to_vec(&canonical))
         .unwrap_or_default();
     crate::build::assets::paths::compute_binary_hash(&bytes)
-}
-
-fn read_slot_inject_record(
-    object_store: &crate::build::cache::ObjectStore,
-    record_oid: &str,
-) -> Option<SlotInjectRecord> {
-    let blob_path = object_store.get_path(record_oid)?;
-    let raw = std::fs::read(blob_path).ok()?;
-    serde_json::from_slice(&raw).ok()
-}
-
-fn write_slot_inject_record(
-    object_store: &crate::build::cache::ObjectStore,
-    transform_cache: &crate::build::cache::TransformCache,
-    source_oid: &str,
-    source_size: u64,
-    params: &serde_json::Value,
-    record: &SlotInjectRecord,
-) {
-    let json_bytes = match serde_json::to_vec(record) {
-        Ok(b) => b,
-        Err(e) => {
-            log::info!("Failed to serialize html/slots record: {}", e);
-            return;
-        }
-    };
-    let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
-        Ok(oid) => oid,
-        Err(e) => {
-            log::info!("Failed to store html/slots record blob: {}", e);
-            return;
-        }
-    };
-    let entry = crate::build::cache::TransformEntry {
-        validation: None,
-        oid: record_oid,
-        size: json_bytes.len() as u64,
-        params: params.clone(),
-    };
-    let merged = transform_cache.merge(source_oid, source_size, crate::build::cache::RecordMode::Request, |rec| {
-        rec.transforms.insert(SLOT_INJECT_TRANSFORM.to_string(), entry);
-    });
-    if let Err(e) = merged {
-        log::info!("Failed to write html/slots transform record: {}", e);
-    }
 }
 
 /// Pages the object store could not take during one pass.
@@ -639,10 +594,7 @@ pub(crate) fn inject_slots_into_directory_cached(
         }
 
         let hit = remembered.get(&page_path).filter(|(oid, _)| *oid == source_oid).map(|(_, record)| record.clone())
-            .or_else(|| transform_cache
-                .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
-                // Present but unreadable/corrupt (or written before this shape): a miss.
-                .and_then(|record_oid| read_slot_inject_record(object_store, &record_oid)))
+            .or_else(|| transform_cache.summary::<SlotInjectRecord>(SLOT_INJECT_TRANSFORM, &source_oid, &params))
             // Its blob may have been collected since: a miss too, re-run live. A
             // receipt must never name a blob `ship_phase` would not find.
             .filter(|record| object_store.get_path(&record.content_oid).is_some());
@@ -677,7 +629,7 @@ pub(crate) fn inject_slots_into_directory_cached(
                     rewritten: changed_page,
                     residual: residual.iter().map(|s| s.to_string()).collect(),
                 };
-                write_slot_inject_record(object_store, transform_cache, &source_oid, html.len() as u64, &params, &record);
+                transform_cache.put_summary(SLOT_INJECT_TRANSFORM, &source_oid, html.len() as u64, &params, &record, Some((oid, injected.len() as u64)));
                 kept.insert(page_path.clone(), (source_oid, record));
             }
             (changed_page, manifest_hash, content_oid, Some(injected))
@@ -689,6 +641,7 @@ pub(crate) fn inject_slots_into_directory_cached(
         receipts.push(SlotInjectionReceipt { page_path, manifest_hash, content_oid });
     }
 
+    let sources = kept.iter().map(|(page, (oid, _))| (page.clone(), oid.clone())).collect();
     SLOT_MEMO.keep(dir, SlotMemo { key: memo_key, pages: kept });
     crate::build::phase::record_count("slot_html_scanned", scanned);
     crate::build::phase::record_count("slot_html_rewritten", rewritten);
@@ -712,11 +665,16 @@ pub(crate) fn inject_slots_into_directory_cached(
         total.saturating_sub(walk_ms),
         rewritten,
     );
-    Ok(SlotPass { receipts, scanned })
+    Ok(SlotPass { receipts, scanned, sources })
 }
 
 /// A receipt per page the pass covered, `scanned` of which it read and hashed.
-pub(crate) struct SlotPass { pub receipts: Vec<SlotInjectionReceipt>, pub scanned: usize }
+pub(crate) struct SlotPass {
+    pub receipts: Vec<SlotInjectionReceipt>,
+    pub scanned: usize,
+    /// Each page this pass has a record for, with that record's source oid.
+    pub sources: std::collections::BTreeMap<String, String>,
+}
 
 #[cfg(test)]
 #[path = "enhance_tests.rs"]

@@ -480,16 +480,13 @@ fn slot_cache_key(html: &str, page_path: &str, slots: &ResolvedSlots) -> (String
 /// the next pass finds it. `html` is the page as the render wrote it, before the
 /// pass touched it.
 fn cached_slot_record(
-    objects: &crate::build::cache::ObjectStore,
     transforms: &crate::build::cache::TransformCache,
     html: &str,
     page_path: &str,
     slots: &ResolvedSlots,
 ) -> Option<SlotInjectRecord> {
     let (source_oid, params) = slot_cache_key(html, page_path, slots);
-    transforms
-        .find_cached_output(&source_oid, SLOT_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
-        .and_then(|record_oid| read_slot_inject_record(objects, &record_oid))
+    transforms.summary(SLOT_INJECT_TRANSFORM, &source_oid, &params)
 }
 
 /// `jupyter/` in the stage is JupyterLite's own third-party HTML, which the pass
@@ -630,9 +627,8 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
     assert_eq!(std::fs::read_to_string(dir.path().join("index.html")).unwrap(), html, "and the page is untouched");
 
     let (source_oid, params) = slot_cache_key(html, "index.html", &slots);
-    write_slot_inject_record(
-        &objects,
-        &transforms,
+    transforms.put_summary(
+        SLOT_INJECT_TRANSFORM,
         &source_oid,
         html.len() as u64,
         &params,
@@ -642,6 +638,7 @@ fn a_no_op_page_reports_its_receipt_cold_and_from_the_cache_warm() {
             rewritten: false,
             residual: vec![],
         },
+        Some((&oid, html.len() as u64)),
     );
 
     let warm = run();
@@ -676,7 +673,7 @@ fn a_cold_pass_caches_a_record_that_matches_the_receipt_it_returned() {
     assert_eq!(receipts.len(), 2);
     for (page, raw, injected) in [("marked.html", marked, true), ("plain.html", plain, false)] {
         let receipt = receipts.iter().find(|r| r.page_path == page).expect("a receipt per page");
-        let record = cached_slot_record(&objects, &transforms, raw, page, &slots)
+        let record = cached_slot_record(&transforms, raw, page, &slots)
             .unwrap_or_else(|| panic!("{page}: the pass returned a receipt but cached nothing to answer from"));
         assert_eq!(
             Some(&record.content_oid),
@@ -831,9 +828,8 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
     let (source_oid, params) = slot_cache_key(html, "index.html", &first);
 
     for build in 1..=10 {
-        write_slot_inject_record(
-            &objects,
-            &transforms,
+        transforms.put_summary(
+            SLOT_INJECT_TRANSFORM,
             &source_oid,
             html.len() as u64,
             &params,
@@ -843,6 +839,7 @@ fn rebuilt_identical_slots_hit_the_injection_cache() {
                 rewritten: false,
                 residual: vec![],
             },
+            Some((&oid, html.len() as u64)),
         );
         let rebuilt = slots_with_eight_keys_per_map("");
         let warm =
@@ -875,6 +872,30 @@ fn a_rebuild_in_the_same_process_reads_no_slot_record() {
     assert!(!cache_dir.path().join("transforms").exists(), "the second pass looked its record up again and rewrote it");
 }
 
+/// A sweep of the cache marks what transform records name, and the page a slot
+/// record points at is named only inside the record's own JSON blob. Collecting
+/// it makes the next build inject and store every page again, which grows the
+/// store past the sweep's threshold, which collects them again.
+#[test]
+fn a_cache_sweep_keeps_the_page_a_slot_record_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(cache_dir.path().join(".moss"));
+    let objects = crate::build::cache::ObjectStore::new(paths.cache_objects());
+    let transforms = crate::build::cache::TransformCache::new(
+        paths.cache_transforms(),
+        crate::build::cache::ObjectStore::new(paths.cache_objects()),
+    );
+    let html = "<html><head><!-- slot:head-end --></head><body></body></html>";
+    std::fs::write(dir.path().join("index.html"), html).unwrap();
+    let slots = head_end_slots("<meta name=\"x\">");
+
+    let oid = inject_staged(dir.path(), &slots, &objects, &transforms).unwrap()[0].content_oid.clone().unwrap();
+    crate::build::cache::gc(&paths, &crate::build::lifecycle::gc_token_for_test()).unwrap();
+
+    assert!(objects.get_path(&oid).is_some(), "the sweep collected the page a live record names");
+}
+
 /// A record can outlive its blob (GC). A receipt naming a missing blob would
 /// hand `ship_phase` nothing to read, so the hit is refused and the page takes
 /// the miss path, which stores the bytes again.
@@ -895,13 +916,13 @@ fn a_record_naming_a_collected_blob_is_a_miss_that_stores_it_again() {
     let cold =
         inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
     let oid = cold[0].content_oid.clone().unwrap();
-    let cached = cached_slot_record(&objects, &transforms, html, "index.html", &slots)
+    let cached = cached_slot_record(&transforms, html, "index.html", &slots)
         .expect("fixture: the cold pass cached its page");
     assert_eq!(cached.content_oid, oid, "fixture: the record names the blob about to be collected");
     std::fs::remove_file(objects.get_path(&oid).unwrap()).unwrap();
     assert!(objects.get_path(&oid).is_none(), "fixture: the blob is gone");
     assert!(
-        cached_slot_record(&objects, &transforms, html, "index.html", &slots).is_some(),
+        cached_slot_record(&transforms, html, "index.html", &slots).is_some(),
         "fixture: the record outlived it, so only the blob's absence can make the next pass miss"
     );
 
@@ -974,7 +995,7 @@ fn slot_inject_record_residual_round_trips_through_the_cache() {
     // still call `log_residual_slot_markers` on a hit (a
     // prior-art requirement from `4dca6d3fc`).
     let cache_dir = tempfile::tempdir().unwrap();
-    let (objects, transforms) = slot_test_cache(cache_dir.path());
+    let (_, transforms) = slot_test_cache(cache_dir.path());
     let params = serde_json::json!({ "page_path": "index.html", "slots_hash": "test" });
     let record = SlotInjectRecord {
         content_oid: "0".repeat(64),
@@ -982,12 +1003,9 @@ fn slot_inject_record_residual_round_trips_through_the_cache() {
         rewritten: false,
         residual: vec!["footer-end".to_string()],
     };
-    write_slot_inject_record(&objects, &transforms, "xxh3:deadbeef", 4, &params, &record);
+    transforms.put_summary(SLOT_INJECT_TRANSFORM, "xxh3:deadbeef", 4, &params, &record, Some((&record.content_oid, 4)));
 
-    let record_oid = transforms
-        .find_cached_output("xxh3:deadbeef", SLOT_INJECT_TRANSFORM, &params, crate::build::cache::RecordMode::Request)
-        .expect("cache hit");
-    let read_back = read_slot_inject_record(&objects, &record_oid).expect("record readable");
+    let read_back: SlotInjectRecord = transforms.summary(SLOT_INJECT_TRANSFORM, "xxh3:deadbeef", &params).expect("record readable");
     assert_eq!(read_back.residual, vec!["footer-end".to_string()]);
 }
 

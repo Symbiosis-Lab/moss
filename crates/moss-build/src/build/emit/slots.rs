@@ -82,6 +82,7 @@ pub fn apply_to_stage_and_manifest(
         let _ = std::fs::write(&pass_record, &pass_key); // allow:raw_write per-machine cache record, never staging
     }
     staged.save();
+    crate::build::cache::page_sources::save(paths, pass.sources, carried.keys().map(String::as_str));
     #[cfg(test)]
     LAST_SCANNED.with(|n| n.set(pass.scanned));
 

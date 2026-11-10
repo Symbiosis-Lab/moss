@@ -236,6 +236,54 @@ fn carried_pages_ship_by_oid_and_keep_their_manifest_entry() {
     assert_eq!(third.files().get("b/index.html"), first.files().get("b/index.html"));
 }
 
+impl Site {
+    fn sweep(&self) {
+        crate::build::cache::gc(&self.paths(), &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
+    }
+}
+
+#[test]
+fn a_sweep_after_a_style_save_keeps_this_builds_pages_and_removes_the_last_builds() {
+    let site = Site::new();
+    site.write("index.md", "# Home");
+    site.write("a.md", "# A");
+    site.write(".moss/theme/style.css", ":root { --moss-accent: #111111; }");
+    let first = site.build(CARRY);
+    let old = first.staged_oid("a/index.html").unwrap().to_string();
+    touch_apart();
+
+    site.write(".moss/theme/style.css", ":root { --moss-accent: #222222; }");
+    let second = site.build(CARRY);
+    let new = second.staged_oid("a/index.html").unwrap().to_string();
+    assert_ne!(old, new, "premise: a style save changes every page's HTML");
+    site.sweep();
+
+    assert!(site.objects().get_path(&new).is_some(), "the sweep collected the page this build serves");
+    assert!(site.objects().get_path(&old).is_none(), "the sweep kept a page the site has moved on from");
+}
+
+/// The memo is forgotten so the carried page's source can come only from the saved
+/// list, as it does in the first build after a relaunch.
+#[test]
+fn a_sweep_after_an_incremental_build_keeps_the_pages_it_carried() {
+    let site = Site::new();
+    site.write("index.md", "# Home");
+    site.write("a.md", "# A\n\nfirst");
+    site.write("b.md", "# B\n\nstable");
+    let first = site.build(CARRY);
+    let carried = first.staged_oid("b/index.html").unwrap().to_string();
+    let edited = first.staged_oid("a/index.html").unwrap().to_string();
+    crate::build::enhance::forget_slot_memo(&site.paths().staging_dir());
+    touch_apart();
+
+    site.write("a.md", "# A\n\nedited");
+    site.build(CARRY);
+    site.sweep();
+
+    assert!(site.objects().get_path(&carried).is_some(), "the sweep collected a page the build carried");
+    assert!(site.objects().get_path(&edited).is_none(), "the edited page's old version outlived its record");
+}
+
 /// The stage keeps what the previous build left there, and the slot pass walks
 /// all of it. A page this build did not render is not this build's to register:
 /// registering it would keep a deleted page in the manifest, and its CAS blob

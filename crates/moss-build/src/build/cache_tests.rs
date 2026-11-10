@@ -2671,6 +2671,60 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
     assert_eq!(result.objects_removed, 2);
 }
 
+/// A fresh `html/slots` record with its summary and page blobs in the shared store.
+fn put_slot_record(objects_dir: &Path, transforms_dir: &Path, source: &str, page: &str) {
+    let entry = |oid: &str| TransformEntry { validation: None, oid: oid.to_string(), size: 1, params: serde_json::json!({}) };
+    let record = TransformRecord {
+        source_oid: source.to_string(),
+        source_size: 1,
+        transforms: [("html/slots".to_string(), entry(&"e".repeat(64))), ("html/slots/page".to_string(), entry(page))].into_iter().collect(),
+    };
+    put_transform(transforms_dir, &record);
+    put_object(objects_dir, &"e".repeat(64), b"summary");
+    put_object(objects_dir, page, b"page");
+}
+
+#[test]
+fn gc_condemns_a_slot_record_the_last_slot_pass_did_not_use() {
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_page_sources");
+    let (used, moved_on) = ("a".repeat(64), "b".repeat(64));
+    let (used_page, old_page) = ("c".repeat(64), "d".repeat(64));
+    put_slot_record(&objects_dir, &transforms_dir, &used, &used_page);
+    put_slot_record(&objects_dir, &transforms_dir, &moved_on, &old_page);
+    fs::write(mp.cache_page_sources(), format!(r#"{{"index.html":"{used}"}}"#)).unwrap();
+
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    let store = ObjectStore::new(objects_dir);
+    assert_eq!(result.transforms_removed, 1, "only the record the site moved on from goes");
+    assert!(store.blob_path(&used_page).exists(), "the page the last pass used survives");
+    assert!(!store.blob_path(&old_page).exists(), "the old page goes with its record");
+}
+
+#[test]
+fn gc_without_a_page_list_keeps_slot_records_until_they_age_out() {
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_no_page_list");
+    let (source, page) = ("a".repeat(64), "c".repeat(64));
+    put_slot_record(&objects_dir, &transforms_dir, &source, &page);
+
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    assert_eq!(result.transforms_removed, 0, "the first build after an upgrade has no list and must not empty the store");
+    assert!(ObjectStore::new(objects_dir).blob_path(&page).exists());
+}
+
+#[test]
+fn gc_deletes_nothing_when_the_page_list_is_unreadable() {
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("gc_bad_page_list");
+    let (source, page) = ("a".repeat(64), "c".repeat(64));
+    put_slot_record(&objects_dir, &transforms_dir, &source, &page);
+    fs::write(mp.cache_page_sources(), b"not json").unwrap();
+
+    assert!(gc(&mp, &crate::build::lifecycle::gc_token_for_test()).is_err());
+
+    assert!(ObjectStore::new(objects_dir).blob_path(&page).exists());
+}
+
 /// A cloud-only blob is a miss until resident and verified against its name.
 #[test]
 fn find_cached_output_trusts_a_cloud_blob_only_when_it_hashes_to_its_oid() {

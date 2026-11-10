@@ -222,6 +222,51 @@ impl TransformCache {
         }
     }
 
+    /// The summary [`put_summary`](Self::put_summary) left for this source, transform
+    /// and parameters. Absent, unusable, unreadable and written in an older shape all
+    /// answer `None`, which the caller treats as a miss.
+    pub(crate) fn summary<T: serde::de::DeserializeOwned>(&self, transform: &str, source_oid: &str, params: &serde_json::Value) -> Option<T> {
+        let oid = self.find_cached_output(source_oid, transform, params, RecordMode::Request)?;
+        let raw = std::fs::read(self.objects.get_path(&oid)?).ok()?;
+        serde_json::from_slice(&raw).ok()
+    }
+
+    /// Record a transform whose result is a JSON summary kept as a blob, and the
+    /// page it produced if any, under `source_oid`. A sweep of the cache marks the
+    /// blobs a record's entries name and never opens them, so the page has an entry
+    /// of its own to live as long as the record. A failure is logged and costs the
+    /// next build a re-run.
+    pub(crate) fn put_summary<T: serde::Serialize>(
+        &self,
+        transform: &str,
+        source_oid: &str,
+        source_size: u64,
+        params: &serde_json::Value,
+        summary: &T,
+        page: Option<(&str, u64)>,
+    ) {
+        let stored = serde_json::to_vec(summary)
+            .map_err(|e| e.to_string())
+            .and_then(|json| Ok((self.objects.store_bytes(&json, RecordMode::Request)?, json.len() as u64)));
+        let (oid, size) = match stored {
+            Ok(stored) => stored,
+            Err(e) => {
+                log::info!("Failed to store {transform} record blob: {e}");
+                return;
+            }
+        };
+        let entry = |oid: String, size: u64| super::TransformEntry { validation: None, oid, size, params: params.clone() };
+        let merged = self.merge(source_oid, source_size, RecordMode::Request, |rec| {
+            rec.transforms.insert(transform.to_string(), entry(oid, size));
+            if let Some((page_oid, page_size)) = page {
+                rec.transforms.insert(format!("{transform}/page"), entry(page_oid.to_string(), page_size));
+            }
+        });
+        if let Err(e) = merged {
+            log::info!("Failed to write {transform} transform record: {e}");
+        }
+    }
+
     /// Apply `edit` to the source's record — a fresh one of `source_size` when
     /// there is none — and write it back, keeping every entry `edit` leaves
     /// alone. An unreadable record is not written over, in either mode: the work
