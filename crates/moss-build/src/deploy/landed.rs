@@ -369,4 +369,4 @@ fn pinned_to(mut map: ArticleMap, published: &live_baseline::LiveBaseline) -> Ar
 
 #[cfg(test)]
 #[path = "landed_tests.rs"]
-mod tests;
+pub(crate) mod tests;

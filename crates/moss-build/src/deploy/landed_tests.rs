@@ -391,7 +391,7 @@ fn stamped_vault(
     (vault, pending.seal())
 }
 
-async fn land(vault: &std::path::Path, sealed: &SealedManifest) -> PublishedSnapshot {
+pub(crate) async fn land(vault: &std::path::Path, sealed: &SealedManifest) -> PublishedSnapshot {
     let history = tempfile::tempdir().unwrap();
     let history = crate::deploy::history::HistoryStore::at(history.path().to_path_buf());
     super::record_landed(vault, sealed, TARGET, &crate::deploy::one_shot::HeadlessDeployPorts, &history).await;
@@ -552,7 +552,7 @@ fn syndicated(name: &str, uid: &str, title: &str, words: &str) -> crate::build::
 
 /// A vault with the test channel `notes`, which posts and updates each copy
 /// at an address that spells out the post's title and shaped text.
-fn syndicating_vault() -> tempfile::TempDir {
+pub(crate) fn syndicating_vault() -> tempfile::TempDir {
     let vault = tempfile::tempdir().unwrap();
     let spell = "async function (job) { return { success: true, copy: { id: job.post.url, url: 'https://example.social/' + encodeURIComponent(job.post.title + ' ' + JSON.stringify(job.copy)) } }; }";
     crate::syndication::test_channel(vault.path(), "notes", &format!("{{ publish_copy: {spell}, update_copy: {spell} }}"));
@@ -610,13 +610,13 @@ fn rebuild_with_an_edit(root: &std::path::Path) {
 
 /// Post `a` sealed with `own` as its `syndicate:`, its output the same bytes
 /// whatever `own` says: choosing a channel changes no page.
-fn seal_post_naming(root: &std::path::Path, own: Option<&[&str]>) -> SealedManifest {
+pub(crate) fn seal_post_naming(root: &std::path::Path, own: Option<&[&str]>) -> SealedManifest {
     let line = own.map(|c| format!("syndicate: [{}]\n", c.join(", "))).unwrap_or_default();
     let text = format!("---\ntitle: A\nuid: aaaa0001\n{line}---\nWords.\n");
     std::fs::create_dir_all(root.join("posts")).unwrap();
     std::fs::write(root.join("posts/a.md"), &text).unwrap();
     let out = ServedPath::from_source("posts/a/index.html").unwrap();
-    let mut pending = PendingManifest::new(SiteHashes::default());
+    let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(root));
     pending.register(&out, b"<p>Words.</p>", crate::build::manifest::HashBucket::Files);
     pending.register_source_mapping("posts/a.md".into(), &out);
     pending.register_page_source_hash("posts/a.md".into(), crate::build::render::blocking::source_metadata(None, text.as_bytes()));

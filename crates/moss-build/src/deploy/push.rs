@@ -101,6 +101,40 @@ pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> R
     }).await
 }
 
+/// The bytes are live, so nothing uploads, but a landing's local half can still
+/// be owed: naming a channel changes no output, so this is the only place that
+/// copy gets planned. The app waits for a verdict either way, checked against
+/// what the server said is live when it answered.
+async fn settle_already_live(
+    sealed: &SealedManifest,
+    cx: &PushContext<'_>,
+    environment: crate::config::environment::HostingEnvironment,
+    server_says: Option<&str>,
+) -> PushResult {
+    let PushContext { folder_path, identity, site_id, ports, .. } = *cx;
+    let folder = folder_path.to_string_lossy().to_string();
+    let target = crate::config::deployment::slot_for("moss", Some(site_id));
+    let summary = match target {
+        Some(target) if sources_moved(folder_path, sealed, &target) => {
+            let history = crate::deploy::history::HistoryStore::in_vault(folder_path);
+            landed::record_landed(folder_path, sealed, &target, ports, &history).await
+        }
+        _ => crate::deploy::change_record::PageChangeSummary::default(),
+    };
+    ports
+        .begin_moss_verification(identity, environment.clone(), site_id, &folder, server_says.unwrap_or(sealed.generation_id()), &summary)
+        .await;
+    PushResult::Success { url: view_site_url(&folder, site_id, environment), files_uploaded: 0, files_removed: 0 }
+}
+
+/// Whether publishing would change a page against what this target last recorded. With no
+/// record the answer is no: a landing there would read every post as new and
+/// post the back catalogue.
+fn sources_moved(folder: &Path, sealed: &SealedManifest, target: &str) -> bool {
+    crate::build::manifest::published_record::load_for(&MossPaths::new(folder), Some(target))
+        .is_some_and(|record| !crate::build::manifest::change_set::classify(Some(&record), sealed).pages.is_empty())
+}
+
 /// Implementation of the deploy work. **Do not call directly** — call
 /// [`push_site_inner`], which brackets this with the `=== DEPLOY START/END ===`
 /// boundary markers; calling `_impl` directly bypasses them. The
@@ -157,22 +191,10 @@ async fn push_site_inner_impl(
     // Ok(None) from get_live_generation (404 = old server, network error, site
     // never deployed) falls through to the normal path for back-compat.
     let probe_phase = crate::build::phase::PhaseTrace::start("live_generation");
-    if let Ok(Some(live_gen)) = client.get_live_generation(&site_id).await {
-        if live_gen == sealed.generation_id() {
-            log::info!(
-                "deploy: generation {} already live on server, skipping deploy",
-                live_gen
-            );
-            // No Complete emit: returning Ok reaches `with_publish_guard`, which
-            // emits it. The message was never read — both listeners ignore it on
-            // a terminal stage.
-            let url = view_site_url(&folder_path_str, &site_id, environment);
-            return Ok(PushResult::Success {
-                url,
-                files_uploaded: 0,
-                files_removed: 0,
-            });
-        }
+    let server_says = client.get_live_generation(&site_id).await.ok().flatten();
+    if server_says.as_deref() == Some(sealed.generation_id()) {
+        log::info!("deploy: generation {} already live on server, skipping deploy", sealed.generation_id());
+        return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
     }
     drop(probe_phase);
 
@@ -181,12 +203,7 @@ async fn push_site_inner_impl(
     let diff = super::profile::sync(folder_path, client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {
-        let url = view_site_url(&folder_path_str, &site_id, environment);
-        return Ok(PushResult::Success {
-            url,
-            files_uploaded: 0,
-            files_removed: 0,
-        });
+        return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
     }
 
     // The server's diff used to be pushed here as a `PublishChangeSet`, so the
@@ -1003,6 +1020,90 @@ mod tests {
                 summary: summary.clone(),
             }));
         }
+    }
+
+    /// A canned JSON reply; the mock wants `'static` bytes.
+    fn json_reply(body: String) -> &'static [u8] {
+        let reply = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        Box::leak(reply.into_bytes().into_boxed_slice())
+    }
+
+    /// Push `sealed` against a server giving `responses`, what the ports saw.
+    async fn push_against(vault: &std::path::Path, sealed: &SealedManifest, responses: Vec<&'static [u8]>) -> Vec<SpyEvent> {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+        let addr = mock_seta_sequence(responses).await;
+        std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+        let identity = Identity::generate().expect("generate identity");
+        std::fs::create_dir_all(MossPaths::new(vault).generation_dir(sealed.generation_id())).unwrap();
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext { folder_path: vault, identity: &identity, site_id: "site-1", sink: &sink, ports: &spy, events_lock: &events_lock };
+        let result = push_site_inner(sealed, &cx).await;
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+        assert!(result.is_ok(), "{result:?}");
+        let events = std::mem::take(&mut *spy.events.lock().unwrap());
+        events
+    }
+
+    fn verified_generation(events: &[SpyEvent]) -> Option<String> {
+        events.iter().find_map(|e| match e {
+            SpyEvent::Verification(call) => Some(call.generation_id.clone()),
+            _ => None,
+        })
+    }
+
+    /// Naming a channel on a live post changes no output, so the server is
+    /// already on this generation. The copy is planned anyway, and the publish
+    /// still gets a verdict.
+    #[tokio::test]
+    async fn a_generation_already_live_plans_the_copy_a_post_now_names() {
+        use crate::deploy::landed::tests::{land, seal_post_naming, syndicating_vault};
+        let vault = syndicating_vault();
+        land(vault.path(), &seal_post_naming(vault.path(), None)).await;
+        let sealed = seal_post_naming(vault.path(), Some(&["notes"]));
+
+        let live = json_reply(format!(r#"{{"generation_id":"{}"}}"#, sealed.generation_id()));
+        let events = push_against(vault.path(), &sealed, vec![live]).await;
+
+        let records = crate::syndication::record::Records::in_vault(&MossPaths::new(vault.path()));
+        assert!(records.exists("aaaa0001", "notes"), "the copy the post now names is planned");
+        assert_eq!(verified_generation(&events).as_deref(), Some(sealed.generation_id()));
+    }
+
+    /// A fresh clone of a live site has no record to compare with. Planning
+    /// there would make every post with a channel due: the whole back catalogue.
+    #[tokio::test]
+    async fn a_generation_already_live_with_no_record_plans_nothing() {
+        use crate::deploy::landed::tests::{seal_post_naming, syndicating_vault};
+        let vault = syndicating_vault();
+        let sealed = seal_post_naming(vault.path(), Some(&["notes"]));
+
+        let live = json_reply(format!(r#"{{"generation_id":"{}"}}"#, sealed.generation_id()));
+        let events = push_against(vault.path(), &sealed, vec![live]).await;
+
+        let records = crate::syndication::record::Records::in_vault(&MossPaths::new(vault.path()));
+        assert!(!records.exists("aaaa0001", "notes"));
+        assert_eq!(verified_generation(&events).as_deref(), Some(sealed.generation_id()));
+    }
+
+    /// With nothing to commit the server's own answer is what is live, and it
+    /// can differ from the sealed id; verifying the sealed id would report a
+    /// good publish as serving an older generation.
+    #[tokio::test]
+    async fn nothing_to_commit_verifies_the_generation_the_server_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let sealed = sealed_fixture(dir.path());
+        let live = json_reply(r#"{"generation_id":"server-side-id"}"#.to_string());
+        let nothing = json_reply(r#"{"need":[],"remove":[]}"#.to_string());
+
+        let events = push_against(dir.path(), &sealed, vec![live, nothing]).await;
+
+        assert_eq!(verified_generation(&events).as_deref(), Some("server-side-id"));
     }
 
     /// The row's own test: `push_site_inner` must call
