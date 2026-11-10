@@ -3039,7 +3039,8 @@ fn a_folder_is_walked_in_composed_name_order() {
 #[test]
 #[cfg_attr(target_os = "macos", ignore = "an APFS volume cannot hold both names of a pair")]
 fn the_scan_refuses_a_folder_holding_a_colliding_pair() {
-    for (first, second) in [("Photo.png", "photo.png"), ("caf\u{e9}.png", "cafe\u{301}.png")] {
+    let pairs = [("Photo.png", "photo.png"), ("caf\u{e9}.png", "cafe\u{301}.png"), ("caf\u{e9}.md", "cafe\u{301}.md"), ("caf\u{e9}.txt", "cafe\u{301}.txt")];
+    for (first, second) in pairs {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("index.md"), "# Home\n").unwrap();
         fs::write(dir.path().join(first), b"one").unwrap();

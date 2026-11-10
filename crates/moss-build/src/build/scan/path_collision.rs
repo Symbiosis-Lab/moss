@@ -48,6 +48,32 @@ pub(crate) fn logical_path(rel: impl AsRef<Path>) -> String {
     moss_core::slug::normalize_separators(&rel.as_ref().to_string_lossy()).nfc().collect()
 }
 
+/// The walk's record of every file's name as the disk stores it. Two
+/// spellings of one accented name get one [`logical_path`], so after the
+/// walk nothing can tell the two files apart; this keeps both names.
+#[derive(Default)]
+pub(crate) struct Spellings {
+    stored: HashMap<String, String>,
+    pairs: Vec<(String, String)>,
+}
+
+impl Spellings {
+    /// The logical path of `rel`, noting the pair when another file already
+    /// took it under a different stored name.
+    pub(crate) fn logical(&mut self, rel: &Path) -> String {
+        let stored = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+        let logical: String = stored.nfc().collect();
+        match self.stored.get(&logical) {
+            Some(first) if *first != stored => self.pairs.push((first.clone(), stored)),
+            Some(_) => {}
+            None => {
+                self.stored.insert(logical.clone(), stored);
+            }
+        }
+        logical
+    }
+}
+
 /// Where the file a composed `logical` path names sits on this disk. A Mac
 /// finds a file under either spelling of its name; Linux matches names byte
 /// for byte, so a name a sync client wrote decomposed is found by composing
@@ -134,13 +160,15 @@ fn rename_advice(a: &str, b: &str) -> String {
 }
 
 /// The refusal for a folder holding a colliding pair among every file the
-/// scan found, saying which file of each pair to rename.
-pub(crate) fn refuse_colliding_files(found: &ProjectStructure) -> Result<(), String> {
+/// scan found, or among the names `spellings` saw on the disk, saying which
+/// file of each pair to rename.
+pub(crate) fn refuse_colliding_files(found: &ProjectStructure, spellings: &Spellings) -> Result<(), String> {
     let files = [&found.markdown_files, &found.html_files, &found.notebook_files, &found.other_files];
     let others = files.into_iter().flatten().map(|f| (f.path.as_str(), false));
     let media = found.image_files.iter().chain(&found.video_files).map(|f| (f.path.as_str(), true));
-    let (same_name, shared): (Vec<_>, Vec<_>) =
+    let (mut same_name, shared): (Vec<_>, Vec<_>) =
         colliding_pairs(others.chain(media)).into_iter().partition(|(a, b, _)| fold(a) == fold(b));
+    same_name.extend(spellings.pairs.iter().map(|(a, b)| (a.clone(), b.clone(), String::new())));
     let mut problems = Vec::new();
     if !same_name.is_empty() {
         let fixes: Vec<String> = same_name.iter().map(|(a, b, _)| rename_advice(a, b)).collect();
@@ -223,10 +251,26 @@ mod tests {
     fn a_folder_with_a_colliding_pair_is_refused() {
         let image = |path: &str| crate::types::content::MediaMetadata { path: path.into(), ..Default::default() };
         let mut found = ProjectStructure { image_files: vec![image("images/caf\u{e9}.png"), image("images/plain.png")], ..Default::default() };
-        assert!(refuse_colliding_files(&found).is_ok());
+        assert!(refuse_colliding_files(&found, &Spellings::default()).is_ok());
         found.image_files.push(image("images/Cafe\u{301}.png"));
-        let refusal = refuse_colliding_files(&found).unwrap_err();
+        let refusal = refuse_colliding_files(&found, &Spellings::default()).unwrap_err();
         assert!(refusal.contains("rename `images/Cafe\u{301}.png`, whose accent is stored as two characters, not `images/caf\u{e9}.png`"), "{refusal}");
+    }
+
+    /// Two stored spellings of one name share a logical path, so only the
+    /// walk's record of the stored names can refuse them. A Mac volume cannot
+    /// hold the pair, so this is the check a Mac runs.
+    #[test]
+    fn two_stored_spellings_of_one_name_are_refused() {
+        let mut spellings = Spellings::default();
+        for name in ["index.md", "images/cafe\u{301}.png", "images/caf\u{e9}.png", "index.md"] {
+            spellings.logical(Path::new(name));
+        }
+        assert_eq!(spellings.logical(Path::new("images/cafe\u{301}.png")), "images/caf\u{e9}.png");
+        let found = ProjectStructure::default();
+        let refusal = refuse_colliding_files(&found, &spellings).unwrap_err();
+        assert!(refusal.contains("rename `images/cafe\u{301}.png`, whose accent is stored as two characters, not `images/caf\u{e9}.png`"), "{refusal}");
+        assert_eq!(refusal.matches("rename").count(), 1, "{refusal}");
     }
 
     /// The advice names the decomposed spelling when there is one, and
@@ -299,7 +343,7 @@ mod tests {
         let image = |path: &str| crate::types::content::MediaMetadata { path: path.into(), ..Default::default() };
         let names = ["photo.jpg", "photo.png", "logo.gif", "Logo.gif"];
         let found = ProjectStructure { image_files: names.map(image).to_vec(), ..Default::default() };
-        let refusal = refuse_colliding_files(&found).unwrap_err();
+        let refusal = refuse_colliding_files(&found, &Spellings::default()).unwrap_err();
         assert!(refusal.contains("rename `logo.gif` or `Logo.gif`") && refusal.contains("which are both published as `photo.webp`"), "{refusal}");
     }
 }
