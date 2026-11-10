@@ -813,6 +813,8 @@ pub fn process_markdown_file(
     // root-absolute. Asset links already do (`pinned_url`), hence only one branch.
     let injects_into_every_page =
         crate::build::footer::targets_a_slot(file_path, frontmatter.slot.as_deref());
+    let fills_footer = injects_into_every_page
+        && frontmatter.slot.as_deref() != Some(crate::build::slots::Slot::BeforeArticleEnd.as_str());
 
     let resolve_link = |href: &str| -> String {
         // By the time hrefs reach this closure, `moss-core`'s resolve pipeline
@@ -1078,7 +1080,7 @@ pub fn process_markdown_file(
     let outgoing_links = resolution.outgoing;
 
     // A footer that ends in a hero closes the page with it.
-    let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
+    let closes_page = fills_footer && crate::build::footer::ends_in_hero(&doc);
     super::hero_ink::note_forced_ink(&doc, media_lookup, file_path, closes_page);
     super::hero_ink::warn_closing_options(&doc, closes_page, file_path, &media_lookup.map(|l| l.page_ground().type_theme).unwrap_or_default());
     super::body_plan::warn_uncountable_cards(&doc, file_path);
@@ -1149,13 +1151,15 @@ pub fn process_markdown_file(
         crate::build::cli_output::log_note!("Image: {warning} — on '{file_path}'");
     }
 
-    // 5b. A footer (a slot document that is never emitted as a page) is injected
-    //    beside every page's own headings: its headings carry no id, and each
-    //    one starts a column. A `partial: true` file is a slot document too,
-    //    but only one that targets a slot is a footer.
+    // 5b. A slot document that is never emitted as a page is injected beside
+    //    other pages' own headings, so its headings carry no id. In a footer
+    //    each one also starts a column. A `partial: true` file is a slot
+    //    document too, but only one that targets a slot is injected.
     if is_slot_only && injects_into_every_page {
         moss_core::ast::clear_heading_ids(&mut doc);
-        crate::build::footer::section_footer_blocks(&mut doc, closes_page);
+        if fills_footer {
+            crate::build::footer::section_footer_blocks(&mut doc, closes_page);
+        }
     }
 
     // 5c. Which text names each `:::subscribe` input, once the footer's blocks are final.

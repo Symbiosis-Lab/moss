@@ -6,41 +6,22 @@
 //! both internally (via `slots.merge(..., name)` keys) and externally (via
 //! the public `slot:` frontmatter field on author markdown files).
 //!
-//! ## Two slot surfaces — what this enum models
-//!
-//! moss has TWO related-but-distinct slot surfaces:
-//!
-//! 1. **Frontmatter-targetable slots** (this enum). The set of slot names
-//!    a markdown author may write in their `slot:` frontmatter field. Modeled
-//!    here, gated by `Slot::is_authorable()`.
-//! 2. **Plugin-emit / template-marker slots** (the broader set). Every
-//!    `<!-- slot:NAME -->` marker the template emits, including the four with
-//!    no frontmatter contract (`after-title`, `before-article-end`,
-//!    `after-article`, `body-end`).
-//!
-//! Both sets are this enum. Until 2026-08-17 the second lived in a separate
-//! `SLOT_NAMES` const in the enhance module, and a third copy — with its own
-//! prose for each position — sat in `cli/describe.rs`, each carrying a comment
-//! saying it mirrored the others. Three lists of the same seven strings, kept
-//! aligned by hand, is how a slot ends up recognized in one place and unknown
-//! in another. [`Slot::ALL`] is now the only list; `is_authorable()` is what
-//! separates the two surfaces, and [`Slot::position`] carries the prose
+//! [`Slot::ALL`] is the only list of them; `is_authorable()` separates the
+//! two surfaces it covers, and [`Slot::position`] carries the prose
 //! `moss describe` prints.
+//!
+//! 1. **Frontmatter-targetable slots**: the names a markdown author may
+//!    write in a `slot:` field, gated by `Slot::is_authorable()`.
+//! 2. **Plugin-emit / template-marker slots**: every `<!-- slot:NAME -->`
+//!    marker the template emits, the rest of which only native code and
+//!    plugins fill.
 //!
 //! ## Public contract surface
 //!
-//! The `slot:` frontmatter
-//! value space (the strings authors are allowed to write) is exactly the
-//! set of `Slot::as_str()` outputs FOR variants where `is_authorable()`
-//! returns true. Adding new variants is a minor-version contract addition;
-//! renaming or removing one (or flipping a slot's authorability) is a
-//! breaking change.
-//!
-//! `Slot::FooterRight` was removed 2026-05-06 — it had been a dead path
-//! since the verbatim-footer refactor (commit 6e47a8024, 2026-04-30) which
-//! dropped `<!-- slot:footer-right -->` from the template. Any author
-//! writing `slot: footer-right` now gets an "unknown slot" warning instead
-//! of a silent no-op.
+//! The `slot:` frontmatter value space is exactly the set of
+//! `Slot::as_str()` outputs for variants where `is_authorable()` returns
+//! true. Adding new variants is a minor-version contract addition; renaming
+//! or removing one (or flipping a slot's authorability) is a breaking change.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {
@@ -74,6 +55,8 @@ pub enum Slot {
     /// review colophon, the book block. Article-only.
     AfterTitle,
     /// Inside `<article>`, before `</article>`. Article addenda. Article-only.
+    /// An author fills it for a folder with a `slot:` partial, unlike the
+    /// footer, whose scope is a language tree.
     BeforeArticleEnd,
     /// Between `</article>` and `</main>` — comments and reactions, which are
     /// *not* part of the article. Both content templates carry this marker, so
@@ -109,7 +92,7 @@ impl Slot {
         match self {
             Slot::HeadEnd => "Before </head> — for stylesheets, scripts, and meta tags.",
             Slot::AfterTitle => "Inside <article>, after the title/date row — for article metadata (e.g. book block, review colophon).",
-            Slot::BeforeArticleEnd => "Inside <article>, before </article> — for article addenda.",
+            Slot::BeforeArticleEnd => "Inside <article>, before </article> — filled by a partial with slot: before-article-end, for the articles of its folder and the folders beneath it, and by plugins for article addenda.",
             Slot::AfterArticle => "Between </article> and </main> — for comments, reactions (NOT part of the article).",
             Slot::Footer => "Inside footer, leading position — filled by footer.md or any file with slot: footer-left frontmatter.",
             Slot::FooterEnd => "Inside footer, trailing position — for the auto-injected subscribe form and plugin widgets.",
@@ -152,14 +135,18 @@ impl Slot {
     /// `is_authorable` to gate plugin enhance-hook output.
     pub fn is_authorable(&self) -> bool {
         match self {
-            Slot::Footer => true,
+            Slot::Footer | Slot::BeforeArticleEnd => true,
             Slot::HeadEnd
             | Slot::FooterEnd
             | Slot::AfterTitle
-            | Slot::BeforeArticleEnd
             | Slot::AfterArticle
             | Slot::BodyEnd => false,
         }
+    }
+
+    /// The names an author may write in `slot:`, for the warning that lists them.
+    pub fn authorable_names() -> String {
+        Slot::ALL.into_iter().filter(Slot::is_authorable).map(|slot| slot.as_str()).collect::<Vec<_>>().join(", ")
     }
 
     /// Parse a string into a Slot, or `None` if unrecognized.
@@ -201,15 +188,9 @@ mod tests {
     }
 
     #[test]
-    fn test_authorability_per_variant() {
-        // Only `Slot::Footer` is author-targetable; `HeadEnd` and
-        // `FooterEnd` are reserved for plugin / native producers. If this
-        // test starts failing, someone changed `is_authorable()` — make
-        // sure that's deliberate (it's a public-API contract change).
-        assert!(Slot::Footer.is_authorable());
-        for slot in Slot::ALL.into_iter().filter(|s| *s != Slot::Footer) {
-            assert!(!slot.is_authorable(), "{} must not be authorable", slot.as_str());
-        }
+    fn only_the_footer_and_the_article_end_are_authorable() {
+        // A change here is a public-API contract change.
+        assert_eq!(Slot::authorable_names(), "before-article-end, footer-left");
     }
 
     #[test]

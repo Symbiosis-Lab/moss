@@ -12,9 +12,16 @@
 //! exists AND another file declares `slot: footer-left`, the
 //! frontmatter-marked file takes effect; `footer.md` is skipped (with a
 //! build warning).
+//!
+//! The end of an article is the one authorable slot not scoped to a language
+//! tree: a `slot: before-article-end` partial closes its own folder's
+//! articles, see [`article_end_slot`].
 
+use crate::build::cloud_ledger::InputEvidence;
+use crate::build::enhance::{EnhanceContent, EnhanceResult};
 use crate::build::slots::Slot;
 use moss_core::ast::{Block, BlockMeta, Document, Shortcode};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -31,6 +38,17 @@ pub struct FooterByLanguage {
     pub default: Option<String>,
     pub by_lang: HashMap<String, String>,
 }
+
+/// A slot partial that fills its slot for one folder and the folders beneath it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FolderBlock {
+    /// The partial's site-relative path, as the build's input ledger names it.
+    pub source: String,
+    pub html: String,
+}
+
+/// Folder-scoped slot content by `(slot, the partial's source folder)`.
+pub type FolderSlots = HashMap<(Slot, String), FolderBlock>;
 
 /// Which source kind populated a slot in a given bucket, so a later entry in
 /// the same pass can decide whether to overwrite or skip.
@@ -152,12 +170,15 @@ pub fn collect_footer_slots_by_language(
         // HeadEnd / FooterEnd which authors must not target.
         let frontmatter_slot = page.slot.as_deref().and_then(|slot_str| {
             match Slot::from_str(slot_str).filter(|s| s.is_authorable()) {
+                // Scoped by folder, in `collect_folder_slots`.
+                Some(Slot::BeforeArticleEnd) => None,
                 Some(s) => Some(s),
                 None => {
                     log::warn!(
-                        "Page '{}' has slot: \"{}\" but it's not a recognized author-targetable slot. Recognized: footer-left.",
+                        "Page '{}' has slot: \"{}\" but it's not a recognized author-targetable slot. Recognized: {}.",
                         path,
-                        slot_str
+                        slot_str,
+                        Slot::authorable_names()
                     );
                     None
                 }
@@ -248,6 +269,115 @@ fn apply_footer_slot(
     provenance.insert(prov_key, source);
 }
 
+/// The source folder of a site-relative path; `""` at the top of the site.
+fn parent_folder(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(folder, _)| folder)
+}
+
+/// Every usable `slot: before-article-end` partial, by its folder, and a
+/// warning for each one that cannot be used. A draft is withheld from the
+/// published site, so it fills nothing and is no mistake to warn about.
+fn collect_folder_slots(
+    pages: &[crate::build::types::ParsedDocument],
+) -> (FolderSlots, Vec<String>) {
+    let slot = Slot::BeforeArticleEnd;
+    let mut sources: Vec<_> = pages
+        .iter()
+        .filter(|page| page.draft != Some(true) && page.slot.as_deref() == Some(slot.as_str()))
+        .map(|page| (page.source_path.as_deref().unwrap_or(""), page))
+        .collect();
+    sources.sort_by_key(|(path, _)| *path);
+
+    let mut blocks = FolderSlots::new();
+    let mut warnings = Vec::new();
+    for (path, page) in sources {
+        if !page.is_partial() {
+            warnings.push(format!(
+                "'{path}' has slot: {name} but no partial: true, so it does not close any article. Add partial: true to its frontmatter.",
+                name = slot.as_str()
+            ));
+            continue;
+        }
+        match blocks.entry((slot, parent_folder(path).to_string())) {
+            Entry::Occupied(used) => warnings.push(format!(
+                "'{used}' and '{path}' are both the {name} block of one folder; using '{used}'. Remove one to silence this warning.",
+                used = used.get().source,
+                name = slot.as_str()
+            )),
+            Entry::Vacant(free) => {
+                free.insert(FolderBlock {
+                    source: path.to_string(),
+                    html: crate::build::ship::strip_source_annotations(&page.html_content).into_owned(),
+                });
+            }
+        }
+    }
+    (blocks, warnings)
+}
+
+/// The block that closes the page at `page_path`: the one in its own folder,
+/// else the nearest above it, never past the page's language tree or, with
+/// `in_section`, its top-level section. A block therefore shares its
+/// subscribers with every page it closes.
+fn nearest_block<'a>(blocks: &'a FolderSlots, slot: Slot, page_path: &str, in_section: bool) -> Option<&'a FolderBlock> {
+    let (_, within_tree) = language_tree_split(page_path);
+    let tree_root = if in_section {
+        page_path.split_once('/').map_or("", |(section, _)| section)
+    } else {
+        page_path.strip_suffix(within_tree)?.trim_end_matches('/')
+    };
+    let mut folder = parent_folder(page_path);
+    loop {
+        if let Some(block) = blocks.get(&(slot, folder.to_string())) {
+            return Some(block);
+        }
+        if folder.len() <= tree_root.len() {
+            return None;
+        }
+        folder = parent_folder(folder);
+    }
+}
+
+/// The end block of every page that has one, as one per-page slot entry, or
+/// `None` when the site has no block. Pages whose template has no
+/// `before-article-end` marker simply never show theirs.
+pub fn article_end_slot(
+    project_path: &str,
+    pages: &[crate::build::types::ParsedDocument],
+    scopes: &[String],
+    input_evidence: Option<&InputEvidence>,
+) -> Option<EnhanceResult> {
+    let (mut blocks, warnings) = collect_folder_slots(pages);
+    for warning in warnings {
+        crate::build::cli_output::log_warn_problem!("{warning}");
+    }
+    let carried = carry_unread_folder_slots(project_path, &mut blocks, input_evidence);
+    if !carried.is_empty() {
+        crate::build::cli_output::log_note!(
+            "[slots] keeping the last content of {} — this build could not read it",
+            carried.join(", ")
+        );
+    }
+    if blocks.is_empty() {
+        return None;
+    }
+    let slot = Slot::BeforeArticleEnd;
+    let per_page = pages
+        .iter()
+        .filter(|page| !page.slot_only)
+        .filter_map(|page| {
+            let in_section = !crate::build::features::email::detect_page_scope(&page.url_path, scopes).is_empty();
+            let block = nearest_block(&blocks, slot, page.source_path.as_deref()?, in_section)?;
+            let html = format!("<aside class=\"moss-article-end\" data-pagefind-ignore>\n{}</aside>", block.html);
+            Some((page.url_path.clone(), html))
+        })
+        .collect();
+    Some(EnhanceResult {
+        success: true,
+        slots: HashMap::from([(slot.as_str().to_string(), EnhanceContent::PerPage { pages: per_page })]),
+    })
+}
+
 /// Whether `<folder_path>/footer.md` exists. Cheap predicate used to gate
 /// `generate_native_slots` so a footer-only site (no analytics/comments/email)
 /// still triggers slot generation.
@@ -271,12 +401,15 @@ pub fn project_has_footer_file(folder_path: &str) -> bool {
 /// `cloud_ledger`: this describes a folder across its builds, not a window,
 /// so a headless build (no `AppState`) must see the same record a windowed
 /// one would.
-static FOOTER_CACHE: Mutex<Option<HashMap<String, HashMap<String, FooterByLanguage>>>> =
-    Mutex::new(None);
+static FOOTER_CACHE: Mutex<Option<HashMap<String, CachedSlots>>> = Mutex::new(None);
 
-fn with_cache<R>(
-    f: impl FnOnce(&mut HashMap<String, HashMap<String, FooterByLanguage>>) -> R,
-) -> R {
+#[derive(Default)]
+struct CachedSlots {
+    by_language: HashMap<String, FooterByLanguage>,
+    by_folder: FolderSlots,
+}
+
+fn with_cache<R>(f: impl FnOnce(&mut HashMap<String, CachedSlots>) -> R) -> R {
     let mut guard = FOOTER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     f(guard.get_or_insert_with(HashMap::new))
 }
@@ -312,7 +445,7 @@ pub fn apply_last_known_good_fallback(
 ) -> Vec<String> {
     let key = cache_key(folder_path);
     with_cache(|cache| {
-        let cached_for_folder = cache.entry(key).or_default();
+        let cached_for_folder = &mut cache.entry(key).or_default().by_language;
         let mut stale = Vec::new();
 
         let mut slot_names: Vec<String> =
@@ -359,6 +492,40 @@ pub fn apply_last_known_good_fallback(
         stale.sort();
         stale
     })
+}
+
+/// Keep a folder block this build could not read, and remember every block it
+/// could. Unlike the footer's fallback this asks why a block is missing: only a
+/// source the build's input ledger names as unread keeps its content, so a
+/// block the author deleted is gone on the next build. Returns the sources kept.
+fn carry_unread_folder_slots(
+    folder_path: &str,
+    fresh: &mut FolderSlots,
+    input_evidence: Option<&InputEvidence>,
+) -> Vec<String> {
+    let key = cache_key(folder_path);
+    with_cache(|cache| {
+        let cached = &mut cache.entry(key).or_default().by_folder;
+        let mut carried = Vec::new();
+        cached.retain(|slot_folder, block| {
+            let unread = !fresh.contains_key(slot_folder)
+                && input_evidence.is_some_and(|evidence| evidence.is_unresolved(&block.source));
+            if unread {
+                fresh.insert(slot_folder.clone(), block.clone());
+                carried.push(block.source.clone());
+            }
+            unread
+        });
+        cached.extend(fresh.iter().map(|(slot_folder, block)| (slot_folder.clone(), block.clone())));
+        carried.sort();
+        carried
+    })
+}
+
+/// Whether an earlier build of this folder held a folder block, so slot
+/// resolution must run even when no source of one was read this time.
+pub fn has_cached_folder_slots(folder_path: &str) -> bool {
+    with_cache(|cache| cache.get(&cache_key(folder_path)).is_some_and(|cached| !cached.by_folder.is_empty()))
 }
 
 // `footer.md` flows through the same parse pass every other page uses (it is
@@ -888,6 +1055,103 @@ mod tests {
         assert_eq!(footer.by_lang.get("zh-hant").map(String::as_str), Some("<p>ZHT</p>"), "fresh zh-hant must win");
         assert_eq!(footer.by_lang.get("zh-hans").map(String::as_str), Some("<p>ZH</p>"), "zh-hans must fall back to its own last-known-good");
         assert_eq!(stale, vec!["footer-left (zh-hans)".to_string()]);
+    }
+
+    // -----------------------------------------------------------------
+    // Folder-scoped end blocks
+    // -----------------------------------------------------------------
+
+    fn end_block(source: &str, html: &str) -> ParsedDocument {
+        let mut page = make_page(source, html, crate::i18n::Language::En);
+        page.slot = Some("before-article-end".to_string());
+        page.slot_only = true;
+        page.raw_frontmatter.insert("partial".to_string(), serde_json::Value::Bool(true));
+        page
+    }
+
+    fn block_folder(blocks: &FolderSlots, folder: &str) -> Option<String> {
+        blocks.get(&(Slot::BeforeArticleEnd, folder.to_string())).map(|b| b.html.clone())
+    }
+
+    #[test]
+    fn an_end_block_is_not_a_footer_slot() {
+        let slots = collect_footer_slots_by_language(&[end_block("letters/end.md", "<p>x</p>")]);
+        assert!(slots.is_empty(), "an end block must not reach every page: {slots:?}");
+    }
+
+    #[test]
+    fn an_end_block_loses_its_source_lines() {
+        let (blocks, _) = collect_folder_slots(&[end_block("letters/end.md", r#"<p data-source-line="1">x</p>"#)]);
+        assert_eq!(block_folder(&blocks, "letters").as_deref(), Some("<p>x</p>"));
+    }
+
+    #[test]
+    fn a_file_without_partial_true_warns_and_is_unused() {
+        let mut not_partial = end_block("letters/note.md", "<p>x</p>");
+        not_partial.raw_frontmatter.clear();
+        not_partial.slot_only = false;
+        let (blocks, warnings) = collect_folder_slots(&[not_partial]);
+        assert!(blocks.is_empty(), "{blocks:?}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("letters/note.md") && warnings[0].contains("partial: true"), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_draft_block_is_withheld_without_a_warning() {
+        let mut draft = end_block("letters/end.md", "<p>x</p>");
+        draft.draft = Some(true);
+        let (blocks, warnings) = collect_folder_slots(&[draft]);
+        assert!(blocks.is_empty() && warnings.is_empty(), "{blocks:?} {warnings:?}");
+    }
+
+    #[test]
+    fn two_files_for_one_folder_warn_and_the_first_by_path_is_used() {
+        let later = end_block("letters/z.md", "<p>z</p>");
+        let first = end_block("letters/a.md", "<p>a</p>");
+        let (blocks, warnings) = collect_folder_slots(&[later, first]);
+        assert_eq!(block_folder(&blocks, "letters").as_deref(), Some("<p>a</p>"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("letters/a.md") && warnings[0].contains("letters/z.md"), "{warnings:?}");
+    }
+
+    #[test]
+    fn the_walk_stops_at_the_language_tree_root() {
+        let (blocks, _) = collect_folder_slots(&[
+            end_block("end.md", "<p>root</p>"),
+            end_block("de/letters/end.md", "<p>de letters</p>"),
+        ]);
+        let found = |page: &str| nearest_block(&blocks, Slot::BeforeArticleEnd, page, false).map(|b| b.html.as_str());
+        assert_eq!(found("de/letters/2025/a.md"), Some("<p>de letters</p>"));
+        assert_eq!(found("de/notes/a.md"), None, "a root block never reaches a language tree");
+        assert_eq!(found("de/a.md"), None);
+        assert_eq!(found("letters/a.md"), Some("<p>root</p>"));
+        assert_eq!(found("a.md"), Some("<p>root</p>"));
+    }
+
+    #[test]
+    fn an_unread_block_keeps_its_content_and_a_deleted_one_does_not() {
+        let folder = unique_folder();
+        let root = std::path::Path::new("/site");
+        let (mut fresh, _) = collect_folder_slots(&[end_block("letters/end.md", "<p>x</p>")]);
+        let evidence = InputEvidence::new(root);
+        assert!(carry_unread_folder_slots(&folder, &mut fresh, Some(&evidence)).is_empty());
+
+        // Still downloading: the ledger names the source as unread.
+        let unread = InputEvidence::new(root);
+        unread.pending(&root.join("letters/end.md"));
+        let mut fresh = FolderSlots::new();
+        let carried = carry_unread_folder_slots(&folder, &mut fresh, Some(&unread));
+        assert_eq!(carried, vec!["letters/end.md".to_string()]);
+        assert_eq!(block_folder(&fresh, "letters").as_deref(), Some("<p>x</p>"));
+
+        // Deleted: the ledger does not name it, and it does not come back,
+        // even if a later build could not read a file at that path.
+        let mut fresh = FolderSlots::new();
+        assert!(carry_unread_folder_slots(&folder, &mut fresh, Some(&InputEvidence::new(root))).is_empty());
+        assert!(fresh.is_empty(), "a deleted block must not come back: {fresh:?}");
+        let mut fresh = FolderSlots::new();
+        assert!(carry_unread_folder_slots(&folder, &mut fresh, Some(&unread)).is_empty());
+        assert!(fresh.is_empty());
     }
 
     fn doc_of(markdown: &str) -> Document {

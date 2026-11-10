@@ -643,6 +643,10 @@ pub fn generate_native_slots(
         slots.merge(&result, 6, &key);
     }
 
+    if let Some(article_end) = crate::build::footer::article_end_slot(project_path, pages, &supported_scopes, input_evidence) {
+        slots.merge(&article_end, 6, "__native_moss_article_end");
+    }
+
     slots
 }
 

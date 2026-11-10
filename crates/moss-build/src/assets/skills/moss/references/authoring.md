@@ -541,6 +541,23 @@ A statement on a full-width background.
 
 A page made of full-width bands sets the width once instead of on every block: `content_width: screen` (in the page's frontmatter, in a folder's `cascade:`, or as `content_width` under `[site]`) gives the page the `full` column and makes every top-level `:::grid` and fenced-div band as wide as the window, so `:::grid 2 5:7` needs no `{screen}`. A block that carries a width word of its own keeps it: `{body}` keeps one grid at the text width. Grids and bands inside another block, and a gallery, keep their width; `content_width: full` alone still only widens the column to the site maximum.
 
+**The end of every article in a folder.** A partial aimed at the `before-article-end` slot closes every article in its folder and in the folders beneath it, without a line in any of them. Saved as `letters/end.md` (any name), this ends each letter with a sign-up form and a way to keep reading:
+
+```markdown
+---
+partial: true
+slot: before-article-end
+---
+If this one was useful, the next letter arrives on Wednesday.
+
+:::subscribe {button="Subscribe" placeholder="you@example.test"}
+:::
+
+[All letters](/letters/) · [By topic](/tags/)
+```
+
+moss draws it as `<aside class="moss-article-end">` inside the article, after everything the page itself ends with and before comments and the series' previous and next. The default stylesheet gives it the gap above it and nothing else; a theme styles it by that class. Links are root-absolute and shortcodes work as in a page, and a heading or `---` in it stays as written. The nearest file wins: `letters/2025/end.md` replaces `letters/end.md` for the pages under `letters/2025/`, so a folder's block stands where it applies, unlike `cascade:`, where the outer folder's value wins. A language tree, or a top-level section that shares the home page's `translationKey`, uses only blocks inside its own folders: `end.md` at the top of the site closes the default language's articles, a page under `de/` gets its block from `de/end.md` or `de/letters/end.md`, and the form in it signs readers up to that language's list. Only articles get a block; a folder's index page, a `layout: page` page and the home page have nowhere to draw one. Feeds, search and sent email never carry it. `partial: true` is required: without it the file would be a page in its own folder's listing, so it is left unused with a build warning. Two blocks in one folder are a build warning naming both, and the one whose path sorts first is used.
+
 ### Footer
 
 A `footer.md` at the top of the site is the footer. Its markdown renders as written inside the page's `<footer>`, on every page, and replaces the row of links moss otherwise builds from pages marked `footer: true`. Shortcodes work there as they do in a page, so footer columns are a grid, and the theme only sets their widths:

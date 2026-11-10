@@ -605,6 +605,8 @@ article h3:not(.moss-card-title) {
   margin-block: var(--moss-read-line) calc(var(--moss-read-line) * 0.25);
 }
 
+.moss-article-end { margin-block-start: calc(var(--moss-read-line) * 1.5); }
+
 /* Two headings back to back, with no prose between them: the ladder above
  * assumes a heading is closing out a block of prose above it, which doubles
  * up awkwardly when the "prose" is really just the previous heading. The

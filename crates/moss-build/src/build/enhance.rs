@@ -22,18 +22,6 @@ use crate::build::components::nav::footer::strip_empty_footer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Known slot marker names used in HTML templates.
-///
-/// This is the **template-marker / plugin-emit** surface — every
-/// `<!-- slot:NAME -->` marker the build pipeline knows how to find and
-/// replace. It is a strict superset of the frontmatter-targetable surface
-/// modeled by `crate::build::slots::Slot`: the four article-area slots
-/// (`after-title`, `before-article-end`, `after-article`, `body-end`)
-/// have no frontmatter contract, only a plugin-emit / native-injection
-/// contract, so they are not (yet) modeled in the `Slot` enum. Folding
-/// them in is plausible future work; documenting the split is enough
-/// for now.
-///
 /// Slot content declaration from a plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]

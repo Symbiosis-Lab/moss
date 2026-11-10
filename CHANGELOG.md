@@ -4,6 +4,10 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+### New
+
+- A folder can close every article in it with one file: a `partial: true` page with `slot: before-article-end` is drawn at the end of each article in that folder and the folders beneath it, the nearest file winning, and never in feeds, search or email.
+
 ### Changed
 
 - A picture on the line after a paragraph's text, or before it, with no blank line between, is its own paragraph, as if the blank line were there, and several picture lines together make a row. An italic line under the picture stays its caption. Without one, a standard-markdown picture's alt text stays alt text and does not become a caption, while a wiki embed's pipe text is its caption, as on its own line. A picture that shares its line with words stays in the text. A picture split out this way can now be a page's social card or a list's cover.

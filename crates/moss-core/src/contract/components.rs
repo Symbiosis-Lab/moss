@@ -1793,6 +1793,17 @@ const CORE: &[ComponentEntry] = &[
         description: "A list of the page's declared fields whose `place` is `facts`: one `<div data-field>` per field in declaration order, with the field's label in `<dt>` and its value in `<dd>`. A row for a `choice` field also carries `data-value`, the slug of the choice's key as written in config. On a wide screen the list sits in the right margin beside the title; on a narrow, vertical, full-width or sidebar page, or one with sidenotes, it stays in the flow. Emitted only on a page that has a value for such a field.",
     },
     ComponentEntry {
+        class: "moss-article-end",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<aside class="moss-article-end" data-pagefind-ignore><p>The next letter arrives on Wednesday.</p></aside>"#,
+        example_markdown: "---\npartial: true\nslot: before-article-end\n---\nThe next letter arrives on Wednesday.",
+        status: Status::Emerging,
+        since: "1",
+        description: "The end block of an article: a partial with `slot: before-article-end`, saved in a folder, written once and drawn at the end of every article in that folder and the folders beneath it, the nearest file winning. It comes after the article's own end sections, inside the article and before comments and series navigation, and stays out of feeds, search and email. A language tree uses only blocks in its own folders. The default stylesheet gives it its top margin and nothing else.",
+    },
+    ComponentEntry {
         class: "moss-field-end",
         kind: "standalone",
         parent: "",

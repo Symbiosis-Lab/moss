@@ -493,7 +493,7 @@ fn collect_native_slots_for_documents(
         is_moss_hosted,
     );
     let has_inline_subscribe = pages.iter().any(|p| p.features.inline_subscribe);
-    let has_footer_file = pages.iter().any(|p| p.slot_only);
+    let has_footer_file = pages.iter().any(|p| p.slot_only || p.slot.is_some());
 
     // Site fingerprint: a PII-free, one-line summary of the build-shaping state
     // that decides footer chrome + slot resolution. Emitted BEFORE the
@@ -548,7 +548,8 @@ fn collect_native_slots_for_documents(
         || is_moss_hosted
         || comments_enabled
         || crate::build::features::should_inject_subscribe_assets(&pages, email_channel_installed)
-        || has_footer_file)
+        || has_footer_file
+        || crate::build::footer::has_cached_folder_slots(folder_path))
     {
         return crate::build::enhance::ResolvedSlots::empty();
     }
