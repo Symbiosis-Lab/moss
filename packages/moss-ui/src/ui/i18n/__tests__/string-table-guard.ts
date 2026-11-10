@@ -28,6 +28,7 @@ const ALLOWLIST = new Set<string>(
     'schema.site_id_placeholder', // sample slug ("my-blog")
     'audience.breakdown_segment', // pure interpolation: "{name} · {count}"
     'pubmgr.lamp.tooltip', // pure interpolation: "{name} — {state} · {hint}"
+    'pubmgr.lamp.tooltip_short', // pure interpolation: "{name} · {state}"
     'upload.size_pair', // pure interpolation: "{done}/{total} {unit}" — kB/MB/GB stay Latin in Chinese technical UI
     'upload.size_one', // pure interpolation: "{n} {unit}" — same reason as the pair
     'channels.installing_caption', // pure interpolation: "{percent}%" — the % sign is identical in Chinese numeric UI
@@ -89,6 +90,7 @@ const GERMAN_IDENTICAL = [
   'audience.breakdown_separator',
   'audience.breakdown_wrap',
   'pubmgr.lamp.tooltip',
+  'pubmgr.lamp.tooltip_short',
   'tree.derive_count',
   'upload.size_pair',
   'upload.size_one',

@@ -5895,6 +5895,10 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 .receipt-copies-group .receipt-detail-line1 > .receipt-copy-actions {
   margin-block-start: 0;
 }
+/* The receipt opens with focus on itself: a mouse click must not paint a ring on its first link. */
+.moss-modal:focus {
+  outline: none;
+}
 .receipt-copy-adopt {
   display: flex;
   flex-wrap: wrap;
