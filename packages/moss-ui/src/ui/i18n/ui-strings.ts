@@ -830,6 +830,7 @@ const EN = {
   /** moss's words for the `already-starting` install failure reason code. */
   'channels.fail.already_starting': '{name} is already starting up — wait for that to finish, then try again.',    // {name}
   'channels.ready': '{name} ready',                    // {name}
+  'channels.removed': '{name} removed',                // {name}
   'channels.ready_tor_connecting': '{name} ready — Tor is still connecting, so the .onion address may take a few more minutes to come online',     // {name}
   // Channel display names — keyed by stable channel id (the plugin registry's).
   // Every channel shown in the catalog MUST have a key here so no hardcoded
@@ -2558,6 +2559,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.download_failed_toast': '{name} konnte nicht installiert werden. Prüfe deine Verbindung und versuche es dann erneut unter Kanäle.',
     'channels.fail.already_starting': '{name} wird bereits gestartet — warte, bis das abgeschlossen ist, und versuche es dann erneut.',
     'channels.ready': '{name} bereit',
+    'channels.removed': '{name} entfernt',
     'channels.ready_tor_connecting': '{name} bereit — Tor verbindet sich noch, daher kann die .onion-Adresse noch einige Minuten brauchen, bis sie online ist',
     'channels.name.email': 'E-Mail-Newsletter',
     'channels.name.matters': 'Matters',
@@ -4150,6 +4152,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.download_failed_toast': '无法安装 {name}。请检查网络后在渠道页重试。',
     'channels.fail.already_starting': '{name} 正在启动中 — 请等待其完成后再试一次。',
     'channels.ready': '{name} 已就绪',
+    'channels.removed': '已移除 {name}',
     'channels.ready_tor_connecting': '{name} 已就绪 — Tor 仍在连接，.onion 地址可能还需几分钟才能访问',
     'channels.name.email': '邮件订阅',
     'channels.name.matters': 'Matters',
@@ -5788,6 +5791,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'channels.download_failed_toast': '無法安裝 {name}。請檢查網路後在管道頁重試。',
     'channels.fail.already_starting': '{name} 正在啟動中 — 請等待其完成後再試一次。',
     'channels.ready': '{name} 已就緒',
+    'channels.removed': '已移除 {name}',
     'channels.ready_tor_connecting': '{name} 已就緒 — Tor 仍在連線，.onion 位址可能還需幾分鐘才能存取',
     'channels.name.email': '電子報',
     'channels.name.matters': 'Matters',
