@@ -4,6 +4,12 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+## [0.15.22] - 2026-11-11
+
+### Fixed
+
+- Saving a page shows in the preview sooner again on a site with link cards. 0.15.21 rewrote and flushed each card's picture details on every build, even unchanged, which cost about 7 ms a card on every save; a build now writes them only when they change.
+
 ## [0.15.21] - 2026-11-09
 
 ### New
