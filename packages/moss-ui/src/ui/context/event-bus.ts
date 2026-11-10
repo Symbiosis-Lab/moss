@@ -138,17 +138,10 @@ export const Events = {
 
   /**
    * Emitted after the subscriber list has been mutated (add / remove /
-   * lang change / import). Lets dependent UI (e.g. the email channel button
+   * lang change / import) or pulled from the server. Lets dependent UI (e.g. the email channel button
    * tooltip) re-read the audience count without polling.
    */
   EMAIL_SUBSCRIBERS_CHANGED: "email:subscribersChanged",
-
-  /**
-   * Emitted after the email send mode has been changed via the settings UI.
-   * Lets dependent UI re-read the mode (e.g. switch between "all", "scope",
-   * "test" tooltips on the email channel button).
-   */
-  EMAIL_SEND_MODE_CHANGED: "email:sendModeChanged",
 
   /**
    * Emitted after the email api_key has been saved (or cleared) via the
@@ -383,12 +376,6 @@ export interface EmailSendResultEvent {
  * Avoids shipping the whole subscriber array through the bus.
  */
 export interface EmailSubscribersChangedEvent {}
-
-/**
- * Payload for EMAIL_SEND_MODE_CHANGED event
- * Empty — listeners re-read the mode via `commands.emailGetSendMode`.
- */
-export interface EmailSendModeChangedEvent {}
 
 /**
  * Payload for PUSH_NOTICE event.
