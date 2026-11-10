@@ -170,7 +170,7 @@ overrides in `.moss/theme/style.css`.
 A fact is a field, and moss places it. Before writing CSS, a classed div or HTML for something a page states (a date, a credit, a place, a role, a label), stop at the first of these that holds:
 
 1. It is a fact about this page: declare a field with a `place` in `.moss/config.toml` (`moss guide authoring`, Declared fields), and write the value in frontmatter.
-2. Every page in a folder shares the value: write it once in `cascade:` on the folder's home page; a page's own value wins.
+2. Every page in a folder shares the value: write it once in `cascade:` on the folder's home page; a page's own value wins, then the nearest folder's.
 3. Several facts read as one line: a group field, `type = "group"` with `of = [...]`, draws the parts that have a value, in order.
 4. A picture needs its crop or framing: display words on the embed, `![[photo.jpg|focus:30%,20%]]` keeps that point in view, `|contain` shows it whole (`moss guide authoring`, images).
 5. A section a link must reach: a heading's own words already give a clean id (`## Opening hours` is `#opening-hours`, punctuation dropped); add `{#hours}` only to give it a different name, linked as `[[Page#hours]]`.
