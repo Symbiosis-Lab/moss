@@ -456,6 +456,7 @@ const EN = {
   'publish.bounced_title': "That address didn't accept the link.",
   'publish.bounced_help': 'Check the spelling, then send a new link.',
   'publish.link_expired': 'That link expired. Send a new one.',
+  'publish.sign_in_again': 'Sign this folder in again to publish it.',
 
   // Deploy toasts
 
@@ -2254,6 +2255,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish.bounced_title': 'Diese Adresse hat den Link nicht angenommen.',
     'publish.bounced_help': 'Prüfe die Schreibweise und schicke dann einen neuen Link.',
     'publish.link_expired': 'Dieser Link ist abgelaufen. Schick einen neuen.',
+    'publish.sign_in_again': 'Melde diesen Ordner erneut an, um ihn zu veröffentlichen.',
     'tree.move_to': 'Verschieben nach…',
     'tree.delete': 'Löschen',
     'tree.rename_failed': 'Umbenennen fehlgeschlagen',
@@ -3840,6 +3842,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish.bounced_title': '这个地址无法接收邮件。',
     'publish.bounced_help': '请检查拼写，然后重新发送链接。',
     'publish.link_expired': '链接已过期，请重新发送。',
+    'publish.sign_in_again': '请重新登录这个文件夹，才能发布它。',
 
     'tree.move_to': '移动到…',
     'tree.delete': '删除',
@@ -5485,6 +5488,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish.bounced_title': '這個地址無法接收郵件。',
     'publish.bounced_help': '請檢查拼寫，然後重新發送連結。',
     'publish.link_expired': '連結已過期，請重新發送。',
+    'publish.sign_in_again': '請重新登入這個資料夾，才能發佈它。',
 
     'tree.move_to': '移動到…',
     'tree.delete': '刪除',
