@@ -116,18 +116,25 @@
 }
 /* field-focus:start */
 /* `:focus`, not `:focus-visible`: a text field matches both whenever focused.
-   Underline fields draw their resting edge through `--moss-field-edge` so a sheet outside the layers (comments, a landing's own underline) can read the focus colour. */
-.moss-input:focus,
+   Underline fields draw their resting edge through `--moss-field-edge` so a sheet outside the layers (comments, a landing's own underline) can read the focus colour.
+   `!important` because a theme's unlayered `:focus-visible { outline }` outranks this layer and would draw a box around the underline.
+   Not on a `<select>`: WebKit paints no box-shadow on one, so its outline is its only focus mark. */
+.moss-input:where(:not(select)):focus,
 .comment-field:focus,
 .comment-form textarea:focus {
-  outline: none;
+  outline: none !important;
   --moss-field-edge: var(--moss-focus-ring);
   box-shadow: inset 0 -1px 0 0 var(--moss-field-edge);
 }
+/* Forced colors drop the shadow; a 2px ring just inside the field keeps the edge without moving anything. */
 @media (forced-colors: active) {
   .moss-input:focus,
   .comment-field:focus,
-  .comment-form textarea:focus { --moss-field-edge: Highlight; }
+  .comment-form textarea:focus {
+    --moss-field-edge: Highlight;
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px !important;
+  }
 }
 /* field-focus:end */
 
@@ -144,7 +151,7 @@
   .moss-input--boxed.moss-input--boxed:focus {
     border-color: Highlight;
     outline: 1px solid Highlight !important;
-    outline-offset: -2px;
+    outline-offset: -2px !important;
   }
 }
 .moss-input:disabled {

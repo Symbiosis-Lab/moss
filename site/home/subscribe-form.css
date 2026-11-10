@@ -1,15 +1,20 @@
 /* Generated from crates/moss-build/src/assets/css/site.css by scripts/build-backend-scripts.mjs; edit it there. */
-.moss-input:focus,
+.moss-input:where(:not(select)):focus,
 .comment-field:focus,
 .comment-form textarea:focus {
-  outline: none;
+  outline: none !important;
   --moss-field-edge: var(--moss-focus-ring);
   box-shadow: inset 0 -1px 0 0 var(--moss-field-edge);
 }
+
 @media (forced-colors: active) {
   .moss-input:focus,
   .comment-field:focus,
-  .comment-form textarea:focus { --moss-field-edge: Highlight; }
+  .comment-form textarea:focus {
+    --moss-field-edge: Highlight;
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px !important;
+  }
 }
 
 .moss-subscribe-form[data-moss-hosted="true"] {
