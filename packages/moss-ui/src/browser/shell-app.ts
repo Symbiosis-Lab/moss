@@ -10,8 +10,6 @@ import { ActionPanelManager } from '../ui/editor/action-panel-manager';
 import { EditorPanelView } from '../ui/editor/editor-panel-view';
 import { openFileInEditor } from '../ui/editor/session/open-file-request';
 import { deliverEditorPosition, sourceTargetPosition } from '../ui/editor/session/editor-position';
-import { extractDisplayPath } from '../ui/preview/path-utils';
-import { isRootUrlPath } from '../ui/utils/url-path';
 import type { PreviewManager } from '../ui/preview/preview-manager';
 import { framesApi } from './frames';
 import { mountDevicePanel } from './device-panel';
@@ -31,14 +29,10 @@ export async function startShell(
   const editorIsOpen = () => panels.getCurrentView() === editor && framesApi().layout() !== 'closed';
 
   const openPreviewedPage = async () => {
-    const url = preview?.getCurrentUrl() ?? null;
-    const urlPath = url ? extractDisplayPath(url) : '/';
-    const isRoot = isRootUrlPath(urlPath);
-    editor.setNode({ sourcePath: link.page.sourcePath, isRoot, takeover: link.page.takeover });
+    editor.setNode(link.openNode());
     // Reopening a hidden editor mounts it again, so it shows this page.
     if (panels.getCurrentView() === editor) editor.mount();
     else await panels.switchTo(editor);
-    link.editorOpened(urlPath, isRoot);
   };
   const close = async () => {
     await panels.close();
@@ -52,7 +46,7 @@ export async function startShell(
     folderPath: () => folder.path,
     openTarget: (target) => {
       const at = sourceTargetPosition(target);
-      if (target.path && target.path !== link.page.sourcePath) {
+      if (target.path && target.path !== link.node?.sourcePath) {
         openFileInEditor(panels, editor, target.path, folder.path);
       } else if (!editorIsOpen()) void openPreviewedPage();
       if (at) deliverEditorPosition(at);

@@ -1,17 +1,7 @@
 // packages/moss-ui/src/ui/editor/session/stale-source-refresh.ts
 //
-// Re-resolving the editor's surface when the answer it was given has gone
-// stale — and the answer that goes stale fastest is "this file is still
-// downloading".
-//
-// Two callers, one mechanism, because they are the same bug seen twice: the
-// editor mounted a surface from an answer that was true when it was asked and
-// false a moment later, and nothing asked again. `refreshStale` covers the
-// bake race (the cached source/dir are null because the resolve had not landed
-// when the panel opened); `armForArrival` + `onFilesArrived` cover the case
-// where the file existed all along but its bytes were still coming down from
-// the cloud. The stale-cache half already self-healed; the pending half did
-// not.
+// Asking again when the answer the editor was given was "this file is still
+// downloading": `armForArrival` + `onFilesArrived` retry once bytes land.
 //
 // # Why the arrival signal is injected
 //
@@ -36,10 +26,10 @@
 // # Two panes, two identities
 //
 // A pending pane raised by resolving a preview URL is a claim about THAT URL,
-// and re-resolving it is the right retry: the arming ends the moment a fresh
-// answer is anything other than "still arriving" — including "this page really
-// is generated", which is pushed rather than swallowed, because a pending pane
-// left standing over that answer is the inverse of the bug this fixes.
+// and re-asking the page's lookup is the right retry: the arming ends the
+// moment a fresh answer is anything other than "still arriving", and the
+// lookup's owner delivers that answer to the editor, "this page really is
+// generated" included.
 //
 // A pane the editor raised by opening a PATH is not about the preview's page at
 // all, and after a file-tree click the two name different documents. Asking the
@@ -50,25 +40,21 @@
 // re-offers its own file instead, and asks the backend nothing. Who stops it
 // is the editor: it is the only half that can see whether the pane is still up.
 
-import { isRootUrlPath } from "../../utils/url-path";
-import type { EditSourceResolution, ResolvedNode } from './node-class';
+import type { PendingReason, EditorNodeWire } from './node-class';
 
 export interface StaleSourceRefreshDeps {
-  /** Fresh disk-truth resolve of a preview URL path (`resolve_page_source`). */
-  resolvePageSource: (
-    urlPath: string,
-  ) => Promise<{ status: 'ok'; data: EditSourceResolution } | { status: 'error'; error: string }>;
+  /**
+   * Ask the page's lookup again and settle it for the editor; null when the
+   * URL is no longer the previewed page or a newer lookup replaced this one.
+   */
+  refreshPage: (urlPath: string) => Promise<{ pending: PendingReason | null } | null>;
   /** The URL path the preview is showing RIGHT NOW — the currency guard's input. */
   liveUrlPath: () => string;
   /** Is the editor panel the view actually on screen? */
   editorIsActive: () => boolean;
-  /** Push a corrected node to the editor (the `editor:load-source` channel). */
-  applyNode: (node: ResolvedNode) => void;
-  warn: (message: string) => void;
+  /** Re-offer a named file to the editor (the `editor:load-source` channel). */
+  applyNode: (node: EditorNodeWire) => void;
 }
-
-/** What a re-resolve concluded. Only `pending` keeps the arrival retry armed. */
-type Outcome = 'applied' | 'pending' | 'nothing-to-correct' | 'superseded' | 'failed';
 
 export class StaleSourceRefresh {
   /** The URL path whose pane announced itself pending, or null when disarmed. */
@@ -79,18 +65,6 @@ export class StaleSourceRefresh {
   private inFlight = false;
 
   constructor(private readonly deps: StaleSourceRefreshDeps) {}
-
-  /**
-   * The stale-cache self-heal, unchanged in behaviour: a background re-resolve
-   * for a panel that opened on an ambiguous bake. A confirmed-generated answer
-   * (both null) is deliberately NOT pushed here — for a non-root page that is
-   * also what a racy echo looks like, and forwarding it would downgrade a live
-   * takeover pane to the buttonless generated surface. The pending pane is the one
-   * case where the empty answer must be forwarded, and that caller says so.
-   */
-  async refreshStale(urlPath: string): Promise<void> {
-    await this.reresolve(urlPath, { pushEmptyAnswer: false });
-  }
 
   /**
    * The pending pane is up; retry when the cloud reports an arrival. Re-arming
@@ -162,52 +136,12 @@ export class StaleSourceRefresh {
       return;
     }
 
-    const outcome = await this.reresolve(urlPath, { pushEmptyAnswer: true });
-    // `failed` keeps the arming: a resolve that threw is not evidence about the
-    // file, and treating it as one is how a transient backend hiccup would
-    // strand the pane for good.
-    if (outcome !== 'pending' && outcome !== 'failed') this.disarm();
-  }
-
-  private async reresolve(
-    urlPath: string,
-    opts: { pushEmptyAnswer: boolean },
-  ): Promise<Outcome> {
+    if (this.deps.liveUrlPath() !== urlPath) { this.disarm(); return; }
     this.inFlight = true;
-    try {
-      let result;
-      try {
-        result = await this.deps.resolvePageSource(urlPath);
-      } catch (err) {
-        this.deps.warn(
-          `[StaleSourceRefresh] resolvePageSource threw: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return 'failed';
-      }
-      if (result.status !== 'ok') return 'failed';
-      const { source_path, takeover, source_pending } = result.data;
-
-      // Still coming down: leave the pane exactly as it is. Pushing a node with
-      // no source would be read as "nothing to edit here" — the very claim the
-      // pending pane exists to stop moss from making.
-      if (source_pending || (takeover?.folder_empty === null && (takeover.kind === 'root-home' || takeover.kind === 'folder-home'))) return 'pending';
-      if (!source_path && !takeover && !opts.pushEmptyAnswer) return 'nothing-to-correct';
-
-      // Currency guard: the user may have navigated the preview while this was
-      // in flight, and a stale answer must never clobber a fresher surface a
-      // genuine navigation already landed.
-      if (this.deps.liveUrlPath() !== urlPath) return 'superseded';
-      // The panel may have been closed or switched away from in the same window.
-      if (!this.deps.editorIsActive()) return 'superseded';
-
-      this.deps.applyNode({
-        sourcePath: source_path,
-        isRoot: isRootUrlPath(urlPath),
-        takeover: takeover ?? null,
-      });
-      return 'applied';
-    } finally {
-      this.inFlight = false;
-    }
+    const answer = await this.deps.refreshPage(urlPath);
+    this.inFlight = false;
+    // Any pending verdict keeps the arming: a failed lookup is not evidence
+    // about the file, and treating it as one would strand the pane for good.
+    if (!answer?.pending) this.disarm();
   }
 }

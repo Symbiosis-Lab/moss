@@ -20,6 +20,21 @@ vi.mock('../../engine', () => ({ engine: { resolvePageSource: vi.fn(), describeS
 import { EditorLink, type EditorLinkHost } from '../editor-link';
 import { host, inPageBus } from "../../host";
 import { eventBus, Events } from '../../context/event-bus';
+import { engine } from '../../engine';
+import { pageSource } from '../../preview/page-source';
+
+const answer = (data: Record<string, unknown>) =>
+  ({ status: 'ok', data: { is_dir: false, is_article: false, takeover: null, ...data } }) as never;
+
+function deferred() {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+/** Bytes landed in the open folder. */
+const arrived = () => mossEvents.get('SourceStructureSettled')!({ payload: { folder_path: '/site', outcome: 'Ready' } });
 
 function fakePreview() {
   return {
@@ -47,8 +62,12 @@ function link(over: Partial<EditorLinkHost> = {}) {
   };
   const l = new EditorLink(host);
   l.connect();
+  links.push(l);
   return { l, host, preview };
 }
+
+// The page source is shared; a past test's link would otherwise forward into this test's bus.
+const links: EditorLink[] = [];
 
 const emitted: Array<[string, unknown]> = [];
 const post = (data: unknown) => window.dispatchEvent(new MessageEvent('message', { data }));
@@ -69,23 +88,88 @@ beforeEach(() => {
   }
   mossEvents.clear();
   eventBus.clear();
+  pageSource.invalidate();
+  vi.mocked(engine.resolvePageSource).mockReset();
 });
 afterEach(() => {
+  for (const l of links.splice(0)) l.disconnect();
   for (const [type, cb] of windowListeners.splice(0)) window.removeEventListener(type, cb);
   vi.restoreAllMocks();
 });
 
 describe('EditorLink', () => {
-  test('a previewed page is recorded always, and forwarded only to an open editor', () => {
+  test('only a settled answer reaches the editor, and only an open one', async () => {
     let open = false;
-    const { l } = link({ editorIsOpen: () => open });
-    eventBus.emit(Events.PREVIEW_URL_CHANGED, { urlPath: '/a/', sourcePath: '/site/a.md', takeover: null, isReload: false });
-    expect(l.page).toEqual({ sourcePath: '/site/a.md', takeover: null });
+    const { preview } = link({ editorIsOpen: () => open });
+    vi.mocked(engine.resolvePageSource).mockResolvedValueOnce(answer({ source_path: '/site/a.md', is_article: true }));
+    await pageSource.navigate('/a/', false);
     expect(emitted).toEqual([]);
 
     open = true;
-    eventBus.emit(Events.PREVIEW_URL_CHANGED, { urlPath: '/', sourcePath: null, takeover: null, isReload: false });
-    expect(emitted).toEqual([['editor:load-source', { sourcePath: null, isRoot: true, takeover: null }]]);
+    preview.getCurrentUrl.mockReturnValue('http://x/');
+    const lookup = deferred();
+    vi.mocked(engine.resolvePageSource).mockReturnValueOnce(lookup.promise as never);
+    const settled = pageSource.navigate('/', false);
+    await Promise.resolve();
+    // Retaining while the lookup is in flight means saying nothing at all.
+    expect(emitted).toEqual([]);
+    lookup.resolve(answer({ source_path: null, is_dir: true }));
+    await settled;
+    expect(emitted).toEqual([['editor:load-source', { sourcePath: null, isRoot: true, takeover: null, pending: null }]]);
+  });
+
+  test("an arrival re-ask of the page on screen reaches the editor, and the bus only when the answer changed", async () => {
+    link();
+    const heard = vi.fn();
+    eventBus.on(Events.PREVIEW_URL_CHANGED, heard);
+    vi.mocked(engine.resolvePageSource).mockResolvedValue(answer({ source_path: null, source_pending: true }));
+    await pageSource.navigate('/a/', false);
+    expect(heard).toHaveBeenCalledOnce();
+    host.bus.emit('editor:source-pending', { pending: true, sourcePath: null });
+
+    arrived();
+    await vi.waitFor(() => expect(engine.resolvePageSource).toHaveBeenCalledTimes(2));
+    await flush();
+    expect(heard).toHaveBeenCalledOnce();
+
+    vi.mocked(engine.resolvePageSource).mockResolvedValue(answer({ source_path: '/site/a.md', is_article: true }));
+    arrived();
+    await vi.waitFor(() => expect(emitted.at(-1)).toEqual(['editor:load-source', expect.objectContaining({ sourcePath: '/site/a.md', pending: null })]));
+    expect(heard).toHaveBeenCalledTimes(2);
+    expect(heard).toHaveBeenLastCalledWith(expect.objectContaining({ sourcePath: '/site/a.md', isArticle: true, isReload: true }));
+    // Exactly one load per answer: the re-ask does not push its own copy.
+    expect(emitted.filter(([, node]) => (node as { sourcePath?: string }).sourcePath === '/site/a.md')).toHaveLength(1);
+  });
+
+  test('a reload of the page on screen reaches the editor only while it waits on that page', async () => {
+    link();
+    vi.mocked(engine.resolvePageSource).mockResolvedValue(answer({ source_path: null, source_known: false }));
+    await pageSource.navigate('/a/', false);
+    expect(emitted.at(-1)).toEqual(['editor:load-source', expect.objectContaining({ pending: 'lookup' })]);
+
+    vi.mocked(engine.resolvePageSource).mockResolvedValue(answer({ source_path: '/site/a.md' }));
+    await pageSource.navigate('/a/', true);
+    expect(emitted.at(-1)).toEqual(['editor:load-source', expect.objectContaining({ sourcePath: '/site/a.md', pending: null })]);
+
+    // The user opened another file; a rebuild of the page must not take the editor back.
+    host.bus.emit('editor:source-pending', { pending: false, sourcePath: null });
+    emitted.length = 0;
+    await pageSource.navigate('/a/', true);
+    expect(emitted).toEqual([]);
+  });
+
+  test('opening the editor bakes the answer in hand, or a bare page whose answer follows on request', async () => {
+    const { l } = link();
+    const lookup = deferred();
+    vi.mocked(engine.resolvePageSource).mockReturnValueOnce(lookup.promise as never);
+    expect(l.openNode()).toEqual({ sourcePath: null, isRoot: false, takeover: null });
+    expect(engine.resolvePageSource).toHaveBeenCalledWith('/a/');
+
+    host.bus.emit('editor:request-page', {});
+    lookup.resolve(answer({ source_path: '/site/a.md' }));
+    await vi.waitFor(() => expect(emitted).toEqual([['editor:load-source', { sourcePath: '/site/a.md', isRoot: false, takeover: null, pending: null }]]));
+    expect(l.openNode()).toEqual({ sourcePath: '/site/a.md', isRoot: false, takeover: null });
+    expect(engine.resolvePageSource).toHaveBeenCalledOnce();
   });
 
   test('a double click on another file opens it even with the editor closed', () => {

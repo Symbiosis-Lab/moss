@@ -7,32 +7,34 @@ import {
   shouldLoadContentPage,
   editorQueryFromNode,
   resolveNodeForEdit,
+  readEditorNode,
+  pendingOf,
 } from '../node-class';
 import type { ResolvedNode, EditSourceResolution } from '../node-class';
 
 describe('decideEditorSurface', () => {
   it('content when a source file exists (regardless of isRoot/dir)', () => {
     expect(decideEditorSurface(
-      { sourcePath: '/x/post.md', isRoot: false, takeover: null },
+      { sourcePath: '/x/post.md', isRoot: false, takeover: null, pending: null },
     )).toEqual({ kind: 'content', sourcePath: '/x/post.md' });
   });
 
   it('empty-string source is treated as no source', () => {
     expect(decideEditorSurface(
-      { sourcePath: '', isRoot: true, takeover: null },
+      { sourcePath: '', isRoot: true, takeover: null, pending: null },
     )).toEqual({ kind: 'generated' });
   });
 
   it('unknown root does not claim the folder is empty', () => {
     expect(decideEditorSurface(
-      { sourcePath: null, isRoot: true, takeover: null },
+      { sourcePath: null, isRoot: true, takeover: null, pending: null },
     )).toEqual({ kind: 'generated' });
   });
 
   it('root + non-empty folder, no index.md → the root-home takeover the resolver computed', () => {
     const takeover = folderHomeTakeover('/abs/site', 'My Site', true);
     expect(decideEditorSurface(
-      { sourcePath: null, isRoot: true, takeover },
+      { sourcePath: null, isRoot: true, takeover, pending: null },
     )).toEqual({ kind: 'takeover', takeover });
   });
 
@@ -44,24 +46,29 @@ describe('decideEditorSurface', () => {
       files: [{ dir: '/abs/site/authors', name: '馬欣宜.md', frontmatter: { author_page: '馬欣宜' } }],
     };
     expect(decideEditorSurface(
-      { sourcePath: null, isRoot: false, takeover },
+      { sourcePath: null, isRoot: false, takeover, pending: null },
     )).toEqual({ kind: 'takeover', takeover });
   });
 
   it('subfolder with a real dir, no home note → folder CTA', () => {
     expect(decideEditorSurface(
-      { sourcePath: null, isRoot: false, takeover: folderHomeTakeover('/abs/My Blog', 'My Blog') },
+      { sourcePath: null, isRoot: false, takeover: folderHomeTakeover('/abs/My Blog', 'My Blog'), pending: null },
     )).toEqual({ kind: 'takeover', takeover: folderHomeTakeover('/abs/My Blog', 'My Blog') });
   });
 
   it('no source, no dir (generated page) → no page to edit', () => {
     expect(decideEditorSurface(
-      { sourcePath: null, isRoot: false, takeover: null },
+      { sourcePath: null, isRoot: false, takeover: null, pending: null },
     )).toEqual({ kind: 'generated' });
   });
 });
 
 describe('a source that is still arriving', () => {
+  it('a known path whose bytes are pending waits on that file', () => {
+    expect(decideEditorSurface({ sourcePath: '/x/post.md', isRoot: false, takeover: null, pending: 'download' }))
+      .toEqual({ kind: 'pending', reason: 'download', sourcePath: '/x/post.md' });
+  });
+
   // The reported failure: pressing Edit on the home page of a Google Drive
   // vault mid-materialization showed "No page to edit — This page is generated
   // by moss. There's nothing here to edit." over a file that plainly exists.
@@ -69,20 +76,14 @@ describe('a source that is still arriving', () => {
   // NETWORK, and the two surfaces must not be the same one.
   it('outranks every other surface — a real file is not a generated page', () => {
     expect(decideEditorSurface(
-      { sourcePath: null, isRoot: true, takeover: null, sourcePending: true },
-    )).toEqual({ kind: 'pending', sourcePath: null });
-
-    // Not the empty-folder starter either: the folder is not empty, moss just
-    // cannot see into it yet.
-    expect(decideEditorSurface(
-      { sourcePath: null, isRoot: true, takeover: null, sourcePending: true },
-    )).toEqual({ kind: 'pending', sourcePath: null });
+      { sourcePath: null, isRoot: true, takeover: null, pending: 'download' },
+    )).toEqual({ kind: 'pending', reason: 'download', sourcePath: null });
 
     // And not the folder CTA, which would offer to CREATE a page over one that
     // is on its way down.
     expect(decideEditorSurface(
-      { sourcePath: null, isRoot: false, takeover: folderHomeTakeover('/abs/Blog', 'Blog'), sourcePending: true },
-    )).toEqual({ kind: 'pending', sourcePath: null });
+      { sourcePath: null, isRoot: false, takeover: folderHomeTakeover('/abs/Blog', 'Blog'), pending: 'download' },
+    )).toEqual({ kind: 'pending', reason: 'download', sourcePath: null });
   });
 
   it('rides the resolver, so the shell self-heal re-reads it on every retry', async () => {
@@ -90,13 +91,8 @@ describe('a source that is still arriving', () => {
       status: 'ok' as const,
       data: { source_path: null, source_pending: true },
     });
-    const node = await resolveNodeForEdit(
-      '/',
-      { sourcePath: null, isRoot: true, takeover: null },
-      waiting,
-    );
-    expect(node.sourcePending).toBe(true);
-    expect(decideEditorSurface(node)).toEqual({ kind: 'pending', sourcePath: null });
+    const node = await resolveNodeForEdit('/', waiting);
+    expect(decideEditorSurface(node)).toEqual({ kind: 'pending', reason: 'download', sourcePath: null });
 
     // …and the retry that finds the bytes landed returns the real surface with
     // no user action: same call, later answer.
@@ -104,14 +100,42 @@ describe('a source that is still arriving', () => {
       status: 'ok' as const,
       data: { source_path: '/vault/My Site.md', source_pending: false },
     });
-    const healed = await resolveNodeForEdit(
-      '/',
-      { sourcePath: null, isRoot: true, takeover: null, sourcePending: true },
-      arrived,
-    );
-    expect(healed.sourcePending).toBe(false);
+    const healed = await resolveNodeForEdit('/', arrived);
     expect(decideEditorSurface(healed))
       .toEqual({ kind: 'content', sourcePath: '/vault/My Site.md' });
+  });
+});
+
+describe('pendingOf: what an answer leaves unknown', () => {
+  it('a page the build has not mapped is a lookup, not a download', () => {
+    expect(pendingOf({ source_path: null, source_known: false })).toBe('lookup');
+  });
+  it('an older backend that never says is read as knowing', () => {
+    expect(pendingOf({ source_path: null })).toBeNull();
+  });
+  it('a home whose folder cannot be listed yet is still coming down', () => {
+    const takeover = { ...folderHomeTakeover('/abs/site/posts', 'Posts'), folder_empty: null };
+    expect(pendingOf({ source_path: null, takeover })).toBe('download');
+  });
+});
+
+describe('readEditorNode: one reading of a node off the wire', () => {
+  it("keeps the shell's verdict", () => {
+    expect(readEditorNode({ sourcePath: null, isRoot: false, takeover: null, pending: 'lookup' }))
+      .toEqual({ node: { sourcePath: null, isRoot: false, takeover: null, pending: 'lookup' }, homeFromDisk: false });
+  });
+  it('a takeover the native open baked is an answer, as on a warm open', () => {
+    const takeover = folderHomeTakeover('/abs/Notes', 'Notes');
+    expect(readEditorNode({ sourcePath: null, isRoot: false, takeover }).node.pending).toBeNull();
+  });
+  it('a baked home whose folder is still arriving waits for the download', () => {
+    const takeover = { ...folderHomeTakeover('/abs/site', 'Site', true), folder_empty: null };
+    expect(readEditorNode({ sourcePath: null, isRoot: true, takeover }).node.pending).toBe('download');
+  });
+  it('a bare root finds its home from disk; any other bare node waits for the shell', () => {
+    expect(readEditorNode({ sourcePath: null, isRoot: true, takeover: null }).homeFromDisk).toBe(true);
+    expect(readEditorNode({ sourcePath: null, isRoot: false, takeover: null }))
+      .toEqual({ node: { sourcePath: null, isRoot: false, takeover: null, pending: 'lookup' }, homeFromDisk: false });
   });
 });
 
@@ -150,6 +174,7 @@ describe('resolveNodeForEdit (Edit-open must mount the on-disk backing .md, not 
     sourcePath: null,
     isRoot: false,
     takeover: null,
+    pending: null,
   };
 
   const ok = (data: EditSourceResolution) =>
@@ -172,7 +197,7 @@ describe('resolveNodeForEdit (Edit-open must mount the on-disk backing .md, not 
     const takeover = folderHomeTakeover('/abs/site', 'My Site', true);
     const resolvePageSource = ok({ source_path: null, takeover });
 
-    const node = await resolveNodeForEdit('/', STALE_DEFAULT_CACHE, resolvePageSource);
+    const node = await resolveNodeForEdit('/', resolvePageSource);
 
     expect(node.isRoot).toBe(true); // <-- develop baked false here; that was the bug
     // With isRoot true and a non-empty folder, the surface is the home CTA / (post
@@ -186,9 +211,9 @@ describe('resolveNodeForEdit (Edit-open must mount the on-disk backing .md, not 
     const wbPath = '/Users/liuguo/repo/Symbiosis-Lab/moss-recordings/William Blake/William Blake.md';
     const resolvePageSource = ok({ source_path: wbPath });
 
-    const node = await resolveNodeForEdit('/', STALE_DEFAULT_CACHE, resolvePageSource);
+    const node = await resolveNodeForEdit('/', resolvePageSource);
 
-    expect(node).toEqual({ sourcePath: wbPath, isRoot: true, takeover: null, sourcePending: false });
+    expect(node).toEqual({ sourcePath: wbPath, isRoot: true, takeover: null, pending: null });
     expect(decideEditorSurface(node))
       .toEqual({ kind: 'content', sourcePath: wbPath });
   });
@@ -198,9 +223,9 @@ describe('resolveNodeForEdit (Edit-open must mount the on-disk backing .md, not 
     // source_path:null / takeover:null, and a non-root URL derives isRoot=false.
     const resolvePageSource = ok({ source_path: null, takeover: null });
 
-    const node = await resolveNodeForEdit('/tags/rust/', STALE_DEFAULT_CACHE, resolvePageSource);
+    const node = await resolveNodeForEdit('/tags/rust/', resolvePageSource);
 
-    expect(node).toEqual({ sourcePath: null, isRoot: false, takeover: null, sourcePending: false });
+    expect(node).toEqual({ sourcePath: null, isRoot: false, takeover: null, pending: null });
     expect(decideEditorSurface(node)).toEqual({ kind: 'generated' });
   });
 
@@ -210,7 +235,7 @@ describe('resolveNodeForEdit (Edit-open must mount the on-disk backing .md, not 
       takeover: folderHomeTakeover('/abs/Illuminated Books', 'Illuminated Books'),
     });
 
-    const node = await resolveNodeForEdit('/illuminated-books/', STALE_DEFAULT_CACHE, resolvePageSource);
+    const node = await resolveNodeForEdit('/illuminated-books/', resolvePageSource);
 
     expect(node.isRoot).toBe(false);
     expect(decideEditorSurface(node))
@@ -220,54 +245,43 @@ describe('resolveNodeForEdit (Edit-open must mount the on-disk backing .md, not 
   it('treats several root url spellings as root ("", "/", "///") — build-independent rule', async () => {
     const resolvePageSource = ok({ source_path: null });
     for (const p of ['', '/', '///']) {
-      const node = await resolveNodeForEdit(p, STALE_DEFAULT_CACHE, resolvePageSource);
+      const node = await resolveNodeForEdit(p, resolvePageSource);
       expect(node.isRoot, `urlPath=${JSON.stringify(p)}`).toBe(true);
     }
   });
 
-  it('resolve FAILURE falls back to cached source/takeover but keeps the fresh (reliable) isRoot', async () => {
-    const cached: ResolvedNode = {
-      sourcePath: '/prev/post.md',
-      isRoot: false,
-      takeover: folderHomeTakeover('/prev/dir', 'dir'),
-    };
+  it('resolve FAILURE is a lookup verdict, never a claim about the page', async () => {
     const failing = vi.fn().mockResolvedValue({ status: 'error' as const, error: 'boom' });
-
-    const node = await resolveNodeForEdit('/', cached, failing);
-
-    // isRoot recomputed from the live URL (true) even though cache said false;
-    // source/dir preserved from cache so Edit never regresses below prior behavior.
-    expect(node).toEqual({
-      sourcePath: '/prev/post.md',
-      isRoot: true,
-      takeover: folderHomeTakeover('/prev/dir', 'dir'),
-    });
+    const node = await resolveNodeForEdit('/', failing);
+    // isRoot still comes from the live URL.
+    expect(node).toEqual({ sourcePath: null, isRoot: true, takeover: null, pending: 'lookup' });
+    expect(decideEditorSurface(node)).toEqual({ kind: 'pending', reason: 'lookup', sourcePath: null });
   });
 
-  it('resolve THROWS → same cached fallback (no unhandled rejection)', async () => {
+  it('resolve THROWS → the same verdict (no unhandled rejection)', async () => {
     const throwing = vi.fn().mockRejectedValue(new Error('ipc down'));
-    const node = await resolveNodeForEdit('/tags/rust/', STALE_DEFAULT_CACHE, throwing);
-    expect(node).toEqual({ sourcePath: null, isRoot: false, takeover: null });
+    const node = await resolveNodeForEdit('/tags/rust/', throwing);
+    expect(node).toEqual({ sourcePath: null, isRoot: false, takeover: null, pending: 'lookup' });
   });
 });
 
 describe('canonical folder emptiness', () => {
   it('shows existing cards for a proven empty nested folder and retains its target', () => {
     const takeover = { ...folderHomeTakeover('/abs/site/posts', 'Posts'), folder_empty: true };
-    expect(decideEditorSurface({ sourcePath: null, isRoot: false, takeover }))
+    expect(decideEditorSurface({ sourcePath: null, isRoot: false, takeover, pending: null }))
       .toEqual({ kind: 'root-empty', folder: takeover });
   });
   it('never promotes missing editable files to a claim that a folder is empty', () => {
     const takeover = { ...folderHomeTakeover('/abs/site', 'Site', true), folder_empty: false };
-    expect(decideEditorSurface({ sourcePath: null, isRoot: true, takeover }))
+    expect(decideEditorSurface({ sourcePath: null, isRoot: true, takeover, pending: null }))
       .toEqual({ kind: 'takeover', takeover });
   });
 });
 
 test('a folder whose enumeration is unavailable waits without showing starter cards', () => {
   const takeover = { ...folderHomeTakeover('/abs/site/posts', 'Posts'), folder_empty: null };
-  expect(decideEditorSurface({ sourcePath: null, isRoot: false, takeover }))
-    .toEqual({ kind: 'pending', sourcePath: null });
+  expect(decideEditorSurface(readEditorNode({ sourcePath: null, isRoot: false, takeover }).node))
+    .toEqual({ kind: 'pending', reason: 'download', sourcePath: null });
 });
 
 test('TAKEOVER_KINDS names the same kinds as the generated TakeoverKind', () => {

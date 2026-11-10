@@ -58,6 +58,14 @@ export function folderHomeTakeover(dir: string, name: string, isRoot = false): T
   };
 }
 
+/**
+ * Why the editor cannot show a page's source yet: moss has no answer for the
+ * page (`lookup`: the lookup failed, or the build has not mapped the page), or
+ * the source is real and its bytes are still coming down from the cloud
+ * (`download`).
+ */
+export type PendingReason = 'lookup' | 'download';
+
 /** A node previewed/selected in the editor, resolved to its source/folder identity. */
 export interface ResolvedNode {
   /** Absolute or project-relative source path of an editable file, or null. */
@@ -66,14 +74,47 @@ export interface ResolvedNode {
   isRoot: boolean;
   /** What would replace the page when nothing backs it; null when nothing would. */
   takeover: Takeover | null;
-  /**
-   * The source exists but moss cannot read it yet — the bytes are still coming
-   * down from the cloud (`PageSource.source_pending`).
-   *
-   * Optional so every existing caller keeps its exact meaning: absent is
-   * "settled", which is what every node was before this existed.
-   */
-  sourcePending?: boolean;
+  /** Null when the node is an answer; otherwise why it is not one yet. */
+  pending: PendingReason | null;
+}
+
+/**
+ * A node as it crosses into the editor. The shell's page answers carry their
+ * verdict; the native open's bake and an explicit file open carry none.
+ */
+export interface EditorNodeWire {
+  sourcePath: string | null;
+  isRoot: boolean;
+  takeover: Takeover | null;
+  pending?: PendingReason | null;
+}
+
+/**
+ * The one reading of a node off the wire. A node with no verdict was baked by
+ * the native open or sent by an explicit open, both from the same resolver as
+ * the shell's answers, so a source or a takeover in it is an answer. A bare
+ * root is not, and its home is found from disk (`homeFromDisk`). Any other
+ * bare node names no page yet, and waits for the shell's answer.
+ */
+export function readEditorNode(wire: EditorNodeWire): { node: ResolvedNode; homeFromDisk: boolean } {
+  const { sourcePath, isRoot } = wire;
+  const takeover = wire.takeover ?? null;
+  if (wire.pending !== undefined) return { node: { sourcePath, isRoot, takeover, pending: wire.pending }, homeFromDisk: false };
+  if (sourcePath || takeover) {
+    return { node: { sourcePath, isRoot, takeover, pending: pendingOf({ source_path: sourcePath, takeover }) }, homeFromDisk: false };
+  }
+  return { node: { sourcePath, isRoot, takeover, pending: 'lookup' }, homeFromDisk: isRoot };
+}
+
+/** What a resolver's answer leaves unknown about the page, if anything. */
+export function pendingOf(answer: EditSourceResolution): PendingReason | null {
+  const takeover = answer.takeover;
+  // A home whose folder moss cannot list yet is a folder still coming down.
+  const folderArriving = takeover?.folder_empty === null && (takeover.kind === 'root-home' || takeover.kind === 'folder-home');
+  if (answer.source_pending || folderArriving) return 'download';
+  // Missing on an older backend, which only answers what it knows.
+  if (answer.source_known === false) return 'lookup';
+  return null;
 }
 
 /** The one surface the editor pane shows for a resolved node. */
@@ -83,11 +124,8 @@ export type EditorSurface =
   /** A generated page the user can take over by creating the recipe's files. */
   | { kind: 'takeover'; takeover: Takeover }
   /**
-   * The file is real and its bytes have not arrived. Every other no-content
-   * surface here is a claim about the SITE ("this page is generated", "this
-   * folder has no home page yet"); this one is a claim about the NETWORK, and
-   * it is the only one that resolves itself — see the arrival retry in
-   * `stale-source-refresh.ts`.
+   * The page has no answer yet, for `reason`. Only a `download` resolves
+   * itself, through the arrival retry in `stale-source-refresh.ts`.
    *
    * `sourcePath` is the file the pane is waiting for when the editor knows it
    * (it opened that path and the read came back still-arriving), and null when
@@ -95,7 +133,7 @@ export type EditorSurface =
    * shell cannot re-derive it: its only other handle is the live preview URL,
    * which after a file-tree click names a different document entirely.
    */
-  | { kind: 'pending'; sourcePath: string | null }
+  | { kind: 'pending'; reason: PendingReason; sourcePath: string | null }
   | { kind: 'generated' };
 
 /**
@@ -107,20 +145,9 @@ export type EditorSurface =
 export function decideEditorSurface(
   node: ResolvedNode,
 ): EditorSurface {
+  if (node.pending) return { kind: 'pending', reason: node.pending, sourcePath: node.sourcePath };
   if (node.sourcePath) {
     return { kind: 'content', sourcePath: node.sourcePath };
-  }
-  // Before every "there is nothing to edit here" answer, because all three of
-  // them are lies about a file that is merely downloading — and the user has no
-  // way to tell a lie from a verdict.
-  if (node.sourcePending) {
-    // Reached only with a null `sourcePath` (a non-null one is `content` above),
-    // so this leg has no file to name — the URL it was resolved from is the
-    // identity, and the shell already holds that.
-    return { kind: 'pending', sourcePath: null };
-  }
-  if (node.takeover?.folder_empty === null && (node.takeover.kind === 'root-home' || node.takeover.kind === 'folder-home')) {
-    return { kind: 'pending', sourcePath: null };
   }
   if (node.takeover?.folder_empty === true) {
     return { kind: 'root-empty', folder: node.takeover };
@@ -135,68 +162,48 @@ export function decideEditorSurface(
 export interface EditSourceResolution {
   source_path: string | null;
   takeover?: Takeover | null;
-  /** See `ResolvedNode.sourcePending`. */
+  /** The source exists and its bytes are still coming down from the cloud. */
   source_pending?: boolean;
+  /**
+   * False when the build's page map is missing or unreadable and the disk
+   * found no source; the next build reload settles it. Not yet in the
+   * generated `PageSource`, which follows the backend.
+   */
+  source_known?: boolean;
 }
 
 /**
- * Resolve a preview URL path to the ResolvedNode the editor should mount — the
- * single, shared source-truth resolver for the editor's root-open paths (both
- * cold-boot `resolveAndApplyRootSurface` and warm/in-session `applyResolvedNode`
- * in editor-main.ts call it when a bare `{isRoot:true, sourcePath:null}` node
- * arrives).
+ * Resolve a preview URL path to the ResolvedNode the editor should mount, from
+ * disk: the editor's own resolve for the root's home and for a folder it names
+ * by real path.
  *
  * WHY (build-independent disk truth): the site root's on-disk home (index.md or
  * a self-named folder note like `William Blake.md`) must open in the editor even
- * while a large folder is still rendering its preview. Callers bake only `isRoot`
- * (derived from the live URL, build-independent); the source is resolved HERE
- * from disk truth:
- *   1. `isRoot` is derived from the url path with the shared `isRootUrlPath`
- *      rule, so a root url ('' / '/' / '///') always yields is_root=1.
- *   2. `sourcePath`/`takeover` come from a fresh `resolvePageSource`.
- *      The backend resolver (detect_root_home_source) returns the real home file
- *      for the empty root even mid-build (no article-map needed), so a root with
- *      a backing note resolves to `{kind:'content'}`.
+ * while a large folder is still rendering its preview. `isRoot` is derived from
+ * the url path with the shared `isRootUrlPath` rule, and the source comes from
+ * a fresh `resolvePageSource`, whose root resolver finds the home with no
+ * article-map.
  *
- * On resolve failure it falls back to the cached values (for the editor's root
- * calls, the bare node) so a resolve error never blanks a known source. A
- * genuinely generated page (feed/archive/404) resolves to
- * `{source_path:null, takeover:null}` with isRoot=false → the `generated`
- * surface is preserved; this does not invent a phantom source.
+ * A failed resolve is a `lookup` verdict, never a claim that the page is
+ * generated. A genuinely generated page (feed/archive/404) resolves to
+ * `{source_path:null, takeover:null}` and keeps the `generated` surface.
  */
 export async function resolveNodeForEdit(
   currentUrlPath: string,
-  cached: ResolvedNode,
   resolvePageSource: (
     urlPath: string,
   ) => Promise<{ status: 'ok'; data: EditSourceResolution } | { status: 'error'; error: string }>,
 ): Promise<ResolvedNode> {
-  // Pure, build-independent root detection from the live URL — the same shared
-  // rule the PREVIEW_URL_CHANGED handler uses (isRootUrlPath).
   const isRoot = isRootUrlPath(currentUrlPath);
   try {
     const res = await resolvePageSource(currentUrlPath);
     if (res.status === 'ok') {
-      return {
-        sourcePath: res.data.source_path,
-        isRoot,
-        takeover: res.data.takeover ?? null,
-        // Read fresh every time, so a retry that finds the bytes landed clears
-        // the waiting surface with no user action.
-        sourcePending: res.data.source_pending ?? false,
-      };
+      return { sourcePath: res.data.source_path, isRoot, takeover: res.data.takeover ?? null, pending: pendingOf(res.data) };
     }
   } catch {
-    // fall through to cached fallback
+    // A failed resolve is no evidence about the page.
   }
-  // Resolve failed: keep the freshly-derived isRoot (still reliable) but reuse
-  // the cached source/dir rather than blanking them.
-  return {
-    sourcePath: cached.sourcePath,
-    isRoot,
-    takeover: cached.takeover,
-    sourcePending: cached.sourcePending,
-  };
+  return { sourcePath: null, isRoot, takeover: null, pending: 'lookup' };
 }
 
 /**
@@ -213,17 +220,25 @@ export function shouldLoadContentPage(sameFile: boolean, cmMounted: boolean): bo
 }
 
 /**
- * Serialize a ResolvedNode to the editor.html query string — the exact param
+ * Serialize a node to the editor.html query string — the exact param
  * set + order build_editor_url (the host editor commands) bakes:
  * source, is_root, takeover (JSON); only present params appended; '' when none.
  * Used by the warm-open to history.replaceState the panel URL so a
  * dev-mode HMR full reload (or the navigate fallback) re-opens what the
- * editor is actually showing.
+ * editor is actually showing. Only answers are baked, so no verdict rides it.
  */
-export function editorQueryFromNode(node: ResolvedNode): string {
+export function editorQueryFromNode(node: EditorNodeWire): string {
   const params: string[] = [];
   if (node.sourcePath) params.push(`source=${encodeURIComponent(node.sourcePath)}`);
   if (node.isRoot) params.push('is_root=1');
   if (node.takeover) params.push(`takeover=${encodeURIComponent(JSON.stringify(node.takeover))}`);
   return params.length ? `?${params.join('&')}` : '';
+}
+
+/** The node `build_editor_url` baked into the query; a hand-edited takeover reads as none. */
+export function editorNodeFromQuery(params: URLSearchParams): EditorNodeWire {
+  let takeover: Takeover | null = null;
+  try { takeover = JSON.parse(params.get('takeover') ?? 'null'); } catch { /* malformed query */ }
+  if (takeover && (!TAKEOVER_KINDS.includes(takeover.kind) || typeof takeover.display !== 'string' || !Array.isArray(takeover.files))) takeover = null;
+  return { sourcePath: params.get('source'), isRoot: params.get('is_root') === '1', takeover };
 }

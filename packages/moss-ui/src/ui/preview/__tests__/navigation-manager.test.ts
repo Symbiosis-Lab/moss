@@ -1664,7 +1664,7 @@ describe("activePage state", () => {
       manager.handleNavigationUpdate({ url: 'http://localhost/b/' });
       // @ts-ignore private transition
       manager.handleNavigationUpdate({ url: 'http://localhost/a/' });
-      await Promise.resolve();
+      await vi.waitFor(() => expect(manager.getActivePage()?.sourceFile).toBe('new-a.md'));
     } else if (replacement === 'folder-change') {
       manager.setFolderPath('/second');
     } else {
@@ -1673,7 +1673,7 @@ describe("activePage state", () => {
     const before = vi.mocked(eventBus.emit).mock.calls.length;
     const requirementCalls = requirement.mock.calls.length;
     finish({ status: 'ok', data: { source_path: 'old-a.md', is_dir: false, is_article: true } });
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(vi.mocked(eventBus.emit).mock.calls).toHaveLength(before);
     expect(manager.getActivePage()?.sourceFile).not.toBe('old-a.md');
     expect(requirement).toHaveBeenCalledTimes(requirementCalls);
@@ -2666,6 +2666,19 @@ describe("NavigationManager navigation deadline", () => {
     vi.advanceTimersByTime(500);
     expect(spy).not.toHaveBeenCalled();
     m.destroy();
+  });
+
+  test("an abandoned navigation leaves the shown page's source answered again", async () => {
+    manager.setFolderPath("/site");
+    vi.mocked(engine.resolvePageSource).mockResolvedValue({ status: "ok", data: { source_path: "/site/y.md", is_dir: false, is_article: true } } as any);
+    echoAt(manager, "/y/");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.getActivePage()?.sourceFile).toBe("/site/y.md");
+    manager.beginNavigation(`${origin}/x/`);
+    expect(manager.getActivePage()?.sourceFile).toBeNull();
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(manager.getActivePage()?.sourceFile).toBe("/site/y.md");
+    vi.mocked(engine.resolvePageSource).mockReset().mockResolvedValue({ status: "ok", data: { source_path: null, is_dir: false, is_article: false } } as any);
   });
 
   test("a late report from the abandoned page is an ordinary arrival and the build is told it", () => {

@@ -759,6 +759,9 @@ export class PreviewManager {
     this.onEmptyFolder = cb;
   }
 
+  /** The same feature state used by preview instruments and shell affordances. */
+  getEditsOnPreview(): boolean { return this.editsOnPreview; }
+
   /** The preview-features setting; turning it off clears what an instrument drew. */
   setEditsOnPreview(on: boolean): void {
     if (this.editsOnPreview === on) return;
