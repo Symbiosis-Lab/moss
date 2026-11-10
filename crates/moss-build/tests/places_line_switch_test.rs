@@ -72,6 +72,26 @@ fn build_located_site(terms_extra: &str, site_extra: &str, article_fm: &str, loc
     (read_page(&out, "posts/report/index.html"), read_page(&out, "posts/index.html"))
 }
 
+/// A kind other than places, switched on in the config, reaches a real page.
+#[test]
+fn a_tags_kind_with_line_true_draws_linked_names_in_the_masthead() {
+    let tmp = std::env::temp_dir().join(format!("moss_term_line_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nname = \"Example Notes\"\nlang = \"en\"\n\n[terms.tags]\nline = true\n");
+    write(&tmp, "index.md", "---\ntitle: Home\n---\n\nHi.\n");
+    write(&tmp, "letters/first-light.md", "---\ntitle: First light\ndate: 2026-01-01\ntags: [\"Field Notes\"]\n---\n\nThe letter itself.\n");
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
+
+    let html = read_page(&tmp.join(".moss/build.nosync/staging"), "letters/first-light/index.html");
+    let line = html.find("class=\"moss-term-line\"").unwrap_or_else(|| panic!("no term line: {html}"));
+    let body = html.find(">The letter itself").expect("the body, not the description in the head");
+    assert!(line < body, "the line sits above the letter: {html}");
+    assert!(html.contains("data-term=\"tags\""), "{html}");
+    assert!(html[line..body].contains("href=\"/tags/field-notes/\""), "{html}");
+}
+
 #[test]
 fn the_place_line_renders_by_default() {
     let (article, _) = build_site("", "locator = \"align-right\"\n", "");

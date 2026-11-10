@@ -80,7 +80,7 @@ Class names, tokens, shortcodes, and frontmatter fields change between moss
 releases. Never hardcode them from memory. From the project root, run:
 
 ```
-moss describe --json          # everything; the .moss/config.toml [site] keys are under site_settings, [redirects] under config_tables
+moss describe --json          # everything; the .moss/config.toml [site] keys are under site_settings, [redirects] and [terms.<key>] under config_tables
 moss describe --json | jq 'keys'   # what "everything" covers, right now
 ```
 

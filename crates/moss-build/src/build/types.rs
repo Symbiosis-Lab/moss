@@ -334,20 +334,15 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_children: Option<Vec<(String, String, usize)>>,
-    /// The automatic place line: a generated markdown row naming every
-    /// place this document declares via `location:`, linked to each
-    /// place's term page. Set by `build::terms::set_place_lines`, after
-    /// `derive_terms`, alongside `link_terms_in_bylines`. `None` when
-    /// `location:` is unset, or the site declares no place-typed kind.
+    /// The lines this page's terms are drawn as, each name a link to its
+    /// term page, set by `build::terms::set_term_lines`.
     #[serde(skip)]
     #[specta(skip)]
-    pub place_line: Option<String>,
-    /// The same resolved place names `place_line` carries, plain and
-    /// unlinked, joined the same way (", "), with no role label — for a
-    /// card's compact meta line to show next to its date. Set alongside
-    /// `place_line` by `build::terms::set_place_lines`, from the same
-    /// filtered, ordered name list, so the two never drift apart. `None`
-    /// under the same conditions as `place_line`.
+    pub term_lines: Vec<crate::build::terms::TermLine>,
+    /// The page's resolved place names, plain and unlinked, joined with ", "
+    /// and with no role label: for a card's compact meta line to show next to
+    /// its date. Set by `build::terms::set_term_lines`, whether or not the
+    /// place line is drawn. `None` when no place resolves.
     #[serde(skip)]
     #[specta(skip)]
     pub place_names: Option<String>,

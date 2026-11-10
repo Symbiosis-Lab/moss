@@ -1267,7 +1267,7 @@ pub(super) fn render_page<'d>(
         // the body, before its first text block.
         if let Some(d) = doc {
             if let Some(masthead) =
-                credits::render_byline_html(&d.byline, emit_source_lines, d.place_line.as_deref())
+                credits::render_byline_html(&d.byline, emit_source_lines, &d.term_lines)
             {
                 after_title_block.push_str(&masthead);
             }

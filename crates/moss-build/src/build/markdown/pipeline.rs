@@ -1621,7 +1621,7 @@ pub fn process_markdown_file(
         term_listing: None,
         term_sections: None,
         place_children: None,
-        place_line: None,
+        term_lines: Vec::new(),
         place_names: None,
         is_place_namespace_root: false,
         explorer_places_hash: None,

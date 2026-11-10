@@ -661,7 +661,7 @@ fn an_event_card_keeps_its_meta_line_and_takes_the_byline_only_as_description() 
 }
 
 /// `props_for_document` reads the page's resolved place straight off
-/// `ParsedDocument::place_names` — the same field `build::terms::set_place_lines`
+/// `ParsedDocument::place_names` — the same field `build::terms::set_term_lines`
 /// fills — rather than re-deriving it.
 #[test]
 fn props_for_document_carries_the_resolved_place() {

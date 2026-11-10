@@ -1212,10 +1212,9 @@ pub fn generate_blocking_content_for_build(
         // the linked URL is part of each page's surface, so a claim
         // appearing elsewhere re-renders the bylines that point at it.
         crate::build::terms::link_terms_in_bylines(&mut documents, &term_index);
-        // The automatic place line — same neighborhood, same reasoning:
-        // before the incremental content hash is taken, so a claim moving
-        // invalidates the line's link for free.
-        crate::build::terms::set_place_lines(&mut documents, &term_index, site_lang);
+        // A page's term lines, for the same reason: a claim moving changes
+        // their links and so the page's surface.
+        crate::build::terms::set_term_lines(&mut documents, &term_index, site_lang);
         // The names a `cards = true` kind shows on listing cards: the same
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);

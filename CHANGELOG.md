@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A page can draw its terms as links under its title: `line = true` in a `[terms.<key>]` table gives one line per field, each name linking to its term page in the page's own edition. Only a place-typed kind does this by default, so no site changes, and `[terms.tags]` or `[terms.authors]` may now leave out `fields` and keep their built-in field. `moss describe` lists the keys of a `[terms.<key>]` table.
 - A folder can close every article in it with one file: a `partial: true` page with `slot: before-article-end` is drawn at the end of each article in that folder and the folders beneath it, the nearest file winning, and never in feeds, search or email.
 
 ### Changed

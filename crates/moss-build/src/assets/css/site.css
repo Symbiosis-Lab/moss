@@ -3287,25 +3287,23 @@ body > header .site-name {
   border-bottom-color: currentColor;
 }
 
-/* The automatic place line (generated from `location:`) — same font, colour
-   and link treatment as the byline just above, since it sits in the same
-   credit-line role, just machine-generated rather than authored. A separate
-   class rather than reusing `.moss-byline` because it is not one of that
-   block's rows (see `render_byline_html`, which resolves the two pieces
-   independently). */
-.moss-place-line {
+/* A page's terms drawn as links: the place line and any kind with
+   `line = true`. Same type and link treatment as the byline above it, as
+   they share its credit role; generated rather than authored, so not rows
+   of that block. */
+.moss-term-line {
   font-size: 0.82em;
   line-height: 1.75;
   font-weight: 400;
   color: var(--moss-color-text-secondary);
   margin-block: 0 var(--moss-space-md);
 }
-.moss-place-line a {
+.moss-term-line a {
   color: inherit;
   text-decoration: none;
   border-bottom: 1px solid var(--moss-border-light);
 }
-.moss-place-line a:hover {
+.moss-term-line a:hover {
   border-bottom-color: currentColor;
 }
 

@@ -311,6 +311,12 @@ fn config_tables() -> Vec<ConfigTableInfo> {
         rules: crate::build::feeds::redirect_table::RULES.to_vec(),
     },
     ConfigTableInfo {
+        name: "terms.<key>",
+        entry: "fields = [\"author\", \"editor\"]",
+        description: "One term kind: a namespace of generated pages (`/<key>/<name>/`) fed by frontmatter name-list fields. `[terms.tags]` and `[terms.authors]` adjust the two built-in kinds; `[terms] tags = false` turns one off.",
+        rules: moss_core::terms::config::KIND_KEY_RULES.to_vec(),
+    },
+    ConfigTableInfo {
         name: "services.forms",
         entry: "endpoint = \"https://forms.example/f\"",
         description: "Where the site's `:::form` blocks post: a form named `booking` posts to `<endpoint>/booking`. With no endpoint the build warns, published pages do not show the forms, and the preview shows them with sending simulated.",
@@ -484,6 +490,20 @@ mod tests {
             .unwrap_or_else(|| panic!("no [redirects] entry: {}", json["config_tables"]));
         let rules: Vec<&str> = redirects["rules"].as_array().unwrap().iter().filter_map(|r| r.as_str()).collect();
         assert!(rules.iter().any(|r| r.contains("moves everything under the old folder") && r.contains("site root")), "{rules:?}");
+    }
+
+    #[test]
+    fn describe_json_lists_the_term_kind_keys() {
+        let tokens = load_tokens().unwrap();
+        let json = serde_json::to_value(full_payload(&tokens, "test")).unwrap();
+        let terms = json["config_tables"]
+            .as_array()
+            .and_then(|tables| tables.iter().find(|t| t["name"] == "terms.<key>"))
+            .unwrap_or_else(|| panic!("no [terms.<key>] entry: {}", json["config_tables"]));
+        let rules = terms["rules"].to_string();
+        for key in ["fields", "title", "count", "type", "explorer", "line", "cards", "nav", "weight"] {
+            assert!(rules.contains(&format!("`{key}`")), "{key} is missing: {rules}");
+        }
     }
 
     /// The `moss describe` manifest table mirrors `PluginManifest` field by

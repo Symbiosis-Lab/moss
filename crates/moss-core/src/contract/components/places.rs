@@ -19,11 +19,11 @@ pub(super) const ENTRIES: &[ComponentEntry] = &[
         kind: "instance",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<div class="moss-place-line">Location: <a href="/places/kyoto/">Kyoto</a></div>"#,
+        example_html: r#"<div class="moss-term-line moss-place-line" data-term="places" data-field="location"><span class="moss-term-line-label">Location</span>: <a href="/places/kyoto/">Kyoto</a></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The automatic place line under a page's byline, generated from `location:` — every declared place, linked to its term page. Absent when `location:` is unset, or the site declares no place-typed kind. No opt-out: this is generated chrome with no authored equivalent.",
+        description: "The place-typed kind's `moss-term-line`: the automatic place line under a page's byline, generated from `location:`, every declared place linked to its term page. Absent when `location:` is unset, the site declares no place-typed kind, or the kind sets `line = false`.",
     },
     ComponentEntry {
         class: "moss-place-map",

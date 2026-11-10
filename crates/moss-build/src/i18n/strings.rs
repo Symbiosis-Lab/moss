@@ -180,7 +180,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // The automatic place line's label-to-links separator — a
         // distinct string from any hard-coded punctuation, so a site's
         // language controls it the same way every other i18n string does.
-        "place_line_separator" => [": ", ": ", "：", "："],
+        "term_line_separator" => [": ", ": ", "：", "："],
 
         // RSS / Subscribe
         "subscribe" => ["Subscribe", "Abonnieren", "订阅", "訂閱"],

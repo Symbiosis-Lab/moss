@@ -61,9 +61,8 @@ pub struct TermKind {
     /// has no effect there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explorer: Option<bool>,
-    /// `[terms.<key>] line`, carried through only for the place-typed kind,
-    /// like `explorer`. `Some(false)` is the only way to drop the automatic
-    /// place line; `None` means the default, on.
+    /// `[terms.<key>] line`, read through [`Self::draws_line`]. `None` is the
+    /// default, so a kind that sets none serializes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<bool>,
     /// Explicit slugs from `.moss/places.toml`, keyed by the slug the place's
@@ -102,6 +101,19 @@ impl TermKind {
     /// default differently.
     pub fn explorer_enabled(&self) -> bool {
         self.is_place && self.explorer.unwrap_or(true)
+    }
+
+    /// Whether pages draw this kind's names as a line of links: only a
+    /// place-typed kind does unless `line` says otherwise.
+    pub fn draws_line(&self) -> bool {
+        self.line.unwrap_or(self.is_place)
+    }
+
+    /// The fields a line is drawn for. A place-typed kind's fields all feed
+    /// `location` (mirrored, then inherited by a work's companions), so its
+    /// line is that one field.
+    pub fn line_fields(&self) -> Vec<&str> {
+        if self.is_place { vec!["location"] } else { self.fields.iter().map(String::as_str).collect() }
     }
 
     /// The kind's name in `edition` (`""` is the default edition), which its
@@ -226,8 +238,7 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermK
             // for it to turn off), the same posture `is_place` itself takes
             // toward an unrecognized `type`.
             let explorer = is_place.then_some(kind.explorer).flatten();
-            let line = is_place.then_some(kind.line).flatten();
-            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line, slugs: Default::default(), cards: kind.cards.unwrap_or(false) }
+            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line: kind.line, slugs: Default::default(), cards: kind.cards.unwrap_or(false) }
         })
         .collect()
 }
@@ -303,14 +314,17 @@ mod tests {
     }
 
     #[test]
-    fn line_false_is_kept_for_a_place_kind_and_dropped_for_any_other() {
+    fn line_defaults_on_for_a_place_kind_only_and_either_way_can_be_set() {
         let cfg = crate::config::ConfigFile::parse(
-            "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\nline = false\n\n[terms.people]\nfields = [\"author\"]\nline = false\n",
+            "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\n\n[terms.venues]\ntype = \"place\"\nfields = [\"venue\"]\nline = false\n\n[terms.people]\nfields = [\"author\"]\n\n[terms.topics]\nfields = [\"topic\"]\nline = true\n",
         )
         .unwrap();
         let kinds = term_kinds(&cfg, "en");
-        assert_eq!(kinds.iter().find(|k| k.key == "places").unwrap().line, Some(false));
-        assert_eq!(kinds.iter().find(|k| k.key == "people").unwrap().line, None);
+        let draws = |key: &str| kinds.iter().find(|k| k.key == key).unwrap().draws_line();
+        assert!(draws("places"));
+        assert!(!draws("venues"));
+        assert!(!draws("people"));
+        assert!(draws("topics"));
     }
 
     #[test]

@@ -3500,12 +3500,19 @@ mod children_field_tests {
         homepage.is_root_level = true;
 
         for (label, mut doc, is_homepage) in every_page_kind() {
-            doc.place_line = Some("Location: [Kyoto](/about/kyoto/)".to_string());
+            doc.term_lines = vec![crate::build::terms::TermLine {
+                term: "places".into(),
+                field: "location".into(),
+                label: "Location".into(),
+                separator: ": ".into(),
+                links: "[Kyoto](/about/kyoto/)".into(),
+                is_place: true,
+            }];
             let all_docs = vec![homepage.clone(), doc.clone()];
             let html = render_page(Some(&doc), &all_docs, is_homepage);
 
             assert_eq!(
-                html.matches(r#"class="moss-place-line""#).count(),
+                html.matches(r#"class="moss-term-line moss-place-line""#).count(),
                 1,
                 "{label}: place line must render exactly once. Got: {html}"
             );
