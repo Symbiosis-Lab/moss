@@ -126,7 +126,7 @@ async fn pacing_leaves_a_thread_alone_while_a_publish_is_in_flight() {
     let gate = DerivedWorkGate::following(rx);
     let sink = crate::deploy::progress::silent();
     let class = crate::deploy::freeze::with_publish_guard(&sink, async move {
-        Ok(std::thread::spawn(move || {
+        Ok::<_, String>(std::thread::spawn(move || {
             // SAFETY: the calling thread's own QoS.
             assert_eq!(unsafe { libc::pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) }, 0);
             gate.pace_this_thread();

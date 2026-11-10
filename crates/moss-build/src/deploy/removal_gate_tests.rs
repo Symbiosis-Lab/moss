@@ -519,7 +519,7 @@ async fn collision_push(plugin: bool) {
         push::push_site_inner(&sealed, &push::PushContext {
             folder_path: folder.path(), identity: &identity, site_id: "collision-test",
             sink: &sink, ports: &ports, events_lock: &events_lock,
-        }).await.unwrap_err()
+        }).await.unwrap_err().to_string()
     };
     assert_eq!(error, messages.join("\n"));
 }

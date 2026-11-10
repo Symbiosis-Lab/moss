@@ -8,7 +8,7 @@
 
 use std::{collections::BTreeMap, future::Future, path::Path, sync::{Arc, Mutex}, time::Instant};
 use crate::build::phase::{self, PhaseTrace};
-use super::{DeployReport, PushResult};
+use super::{DeployReport, PublishError, PushResult};
 
 /// Why the deploy was refused, if it was; its counts and phases live in the
 /// phase collector the record opens.
@@ -76,10 +76,10 @@ pub(crate) fn target(route: &super::route::DeployRoute) -> &'static str {
 }
 
 /// Nested entry points share one record; only the outer command appends it.
-pub(crate) fn record<'a, T: Outcome + 'a>(
+pub(crate) fn record<'a, T: Outcome + 'a, E: 'a>(
     folder: &'a Path, target: &'static str, dry_run: bool,
-    body: impl Future<Output = Result<T, String>> + 'a,
-) -> impl Future<Output = Result<T, String>> + 'a {
+    body: impl Future<Output = Result<T, E>> + 'a,
+) -> impl Future<Output = Result<T, E>> + 'a {
     // The build future is large; nested entry-point scopes must not copy it
     // through several task-local future states on a worker's stack.
     let body = Box::pin(body);
@@ -143,31 +143,31 @@ pub(crate) fn seta_error(error: &crate::seta::client::SetaError) {
     }
 }
 
-/// Record a failed seta call in the profile, and return the sentence the
-/// deploy gives for it when it has one of its own (a key not signed in to
-/// the site gets the one `--email` lifts).
-pub(crate) fn profiled_refusal(folder: &std::path::Path, error: &crate::seta::client::SetaError) -> Option<String> {
-    seta_error(error);
-    crate::identity::verify_email::server_refusal(folder, error)
+/// Record a failed seta call in the profile and type it: a key the site does
+/// not know is the sign-in refusal.
+pub(crate) fn profiled_refusal(error: crate::seta::client::SetaError) -> PublishError {
+    seta_error(&error);
+    match error {
+        crate::seta::client::SetaError::NotSignedIn { site } => PublishError::NotSignedIn { host: site },
+        e => e.to_string().into(),
+    }
 }
 
 pub(crate) async fn sync(
-    folder: &std::path::Path,
     call: impl Future<Output = Result<crate::seta::sites::SyncManifestResponse, crate::seta::client::SetaError>>,
-) -> Result<crate::seta::sites::SyncManifestResponse, String> {
+) -> Result<crate::seta::sites::SyncManifestResponse, PublishError> {
     let _phase = PhaseTrace::start("sync");
-    let diff = call.await.map_err(|e| profiled_refusal(folder, &e).unwrap_or_else(|| e.to_string()))?;
+    let diff = call.await.map_err(profiled_refusal)?;
     count("files_needed", diff.need.len() as u64);
     count("removed_files", diff.remove.len() as u64);
     Ok(diff)
 }
 
 pub(crate) async fn commit(
-    folder: &std::path::Path,
     call: impl Future<Output = Result<crate::seta::sites::CommitResponse, crate::seta::client::SetaError>>,
-) -> Result<crate::seta::sites::CommitResponse, String> {
+) -> Result<crate::seta::sites::CommitResponse, PublishError> {
     let _phase = PhaseTrace::start("publish");
-    let result = call.await.map_err(|e| profiled_refusal(folder, &e).unwrap_or_else(|| e.to_string()))?;
+    let result = call.await.map_err(profiled_refusal)?;
     count("server_files_updated", result.files_updated as u64);
     count("removed_files", result.files_removed as u64);
     Ok(result)

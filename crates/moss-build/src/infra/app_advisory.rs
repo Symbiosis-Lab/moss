@@ -145,6 +145,8 @@ advisory_strings! {
     rebuilding_site => { en: "Rebuilding your site…", zh_hans: "正在重新构建网站……", zh_hant: "正在重新建置網站……", de: "Deine Website wird neu erstellt …" },
     sending_site => { en: "Sending your site…", zh_hans: "正在发送网站……", zh_hant: "正在傳送網站……", de: "Deine Website wird gesendet …" },
     waiting_for_other_publish => { en: "Waiting for another publish of this folder…", zh_hans: "正在等待此文件夹的另一次发布完成……", zh_hant: "正在等待此資料夾的另一次發佈完成……", de: "Warte auf eine andere Veröffentlichung dieses Ordners …" },
+    not_signed_in => { en: "This folder isn't signed in to {host}. Sign it in again to publish it.", zh_hans: "这个文件夹没有登录到 {host}。请重新登录，再发布。", zh_hant: "這個資料夾沒有登入到 {host}。請重新登入，再發佈。", de: "Dieser Ordner ist nicht bei {host} angemeldet. Melde ihn erneut an, um ihn zu veröffentlichen." },
+    name_taken => { en: "{address} is taken, or this folder can't claim it. Choose another name.", zh_hans: "{address} 已被占用，或者这个文件夹不能使用它。请换一个名字。", zh_hant: "{address} 已被佔用，或者這個資料夾不能使用它。請換一個名字。", de: "{address} ist vergeben, oder dieser Ordner kann die Adresse nicht übernehmen. Wähle einen anderen Namen." },
     registering_site => { en: "Registering site…", zh_hans: "正在注册网站……", zh_hant: "正在註冊網站……", de: "Website wird registriert …" },
     uploading => { en: "Uploading {name}", zh_hans: "正在上传 {name}", zh_hant: "正在上傳 {name}", de: "{name} wird hochgeladen" },
     rechecking => { en: "Rechecking...", zh_hans: "重新检查……", zh_hant: "重新檢查……", de: "Wird erneut geprüft …" },
@@ -202,7 +204,12 @@ pub fn t(key: &str) -> String {
 /// Resolve a key with `{name}` placeholder interpolation — mirror of the app's
 /// own TS `interpolate()`.
 pub fn fmt(key: &str, params: &[(&str, &str)]) -> String {
-    let mut s = lookup(app_language(), key).unwrap_or(key).to_string();
+    fmt_in(app_language(), key, params)
+}
+
+/// [`fmt`] in a given language.
+pub(crate) fn fmt_in(lang: AppLanguage, key: &str, params: &[(&str, &str)]) -> String {
+    let mut s = lookup(lang, key).unwrap_or(key).to_string();
     for (k, v) in params {
         s = s.replace(&format!("{{{}}}", k), v);
     }

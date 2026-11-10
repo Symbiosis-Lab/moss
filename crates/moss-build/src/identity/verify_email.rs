@@ -6,6 +6,7 @@
 //! `--email`, because sending a message to an address is something the caller
 //! must ask for.
 
+use crate::deploy::PublishError;
 use crate::seta::client::NOT_OWNER;
 use std::path::Path;
 use std::time::Duration;
@@ -15,32 +16,13 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(3);
 /// How long a sign-in link is waited for before giving up.
 pub const WAIT_LIMIT: Duration = Duration::from_secs(15 * 60);
 
-/// [`is_unverified_refusal`] knows a sign-in refusal by these two, so the
-/// producer and the recogniser share them.
-const NOT_SIGNED_IN: &str = " isn't signed in to ";
-const SIGN_IN_FLAG: &str = "--email <address>";
-
-/// The refusal for a folder the hosting service would not accept a publish
-/// from: one never signed in, or one whose key is gone. `host` is the site's
-/// address once it has one, else the hosting service.
+/// The terminal's words for a folder the hosting service would not accept a
+/// publish from: one never signed in, or one whose key is gone. `host` is the
+/// site's address once it has one, else the hosting service.
 pub fn not_signed_in(folder: &Path, host: &str) -> String {
     let root = crate::vault::paths::VaultRoot::resolve(folder);
     let name = root.name();
-    format!("{name}{NOT_SIGNED_IN}{host}. Sign it in: moss deploy {} {SIGN_IN_FLAG}", folder.display())
-}
-
-/// [`not_signed_in`] for the server's refusal of a key not signed in to the
-/// site; `None` for any other error.
-pub fn server_refusal(folder: &Path, error: &crate::seta::client::SetaError) -> Option<String> {
-    match error {
-        crate::seta::client::SetaError::NotSignedIn { site } => Some(not_signed_in(folder, site)),
-        _ => None,
-    }
-}
-
-/// Whether `message` is the refusal that `--email` can lift.
-pub fn is_unverified_refusal(message: &str) -> bool {
-    message.contains(NOT_SIGNED_IN) && message.ends_with(SIGN_IN_FLAG)
+    format!("{name} isn't signed in to {host}. Sign it in: moss deploy {} --email <address>", folder.display())
 }
 
 /// A shape check, not a deliverability check: one `@`, something either side,
@@ -265,14 +247,15 @@ pub async fn retrying_after_verification<T, F, Fut>(
     interval: Duration,
     limit: Duration,
     attempt: F,
-) -> Result<T, String>
+) -> Result<T, PublishError>
 where
     F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<T, String>>,
+    Fut: std::future::Future<Output = Result<T, PublishError>>,
 {
     match (attempt().await, email) {
         (Err(refusal), Some(email))
-            if is_unverified_refusal(&refusal) || (refusal.contains(NOT_OWNER) && key_is_unlinked(folder).await) =>
+            if matches!(refusal, PublishError::NotSignedIn { .. })
+                || (matches!(&refusal, PublishError::Other(text) if text.contains(NOT_OWNER)) && key_is_unlinked(folder).await) =>
         {
             verify_folder_email(folder, email, interval, limit).await?;
             attempt().await

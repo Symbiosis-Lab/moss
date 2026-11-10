@@ -144,7 +144,7 @@ impl Folder {
         crate::identity::Identity::read_pubkey(self.dir.path()).unwrap()
     }
 
-    async fn register(&self) -> Result<String, String> {
+    async fn register(&self) -> Result<String, PublishError> {
         let identity = crate::identity::Identity::load_for_signing(self.dir.path()).unwrap();
         crate::deploy::register_moss_host_site(self.dir.path(), "my-site", &identity).await
     }
@@ -169,8 +169,9 @@ async fn a_refusal_without_email_names_the_flag_and_sends_nothing() {
         .await
         .expect_err("an unverified key is refused");
 
-    assert!(is_unverified_refusal(&err), "{err}");
-    assert!(err.contains("--email <address>"), "the refusal must name the flag: {err}");
+    assert!(matches!(err, PublishError::NotSignedIn { .. }), "{err:?}");
+    let words = err.cli_text(folder.dir.path());
+    assert!(words.ends_with("--email <address>"), "the refusal must name the flag: {words}");
     assert_eq!(seta.count("POST /auth/request"), 0, "no link may be sent without the flag");
 }
 
@@ -236,7 +237,7 @@ async fn an_expired_link_fails_with_what_to_do_and_does_not_retry() {
     .await
     .expect_err("an expired link is not a verification");
 
-    assert!(err.contains("--email"), "say what to do: {err}");
+    assert!(err.to_string().contains("--email"), "say what to do: {err}");
     assert_eq!(seta.count("POST /api/sites"), 1, "no retry after a failed verification");
     assert_eq!(crate::identity::Identity::read_email(folder.dir.path()), None);
 }
@@ -256,7 +257,7 @@ async fn a_link_nobody_opens_times_out() {
     .await
     .expect_err("never opened");
 
-    assert!(err.contains("No one opened the sign-in link"), "{err}");
+    assert!(err.to_string().contains("No one opened the sign-in link"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -333,7 +334,7 @@ async fn verifying_over_a_stored_address_replaces_it() {
 async fn an_unlinked_key_is_sent_a_link_only_for_a_not_the_owner_refusal() {
     let seta = Seta::start(1, "verified").await;
     let folder = Folder::new(&seta);
-    let refused = |message: &'static str| move || async move { Err::<(), String>(message.to_string()) };
+    let refused = |message: &'static str| move || async move { Err::<(), PublishError>(message.to_string().into()) };
 
     let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), TICK, WAIT_LIMIT, refused("HTTP request failed: connection refused")).await;
     assert_eq!(seta.count("POST /auth/request"), 0, "a refusal for another reason sends nothing");
@@ -406,11 +407,11 @@ async fn a_folder_not_signed_in_to_its_site_is_signed_in_by_email() {
     let identity = crate::identity::Identity::load_for_signing(folder.dir.path()).unwrap();
     let client = crate::seta::client::MossSetaClient::for_environment(&identity, &crate::build::site_config::resolve_environment(&folder.dir.path().to_string_lossy()));
     let sync = || async {
-        crate::deploy::profile::sync(folder.dir.path(), client.sync_manifest("my-site", &Default::default(), &Default::default(), "gen")).await.map(|_| ())
+        crate::deploy::profile::sync(client.sync_manifest("my-site", &Default::default(), &Default::default(), "gen")).await.map(|_| ())
     };
 
     let err = sync().await.expect_err("not signed in");
-    assert_eq!(err, not_signed_in(folder.dir.path(), "my-site.mosspub.com"));
+    assert_eq!(err, PublishError::NotSignedIn { host: "my-site.mosspub.com".into() });
 
     retrying_after_verification(folder.dir.path(), Some("me@example.com"), TICK, WAIT_LIMIT, sync).await.expect("signed in, then synced");
     assert_eq!(seta.count("POST /auth/request"), 1);

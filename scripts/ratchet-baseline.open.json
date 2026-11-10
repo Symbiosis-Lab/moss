@@ -63,7 +63,7 @@
         "crates/moss-build/src": 45,
         "crates/moss-build/src/build": 80,
         "crates/moss-build/src/build/media": 20,
-        "crates/moss-build/src/deploy": 21,
+        "crates/moss-build/src/deploy": 22,
         "crates/moss-build/src/js-src/bridge": 17,
         "crates/moss-build/src/js-src/site": 28,
         "crates/moss-build/src/plugins": 19,

@@ -346,6 +346,7 @@ async fn dispatch(
         || send(folder, route, host_ports, plugins, flags, sink),
     )
     .await
+    .map_err(|e| e.cli_text(folder))
     }).await
 }
 
@@ -357,7 +358,7 @@ async fn send(
     plugins: crate::build::PluginMode,
     flags: &DeployFlags,
     sink: &Arc<dyn DeploySink>,
-) -> Result<DeployReport, String> {
+) -> Result<DeployReport, crate::deploy::PublishError> {
     crate::deploy::profile::begin_attempt();
     match route {
         DeployRoute::Prebuilt { dir } => {
@@ -413,8 +414,9 @@ async fn send(
             .and_then(|published| {
                 crate::deploy::plugin_push::report_for(&published)
             })
+            .map_err(Into::into)
         }
-        DeployRoute::Direct { id } => Err(unavailable(id)),
+        DeployRoute::Direct { id } => Err(unavailable(id).into()),
     }
 }
 
@@ -993,7 +995,6 @@ mod dry_run_tests {
         let refusal = dry.refusal.as_ref().expect("a real deploy would be refused");
         assert_eq!(refusal.kind, crate::deploy::RefusalKind::NotSignedIn);
         assert_eq!(refusal.text, crate::identity::verify_email::not_signed_in(fx.dir.path(), "dry-test.example.org"));
-        assert!(crate::identity::verify_email::is_unverified_refusal(&refusal.text));
     }
 
     /// The prebuilt route asks the same question and refuses the same way.
@@ -1156,7 +1157,6 @@ mod dry_run_tests {
         let expected = format!("{name} isn't signed in to {host}. Sign it in: moss deploy {} --email <address>", fx.dir.path().display());
         let err = fx.run(false).await.expect_err("a lost key must refuse");
         assert_eq!(err, expected);
-        assert!(crate::identity::verify_email::is_unverified_refusal(&err), "--email must lift it");
         assert_eq!(crate::identity::Identity::read_pubkey(fx.dir.path()), pubkey, "the old key stays named");
         assert!(!identity.join("secret-key").exists(), "no new key may be written");
         assert!(fx.requests().is_empty(), "nothing may reach the server");

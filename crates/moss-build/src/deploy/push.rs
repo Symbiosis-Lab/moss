@@ -56,7 +56,7 @@ pub struct PushContext<'a> {
 /// `needs_setup` and `failed` are the same answer to "did bytes land" and
 /// completely different things to find in a log. Its exhaustive match is what
 /// makes a new variant pick a label instead of inheriting one.
-fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
+fn deploy_status_label(result: &Result<PushResult, crate::deploy::PublishError>) -> &'static str {
     match result {
         Ok(PushResult::Success { .. }) => "success",
         Ok(PushResult::NeedsSetup) => "needs_setup",
@@ -75,7 +75,7 @@ fn deploy_status_label(result: &Result<PushResult, String>) -> &'static str {
 /// `DEPLOY END … status=failed`; `deploy_id` correlates the two lines. A
 /// `NeedsSetup` short-circuits earlier in `push_site_command_body`, so reaching
 /// here is always a genuine deploy attempt.
-pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, String> {
+pub async fn push_site_inner(sealed: &SealedManifest, cx: &PushContext<'_>) -> Result<PushResult, crate::deploy::PublishError> {
     super::profile::record(cx.folder_path, "seta", false, async {
     super::refuse_before_upload(cx.folder_path, sealed)?;
     let full = uuid::Uuid::new_v4().simple().to_string();
@@ -143,7 +143,7 @@ fn sources_moved(folder: &Path, sealed: &SealedManifest, target: &str) -> bool {
 async fn push_site_inner_impl(
     sealed: &SealedManifest,
     cx: &PushContext<'_>,
-) -> Result<PushResult, String> {
+) -> Result<PushResult, crate::deploy::PublishError> {
     let PushContext { folder_path, identity, site_id, sink, ports, events_lock } = *cx;
     let folder_path_str = folder_path.to_string_lossy().to_string();
 
@@ -200,7 +200,7 @@ async fn push_site_inner_impl(
 
     let site_dir = MossPaths::new(folder_path).generation_dir(sealed.generation_id());
     let sizes = upload::regular_file_sizes(&site_dir, &manifest).await?;
-    let diff = super::profile::sync(folder_path, client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
+    let diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {
         return Ok(settle_already_live(sealed, cx, environment, server_says.as_deref()).await);
@@ -356,7 +356,7 @@ async fn push_site_inner_impl(
                     return Err(format!(
                         "Path {} appeared in diff.need but not in client manifest",
                         file_path
-                    ));
+                    ).into());
                 }
             };
 
@@ -523,7 +523,7 @@ async fn push_site_inner_impl(
         sealed.generation_id(),
         manifest.len()
     );
-    let commit_result = super::profile::commit(folder_path, client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
+    let commit_result = super::profile::commit(client.commit_sync(&site_id, &manifest, sealed.generation_id())).await?;
     let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Record what just went live, so the NEXT publish can say what it will
@@ -761,7 +761,7 @@ pub async fn run_hosted_deploy(
     requested_site_id: Option<&str>,
     overrides: PublishOverrides,
     sink: &std::sync::Arc<dyn progress::DeploySink>,
-) -> Result<PushResult, String> {
+) -> Result<PushResult, crate::deploy::PublishError> {
     super::profile::record(folder, "seta", false, async {
     let folder_str = folder.to_string_lossy().to_string();
 
@@ -857,7 +857,7 @@ mod tests {
         });
         assert_eq!(deploy_status_label(&ok), "success");
         assert_eq!(deploy_status_label(&Ok(PushResult::NeedsSetup)), "needs_setup");
-        let err: Result<PushResult, String> = Err("boom".to_string());
+        let err: Result<PushResult, crate::deploy::PublishError> = Err("boom".to_string().into());
         assert_eq!(deploy_status_label(&err), "failed");
     }
 
@@ -967,7 +967,7 @@ mod tests {
             None => std::env::remove_var("MOSS_SETA_URL"),
         }
         let error = result.expect_err("latest pending attempt must refuse before network");
-        assert!(error.contains("about.md"), "{error}");
+        assert!(error.to_string().contains("about.md"), "{error}");
         assert!(spy.events.lock().unwrap().is_empty());
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
             None => std::env::remove_var("MOSS_SETA_URL"),
         }
 
-        let err = result.expect_err("publish must be refused, not attempted");
+        let err = result.expect_err("publish must be refused, not attempted").to_string();
         assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
         assert!(
             spy.events.lock().unwrap().is_empty(),
@@ -1518,7 +1518,7 @@ mod tests {
             Some(u) => std::env::set_var("MOSS_SETA_URL", u),
             None => std::env::remove_var("MOSS_SETA_URL"),
         }
-        assert_eq!(result.err().as_deref(), Some("Failed to stat index.html"));
+        assert_eq!(result.err().map(|e| e.to_string()).as_deref(), Some("Failed to stat index.html"));
     }
 
     // ── a copy behind the live site ────────────────────────────────────────
@@ -1581,6 +1581,7 @@ mod tests {
             &progress::silent(),
         )
         .await
+        .map_err(|e| e.to_string())
     }
 
     /// Awaits `publish` against the mock at `addr`. The caller holds
@@ -1611,7 +1612,7 @@ mod tests {
         let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
 
         let err = result.expect_err("a copy behind the live site must not publish");
-        assert!(err.contains("published from another copy"), "got: {err}");
+        assert!(err.to_string().contains("published from another copy"), "got: {err}");
         let probe = String::from_utf8_lossy(&probe.await.expect("the probe is the one request made")).to_string();
         assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
     }
@@ -1898,7 +1899,7 @@ mod tests {
         .await;
 
         let err = result.expect_err("a copy behind the live site must not publish");
-        assert!(err.contains("published from another copy"), "got: {err}");
+        assert!(err.to_string().contains("published from another copy"), "got: {err}");
         let probe = String::from_utf8_lossy(&probe.await.expect("the probe is the one request made")).to_string();
         assert!(probe.starts_with("GET /api/sites/behind-test/generation"), "got: {probe}");
     }

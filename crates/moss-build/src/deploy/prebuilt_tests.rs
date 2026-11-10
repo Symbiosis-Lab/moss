@@ -150,7 +150,7 @@ async fn prebuilt_publish_is_rejected_while_a_normal_publish_is_in_flight() {
         .await
         .expect_err("a prebuilt publish must be rejected while a publish is in flight");
     assert_eq!(
-        err, PUBLISH_IN_PROGRESS_MSG,
+        err.to_string(), PUBLISH_IN_PROGRESS_MSG,
         "prebuilt publish must be refused by the single-flight latch"
     );
 
@@ -238,6 +238,7 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
     let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, false, &silent())
         .await
         .expect_err("a version-ahead config must refuse");
+    let err = err.to_string();
     assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
 }
 
@@ -428,7 +429,7 @@ async fn a_prebuilt_sync_sends_sizes_and_shows_the_storage_cap_refusal() {
         None => std::env::remove_var("MOSS_SETA_URL"),
     }
 
-    assert_eq!(result.err().as_deref(), Some(SENTENCE));
+    assert_eq!(result.err().map(|e| e.to_string()).as_deref(), Some(SENTENCE));
     let raw = sync_rx.await.expect("the sync was sent");
     let body = &raw[raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
     let body: serde_json::Value = serde_json::from_slice(body).unwrap();
@@ -545,7 +546,7 @@ async fn gated_push(project: &Path, files: &[&str], accept_removals: bool) -> Re
     let prev_url = std::env::var("MOSS_SETA_URL").ok();
     std::env::set_var("MOSS_SETA_URL", "http://127.0.0.1:1");
     let identity = Identity::generate().expect("generate identity");
-    let result = push_prebuilt(project, prebuilt.path(), GATE_SITE, &identity, accept_removals, &silent()).await;
+    let result = push_prebuilt(project, prebuilt.path(), GATE_SITE, &identity, accept_removals, &silent()).await.map_err(|e| e.to_string());
     match prev_url {
         Some(u) => std::env::set_var("MOSS_SETA_URL", u),
         None => std::env::remove_var("MOSS_SETA_URL"),

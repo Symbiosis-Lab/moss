@@ -118,10 +118,10 @@ impl Drop for PublishGuard {
 /// in-flight publish owns the panel — marking it failed would mark the OTHER
 /// one failed. `try_acquire` returns `Err` before `body.await`, so a rejected
 /// duplicate returns above the emit and cannot reach it.
-pub async fn with_publish_guard<T, F: std::future::Future<Output = Result<T, String>>>(
+pub async fn with_publish_guard<T, E: From<String> + std::fmt::Display, F: std::future::Future<Output = Result<T, E>>>(
     sink: &Arc<dyn DeploySink>,
     body: F,
-) -> Result<T, String> {
+) -> Result<T, E> {
     // Above the emit ON PURPOSE — see the carve-out note above.
     let _guard = super::profile::gate("in_progress", PublishGuard::try_acquire())?;
 
@@ -131,7 +131,8 @@ pub async fn with_publish_guard<T, F: std::future::Future<Output = Result<T, Str
     // immediately on it, and the hairline only branches on the stage), so the
     // counts carry nothing here. On `failed` the message IS the payload — it is
     // what threads the real error into the advisory system — and the guard has
-    // it, because the error string is the message.
+    // it, as the error's `Display`: a typed refusal shows words that name no
+    // command, since every surface shows this stage.
     match &result {
         Ok(_) => sink.stage(
             DeployStage::Complete,
@@ -139,7 +140,7 @@ pub async fn with_publish_guard<T, F: std::future::Future<Output = Result<T, Str
             0,
             &crate::infra::app_advisory::t("published"),
         ),
-        Err(e) => sink.stage(DeployStage::Failed, 0, 0, e),
+        Err(e) => sink.stage(DeployStage::Failed, 0, 0, &e.to_string()),
     }
     result
 }

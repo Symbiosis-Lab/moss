@@ -132,7 +132,7 @@ pub async fn push_prebuilt(
     identity: &Identity,
     accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
-) -> Result<PushResult, String> {
+) -> Result<PushResult, crate::deploy::PublishError> {
     super::profile::record(project_folder, "prebuilt", false, async {
     // Under the same stall watchdog as the interactive publish. This path had
     // NO outer bound at all, so `moss deploy --prebuilt` against a wedged
@@ -191,7 +191,7 @@ async fn push_prebuilt_inner(
     identity: &Identity,
     accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
-) -> Result<PushResult, String> {
+) -> Result<PushResult, crate::deploy::PublishError> {
     // The door guard every config-reading door shares
     // (`site_config::ensure_config_current`) — `push_prebuilt` (the only
     // caller, for both binaries) already takes `with_publish_guard`, but the
@@ -270,7 +270,7 @@ async fn push_prebuilt_inner(
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
     let sizes = crate::deploy::upload::regular_file_sizes(prebuilt_dir, &manifest).await?;
-    let diff = super::profile::sync(project_folder, client.sync_manifest(site_id, &manifest, &sizes, &generation_id)).await?;
+    let diff = super::profile::sync(client.sync_manifest(site_id, &manifest, &sizes, &generation_id)).await?;
 
     if !diff.needs_commit() {
         // Complete comes from `with_publish_guard` on the way out.
@@ -420,7 +420,7 @@ async fn push_prebuilt_inner(
         &crate::infra::app_advisory::t("making_changes_live"),
     );
     // generation_id was computed above after building the manifest.
-    let commit_result = super::profile::commit(project_folder, client.commit_sync(site_id, &manifest, &generation_id)).await?;
+    let commit_result = super::profile::commit(client.commit_sync(site_id, &manifest, &generation_id)).await?;
     let _after_publish = crate::build::phase::PhaseTrace::start("after_publish");
 
     // Skew detection: the server echoes its now-live generation_id.
@@ -504,7 +504,7 @@ pub async fn run_prebuilt_deploy(
     overwrite_newer: bool,
     accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
-) -> Result<PushResult, String> {
+) -> Result<PushResult, crate::deploy::PublishError> {
     super::profile::record(folder, "prebuilt", false, async {
     let Some((site_id, identity)) =
         crate::deploy::resolve_publish_inputs(folder, requested_site_id, overwrite_newer, sink).await?

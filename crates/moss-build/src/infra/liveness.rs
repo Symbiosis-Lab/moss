@@ -139,16 +139,16 @@ pub async fn watchdog(stall: Duration) -> Duration {
 /// error if it goes quiet for `stall`.
 ///
 /// The clock is bumped on entry so a caller never inherits a stale window.
-pub async fn bounded_by_stall<T, F>(fut: F, stall: Duration, what: &str) -> Result<T, String>
+pub async fn bounded_by_stall<T, E: From<String>, F>(fut: F, stall: Duration, what: &str) -> Result<T, E>
 where
-    F: std::future::Future<Output = Result<T, String>>,
+    F: std::future::Future<Output = Result<T, E>>,
 {
     bump();
     tokio::select! {
         result = fut => result,
         idle = watchdog(stall) => {
             log::info!(target: "deploy", "{what}: no progress for {}s — aborting", idle.as_secs());
-            Err(stalled_message(stall))
+            Err(stalled_message(stall).into())
         }
     }
 }
