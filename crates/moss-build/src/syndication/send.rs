@@ -37,11 +37,28 @@ pub enum Outcome {
     Refused { cause: Cause, reason: String },
     /// Whether a copy exists is unknown; not retried until the author says so.
     Unconfirmed { reason: String },
-    /// Left due: over this run's limit, or its page is not in this publish.
-    Held { reason: String },
+    /// Left due and sent by a later run. `why` is what a person is told;
+    /// `reason` is the detail, for the log and the command line.
+    Held { why: HeldWhy, reason: String },
     Deleted,
     /// The network cannot remove a copy; it stays where it is.
     CannotDelete,
+}
+
+/// Why a copy was left for a later run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum HeldWhy {
+    /// Its page is not in this publish.
+    NotPublished,
+    /// Over this run's limit of new copies on the channel.
+    OverLimit,
+    PageNotAnswering,
+    /// Its record could not be written, so nothing was sent.
+    NotRecorded,
+    /// The channel's plugin failed before answering; the same key makes a
+    /// second try safe.
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -173,7 +190,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
                 continue;
             }
             if op == Op::Publish {
-                push(sent(&record, Outcome::Held { reason: "its page is not in this publish".into() }));
+                push(sent(&record, Outcome::Held { why: HeldWhy::NotPublished, reason: "its page is not in this publish".into() }));
             }
             continue;
         };
@@ -214,7 +231,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
         if op == Op::Publish {
             let n = sent_per_channel.entry(record.channel.clone()).or_default();
             if *n >= opts.cap {
-                push(sent(&record, Outcome::Held { reason: format!("over this run's limit of {} new copies on {}", opts.cap, record.channel) }));
+                push(sent(&record, Outcome::Held { why: HeldWhy::OverLimit, reason: format!("over this run's limit of {} new copies on {}", opts.cap, record.channel) }));
                 continue;
             }
             *n += 1;
@@ -222,7 +239,7 @@ async fn send_in_turn(folder: &Path, manager: &PluginManager, articles: &Article
                 let page = page_url(record.site(opts.site_url), &post.url_path);
                 if !answers(&page).await {
                     *n -= 1;
-                    push(sent(&record, Outcome::Held { reason: format!("its page does not answer yet at {page}") }));
+                    push(sent(&record, Outcome::Held { why: HeldWhy::PageNotAnswering, reason: format!("its page does not answer yet at {page}") }));
                     continue;
                 }
             }
@@ -283,7 +300,7 @@ async fn send_one(
         record.state = State::Sending;
         record.touch();
         if let Err(e) = records.save(&record) {
-            return Some(sent(&record, Outcome::Held { reason: format!("its record could not be written, so nothing was sent ({e})") }));
+            return Some(sent(&record, Outcome::Held { why: HeldWhy::NotRecorded, reason: format!("its record could not be written, so nothing was sent ({e})") }));
         }
     }
 
@@ -296,7 +313,7 @@ async fn send_one(
         record.touch();
         let _ = records.save(&record);
         if channel.spec.idempotent {
-            sent(&record, Outcome::Held { reason: format!("{reason}; sent again next run with the same key") })
+            sent(&record, Outcome::Held { why: HeldWhy::Failed, reason: format!("{reason}; sent again next run with the same key") })
         } else {
             sent(&record, Outcome::Unconfirmed { reason })
         }
@@ -529,7 +546,7 @@ pub fn render(sent: &[Sent]) -> String {
                 "unconfirmed on {}: {reason}. If the copy is there, add its address to syndicated: (for a thread, the first post's: moss tracks only that one). If it is not, run moss deploy --retry-copies={}; any part of a thread that did get through is posted a second time",
                 s.channel, s.channel
             ),
-            Outcome::Held { reason } => format!("held for {}: {reason}", s.channel),
+            Outcome::Held { reason, .. } => format!("held for {}: {reason}", s.channel),
             Outcome::Deleted => format!("deleted from {}", s.channel),
             Outcome::CannotDelete => format!("{} cannot remove a copy; it stays", s.channel),
         };
@@ -739,10 +756,41 @@ mod tests {
 
         let rest = send_due(root, &manager, &articles, &opts(None, None, 1)).await;
         let got = outcomes(&rest);
-        let held = |s: &&(String, String, Outcome)| matches!(&s.2, Outcome::Held { reason } if reason.contains("limit of 1"));
+        let held = |s: &&(String, String, Outcome)| matches!(&s.2, Outcome::Held { why: HeldWhy::OverLimit, .. });
         assert_eq!(got.iter().filter(|s| matches!(s.2, Outcome::Posted { .. })).count(), 2, "one new copy per channel: {got:?}");
         assert_eq!(got.iter().filter(held).count(), 3, "{got:?}");
         assert_eq!(records.get("aaaa0001", "two").unwrap().remote.unwrap().id, "https://publish.example.net/notes/a/");
+    }
+
+    /// A plugin that throws is held for the next run, which its key makes
+    /// safe, and says so as a kind a person can be told, with the throw's own
+    /// words as the detail.
+    #[tokio::test]
+    async fn a_channel_whose_plugin_throws_is_held_as_failed_with_its_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        super::super::test_channel(root, "keyed", "{ publish_copy: async function () { throw new TypeError('no route'); } }");
+        let manifest = root.join(".moss/plugins/keyed/manifest.json");
+        let mut m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
+        m["contributes"]["channel"]["syndication"]["idempotent"] = true.into();
+        std::fs::write(&manifest, m.to_string()).unwrap();
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/a.md"), "Hello.\n").unwrap();
+        Records::in_vault(&crate::moss_paths::MossPaths::new(root)).save(&CopyRecord::due("aaaa0001", "keyed", "notes/a.md", "notes/a/")).unwrap();
+        let post: ArticleInfo = serde_json::from_value(serde_json::json!({
+            "source_path": "notes/a.md", "title": "", "content": "Hello.\n", "url_path": "notes/a/", "date": null,
+            "uid": "aaaa0001", "syndicate": ["keyed"]
+        }))
+        .unwrap();
+        let mut articles = ArticleMap::default();
+        articles.articles.insert(post.url_path.clone(), post);
+        let manager = crate::plugins::manager::ManagerCache::headless(crate::build::ports::reporter::discard_owned()).get_or_create(&root.to_string_lossy()).unwrap();
+        let emit = |_: &Sent| {};
+        let opts = SendOptions { site_url: "https://example.org", retry: &[], emit: &emit, only_source: None, only_channel: None, cap: PER_RUN, check_pages: false };
+        let sent = send_due(root, &manager, &articles, &opts).await;
+        let Some(Outcome::Held { why, reason }) = sent.last().map(|s| s.outcome.clone()) else { panic!("{sent:?}") };
+        assert_eq!(why, HeldWhy::Failed);
+        assert!(reason.contains("TypeError: no route") && !reason.contains("Exception"), "{reason}");
     }
 
     /// The author's latest word decides: a channel the post's `syndicate:` no
