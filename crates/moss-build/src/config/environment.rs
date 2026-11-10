@@ -39,6 +39,11 @@ impl HostingEnvironment {
         }
     }
 
+    /// The host sites are published under, as a person reads it: `mosspub.com`.
+    pub fn host(&self) -> &'static str {
+        self.site_suffix().trim_start_matches('.')
+    }
+
     pub fn beacon_host(&self) -> &'static str {
         match self {
             Self::Production => "api.mosspub.com",
