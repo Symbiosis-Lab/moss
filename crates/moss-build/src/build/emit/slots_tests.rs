@@ -262,6 +262,27 @@ fn a_sweep_after_a_style_save_keeps_this_builds_pages_and_removes_the_last_build
     assert!(site.objects().get_path(&old).is_none(), "the sweep kept a page the site has moved on from");
 }
 
+/// The memo is forgotten so a build's blobs are checked through the record, as in a
+/// new process; the rebuild then has nothing to add, so the record is not rewritten.
+#[test]
+fn the_slot_pass_remembers_the_blobs_it_checked_and_a_no_change_build_writes_nothing() {
+    let site = Site::new();
+    site.write("index.md", "# Home");
+    site.write("a.md", "# A");
+    site.build(CARRY);
+    let record = site.paths().cache_verified_slot_blobs();
+    crate::build::enhance::forget_slot_memo(&site.paths().staging_dir());
+    touch_apart();
+    site.build(CARRY);
+    let written = std::fs::metadata(&record).expect("the second pass checked blobs through the record").modified().unwrap();
+    crate::build::enhance::forget_slot_memo(&site.paths().staging_dir());
+    touch_apart();
+
+    site.build(CARRY);
+
+    assert_eq!(std::fs::metadata(&record).unwrap().modified().unwrap(), written, "a no-change build rewrote the record");
+}
+
 /// The memo is forgotten so the carried page's source can come only from the saved
 /// list, as it does in the first build after a relaunch.
 #[test]

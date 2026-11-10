@@ -99,7 +99,18 @@ impl ObjectStore {
     /// earlier save holds for a blob this pass did not check stays while the
     /// blob's file exists.
     pub(crate) fn save_verified_keeping_unchecked(&self) -> Result<(), String> {
+        if self.verified_nothing_new() {
+            return Ok(());
+        }
         self.save_verified_keeping(|key| Path::new(key).exists())
+    }
+
+    /// Whether every answer this pass holds came unchanged from what it remembered,
+    /// so a build that changed nothing writes nothing.
+    fn verified_nothing_new(&self) -> bool {
+        let Some(remembered) = self.remembered.as_deref() else { return false };
+        let index = self.verified.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        index.entries.iter().all(|(key, entry)| remembered.index.entries.get(key) == Some(entry))
     }
 
     fn save_verified_keeping(&self, keep: impl Fn(&str) -> bool) -> Result<(), String> {

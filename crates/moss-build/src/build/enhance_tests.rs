@@ -872,6 +872,35 @@ fn a_rebuild_in_the_same_process_reads_no_slot_record() {
     assert!(!cache_dir.path().join("transforms").exists(), "the second pass looked its record up again and rewrote it");
 }
 
+#[test]
+fn a_pass_in_a_new_process_reads_no_blob_an_earlier_pass_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let paths = crate::moss_paths::MossPaths::from_moss_dir(cache_dir.path().join(".moss"));
+    // No marker, so the page is never re-linked: a link moves the blob's change time,
+    // and this helper keeps no staged-link record to say the page is already in place.
+    std::fs::write(dir.path().join("index.html"), "<html><head></head><body>no markers</body></html>").unwrap();
+    let slots = ResolvedSlots::empty();
+    let stores = || {
+        let objects = crate::build::cache::ObjectStore::for_slot_pass(&paths);
+        let transforms = crate::build::cache::TransformCache::over(&paths, &objects);
+        (objects, transforms)
+    };
+    // The cold pass stores its blobs without checking them, so the second is the one
+    // that reads and verifies them.
+    for _ in 0..2 {
+        let (objects, transforms) = stores();
+        inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
+        objects.save_verified_keeping_unchecked().unwrap();
+    }
+
+    let (objects, transforms) = stores();
+    crate::build::cache::blob_residency::HASH_READS.with(|count| count.set(0));
+    inject_staged(dir.path(), &slots, &objects, &transforms).unwrap();
+
+    assert_eq!(crate::build::cache::blob_residency::HASH_READS.with(|count| count.get()), 0, "the second pass re-read a blob the first one verified");
+}
+
 /// A sweep of the cache marks what transform records name, and the page a slot
 /// record points at is named only inside the record's own JSON blob. Collecting
 /// it makes the next build inject and store every page again, which grows the

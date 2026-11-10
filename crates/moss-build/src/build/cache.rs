@@ -121,6 +121,12 @@ impl ObjectStore {
         Self::for_site(mp).remembering_verified(&mp.cache_verified_video_blobs())
     }
 
+    /// `mp`'s store for one slot pass, so a new process checks only the page and
+    /// summary blobs whose stat moved since an earlier pass read them.
+    pub(crate) fn for_slot_pass(mp: &crate::moss_paths::MossPaths) -> Self {
+        Self::for_site(mp).remembering_verified(&mp.cache_verified_slot_blobs())
+    }
+
     fn local_blob_path(&self, oid: &str) -> Option<PathBuf> {
         self.site.as_ref().map(|site| Self::blob_path_in(&site.cache_local_objects(), oid))
     }

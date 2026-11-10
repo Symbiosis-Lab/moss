@@ -39,11 +39,8 @@ pub fn apply_to_stage_and_manifest(
     // that is the first moment the stage holds post-injection bytes.
     carry_verification: Option<CarryVerification>,
 ) -> Result<(), BuildStopped> {
-    // Construction is free of I/O — ObjectStore/TransformCache are just path
-    // handles — so building fresh ones here (rather than threading them
-    // through from further up) matches the established per-call-site idiom.
-    let object_store = crate::build::cache::ObjectStore::for_site(paths);
-    let transform_cache = crate::build::cache::TransformCache::for_site(paths);
+    let object_store = crate::build::cache::ObjectStore::for_slot_pass(paths);
+    let transform_cache = crate::build::cache::TransformCache::over(paths, &object_store);
     // Emit the feature stylesheets the resolved slots link to, BEFORE the
     // injection that writes those <link> tags into pages. Slot resolution can
     // name a content-hashed file but has no manifest to write one; this is the
@@ -82,6 +79,9 @@ pub fn apply_to_stage_and_manifest(
         let _ = std::fs::write(&pass_record, &pass_key); // allow:raw_write per-machine cache record, never staging
     }
     staged.save();
+    if let Err(e) = object_store.save_verified_keeping_unchecked() {
+        log::info!("[slots] could not save the verified-blob record: {e}");
+    }
     crate::build::cache::page_sources::save(paths, pass.sources, carried.keys().map(String::as_str));
     #[cfg(test)]
     LAST_SCANNED.with(|n| n.set(pass.scanned));

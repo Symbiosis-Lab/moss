@@ -451,6 +451,12 @@ impl MossPaths {
         self.cache_dir().join("verified-blobs.json")
     }
 
+    /// `.moss/build.nosync/cache/verified-slot-blobs.json` — the same record for the
+    /// slot pass, which checks page and summary blobs the seal never asks about.
+    pub fn cache_verified_slot_blobs(&self) -> PathBuf {
+        self.cache_dir().join("verified-slot-blobs.json")
+    }
+
     /// `.moss/build.nosync/cache/verified-video-blobs.json` — the same record for
     /// the video passes. Its own file, because the seal's save drops every blob
     /// the seal did not check.
