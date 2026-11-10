@@ -374,9 +374,9 @@ const EN = {
   'appsettings.save_failed': "Couldn't save that setting. Please try again.",  // error toast when a toggle fails to persist (the toggle reverts)
 
   // First-publish flow (modal + target cards)
-  'publish.setup_title': "Publish {folder} to mosspub.com",
+  'publish.setup_title': "Publish {folder} to {host}",
   'publish.setup_title_domain': "Publish to {domain}",     // {domain} placeholder
-  'publish.subdomain_label_domain': "Your mosspub.com address, forwarding to {domain}", // {domain} placeholder
+  'publish.subdomain_label_domain': "Your {host} address, forwarding to {domain}",
   'publish.publish_btn': 'Publish',
   // Busy CTA label. SHORT, and distinct from `publish.loading` — which narrates
   // the same wait in the caption above the button; the CTA must not resize.
@@ -442,7 +442,7 @@ const EN = {
   'publish.setup_failed': "Couldn't set up your site: {error}",    // {error} placeholder
   // [first-publish morphing surface] — one form that grows, not four pages.
   'publish.email_caption': "We'll email you a sign-in link.",
-  'publish.send_link': "Sign in {folder} to mosspub.com",
+  'publish.send_link': "Sign in {folder} to {host}",
   'publish.awaiting_status': "Open the link in your email.",
   'publish.awaiting_hint': "Didn't get it?",
   'publish.awaiting_advice': "Check spam for a message from moss.",
@@ -2194,9 +2194,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'appsettings.usage_privacy_link': 'Datenschutzerklärung →',
     'appsettings.language_switch_failed': 'Sprache konnte nicht umgestellt werden. Versuche es bitte erneut.',
     'appsettings.save_failed': 'Diese Einstellung konnte nicht gespeichert werden. Versuche es bitte erneut.',
-    'publish.setup_title': "{folder} auf mosspub.com veröffentlichen",
+    'publish.setup_title': "{folder} auf {host} veröffentlichen",
     'publish.setup_title_domain': "Auf {domain} veröffentlichen",
-    'publish.subdomain_label_domain': "Deine Adresse auf mosspub.com, weitergeleitet zu {domain}",
+    'publish.subdomain_label_domain': "Deine Adresse auf {host}, weitergeleitet zu {domain}",
     'publish.publish_btn': 'Veröffentlichen',
     'publish.publishing_btn': 'Wird veröffentlicht …',
     'publish.publishing_as': 'Veröffentlichen als {email}',
@@ -2242,7 +2242,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish.live_toast': 'Deine Website ist online unter {url}',
     'publish.setup_failed': 'Deine Website konnte nicht eingerichtet werden: {error}',
     'publish.email_caption': "Wir schicken dir einen Anmeldelink per E-Mail.",
-    'publish.send_link': "{folder} bei mosspub.com anmelden",
+    'publish.send_link': "{folder} bei {host} anmelden",
     'publish.awaiting_status': "Öffne den Link in deiner E-Mail.",
     'publish.awaiting_hint': 'Nichts angekommen?',
     'publish.awaiting_advice': "Sieh im Spam-Ordner nach einer Nachricht von moss.",
@@ -3780,9 +3780,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'appsettings.language_switch_failed': '切换语言失败，请重试。',
     'appsettings.save_failed': '设置保存失败，请重试。',
 
-    'publish.setup_title': "将 {folder} 发布到 mosspub.com",
+    'publish.setup_title': "将 {folder} 发布到 {host}",
     'publish.setup_title_domain': "发布到 {domain}",
-    'publish.subdomain_label_domain': "你在 mosspub.com 上的地址，转到 {domain}",
+    'publish.subdomain_label_domain': "你在 {host} 上的地址，转到 {domain}",
     'publish.publish_btn': '发布',
     'publish.publishing_btn': '发布中…',
     'publish.publishing_as': '以 {email} 发布',
@@ -3828,7 +3828,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish.live_toast': '你的站点已上线：{url}',
     'publish.setup_failed': '无法设置你的站点：{error}',
     'publish.email_caption': "我们会通过邮件发送登录链接。",
-    'publish.send_link': "将 {folder} 登录到 mosspub.com",
+    'publish.send_link': "将 {folder} 登录到 {host}",
     'publish.awaiting_status': "请打开邮件中的链接。",
     'publish.awaiting_hint': '没收到？',
     'publish.awaiting_advice': "请在垃圾邮件中查找来自 moss 的邮件。",
@@ -5425,9 +5425,9 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'appsettings.language_switch_failed': '切換語言失敗，請重試。',
     'appsettings.save_failed': '設定儲存失敗，請重試。',
 
-    'publish.setup_title': "將 {folder} 發佈到 mosspub.com",
+    'publish.setup_title': "將 {folder} 發佈到 {host}",
     'publish.setup_title_domain': "發佈到 {domain}",
-    'publish.subdomain_label_domain': "你在 mosspub.com 上的地址，轉到 {domain}",
+    'publish.subdomain_label_domain': "你在 {host} 上的地址，轉到 {domain}",
     'publish.publish_btn': '發佈',
     'publish.publishing_btn': '發佈中…',
     'publish.publishing_as': '以 {email} 發佈',
@@ -5473,7 +5473,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'publish.live_toast': '你的網站已上線：{url}',
     'publish.setup_failed': '無法設定你的網站：{error}',
     'publish.email_caption': "我們會透過電子郵件傳送登入連結。",
-    'publish.send_link': "將 {folder} 登入 mosspub.com",
+    'publish.send_link': "將 {folder} 登入 {host}",
     'publish.awaiting_status': "請開啟電子郵件中的連結。",
     'publish.awaiting_hint': '沒收到？',
     'publish.awaiting_advice': "請在垃圾郵件中尋找來自 moss 的郵件。",
