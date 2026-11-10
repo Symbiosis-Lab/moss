@@ -707,12 +707,17 @@ pub enum FieldEdit {
     /// Remove `key`, its value lines and the comment lines directly above it.
     /// Absent keys are fine.
     Remove { key: String },
+    /// Set `key` inside the mapping `parent`, or remove it with `None`, leaving
+    /// the mapping's other lines and their comments as written. An absent
+    /// `parent` is added; removing its last key removes it.
+    SetChild { parent: String, key: String, value: Option<serde_yaml::Value> },
 }
 
 impl FieldEdit {
     pub fn key(&self) -> &str {
         match self {
             FieldEdit::Set { key, .. } | FieldEdit::Remove { key } => key,
+            FieldEdit::SetChild { parent, .. } => parent,
         }
     }
 }
@@ -874,6 +879,82 @@ fn entry_text(key: &str, value: &serde_yaml::Value, newline: &str) -> Result<Str
     }
 }
 
+/// `key: value` as its lines, each indented `indent` spaces.
+fn child_text(key: &str, value: &serde_yaml::Value, indent: usize, newline: &str) -> Result<String, String> {
+    let pad = " ".repeat(indent);
+    Ok(entry_text(key, value, newline)?.split_inclusive('\n').map(|line| format!("{pad}{line}")).collect())
+}
+
+/// A new mapping `parent` holding one key.
+fn new_parent_text(parent: &str, key: &str, value: &serde_yaml::Value, newline: &str) -> Result<String, String> {
+    let name = scalar_text(&serde_yaml::Value::String(parent.to_string()))?;
+    Ok(format!("{name}:{newline}{}", child_text(key, value, 2, newline)?))
+}
+
+/// The splices for one [`FieldEdit::SetChild`], recording the result in
+/// `expected`. `entry` is `parent` as written; a new parent goes at `end`.
+#[allow(clippy::too_many_arguments)]
+fn child_splices(
+    content: &str,
+    entry: Option<&Entry>,
+    end: usize,
+    parent: &str,
+    key: &str,
+    value: Option<&serde_yaml::Value>,
+    newline: &str,
+    expected: &mut HashMap<String, serde_yaml::Value>,
+) -> Result<Vec<(Range<usize>, String)>, String> {
+    use serde_yaml::{Mapping, Value};
+    let mut map = match expected.get(parent) {
+        None => Mapping::new(),
+        Some(Value::Mapping(map)) => map.clone(),
+        Some(_) => return Err(format!("`{parent}` does not hold keys")),
+    };
+    let child = Value::String(key.to_string());
+    let unchanged = match value {
+        Some(v) => map.get(&child).is_some_and(|old| same_value(old, v)),
+        None => !map.contains_key(&child),
+    };
+    if unchanged {
+        return Ok(Vec::new());
+    }
+    match value {
+        Some(v) => map.insert(child, v.clone()),
+        None => map.remove(&child),
+    };
+    let Some(entry) = entry else {
+        let value = value.ok_or("nothing to remove")?;
+        expected.insert(parent.to_string(), Value::Mapping(map));
+        return Ok(vec![(end..end, new_parent_text(parent, key, value, newline)?)]);
+    };
+    if map.is_empty() {
+        expected.remove(parent);
+        return Ok(vec![(entry.comment_from..entry.lines.end, String::new())]);
+    }
+    expected.insert(parent.to_string(), Value::Mapping(map.clone()));
+    #[allow(clippy::string_slice)]
+    // `lines.start` is a line boundary.
+    let first_line_end = entry.lines.start + content[entry.lines.start..].find('\n').map_or(0, |at| at + 1);
+    if first_line_end >= entry.lines.end {
+        // Written inline: there are no comments to keep, so it becomes a block.
+        let mut text = format!("{}:{newline}", scalar_text(&Value::String(parent.to_string()))?);
+        for (k, v) in &map {
+            let k = k.as_str().ok_or("only text keys can be written")?;
+            text.push_str(&child_text(k, v, 2, newline)?);
+        }
+        return Ok(vec![(entry.lines.clone(), text)]);
+    }
+    let children = entries(content, first_line_end..entry.lines.end);
+    let indent = children.first().map_or(2, |c| c.key_span.start - c.lines.start);
+    let found = children.iter().find(|c| c.key == key);
+    Ok(vec![match (found, value) {
+        (Some(c), Some(v)) => (c.lines.clone(), child_text(key, v, indent, newline)?),
+        (Some(c), None) => (c.comment_from..c.lines.end, String::new()),
+        (None, Some(v)) => (entry.lines.end..entry.lines.end, child_text(key, v, indent, newline)?),
+        (None, None) => return Ok(Vec::new()),
+    }])
+}
+
 /// `value` as YAML scalar text: plain when YAML reads it back as the same
 /// value, else double-quoted. Stray control characters are dropped, as
 /// [`serialize`] drops them.
@@ -932,9 +1013,9 @@ pub fn set_fields(content: &str, fields: &HashMap<String, serde_yaml::Value>) ->
 /// other entry being set is rewritten as its own lines.
 ///
 /// Refuses, with the reason, rather than write a result it cannot vouch for:
-/// moss's simplified dialect, a key written twice, a value that is a map, and
-/// any result whose fields do not read back as exactly the old ones with the
-/// edits applied.
+/// moss's simplified dialect, a key written twice, a [`FieldEdit::Set`] value
+/// that is a map ([`FieldEdit::SetChild`] edits inside one), and any result
+/// whose fields do not read back as exactly the old ones with the edits applied.
 pub fn edit_fields(content: &str, edits: &[FieldEdit]) -> Result<String, String> {
     let mut seen = std::collections::HashSet::new();
     if let Some(dup) = edits.iter().map(FieldEdit::key).find(|k| !seen.insert(*k)) {
@@ -947,10 +1028,15 @@ pub fn edit_fields(content: &str, edits: &[FieldEdit]) -> Result<String, String>
     };
 
     let Some(span) = frontmatter_span(content) else {
-        let lines = appended_text(edits.iter().filter_map(|e| match e {
+        let mut lines = appended_text(edits.iter().filter_map(|e| match e {
             FieldEdit::Set { key, value } => Some((key, value)),
-            FieldEdit::Remove { .. } => None,
+            FieldEdit::Remove { .. } | FieldEdit::SetChild { .. } => None,
         }).collect())?;
+        for edit in edits {
+            if let FieldEdit::SetChild { parent, key, value: Some(value) } = edit {
+                lines.push_str(&new_parent_text(parent, key, value, newline)?);
+            }
+        }
         if lines.is_empty() {
             return Ok(content.to_string());
         }
@@ -980,6 +1066,9 @@ pub fn edit_fields(content: &str, edits: &[FieldEdit]) -> Result<String, String>
     for edit in edits {
         let entry = found.iter().find(|e| e.key == edit.key());
         match (edit, entry) {
+            (FieldEdit::SetChild { parent, key, value }, entry) => {
+                splices.extend(child_splices(content, entry, span.fields.end, parent, key, value.as_ref(), newline, &mut expected)?);
+            }
             (FieldEdit::Remove { .. }, None) => {}
             (FieldEdit::Remove { key }, Some(entry)) => {
                 splices.push((entry.comment_from..entry.lines.end, String::new()));

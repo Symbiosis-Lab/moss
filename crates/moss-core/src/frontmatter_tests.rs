@@ -746,6 +746,61 @@ mod edit_fields_tests {
     /// serializer would choose.
     const PAGE: &str = "---\n# about this photo\ntitle: \"Harbour: Dusk\"\nweight: 22\ntags:\n  - road\n  - mountain\nplace: 'Port Ellen, Islay'  # town\nnote: |\n  first\n  second\npier_no: \"4 of 9\"\n---\n\n::: {.eyebrow}\nPier 4\n:::\n";
 
+    fn set_child(value: Option<&[&str]>) -> FieldEdit {
+        FieldEdit::SetChild {
+            parent: "cascade".into(),
+            key: "syndicate".into(),
+            value: value.map(|v| Value::Sequence(v.iter().map(|s| Value::String(s.to_string())).collect())),
+        }
+    }
+
+    #[test]
+    fn a_child_is_added_and_its_siblings_and_comments_stay_as_written() {
+        let page = "---\ntitle: A\ncascade:\n  # the zone\n  timezone: \"Asia/Tokyo\"  # kept\n  nav: false\n---\nBody\n";
+        assert_eq!(
+            edit_fields(page, &[set_child(Some(&["bluesky"]))]).unwrap(),
+            "---\ntitle: A\ncascade:\n  # the zone\n  timezone: \"Asia/Tokyo\"  # kept\n  nav: false\n  syndicate:\n    - bluesky\n---\nBody\n"
+        );
+    }
+
+    #[test]
+    fn a_child_is_replaced_at_the_mappings_own_indent() {
+        let page = "---\ncascade:\n    syndicate:\n      - email\n    nav: false\ntitle: A\n---\n";
+        assert_eq!(
+            edit_fields(page, &[set_child(Some(&["email", "bluesky"]))]).unwrap(),
+            "---\ncascade:\n    syndicate:\n      - email\n      - bluesky\n    nav: false\ntitle: A\n---\n"
+        );
+    }
+
+    #[test]
+    fn removing_a_child_keeps_the_others_and_removing_the_last_removes_the_parent() {
+        let two = "---\ncascade:\n  nav: false\n  syndicate:\n    - email\ntitle: A\n---\n";
+        assert_eq!(edit_fields(two, &[set_child(None)]).unwrap(), "---\ncascade:\n  nav: false\ntitle: A\n---\n");
+        let one = "---\n# defaults\ncascade:\n  syndicate:\n    - email\ntitle: A\n---\n";
+        assert_eq!(edit_fields(one, &[set_child(None)]).unwrap(), "---\ntitle: A\n---\n");
+    }
+
+    #[test]
+    fn an_absent_parent_is_added_and_an_inline_one_becomes_a_block() {
+        assert_eq!(
+            edit_fields("---\ntitle: A\n---\n", &[set_child(Some(&["bluesky"]))]).unwrap(),
+            "---\ntitle: A\ncascade:\n  syndicate:\n    - bluesky\n---\n"
+        );
+        assert_eq!(
+            edit_fields("Body\n", &[set_child(Some(&["bluesky"]))]).unwrap(),
+            "---\ncascade:\n  syndicate:\n    - bluesky\n---\nBody\n"
+        );
+        let out = edit_fields("---\ncascade: {nav: false}\ntitle: A\n---\n", &[set_child(Some(&["bluesky"]))]).unwrap();
+        assert_eq!(out, "---\ncascade:\n  nav: false\n  syndicate:\n    - bluesky\ntitle: A\n---\n");
+    }
+
+    #[test]
+    fn a_child_edit_on_a_field_that_holds_no_keys_is_refused_and_an_unchanged_one_writes_nothing() {
+        assert!(edit_fields("---\ncascade: x\n---\n", &[set_child(Some(&["bluesky"]))]).is_err());
+        let page = "---\ncascade:\n  syndicate: [bluesky]  # flow stays\n---\n";
+        assert_eq!(edit_fields(page, &[set_child(Some(&["bluesky"]))]).unwrap(), page);
+    }
+
     #[test]
     fn a_new_key_is_one_line_at_the_end_and_nothing_else_moves() {
         let out = edit_fields(PAGE, &[set("stage", "Pier 4")]).unwrap();

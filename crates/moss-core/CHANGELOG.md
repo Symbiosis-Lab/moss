@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `FieldEdit::SetChild` sets or removes one key inside a frontmatter mapping such as `cascade:`, leaving the mapping's other lines and comments as written.
+
 ## [0.23.1] - 2026-11-09
 
 ### Added
