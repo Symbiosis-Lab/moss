@@ -53,6 +53,16 @@ pub struct PageSource {
     /// exist while the provider was still handing it over.
     #[serde(default)]
     pub source_pending: bool,
+    /// False when whether this URL has a source is not known yet: the build's
+    /// page map is missing or unreadable and the disk found none, and only the
+    /// map tells a generated page from a source under a lossy slug. The next
+    /// build settles it. `source_path: None` is a claim only while this is true.
+    #[serde(default = "known")]
+    pub source_known: bool,
+}
+
+fn known() -> bool {
+    true
 }
 
 /// Inner logic for `resolve_url_for_file`, extracted for testability.

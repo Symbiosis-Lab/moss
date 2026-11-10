@@ -1795,7 +1795,14 @@ takeover?: Takeover | null;
  * moss" — and conflating them is what told a user their home page did not
  * exist while the provider was still handing it over.
  */
-source_pending?: boolean }
+source_pending?: boolean; 
+/**
+ * False when whether this URL has a source is not known yet: the build's
+ * page map is missing or unreadable and the disk found none, and only the
+ * map tells a generated page from a source under a lossy slug. The next
+ * build settles it. `source_path: None` is a claim only while this is true.
+ */
+source_known?: boolean }
 
 export type PageSourceArgs = { urlPath: string }
 

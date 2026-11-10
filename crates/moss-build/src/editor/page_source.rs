@@ -22,13 +22,20 @@ use crate::editor::resolve::takeover::{takeover_for, TakeoverKind};
 ///
 /// A URL nothing backs resolves to `source_path: None`, with the takeover the
 /// author could create to claim it; that is a normal answer, not an error.
+/// Without the build's map (none yet, during a first build, or one this moss
+/// cannot read) and with no source on disk for a page below the root, the
+/// answer is `source_known: false`: only the map tells a generated page from
+/// one whose source has a lossy slug, so "nothing backs it" is not known.
 pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSource, String> {
     let moss_dir = folder_path.join(".moss");
-    // An unreadable map degrades to an empty one: the map is rewritten on every
-    // build, and a torn read must not skip the disk fallback below, which is
-    // what keeps the editor from offering to create a home that already exists.
+    // A missing or unreadable map degrades to an empty one, so the disk
+    // fallbacks below still run: they keep the editor from offering to create
+    // a home that already exists.
+    let mut unknown = (!crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()).article_map().exists())
+        .then(|| "no build has finished yet".to_string());
     let map = ArticleMap::load(&moss_dir).unwrap_or_else(|e| {
         log::debug!("[resolve_page_source] article-map unreadable ({e}); using source-truth fallback");
+        unknown = Some(e);
         ArticleMap::default()
     });
     let normalized = url_path.trim_start_matches('/');
@@ -51,6 +58,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
                 syndicate: info.syndicate.clone(),
                 takeover: None,
                 source_pending: false,
+                source_known: true,
             });
         }
     }
@@ -64,6 +72,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
             syndicate: None,
             takeover: None,
             source_pending: false,
+            source_known: true,
         });
     }
 
@@ -99,14 +108,19 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         }
         other => other,
     };
+    let not_known = unknown.filter(|_| source_path.is_none() && !normalized.is_empty());
+    if let Some(why) = &not_known {
+        log::debug!("[resolve_page_source] whether '{url_path}' has a source is not known yet: {why}");
+    }
     Ok(PageSource {
         source_path,
         is_dir: normalized.is_empty(),
         is_article: false,
         syndicated: vec![],
         syndicate: None,
-        takeover,
+        takeover: takeover.filter(|_| not_known.is_none()),
         source_pending: false,
+        source_known: not_known.is_none(),
     })
 }
 
@@ -265,9 +279,33 @@ mod tests {
     #[test]
     fn an_unreadable_map_still_finds_the_home_on_disk() {
         let dir = vault(&[], &[], &["index.md"]);
-        std::fs::write(dir.path().join(".moss/build.nosync/article-map.json"), "{ torn").unwrap();
+        std::fs::write(dir.path().join(".moss/build.nosync/article-map.json"), "{ \"articles\": 7 }").unwrap();
         let r = resolve_page_source("", dir.path()).unwrap();
         assert!(r.source_path.unwrap().ends_with("index.md"));
+    }
+
+    /// Without a map this moss can read (another version's format, an IO
+    /// error, or none yet during a first build), a page nothing on disk backs
+    /// may still have a source under a lossy slug, so it is unknown, never
+    /// "generated". What the disk alone settles still resolves: a source at
+    /// the URL, and a real folder's missing home.
+    #[test]
+    fn without_a_readable_map_a_page_without_a_source_on_disk_is_unknown() {
+        let dir = vault(&[("posts/hello-world/", "posts/Hello, World!.md")], &[], &["posts/Hello, World!.md", "notes/a.md"]);
+        assert!(resolve_page_source("posts/hello-world/", dir.path()).unwrap().source_path.is_some(), "the map knows it");
+        let generated = resolve_page_source("rss/", dir.path()).unwrap();
+        assert!(generated.source_known && generated.source_path.is_none() && generated.takeover.is_none(), "a readable map settles a generated page");
+
+        let map = dir.path().join(".moss/build.nosync/article-map.json");
+        for state in ["a map in a format this moss cannot parse", "no map yet"] {
+            if state == "no map yet" { std::fs::remove_file(&map).unwrap() } else { std::fs::write(&map, "{ \"articles\": 7 }").unwrap() }
+            assert!(!resolve_page_source("posts/hello-world/", dir.path()).unwrap().source_known, "{state}: a lossy slug the disk cannot find");
+            let rss = resolve_page_source("rss/", dir.path()).unwrap();
+            assert!(!rss.source_known && rss.takeover.is_none(), "{state}");
+            assert!(resolve_page_source("notes/a/", dir.path()).unwrap().source_path.is_some(), "{state}: a source at the URL");
+            let folder = resolve_page_source("notes/", dir.path()).unwrap();
+            assert!(folder.source_known && (folder.source_path.is_some() || folder.takeover.is_some()), "{state}: a real folder, settled by the disk");
+        }
     }
 
     /// The takeover branch: a URL no page backs, and what the editor offers.
