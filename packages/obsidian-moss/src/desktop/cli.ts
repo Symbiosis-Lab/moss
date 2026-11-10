@@ -180,6 +180,39 @@ export function publishInAppUrl(folder: string): string {
   return `moss://deploy?path=${encodeURIComponent(folder)}`;
 }
 
+/**
+ * The notice shown as the folder opens in the moss app, where it is published.
+ * `address` is what `moss root --json` reports (see `parseRootJson`).
+ */
+export function publishNotice(folder: string, address: SiteAddress): string {
+  const to = address ? ` to ${address}` : address === null ? " to mosspub.com" : "";
+  return `Opening ${folder} in moss to publish${to}: every note except draft: true.`;
+}
+
+/** A string once the site is live, null before its first publish, undefined when the CLI cannot say. */
+export type SiteAddress = string | null | undefined;
+
+/**
+ * `moss root --json`: the site folder that owns a path (null when none does or
+ * the run failed) and its address. A CLI too old to print the address leaves
+ * it undefined.
+ */
+export function parseRootJson(stdout: string): { root: string | null; address: SiteAddress } {
+  try {
+    const o: unknown = JSON.parse(stdout);
+    if (o && typeof o === "object") {
+      const { root, address } = o as Record<string, unknown>;
+      return {
+        root: typeof root === "string" ? root : null,
+        address: address === null || typeof address === "string" ? address : undefined,
+      };
+    }
+  } catch {
+    // A failed run says nothing about the site.
+  }
+  return { root: null, address: undefined };
+}
+
 /** Substring that identifies a real moss preview server's health body. */
 export const MOSS_HEALTH_MARKER = '"moss-preview-server"';
 

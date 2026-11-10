@@ -57,9 +57,9 @@ describe("moss plugin", () => {
     const modal = browser.$(".modal");
     await modal.waitForExist({ timeout: 10000 });
     const text = await modal.getText();
-    expect(text).toContain("moss has not built this vault before");
-    expect(text).toContain("uid: line");
+    expect(text).toMatch(/Building .+ will create a \.moss folder in it, and change no note\./);
     expect(text).toContain("create a .moss folder");
+    expect(text).not.toContain("uid");
     await browser.$(".modal button:not(.mod-cta)").click();
     await browser.pause(1000);
     expect(await browser.$("iframe.moss-preview-iframe").isExisting()).toBe(false);

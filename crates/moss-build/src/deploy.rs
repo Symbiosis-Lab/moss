@@ -180,12 +180,23 @@ pub fn view_site_url(
     site_id: &str,
     env: crate::config::environment::HostingEnvironment,
 ) -> String {
-    let custom = if env == crate::config::environment::HostingEnvironment::Production {
-        let config = crate::build::site_config::get_domain_config(folder_path).unwrap_or_default();
-        crate::config::deployment::live_custom_domain_url(&config)
+    let config = if env == crate::config::environment::HostingEnvironment::Production {
+        crate::build::site_config::get_domain_config(folder_path).unwrap_or_default()
     } else {
-        None
+        Default::default()
     };
+    view_site_url_for(&config, site_id, env)
+}
+
+/// [`view_site_url`] for a caller already holding the folder's domain config.
+pub fn view_site_url_for(
+    config: &crate::config::deployment::DomainDeploymentConfig,
+    site_id: &str,
+    env: crate::config::environment::HostingEnvironment,
+) -> String {
+    let custom = (env == crate::config::environment::HostingEnvironment::Production)
+        .then(|| crate::config::deployment::live_custom_domain_url(config))
+        .flatten();
     custom.unwrap_or_else(|| format!("https://{}{}", site_id, env.site_suffix()))
 }
 

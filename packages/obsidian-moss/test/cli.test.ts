@@ -6,10 +6,12 @@ import {
   findMossBinary,
   parseBuildFailure,
   parseCliError,
+  parseRootJson,
   parseProblemCount,
   parseServerEvents,
   parseServerUrl,
   publishInAppUrl,
+  publishNotice,
   splitFlags,
   type DetectEnv,
 } from "../src/desktop/cli";
@@ -182,5 +184,35 @@ describe("publishInAppUrl", () => {
 
   it("keeps characters that would end the query intact", () => {
     expect(publishInAppUrl("/a/b&c?d#e")).toBe("moss://deploy?path=%2Fa%2Fb%26c%3Fd%23e");
+  });
+});
+
+describe("publishNotice", () => {
+  it("names the address a live site publishes to", () => {
+    expect(publishNotice("Garden", "garden.example")).toBe("Opening Garden in moss to publish to garden.example: every note except draft: true.");
+  });
+
+  it("names mosspub.com before the first publish", () => {
+    expect(publishNotice("Garden", null)).toBe("Opening Garden in moss to publish to mosspub.com: every note except draft: true.");
+  });
+
+  it("names only the folder when the CLI cannot say where it goes", () => {
+    expect(publishNotice("Garden", undefined)).toBe("Opening Garden in moss to publish: every note except draft: true.");
+  });
+});
+
+describe("parseRootJson", () => {
+  it("reads the site and its address", () => {
+    expect(parseRootJson('{"address":"garden.example","root":"/v/Garden"}')).toEqual({ root: "/v/Garden", address: "garden.example" });
+  });
+
+  it("keeps a null address apart from one an older CLI does not print", () => {
+    expect(parseRootJson('{"address":null,"root":null}')).toEqual({ root: null, address: null });
+    expect(parseRootJson('{"root":"/v/Garden"}')).toEqual({ root: "/v/Garden", address: undefined });
+  });
+
+  it("reads a failed run as no site and an unknown address", () => {
+    expect(parseRootJson("")).toEqual({ root: null, address: undefined });
+    expect(parseRootJson('{"root":3}')).toEqual({ root: null, address: undefined });
   });
 });

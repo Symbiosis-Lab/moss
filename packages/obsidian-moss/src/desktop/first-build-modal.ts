@@ -1,11 +1,12 @@
 import { App, Modal, Setting } from "obsidian";
 
-/** Asks before a first build changes a vault. Closing it any other way than Continue cancels. */
+/** Asks before a first build changes a folder. Closing it any other way than Continue cancels. */
 export class FirstBuildModal extends Modal {
   private decided = false;
 
   constructor(
     app: App,
+    private title: string,
     private lines: string[],
     private done: (ok: boolean) => void,
   ) {
@@ -13,7 +14,7 @@ export class FirstBuildModal extends Modal {
   }
 
   onOpen(): void {
-    this.titleEl.setText("Build this vault with moss?");
+    this.titleEl.setText(this.title);
     for (const line of this.lines) this.contentEl.createEl("p", { text: line });
     new Setting(this.contentEl)
       .addButton((b) => b.setButtonText("Cancel").onClick(() => this.finish(false)))

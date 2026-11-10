@@ -39,7 +39,8 @@ export interface RunCallbacks {
  */
 export class MossProcess {
   private child: ChildProcess | null = null;
-  private stopRequested = false;
+  /** Children stop() ended: their exit is a clean shutdown, whatever code they report. */
+  private stopped = new WeakSet<object>();
   private stderrBuf = "";
   private lastServerUrl: string | null = null;
   private standbyAnnounced = false;
@@ -59,7 +60,6 @@ export class MossProcess {
 
   start(binary: string, args: string[], cwd: string, callbacks: RunCallbacks): void {
     if (this.child) throw new Error("MossProcess already running");
-    this.stopRequested = false;
     this.stderrBuf = "";
     this.lastServerUrl = null;
     this.standbyAnnounced = false;
@@ -68,8 +68,12 @@ export class MossProcess {
 
     const child = this.spawnFn(binary, args, { cwd });
     this.child = child;
+    // A stopped child can still print and exit after the next start(); only
+    // the current one may change this process's state.
+    const current = () => this.child === child;
 
     const onChunk = (data: unknown) => {
+      if (!current()) return;
       const text = String(data);
       callbacks.onOutput?.(text);
       this.append(text);
@@ -81,15 +85,15 @@ export class MossProcess {
     child.stdout?.on("data", onChunk);
 
     child.on("error", (err: Error) => {
-      this.child = null;
-      callbacks.onError?.(`Failed to start moss: ${err.message}`);
+      if (current()) this.child = null;
+      if (!this.stopped.has(child)) callbacks.onError?.(`Failed to start moss: ${err.message}`);
       callbacks.onExit?.(null);
     });
     child.on("exit", (code: number | null) => {
-      this.child = null;
+      if (current()) this.child = null;
       // A SIGTERM'd process reports 143 (or a signal, code null); after a
       // deliberate stop() neither is an error, so report a clean shutdown.
-      callbacks.onExit?.(this.stopRequested ? null : code);
+      callbacks.onExit?.(this.stopped.has(child) ? null : code);
     });
   }
 
@@ -97,7 +101,7 @@ export class MossProcess {
     if (!this.child) return;
     const child = this.child;
     this.child = null;
-    this.stopRequested = true;
+    this.stopped.add(child);
     child.kill("SIGTERM");
   }
 

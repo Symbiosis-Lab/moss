@@ -107,6 +107,29 @@ describe("MossProcess", () => {
     expect(onExit).toHaveBeenCalledWith(null);
   });
 
+  it("a stopped child's late exit and output leave the next run alone", () => {
+    const first = new FakeChild();
+    first.kill = function (this: FakeChild, signal: string) {
+      this.killed = signal;
+      return true;
+    } as typeof first.kill;
+    const second = new FakeChild();
+    const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const proc = new MossProcess(spawn as unknown as SpawnFn);
+    const firstExit = vi.fn();
+    const onServerReady = vi.fn();
+    proc.start("/bin/moss", [], "/a", { onExit: firstExit });
+    proc.stop();
+    proc.start("/bin/moss", [], "/b", { onServerReady });
+    first.stderr.emit("data", "🌐 Preview server ready! Access at http://localhost:8081\n");
+    first.emit("exit", 143);
+    expect(firstExit).toHaveBeenCalledWith(null);
+    expect(onServerReady).not.toHaveBeenCalled();
+    expect(proc.running).toBe(true);
+    proc.stop();
+    expect(second.killed).toBe("SIGTERM");
+  });
+
   it("refuses a second start while running", () => {
     const { proc } = makeProcess();
     proc.start("/bin/moss", [], "/v", {});
