@@ -221,3 +221,239 @@ fn clearing_a_folder_under_one_that_names_channels_writes_false() {
     assert!(page_of(&dir, "notes/index.md").contains("syndicate: false"), "removing the key would hand the folder the list above");
     assert_eq!(read_folder(dir.path(), "notes/", "notes/index.md"), Some(vec![]));
 }
+
+
+const COPY_URL: &str = "https://bsky.app/profile/a/post/1";
+const POST: &str = "---\ntitle: A\nuid: bb22bb22\n---\n\nBody stays.\n";
+
+fn adoption_site() -> tempfile::TempDir {
+    let dir = site(POST);
+    super::super::test_channel(dir.path(), "bluesky", "{}");
+    let manifest = dir.path().join(".moss/plugins/bluesky/manifest.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    value["domains"] = serde_json::json!(["bsky.app", "social.example"]);
+    std::fs::write(manifest, value.to_string()).unwrap();
+    dir
+}
+
+fn copies(dir: &tempfile::TempDir) -> Records {
+    Records::in_vault(&MossPaths::new(dir.path()))
+}
+
+fn record_path(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    MossPaths::new(dir.path()).deploy_dir().join("copies").join(format!("{UID}.bluesky.json"))
+}
+
+fn seed_copy(dir: &tempfile::TempDir, state: State) -> CopyRecord {
+    use super::super::record::{Handoff, RemoteRef};
+    let mut r = CopyRecord::due(UID, "bluesky", SOURCE, URL);
+    r.state = state;
+    r.reason = Some("waiting".into());
+    r.handoff = Some(Handoff { text: "copy".into(), open_url: None, id: None });
+    r.remote = Some(RemoteRef { id: "original-id".into(), url: COPY_URL.into() });
+    copies(dir).save(&r).unwrap();
+    r
+}
+
+fn assert_listed_once(dir: &tempfile::TempDir, source: &str, url: &str) {
+    let content = page_of(dir, source);
+    let front = frontmatter::parse(&content).frontmatter;
+    let list = front["syndicated"].as_sequence().unwrap();
+    assert_eq!(list.iter().filter(|v| v.as_str() == Some(url)).count(), 1);
+    assert!(content.contains("uid: bb22bb22"));
+    assert!(content.ends_with("\n\nBody stays.\n"));
+}
+
+#[test]
+fn adopt_checks_channel_then_host_before_the_post_without_mutation() {
+    let dir = adoption_site();
+    seed_copy(&dir, State::Due);
+    let before = std::fs::read(record_path(&dir)).unwrap();
+    assert_eq!(adopt(dir.path(), "absent.md", "missing", "invalid"), Err(AdoptRefusal::UnknownChannel));
+    for address in ["https://elsewhere.example/post", "https://bsky.app.evil.example/post", "invalid"] {
+        assert_eq!(adopt(dir.path(), "absent.md", "bluesky", address), Err(AdoptRefusal::OffHost { expected: "bsky.app".into() }));
+    }
+    assert_eq!(page_of(&dir, SOURCE), POST);
+    assert_eq!(std::fs::read(record_path(&dir)).unwrap(), before);
+}
+
+#[test]
+fn adopt_requires_a_built_source_and_built_uid() {
+    let dir = adoption_site();
+    assert_eq!(adopt(dir.path(), "absent.md", "bluesky", COPY_URL), Err(AdoptRefusal::NotAPost));
+    let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+    map.articles.get_mut(URL).unwrap().uid = None;
+    map.save(&dir.path().join(".moss")).unwrap();
+    assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Err(AdoptRefusal::NotAPost));
+    assert_eq!(page_of(&dir, SOURCE), POST);
+    assert!(!copies(&dir).exists(UID, "bluesky"));
+    assert!(!copies(&dir).exists("bb22bb22", "bluesky"));
+}
+
+#[test]
+fn adopt_without_a_record_only_writes_the_page_even_while_a_turn_is_held() {
+    for held in [false, true] {
+        let dir = adoption_site();
+        let records = copies(&dir);
+        let _turn = held.then(|| records.turn().unwrap());
+        assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Ok(Adopted { write_back: None }));
+        assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Ok(Adopted { write_back: None }));
+        assert_listed_once(&dir, SOURCE, COPY_URL);
+        assert!(!records.exists(UID, "bluesky"));
+        assert!(!records.exists("bb22bb22", "bluesky"));
+        if !held {
+            assert!(!MossPaths::new(dir.path()).deploy_dir().join("copies.lock").exists());
+        }
+    }
+}
+
+#[test]
+fn adopt_accepts_any_declared_domain() {
+    let dir = adoption_site();
+    let url = "https://social.example/post/1";
+    adopt(dir.path(), SOURCE, "bluesky", url).unwrap();
+    assert_listed_once(&dir, SOURCE, url);
+    assert!(!copies(&dir).exists(UID, "bluesky"));
+}
+
+#[test]
+fn adopt_existing_record_needs_a_turn_before_reading() {
+    let dir = adoption_site();
+    seed_copy(&dir, State::Due);
+    let records = copies(&dir);
+    let _turn = records.turn().unwrap();
+    for bytes in [std::fs::read(record_path(&dir)).unwrap(), b"not json".to_vec()] {
+        std::fs::write(record_path(&dir), &bytes).unwrap();
+        assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Err(AdoptRefusal::Busy));
+        assert_eq!(page_of(&dir, SOURCE), POST);
+        assert_eq!(std::fs::read(record_path(&dir)).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn adopt_refuses_an_unreadable_record_without_touching_it_or_the_page() {
+    let dir = adoption_site();
+    seed_copy(&dir, State::Due);
+    std::fs::write(record_path(&dir), "not json").unwrap();
+    assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Err(AdoptRefusal::Unreadable));
+    assert_eq!(page_of(&dir, SOURCE), POST);
+    assert_eq!(std::fs::read_to_string(record_path(&dir)).unwrap(), "not json");
+}
+
+#[test]
+fn adopt_posted_same_address_preserves_the_record_and_remote_id() {
+    let dir = adoption_site();
+    seed_copy(&dir, State::Posted);
+    let before = std::fs::read(record_path(&dir)).unwrap();
+    for _ in 0..2 {
+        assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Ok(Adopted { write_back: None }));
+        assert_listed_once(&dir, SOURCE, COPY_URL);
+        assert_eq!(std::fs::read(record_path(&dir)).unwrap(), before);
+    }
+}
+
+#[test]
+fn adopt_posted_different_address_preserves_both_files() {
+    let dir = adoption_site();
+    seed_copy(&dir, State::Posted);
+    let before = std::fs::read(record_path(&dir)).unwrap();
+    assert_eq!(adopt(dir.path(), SOURCE, "bluesky", "https://bsky.app/other"), Err(AdoptRefusal::AlreadyPosted { url: COPY_URL.into() }));
+    assert_eq!(page_of(&dir, SOURCE), POST);
+    assert_eq!(std::fs::read(record_path(&dir)).unwrap(), before);
+}
+
+#[test]
+fn adopt_settles_each_pending_state_using_the_built_identity() {
+    for state in [State::Due, State::Refused, State::Unconfirmed, State::HandedOff] {
+        let dir = adoption_site();
+        seed_copy(&dir, state);
+        assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Ok(Adopted { write_back: None }));
+        let records = copies(&dir);
+        let adopted = records.get(UID, "bluesky").unwrap();
+        assert_eq!(adopted.state, State::Posted, "{state:?}");
+        let remote = adopted.remote.unwrap();
+        assert_eq!(remote.id, COPY_URL);
+        assert_eq!(remote.url, COPY_URL);
+        assert!(adopted.reason.is_none());
+        assert!(adopted.handoff.is_none());
+        assert!(!records.exists("bb22bb22", "bluesky"));
+        adopt(dir.path(), SOURCE, "bluesky", COPY_URL).unwrap();
+        assert_listed_once(&dir, SOURCE, COPY_URL);
+    }
+}
+
+#[test]
+fn adopt_sending_is_busy_without_mutation() {
+    let dir = adoption_site();
+    seed_copy(&dir, State::Sending);
+    let before = std::fs::read(record_path(&dir)).unwrap();
+    assert_eq!(adopt(dir.path(), SOURCE, "bluesky", COPY_URL), Err(AdoptRefusal::Busy));
+    assert_eq!(page_of(&dir, SOURCE), POST);
+    assert_eq!(std::fs::read(record_path(&dir)).unwrap(), before);
+}
+
+#[test]
+fn adopt_writes_a_renamed_post_and_only_refreshes_pending_records() {
+    for state in [State::Due, State::Posted] {
+        let dir = adoption_site();
+        seed_copy(&dir, state);
+        let before = std::fs::read(record_path(&dir)).unwrap();
+        let renamed = "notes/renamed.md";
+        std::fs::rename(dir.path().join(SOURCE), dir.path().join(renamed)).unwrap();
+        std::fs::write(dir.path().join(SOURCE), "An unrelated page.\n").unwrap();
+        let mut map = ArticleMap::load(&dir.path().join(".moss")).unwrap();
+        let post = map.articles.get_mut(URL).unwrap();
+        post.source_path = renamed.into();
+        post.url_path = "notes/renamed/".into();
+        map.save(&dir.path().join(".moss")).unwrap();
+        adopt(dir.path(), renamed, "bluesky", COPY_URL).unwrap();
+        assert_listed_once(&dir, renamed, COPY_URL);
+        assert_eq!(page_of(&dir, SOURCE), "An unrelated page.\n");
+        let r = copies(&dir).get(UID, "bluesky").unwrap();
+        assert_eq!(r.state, State::Posted);
+        if state == State::Posted {
+            assert_eq!(std::fs::read(record_path(&dir)).unwrap(), before);
+        } else {
+            assert_eq!(r.source_path, renamed);
+            assert_eq!(r.url_path, "notes/renamed/");
+        }
+    }
+}
+
+#[test]
+fn adopt_reports_writeback_failure_and_keeps_the_settled_record() {
+    for state in [None, Some(State::Due), Some(State::Posted)] {
+        let dir = adoption_site();
+        if let Some(state) = state {
+            seed_copy(&dir, state);
+        }
+        std::fs::remove_file(dir.path().join(SOURCE)).unwrap();
+        let result = adopt(dir.path(), SOURCE, "bluesky", COPY_URL).unwrap();
+        assert!(result.write_back.is_some());
+        assert!(!dir.path().join(SOURCE).exists());
+        let r = copies(&dir).get(UID, "bluesky");
+        if state.is_some() {
+            let r = r.unwrap();
+            assert_eq!(r.state, State::Posted);
+            assert_eq!(r.remote.unwrap().url, COPY_URL);
+        } else {
+            assert!(r.is_none());
+            assert!(!copies(&dir).exists(UID, "bluesky"));
+        }
+    }
+}
+
+#[test]
+fn adopt_refusals_serialize_with_kebab_case_names() {
+    let cases = [
+        (AdoptRefusal::UnknownChannel, serde_json::json!("unknown-channel")),
+        (AdoptRefusal::OffHost { expected: "bsky.app".into() }, serde_json::json!({"off-host": {"expected": "bsky.app"}})),
+        (AdoptRefusal::NotAPost, serde_json::json!("not-a-post")),
+        (AdoptRefusal::Busy, serde_json::json!("busy")),
+        (AdoptRefusal::Unreadable, serde_json::json!("unreadable")),
+        (AdoptRefusal::AlreadyPosted { url: COPY_URL.into() }, serde_json::json!({"already-posted": {"url": COPY_URL}})),
+    ];
+    for (refusal, wire) in cases {
+        assert_eq!(serde_json::to_value(refusal).unwrap(), wire);
+    }
+}

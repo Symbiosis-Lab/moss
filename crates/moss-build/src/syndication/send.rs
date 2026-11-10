@@ -428,17 +428,16 @@ async fn reconcile(manager: &PluginManager, record: &CopyRecord, channel: &CopyC
     }
 }
 
-/// Record a copy the network turned out to hold.
-fn adopt(folder: &Path, records: &Records, mut record: CopyRecord, outcome: CopyOutcome) -> Sent {
+/// Record a copy the network holds. The caller holds the folder's send turn.
+pub(super) fn adopt(folder: &Path, records: &Records, mut record: CopyRecord, outcome: CopyOutcome) -> Sent {
     let url = outcome.url.unwrap_or_default();
     record.state = State::Posted;
     record.remote = Some(super::record::RemoteRef { id: outcome.id.unwrap_or_default(), url: url.clone() });
     record.parts = outcome.parts;
     record.reason = None;
     record.handoff = None;
-    let write_back = write_back(folder, &record.source_path, &url).err();
-    let mut s = settle(records, record, Outcome::Posted { url });
-    s.write_back = write_back;
+    let mut s = settle(records, record, Outcome::Posted { url: url.clone() });
+    s.write_back = write_back(folder, &s.source_path, &url).err();
     s
 }
 

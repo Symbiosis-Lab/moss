@@ -211,6 +211,61 @@ pub fn set_post(folder: &Path, source: &str, channel: &str, on: bool) -> Result<
     read_post(folder, source).ok_or_else(|| "the post could not be read back".to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub struct Adopted {
+    /// The address could not be written into the page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_back: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum AdoptRefusal {
+    UnknownChannel,
+    OffHost { expected: String },
+    NotAPost,
+    Busy,
+    Unreadable,
+    AlreadyPosted { url: String },
+}
+
+/// Add an existing copy's address to a post, settling its record if it has one.
+pub fn adopt(folder: &Path, source: &str, channel: &str, url: &str) -> Result<Adopted, AdoptRefusal> {
+    let channels = super::landing::channels(folder);
+    let info = channels.get(channel).ok_or(AdoptRefusal::UnknownChannel)?;
+    if !plan::on_host(url, &info.domains) {
+        return Err(AdoptRefusal::OffHost { expected: info.domains.first().cloned().unwrap_or_default() });
+    }
+    let map = load_map(folder).ok_or(AdoptRefusal::NotAPost)?;
+    let post = map.articles.values().find(|a| a.source_path == source).ok_or(AdoptRefusal::NotAPost)?;
+    let uid = post.uid.as_deref().ok_or(AdoptRefusal::NotAPost)?;
+    let records = Records::in_vault(&MossPaths::new(folder));
+    let write_back = || Adopted { write_back: super::send::write_back(folder, &post.source_path, url).err() };
+    if !records.exists(uid, channel) {
+        return Ok(write_back());
+    }
+    let _turn = records.turn().ok_or(AdoptRefusal::Busy)?;
+    let mut record = records.get(uid, channel).ok_or(AdoptRefusal::Unreadable)?;
+    match record.state {
+        State::Posted => {
+            let existing = record.remote.as_ref().map(|r| r.url.as_str()).unwrap_or_default();
+            if existing == url {
+                Ok(write_back())
+            } else {
+                Err(AdoptRefusal::AlreadyPosted { url: existing.to_string() })
+            }
+        }
+        State::Sending => Err(AdoptRefusal::Busy),
+        State::Due | State::Refused | State::Unconfirmed | State::HandedOff => {
+            record.source_path = post.source_path.clone();
+            record.url_path = post.url_path.clone();
+            let outcome = super::record::CopyOutcome { id: Some(url.into()), url: Some(url.into()), ..Default::default() };
+            let sent = super::send::adopt(folder, &records, record, outcome);
+            Ok(Adopted { write_back: sent.write_back })
+        }
+    }
+}
+
 /// The channels a folder's own page sets for new posts: its own list, or the
 /// nearest folder's above it.
 pub fn read_folder(folder: &Path, url_path: &str, index_source: &str) -> Option<Vec<String>> {
