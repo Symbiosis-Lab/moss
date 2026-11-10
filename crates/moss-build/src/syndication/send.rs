@@ -490,23 +490,21 @@ fn sent(record: &CopyRecord, outcome: Outcome) -> Sent {
 }
 
 /// Add `url` to the page's `syndicated:` list, changing only that field.
-fn write_back(folder: &Path, source_path: &str, url: &str) -> Result<(), String> {
-    let path = on_disk(folder, source_path);
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut list: Vec<serde_yaml::Value> = match moss_core::frontmatter::parse(&content).frontmatter.get("syndicated") {
-        Some(serde_yaml::Value::Sequence(items)) => items.clone(),
-        Some(serde_yaml::Value::String(one)) => vec![serde_yaml::Value::String(one.clone())],
-        _ => Vec::new(),
-    };
-    if list.iter().any(|v| v.as_str() == Some(url)) {
-        return Ok(());
-    }
-    list.push(serde_yaml::Value::String(url.to_string()));
-    let edited = moss_core::frontmatter::edit_fields(
-        &content,
-        &[moss_core::frontmatter::FieldEdit::Set { key: "syndicated".into(), value: serde_yaml::Value::Sequence(list) }],
-    )?;
-    crate::infra::atomic_write::write_atomic(&path, &edited)
+pub(super) fn write_back(folder: &Path, source_path: &str, url: &str) -> Result<(), String> {
+    crate::build::cloud_readiness::rewrite_input(&on_disk(folder, source_path), |bytes| {
+        let content = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        let mut list: Vec<serde_yaml::Value> = match moss_core::frontmatter::parse(content).frontmatter.get("syndicated") {
+            Some(serde_yaml::Value::Sequence(items)) => items.clone(),
+            Some(serde_yaml::Value::String(one)) => vec![serde_yaml::Value::String(one.clone())],
+            _ => Vec::new(),
+        };
+        if list.iter().any(|v| v.as_str() == Some(url)) {
+            return Ok(None);
+        }
+        list.push(serde_yaml::Value::String(url.to_string()));
+        moss_core::frontmatter::edit_fields(content, &[moss_core::frontmatter::FieldEdit::Set { key: "syndicated".into(), value: serde_yaml::Value::Sequence(list) }]).map(Some)
+    })
+    .map(drop)
 }
 
 /// One line per copy for a terminal.

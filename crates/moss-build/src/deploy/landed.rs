@@ -270,30 +270,19 @@ async fn stamp_published_uids(folder: &Path, sealed: &SealedManifest) -> Stamps 
 /// bytes: the stamped bytes' hash, or `None` when the page was edited since
 /// the build or already names the uid.
 fn stamp_one(root: &Path, source_path: &str, uid: &str, published_hash: &str) -> Result<Option<String>, String> {
-    use crate::build::cloud_readiness::{probe_input, Found};
-    let path = on_disk(root, source_path);
-    let read = || match probe_input(&path) {
-        Ok(Found::Bytes(bytes)) => Ok(bytes),
-        Ok(Found::InCloud) => Err("it is still in the cloud".to_string()),
-        Err(e) => Err(e.to_string()),
-    };
     let hash = |b: &[u8]| crate::build::render::blocking::source_metadata(None, b).hash;
-    let bytes = read()?;
-    if hash(&bytes) != published_hash {
-        return Ok(None);
-    }
-    let before = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
-    if crate::build::markdown::parse_typed_frontmatter(before).uid.as_deref() == Some(uid) {
-        return Ok(None);
-    }
-    let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };
-    let after = moss_core::frontmatter::edit_fields(before, &[set])?;
-    // Narrows, without closing, the race with an author's save landing now.
-    if read()? != bytes {
-        return Err("it changed while its note ID was being written".into());
-    }
-    crate::infra::atomic_write::write_atomic(&path, &after)?;
-    Ok(Some(hash(after.as_bytes())))
+    let written = crate::build::cloud_readiness::rewrite_input(&on_disk(root, source_path), |bytes| {
+        if hash(bytes) != published_hash {
+            return Ok(None);
+        }
+        let before = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        if crate::build::markdown::parse_typed_frontmatter(before).uid.as_deref() == Some(uid) {
+            return Ok(None);
+        }
+        let set = moss_core::frontmatter::FieldEdit::Set { key: "uid".into(), value: serde_yaml::Value::String(uid.to_string()) };
+        moss_core::frontmatter::edit_fields(before, &[set]).map(Some)
+    })?;
+    Ok(written.map(|after| hash(after.as_bytes())))
 }
 
 /// Write the publish record for a prebuilt tree that just went live.

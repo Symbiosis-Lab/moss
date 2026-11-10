@@ -7,6 +7,7 @@
 //! `docs/proposals/syndication/README.md`.
 
 pub mod channel;
+pub mod choose;
 pub mod job;
 pub mod landing;
 pub mod plan;
