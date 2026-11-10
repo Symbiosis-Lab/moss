@@ -210,7 +210,7 @@ impl TypeTheme {
             let words = |tags: &[&str]| rule.prelude.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| tags.contains(&t));
             // A rule reaches the closing words by naming the hero, or by the footer's own
             // structure: a heading, paragraph or link under the page's footer.
-            let reaches = rule.prelude.contains("moss-hero") || (rule.prelude.contains("footer") && words(&["h1", "h2", "h3", "h4", "h5", "h6", "p", "a"]));
+            let reaches = rule.prelude.split(',').any(reaches_closing_words);
             // Inside a media query or another condition, the value holds only at some widths: it is not read.
             let hero = reaches && rule.conditions.is_empty();
             let heading_only = hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) && !words(&["p", "a"]);
@@ -253,6 +253,25 @@ impl TypeTheme {
         }
         theme
     }
+}
+
+/// Whether one selector can move a closing picture's words: it names the hero, or a heading,
+/// paragraph or link under a footer. Not one that sizes the picture itself, and not one that
+/// excludes the closing hero (`:not(.moss-hero-closing)`, or a hero that is a direct child of
+/// `body`, where the closing picture, inside the footer, is not).
+fn reaches_closing_words(selector: &str) -> bool {
+    let spaced = selector.replace('>', " > ");
+    let compounds: Vec<&str> = spaced.split_whitespace().collect();
+    let Some(subject) = compounds.last() else { return false };
+    let tag = |c: &str| c.split(['.', '#', ':', '[']).next().unwrap_or_default().to_ascii_lowercase();
+    if ["img", "video", "picture", "source", "svg"].contains(&tag(subject).as_str()) {
+        return false;
+    }
+    let names_hero = selector.contains("moss-hero");
+    let heading_in_footer = selector.contains("footer") && selector.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| ["h1", "h2", "h3", "h4", "h5", "h6", "p", "a"].contains(&t));
+    let excluded = selector.contains(":not(.moss-hero-closing)")
+        || compounds.windows(3).any(|w| tag(w[0]) == "body" && w[1] == ">" && w[2].contains("moss-hero") && !w[2].contains("moss-hero-closing"));
+    (names_hero || heading_in_footer) && !excluded
 }
 
 /// A token's value in px from tokens.json, at the 16px root.

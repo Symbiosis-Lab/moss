@@ -1657,6 +1657,23 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_for_another_hero_or_for_the_picture_does_not_reach_the_closing_words() {
+        for kept in [
+            r#"body[data-page="home"] > .moss-hero img { position: absolute; width: 130%; max-width: none; object-fit: cover; }"#,
+            r#"body[data-page="home"] > .moss-hero .moss-hero-content { padding: 0 2rem; }"#,
+            r#"body[data-page="home"] > .moss-hero h1 { font-family: var(--moss-font-heading); font-size: clamp(2.4rem, 6vw, 4.2rem); letter-spacing: 0.12em; text-transform: uppercase; }"#,
+            ".moss-hero img { max-width: none; }",
+            ".moss-hero:not(.moss-hero-closing) h1 { letter-spacing: 1px; }",
+        ] {
+            let theme = TypeTheme::of_theme(Some(kept));
+            assert!(!theme.resized && theme.heading_size.is_none(), "{kept}");
+        }
+        for moves in [".moss-hero-closing .moss-hero-content { padding: 3rem; }", "footer p { letter-spacing: 1px; }", ".moss-hero img, .moss-hero-closing h2 { letter-spacing: 1px; }"] {
+            assert!(TypeTheme::of_theme(Some(moves)).resized, "{moves}");
+        }
+    }
+
+    #[test]
     fn site_css_sets_the_type_the_words_are_modelled_in() {
         let css = crate::build::emit::stylesheet::CORE_CSS;
         for rule in ["margin: 0 0 var(--moss-hero-words-gap, var(--moss-space-sm));", "margin-block-start: var(--moss-hero-words-gap, var(--moss-space-sm));", "font-size: var(--moss-hero-title-size, 2.5rem);", "font-size: var(--moss-hero-title-size, 1.75rem);", "font-size: var(--moss-hero-title-size, 1.4rem);", "font-size: var(--moss-hero-link-size, 1em);", "padding: var(--moss-hero-link-padding, 0.5em 1.2em);", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
