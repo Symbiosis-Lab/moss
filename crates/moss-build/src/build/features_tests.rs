@@ -68,7 +68,6 @@ fn make_article_map() -> HashMap<String, ArticleInfo> {
             cover: None,
             comments: None,
             lang: None,
-            syndicated: Vec::new(),
         },
     );
     map
@@ -295,7 +294,6 @@ fn folder_index_pages_default_off_articles_default_on() {
             cover: None,
             comments: Some(true),
             lang: None,
-            syndicated: Vec::new(),
         },
     );
     let site_off_slots = generate_native_slots(
@@ -403,7 +401,6 @@ fn comment_section_uses_per_page_lang_not_site_lang() {
             cover: None,
             comments: None,
             lang: None,
-            syndicated: Vec::new(),
         },
     );
     let pages = vec![crate::build::types::ParsedDocument {
@@ -582,7 +579,6 @@ fn comments_form_renders_from_features_toggle_fallback() {
             rating: None,
             cover: None,
             lang: None,
-            syndicated: Vec::new(),
         },
     );
 
@@ -667,7 +663,6 @@ fn comments_explicit_disabled_does_not_render() {
             rating: None,
             cover: None,
             lang: None,
-            syndicated: Vec::new(),
         },
     );
 
@@ -1613,7 +1608,6 @@ fn colophon_slot_merge_routes_cover_through_synthesizer_when_lookup_provided() {
             cover: Some("image/cover.jpg".to_string()),
             comments: None,
             lang: None,
-            syndicated: Vec::new(),
         },
     );
 
@@ -1726,7 +1720,6 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
             cover: Some("image/cover.jpg".to_string()),
             comments: None,
             lang: None,
-            syndicated: Vec::new(),
         },
     );
 

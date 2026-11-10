@@ -1274,19 +1274,9 @@ pub(super) fn render_page<'d>(
         after_title_block.push_str("<!-- slot:after-title -->");
         after_title_block.push_str(&facts.fields.after_masthead());
         let spliced = splice_after_title_block(&homepage_content, &after_title_block);
-        // Colophon rows close the article body, after the prose and any
-        // footnote section, inside `<article>`; a page's syndication line
-        // follows them.
+        // Colophon rows close the article body after the prose and footnotes.
         match doc {
-            Some(d) => {
-                let mut html = with_colophon(spliced, d, emit_source_lines);
-                if d.kind != moss_core::PageKind::Folder {
-                    if let Some(line) = crate::build::features::syndication::render_syndication_line(&d.syndicated_urls(), d.lang) {
-                        html.push_str(&line);
-                    }
-                }
-                html
-            }
+            Some(d) => with_colophon(spliced, d, emit_source_lines),
             None => spliced,
         }
     } else {

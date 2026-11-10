@@ -18,7 +18,7 @@ cascade:
 ```
 
 - `syndicate:` names channels, the ids under `[channels.<id>]` in `.moss/config.toml`. One post opts out with `syndicate: false` or names its own list; leaving a channel out of a post's own list is how a post skips that channel, and adding it back undoes the skip. `email` in the list names the site's newsletter, which the app sends; it is not a channel and moss posts nothing for it.
-- After a copy is posted, moss adds its address to the post's `syndicated:` list, the field moss already reads to label comment links. Only the `syndicated:` line changes; the rest of the file stays as written. A file whose frontmatter moss cannot edit in place (the simplified `key: value` dialect, a duplicated key) keeps its bytes, and moss reports that the address was recorded only in its own record.
+- After a copy is posted, moss adds its address to the post's `syndicated:` list, the field moss reads to avoid posting duplicate copies. Only the `syndicated:` line changes; the rest of the file stays as written. A file whose frontmatter moss cannot edit in place (the simplified `key: value` dialect, a duplicated key) keeps its bytes, and moss reports that the address was recorded only in its own record.
 - A post goes out when it first goes live. Naming a channel for a folder does not post the folder's earlier posts: a post that was already live (on any publish target) before the channel was named for it goes out only if its own file names the channel.
 - Credentials never enter the folder. They live in moss's secret store, outside the site, entered in the app's own credential prompt or, headless, with `moss plugin secret set <plugin> <key>`, which reads the value from standard input.
 
@@ -115,6 +115,8 @@ The hash only spares work: an unchanged copy is not sent again. It never causes 
 - A post with no title (its file is named by its date) is a `short` copy when its text fits, a `thread` when it is written in parts (a line holding only `---` between blank lines) and the channel takes threads, and otherwise a `teaser`.
 - A post with a title is a `long` copy where the channel declares `long`, and a `teaser` everywhere else.
 - Text is the post's markdown as plain text: emphasis dropped, links kept as their address, pictures moved out of the text into the copy's pictures with their alt text. The first link is the copy's link card where the network makes one.
+
+Every copy links back to its page. Short posts, each thread part and handoffs include the page's address in their text, and long articles include it as an HTML link. These links are included before checking the network's length limit; a copy that does not fit becomes a teaser where supported, or is refused. The page adds no links to its copies, visible or hidden, and no comment reply links to them. The `syndicated:` field and `.moss/deploy/copies/` records still track copies for deduplication, editing and deletion.
 
 ## What it retires
 

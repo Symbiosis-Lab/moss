@@ -192,6 +192,11 @@ fn a_new_post_is_copied_once_its_address_is_written_back_and_an_edit_updates_the
     let job = net.lock().unwrap().requests[0].1.clone();
     assert!(job["post"]["url"].as_str().unwrap().ends_with("/notes/first/"), "{}", job["post"]["url"]);
     assert_eq!(job["op"], "publish");
+    let canonical = job["post"]["url"].as_str().unwrap();
+    let text = job["parts"][0]["text"].as_str().unwrap();
+    assert!(text.contains(canonical), "the posted payload links to its page: {job}");
+    assert!(text.chars().count() <= 300);
+    assert!(job["parts"][0]["links"].as_array().unwrap().iter().any(|link| link == canonical));
     let page = read(&s.root, "notes/first.md");
     assert!(page.contains("syndicated:\n  - https://example.social/@a/1\n"), "{page}");
     assert!(page.ends_with("The first note, with [a link](https://example.org).\n"), "the body is untouched: {page}");

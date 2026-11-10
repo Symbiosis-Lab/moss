@@ -69,7 +69,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// A page's absolute address on the site at `site_url`.
 pub fn page_url(site_url: &str, url_path: &str) -> String {
-    format!("{}/{}", site_url.trim_end_matches('/'), url_path.trim_start_matches('/'))
+    format!("{}/{}", site_url.trim_end_matches('/'), moss_core::resolve::fuzzy_path::percent_encode_url(url_path.trim_start_matches('/')))
 }
 
 /// Shape `post` for a channel, linking to it on the site at `site_url`.
@@ -79,7 +79,11 @@ pub fn shape(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str) -> Result<S
     let handoff = spec.takes(Form::Handoff);
 
     if untitled {
-        let parts: Vec<Part> = split_parts(&post.content).into_iter().map(|md| lower(&md, page_url, site_url)).collect();
+        let mut parts: Vec<Part> = split_parts(&post.content).into_iter().map(|md| lower(&md, page_url, site_url)).collect();
+        // A thread is one copy: its last post carries the address.
+        if let Some(last) = parts.last_mut() {
+            link_back(last, page_url);
+        }
         if parts.len() == 1 && spec.fits(&parts[0].text) && (spec.takes(Form::Short) || handoff) {
             return Ok(Shaped { form: if handoff { Form::Handoff } else { Form::Short }, parts, teaser: None, article: None });
         }
@@ -91,9 +95,11 @@ pub fn shape(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str) -> Result<S
             return Ok(Shaped { form: if handoff { Form::Handoff } else { Form::Short }, parts: vec![joined], teaser: None, article: None });
         }
     } else if spec.takes(Form::Long) {
+        let url = crate::build::features::html_escape(page_url);
+        let html = format!("{}\n<p><a href=\"{url}\">{url}</a></p>", post.html_content.as_deref().unwrap_or_default());
         let article = Article {
             title: post.title.clone(),
-            html: post.html_content.clone().unwrap_or_default(),
+            html,
             description: described(post),
             cover: cover(post, site_url),
         };
@@ -105,6 +111,15 @@ pub fn shape(post: &ArticleInfo, spec: &ChannelSpec, site_url: &str) -> Result<S
     }
     let (teaser, part) = teaser(post, spec, page_url, site_url)?;
     Ok(Shaped { form: if handoff { Form::Handoff } else { Form::Teaser }, parts: vec![part], teaser: Some(teaser), article: None })
+}
+
+/// Include the original in the posted text, before checking network limits.
+fn link_back(part: &mut Part, page_url: &str) {
+    if !part.links.iter().any(|link| link == page_url) {
+        end_paragraph(&mut part.text);
+        part.text.push_str(page_url);
+        part.links.push(page_url.to_string());
+    }
 }
 
 /// The parts of a post written as a thread: split at each line holding only

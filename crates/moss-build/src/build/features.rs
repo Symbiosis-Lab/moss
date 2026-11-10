@@ -12,7 +12,6 @@ pub mod email;
 pub mod forms;
 pub mod review;
 pub mod sync;
-pub mod syndication;
 
 /// Get the inactive tooltip text for the given language.
 pub(crate) fn inactive_label(lang: crate::i18n::Language) -> &'static str {
@@ -379,8 +378,6 @@ pub fn generate_native_slots(
         // question, and the answer does not follow from the page having
         // children — so an author who turns comments on for a folder page (or
         // for the homepage, which is a folder index too) gets them.
-        // Folder pages carry no `syndicated:` link-outs, since nothing can
-        // syndicate them.
         let folder_targets: Vec<(String, ArticleInfo)> = pages
             .iter()
             .filter(|p| !p.slot_only && p.kind == moss_core::PageKind::Folder)
@@ -399,7 +396,6 @@ pub fn generate_native_slots(
                     cover: None,
                     comments: p.comments,
                     lang: None,
-                    syndicated: Vec::new(),
                 }))
             })
             .collect();
@@ -440,7 +436,6 @@ pub fn generate_native_slots(
                 uid,
                 &info.title,
                 page_lang,
-                &info.syndicated,
                 high_water_id,
             );
             per_page.insert(info.url_path.clone(), section_html);
@@ -662,9 +657,6 @@ pub struct ArticleInfo {
     pub cover: Option<String>,
     pub comments: Option<bool>,
     pub lang: Option<String>,
-    /// Syndicated publication URLs from frontmatter `syndicated:` field.
-    /// Used to render "Reply on X ↗" link-outs for non-Artalk source comments.
-    pub syndicated: Vec<String>,
 }
 
 #[cfg(test)]

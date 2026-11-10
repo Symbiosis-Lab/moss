@@ -785,7 +785,6 @@ fn rewrite_tracks_the_real_emitter() {
         "abc12345",
         "Test",
         crate::i18n::Language::En,
-        &[],
         0,
     );
     let page = format!("<html lang=\"en\"><body>{html}</body></html>");

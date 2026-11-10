@@ -127,7 +127,7 @@ for the whole site, so none also removes a place the field already has.
 
 --import-sources <list.json> reads a JSON array of addresses a page was
 imported from. Imports made before `origin:` existed wrote that address into
-`syndicated:`, so the page shows it as a copy (\"Also on\"). Each page whose
+`syndicated:`, so moss treats it as a copy. Each page whose
 `syndicated:` holds one listed address gets it as `origin:` instead; its
 other entries stay. A page is left as written when it already names a
 different origin, holds two listed addresses, shares one with another page,

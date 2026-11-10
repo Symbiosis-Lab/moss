@@ -768,11 +768,6 @@ pub(crate) fn syndicated_urls(value: Option<&serde_json::Value>) -> Vec<String> 
 }
 
 impl ParsedDocument {
-    /// [`syndicated_urls`] of this page.
-    pub fn syndicated_urls(&self) -> Vec<String> {
-        syndicated_urls(self.raw_frontmatter.get("syndicated"))
-    }
-
     /// The text the site's own navigation shows for this page: `nav_label`
     /// when set, else the chrome `label`.
     pub fn nav_text(&self) -> &str {

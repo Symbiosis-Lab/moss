@@ -259,12 +259,6 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "comment_website" => ["Website (optional)", "Website (optional)", "网站（选填）", "網站（選填）"],
         "comment_reply" => ["Reply", "Antworten", "回复", "回覆"],
         "anonymous" => ["Anonymous", "Anonym", "匿名", "匿名"],
-        // `{}` is replaced with the source display name (e.g. Matters, 豆瓣).
-        "comment_reply_on" => ["Reply on {} ↗", "Auf {} antworten ↗", "去 {} 回复 ↗", "去 {} 回覆 ↗"],
-
-        // Label of the line listing the other sites a page was also published on.
-        "also_on" => ["Also on", "Auch auf", "也发在", "也發在"],
-
         // Defaults / fallbacks
         "untitled" => ["Untitled", "Ohne Titel", "无标题", "無標題"],
         "untitled_site" => ["Untitled Site", "Website ohne Titel", "无标题站点", "無標題網站"],

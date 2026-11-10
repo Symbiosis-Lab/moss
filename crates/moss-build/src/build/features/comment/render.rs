@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::{CommentI18n, NormalizedComment};
 use crate::build::features::{html_escape, inactive_label, CHECK_SVG};
-use crate::i18n::{t, Language};
+use crate::i18n::Language;
 
 /// Format a comment count string using i18n.
 pub fn format_comment_count(count: usize, i18n: &CommentI18n) -> String {
@@ -81,40 +81,6 @@ pub fn format_date(date_str: &str, lang: Language) -> String {
         };
         format!("{} {}, {}", month_name, day, year)
     }
-}
-
-/// Pick the syndicated URL whose host contains the comment source name.
-/// "matters" matches matters.town / matters.icu; "douban" matches douban.com.
-/// Host-contains-source is the contract: source names are file stems and
-/// syndication targets are first-party platform domains.
-/// `url::Url::parse` lowercases hosts, so matching is case-insensitive.
-pub(super) fn syndicated_link_for_source(syndicated: &[String], source: &str) -> Option<String> {
-    syndicated
-        .iter()
-        .find(|u| {
-            url::Url::parse(u)
-                .ok()
-                .and_then(|p| p.host_str().map(|h| h.contains(source)))
-                .unwrap_or(false)
-        })
-        .cloned()
-}
-
-/// Human-readable "reply on X" label per source, localized.
-fn source_reply_label(source: &str, url: &str, lang: Language) -> String {
-    let display = match source {
-        // zh: 豆瓣 (no script mixing, both scripts); en: "Douban" (not "豆瓣 ↗").
-        "douban" => {
-            if lang.is_cjk() {
-                "豆瓣"
-            } else {
-                "Douban"
-            }
-        }
-        "matters" => "Matters",
-        other => crate::build::features::syndication::platform_name(url).unwrap_or(other),
-    };
-    t(lang, "comment_reply_on").replace("{}", display)
 }
 
 /// One comment in the dehydrated store embedded in the baked HTML. This is the
@@ -216,9 +182,6 @@ fn render_dehydrated_store(
 /// Render a complete comment section HTML for an article.
 ///
 /// `page_key` is the canonical article uid for the current contract.
-/// `syndicated` — URLs where this article was also published (e.g. matters.town,
-/// douban.com). Used to render "Reply on X ↗" link-outs for non-Artalk comments
-/// instead of in-page reply buttons.
 pub fn render_comment_section(
     comments: &[NormalizedComment],
     server_url: &str,
@@ -226,7 +189,6 @@ pub fn render_comment_section(
     page_key: &str,
     page_title: &str,
     lang: Language,
-    syndicated: &[String],
     artalk_high_water_id: i64,
 ) -> String {
     let i18n = super::get_i18n(lang);
@@ -291,7 +253,7 @@ pub fn render_comment_section(
     // Comment list
     html.push_str("    <ol class=\"comment-list\">\n");
     for comment in &top_level {
-        render_comment_item(&mut html, comment, &replies, lang, &i18n, 6, syndicated);
+        render_comment_item(&mut html, comment, &replies, lang, &i18n, 6);
     }
     html.push_str("    </ol>\n");
 
@@ -331,7 +293,6 @@ fn render_comment_item(
     lang: Language,
     i18n: &CommentI18n,
     indent: usize,
-    syndicated: &[String],
 ) {
     let pad = " ".repeat(indent);
     let author_label = comment.author.label(lang);
@@ -368,21 +329,13 @@ fn render_comment_item(
         html_escape(&date_display)
     ));
 
-    // Reply affordance: Artalk comments get an in-page reply button;
-    // syndicated-source comments get a link-out to the original platform
-    // (if a matching syndicated URL is available); otherwise no affordance.
+    // Artalk comments can be replied to through the in-page form.
     if comment.source == "artalk" {
         // "↩\u{FE0E}": U+21A9 + VARIATION SELECTOR-15 forces text presentation,
         // so iOS/Android render a plain monochrome arrow, not a colored emoji.
         html.push_str(&format!(
             "{}    <button type=\"button\" class=\"comment-reply-btn\" data-reply-id=\"{}\" data-reply-name=\"{}\">{}</button>\n",
             pad, html_escape(&comment.id), html_escape(author_label), format_args!("↩\u{FE0E} {}", i18n.reply_btn)
-        ));
-    } else if let Some(url) = syndicated_link_for_source(syndicated, &comment.source) {
-        let label = source_reply_label(&comment.source, &url, lang);
-        html.push_str(&format!(
-            "{}    <a class=\"comment-source-link\" href=\"{}\" target=\"_blank\" rel=\"noopener nofollow\">{}</a>\n",
-            pad, html_escape(&url), html_escape(&label)
         ));
     }
 
@@ -400,7 +353,7 @@ fn render_comment_item(
     if let Some(children) = replies.get(&(comment.source.as_str(), comment.id.as_str())) {
         html.push_str(&format!("{}  <ol class=\"comment-replies\">\n", pad));
         for child in children {
-            render_comment_item(html, child, replies, lang, i18n, indent + 4, syndicated);
+            render_comment_item(html, child, replies, lang, i18n, indent + 4);
         }
         html.push_str(&format!("{}  </ol>\n", pad));
     }
@@ -412,16 +365,6 @@ fn render_comment_item(
 mod tests {
     use super::*;
     use crate::build::features::comment::{get_i18n, CommentAuthor};
-
-    /// A comment's own source names its network whatever host its link is on;
-    /// the host is read only for a source moss does not know.
-    #[test]
-    fn a_reply_link_names_its_source_before_its_host() {
-        let en = Language::En;
-        assert!(source_reply_label("matters", "https://matters.example/p/1", en).contains("Matters"));
-        assert!(source_reply_label("bluesky", "https://bsky.app/profile/a/post/1", en).contains("Bluesky"));
-        assert!(source_reply_label("forum", "https://forum.example/t/1", en).contains("forum"));
-    }
 
     fn sample_comments() -> Vec<NormalizedComment> {
         vec![
@@ -571,7 +514,6 @@ mod tests {
             "/test/",
             "Test",
             Language::ZhHans,
-            &[],
             0,
         );
         assert!(html.contains("moss-comments"));
@@ -589,7 +531,6 @@ mod tests {
             "/test/",
             "Test",
             Language::ZhHans,
-            &[],
             0,
         );
         assert!(html.contains("moss-comment-form"));
@@ -606,7 +547,6 @@ mod tests {
             "/test/",
             "Test",
             Language::ZhHans,
-            &[],
             0,
         );
         assert!(html.contains("Alex"));
@@ -623,7 +563,6 @@ mod tests {
             "/test/",
             "Test",
             Language::ZhHans,
-            &[],
             0,
         );
         assert!(html.contains("comment-replies"));
@@ -639,7 +578,6 @@ mod tests {
             "/test/",
             "Test",
             Language::ZhHans,
-            &[],
             0,
         );
         assert!(html.contains("moss-comment-form"));
@@ -656,7 +594,6 @@ mod tests {
             "/test/",
             "Test",
             Language::En,
-            &[],
             0,
         );
         assert!(html.contains("<script>"));
@@ -687,7 +624,7 @@ mod tests {
         let comments = vec![sample_comment("1", "2026-01-02T00:00:00Z")];
         let html = render_comment_section(
             &comments, "https://example.com/comments", "guo", "abc12345", "Title",
-            Language::En, &[], 0,
+            Language::En, 0,
         );
         assert!(!html.contains("data-built-at"),
             "comment section must not carry a wall-clock build timestamp; got: {html}");
@@ -704,7 +641,7 @@ mod tests {
         ];
         let html = render_comment_section(
             &comments, "https://example.com/comments", "guo", "abc12345", "Title",
-            Language::En, &[], 0,
+            Language::En, 0,
         );
         assert!(html.contains("\"watermark\":\"2026-03-15T12:30:00Z\""),
             "watermark must equal the newest comment created_at; got: {html}");
@@ -719,7 +656,7 @@ mod tests {
         ];
         let render = || render_comment_section(
             &comments, "https://example.com/comments", "guo", "abc12345", "Title",
-            Language::En, &[], 0,
+            Language::En, 0,
         );
         assert_eq!(render(), render(), "comment section render must be deterministic");
     }
@@ -751,36 +688,6 @@ mod tests {
         assert!(replies.get(&("artalk", "1")).is_none());
     }
 
-    // --- syndicated_link_for_source tests ---
-
-    #[test]
-    fn test_syndicated_link_for_source_matches_by_host() {
-        let urls = vec![
-            "https://matters.town/@guo/3-river".to_string(),
-            "https://www.douban.com/note/123/".to_string(),
-        ];
-        assert_eq!(
-            syndicated_link_for_source(&urls, "matters"),
-            Some("https://matters.town/@guo/3-river".to_string())
-        );
-        assert_eq!(
-            syndicated_link_for_source(&urls, "douban"),
-            Some("https://www.douban.com/note/123/".to_string())
-        );
-        assert_eq!(syndicated_link_for_source(&urls, "substack"), None);
-    }
-
-    #[test]
-    fn test_syndicated_link_for_source_case_insensitive_host() {
-        // url::Url::parse lowercases hosts — "Matters.town" must still match "matters".
-        let urls = vec!["https://Matters.town/x".to_string()];
-        assert_eq!(
-            syndicated_link_for_source(&urls, "matters"),
-            Some("https://Matters.town/x".to_string()),
-            "host match must be case-insensitive via url::Url host normalization"
-        );
-    }
-
     #[test]
     fn test_form_uses_supplied_page_key() {
         let html = render_comment_section(
@@ -790,7 +697,6 @@ mod tests {
             "abc12345", // page_key is whatever the caller supplies
             "Test",
             Language::ZhHans,
-            &[],
             0,
         );
         assert!(html.contains("data-page-key=\"abc12345\""));
@@ -811,7 +717,6 @@ mod tests {
             uid,
             "Test",
             Language::En,
-            &[],
             0,
         );
         assert!(
@@ -835,7 +740,6 @@ mod tests {
             "cc4f602b",
             "Test",
             Language::En,
-            &[],
             9, // artalk_high_water_id: sample_comments() has ids 8 and 9
         );
         assert!(
@@ -867,7 +771,6 @@ mod tests {
             "uid1",
             "T",
             Language::En,
-            &[],
             9,
         );
         assert!(
@@ -886,7 +789,6 @@ mod tests {
             "uid1",
             "T",
             Language::En,
-            &[],
             0,
         );
         assert!(
@@ -920,7 +822,6 @@ mod tests {
             "uid1",
             "T",
             Language::En,
-            &[],
             0,
         );
         // Slice from the island open to the FIRST literal `</script>` — if escaping
@@ -959,7 +860,6 @@ mod tests {
             "uid1",
             "T",
             Language::En,
-            &[],
             0,
         );
         assert!(!html.contains("javascript:"), "js: author url must not become a link:\n{html}");
@@ -991,7 +891,6 @@ mod tests {
             "uid1",
             "T",
             Language::En,
-            &[],
             0,
         );
         assert!(
@@ -1029,7 +928,6 @@ mod tests {
             "uid1",
             "T",
             Language::En,
-            &[],
             0,
         );
         assert!(
@@ -1039,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn test_artalk_comment_gets_reply_button_matters_gets_link_out() {
+    fn test_artalk_comment_gets_reply_button_without_copy_links() {
         let mk = |id: &str, source: &str| NormalizedComment {
             id: id.into(),
             source: source.into(),
@@ -1054,7 +952,6 @@ mod tests {
             state: None,
         };
         let comments = vec![mk("1", "artalk"), mk("m1", "matters")];
-        let syndicated = vec!["https://matters.town/@guo/3-river-ezdqp77gmegp".to_string()];
         let html = render_comment_section(
             &comments,
             "https://api.mosspub.com/comments",
@@ -1062,17 +959,16 @@ mod tests {
             "6a559bc6",
             "Test",
             Language::ZhHans,
-            &syndicated,
             0,
         );
         assert!(html.contains("data-reply-id=\"1\""));
-        assert!(html.contains("class=\"comment-source-link\""));
-        assert!(html.contains("https://matters.town/@guo/3-river-ezdqp77gmegp"));
+        assert!(!html.contains("class=\"comment-source-link\""));
+        assert!(!html.contains("https://matters.town/"));
         assert!(!html.contains("data-reply-id=\"m1\""));
     }
 
     #[test]
-    fn test_no_syndicated_url_means_no_affordance() {
+    fn test_imported_comment_has_no_reply_affordance() {
         let c = NormalizedComment {
             id: "m1".into(),
             source: "matters".into(),
@@ -1093,7 +989,6 @@ mod tests {
             "6a559bc6",
             "Test",
             Language::En,
-            &[],
             0,
         );
         assert!(!html.contains("comment-source-link"));
@@ -1112,7 +1007,7 @@ mod tests {
         ];
         let html = render_comment_section(
             &comments, "https://example.com/comments", "guo", "abc12345", "Title",
-            Language::En, &[], 0,
+            Language::En, 0,
         );
         assert!(html.contains("\"watermark\":\"2026-03-26 09:00:00\""),
             "watermark must be the newest real-format timestamp; got: {html}");
@@ -1124,7 +1019,7 @@ mod tests {
         let comments: Vec<NormalizedComment> = vec![];
         let html = render_comment_section(
             &comments, "https://example.com/comments", "guo", "abc12345", "Title",
-            Language::En, &[], 0,
+            Language::En, 0,
         );
         assert!(html.contains("\"watermark\":\"\""),
             "empty comment set must yield watermark=\"\"; got: {html}");
@@ -1144,7 +1039,7 @@ mod tests {
             state: None,
         }];
         let html = render_comment_section(
-            &comments, "", "site", "page-uid", "Title", Language::En, &[], -1,
+            &comments, "", "site", "page-uid", "Title", Language::En, -1,
         );
         assert!(html.contains(r#"data-comment-source="matters""#), "missing source attr: {html}");
         assert!(html.contains(r#"data-comment-id="42""#), "missing id attr: {html}");

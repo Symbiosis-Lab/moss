@@ -1656,7 +1656,6 @@ pub fn load_article_map_for_features(
                 .and_then(|fm| fm.get("lang"))
                 .and_then(|l| l.as_str())
                 .map(|s| s.to_string()),
-            syndicated: crate::build::types::syndicated_urls(article.get("frontmatter").and_then(|fm| fm.get("syndicated"))),
         };
 
         result.insert(uid, info);

@@ -3,6 +3,11 @@
 All notable changes to moss will be documented here.
 
 ## [Unreleased]
+
+### Changed
+
+- A page no longer links automatically to its syndicated copies, including hidden markup and comment reply links; each copy links back to the page. Copy records remain available for deduplication, edits and deletion.
+
 ### Fixed
 
 - A site's `tagline` can be placed again, for example as an eyebrow above an article's title. Existing `[fields.tagline]` declarations with `type = "text"` keep working.

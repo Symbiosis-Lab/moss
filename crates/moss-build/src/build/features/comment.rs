@@ -51,7 +51,7 @@ pub(super) fn default_source() -> String {
 pub struct NormalizedComment {
     pub id: String,
     /// Which sync wrote this comment: "artalk" | "matters" | "douban" | <file stem>.
-    /// Drives reply affordance (in-page form vs syndicated link-out) and
+    /// Determines whether the in-page reply button is available and
     /// thread-tree namespacing. Defaults to "artalk" for legacy comment.json.
     #[serde(default = "default_source")]
     pub source: String,
@@ -499,7 +499,7 @@ mod tests {
         let loaded = load_all_social_comments(tmp.path().to_str().unwrap(), MATTERS_DOMAIN_FALLBACK);
         let html = render::render_comment_section(
             loaded.get("uid1").unwrap(), "https://api.mosspub.com/comments", "example.com",
-            "uid1", "T", Language::En, &[], 0,
+            "uid1", "T", Language::En, 0,
         );
         assert!(html.contains(r#"href="https://matters.town/@guo""#), "{html}");
         assert!(!html.contains(r#"href="/@guo""#), "{html}");
@@ -596,7 +596,7 @@ mod tests {
         // Render and verify affordances
         let html = render_comment_section(
             comments, "https://comments.example.com", "example.com",
-            "uid1", "Test", Language::En, &[], 0,
+            "uid1", "Test", Language::En, 0,
         );
         assert!(html.contains("data-reply-id=\"8\""),
             "legacy comment must get reply button; got:\n{html}");
