@@ -7301,6 +7301,54 @@ mod og_url_tests {
         assert_eq!(SEQUENCES_ORDERED.with(|n| n.get()) - before, 1, "each page sorted its folder again");
     }
 
+    #[test]
+    fn a_series_links_its_pages_by_their_clean_addresses() {
+        use super::super::generate_html_collect_og;
+
+        let out = tempfile::tempdir().expect("tempdir");
+        let mut letters = make_doc("Letters", "letters/index.html");
+        letters.kind = PageKind::Folder;
+        letters.series = Some(crate::build::types::SeriesField::Flag(true));
+        let letter = |title: &str, slug: &str, date: &str| {
+            let mut d = make_doc(title, &format!("letters/{slug}/index.html"));
+            d.date = Some(date.to_string());
+            d
+        };
+        let second = letter("Second", "second", "2026-02-01");
+        let all_docs = vec![
+            make_doc("Home", "index.html"),
+            letters,
+            letter("Third", "third", "2026-03-01"),
+            second.clone(),
+            letter("First", "first", "2026-01-01"),
+        ];
+        let project = make_project();
+        let no_previous = std::collections::HashMap::new();
+        let filename_covers = crate::build::page::cover::FilenameCovers::default();
+        let shared = crate::build::render::build_shared::BuildShared::new(
+            crate::build::emit::scripts::ScriptAssets::resolve(),
+            &project,
+            &std::collections::HashMap::new(), crate::build::inputs::now(),
+        );
+        let mut og_outputs = crate::build::page::og_card::OgSink::new(&no_previous, &filename_covers);
+        let html = generate_html_collect_og(
+            Some(&second), &all_docs, &project, &make_layout(), false, None, None,
+            Language::En, None, false, false, None, false, None, None,
+            &std::collections::HashMap::new(),
+            &SiteUrl::parse("https://example.com").unwrap(),
+            true, false, "favicon.svg", false, Some(out.path()), &mut og_outputs,
+            out.path(),
+            &shared,
+        )
+        .expect("render");
+
+        assert!(html.contains(r#"<a href="/letters/first/" class="moss-series-nav-link moss-series-nav-prev">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/third/" class="moss-series-nav-link moss-series-nav-next">"#), "{html}");
+        assert!(html.contains(r#"<a href="/letters/" class="moss-series-nav-collection">"#), "{html}");
+        assert!(html.contains(r#"<link rel="prefetch" href="/letters/third/">"#), "{html}");
+        assert!(html.contains("2 of 3"), "{html}");
+    }
+
     /// A favicon raster trio an earlier default-SVG build left in the output
     /// tree is not this build's: once a vault grows its own `favicon.png`, no
     /// PNG sizes are rasterized, and pages must not link the leftovers

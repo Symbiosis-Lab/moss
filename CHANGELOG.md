@@ -12,6 +12,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- The Previous, Next and folder links of a series point at a page's clean address (`/letters/second/`), like every other link moss writes, instead of its `index.html`.
 - In a folder sorted newest first, a series now runs oldest to newest, so Next opens the newer page and a reader can go through it in the order it was written. Pages that share a date keep their order.
 - `moss import` rewrites a link that redirects off the site, such as a click-tracking short link, to where it leads: the off-site address, or the `mailto:` or `tel:` address it names. Before, a link to the old host was left, which dies with the old site, and one that redirected to a mail address became a "Page Unavailable" page that the post linked to. A redirect that returns to an address already visited now says the site redirects it to itself in a loop.
 - `moss import` drops the `?ref=<the site's own host>` that some platforms add to every outbound link. Other parameters and the `#fragment` stay, and a `ref` naming another host is left alone.
