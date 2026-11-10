@@ -514,7 +514,7 @@ fn a_copy_is_never_walked_and_is_reported_when_the_root_has_no_moss() {
     let report = find_nested_roots(tmp.path(), None, &small);
     assert!(!report.truncated, "the copy's cache must not exhaust the scan");
     assert_eq!(report.dirs_visited, 2);
-    assert_eq!(report.moss_copies, vec![MossCopy { name: ".moss 2".into(), published: None }]);
+    assert_eq!(report.moss_copies, vec![MossCopy { name: ".moss 2".into(), evidence: CopyEvidence::Listed }]);
 }
 
 #[test]
@@ -531,15 +531,45 @@ fn a_set_aside_counts_only_when_it_records_a_published_site() {
     assert_eq!(report.dirs_visited, 1, "and its cache is still not walked");
 }
 
-/// A set-aside with no state file may be one whose state has not been
-/// listed yet in a cloud folder: it counts.
+/// A set-aside is unpublished only when every trace a publish leaves is
+/// provably absent from a listing on this computer; a copy the cloud has not
+/// listed yet is unknown, and counts.
 #[test]
-fn a_set_aside_without_state_counts() {
+fn a_set_aside_is_unpublished_only_when_every_publish_trace_is_absent() {
     let tmp = tempfile::tempdir().unwrap();
     filled_copy(tmp.path(), ".moss.removed-20261030", None, 1);
     let report = find_nested_roots(tmp.path(), None, &limits());
-    assert_eq!(report.moss_copies, vec![MossCopy { name: ".moss.removed-20261030".into(), published: None }]);
+    assert_eq!(report.moss_copies, vec![MossCopy { name: ".moss.removed-20261030".into(), evidence: CopyEvidence::Unpublished }]);
+    assert!(!report.moss_copies[0].is_site_data());
+
+    let copy = tmp.path().join(".moss.removed-20261030");
+    for (trace, body) in [("deploy/records/site.json", "{}"), ("history/publishes/1.json", "{}"), ("keys/ipns/main", "k"), ("identity/public.json", "{\"pubkey\":\"p\",\"email\":\"a@example.com\"}")] {
+        let t = tempfile::tempdir().unwrap();
+        filled_copy(t.path(), ".moss.removed-20261030", Some("last_build = \"x\"\n"), 1);
+        let file = t.path().join(".moss.removed-20261030").join(trace);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, body).unwrap();
+        assert_eq!(find_nested_roots(t.path(), None, &limits()).moss_copies[0].evidence, CopyEvidence::Published, "{trace}");
+    }
+
+    fs::create_dir_all(copy.join("identity")).unwrap();
+    fs::write(copy.join("identity/public.json"), "{\"pubkey\":\"p\",\"email\":\"\"}").unwrap();
+    fs::create_dir_all(copy.join("deploy/records")).unwrap();
+    assert_eq!(find_nested_roots(tmp.path(), None, &limits()).moss_copies[0].evidence, CopyEvidence::Unpublished, "no email, no records");
+
+    let _in_cloud = crate::build::icloud::pretend::evicted(&copy.join("deploy"));
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.moss_copies[0].evidence, CopyEvidence::Arriving, "a folder not listed here is unknown");
     assert!(report.moss_copies[0].is_site_data());
+}
+
+#[test]
+fn a_copy_the_cloud_has_not_listed_is_arriving() {
+    let tmp = tempfile::tempdir().unwrap();
+    filled_copy(tmp.path(), ".moss 2", None, 1);
+    let _in_cloud = crate::build::icloud::pretend::evicted(&tmp.path().join(".moss 2"));
+    let report = find_nested_roots(tmp.path(), None, &limits());
+    assert_eq!(report.moss_copies[0].evidence, CopyEvidence::Arriving);
 }
 
 /// Inside a site that owns `.moss`, a folder holding only a copy is that
@@ -607,4 +637,17 @@ fn a_file_or_symlink_named_like_a_copy_is_not_one() {
         std::os::unix::fs::symlink(elsewhere.path(), tmp.path().join(".moss (1)")).unwrap();
     }
     assert!(find_nested_roots(tmp.path(), None, &limits()).moss_copies.is_empty());
+}
+
+#[test]
+fn a_set_aside_that_is_here_but_cannot_be_read_says_so() {
+    for (file, body) in [("state.toml", "not toml ["), ("identity/public.json", "not json")] {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".moss.removed-20261030").join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, body).unwrap();
+        let report = find_nested_roots(tmp.path(), None, &limits());
+        assert_eq!(report.moss_copies[0].evidence, CopyEvidence::Unreadable, "{file}");
+        assert!(report.moss_copies[0].is_site_data(), "{file}");
+    }
 }
