@@ -504,10 +504,9 @@ test.describe("the page title's size", () => {
 test.describe("headings in languages of compound words", () => {
   const hyphens = (page: Page) => page.locator("article h2").first().evaluate((h) => getComputedStyle(h).hyphens);
 
-  test("hyphenate in German, only where long words alone may break, and keep whole words on an English page", async ({ page }) => {
+  test("keep whole words, in German as on an English page", async ({ page }) => {
     await open(page, "/hyphens-de/", 390);
-    const limited = await page.evaluate(() => CSS.supports("hyphenate-limit-chars", "10 4 4"));
-    expect(await hyphens(page)).toBe(limited ? "auto" : "manual");
+    expect(await hyphens(page)).toBe("manual");
     await open(page, "/hyphens-en/", 390);
     expect(await hyphens(page)).toBe("manual");
   });

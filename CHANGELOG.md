@@ -51,6 +51,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- Headings no longer break inside a word with an automatic hyphen, in German, Dutch, Danish, Norwegian, Swedish or Finnish, where a long compound on a phone came out split in two. They keep whole words, as in every other language; a theme that wants hyphenation sets `hyphens: auto` on its own headings.
 - A `moss build` or deploy, and the first build after the desktop app starts, no longer read every page, stylesheet and script twice to find which pictures they name: the last build's reading is kept in `.moss/build.nosync/cache/memo/` and only files changed since are read. On a 319-page site a build that changed nothing went from about 1.97 s to 1.84 s. The desktop app and the `moss` command line cannot use each other's reading, so the first build after switching between them reads every file once.
 - A build no longer writes again the files whose bytes it did not change, such as each page's QR code, the pages that redirect an old address, and moss's own scripts and stylesheets. Every build used to replace them, so anything that judged a file by its date read it again. On a 319-page site a build that changed nothing went from about 1.8 s to 1.5 s.
 - Rendering a page no longer compiles two text patterns for every section of its body, which it did to fix up the paths of pictures and media. On a 5,000-page site the markdown step of a build that changed nothing went from about 0.8 s to 0.1 s.
