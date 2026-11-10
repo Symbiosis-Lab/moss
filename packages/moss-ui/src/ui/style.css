@@ -1858,6 +1858,12 @@ body.divider-dragging * {
   transform: translate(-0.5px, 0.5px);
 }
 
+/* Off reads as off at a glance: a logo keeps its colour only while the channel is on. */
+.moss-syndication-button:not(.enabled) :is(.channel-icon-glyph, .channel-icon-fallback) {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
 .moss-syndication-button:hover {
   color: var(--moss-color-accent);
   background: var(--moss-color-surface);
