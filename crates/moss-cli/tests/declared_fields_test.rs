@@ -260,6 +260,29 @@ fn a_builtin_description_placed_as_eyebrow_draws_only_the_authored_value() {
 }
 
 #[test]
+fn legacy_tagline_declaration_draws_each_articles_own_eyebrow() {
+    let config = "[fields.tagline]\ntype = \"text\"\nplace = \"eyebrow\"\n";
+    let s = site(config, &[
+        ("index.md", "---\ntitle: Home\ntagline: Notes from home\n---\nWelcome\n"),
+        ("Housing/court.md", "---\ntitle: Court\ntagline: Homes around a garden\n---\nbody\n"),
+        ("Housing/tower.md", "---\ntitle: Tower\ntagline: Rooms above the river\n---\nbody\n"),
+    ]);
+    let o = build_strict(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert!(!err.contains("[fields.tagline]"), "{err}");
+    for (path, title, tagline) in [
+        ("housing/court/index.html", "Court", "Homes around a garden"),
+        ("housing/tower/index.html", "Tower", "Rooms above the river"),
+    ] {
+        let html = built(&s, path);
+        let eyebrow = position(&html, &format!("<p class=\"moss-eyebrow\"><span data-field=\"tagline\">{tagline}</span></p>"));
+        let h1 = position(&html, &format!("<h1 class=\"moss-article-title\">{title}</h1>"));
+        assert!(eyebrow < h1, "{html}");
+    }
+}
+
+#[test]
 fn a_page_in_the_simplified_dialect_is_drawn_and_checked_like_any_other() {
     let page = "title: Court\nkind: Building\ndistrict: Eastbank\nyears: soon\n---\nbody\n";
     let s = site(PLACED, &[("Housing/court.md", page)]);

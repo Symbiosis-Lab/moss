@@ -1381,7 +1381,7 @@ pub fn builtin_field(name: &str) -> Option<&'static BuiltinField> {
 
 /// The built-in fields a site may give a `place`: page text a reader would
 /// see. Plain-string plumbing such as `url`, `slot` or `uid` is not on it.
-pub const PLACEABLE_BUILTINS: &[&str] = &["description", "publisher"];
+pub const PLACEABLE_BUILTINS: &[&str] = &["description", "publisher", "tagline"];
 
 #[cfg(test)]
 #[path = "schema_fields_tests.rs"]

@@ -386,12 +386,14 @@ impl ConfigFile {
                 if !moss_core::schema_fields::PLACEABLE_BUILTINS.contains(&name.as_str()) {
                     problems.push(format!(
                         "[fields.{name}] is a moss field and cannot be redeclared; of moss's fields only {} can take a place",
-                        moss_core::schema_fields::PLACEABLE_BUILTINS.join(" and ")
+                        moss_core::schema_fields::PLACEABLE_BUILTINS.join(", ")
                     ));
                     continue;
                 }
-                for key in sub.keys() {
-                    if !matches!(key.as_str(), "place" | "label") {
+                for (key, value) in sub {
+                    if !matches!(key.as_str(), "place" | "label")
+                        && !(name == "tagline" && key == "type" && value.as_str() == Some("text"))
+                    {
                         problems.push(format!(
                             "[fields.{name}] has \"{key}\"; built-in fields take only place and label"
                         ));

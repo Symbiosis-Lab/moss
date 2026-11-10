@@ -3,6 +3,9 @@
 All notable changes to moss will be documented here.
 
 ## [Unreleased]
+### Fixed
+
+- A site's `tagline` can be placed again, for example as an eyebrow above an article's title. Existing `[fields.tagline]` declarations with `type = "text"` keep working.
 
 ## [0.15.21] - 2026-11-09
 

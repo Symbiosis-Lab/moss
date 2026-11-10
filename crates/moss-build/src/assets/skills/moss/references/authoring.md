@@ -791,7 +791,7 @@ To stop a dimension generating pages, either switch the built-in off — `[terms
 
 The built-in `date:` takes a calendar date (`1938-05-18`). A catalogue's date that is not one, such as `1935 - 1938 (Approximate)`, belongs in a declared text field that keeps it as written, never rewritten into a date moss can parse. Use that one field for every row of a collection, shown with `place = "facts"`: mixing `date:` on most pages with a text field on a few leaves the few without a visible date.
 
-A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields, except that `description` and `publisher` can take a `place` (see below).
+A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields, except that `description`, `publisher` and `tagline` can take a `place` (see below).
 
 A field's `place` draws it on the page itself, never on a listing row or card (those take a field only through `card = true`, below):
 
@@ -870,7 +870,7 @@ type = "text"
 card = true
 ```
 
-`description` and `publisher` can take a place too, and their type is their own. `[fields.description]` with `place = "eyebrow"` draws the page's own `description:` as written, never the description moss derives from the body when the page has none. A built-in takes only `place` and `label`; no other moss field can take a place.
+`description`, `publisher` and `tagline` can take a place too, and their type is their own. `[fields.description]` with `place = "eyebrow"` draws the page's own `description:` as written, never the description moss derives from the body when the page has none. `[fields.tagline]` with `place = "eyebrow"` draws an article's own `tagline:` above its title. A built-in takes only `place` and `label`, except that `tagline` also accepts a redundant `type = "text"` for compatibility with existing declarations; no other type override is accepted, and no other moss field can take a place.
 
 A group names other fields in `of` and places them as one element. A page does not write a value for the group. `of` lists declared fields, or the page's own `title` or `date`, in the order they are drawn:
 

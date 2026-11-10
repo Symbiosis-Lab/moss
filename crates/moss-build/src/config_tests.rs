@@ -238,7 +238,7 @@ fn field_decls_plumbing_builtin_cannot_take_a_place() {
     let config = ConfigFile::parse("[fields.url]\nplace = \"eyebrow\"\n").unwrap();
     let (decls, problems) = config.field_decls();
     assert!(decls.is_empty());
-    assert!(problems.iter().any(|p| p.contains("[fields.url]") && p.contains("description and publisher")), "got: {problems:?}");
+    assert!(problems.iter().any(|p| p.contains("[fields.url]") && p.contains("description, publisher, tagline")), "got: {problems:?}");
 }
 
 #[test]
@@ -311,6 +311,37 @@ fn field_decls_a_builtin_takes_only_place_and_label() {
     assert_eq!(problems.len(), 2, "{problems:?}");
     assert!(problems.iter().any(|p| p.contains("has \"type\"; built-in fields take only place and label")), "{problems:?}");
     assert!(problems.iter().any(|p| p.contains("has \"in\"; built-in fields take only place and label")), "{problems:?}");
+}
+
+#[test]
+fn field_decls_tagline_takes_a_place_with_or_without_redundant_text_type() {
+    for type_line in ["", "type = \"text\"\n"] {
+        let config = ConfigFile::parse(&format!("[fields.tagline]\n{type_line}place = \"eyebrow\"\nlabel = \"Tagline\"\n")).unwrap();
+        let (decls, problems) = config.field_decls();
+        assert!(problems.is_empty(), "got: {problems:?}");
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].name, "tagline");
+        assert_eq!(decls[0].kind, moss_core::fields::FieldKind::Text);
+        assert_eq!(decls[0].place, Some(moss_core::fields::Place::Eyebrow));
+        assert_eq!(decls[0].label_for("en"), "Tagline");
+    }
+}
+
+#[test]
+fn field_decls_tagline_rejects_type_overrides_and_other_builtin_keys() {
+    for (key, value) in [
+        ("type", "\"number\""), ("type", "\"unknown\""), ("type", "true"),
+        ("of", "[\"title\"]"), ("text", "\"Read\""), ("in", "[\"Housing\"]"),
+        ("card", "true"), ("pictures", "2"), ("unknown", "true"),
+    ] {
+        let config = ConfigFile::parse(&format!("[fields.tagline]\n{key} = {value}\nplace = \"eyebrow\"\n")).unwrap();
+        let (decls, problems) = config.field_decls();
+        assert_eq!(problems, vec![format!("[fields.tagline] has \"{key}\"; built-in fields take only place and label")]);
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0], moss_core::fields::FieldDecl {
+            name: "tagline".into(), place: Some(moss_core::fields::Place::Eyebrow), ..Default::default()
+        });
+    }
 }
 
 #[test]
