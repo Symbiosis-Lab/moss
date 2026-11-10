@@ -907,6 +907,27 @@ mod tests {
     }
 }
 
+/// Whether an inline is only spaces: a soft break or the gap between words.
+pub(crate) fn is_blank(inline: &Inline) -> bool {
+    matches!(inline, Inline::Text(s) if s.trim().is_empty())
+}
+
+/// The words of a line that is one italic span and nothing else.
+pub(crate) fn lone_italic(line: &[Inline]) -> Option<&[Inline]> {
+    let mut shown = line.iter().filter(|i| !is_blank(i));
+    match (shown.next(), shown.next()) {
+        (Some(Inline::Emphasis(words)), None) if !words.is_empty() => Some(words),
+        _ => None,
+    }
+}
+
+/// The picture a link wraps, when the link holds nothing else.
+pub(crate) fn linked_image(children: &[Inline]) -> Option<&Inline> {
+    let mut shown = children.iter().filter(|c| !is_blank(c));
+    let image = shown.next().filter(|i| matches!(i, Inline::Image { .. }))?;
+    shown.next().is_none().then_some(image)
+}
+
 /// Whether a paragraph's inlines are nothing but links, with only spaces or
 /// line breaks between them: a row of links, not a sentence holding one.
 pub fn is_link_row(inlines: &[Inline]) -> bool {

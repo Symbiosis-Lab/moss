@@ -8,8 +8,12 @@ A lone embed gets its own player.
 
 ![[clip.mp4]]
 
-An embed that shares its paragraph with other text still gets its own player, not a broken image.
+An embed on the line above a caption stands alone, and the caption is its own paragraph.
 
 ![[clip.mp4]]
 A caption on the next line.
+
+An embed beside words on one line still gets its own player, not a broken image.
+
+Watch ![[clip.mp4]] beside these words.
 

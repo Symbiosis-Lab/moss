@@ -423,6 +423,11 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     if config.hard_line_breaks {
         super::line_breaks::apply(&mut doc);
     }
+    // `HeadingIds::Number` marks the top-level parse: a grid cell or fragment
+    // is laid out by its host.
+    if heading_ids == HeadingIds::Number {
+        super::picture_row::split_lines(&mut doc, &|run| captioned_figure(run, &line_ctx, config.implicit_figure));
+    }
 
     doc
 }
@@ -451,17 +456,28 @@ fn promote_linked_figures(blocks: &mut [Block], line_ctx: &LineCtx<'_>) {
     }
 }
 
+/// What one picture and the italic line under it make when a line break split
+/// them out of a paragraph: the figure a blank line above would have given,
+/// undone under `implicit_figure: false` as that one was.
+fn captioned_figure(run: &[Inline], line_ctx: &LineCtx<'_>, implicit_figure: bool) -> Option<Block> {
+    let mut figure = if run.iter().any(|i| matches!(i, Inline::Link { .. })) {
+        linked_figure(run, line_ctx)?
+    } else {
+        let em = italic_caption_index(run)?;
+        try_promote_image_only(run.to_vec(), &[], 0, line_ctx, Caption::Italic(em)).ok()?
+    };
+    if !implicit_figure {
+        unwrap_implicit_figure(&mut figure);
+    }
+    Some(figure)
+}
+
 /// The figure a linked picture with a caption line makes, by the same rule an
 /// unlinked one promotes by.
 fn linked_figure(inlines: &[Inline], line_ctx: &LineCtx<'_>) -> Option<Block> {
-    let blank = |i: &Inline| matches!(i, Inline::Text(s) if s.trim().is_empty());
     let at = inlines.iter().position(|i| matches!(i, Inline::Link { .. }))?;
     let Inline::Link { url, children, .. } = &inlines[at] else { return None };
-    let mut images = children.iter().filter(|c| !blank(c));
-    let image = images.next().filter(|i| matches!(i, Inline::Image { .. }))?;
-    if images.next().is_some() {
-        return None;
-    }
+    let image = super::node::linked_image(children)?;
     let mut unlinked = inlines.to_vec();
     unlinked[at] = image.clone();
     let em = italic_caption_index(&unlinked)?;

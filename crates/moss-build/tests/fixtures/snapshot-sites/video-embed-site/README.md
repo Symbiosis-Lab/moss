@@ -2,7 +2,7 @@
 
 Covers: `moss-core::ast::dispatch_wikilink_embeds` — a video embed rendering by its own kind regardless of paragraph position.
 
-A one-page site with a synthetic `clip.mp4` (2s, 320x240, generated with ffmpeg — see below), embedded twice: alone in its own paragraph, and sharing a paragraph with a caption joined by a soft line break. Pins the real end-to-end HTML for both: a `<video>` element in each case, never an `<img>` for the mid-paragraph one.
+A one-page site with a synthetic `clip.mp4` (2s, 320x240, generated with ffmpeg — see below), embedded three times: alone in its own paragraph, on the line above a caption (the line break splits it out as a lone embed, with the caption as its own paragraph), and beside words on one line. Pins the real end-to-end HTML for all three: a `<video>` element in each case, never an `<img>` for the mid-paragraph one.
 
 ## Layout
 
