@@ -63,20 +63,20 @@ pub fn slugify_dir_path(path: &str) -> String {
         .join("/")
 }
 
-/// An 8-character hex UID for the page at `relative_path`: the first four
-/// bytes of SHA-256 over the composed path, a 0 byte and `salt`. For a new
-/// page the salt is the hex SHA-256 of its raw bytes, so every machine holding
-/// the same page builds it under the same uid; for a duplicate given another
-/// uid it is the contested uid and an attempt number. Once a publish writes the
-/// uid into the page it stays when the page moves or changes, so it cannot be
-/// recomputed from the page as it is later.
-pub fn generate_uid(relative_path: &str, salt: &str) -> String {
+/// A deterministic, nonsecret 8-character hex UID for the page at `relative_path`.
+/// Uses the first four bytes of SHA-256 over the NFC-normalized path, a zero
+/// byte and `discriminator`. For a new page, the discriminator is the hex
+/// SHA-256 of its raw bytes; for a duplicate, it is the contested UID and an
+/// attempt number. Equal inputs produce the same UID on every machine.
+/// Once published into a page, the UID stays when the page moves or changes
+/// and cannot be recomputed from the later page.
+pub fn generate_uid(relative_path: &str, discriminator: &str) -> String {
     use sha2::{Digest, Sha256};
     use unicode_normalization::UnicodeNormalization;
     let mut hasher = Sha256::new();
     hasher.update(relative_path.nfc().collect::<String>().as_bytes());
     hasher.update([0]);
-    hasher.update(salt.as_bytes());
+    hasher.update(discriminator.as_bytes());
     hasher.finalize()[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
