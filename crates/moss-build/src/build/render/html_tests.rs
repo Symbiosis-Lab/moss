@@ -9526,10 +9526,42 @@ mod sequence_siblings_tests {
     }
 
     fn chain(docs: &[ParsedDocument]) -> Vec<String> {
-        sequence_siblings(docs, "guide/index.html", "guide/", &weighted())
+        chain_sorted(docs, &weighted())
+    }
+
+    fn chain_sorted(docs: &[ParsedDocument], sort: &ResolvedSort) -> Vec<String> {
+        sequence_siblings(docs, "guide/index.html", "guide/", sort)
             .iter()
             .map(|d| d.clean_stem.clone())
             .collect()
+    }
+
+    fn dated(stem: &str, date: &str) -> ParsedDocument {
+        ParsedDocument { date: Some(date.to_string()), weight: None, ..article(stem, 0) }
+    }
+
+    fn newest_first(explicit_order: Option<Vec<String>>) -> ResolvedSort {
+        ResolvedSort { axis: SortAxis::Date, explicit_order, series_default: false }
+    }
+
+    #[test]
+    fn a_newest_first_folder_is_read_forward_in_time() {
+        let docs = vec![parent(), dated("third", "2026-03-01"), dated("first", "2026-01-01"), dated("second", "2026-02-01")];
+        assert_eq!(chain_sorted(&docs, &newest_first(None)), vec!["first", "second", "third"]);
+    }
+
+    /// The tie-break is not reversed with the dates: chapters that share a date stay in order.
+    #[test]
+    fn pages_that_share_a_date_keep_their_order_in_a_forward_series() {
+        let docs = vec![parent(), dated("03-room", "2026-05-01"), dated("01-door", "2026-05-01"), dated("02-hall", "2026-05-01")];
+        assert_eq!(chain_sorted(&docs, &newest_first(None)), vec!["01-door", "02-hall", "03-room"]);
+    }
+
+    #[test]
+    fn an_explicit_order_on_the_date_axis_is_unchanged() {
+        let docs = vec![parent(), dated("old", "2026-01-01"), dated("new", "2026-03-01"), dated("mid", "2026-02-01")];
+        let sort = newest_first(Some(vec!["old".to_string()]));
+        assert_eq!(chain_sorted(&docs, &sort), vec!["old", "new", "mid"]);
     }
 
     /// Baseline: a plain folder of articles is untouched by the two

@@ -1603,7 +1603,10 @@ fn sequence_siblings<'a>(
         })
         .filter(|pd| is_direct_child(&pd.url_path, parent_prefix))
         .collect();
-    moss_core::sort::sort_by_resolved(&siblings, resolved)
+    // However a folder lists its pages, a series is read forward in time: next is the newer page.
+    let forward = (resolved.axis == moss_core::sort::SortAxis::Date && resolved.explicit_order.is_none())
+        .then(|| moss_core::sort::ResolvedSort { axis: moss_core::sort::SortAxis::DateAsc, ..resolved.clone() });
+    moss_core::sort::sort_by_resolved(&siblings, forward.as_ref().unwrap_or(resolved))
 }
 
 /// Is `url_path` a direct child of `prefix` — one segment below it, tolerating

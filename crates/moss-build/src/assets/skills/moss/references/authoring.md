@@ -1095,7 +1095,7 @@ external_url: "/#menu"
 
 A partial with `nav: true` and no `external_url` adds nothing to the nav, and the build warns with the file's name. Write the header link's frontmatter between `---` lines, as above: `external_url` is read from fenced frontmatter only, so in the fence-less `key: value` form the link is not added.
 
-`series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
+`series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, except that a folder sorted newest first by date is read forward in time, so Next opens the newer page and pages that share a date keep their order; a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
 
 Show a capped feed on the homepage by pointing at that folder:
 
