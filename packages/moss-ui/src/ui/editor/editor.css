@@ -788,6 +788,13 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 }
 .moss-editor-cm .cm-content { padding: 20px 0 60px; cursor: text; }
 .moss-editor-cm .cm-line { padding-left: var(--moss-editor-line-inset); padding-right: var(--moss-editor-line-inset); }
+/* The inset for a pseudo-element positioned against the line: its `100%` is the line's width, a hang less than the padding's (`.cm-li-hang` has margin-left only), so it adds the hang back. */
+.moss-editor-cm .cm-line {
+  --moss-line-inset-box: max(
+    calc(var(--moss-editor-spine) + var(--moss-editor-hang-gutter)),
+    calc((100% + var(--lp-hang, 0px) - var(--moss-editor-measure)) / 2)
+  );
+}
 .moss-editor-cm .cm-focused { outline: none; }
 /* Empty-document ghost line (@codemirror/view placeholder()) — override CM6's
  * hard-coded #888 with the theme's muted color; vanishes on first input. */
@@ -1414,8 +1421,8 @@ body.own-titlebar.controls-trailing.owns-caption .nav-right {
 .moss-editor-cm .cm-line.cm-callout-block::before {
   content: "";
   position: absolute;
-  left: calc(var(--moss-editor-line-inset, 28px) - var(--lp-hang, 0px));
-  right: var(--moss-editor-line-inset, 28px);
+  left: calc(var(--moss-line-inset-box, 28px) - var(--lp-hang, 0px));
+  right: var(--moss-line-inset-box, 28px);
   top: 0;
   bottom: 0;
   border-left: 3px solid var(--cm-callout-bar-color, var(--moss-border-medium));
