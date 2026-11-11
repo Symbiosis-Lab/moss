@@ -332,7 +332,8 @@ pub(crate) fn save_derived(moss_dir: &Path, meta: &LinkMeta) {
         color: meta.cover_color.clone(),
     };
     let Ok(json) = serde_json::to_string_pretty(&derived) else { return };
-    if let Err(e) = crate::infra::atomic_write::write_atomic(&derived_path(moss_dir, cover), json) {
+    // Every build saves this, nearly always unchanged; it is rebuildable, so it needs no flush.
+    if let Err(e) = crate::build::io_utils::write_output_if_changed(&derived_path(moss_dir, cover), json.as_bytes()) {
         log::info!(target: "link-meta", "{e}");
     }
 }
@@ -1560,6 +1561,24 @@ mod tests {
         meta.cover = link_snapshot::store_cover(&tmp, b"second", "png");
         save_fetched(&tmp, &meta);
         assert_eq!(read_cache(&tmp, url, None).unwrap().cover_width, None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_the_same_derived_fields_leaves_the_file_alone() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = unique_tmp("derived_unchanged");
+        let cover = link_snapshot::store_cover(&tmp, b"picture", "png");
+        let mut meta = LinkMeta { cover: cover.clone(), cover_width: Some(3), ..empty("https://x.example.test/") };
+        let path = derived_path(&tmp, cover.as_deref().unwrap());
+        save_derived(&tmp, &meta);
+        let inode = std::fs::metadata(&path).unwrap().ino();
+        save_derived(&tmp, &meta);
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode, "an identical save must not replace the file");
+        meta.cover_width = Some(4);
+        save_derived(&tmp, &meta);
+        assert!(std::fs::read_to_string(&path).unwrap().contains('4'), "a changed save still lands");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
