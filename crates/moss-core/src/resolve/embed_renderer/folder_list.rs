@@ -16,7 +16,7 @@ pub struct FolderEmbedParams {
     pub lazy_cards: bool,
     pub limit: Option<usize>,
     pub sort: Option<SortAxis>,
-    pub style: Option<String>,   // "list" | "summary" | "grid"
+    pub style: Option<String>,   // "list" | "summary" | "lead" | "grid" | "stream"
     pub depth: Option<String>,   // "direct" | "all"
     pub group: Option<String>,   // "year" | "none" | "upcoming"
     /// Listing filter: "only" keeps pages that have a cover. Applied after

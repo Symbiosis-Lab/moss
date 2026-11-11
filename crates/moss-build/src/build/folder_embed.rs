@@ -31,14 +31,17 @@
 mod maps;
 pub(crate) use maps::ListPlacement;
 pub(crate) mod hero_from;
+pub(crate) mod inline_body;
 pub(crate) mod members;
 mod calendar_tokens;
 pub mod listing_markup;
 pub(crate) mod upcoming;
 mod nav_note;
 mod repeat_note;
+mod stream;
 pub(crate) use nav_note::note_home_map_of_nav_root;
-pub(crate) use repeat_note::{note_repeated_child_listing, ListedUrls};
+pub(crate) use stream::is_stream_host;
+pub(crate) use repeat_note::{note_repeated_child_listing, ListingHost};
 use maps::place_map_with_placement;
 
 use std::path::Path;
@@ -318,7 +321,7 @@ pub(crate) fn resolve_children_config(
             // contract). A single dated post gets a year heading too; a
             // dateless listing stays flat. Auto-detected `year` is still
             // suppressed under a non-Date sort axis in `effective_group_for_axis`.
-            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
+            let auto_value = if !matches!(style.value.as_str(), "summary" | "lead" | "stream") && docs.iter().any(|d| d.date.is_some() || d.event.is_some()) {
                 "year".to_string()
             } else {
                 "none".to_string()
@@ -400,7 +403,7 @@ pub(crate) fn folder_latest_date<D: std::borrow::Borrow<ParsedDocument>>(
 /// * `folder_docs` - Direct children documents to render
 /// * `all_folder_docs` - All documents in the folder (for computing child counts)
 /// * `project` - Project structure for date extraction
-/// * `style` - "list", "summary", "lead" (summary whose first item leads), or "grid" (collection cards)
+/// * `style` - "list", "summary", "lead" (summary whose first item leads), "grid" (collection cards), or "stream" (each page drawn whole)
 /// * `group` - "year" or "none"
 /// * `lang` - Language for UI strings
 /// * `skip_resort` - If true, skip the internal date-desc resort and render docs
@@ -518,6 +521,10 @@ pub(crate) fn generate_children(
     let upcoming = upcoming::urls(group, folder_docs, now);
     if group == "upcoming" {
         sorted = upcoming::order(sorted, &upcoming, skip_resort);
+    }
+
+    if style == "stream" {
+        return stream::render(&sorted, folder_docs, typesetting, rows);
     }
 
     // Grid style: render as collection cards.
@@ -705,6 +712,12 @@ pub(crate) struct ListingRowOptions<'a> {
     pub pictures: Option<usize>,
     /// The strip slides sideways in a loop (`motion:marquee`).
     pub marquee: bool,
+    /// The address of the page the listing is drawn on; `style:stream` rebases
+    /// each page's body to its directory.
+    pub host_url_path: &'a str,
+    /// The id prefixes already taken on that page, shared by every listing on
+    /// it so a page drawn whole twice keeps its ids apart.
+    pub id_scopes: Option<&'a std::cell::RefCell<inline_body::IdScopes>>,
 }
 
 /// Bucket articles by year using find-or-append: one section per year, in
@@ -839,6 +852,7 @@ pub fn expand_markers_in_documents_with_place_maps(
     now: chrono::NaiveDateTime,
 ) {
     hero_from::resolve_all(documents, project, dir_overrides, math, media_lookup, now);
+    stream::absorb_listed_features(documents, project, now);
     let has_marker = |d: &ParsedDocument| [Some(d.html_content.as_str()), d.hero_html.as_deref()].into_iter().flatten().any(|h| h.contains(MARKER_FOLDER_LIST));
     if !documents.iter().any(has_marker) {
         return;
@@ -862,7 +876,7 @@ pub fn expand_markers_in_documents_with_place_maps(
         // Every marker here came from an authored `![[folder/|…]]`, never from
         // `synthesize_children_marker`. One SVG identity sequence per page.
         let ordinal = std::cell::Cell::new(0);
-        let shown = ListedUrls::default();
+        let shown = ListingHost::of(&documents[i]);
         // The markers still carry the authored options, so the page's script
         // gate is read from them before they are replaced by the listing.
         documents[i].features.marquee |= has_marquee_marker(&documents[i]);
@@ -880,7 +894,7 @@ pub fn expand_markers_in_documents_with_place_maps(
                 true,
                 place_maps,
                 &ordinal,
-                Some(&shown),
+                &shown,
                 now,
             )
         };
@@ -902,7 +916,10 @@ pub fn expand_markers_in_documents_with_place_maps(
         documents[i].body_plan = plan;
         documents[i].html_content = resolved;
         documents[i].hero_html = hero;
-        documents[i].embedded_listing_urls = shown.into_inner();
+        if shown.stream.get() {
+            stream::absorb_into(documents, i, &shown.streamed.into_inner());
+        }
+        documents[i].embedded_listing_urls = shown.urls.into_inner();
     }
 }
 
@@ -927,9 +944,12 @@ pub(crate) fn resolve_markers(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
 ) -> String {
+    // The page the markers sit on, or a stand-in at the source's address.
+    let stand_in = || ParsedDocument { url_path: from_md_path.replace(".md", ".html"), lang: site_lang, ..Default::default() };
+    let host = all_docs.iter().find(|d| d.source_path.as_deref() == Some(from_md_path)).map_or_else(|| ListingHost::of(&stand_in()), ListingHost::of);
     resolve_markers_with_place_maps(
         html, from_md_path, all_docs, project, dir_overrides, site_lang,
-        typesetting, media_lookup, math, None, None, crate::build::inputs::now(),
+        typesetting, media_lookup, math, None, &host, crate::build::inputs::now(),
     )
 }
 
@@ -945,7 +965,7 @@ pub(crate) fn resolve_markers_with_place_maps(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
-    shown: Option<&ListedUrls>,
+    host: &ListingHost,
     now: chrono::NaiveDateTime,
 ) -> String {
     resolve_markers_impl(
@@ -961,7 +981,7 @@ pub(crate) fn resolve_markers_with_place_maps(
         false,
         place_maps,
         &std::cell::Cell::new(0),
-        shown,
+        host,
         now,
     )
 }
@@ -988,7 +1008,7 @@ fn resolve_markers_impl(
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     ordinal: &std::cell::Cell<usize>,
-    shown: Option<&ListedUrls>,
+    host: &ListingHost,
     now: chrono::NaiveDateTime,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
@@ -1029,7 +1049,7 @@ fn resolve_markers_impl(
                     math,
                     is_embed,
                     place_maps,
-                    shown,
+                    host,
                     now,
                 )
             }
@@ -1530,7 +1550,7 @@ fn render_one(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
-    shown: Option<&ListedUrls>,
+    host: &ListingHost,
     now: chrono::NaiveDateTime,
 ) -> Result<String, String> {
     // Prefer the marker's `from=` (the original markdown source); the
@@ -1577,16 +1597,14 @@ fn render_one(
 
     let members::Ordered { resolved, style: style_resolved, group: effective_group, skip_resort, limited, truncated } =
         order_listed(parsed, &folder_docs, target_doc, is_flatten, math, now);
-    if let Some(shown) = shown {
-        shown.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
+    host.urls.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
+    if style_resolved.value == "stream" {
+        host.stream.set(true);
+        host.streamed.borrow_mut().extend(limited.iter().filter(|d| stream::drawn_whole(d, &host.url_path)).map(|d| d.url_path.clone()));
     }
     let children_style = style_resolved.value.clone();
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
-    let host_tag = all_docs
-        .iter()
-        .find(|d| d.source_path.as_deref() == Some(from))
-        .map(|h| h.lang_tag.clone().unwrap_or_else(|| h.lang.as_bcp47_attr().to_string()));
 
     // With a caption, the whole placement — width, float AND size — moves
     // out to the figure wrapping the listing (the width escape is a
@@ -1602,9 +1620,11 @@ fn render_one(
         placement: container_placement,
         lazy_cards: parsed.lazy_cards,
         count: parsed.count.as_ref(),
-        listing_tag: host_tag.as_deref(),
+        listing_tag: Some(&host.lang_tag),
         pictures: parsed.pictures,
         marquee: parsed.marquee,
+        host_url_path: &host.url_path,
+        id_scopes: Some(&host.id_scopes),
     };
 
     // Dispatch rendering based on style.

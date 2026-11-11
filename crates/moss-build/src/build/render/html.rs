@@ -247,6 +247,26 @@ fn annotate_children_listing(listing: String, emit_source_lines: bool) -> String
     )
 }
 
+/// The folder a page's own listing shows and whether it names an edition home
+/// (the listing then takes that home's filters), or `None` when the page ends
+/// in no listing. A home (the root's or a language's) lists its tree; any
+/// other page a claimed term, else its own folder when it is a folder index,
+/// else the folder its `children_source` names. `children_source` redirects a
+/// home too. The renderer and whatever must agree with it ask here.
+pub(crate) fn own_listing_target(doc: &ParsedDocument, all_docs: &[ParsedDocument]) -> Option<(String, bool)> {
+    let source = doc.children_source.as_deref().map(|r| resolve_children_source_folder_path(r, all_docs));
+    if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
+        return Some(source.unwrap_or_else(|| (crate::build::folder_embed::home_defaults(doc).tree.to_string(), false)));
+    }
+    let names_scoped_home = source.as_ref().is_some_and(|t| t.1);
+    let folder = match doc.term_listing.as_deref() {
+        Some(term) => term.to_string(),
+        None if doc.kind == PageKind::Folder && doc.url_path.ends_with("/index.html") => doc.url_path.trim_end_matches("/index.html").to_string(),
+        None => source?.0,
+    };
+    Some((folder, names_scoped_home))
+}
+
 /// Resolves `children_source:`'s wikilink target to a folder's site path (no
 /// leading/trailing slash; `""` for the root) — the NAMED folder, never the
 /// hosting page's own `url_path`. Shared by both `children:` branches below.
@@ -579,7 +599,7 @@ impl<'a> PageFacts<'a> {
             from_md_path,
             names_scoped_home,
         );
-        let listed = crate::build::folder_embed::ListedUrls::default();
+        let listed = crate::build::folder_embed::ListingHost::of(doc);
         let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
             &marker,
             from_md_path,
@@ -591,7 +611,7 @@ impl<'a> PageFacts<'a> {
             Some(&context.shared.media_lookup),
             context.chrome.layout.assets.math,
             None,
-            Some(&listed),
+            &listed,
             context.shared.now,
         );
         crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
@@ -606,20 +626,10 @@ impl<'a> PageFacts<'a> {
     /// `children_source` ends in that listing; a term page and a place
     /// namespace root also get their map.
     fn host_listing(&self, context: &RenderCtx<'_, '_>, doc: &ParsedDocument, content: String, is_folder_index: bool) -> String {
-        let term_listing = doc.term_listing.as_deref();
-        let children_source_target = doc.children_source.as_deref()
-            .map(|r| resolve_children_source_folder_path(r, context.chrome.documents));
-        if !(is_folder_index || term_listing.is_some() || children_source_target.is_some()) {
+        let Some((folder_path, names_scoped_home)) = own_listing_target(doc, context.chrome.documents) else {
             return content;
-        }
-        let names_scoped_home = children_source_target.as_ref().is_some_and(|t| t.1);
-        let folder_path = term_listing.map(str::to_string).unwrap_or_else(|| {
-            if is_folder_index {
-                doc.url_path.trim_end_matches("/index.html").trim_end_matches("index.html").trim_end_matches('/').to_string()
-            } else {
-                children_source_target.map(|t| t.0).unwrap_or_default()
-            }
-        });
+        };
+        let term_listing = doc.term_listing.as_deref();
         // A `children_source` host needs its real source path, so the
         // listing's self-exclusion can match it.
         let from_md_path = if term_listing.is_some() || is_folder_index {
@@ -799,12 +809,8 @@ pub(super) fn render_page<'d>(
                 }
             };
 
-            // A home lists its own tree: "" for the root home, `en` for
-            // `en/index.html`. `children_source` redirects it elsewhere.
             let own_tree = crate::build::folder_embed::home_defaults(doc).tree;
-            let (target_folder_path, names_scoped_home) = doc.children_source.as_deref()
-                .map(|r| resolve_children_source_folder_path(r, all_docs))
-                .unwrap_or_else(|| (own_tree.to_string(), false));
+            let (target_folder_path, names_scoped_home) = own_listing_target(doc, all_docs).unwrap_or_default();
             let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
             let content = if !facts.children_in_sidebar && doc.children.unwrap_or(true) {

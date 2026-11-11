@@ -1102,11 +1102,11 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "children_style",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["list", "summary", "lead", "grid"]),
+        enum_values: Some(&["list", "summary", "lead", "grid", "stream"]),
         default_json: None,
         // Frequency=3, Importance=3 → score=70
         score: 70,
-        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. `lead` is `summary` whose first item leads (large picture beside its date, title and opening line on a wide screen, stacked on a phone) and whose other items form a register of three columns with no pictures. An installed plugin can add styles of its own (its `contributes.listing_styles`); name one by its id",
+        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. `lead` is `summary` whose first item leads (large picture beside its date, title and opening line on a wide screen, stacked on a phone) and whose other items form a register of three columns with no pictures. `stream` draws each page whole, one column with a hairline between pages: its title as a heading when it has one of its own, its body, then its date as a link to the page; it suits short dated posts, a changelog or a page of quotes. An installed plugin can add styles of its own (its `contributes.listing_styles`); name one by its id",
         label: Some("Child Layout"),
         label_key: "chip.children_style.label",
         group: "Child Styles",

@@ -537,6 +537,13 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub body_claims_eager: bool,
+    /// The page's body or hero asks for a folder listing (`![[folder/]]`, or a
+    /// `from=` hero), known when the page is parsed. A listing that draws pages
+    /// whole shows such a page as a row: its body is a marker, or already
+    /// another listing, depending on which pages were expanded first.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub lists_folders: bool,
     /// Hero image URL — populated at hoisting time from `HeroShortcode.image`
     /// (post-resolution). `None` when the hero had no `image=` attribute
     /// (text-only overlay) or the page has no hero. Feeds the homepage-hero
@@ -971,6 +978,41 @@ pub struct PageFeatures {
     /// (`moss_core::ast::has_diagram_recursive`). Gates the `diagrams`
     /// stylesheet partial via [`SiteAssets`].
     pub diagrams: bool,
+    /// True if the page draws a `style:stream` listing, which gates the
+    /// `stream` stylesheet partial.
+    pub stream: bool,
+}
+
+impl PageFeatures {
+    /// Take on what a page drawn whole inside this one needs.
+    ///
+    /// Every field is named, so a new feature has to be decided here.
+    pub fn absorb(&mut self, inlined: &PageFeatures) {
+        let PageFeatures {
+            forms,
+            inline_subscribe,
+            callouts,
+            footnotes,
+            scroll_rows,
+            marquee,
+            // The page's hero is not part of the body a listing draws.
+            hero_ends: _,
+            viewer,
+            field_places,
+            diagrams,
+            // A page drawn whole lists no folder, so it draws no stream itself.
+            stream: _,
+        } = inlined;
+        self.forms |= *forms;
+        self.inline_subscribe |= *inline_subscribe;
+        self.callouts |= *callouts;
+        self.footnotes |= *footnotes;
+        self.scroll_rows |= *scroll_rows;
+        self.marquee |= *marquee;
+        self.viewer |= *viewer;
+        self.field_places |= *field_places;
+        self.diagrams |= *diagrams;
+    }
 }
 
 /// Which optional asset partials this build ships — the site-level union of
@@ -1040,6 +1082,8 @@ pub struct SiteAssets {
     pub field_places: bool,
     /// Some page has a mermaid diagram. Gates the `diagrams` stylesheet partial.
     pub diagrams: bool,
+    /// Some page draws a `style:stream` listing. Gates the `stream` stylesheet partial.
+    pub stream: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -1107,6 +1151,7 @@ impl SiteAssets {
             viewer: false,
             field_places: false,
             diagrams: false,
+            stream: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -1123,6 +1168,7 @@ impl SiteAssets {
             out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
             out.diagrams |= page.features.diagrams;
+            out.stream |= page.features.stream;
             out.country_map |= page.country_map.is_some();
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }

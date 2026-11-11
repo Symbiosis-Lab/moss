@@ -70,6 +70,7 @@ GATES_BUILD=(
   card-cover-auto
   lead-listing
   listing-picture-strip
+  stream-listing
   marquee
   field-place-end
   grid-card-image-inline-size

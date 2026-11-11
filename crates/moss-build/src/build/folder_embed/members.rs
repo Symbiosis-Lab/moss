@@ -192,7 +192,7 @@ pub(crate) fn in_listing_order<'a>(
 }
 
 fn host_key(host: &ParsedDocument, documents: &[ParsedDocument]) -> Option<crate::build::render::incremental::listing::GroupKey> {
-    crate::build::render::incremental::listing::groups_read_by(host, documents)?.into_iter().next()
+    crate::build::render::incremental::listing::own_listing_key(host, documents)
 }
 
 fn ordered_like_listing<'a>(

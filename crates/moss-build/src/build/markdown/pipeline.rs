@@ -1549,6 +1549,8 @@ pub fn process_markdown_file(
     // The plan, flattened. Consumers that only want bytes read this; the render
     // phase reads `body_plan` when it needs to know what the bytes are made of.
     let html_content = body_plan.to_html();
+    let mut lists_folders = false;
+    body_plan.for_each_html(&mut |html| lists_folders |= super::body_plan::is_folder_embed(html));
 
     // Apply the same adjustment to hero HTML (hero images also need "../" for pretty URLs)
     let hero_html = if !is_index_file {
@@ -1562,6 +1564,8 @@ pub fn process_markdown_file(
         fallback_image_url: hero_image_url.clone(),
         fallback_overlay_text: hero_overlay_text.clone(),
     });
+
+    let lists_folders = lists_folders || hero_from.is_some() || hero_html.as_deref().is_some_and(super::body_plan::is_folder_embed);
 
     Ok(ParsedDocument {
         declared,
@@ -1662,6 +1666,7 @@ pub fn process_markdown_file(
         hero_html,
         hero_from,
         body_claims_eager,
+        lists_folders,
         hero_image_url,
         body_cover_path,
         body_cover_candidates,
@@ -1679,6 +1684,7 @@ pub fn process_markdown_file(
             viewer: has_viewer,
             field_places: has_field_places,
             diagrams: moss_core::ast::has_diagram_recursive(&doc),
+            stream: false,
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses

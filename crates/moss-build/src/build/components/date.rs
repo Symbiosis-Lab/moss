@@ -338,6 +338,26 @@ pub fn datetime_attr(raw: &str) -> Option<String> {
     })
 }
 
+/// The local clock time a raw date writes after its day (`2026-11-06T14:32`,
+/// `2026-11-06 14:32`, seconds allowed), as `HH:MM`. A timestamp with a zone
+/// (`…T00:50:43Z`) gives none: its clock is not the author's.
+pub fn clock_time(raw: &str) -> Option<&str> {
+    let after_day = raw.trim().get(10..)?.strip_prefix(['T', ' '])?;
+    let (clock, rest) = (after_day.get(..5)?, after_day.get(5..)?);
+    let digits = |s: &str| s.len() == 2 && s.bytes().all(|b| b.is_ascii_digit());
+    let (h, m) = clock.split_once(':')?;
+    let seconds_only = rest.is_empty() || rest.strip_prefix(':').is_some_and(digits);
+    (digits(h) && digits(m) && seconds_only).then_some(clock)
+}
+
+/// A day's display text with a clock time after it, as `lang` writes the two together.
+pub fn with_clock(day: &str, clock: &str, lang: Language) -> String {
+    match lang {
+        Language::ZhHans | Language::ZhHant => format!("{day} {clock}"),
+        Language::En | Language::De => format!("{day}, {clock}"),
+    }
+}
+
 /// A date's display text as `<time datetime>` carrying the full date, when the
 /// raw date parses; otherwise the escaped text alone.
 pub fn time_html(display: &str, raw: &str) -> String {

@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A folder can show its pages whole with `children_style: stream`, or `style:stream` in a folder embed: one column, each page's title as a heading when it has one of its own, then its body and its date as a link to the page. For short dated posts, a changelog or a page of quotes; a page that lists a folder itself is drawn as a row. Pictures load lazily and are capped by `--moss-stream-media-max`.
 - A page can draw its terms as links under its title: `line = true` in a `[terms.<key>]` table gives one line per field, each name linking to its term page in the page's own edition. Only a place-typed kind does this by default, so no site changes, and `[terms.tags]` or `[terms.authors]` may now leave out `fields` and keep their built-in field. `moss describe` lists the keys of a `[terms.<key>]` table.
 - A folder can close every article in it with one file: a `partial: true` page with `slot: before-article-end` is drawn at the end of each article in that folder and the folders beneath it, the nearest file winning, and never in feeds, search or email.
 

@@ -70,6 +70,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.callouts,
     },
     CssPartial {
+        name: "stream",
+        source: include_str!("../../assets/css/site/stream.css"),
+        gate: |a| a.stream,
+    },
+    CssPartial {
         name: "forms",
         source: include_str!("../../assets/css/site/forms.css"),
         gate: |a| a.forms,

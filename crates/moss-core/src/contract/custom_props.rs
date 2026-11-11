@@ -392,6 +392,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Aspect ratio every picture in a summary row's strip (`pictures:N`) is cropped to. `--moss-card-cover-fit` applies to the strip too.",
     },
     CustomProp {
+        name: "--moss-stream-media-max",
+        owner: "moss-stream-body",
+        default: "28rem",
+        description: "Tallest a picture or video may be inside a `style:stream` listing, so a tall photograph cannot fill the column.",
+    },
+    CustomProp {
         name: "--moss-marquee-speed",
         owner: "moss-marquee-track",
         default: "60",

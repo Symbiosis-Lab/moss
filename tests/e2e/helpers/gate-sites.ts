@@ -4537,6 +4537,34 @@ Body.
 const LEAD_TILE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4a7"/></svg>
 `;
 
+// Short posts drawn whole by `style:stream`, on a home (one post, then the More
+// link) and on their folder's own page. Served by playwright/stream-listing.config.ts.
+export const STREAM_LISTING_GATE: ScratchSiteSpec = {
+  name: "stream-listing-gate",
+  files: {
+    "index.md": `---
+title: Stream Listing
+uid: "strm0001"
+children: false
+---
+
+## Notes
+
+![[notes/|style:stream,limit:1]]
+`,
+    "notes/index.md": `---
+title: Notes
+uid: "strm0010"
+children_style: stream
+content_width: wide
+---
+`,
+    "notes/2026-01-02 0910.md": "A first short post, a sentence or two long.\n",
+    "notes/2026-01-03 1200.md": "A second short post.\n\nWith a second paragraph.\n",
+    "notes/2026-01-04 0800.md": "The newest short post.\n",
+  },
+};
+
 // A folder drawn with `children_style: lead`: a first item with a picture and
 // three more. Served by playwright/lead-listing.config.ts.
 export const LEAD_LISTING_GATE: ScratchSiteSpec = {

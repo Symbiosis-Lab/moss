@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initSidenotes } from "../sidenotes";
 
 // Scope: what jsdom can actually see, which is the DOM the script BUILDS —
@@ -125,5 +125,58 @@ describe("initSidenotes", () => {
     expect(scroller.querySelector("ol")).not.toBeNull();
     const grab = section.querySelector("button.moss-footnote-grab")!;
     expect(grab.getAttribute("aria-label")).toBe("All notes");
+  });
+
+  it("gives every post's endnote section its own sheet, and lifts the one a marker cites", () => {
+    // A stream listing draws several posts whole, each with its endnote
+    // section and ids scoped by the post. Only the first section used to get
+    // a sheet, and an arrival at a scoped id was never recognised.
+    document.body.innerHTML = `
+      <style>.moss-sidenote { display: none; }</style>
+      <p>A<sup class="moss-footnote-ref" id="a-fnref-1"><a href="#a-fn-1">1</a></sup>.</p>
+      <section class="moss-footnotes" role="doc-endnotes"><ol>
+        <li id="a-fn-1" tabindex="-1"><p>First post's note.</p></li>
+      </ol></section>
+      <p>B<sup class="moss-footnote-ref" id="b-fnref-1"><a href="#b-fn-1">1</a></sup>.</p>
+      <section class="moss-footnotes" role="doc-endnotes"><ol>
+        <li id="b-fn-1" tabindex="-1"><p>Second post's note.</p></li>
+      </ol></section>`;
+    // Reduced motion: the sheet settles at once.
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    initSidenotes();
+    const [first, second] = document.querySelectorAll(".moss-footnotes");
+    for (const section of [first, second]) {
+      expect(section.querySelector("button.moss-footnote-grab")).not.toBeNull();
+    }
+
+    document.querySelector<HTMLAnchorElement>('a[href="#b-fn-1"]')!.click();
+    expect(second.classList.contains("moss-footnotes-lifted")).toBe(true);
+    expect(first.classList.contains("moss-footnotes-lifted")).toBe(false);
+
+    document.querySelector<HTMLAnchorElement>('a[href="#a-fn-1"]')!.click();
+    expect(first.classList.contains("moss-footnotes-lifted")).toBe(true);
+    expect(second.classList.contains("moss-footnotes-lifted")).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("lands an arrival at a post's scoped, percent-encoded note id on that post's sheet", () => {
+    document.body.innerHTML = `
+      <style>.moss-sidenote { display: none; }</style>
+      <p>A<sup class="moss-footnote-ref" id="a-fnref-1"><a href="#a-fn-1">1</a></sup>.</p>
+      <section class="moss-footnotes" role="doc-endnotes"><ol>
+        <li id="a-fn-1" tabindex="-1"><p>First post's note.</p></li>
+      </ol></section>
+      <p>B<sup class="moss-footnote-ref" id="b-fnref-1"><a href="#b-fn-1">1</a></sup>.</p>
+      <section class="moss-footnotes" role="doc-endnotes"><ol>
+        <li id="b-fn-1" tabindex="-1"><p>Second post's note.</p></li>
+      </ol></section>`;
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    location.hash = "#b-fn-%31";
+    initSidenotes();
+    const [first, second] = document.querySelectorAll(".moss-footnotes");
+    expect(second.classList.contains("moss-footnotes-lifted")).toBe(true);
+    expect(first.classList.contains("moss-footnotes-lifted")).toBe(false);
+    location.hash = "";
+    vi.unstubAllGlobals();
   });
 });

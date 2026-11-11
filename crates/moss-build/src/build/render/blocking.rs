@@ -1290,6 +1290,15 @@ pub fn generate_blocking_content_for_build(
             }
         }
 
+        // Inline `:::subscribe` forms get their page's language scope, judged
+        // the same way the footer form's is, now that every page has parsed,
+        // and before a stream listing copies a form into another page.
+        crate::build::features::email::stamp_inline_subscribe_scopes(
+            &mut documents,
+            site_id.as_deref(),
+            &seta_url_for_build,
+        );
+
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`) and settle `from=` heroes.
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
@@ -1315,14 +1324,6 @@ pub fn generate_blocking_content_for_build(
             )
         });
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
-
-        // Inline `:::subscribe` forms get their page's language scope, judged
-        // the same way the footer form's is, now that every page has parsed.
-        crate::build::features::email::stamp_inline_subscribe_scopes(
-            &mut documents,
-            site_id.as_deref(),
-            &seta_url_for_build,
-        );
 
         log::debug!(target: "timing", "[reduce] translation_links: {:?}", reduce_start.elapsed());
         log::debug!(target: "timing", "[reduce] total (uid_dedup..translation_links): {:?}", reduce_pre_start.elapsed());
@@ -2258,7 +2259,7 @@ pub fn generate_blocking_content_for_build(
                 // the legacy meta-slot behavior.
                 None,
                 site_config.math,
-                &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), ..Default::default() },
+                &crate::build::folder_embed::ListingRowOptions { listing_tag: Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())), host_url_path: &folder_doc.url_path, ..Default::default() },
                 now,
             );
             // The generated half of the same split the claimed term page gets

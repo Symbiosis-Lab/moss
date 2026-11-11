@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::build::folder_embed::inline_body::{dir_segments, listed_body, relative};
 use crate::build::enhance::{EnhanceContent, EnhanceResult, ResolvedSlots};
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::served_path::ServedPath;
@@ -81,6 +82,12 @@ pub(crate) struct ListingFill {
 }
 
 impl ParsedDocument {
+    /// Whether this page's listing is drawn from its children's bodies, which
+    /// the listing digests deliberately ignore: a plugin style or `stream`.
+    pub(crate) fn reads_child_bodies(&self) -> bool {
+        self.plugin_listing_style().is_some() || crate::build::folder_embed::is_stream_host(self)
+    }
+
     /// The plugin-style id this folder home page asks for, when it draws a
     /// listing and names a style other than moss's own.
     pub(crate) fn plugin_listing_style(&self) -> Option<&str> {
@@ -137,77 +144,6 @@ fn with_content_width(html: String, width: &str) -> String {
     format!("{} data-content-width=\"{}\"{}", &html[..insert], width, &html[insert..])
 }
 
-/// Directory of a served page, as segments: `board/sub/index.html` is
-/// `["board", "sub"]`.
-fn dir_segments(url_path: &str) -> Vec<String> {
-    let dir = url_path.rsplit_once('/').map_or("", |(dir, _)| dir);
-    dir.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect()
-}
-
-/// The path from directory `from` to `to_segments`, `../` as needed.
-fn relative(from: &[String], to: &[String]) -> String {
-    let common = from.iter().zip(to).take_while(|(a, b)| a == b).count();
-    let mut parts: Vec<&str> = vec![".."; from.len() - common];
-    parts.extend(to[common..].iter().map(String::as_str));
-    parts.join("/")
-}
-
-/// Rewrite the relative references in a page body so they resolve from
-/// `to_dir` instead of from the page `page_url_path`.
-fn rebase_html(html: &str, page_url_path: &str, to_dir: &[String]) -> String {
-    static ATTR: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r#"((?:src|srcset|poster|href)=")([^"]*)""#).unwrap());
-    let page_dir = dir_segments(page_url_path);
-    let rebase_one = |url: &str| -> String {
-        let skip = url.is_empty()
-            || url.starts_with('/')
-            || url.starts_with('#')
-            || url.contains("://")
-            || url.split(':').next().is_some_and(|scheme| url.contains(':') && scheme.chars().all(|c| c.is_ascii_alphabetic()));
-        if skip {
-            return url.to_string();
-        }
-        let (path, suffix) = match url.find(['?', '#']) {
-            Some(i) => url.split_at(i),
-            None => (url, ""),
-        };
-        let mut segments = page_dir.clone();
-        for part in path.split('/') {
-            match part {
-                "" | "." => {}
-                ".." => {
-                    segments.pop();
-                }
-                other => segments.push(other.to_string()),
-            }
-        }
-        let mut rebased = relative(to_dir, &segments);
-        if path.ends_with('/') && !rebased.is_empty() {
-            rebased.push('/');
-        }
-        if rebased.is_empty() {
-            rebased.push_str("./");
-        }
-        format!("{rebased}{suffix}")
-    };
-    ATTR.replace_all(html, |caps: &regex::Captures| {
-        let value = if caps[1].starts_with("srcset") {
-            caps[2]
-                .split(", ")
-                .map(|candidate| match candidate.split_once(' ') {
-                    Some((url, descriptor)) => format!("{} {descriptor}", rebase_one(url)),
-                    None => rebase_one(candidate),
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            rebase_one(&caps[2])
-        };
-        format!("{}{}\"", &caps[1], value)
-    })
-    .into_owned()
-}
-
 fn lang_tag(doc: &ParsedDocument) -> String {
     doc.lang_tag.clone().unwrap_or_else(|| doc.lang.as_bcp47_attr().to_string())
 }
@@ -223,15 +159,6 @@ fn resolved_frontmatter(doc: &ParsedDocument) -> BTreeMap<String, serde_json::Va
     }
     frontmatter.insert("title".to_string(), serde_json::Value::String(doc.title.clone()));
     frontmatter
-}
-
-/// The body without the heading moss draws from the page's title: the record
-/// carries the title as a field, and a plugin that lists the page draws its own.
-fn without_title(html: &str) -> String {
-    static HEADING: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r#"(?s)<h1 class="moss-article-title"[^>]*>.*?</h1>\n?"#).unwrap());
-    // The editor's source-line markers are not part of a published page either.
-    crate::build::ship::strip_source_annotations(&HEADING.replacen(html, 1, "")).into_owned()
 }
 
 /// A page's directory address ("a/b/") as seen from the listing directory.
@@ -288,7 +215,7 @@ fn record(doc: &ParsedDocument, listing_dir: &[String], with_body: bool) -> Page
         frontmatter,
         fields: doc.declared.iter().filter_map(|(name, value)| Some((name.clone(), serde_json::to_value(value).ok()?))).collect(),
         field_errors: doc.field_errors.clone(),
-        html: if with_body { rebase_html(&without_title(&doc.html_content), &doc.url_path, listing_dir) } else { String::new() },
+        html: if with_body { listed_body(doc, listing_dir) } else { String::new() },
         folder,
     }
 }
@@ -519,26 +446,6 @@ pub(crate) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn segs(path: &str) -> Vec<String> {
-        path.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect()
-    }
-
-    #[test]
-    fn a_body_is_rebased_from_its_page_to_the_listing() {
-        let html = r##"<img src="../pic.jpg"> <a href="../../beta/#x">b</a> <a href="/abs/">a</a> <a href="https://e.com/">e</a> <a href="#top">t</a>"##;
-        let out = rebase_html(html, "board/sub/alpha/index.html", &segs("board"));
-        assert!(out.contains(r#"src="sub/pic.jpg""#), "{out}");
-        assert!(out.contains(r#"href="beta/#x""#), "{out}");
-        assert!(out.contains(r#"href="/abs/""#) && out.contains(r#"href="https://e.com/""#) && out.contains(r##"href="#top""##), "{out}");
-    }
-
-    #[test]
-    fn urls_are_relative_to_the_listing_page() {
-        assert_eq!(relative(&segs("board"), &segs("board/sub")), "sub");
-        assert_eq!(relative(&segs("board"), &segs("other/x")), "../other/x");
-        assert_eq!(relative(&segs(""), &segs("board")), "board");
-    }
 
     #[test]
     fn a_span_is_filled_or_unwrapped() {

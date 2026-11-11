@@ -323,6 +323,21 @@ pub fn hosts_listing(doc: &ParsedDocument) -> bool {
         || doc.term_listing.is_some()
 }
 
+/// The one listing a host's page ends in, as the renderer chooses it
+/// (`render::html::own_listing_target`), with the filters its marker carries.
+pub fn own_listing_key(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<GroupKey> {
+    let (folder_slug, names_scoped_home) = crate::build::render::html::own_listing_target(doc, documents)?;
+    let home = crate::build::folder_embed::home_defaults(doc);
+    let scoped = home.scoped || names_scoped_home;
+    Some(GroupKey {
+        folder_slug,
+        depth: Depth::from_frontmatter(doc.children_depth.as_deref(), home.depth_all),
+        scope_default_tree: scoped,
+        exclude_nav: scoped,
+        edition: doc.edition.clone(),
+    })
+}
+
 /// The groups a host reads, or `None` when its shape is not modelled.
 ///
 /// `None` means **render**. Over-approximation is the only safe default —
@@ -331,24 +346,11 @@ pub fn hosts_listing(doc: &ParsedDocument) -> bool {
 pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<Vec<GroupKey>> {
     let mut keys: Vec<GroupKey> = Vec::new();
 
-    // (a) A home page — the root's or a language's own `<lang>/index.html`.
-    //     `synthesize_children_marker` lists the tree the home sits at (`""`
-    //     for the root, `<lang>` otherwise) unless `children_source` redirects
-    //     it; `home_defaults` says which homes default depth to "all" and turn
-    //     on both filters.
+    // (a) A home page — the root's or a language's own `<lang>/index.html`
+    //     — reads the listing the renderer draws on it: its tree, or the one
+    //     its `children_source` names, an edition home included.
     if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
-        let home = crate::build::folder_embed::home_defaults(doc);
-        let folder_slug = match doc.children_source.as_deref() {
-            None => home.tree.to_string(),
-            Some(reference) => resolve_children_source_slug(reference, documents)?,
-        };
-        keys.push(GroupKey {
-            folder_slug,
-            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), home.depth_all),
-            scope_default_tree: home.scoped,
-            exclude_nav: home.scoped,
-            edition: doc.edition.clone(),
-        });
+        keys.extend(own_listing_key(doc, documents));
     }
 
     // (b) A folder index page lists its OWN folder — `render/html.rs` passes
