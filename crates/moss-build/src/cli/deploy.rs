@@ -341,6 +341,7 @@ async fn dispatch(
     crate::identity::verify_email::retrying_after_verification(
         folder,
         flags.email.as_deref(),
+        Some(&crate::deploy::first_publish_site_id(folder, flags.site_id.as_deref())),
         crate::identity::verify_email::POLL_INTERVAL,
         crate::identity::verify_email::WAIT_LIMIT,
         || send(folder, route, host_ports, plugins, flags, sink),
@@ -1372,6 +1373,20 @@ mod email_wiring_tests {
         *seta.account.lock().unwrap() = Some("ada@example.test");
         let _ = deploy(&folder, Some("ada@example.test")).await;
         assert_eq!(seta.count("POST /auth/request"), 1, "a linked key is never re-sent a link");
+    }
+
+    /// A new folder published to a site its account already owns: the link
+    /// names that site, so opening it signs the key in to the site and the retry
+    /// publishes, instead of being refused again with the same sign-in advice.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_first_publish_signs_in_naming_the_site_it_publishes_to() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+
+        let _ = deploy(&folder, Some("ada@example.test")).await;
+
+        let target = crate::deploy::derive_site_id_from_root(&crate::vault::paths::VaultRoot::resolve(folder.dir.path()));
+        assert_eq!(seta.sign_in_bodies()[0]["site_id"], target.as_str());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

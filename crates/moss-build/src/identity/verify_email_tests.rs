@@ -99,7 +99,7 @@ impl Seta {
     }
 
     /// The bodies of the sign-in requests, in order.
-    fn sign_in_bodies(&self) -> Vec<serde_json::Value> {
+    pub(crate) fn sign_in_bodies(&self) -> Vec<serde_json::Value> {
         let log = self.log.lock().unwrap();
         log.iter().filter(|(l, _)| l == "POST /auth/request").map(|(_, b)| serde_json::from_str(b).unwrap()).collect()
     }
@@ -165,7 +165,7 @@ async fn a_refusal_without_email_names_the_flag_and_sends_nothing() {
     let seta = Seta::start(1, "verified").await;
     let folder = Folder::new(&seta);
 
-    let err = retrying_after_verification(folder.dir.path(), None, TICK, WAIT_LIMIT, || folder.register())
+    let err = retrying_after_verification(folder.dir.path(), None, None, TICK, WAIT_LIMIT, || folder.register())
         .await
         .expect_err("an unverified key is refused");
 
@@ -184,7 +184,7 @@ async fn with_email_a_folder_that_lost_its_key_signs_in_a_new_one() {
     let lost = folder.pubkey();
     std::fs::remove_file(crate::identity::keypair::key_file_path(folder.dir.path())).unwrap();
 
-    verify_folder_email(folder.dir.path(), "me@example.com", TICK, WAIT_LIMIT).await.expect("signed in");
+    verify_folder_email(folder.dir.path(), "me@example.com", None, TICK, WAIT_LIMIT).await.expect("signed in");
 
     let fresh = folder.pubkey();
     assert_ne!(fresh, lost, "the lost key cannot be signed in");
@@ -200,7 +200,7 @@ async fn with_email_it_sends_one_link_polls_through_pending_records_the_email_an
     let seta = Seta::start(3, "verified").await;
     let folder = Folder::new(&seta);
 
-    let site = retrying_after_verification(folder.dir.path(), Some("me@example.com"), TICK, WAIT_LIMIT, || {
+    let site = retrying_after_verification(folder.dir.path(), Some("me@example.com"), None, TICK, WAIT_LIMIT, || {
         folder.register()
     })
     .await
@@ -231,7 +231,7 @@ async fn an_expired_link_fails_with_what_to_do_and_does_not_retry() {
     let seta = Seta::start(2, "expired").await;
     let folder = Folder::new(&seta);
 
-    let err = retrying_after_verification(folder.dir.path(), Some("me@example.com"), TICK, WAIT_LIMIT, || {
+    let err = retrying_after_verification(folder.dir.path(), Some("me@example.com"), None, TICK, WAIT_LIMIT, || {
         folder.register()
     })
     .await
@@ -250,6 +250,7 @@ async fn a_link_nobody_opens_times_out() {
     let err = retrying_after_verification(
         folder.dir.path(),
         Some("me@example.com"),
+        None,
         TICK,
         Duration::from_millis(60),
         || folder.register(),
@@ -265,7 +266,7 @@ async fn a_link_opened_by_another_account_fails_and_writes_nothing() {
     let seta = Seta::start_with(1, "verified", Some("other@example.test"), 200).await;
     let folder = Folder::new(&seta);
 
-    let err = verify_folder_email(folder.dir.path(), "ada@example.test", TICK, Duration::from_secs(2))
+    let err = verify_folder_email(folder.dir.path(), "ada@example.test", None, TICK, Duration::from_secs(2))
         .await
         .expect_err("the link was opened for someone else");
 
@@ -279,7 +280,7 @@ async fn the_status_email_matches_the_typed_one_ignoring_case_and_padding() {
     let seta = Seta::start_with(1, "verified", Some(" ADA@Example.test "), 200).await;
     let folder = Folder::new(&seta);
 
-    verify_folder_email(folder.dir.path(), "ada@example.test", TICK, Duration::from_secs(2)).await.expect("same account");
+    verify_folder_email(folder.dir.path(), "ada@example.test", None, TICK, Duration::from_secs(2)).await.expect("same account");
 
     assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("ada@example.test"));
 }
@@ -289,7 +290,7 @@ async fn a_status_check_the_service_keeps_refusing_stops_early_and_says_what_it_
     let seta = Seta::start_with(usize::MAX, "verified", None, 403).await;
     let folder = Folder::new(&seta);
 
-    let err = verify_folder_email(folder.dir.path(), "ada@example.test", TICK, Duration::from_secs(2))
+    let err = verify_folder_email(folder.dir.path(), "ada@example.test", None, TICK, Duration::from_secs(2))
         .await
         .expect_err("a permanent refusal");
 
@@ -302,7 +303,7 @@ async fn a_service_that_never_answers_a_poll_is_reported_unreachable_not_unopene
     let seta = Seta::start_with(usize::MAX, "verified", None, 500).await;
     let folder = Folder::new(&seta);
 
-    let err = verify_folder_email(folder.dir.path(), "ada@example.test", TICK, Duration::from_millis(100))
+    let err = verify_folder_email(folder.dir.path(), "ada@example.test", None, TICK, Duration::from_millis(100))
         .await
         .expect_err("no poll ever succeeded");
 
@@ -325,7 +326,7 @@ async fn verifying_over_a_stored_address_replaces_it() {
     identity.link_email("old@example.test".to_string());
     identity.save(folder.dir.path()).unwrap();
 
-    verify_folder_email(folder.dir.path(), "ada@example.test", TICK, Duration::from_secs(2)).await.unwrap();
+    verify_folder_email(folder.dir.path(), "ada@example.test", None, TICK, Duration::from_secs(2)).await.unwrap();
 
     assert_eq!(crate::identity::Identity::read_email(folder.dir.path()).as_deref(), Some("ada@example.test"));
 }
@@ -336,10 +337,10 @@ async fn an_unlinked_key_is_sent_a_link_only_for_a_not_the_owner_refusal() {
     let folder = Folder::new(&seta);
     let refused = |message: &'static str| move || async move { Err::<(), PublishError>(message.to_string().into()) };
 
-    let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), TICK, WAIT_LIMIT, refused("HTTP request failed: connection refused")).await;
+    let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), None, TICK, WAIT_LIMIT, refused("HTTP request failed: connection refused")).await;
     assert_eq!(seta.count("POST /auth/request"), 0, "a refusal for another reason sends nothing");
 
-    let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), TICK, WAIT_LIMIT, refused("API error: 403 - Not authorized for this site")).await;
+    let _ = retrying_after_verification(folder.dir.path(), Some("ada@example.test"), None, TICK, WAIT_LIMIT, refused("API error: 403 - Not authorized for this site")).await;
     assert_eq!(seta.count("POST /auth/request"), 1);
 }
 
@@ -351,10 +352,10 @@ fn a_deployed_folder_names_its_site_and_never_its_path() {
     let config = crate::config::deployment::DomainDeploymentConfig { site_id: Some("her-blog".into()), ..Default::default() };
     crate::vault::deployment_state::save_domain_config(dir.to_str().unwrap(), &config).unwrap();
 
-    let named = sign_in_folder(&dir);
+    let named = sign_in_folder(&dir, None);
     assert_eq!(named.site_id.as_deref(), Some("her-blog"));
     assert_eq!(named.name.as_deref(), Some("Blog"));
-    assert!(sign_in_folder(parent.path()).site_id.is_none(), "an undeployed folder names no site");
+    assert!(sign_in_folder(parent.path(), None).site_id.is_none(), "an undeployed folder names no site");
 }
 
 const KEY_HAS_OTHER_SITE: &str = r#"{"error":"This folder's key is signed in to old-blog.mosspub.com. Update moss to sign this folder in with a key of its own.","code":"key_has_other_site","site":"old-blog.mosspub.com"}"#;
@@ -372,7 +373,7 @@ async fn a_copied_key_is_replaced_by_one_of_the_folders_own_and_the_link_asked_f
     let folder = Folder::new(&seta);
     let copied = folder.pubkey();
 
-    verify_folder_email(folder.dir.path(), "me@example.com", TICK, WAIT_LIMIT).await.expect("signed in");
+    verify_folder_email(folder.dir.path(), "me@example.com", None, TICK, WAIT_LIMIT).await.expect("signed in");
 
     let own = folder.pubkey();
     assert_ne!(own, copied);
@@ -391,7 +392,7 @@ async fn a_long_wait_after_a_copied_key_is_reported() {
     seta.reply_to_sign_in("429 Too Many Requests", "Retry-After: 3600\r\n", JUST_SENT);
     let folder = Folder::new(&seta);
 
-    let err = verify_folder_email(folder.dir.path(), "me@example.com", TICK, WAIT_LIMIT).await.expect_err("too soon");
+    let err = verify_folder_email(folder.dir.path(), "me@example.com", None, TICK, WAIT_LIMIT).await.expect_err("too soon");
     assert!(err.contains("just sent"), "{err}");
     assert_eq!(seta.count("POST /auth/request"), 2);
 }
@@ -413,7 +414,7 @@ async fn a_folder_not_signed_in_to_its_site_is_signed_in_by_email() {
     let err = sync().await.expect_err("not signed in");
     assert_eq!(err, PublishError::NotSignedIn { host: "my-site.mosspub.com".into() });
 
-    retrying_after_verification(folder.dir.path(), Some("me@example.com"), TICK, WAIT_LIMIT, sync).await.expect("signed in, then synced");
+    retrying_after_verification(folder.dir.path(), Some("me@example.com"), None, TICK, WAIT_LIMIT, sync).await.expect("signed in, then synced");
     assert_eq!(seta.count("POST /auth/request"), 1);
     assert_eq!(seta.count("GET /auth/whoami"), 0, "the refusal itself says --email lifts it");
 }

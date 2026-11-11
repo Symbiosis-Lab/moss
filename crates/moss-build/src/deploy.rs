@@ -887,9 +887,7 @@ pub async fn resolve_publish_inputs(
             if !first_publish_is_permitted(&folder_str)? {
                 return Ok(None);
             }
-            let chosen = requested_site_id.map(str::to_string).unwrap_or_else(|| {
-                derive_site_id_from_root(&crate::vault::paths::VaultRoot::resolve(folder))
-            });
+            let chosen = first_publish_site_id(folder, requested_site_id);
             validate_site_id(&chosen)?;
             Some(chosen)
         }
@@ -1020,6 +1018,12 @@ pub fn validate_site_id(site_id: &str) -> Result<(), String> {
         return Err(format!("\"{}\" is a reserved name", site_id));
     }
     Ok(())
+}
+
+/// The site a folder with no `site_id` registers on its first publish:
+/// `--site-id`, else the one derived from the folder's name.
+pub(crate) fn first_publish_site_id(folder: &std::path::Path, requested: Option<&str>) -> String {
+    requested.map(str::to_string).unwrap_or_else(|| derive_site_id_from_root(&crate::vault::paths::VaultRoot::resolve(folder)))
 }
 
 /// Derive a valid moss-host site ID from a resolved vault root.

@@ -55,13 +55,15 @@ pub fn replaced_email_notice(old: &str, new: &str) -> String {
     format!("The address stored for this folder, {old}, is being replaced by {new}.")
 }
 
-/// What a sign-in link names: the folder's site, if it has been deployed, and
-/// the folder's own name. Never a path, which would show the person's file
-/// system to whoever the link is forwarded to.
-pub fn sign_in_folder(folder: &Path) -> crate::seta::client::SignInFolder {
+/// What a sign-in link names: the folder's site if it has been deployed, else
+/// `target`, the site a first publish is about to publish to; and the folder's
+/// own name. Never a path, which would show the person's file system to
+/// whoever the link is forwarded to. The service signs the key in to a named
+/// site only when the address owns it.
+pub fn sign_in_folder(folder: &Path, target: Option<&str>) -> crate::seta::client::SignInFolder {
     let name = crate::vault::paths::VaultRoot::resolve(folder).name().to_string();
     crate::seta::client::SignInFolder {
-        site_id: crate::build::site_config::site_id_for_folder(folder).ok(),
+        site_id: crate::build::site_config::site_id_for_folder(folder).ok().or_else(|| target.map(str::to_string)),
         name: Some(name).filter(|n| !n.trim().is_empty()),
     }
 }
@@ -83,16 +85,27 @@ pub async fn request_sign_in(
     lang: Option<&str>,
     on_wait: impl Fn(Duration),
 ) -> Result<super::keypair::Identity, crate::seta::client::SetaError> {
+    request_sign_in_naming(folder, &sign_in_folder(folder, None), client, email, session_id, lang, on_wait).await
+}
+
+async fn request_sign_in_naming(
+    folder: &Path,
+    named: &crate::seta::client::SignInFolder,
+    client: &crate::seta::client::MossSetaClient,
+    email: &str,
+    session_id: &str,
+    lang: Option<&str>,
+    on_wait: impl Fn(Duration),
+) -> Result<super::keypair::Identity, crate::seta::client::SetaError> {
     use crate::seta::client::SetaError;
     let identity_error = |e: super::keypair::IdentityError| SetaError::Identity(e.to_string());
-    let named = sign_in_folder(folder);
     let mut service = super::service::IdentityService::new(folder);
     let identity = service.key_for_sign_in().map_err(identity_error)?.clone();
-    match client.request_auth(email, &identity.pubkey, session_id, lang, &named).await {
+    match client.request_auth(email, &identity.pubkey, session_id, lang, named).await {
         Err(SetaError::KeyHasOtherSite { site }) => {
             log::info!(target: "identity", "this folder's key is signed in to {site}; the folder signs in with a key of its own");
             let own = service.own_key_for_sign_in().map_err(identity_error)?.clone();
-            let send = || client.request_auth(email, &own.pubkey, session_id, lang, &named);
+            let send = || client.request_auth(email, &own.pubkey, session_id, lang, named);
             match send().await {
                 Err(SetaError::TooSoon { retry_after, .. }) if retry_after <= LONGEST_WAIT => {
                     on_wait(retry_after);
@@ -116,11 +129,12 @@ fn is_client_error(e: &crate::seta::client::SetaError) -> bool {
     matches!(e, SetaError::Api { status, .. } | SetaError::Challenge { status } if (400..500).contains(status))
 }
 
-/// Send a sign-in link to `email`, wait for it to be opened, and record the
-/// address in the folder's identity.
+/// Send a sign-in link to `email`, naming the folder as [`sign_in_folder`]
+/// does, wait for it to be opened, and record the address in the folder's identity.
 pub async fn verify_folder_email(
     folder: &Path,
     email: &str,
+    target: Option<&str>,
     interval: Duration,
     limit: Duration,
 ) -> Result<(), String> {
@@ -129,7 +143,7 @@ pub async fn verify_folder_email(
     let client = crate::seta::client::MossSetaClient::new_for_environment(&env);
     let session_id = new_session_id();
     let waiting = |wait: Duration| eprintln!("Waiting {} s to send the sign-in link to {email}.", wait.as_secs());
-    let mut identity = request_sign_in(folder, &client, email, &session_id, None, waiting)
+    let mut identity = request_sign_in_naming(folder, &sign_in_folder(folder, target), &client, email, &session_id, None, waiting)
         .await
         .map_err(|e| format!("Could not send a sign-in link to {email}: {e}"))?;
     eprintln!("Sent a sign-in link to {email}. Open it to continue \u{2014} waiting (Ctrl-C to stop).");
@@ -238,12 +252,14 @@ async fn key_is_unlinked(folder: &Path) -> bool {
 }
 
 /// Run `attempt`; if it is refused for want of a verified account and `email`
-/// was given, verify that address and run it once more. A not-the-owner refusal
+/// was given, verify that address (the link naming `target` as in
+/// [`sign_in_folder`]) and run it once more. A not-the-owner refusal
 /// counts only when the service says the key belongs to no account (asked
 /// again here because only a refused publish needs the answer).
 pub async fn retrying_after_verification<T, F, Fut>(
     folder: &Path,
     email: Option<&str>,
+    target: Option<&str>,
     interval: Duration,
     limit: Duration,
     attempt: F,
@@ -257,7 +273,7 @@ where
             if matches!(refusal, PublishError::NotSignedIn { .. })
                 || (matches!(&refusal, PublishError::Other(text) if text.contains(NOT_OWNER)) && key_is_unlinked(folder).await) =>
         {
-            verify_folder_email(folder, email, interval, limit).await?;
+            verify_folder_email(folder, email, target, interval, limit).await?;
             attempt().await
         }
         (result, _) => result,
