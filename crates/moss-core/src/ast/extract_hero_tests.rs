@@ -122,6 +122,7 @@ fn extract_hero_overlay_text_skips_leading_heading() {
             children: vec![Inline::Text("Title".into())],
             id: None,
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         },

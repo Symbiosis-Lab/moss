@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** `Block::Heading` gains `numbered_from: Option<String>`: when the parser numbered a heading's id apart from an earlier one with the same id (`posts-1` after `posts`), the id it was numbered from, so headings of one name can be found without reading the suffix. A struct literal or an exhaustive pattern must name it.
+
 ### Added
 
 - `FieldEdit::SetChild` sets or removes one key inside a frontmatter mapping such as `cascade:`, leaving the mapping's other lines and comments as written.

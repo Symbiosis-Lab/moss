@@ -323,6 +323,16 @@ pub fn hosts_listing(doc: &ParsedDocument) -> bool {
         || doc.term_listing.is_some()
 }
 
+/// Whether the renderer ends this page in its own children listing. An
+/// explorer root hosts none: its map is the page.
+pub fn draws_own_listing(doc: &ParsedDocument, is_explorer_root: bool) -> bool {
+    hosts_listing(doc)
+        && doc.children.unwrap_or(true)
+        && doc.children_in.as_deref() != Some("sidebar")
+        && !doc.from_sidebar_alias.unwrap_or(false)
+        && !is_explorer_root
+}
+
 /// The one listing a host's page ends in, as the renderer chooses it
 /// (`render::html::own_listing_target`), with the filters its marker carries.
 pub fn own_listing_key(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Option<GroupKey> {

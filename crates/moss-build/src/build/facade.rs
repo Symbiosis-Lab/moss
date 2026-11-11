@@ -1069,13 +1069,7 @@ mod tests {
         // what the folder-cover column is split from, and a stale one ships a
         // page whose lede does not match its body.
         let plan = |html: &str| ParsedDocument {
-            body_plan: Some(crate::build::markdown::body_plan::BodyPlan {
-                segments: vec![crate::build::markdown::body_plan::BodySegment::Html(html.to_string())],
-                lede_segments: 1,
-                first_text_segments: 0,
-                after_first_text_segments: 0,
-                has_text: false,
-            }),
+            body_plan: Some(crate::build::markdown::body_plan::BodyPlan::opaque(html.to_string())),
             ..Default::default()
         };
         assert_ne!(

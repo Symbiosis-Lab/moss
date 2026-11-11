@@ -1479,6 +1479,7 @@ pub fn process_markdown_file(
     let children_in = frontmatter.children_in;
     let children_limit = frontmatter.children_limit;
     let children_more = frontmatter.children_more;
+    let children_listed = frontmatter.children_listed;
     let children_covers = frontmatter.children_covers;
     let children_when = frontmatter.children_when;
     let children_pictures = frontmatter.children_pictures.and_then(|n| {
@@ -1645,6 +1646,7 @@ pub fn process_markdown_file(
         children_in,
         children_limit,
         children_more,
+        children_listed,
         children_covers,
         children_when,
         children_pictures,

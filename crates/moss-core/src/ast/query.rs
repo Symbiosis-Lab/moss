@@ -555,6 +555,7 @@ mod tests {
                 children: vec![Inline::Text("Title".into())],
                 id: None,
                 legacy_id: None,
+                numbered_from: None,
                 contents_end: false,
                 contents_label: None,
             },
@@ -596,6 +597,7 @@ mod tests {
             children: vec![img("badge.png"), Inline::Text("Title".into())],
             id: None,
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         }]);

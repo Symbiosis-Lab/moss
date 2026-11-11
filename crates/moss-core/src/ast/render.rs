@@ -269,6 +269,7 @@ fn render_block<H: RenderHooks + ?Sized>(
             legacy_id,
             contents_end,
             contents_label,
+            numbered_from: _,
         } => {
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);

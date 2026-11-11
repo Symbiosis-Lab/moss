@@ -1142,6 +1142,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "children_listed",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["everywhere", "here"]),
+        score: 87,
+        description: "Where this folder's pages are listed. `here` keeps every page under the folder out of the listings that flatten the folders above it (the home's whole-tree listing, a parent's `children_depth: all`); the folder's own listing, feed, sitemap and search still have them, and a direct listing of the parent still shows the folder's own page. Unset or `everywhere`, they appear in those listings",
+        label: Some("Listed In"),
+        label_key: "chip.children_listed.label",
+        group: "Child Pages",
+        applies_when: Some(LISTS_CHILDREN),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "children_in",
         field_type: FieldType::String,
         widget: Widget::Select,

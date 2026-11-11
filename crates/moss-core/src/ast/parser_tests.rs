@@ -997,6 +997,20 @@ fn duplicate_headings_get_suffixed_ids() {
 }
 
 #[test]
+fn a_numbered_heading_id_names_the_id_it_is_numbered_from() {
+    let doc = parse("## Posts\n\n## Posts\n\n## Posts 2\n\n## Notes {#posts-3}\n");
+    let from: Vec<Option<&str>> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading { numbered_from, .. } => Some(numbered_from.as_deref()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(from, vec![None, Some("posts"), None, None]);
+}
+
+#[test]
 fn duplicate_suffix_descends_into_blockquote() {
     // Headings inside a blockquote share the same id-counter as top-level.
     let md = "# Notes\n\n> # Notes\n";

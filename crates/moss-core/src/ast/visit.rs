@@ -644,6 +644,7 @@ mod tests {
             }],
             id: None,
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         }]);

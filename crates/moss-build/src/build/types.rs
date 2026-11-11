@@ -440,6 +440,9 @@ pub struct ParsedDocument {
     pub children_group: Option<moss_core::Resolved<String>>,
     /// What children to include: "direct" (default), "all" descendants
     pub children_depth: Option<String>,
+    /// "here" on a folder's home keeps every page under the folder out of the
+    /// ancestors' `depth: all` listings.
+    pub children_listed: Option<String>,
     /// Where to render the children feed: "body" (default) or "sidebar".
     pub children_in: Option<String>,
     /// Cap the children feed at N items. Truncation appends "More →".

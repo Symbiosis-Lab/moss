@@ -3,6 +3,7 @@
 //! The `generate_html` function converts a `ParsedDocument` (plus site context)
 //! into a complete HTML page using the template system.
 
+use crate::build::render::incremental::listing::draws_own_listing;
 use crate::build::types::ParsedDocument;
 #[cfg(test)]
 use crate::types::content::ProjectStructure;
@@ -621,6 +622,14 @@ impl<'a> PageFacts<'a> {
         )
     }
 
+    /// Splices the page's own listing where its body put `![[./]]`; with no
+    /// such spot, hands it back to be appended.
+    fn place_listing(content: &mut String, listing: String) -> Option<String> {
+        let Some(at) = content.find(crate::build::folder_embed::OWN_LISTING_PLACEHOLDER) else { return Some(listing) };
+        content.replace_range(at..at + crate::build::folder_embed::OWN_LISTING_PLACEHOLDER.len(), &listing);
+        None
+    }
+
     /// A folder index, a page that won a term claim (`author_page:` /
     /// `tag_page:`, at any path) or a page hosting another folder's
     /// `children_source` ends in that listing; a term page and a place
@@ -639,11 +648,11 @@ impl<'a> PageFacts<'a> {
         };
 
         // An explorer root hosts no listing: the map is the page.
-        let show_folder_children = !self.children_in_sidebar && doc.children.unwrap_or(true) && !self.is_explorer_root;
-        // Where the page's own body ends: a claimed term page's map and
-        // listing are placed relative to it (see `insert_before_sources`).
-        let body_end = content.len();
         let mut content = content;
+        let listing = draws_own_listing(doc, self.is_explorer_root)
+            .then(|| self.children_listing(context, doc, &folder_path, &from_md_path, names_scoped_home))
+            .and_then(|listing| Self::place_listing(&mut content, listing));
+        let body_end = content.len();
         // A claimed sub-term and a real place-namespace-root folder index get
         // the same map, under the page-level `map: false` opt-out.
         let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
@@ -667,10 +676,12 @@ impl<'a> PageFacts<'a> {
                 content.push_str(&map);
             }
         }
-        if show_folder_children {
-            content.push_str(&self.children_listing(context, doc, &folder_path, &from_md_path, names_scoped_home));
+        if let Some(listing) = listing {
+            content.push_str(&listing);
         }
         if term_listing.is_some() && !self.is_explorer_root {
+            // A claimed term page's map and listing are placed relative to
+            // where its own body ends (see `insert_before_sources`).
             let hosted = content.split_off(body_end);
             content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang);
         }
@@ -813,11 +824,11 @@ pub(super) fn render_page<'d>(
             let (target_folder_path, names_scoped_home) = own_listing_target(doc, all_docs).unwrap_or_default();
             let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
-            let content = if !facts.children_in_sidebar && doc.children.unwrap_or(true) {
-                content + &facts.children_listing(context, doc, &target_folder_path, &from_md_path, names_scoped_home)
-            } else {
-                content
-            };
+            let mut content = content;
+            let listing = draws_own_listing(doc, facts.is_explorer_root)
+                .then(|| facts.children_listing(context, doc, &target_folder_path, &from_md_path, names_scoped_home))
+                .and_then(|listing| PageFacts::place_listing(&mut content, listing));
+            content.extend(listing);
             // Colophon at the very foot, after the children listing.
             let content = if is_article_page { content } else { with_colophon(content, doc, emit_source_lines) };
 

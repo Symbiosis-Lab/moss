@@ -206,6 +206,11 @@ pub enum Block {
         /// `{#id}` it is that id's slugged spelling, which `[[Page#id]]` emits.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         legacy_id: Option<String>,
+        /// The id this one is numbered from, when the parser added a `-N` to
+        /// tell it from an earlier heading with the same id: `posts` for
+        /// `posts-1`. Headings sharing it share a name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        numbered_from: Option<String>,
         /// The heading was written `## Title {contents=end}`: it opens the part
         /// of the page after the main sections.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -523,6 +528,7 @@ mod tests {
             children: vec![text("Hello")],
             id: Some("hello".to_string()),
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         };
@@ -773,6 +779,7 @@ mod tests {
             children: vec![Inline::Text("Setup".to_string())],
             id: Some("setup".to_string()),
             legacy_id: None,
+            numbered_from: None,
             contents_end: false,
             contents_label: None,
         };

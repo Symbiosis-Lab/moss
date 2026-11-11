@@ -6,6 +6,9 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A `##` or lower heading whose section holds only folder embeds is left out while every one of those embeds lists nothing, so a section of posts or upcoming events can be written before its first entry exists; the build prints a note naming the heading's anchor, and the heading appears with the first page.
+- `children_listed: here` on a folder's home keeps the pages under that folder out of the listings that flatten the folders above it (the site home's whole-tree listing, an ancestor's `children_depth: all`, an archive of the home), while the folder's own listing, feed, search and sitemap keep them. A folder of short posts no longer floods the home.
+- A bare embed of the page's own folder (`![[./]]`, or the folder by name) places the page's own listing at that spot instead of after the body, so a home can list its articles and then show a heading and a folder embed below them. An embed with options, and any embed on a page that draws no listing of its own, stays a plain embed.
 - A folder can show its pages whole with `children_style: stream`, or `style:stream` in a folder embed: one column, each page's title as a heading when it has one of its own, then its body and its date as a link to the page. For short dated posts, a changelog or a page of quotes; a page that lists a folder itself is drawn as a row. Pictures load lazily and are capped by `--moss-stream-media-max`.
 - A page can draw its terms as links under its title: `line = true` in a `[terms.<key>]` table gives one line per field, each name linking to its term page in the page's own edition. Only a place-typed kind does this by default, so no site changes, and `[terms.tags]` or `[terms.authors]` may now leave out `fields` and keep their built-in field. `moss describe` lists the keys of a `[terms.<key>]` table.
 - A folder can close every article in it with one file: a `partial: true` page with `slot: before-article-end` is drawn at the end of each article in that folder and the folders beneath it, the nearest file winning, and never in feeds, search or email.
@@ -23,6 +26,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A folder embed (`![[Notes-src/|limit:1]]`) or `more:` naming a folder whose home sets a different `url:` now finds it, and the embed draws its "More →" link to the folder's address; before, the embed listed nothing or lost the link. A folder with a non-ASCII name and an ASCII `url:` works the same.
 - A hero's words still sit on their tinted panel, but the panel's edge now fades into the picture over 2.5rem on every side that faces it, instead of cutting the picture with a hard line. On a phone under `mobile=overlay`, or wherever a theme widens the words' box, that edge used to read as a dark band across the photo. The words stay on the solid panel, so their contrast is unchanged. `--moss-hero-panel-feather` sets the fade's width, and `0px` restores the hard edge; a theme that clears the panel (`background: none` on `.moss-hero-content`) gets no fade.
 - The Previous, Next and folder links of a series point at a page's clean address (`/letters/second/`), like every other link moss writes, instead of its `index.html`.
 - In a folder sorted newest first, a series now runs oldest to newest, so Next opens the newer page and a reader can go through it in the order it was written. Pages that share a date keep their order.

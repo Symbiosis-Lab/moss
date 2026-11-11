@@ -11,6 +11,7 @@ fn two_long_sections() -> Vec<Block> {
         children: vec![Inline::Text(text.into())],
         id: Some(id.into()),
         legacy_id: None,
+        numbered_from: None,
         contents_end: false,
         contents_label: None,
     };
@@ -57,6 +58,7 @@ fn renders_level_one_heading_without_permalink_anchor() {
         children: vec![Inline::Text("Title".into())],
         id: Some("title".into()),
         legacy_id: None,
+        numbered_from: None,
         contents_end: false,
         contents_label: None,
     }]);

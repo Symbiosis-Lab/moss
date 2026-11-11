@@ -399,6 +399,9 @@ pub struct FrontMatter {
     pub children_group: Option<String>,
     /// What children to include: "direct" (default), "all" descendants
     pub children_depth: Option<String>,
+    /// "here" keeps the pages under this folder out of every ancestor's
+    /// `depth: all` listing; "everywhere" (or absent) lists them as usual.
+    pub children_listed: Option<String>,
     /// Where to render the children feed: "body" (default) or "sidebar".
     /// Resolved at consumer; absent means body.
     pub children_in: Option<String>,
@@ -1071,6 +1074,13 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 "children_style" => frontmatter.children_style = Some(value.to_string()),
                 "children_group" => frontmatter.children_group = Some(value.to_string()),
                 "children_depth" => frontmatter.children_depth = Some(value.to_string()),
+                "children_listed" => match value {
+                    "here" | "everywhere" => frontmatter.children_listed = Some(value.to_string()),
+                    _ => eprintln!(
+                        "Warning: children_listed: \"{}\" is not valid. Use \"here\" or \"everywhere\".",
+                        value
+                    ),
+                },
                 "children_in" => match value {
                     "body" | "sidebar" => frontmatter.children_in = Some(value.to_string()),
                     _ => eprintln!(

@@ -844,6 +844,7 @@ fn parse_block_with_tag(
                     children,
                     id: Some(id),
                     legacy_id,
+                    numbered_from: None,
                     contents_end,
                     contents_label,
                 }),
@@ -2185,7 +2186,9 @@ fn assign_heading_id_suffixes(blocks: &mut [Block]) {
     for slot in slots.iter_mut() {
         let mut old = slot.legacy_id.take().or_else(|| slot.id.clone());
         disambiguate_heading_id(&mut old, &mut legacy_counts);
+        let base = slot.id.clone();
         disambiguate_heading_id(slot.id, &mut id_counts);
+        *slot.numbered_from = base.filter(|b| Some(b) != slot.id.as_ref());
         *slot.legacy_id = old.filter(|o| Some(o) != slot.id.as_ref());
     }
     // An alias that is another heading's id would duplicate it: that id
@@ -2205,6 +2208,7 @@ pub fn clear_heading_ids(doc: &mut Document) {
     for slot in heading_id_slots(&mut doc.blocks) {
         *slot.id = None;
         *slot.legacy_id = None;
+        *slot.numbered_from = None;
     }
 }
 
@@ -2246,6 +2250,7 @@ fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
 struct HeadingSlot<'a> {
     id: &'a mut Option<String>,
     legacy_id: &'a mut Option<String>,
+    numbered_from: &'a mut Option<String>,
 }
 
 /// Apply the `-N` suffix rule to one heading id slot.
@@ -2325,7 +2330,7 @@ fn collect_heading_id_slots<'a>(
 ) {
     for block in blocks.iter_mut() {
         match block {
-            Block::Heading { id, legacy_id, .. } => sink.push(HeadingSlot { id, legacy_id }),
+            Block::Heading { id, legacy_id, numbered_from, .. } => sink.push(HeadingSlot { id, legacy_id, numbered_from }),
             Block::FootnoteDefinition { label, children } => {
                 let label = label.clone();
                 // A definition is bucketed as an endnote only when the

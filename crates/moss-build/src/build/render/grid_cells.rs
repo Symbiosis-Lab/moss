@@ -733,14 +733,14 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str) -> Option<String> {
 fn grids(plan: &BodyPlan) -> impl Iterator<Item = &GridEmission> {
     plan.segments.iter().filter_map(|s| match s {
         BodySegment::Grid(g) => Some(g),
-        BodySegment::Html(_) | BodySegment::Subscribe(_) => None,
+        BodySegment::Html(_) | BodySegment::Subscribe(_) | BodySegment::Section(_) => None,
     })
 }
 
 fn grids_mut(plan: &mut BodyPlan) -> impl Iterator<Item = &mut GridEmission> {
     plan.segments.iter_mut().filter_map(|s| match s {
         BodySegment::Grid(g) => Some(g),
-        BodySegment::Html(_) | BodySegment::Subscribe(_) => None,
+        BodySegment::Html(_) | BodySegment::Subscribe(_) | BodySegment::Section(_) => None,
     })
 }
 
