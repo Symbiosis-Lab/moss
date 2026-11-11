@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use super::registry_client::{enforce, fetch, signature};
+use super::registry_client::{enforce, fetch};
 use crate::vault_root::VaultRoot;
 
 pub const USAGE: &str = "Usage: moss plugin install <id> [<folder>]";
@@ -48,7 +48,7 @@ pub fn run(args: &[String]) -> i32 {
             }
         },
     };
-    match install(id, &folder, fetch::REGISTRY_ORIGIN) {
+    match install(id, &folder, fetch::REGISTRY_ORIGIN, fetch::VERIFY_KEYS) {
         Ok(done) => {
             if let Some(notice) = done.notice {
                 eprintln!("{notice}");
@@ -63,9 +63,9 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-/// [`run`] without the process: `origin` is a parameter so a test can point at
-/// a local registry. `folder` must be the site root. The app-data directory is the app's own.
-pub fn install(id: &str, folder: &Path, origin: &str) -> Result<Installed, String> {
+/// [`run`] without the process: `origin` and `keys` are parameters so a test can
+/// point at a local registry. `folder` must be the site root. The app-data directory is the app's own.
+pub fn install(id: &str, folder: &Path, origin: &str, keys: &[&str]) -> Result<Installed, String> {
     let folder = crate::vault_root::resolve_input(folder);
     if !crate::nested_roots::owns_moss(&folder) {
         return Err(format!("{} is not a moss site root (no site .moss folder here)", folder.display()));
@@ -77,7 +77,7 @@ pub fn install(id: &str, folder: &Path, origin: &str) -> Result<Installed, Strin
         .ok_or("no app-data directory to keep the approval in")?;
 
     enforce::install(Some(&app_data));
-    let refreshed = fetch::refresh_from(&app_data, origin, signature::REGISTRY_KEYS);
+    let refreshed = fetch::refresh_from(&app_data, origin, keys);
     let unreached = match &refreshed.index {
         fetch::RefreshOutcome::Updated => None,
         fetch::RefreshOutcome::Offline(why) | fetch::RefreshOutcome::NotCached(why) => Some(why.clone()),

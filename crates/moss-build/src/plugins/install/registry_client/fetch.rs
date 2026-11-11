@@ -1,20 +1,18 @@
 //! Fetching `index.json` and `revoked.json` from the pinned registry origin,
 //! and the refresh that composes fetch → accept → cache.
 //!
-//! **The origin is a trust anchor, not a configuration detail.** A build that
-//! pins registry keys ([`super::signature::REGISTRY_KEYS`]) accepts a document
-//! only with a valid `.minisig` beside it, and then the origin only carries
-//! bytes it cannot change. Until keys are pinned the documents are unsigned,
-//! so whoever serves the bytes is trusted, and exactly one GitHub-controlled
-//! origin serves them: no CDN mirrors, no fallback origins, no user override.
-//! What authenticates them then is TLS to that origin plus the monotonic
-//! serials `super::index` enforces.
+//! **The origin carries bytes it cannot change.** Every document is accepted
+//! only with a `.minisig` beside it signed by one of the registry's keys
+//! ([`super::signature::REGISTRY_KEYS`]), plus the monotonic serials
+//! `super::index` enforces, so a mirror or a hijacked hostname can withhold a
+//! document but never forge one.
 //!
-//! The origin is a parameter only so unit tests can point at a local static
-//! server. Production callers use [`refresh`], which hard-codes
-//! [`REGISTRY_ORIGIN`] — and that constant has one door, closed at build
-//! time: `MOSS_REGISTRY_ORIGIN`, for the e2e suite's fixture, which the
-//! assertion under it confines to https or loopback.
+//! The origin and keys are parameters only so unit tests can point at a local
+//! static server. Production callers use [`refresh`], which hard-codes
+//! [`REGISTRY_ORIGIN`] and [`VERIFY_KEYS`]; each has one door, closed at build
+//! time, for the e2e suite's fixture: `MOSS_REGISTRY_ORIGIN`, which the
+//! assertion under it confines to https or loopback, and `MOSS_REGISTRY_PUBKEY`,
+//! honoured only beside it.
 //!
 //! [`refresh`] blocks: two documents, each with a short leash, tried over two
 //! transports. Callers on the app-launch path MUST run it off-thread — the
@@ -60,6 +58,23 @@ const _: () = assert!(
 const _: () = assert!(
     !has_prefix(PRODUCTION_ORIGIN, "https://registry.mosspub.com") || !signature::REGISTRY_KEYS.is_empty(),
     "a build that reads registry.mosspub.com must pin the registry's signing keys"
+);
+
+/// The keys documents are verified with: [`signature::REGISTRY_KEYS`], unless
+/// the binary was BUILT with `MOSS_REGISTRY_PUBKEY` beside `MOSS_REGISTRY_ORIGIN`,
+/// the e2e fixture, which signs with a test key. A shipped binary has no other.
+pub const VERIFY_KEYS: &[&str] = match (option_env!("MOSS_REGISTRY_ORIGIN"), option_env!("MOSS_REGISTRY_PUBKEY")) {
+    (Some(_), Some(_)) => &FIXTURE_KEY,
+    _ => signature::REGISTRY_KEYS,
+};
+const FIXTURE_KEY: [&str; 1] = [match option_env!("MOSS_REGISTRY_PUBKEY") {
+    Some(key) => key,
+    None => "",
+}];
+// A test key alone would replace the registry's keys on the real origin.
+const _: () = assert!(
+    option_env!("MOSS_REGISTRY_PUBKEY").is_none() || option_env!("MOSS_REGISTRY_ORIGIN").is_some(),
+    "MOSS_REGISTRY_PUBKEY is honoured only together with MOSS_REGISTRY_ORIGIN"
 );
 
 const fn has_prefix(s: &str, prefix: &str) -> bool {
@@ -201,13 +216,12 @@ fn get_once(url: &str, transport: Transport, cap: usize) -> Result<String, Strin
 /// caching them. The caller reads [`Refreshed::cache`] for what is now in
 /// force and the two outcomes for what to log or show.
 pub fn refresh(app_data_dir: &std::path::Path) -> Refreshed {
-    refresh_from(app_data_dir, REGISTRY_ORIGIN, signature::REGISTRY_KEYS)
+    refresh_from(app_data_dir, REGISTRY_ORIGIN, VERIFY_KEYS)
 }
 
 /// [`refresh`] against an explicit origin and keys. Tests and the e2e fixture
 /// only — production has exactly one origin and it is not configurable. An
-/// empty `keys` accepts unsigned documents, as every build did before keys
-/// were pinned.
+/// empty `keys` accepts unsigned documents, which only tests pass.
 pub fn refresh_from(app_data_dir: &std::path::Path, origin: &str, keys: &[&str]) -> Refreshed {
     // Poisoning is not meaningful here: the lock guards no invariant held in
     // memory, only the ordering of file writes.
@@ -586,6 +600,44 @@ mod tests {
         let origin = FixtureOrigin::serving(Some(fixture!("index-28.json")), Some(fixture!("revoked-7.json")));
 
         let result = refresh_from(dir.path(), &origin.origin, &[KEY_A]);
+
+        assert_eq!(result.index, RefreshOutcome::Refused(RejectReason::Unsigned));
+        assert_eq!(result.revoked, RefreshOutcome::Refused(RejectReason::Unsigned));
+        assert!(result.cache.index.is_none(), "nothing unsigned reaches the cache");
+    }
+
+    /// The registry's publish run 56 as its origin served it, signed by the
+    /// registry's own signing key; `signed: false` withholds the signatures.
+    fn live_origin(signed: bool) -> FixtureOrigin {
+        let mut files = vec![
+            ("/index.json".to_string(), fixture!("live-56/index.json")),
+            ("/revoked.json".to_string(), fixture!("live-56/revoked.json")),
+        ];
+        if signed {
+            files.push(("/index.json.minisig".to_string(), fixture!("live-56/index.json.minisig")));
+            files.push(("/revoked.json.minisig".to_string(), fixture!("live-56/revoked.json.minisig")));
+        }
+        FixtureOrigin::serving_files(files)
+    }
+
+    #[test]
+    fn the_registrys_signed_catalog_is_accepted_with_the_keys_this_build_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = live_origin(true);
+
+        let result = refresh_from(dir.path(), &origin.origin, VERIFY_KEYS);
+
+        assert_eq!(result.index, RefreshOutcome::Updated);
+        assert_eq!(result.revoked, RefreshOutcome::Updated);
+        assert_eq!(result.cache.index.unwrap().serial, 56);
+    }
+
+    #[test]
+    fn the_registrys_catalog_without_its_signatures_is_refused_by_this_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = live_origin(false);
+
+        let result = refresh_from(dir.path(), &origin.origin, VERIFY_KEYS);
 
         assert_eq!(result.index, RefreshOutcome::Refused(RejectReason::Unsigned));
         assert_eq!(result.revoked, RefreshOutcome::Refused(RejectReason::Unsigned));
