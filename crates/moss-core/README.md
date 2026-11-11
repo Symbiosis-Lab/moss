@@ -5,7 +5,7 @@
 [![crates.io](https://img.shields.io/crates/v/moss-core.svg)](https://crates.io/crates/moss-core)
 [![docs.rs](https://docs.rs/moss-core/badge.svg)](https://docs.rs/moss-core)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![MSRV](https://img.shields.io/badge/MSRV-1.80-blue.svg)](./Cargo.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](./Cargo.toml)
 
 [moss](https://mosspub.com) turns a folder of markdown into a website, wherever you write; this crate is its content engine. Pure Rust, no I/O — takes data in (strings, structs), returns data out (parsed AST, frontmatter, rendered HTML).
 

@@ -18,34 +18,6 @@ both erode legibility.
 
 **Never ship less than the design needs.** moss has a low floor and a high ceiling: the simple parts of a site are plain markdown and folders, and anything a hand-built site can put on the web a moss site can put there too. When markdown cannot say something — an interactive drawing, a scroll-driven scene, a custom component — keep the words in markdown and take an escape hatch for the rest: raw `<svg>` or `<canvas>` in a partial, `.moss/theme/script.js`, a plugin. Do not cut the design down to what is easy in markdown. If moss blocks something the web can do, or forces a workaround, tell the user it is a moss gap and name the reproduction, rather than quietly shipping less.
 
-## A collection from a spreadsheet
-
-For a folder of items with a metadata file (pictures plus a CSV, as an archive or library hands it over). Never edit the CSV, the pictures or the source note; a script that writes pages runs from outside the site folder, since every file left in the folder is published.
-
-1. **One page per row**, in a folder of its own (`photographs/<slug>.md`). Its body is one picture line embedding the file where it already is: `![Title|](../images/x.jpg)` (the trailing `|` keeps the title as alt text without repeating it as a caption).
-2. **Every other column into frontmatter**, header unchanged as the key, value exactly as the CSV has it. A name for readers goes in the field's `label`, never in the key. Prefix a header that is a moss key with another meaning (`url` becomes `source_url`; `moss describe --json | jq '.frontmatter'` lists them).
-3. **Dates.** `date:` must be a calendar date (`1938`, `1938-05`, `1938-05-18`). If any row's date is not, put every row's value, as written, in one declared text field (`catalogue_date`).
-4. **Facts.** In `.moss/config.toml`, declare each column a visitor should see as a field with `place = "facts"`: every column whose values differ between rows, the identifiers, and the rights statement (even when every row has the same one; a collection for the general public shows it as the picture's one-line credit instead). Leave out the columns already used elsewhere: the file column is the picture line, and the title column is the page's `title:`.
-5. **Credit and link back.** Declare the item-link column `type = "url"` with `text = "<the credit line the source asks for>"`.
-6. **The creator, once.** If one creator made every item, set `author:` in `cascade:` on the items folder's home page (each page is cited to them) and show the name with a declared field set in the same `cascade:` (`photographer`, `place = "facts"`). `[site] author` is this edition's maker, not the items' creator.
-7. **Citable, when its readers cite.** For a catalogue that researchers will cite, set `archival = true` under `[site]`: every page shows its edition and a citation, and the source travels with the site. For a collection made for the general public, an exhibition rather than a catalogue, leave it off: an edition line and a citation on every page serve a citing scholar, not a visitor (`moss guide import-and-redesign`, step 4: every element earns its place for its audience). (2026-11-05: a public-domain exhibition built from this recipe showed an edition line, a citation and a licence paragraph on every page, and its owner asked whether a visitor cared; none of it served one.) The site's name is the home page's `title:`; `moss describe --json | jq .site_settings` lists every `[site]` setting. Until the site has an address, the build prints one note that citations name no address; leave it, since it clears once `[site] url` is set to an https address.
-8. **Browse.** Make the browse column a term kind (`[terms.boroughs] fields = ["borough"]`, with `count = "{n} photograph|{n} photographs"` so its cards name what they count): every value gets its own page (`/boroughs/brooklyn/`) listing its items. The home page is the way in, not the whole collection: a sentence on what the collection is, a few highlights, and the index. For the highlights, choose 3 to 9 items as a `:::grid {collage}`, one from each value where you can and the best known as the lead, each cell a picture linking to its page with its credit on the next line, title in bold, and a `+++` line between cells:
-
-   ```
-   :::grid {collage}
-   [![Flatiron building|contain](images/flatiron.jpg)](/photographs/flatiron/)
-   *__Flatiron building__ · Manhattan*
-   +++
-   [![Brooklyn Bridge|contain](images/bridge.jpg)](/photographs/bridge/)
-   *__Brooklyn Bridge__ · Brooklyn*
-   :::
-   ```
-
-   Each index card below already shows one picture of its value as its cover, so pick highlights the cards do not show (build once and look). Say in your report which you chose and why. Then embed the index once, `![[/boroughs/|style:grid]]`, and set `children: false` (otherwise every item is listed again below) and `content_width: wide`. Never list every item on the home page. Since the home page already shows the boroughs, leave the kind out of the nav: no `nav = true`.
-9. **Pictures whole.** For prints that must not be cropped, set `--moss-card-cover-ratio: auto` in `.moss/theme/style.css` under `:root`: each card's cover takes its own picture's shape, uncropped, and the titles of a grid row still line up. It is for pictures: a video or an embedded page has no shape of its own until it loads, so give a listing of those a ratio. For one uniform box instead, keep an `aspect-ratio` value (the default is `4 / 3`, upright prints suit `4 / 5`) and set `--moss-card-cover-fit: contain`, which shows the whole picture inside the box with bands where the shapes differ. Give the pictures folder an `index.md` with `listed: false`.
-10. **The source note** becomes a page by adding frontmatter above its unchanged text.
-11. `moss build --strict`, then read every warning and note.
-
 ## Start from a blank folder
 
 1. Create a folder. Its name becomes the site title — choose it deliberately.
@@ -124,14 +96,11 @@ declarations that fight each other.
   folder's own name goes through the same transform: `my-blog/` titles "my
   blog", not "My Blog"). Add `title:` whenever the title you want differs from
   that result even slightly; it is redundant, and safe to omit, only when it
-  matches the filename's derived title character for character. Do **not**
-  also write a body `# Heading` repeating the title — it renders as well, so
-  the title would show twice. One exception: a `:::hero` block at the very
-  top of the body takes over the title slot itself, so a heading written
-  inside it does not duplicate anything. A page in the navigation shows its title too. Nothing else does this — a
-  `:::grid` or any other block opening the page still leaves the
-  auto-injected title in place, so a heading after it shows the title twice
-  the same as if the grid weren't there.
+  matches the filename's derived title character for character. A body
+  that opens with a `# Heading` whose text is the title is the page's one
+  title, and moss adds none above it; so is that heading inside a `:::hero`
+  or a `:::grid` at the top of the body, or after a leading image. A heading
+  whose text differs is not the title: the page shows its title above it.
   A name that starts with a date stamp (`2026-11-06 Autumn hotpot.md`) dates the page and the words after it
   are the title; a name that is only the stamp is an untitled, dated post (`moss guide authoring`, "Content structure").
 - **Name files in their own language; pin a non-ASCII URL.** The
@@ -146,6 +115,34 @@ declarations that fight each other.
   `Harbour.md` an article and names the site "copy". Keep the folder's name
   in a copy, or set `home: true` on the home page so it survives any rename.
 - moss classifies every page as **Article** or **Folder**.
+
+## A collection from a spreadsheet
+
+For a folder of items with a metadata file (pictures plus a CSV, as an archive or library hands it over). Never edit the CSV, the pictures or the source note; a script that writes pages runs from outside the site folder, since every file left in the folder is published.
+
+1. **One page per row**, in a folder of its own (`photographs/<slug>.md`). Its body is one picture line embedding the file where it already is: `![Title|](../images/x.jpg)` (the trailing `|` keeps the title as alt text without repeating it as a caption).
+2. **Every other column into frontmatter**, header unchanged as the key, value exactly as the CSV has it. A name for readers goes in the field's `label`, never in the key. Prefix a header that is a moss key with another meaning (`url` becomes `source_url`; `moss describe --json | jq '.frontmatter'` lists them).
+3. **Dates.** `date:` must be a calendar date (`1938`, `1938-05`, `1938-05-18`). If any row's date is not, put every row's value, as written, in one declared text field (`catalogue_date`).
+4. **Facts.** In `.moss/config.toml`, declare each column a visitor should see as a field with `place = "facts"`: every column whose values differ between rows, the identifiers, and the rights statement (even when every row has the same one; a collection for the general public shows it as the picture's one-line credit instead). Leave out the columns already used elsewhere: the file column is the picture line, and the title column is the page's `title:`.
+5. **Credit and link back.** Declare the item-link column `type = "url"` with `text = "<the credit line the source asks for>"`.
+6. **The creator, once.** If one creator made every item, set `author:` in `cascade:` on the items folder's home page (each page is cited to them) and show the name with a declared field set in the same `cascade:` (`photographer`, `place = "facts"`). `[site] author` is this edition's maker, not the items' creator.
+7. **Citable, when its readers cite.** For a catalogue that researchers will cite, set `archival = true` under `[site]`: every page shows its edition and a citation, and the source travels with the site. For a collection made for the general public, an exhibition rather than a catalogue, leave it off: an edition line and a citation on every page serve a citing scholar, not a visitor (`moss guide import-and-redesign`, step 4: every element earns its place for its audience). (2026-11-05: a public-domain exhibition built from this recipe showed an edition line, a citation and a licence paragraph on every page, and its owner asked whether a visitor cared; none of it served one.) The site's name is the home page's `title:`; `moss describe --json | jq .site_settings` lists every `[site]` setting. Until the site has an address, the build prints one note that citations name no address; leave it, since it clears once `[site] url` is set to an https address.
+8. **Browse.** Make the browse column a term kind (`[terms.boroughs] fields = ["borough"]`, with `count = "{n} photograph|{n} photographs"` so its cards name what they count): every value gets its own page (`/boroughs/brooklyn/`) listing its items. The home page is the way in, not the whole collection: a sentence on what the collection is, a few highlights, and the index. For the highlights, choose 3 to 9 items as a `:::grid {collage}`, one from each value where you can and the best known as the lead, each cell a picture linking to its page with its credit on the next line, title in bold, and a `+++` line between cells:
+
+   ```
+   :::grid {collage}
+   [![Flatiron building|contain](images/flatiron.jpg)](/photographs/flatiron/)
+   *__Flatiron building__ · Manhattan*
+   +++
+   [![Brooklyn Bridge|contain](images/bridge.jpg)](/photographs/bridge/)
+   *__Brooklyn Bridge__ · Brooklyn*
+   :::
+   ```
+
+   Each index card below already shows one picture of its value as its cover, so pick highlights the cards do not show (build once and look). Say in your report which you chose and why. Then embed the index once, `![[/boroughs/|style:grid]]`, and set `children: false` (otherwise every item is listed again below) and `content_width: wide`. Never list every item on the home page. Since the home page already shows the boroughs, leave the kind out of the nav: no `nav = true`.
+9. **Pictures whole.** For prints that must not be cropped, set `--moss-card-cover-ratio: auto` in `.moss/theme/style.css` under `:root`: each card's cover takes its own picture's shape, uncropped, and the titles of a grid row still line up. It is for pictures: a video or an embedded page has no shape of its own until it loads, so give a listing of those a ratio. For one uniform box instead, keep an `aspect-ratio` value (the default is `4 / 3`, upright prints suit `4 / 5`) and set `--moss-card-cover-fit: contain`, which shows the whole picture inside the box with bands where the shapes differ. Give the pictures folder an `index.md` with `listed: false`.
+10. **The source note** becomes a page by adding frontmatter above its unchanged text.
+11. `moss build --strict`, then read every warning and note.
 
 ## Styling: the one-sentence model
 

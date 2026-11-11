@@ -16,7 +16,7 @@ UPDATE_ENGINE_CONTRACT=1 cargo test -p moss-build --lib commands::tests::the_con
 
 `src/ui/` holds the UI code that does not depend on which program shows it. It reaches whatever runs it through one record, `src/ui/host.ts`: the engine and its events, the bus between the UI's parts, links, file picks, and the optional members only some hosts have (a native window, a file manager, files on disk). A host fills that record before the UI mounts, and where a member is absent the UI shows no control for it.
 
-Today `src/ui/` holds the UI's foundations: the strings and their locales (`i18n/`), shared controls and the toast stack (`shared/`), small components (`components/`), the design tokens and shared stylesheets (`styles/`), helpers (`utils/`, `lib/`), the log, and the host record. Import a module by its path under `ui/`, with no extension, or a stylesheet by its file name:
+`src/ui/` holds the whole UI: the editor (`editor/`), the shell around the preview (`shell/`), the preview (`preview/`), the views of the action panel (`panel-view/`), the strings and their locales (`i18n/`), shared controls and the toast stack (`shared/`), small components (`components/`), the design tokens and shared stylesheets (`styles/`), helpers (`utils/`, `lib/`), the log, and the host record. Import a module by its path under `ui/`, with no extension, or a stylesheet by its file name:
 
 ```ts
 import { t } from '@symbiosis-lab/moss-ui/ui/i18n/index';

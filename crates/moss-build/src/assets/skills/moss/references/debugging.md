@@ -36,7 +36,7 @@ Builds the site and serves it on port 8080, or the next free port if 8080 is tak
 
 For an editing session, start with `moss build <folder> --serve --watch` and use the URL printed by that process. Verify the exact URL the reader will open. A successful build or HTTP 200 for the page does not prove its styles loaded: check the linked CSS and JavaScript responses, their content types, and the rendered page. An HTML fallback can return 200 at a stylesheet URL while leaving the page unstyled.
 
-Test watching with a reversible edit to the actual source, observe the changed page or asset through the running server, then restore it and verify restoration. Checking only the initial build cannot reveal a watcher that ignores source events. Edit source files, not the generated output under `.moss/build/`.
+Test watching with a reversible edit to the actual source, observe the changed page or asset through the running server, then restore it and verify restoration. Checking only the initial build cannot reveal a watcher that ignores source events. Edit source files, not the generated output under `.moss/build.nosync/`.
 
 If you separately serve an exported build, set the server root explicitly to that output and preserve its `/_moss/` asset paths. A prototype-specific rewrite can break an otherwise valid documentation build.
 
@@ -77,7 +77,7 @@ shortcode name is the `class` minus its `moss-` prefix (`moss-hero` →
 
 ## Import stopped mid-crawl
 
-`moss import --recursive` caps at 200 pages. If you get a partial result,
+`moss import --recursive` follows links for at most 200 pages; the pages a site's sitemap lists are imported beyond that cap. If you get a partial result,
 check the logs for HTTP errors on individual pages, split the crawl by
 path prefix, and re-import the missing sections into the same folder.
 

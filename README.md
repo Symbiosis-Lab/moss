@@ -53,18 +53,19 @@ npm install -g @symbiosis-lab/moss
 
 ## Quick start
 
-Make a folder with an `index.md` in it, then:
+Make a folder with a markdown file in it, then build it:
 
 ```sh
+mkdir ~/blog && printf '# Hello\n\nMy first page.\n' > ~/blog/index.md
 moss build ~/blog/            # build once
-moss build ~/blog/ --serve    # build and serve a local preview
+moss build ~/blog/ --serve    # build and serve a local preview; Ctrl-C stops it
 moss list ~/blog/             # inventory every page: kind, URL, title, lang
-moss env production ~/blog/  # publish this folder to mosspub.com
+moss env production ~/blog/  # choose where this folder publishes: mosspub.com
 moss deploy ~/blog/ --site-id=my-blog --email you@example.com   # signs the folder in, then publishes my-blog.mosspub.com
 moss deploy ~/blog/           # build and publish on every later run
 ```
 
-`moss preview` and `moss edit` open a window and need the desktop app; the CLI binary hands off to it if installed, or tells you how to get it. Run `moss --help` for the full command list.
+`moss edit <folder>` opens the folder in moss desktop when it is installed and you run it from a terminal; otherwise it serves the editor in your browser, and `moss edit <folder> --serve` asks for the browser editor outright. `moss preview` opens a window, so it needs moss desktop: the CLI hands off to it if installed, or tells you how to get it. Run `moss --help` for the full command list.
 
 For a coding agent, `moss guide` prints the conventions and rules, and `moss describe --json` prints the whole contract: tokens, components, frontmatter and commands.
 
