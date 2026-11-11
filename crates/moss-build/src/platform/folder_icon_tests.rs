@@ -160,6 +160,19 @@ fn the_marker_stays_out_of_git_status() {
 }
 
 #[test]
+fn an_exclude_file_it_cannot_read_keeps_its_rules() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = site();
+    let exclude = dir.path().join(".git/info/exclude");
+    std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    std::fs::write(&exclude, "*.log\n").unwrap();
+    std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o200)).unwrap();
+    mark_with(dir.path(), TAG, icns);
+    std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(std::fs::read(&exclude).unwrap(), b"*.log\n");
+}
+
+#[test]
 fn the_mark_sits_centred_on_the_folder_front_and_not_below_32px() {
     let mark = mark_alpha();
     let folder = |dim: u32| {
