@@ -120,7 +120,15 @@ pub(super) fn exclude_from_git(dir: &Path) {
     }
     let Some(common) = git_common_dir(dir) else { return };
     let exclude = common.join("info").join("exclude");
-    let existing = std::fs::read(&exclude).unwrap_or_default();
+    // Only a missing file is empty; rewriting one we could not read would drop its rules.
+    let existing = match std::fs::read(&exclude) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            log::debug!(target: "build", "folder icon: git exclude not read: {e}");
+            return;
+        }
+    };
     if existing.split(|b| *b == b'\n').any(|line| line == b"Icon\r\r") {
         return;
     }
@@ -130,8 +138,7 @@ pub(super) fn exclude_from_git(dir: &Path) {
     }
     out.extend_from_slice(b"Icon\r\r\n");
     let _ = std::fs::create_dir_all(common.join("info"));
-    // allow:raw_write a git exclude file, not build output
-    if let Err(e) = std::fs::write(&exclude, out) {
+    if let Err(e) = crate::infra::atomic_write::write_atomic(&exclude, out) {
         log::debug!(target: "build", "folder icon: git exclude not written: {e}");
     }
 }

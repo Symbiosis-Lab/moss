@@ -36,6 +36,13 @@ All notable changes to moss will be documented here.
 - `moss build --strict` reports a badly named template once, and counts it as one problem. Before, it was often reported twice.
 - A site's `tagline` can be placed again, for example as an eyebrow above an article's title. Existing `[fields.tagline]` declarations with `type = "text"` keep working.
 
+## [0.15.22] - 2026-11-11
+
+### Fixed
+
+- Saving a page shows in the preview sooner again on a site with link cards. 0.15.21 rewrote and flushed each card's picture details on every build, even unchanged, which cost about 7 ms a card on every save; a build now writes them only when they change.
+- On a Mac, marking a site folder that is a git repository with moss's icon no longer risks emptying the repository's local ignore list (`.git/info/exclude`): when that file can't be read, moss now leaves it as it is instead of rewriting it with only its own line.
+
 ## [0.15.21] - 2026-11-09
 
 ### New
