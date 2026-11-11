@@ -192,6 +192,7 @@ pub enum Fold {
 /// headings of that id in the order the page renders them (the first, which
 /// keeps the bare id, is place 0).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HeadingNumber {
     pub from: String,
     pub place: usize,

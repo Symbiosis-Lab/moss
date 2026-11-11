@@ -9,18 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING:** `Block::Heading` gains `numbered_from: Option<HeadingNumber>`: when the parser numbered a heading's id apart from an earlier one with the same id (`posts-1` after `posts`), the id it was numbered from and the heading's place among those headings in the order the page renders them, so headings of one name can be found and ordered without reading the suffix. A struct literal or an exhaustive pattern must name it.
+- **BREAKING:** `Block::Heading` gains `numbered_from: Option<HeadingNumber>`: when the parser numbered a heading's id apart from an earlier one with the same id (`posts-1` after `posts`), the id it was numbered from and the heading's place among those headings in the order the page renders them, so headings of one name can be found and ordered without reading the suffix. A struct literal or an exhaustive pattern must name it. `HeadingNumber` is `#[non_exhaustive]`: read its `from` and `place`, and only the parser builds one.
+- **BREAKING:** `ParseConfig` takes a lifetime, `ParseConfig<'a>`, and a `blocks: Option<&'a BlockNames>` field naming the fences plugins declare. Build it as `ParseConfig { …, ..ParseConfig::default() }`; `blocks: None` keeps the old reading, where every `:::name` fence a plugin would own is an unknown shortcode. A struct or function that stored a `ParseConfig` gains the lifetime.
+- **BREAKING:** `Shortcode::kind` returns `Option<ShortcodeKind>`, `None` for a plugin's block.
+- An unknown shortcode's warning now names its line.
 
 ### Added
 
 - `FieldEdit::SetChild` sets or removes one key inside a frontmatter mapping such as `cascade:`, leaving the mapping's other lines and comments as written.
 - `Shortcode::Block` and `page::block_names`: a `:::name` fence a plugin declares parses to a block whose body stays ordinary markdown.
-
-### Changed
-
-- **Breaking:** `ParseConfig` takes a lifetime and a `blocks` field naming the fences plugins declare.
-- **Breaking:** `Shortcode::kind` returns `Option<ShortcodeKind>`, `None` for a plugin's block.
-- An unknown shortcode's warning now names its line.
 
 ## [0.23.1] - 2026-11-09
 
