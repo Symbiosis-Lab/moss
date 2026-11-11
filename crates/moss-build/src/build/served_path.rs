@@ -373,6 +373,11 @@ impl ServedPath {
         Ok(ServedPath(format!("assets/favicon.{}", ext)))
     }
 
+    /// A PNG made from the site's favicon at `size` pixels.
+    pub fn for_favicon_raster(size: u32) -> Self {
+        ServedPath(format!("assets/favicon-{size}.png"))
+    }
+
     /// Sitemap. Path is fixed.
     pub fn for_sitemap() -> Self {
         ServedPath("sitemap.xml".to_string())
@@ -466,6 +471,17 @@ impl ServedPath {
     /// robots.txt. Path is fixed.
     pub fn for_robots_txt() -> Self {
         ServedPath("robots.txt".to_string())
+    }
+
+    /// The site's web app manifest. A published address: other software stores it.
+    pub fn for_web_manifest() -> Self {
+        ServedPath("manifest.webmanifest".to_string())
+    }
+
+    /// The site's resolved colour and font tokens, read by moss's own services.
+    /// Under `_moss/`, so an author's file in `assets/` never stands in for it.
+    pub fn for_site_tokens() -> Self {
+        ServedPath("_moss/tokens.json".to_string())
     }
 
     /// The TDM Reservation Protocol file. Path is fixed by the protocol.

@@ -67,7 +67,7 @@ impl ThemeColor {
     pub fn of_theme(theme_css: Option<&str>) -> Self {
         use crate::build::scan::section_text::{to_hex, BACKGROUNDS};
         let (light_bg, dark_bg) = *BACKGROUNDS;
-        let (light, dark) = crate::build::theme_lint::root_colours(theme_css, "--moss-color-bg", (light_bg, dark_bg));
+        let (light, dark) = crate::build::theme_lint::root_colours(theme_css, "--moss-color-bg");
         Self { light: to_hex(light.root.unwrap_or(light_bg)), dark: to_hex(dark.root.unwrap_or(dark_bg)) }
     }
 

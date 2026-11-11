@@ -148,7 +148,7 @@ Files over 1000 code lines:
 
 | File | Code lines | Disposition |
 |---|---:|---|
-| `crates/moss-build/src/build/render/blocking.rs` | 2066 | The blocking build coordinates source readiness, parsing, typed document preparation, and distinct authored, term, and place bodies. Folder planning and common page chrome now have single owners; further reduction should give document preparation an explicit result consumed by those body renderers. |
+| `crates/moss-build/src/build/render/blocking.rs` | 2065 | The blocking build coordinates source readiness, parsing, typed document preparation, and distinct authored, term, and place bodies. Folder planning and common page chrome now have single owners; further reduction should give document preparation an explicit result consumed by those body renderers. |
 | `packages/moss-ui/src/ui/editor/editor-main.ts` | 1857 | The editor entry coordinates document loading, focus, history and host events. Give the document session one explicit state record before separating its event wiring. |
 | `packages/moss-ui/src/ui/editor/chip-bar.ts` | 1658 | The chip bar combines field rendering, parsing, dropdown state and keyboard handling. Separate the field state from its renderers before splitting the controller. |
 | `crates/moss-build/src/build/media/image.rs` | 1499 | The image half of media conversion: WebP encode, EXIF, resize, CAS store, dispatched on threads under a megapixel budget. It shares output registration and the coherence summary with video through output_emit; its dispatch, concurrency and state model differ on purpose, so no further shared skeleton is planned. |

@@ -2507,6 +2507,8 @@ pub fn generate_blocking_content_for_build(
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
     crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
+    let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });
+    crate::build::site_meta::site_identity::emit(&layout_config, own_icon, user_css_content.as_deref(), output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
     send_progress(
         progress_sender,
@@ -3255,17 +3257,15 @@ pub fn generate_blocking_content_for_build(
                 if favicon_raster_sizes.contains(&size) {
                     tags.push('\n');
                     tags.push_str(&format!(
-                        r#"<link rel="icon" type="image/png" sizes="{size}x{size}" href="/assets/favicon-{size}.png">"#
+                        r#"<link rel="icon" type="image/png" sizes="{size}x{size}" href="/{}">"#,
+                        ServedPath::for_favicon_raster(size).as_str()
                     ));
                 }
             }
             Some(tags)
         };
         let apple_touch_icon: Option<String> = if favicon_raster_sizes.contains(&180) {
-            Some(
-                r#"<link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png">"#
-                    .to_string(),
-            )
+            Some(format!(r#"<link rel="apple-touch-icon" sizes="180x180" href="/{}">"#, ServedPath::for_favicon_raster(180).as_str()))
         } else {
             None
         };
@@ -3415,8 +3415,6 @@ pub(super) struct ResolvedFavicon {
     pub relative_path: String,
     pub content_hash: String,
     /// True when no user favicon was found and the moss-logo default was used.
-    /// Locked in by tests so a refactor can't silently disable the fallback.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub used_default: bool,
     /// The sizes of `assets/favicon-<size>.png` written beside the favicon:
     /// every size in `SIZES` for an SVG favicon, the sizes that fit a supplied

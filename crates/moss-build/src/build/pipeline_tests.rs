@@ -8316,6 +8316,19 @@ fn an_author_supplied_calendar_file_wins_over_the_generated_one() {
     assert_eq!(staged(&dir, "events/calendar.ics"), "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n");
 }
 
+/// A web app manifest the author keeps at the root is their site's declared
+/// identity and is published as written, on a rebuild too.
+#[test]
+fn an_author_supplied_web_manifest_wins_over_the_generated_one() {
+    let (dir, _c) = create_test_dir();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(dir.join("manifest.webmanifest"), "{\"name\":\"Mine\"}").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    assert_eq!(staged(&dir, "manifest.webmanifest"), "{\"name\":\"Mine\"}");
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("rebuild");
+    assert_eq!(staged(&dir, "manifest.webmanifest"), "{\"name\":\"Mine\"}");
+}
+
 #[test]
 fn availability_pending_source_walk_preserves_current_generation_and_baseline() {
     crate::infra::home::with_moss_home(|_| {

@@ -109,9 +109,9 @@ fn scope_of(unconditioned: bool, selector: &str) -> Scope {
     }
 }
 
-/// A colour token on one side (light or dark) as the stylesheet sets it at the
-/// page root, following `var(--x)` through other custom properties (`None`
-/// where the build can't read it), and whether the token or a property it goes
+/// A colour token on one side (light or dark) as the page shows it at its
+/// root, following `var(--x)` through other custom properties (`None` where
+/// the build can't read it), and whether the token or a property it goes
 /// through is also set in another scope (a section, a media query), so that
 /// some pages differ from the root. A `var(--x, fallback)` follows `--x` only.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,53 +120,141 @@ pub(crate) struct RootColour {
     pub varies: bool,
 }
 
-/// `token` on the light and the dark side, with moss's own `default` where the
-/// sheet does not set it.
-pub(crate) fn root_colours(theme_css: Option<&str>, token: &str, default: (Rgb, Rgb)) -> (RootColour, RootColour) {
-    let css = strip_comments(theme_css.unwrap_or_default());
-    let decls = custom_properties(&css);
-    (resolve_colour(&decls, token, Scope::Light, default.0), resolve_colour(&decls, token, Scope::Dark, default.1))
+/// `token` on the light and the dark side: the theme's value, else moss's own.
+pub(crate) fn root_colours(theme_css: Option<&str>, token: &str) -> (RootColour, RootColour) {
+    Layered::new(theme_css).colours(token)
 }
+
+/// One custom property declaration: where it applies, the property, its value.
+type Decl = (Scope, String, String);
 
 /// Every custom property declaration as (scope, property, value), once per
 /// selector of its rule: `:root, main {}` sets the root and another scope.
-fn custom_properties(stripped: &str) -> Vec<(Scope, String, String)> {
+fn custom_properties(stripped: &str) -> Vec<Decl> {
     let mut out = Vec::new();
     for rule in style_rules(stripped) {
         let Some((_, body)) = rule.rule.split_once('{') else { continue };
         for selector in rule.prelude.split(',') {
-            let scope = scope_of(rule.conditions.is_empty(), selector);
-            for decl in body.trim_end_matches('}').split(';') {
-                let Some((prop, value)) = decl.split_once(':') else { continue };
-                let prop = prop.trim();
-                if prop.starts_with("--") {
-                    out.push((scope, prop.to_string(), value.trim().trim_end_matches("!important").trim().to_string()));
-                }
-            }
+            push_custom_properties(&mut out, scope_of(rule.conditions.is_empty(), selector), body);
         }
     }
     out
 }
 
-/// A `var(--x)` chain is followed this many properties deep, which also ends a cycle.
+fn push_custom_properties(out: &mut Vec<Decl>, scope: Scope, body: &str) {
+    for decl in body.trim_end_matches('}').split(';') {
+        let Some((prop, value)) = decl.split_once(':') else { continue };
+        let prop = prop.trim();
+        if prop.starts_with("--") {
+            out.push((scope, prop.to_string(), value.trim().trim_end_matches("!important").trim().to_string()));
+        }
+    }
+}
+
+/// moss's own token values, the lowest layer of the page: the registry's light
+/// values on the root and its dark values under the dark theme.
+static REGISTRY_LAYER: LazyLock<Vec<Decl>> = LazyLock::new(|| {
+    let registry = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {e}"));
+    registry.groups.iter().flat_map(|g| &g.entries).flat_map(|e| {
+        let name = format!("--{}", e.name);
+        let dark = e.dark_value.clone().map(|d| (Scope::Dark, name.clone(), d));
+        std::iter::once((Scope::Light, name, e.value.clone())).chain(dark)
+    }).collect()
+});
+
+/// The page stylesheet's own root rules for a page in `lang`, which sit between
+/// the registry and the theme: the Han font stacks, and the swap to them on a
+/// Chinese, Japanese or Korean page.
+fn page_layer(lang: &str) -> Vec<Decl> {
+    let css = strip_comments(crate::build::page::shell::DEFAULT_CSS);
+    let mut out = Vec::new();
+    for rule in style_rules(&css) {
+        let Some((_, body)) = rule.rule.split_once('{') else { continue };
+        // A cascade layer orders rules; it does not condition them.
+        if rule.conditions.iter().all(|c| c.starts_with("@layer")) && selects_root_in(rule.prelude, lang) {
+            push_custom_properties(&mut out, Scope::Light, body);
+        }
+    }
+    out
+}
+
+/// Whether a selector the page stylesheet writes for its root matches a page in
+/// `lang`: `:root`, `html[lang="x"]` and `html:is([lang|="x"], …)`.
+fn selects_root_in(prelude: &str, lang: &str) -> bool {
+    let sel: String = prelude.chars().filter(|c| !c.is_whitespace() && !matches!(c, '"' | '\'')).collect::<String>().to_ascii_lowercase();
+    let lang = lang.to_ascii_lowercase();
+    if sel == ":root" {
+        return true;
+    }
+    if let Some(exact) = sel.strip_prefix("html[lang=").and_then(|s| s.strip_suffix(']')) {
+        return exact == lang;
+    }
+    let Some(list) = sel.strip_prefix("html:is(").and_then(|s| s.strip_suffix(')')) else { return false };
+    list.split(',').filter_map(|item| item.strip_prefix("[lang|=")?.strip_suffix(']')).any(|x| lang == x || lang.starts_with(&format!("{x}-")))
+}
+
+/// A `var()` chain is followed this many properties deep, which also ends a cycle.
 const MAX_HOPS: usize = 8;
 
-fn resolve_colour(decls: &[(Scope, String, String)], token: &str, side: Scope, default: Rgb) -> RootColour {
+/// `token`'s value on one side at the page root, following `var(--x)` through
+/// other custom properties, and whether the token or a property it goes
+/// through is also set in another scope. `layers` are cascade layers, the
+/// winning one first: a property set anywhere in a layer beats every later one.
+fn resolve_value<'d>(layers: &[&'d [Decl]], token: &str, side: Scope) -> (Option<&'d str>, bool) {
     let mut varies = false;
     let mut name = token;
     for _ in 0..MAX_HOPS {
-        varies |= decls.iter().any(|(scope, prop, _)| *scope == Scope::Other && prop == name);
-        let set_in = |want: Scope| decls.iter().rev().find(|(scope, prop, _)| *scope == want && prop == name).map(|d| d.2.as_str());
+        varies |= layers.iter().any(|decls| decls.iter().any(|(scope, prop, _)| *scope == Scope::Other && prop == name));
+        let set_in = |decls: &'d [Decl], want: Scope| decls.iter().rev().find(|(scope, prop, _)| *scope == want && prop == name).map(|d| d.2.as_str());
         // The dark side reads `:root` too, for whatever its own rule leaves.
-        let Some(value) = set_in(side).or_else(|| set_in(Scope::Light)) else {
-            return RootColour { root: (name == token).then_some(default), varies };
-        };
-        match value.strip_prefix("var(").and_then(|v| v.strip_suffix(')')) {
-            Some(inner) => name = inner.split(',').next().unwrap_or_default().trim(),
-            None => return RootColour { root: crate::build::components::color_extract::parse_css_color(value), varies },
+        let value = layers.iter().find_map(|decls| set_in(decls, side).or_else(|| set_in(decls, Scope::Light)));
+        match value.map(|v| (v, v.strip_prefix("var(").and_then(|v| v.strip_suffix(')')))) {
+            Some((_, Some(inner))) => name = inner.split(',').next().unwrap_or_default().trim(),
+            Some((v, None)) => return (Some(v), varies),
+            None => return (None, varies),
         }
     }
-    RootColour { root: None, varies }
+    (None, varies)
+}
+
+/// A theme stylesheet's custom properties over moss's own, as the theme layer
+/// sits over the page stylesheet and the tokens on the page. Parsed once;
+/// [`Layered::values`] and [`Layered::colours`] look each property up.
+pub(crate) struct Layered {
+    theme: Vec<Decl>,
+    page: Vec<Decl>,
+}
+
+impl Layered {
+    /// The theme over the registry. Enough for colours: the page stylesheet's
+    /// root rules set fonts only.
+    pub(crate) fn new(theme_css: Option<&str>) -> Self {
+        Self { theme: custom_properties(&strip_comments(theme_css.unwrap_or_default())), page: Vec::new() }
+    }
+
+    /// The theme over the page stylesheet's root rules for `lang` and the registry.
+    pub(crate) fn for_page(theme_css: Option<&str>, lang: &str) -> Self {
+        Self { page: page_layer(lang), ..Self::new(theme_css) }
+    }
+
+    fn resolve(&self, token: &str, side: Scope) -> (Option<&str>, bool) {
+        resolve_value(&[&self.theme, &self.page, &REGISTRY_LAYER], token, side)
+    }
+
+    /// `token`'s value on the light and the dark side at the page root, after
+    /// following `var()`; `None` where no layer sets it there.
+    pub(crate) fn values(&self, token: &str) -> (Option<String>, Option<String>) {
+        let side = |scope| self.resolve(token, scope).0.map(str::to_string);
+        (side(Scope::Light), side(Scope::Dark))
+    }
+
+    pub(crate) fn colours(&self, token: &str) -> (RootColour, RootColour) {
+        let side = |scope| {
+            let (value, varies) = self.resolve(token, scope);
+            RootColour { root: value.and_then(crate::build::components::color_extract::parse_css_color), varies }
+        };
+        (side(Scope::Light), side(Scope::Dark))
+    }
 }
 
 /// A colour token set on `:root` with no dark value stays at its light value
@@ -500,17 +588,37 @@ mod tests {
     #[test]
     fn a_root_colour_follows_var_and_says_when_a_section_changes_it() {
         const BG: &str = "--moss-color-bg";
-        let defaults = ((1, 1, 1), (2, 2, 2));
         let sectioned = ":root { --paper: #fbfbfb; }\n:root, body[data-section] { --moss-color-bg: var(--paper); }\nbody[data-section] { --paper: var(--section); }";
-        let (light, dark) = root_colours(Some(sectioned), BG, defaults);
+        let (light, dark) = root_colours(Some(sectioned), BG);
         assert_eq!(light, RootColour { root: Some((251, 251, 251)), varies: true });
         assert_eq!(dark, light, "no dark rule: the root holds on both sides");
-        let steady = root_colours(Some(":root { --day: #fff; --paper: var(--day); --moss-color-bg: var(--paper); }"), BG, defaults);
+        let steady = root_colours(Some(":root { --day: #fff; --paper: var(--day); --moss-color-bg: var(--paper); }"), BG);
         assert_eq!(steady.0, RootColour { root: Some((255, 255, 255)), varies: false });
-        assert_eq!(root_colours(None, BG, defaults).1, RootColour { root: Some((2, 2, 2)), varies: false }, "unset: moss's own");
+        let (l, d) = *crate::build::scan::section_text::BACKGROUNDS;
+        assert_eq!(root_colours(None, BG), (RootColour { root: Some(l), varies: false }, RootColour { root: Some(d), varies: false }), "unset: moss's own");
         for unreadable in [":root { --moss-color-bg: var(--a); --a: var(--b); --b: var(--a); }", ":root { --moss-color-bg: var(--nowhere); }"] {
-            assert_eq!(root_colours(Some(unreadable), BG, defaults).0.root, None, "{unreadable}");
+            assert_eq!(root_colours(Some(unreadable), BG).0.root, None, "{unreadable}");
         }
+    }
+
+    #[test]
+    fn a_theme_value_that_names_a_moss_token_takes_that_token_s_value() {
+        let (surface, _) = root_colours(None, "--moss-color-surface");
+        let (light, _) = root_colours(Some(":root { --moss-color-bg: var(--moss-color-surface); }"), "--moss-color-bg");
+        assert_eq!(light.root, surface.root);
+        assert!(light.root.is_some());
+    }
+
+    #[test]
+    fn a_han_page_takes_the_han_font_stacks_and_a_theme_font_still_wins() {
+        let latin = Layered::for_page(None, "en").values("--moss-font-heading").0.unwrap();
+        let han = Layered::for_page(None, "zh-Hans").values("--moss-font-heading").0.unwrap();
+        let hant = Layered::for_page(None, "zh-Hant").values("--moss-font-body").0.unwrap();
+        assert!(!latin.contains("Songti SC") || latin.find("Source Serif") < latin.find("Songti SC"), "{latin}");
+        assert!(han.trim_start().starts_with("'Source Han Serif SC'"), "{han}");
+        assert!(hant.contains("'PingFang TC'"), "{hant}");
+        let themed = Layered::for_page(Some(":root { --moss-font-heading: Georgia, serif; }"), "ja").values("--moss-font-heading").0;
+        assert_eq!(themed.as_deref(), Some("Georgia, serif"));
     }
 
     #[test]
