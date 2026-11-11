@@ -1301,10 +1301,13 @@ pub(crate) fn select_children_by_slug<'a>(
             if d.url_path == target_url {
                 return false;
             }
-            // Folder embeds publish a list of articles — `is_listable`
-            // covers draft/slot_only in one shot. A page-less entry is a row
-            // in its own folder only, never a term page or an `also_in` one.
-            if !d.is_listable() && !(d.is_pageless_entry() && d.url_path.starts_with(&folder_prefix)) {
+            // Folder embeds publish a list of articles — `is_listable_in`
+            // covers draft/slot_only and hidden folders in one shot. A
+            // page-less entry is a row in its own folder only, never a term
+            // page or an `also_in` one.
+            if !d.is_listable_in(&folder_prefix)
+                && !(d.is_pageless_entry() && d.url_path.starts_with(&folder_prefix) && d.reaches(&folder_prefix))
+            {
                 return false;
             }
             // scope_default_tree: a home lists its own edition only (gated by

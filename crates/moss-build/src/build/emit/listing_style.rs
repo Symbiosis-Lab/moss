@@ -144,6 +144,25 @@ fn with_content_width(html: String, width: &str) -> String {
     format!("{} data-content-width=\"{}\"{}", &html[..insert], width, &html[insert..])
 }
 
+/// The folders under `listing_dir` a plugin's listing on `page` is handed:
+/// those moss's own listing of that folder may show. The root's address prefix
+/// is empty, so without the edition check a root listing would take in every
+/// edition's folders as well.
+fn listing_folders<'a>(page: &ParsedDocument, documents: &'a [ParsedDocument], listing_dir: &[String]) -> Vec<&'a ParsedDocument> {
+    let folder: String = listing_dir.iter().map(|segment| format!("{segment}/")).collect();
+    documents
+        .iter()
+        .filter(|d| {
+            d.kind == moss_core::PageKind::Folder
+                && d.source_path.is_some()
+                && d.url_path != page.url_path
+                && d.is_listable_in(&folder)
+                && dir_segments(&d.url_path).starts_with(listing_dir)
+                && d.edition == page.edition
+        })
+        .collect()
+}
+
 fn lang_tag(doc: &ParsedDocument) -> String {
     doc.lang_tag.clone().unwrap_or_else(|| doc.lang.as_bcp47_attr().to_string())
 }
@@ -324,19 +343,7 @@ pub(crate) fn apply(
         let dir = own_dir(page).unwrap_or_default();
         let listing_dir: Vec<String> = dir.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
         let children = listing_members(page, documents, project, now);
-        // The root's address prefix is empty, so without the edition check a
-        // root listing would take in every edition's folders as well.
-        let folders: Vec<&ParsedDocument> = documents
-            .iter()
-            .filter(|d| {
-                d.kind == moss_core::PageKind::Folder
-                    && d.source_path.is_some()
-                    && d.url_path != page.url_path
-                    && d.is_public_page()
-                    && dir_segments(&d.url_path).starts_with(&listing_dir)
-                    && d.edition == page.edition
-            })
-            .collect();
+        let folders = listing_folders(page, documents, &listing_dir);
         let ctx = ListingContext {
             model: LISTING_MODEL,
             style: style.to_string(),
@@ -446,6 +453,41 @@ pub(crate) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn segs(path: &str) -> Vec<String> {
+        path.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect()
+    }
+
+    /// A plugin is handed the folders moss's own listing would show: not a
+    /// hidden folder from a listing outside it, but the folders inside it from
+    /// its own home.
+    #[test]
+    fn a_plugin_listing_gets_no_hidden_folder_from_outside_it() {
+        let folder = |url: &str| ParsedDocument {
+            url_path: url.to_string(),
+            source_path: Some(url.replace(".html", ".md")),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let root = folder("index.html");
+        let mut acme = folder("acme/index.html");
+        acme.search_engines = Some(false);
+        let mut second = folder("acme/second/index.html");
+        second.hidden_home = Some("acme/".to_string());
+        let docs = vec![root.clone(), folder("open/index.html"), acme.clone(), second];
+        let urls = |page: &ParsedDocument, dir: &str| -> Vec<String> {
+            listing_folders(page, &docs, &segs(dir)).iter().map(|d| d.url_path.clone()).collect()
+        };
+        assert_eq!(urls(&root, ""), ["open/index.html"]);
+        assert_eq!(urls(&acme, "acme"), ["acme/second/index.html"]);
+    }
+
+    #[test]
+    fn urls_are_relative_to_the_listing_page() {
+        assert_eq!(relative(&segs("board"), &segs("board/sub")), "sub");
+        assert_eq!(relative(&segs("board"), &segs("other/x")), "../other/x");
+        assert_eq!(relative(&segs(""), &segs("board")), "board");
+    }
 
     #[test]
     fn a_span_is_filled_or_unwrapped() {

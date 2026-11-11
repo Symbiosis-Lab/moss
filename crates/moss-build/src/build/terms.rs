@@ -441,6 +441,11 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // a city also lists on its region and country), pushing each ancestor
     // through the same steps as the immediate key.
     for doc in documents.iter_mut() {
+        // A page reached only by its link joins no term: the term's page
+        // would name the page, or the term, to the whole site.
+        if doc.hidden_from_search_engines() {
+            continue;
+        }
         let own_claim = claimed_key(doc, &kinds, &index);
         let doc_edition = doc.edition.clone();
         let doc_url = to_pretty_url(&doc.url_path);

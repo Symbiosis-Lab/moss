@@ -1112,7 +1112,7 @@ pub(super) fn render_page<'d>(
                 .filter(|d| {
                     d.url_path.starts_with(&target_prefix)
                         && d.url_path != target_doc.url_path
-                        && d.is_listable()
+                        && d.is_listable_in(&target_prefix)
                         && (d.date.is_some() || d.event.is_some())
                 })
                 // Sidebar always shows direct children only, regardless of children_depth.
@@ -1575,10 +1575,12 @@ pub(super) fn render_page<'d>(
 ///    is the whole-chain half of the opt-out; the page's own nav is separately
 ///    suppressed by `nav_enabled` at the call site.
 ///
-/// Every page that sets neither answers exactly as `is_listable` does.
+/// Every page that sets neither answers exactly as `is_listable_in` its own
+/// folder does: a chain runs among siblings, so a hidden folder holding the
+/// page holds the whole chain, and the page's own address lies inside it.
 pub(crate) fn is_sequence_step(pd: &ParsedDocument) -> bool {
     use moss_core::sort::SortableDoc;
-    pd.is_listable()
+    pd.is_listable_in(&pd.url_path)
         && (!pd.is_folder_index() || ShellRegistry::is_article_layout(pd))
         && !matches!(&pd.series, Some(crate::build::types::SeriesField::Flag(false)))
 }

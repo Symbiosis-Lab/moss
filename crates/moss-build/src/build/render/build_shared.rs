@@ -143,7 +143,7 @@ impl FolderIndexPlan {
                     crate::build::cloud_ledger::InputState::Pending { .. } | crate::build::cloud_ledger::InputState::ReadError { .. }))
             .map(|(path, _)| path).collect();
         let suppressed: HashSet<String> = folder_index_keys(&project.dirs, dir_overrides)
-            .filter(|(raw, _)| {
+            .filter(|(raw, key)| {
                 let prefix = format!("{raw}/");
                 let pending_only = pending_pages.iter().any(|path| path.starts_with(&prefix))
                     && !documents.iter().any(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
@@ -156,10 +156,15 @@ impl FolderIndexPlan {
                 // A folder whose only pages are partials has nothing to show:
                 // its sources are never built, so an index for it would be a
                 // live, empty page at an address the author never made. Rows
-                // with no page of their own are something to show.
+                // with no page of their own are something to show. A page that
+                // says `search_engines: false`, or one in a hidden folder this
+                // folder is outside of, is not: an index would lead to it.
+                let folder = format!("{key}/");
                 let mut under = documents.iter().filter(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
-                let partials_only = under.clone().next().is_some() && under.all(|doc| doc.slot_only && !doc.is_pageless_entry());
-                pending_only || authored_index_pending || partials_only
+                let nothing_to_show = under.clone().next().is_some() && under.all(|doc| {
+                    (doc.slot_only && !doc.is_pageless_entry()) || doc.search_engines == Some(false) || !doc.reaches(&folder)
+                });
+                pending_only || authored_index_pending || nothing_to_show
             }).map(|(_, key)| key).collect();
 
         // A folder whose `index.html` is copied verbatim already has its page.
@@ -236,6 +241,7 @@ impl FolderIndexPlan {
             documents.push(make_document(&folder));
             FolderIndexEntry { folder, document_index }
         }).collect();
+        crate::build::types::mark_hidden_folders(documents);
         // A storage folder's listing is not written; its address forwards home.
         passthrough_stubs.extend(project.storage_folders.iter().map(|f| (format!("{f}/"), "/".to_string()))); // allow:served-path-url-construct (the address the listing had, the redirect source)
         Self { entries, passthrough_stubs }

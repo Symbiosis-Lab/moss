@@ -1315,7 +1315,7 @@ pub fn process_markdown_file(
     // `url_path`, computed a few lines below.
     let is_nav_page = crate::build::components::nav::is_nav_bar_item(
         crate::build::components::nav::NavFacts { nav: frontmatter.nav, draft: frontmatter.draft == Some(true),
-            slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) },
+            slot_only: is_slot_only, unlisted: frontmatter.listed == Some(false) || frontmatter.search_engines == Some(false) },
         is_root_level,
         is_index_file && is_root_level,
         &clean_stem,
@@ -1604,6 +1604,8 @@ pub fn process_markdown_file(
         is_home_override: is_index_by_home_override,
         draft,
         listed,
+        search_engines: frontmatter.search_engines,
+        hidden_home: None,
         description,
         // Byline rows are already normalized (one row per line, trimmed,
         // blanks dropped) by the field's deserializer, which shares

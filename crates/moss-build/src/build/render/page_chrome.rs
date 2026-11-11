@@ -129,8 +129,11 @@ impl PageChromeContext<'_, '_> {
         let paths = &self.assets.paths;
         let page_source = doc.and_then(|d| d.source_path.as_deref());
         let (theme_js_tag, theme_importmap) = self.assets.theme_modules.shell_tags(paths, self.assets.has_user_js);
+        let indexable = doc.is_none_or(|d| d.is_indexable());
         let mut body_attrs = String::new();
         if self.emit_source_lines { body_attrs.push_str(" data-moss-preview"); }
+        // Pagefind's own word for "not this page", read by `feeds::search::read_pages`.
+        if !indexable { body_attrs.push_str(r#" data-pagefind-ignore="all""#); }
         if is_homepage { body_attrs.push_str(r#" data-page="home""#); }
         // The page's published address, spelled as the sitemap and links spell
         // it. A page with no document is the synthetic homepage.
@@ -210,7 +213,7 @@ impl PageChromeContext<'_, '_> {
             date: None, formatted_date: None, date_line: None, short_date: None, content: None,
             description: None, og_tags: None, twitter_tags: None, canonical_link: None,
             hreflang_links, schema_json_ld: None, embed_head_assets: String::new(),
-            post_article: String::new(), lightbox: String::new(), robots_meta: self.layout.ai.robots_tag(doc.is_some_and(|d| !d.is_public_page())).map(|t| format!("\n    {t}")),
+            post_article: String::new(), lightbox: String::new(), robots_meta: self.layout.ai.robots_tag(!indexable).map(|t| format!("\n    {t}")),
         }
     }
 }

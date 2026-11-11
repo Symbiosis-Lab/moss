@@ -805,6 +805,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "search_engines",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        score: 93,
+        description: "When off, the page asks search engines not to index it (noindex) and leaves every listing, feed, the sitemap, tag pages and the site's search, posting no copies; on a folder's home it does the same for everything in the folder, which then only the folder's own listings show. It stays published at its address, for a page reached only by its link",
+        label_key: "chip.search_engines.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "partial",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,

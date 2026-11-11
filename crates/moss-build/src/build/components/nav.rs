@@ -554,7 +554,7 @@ pub fn is_nav_bar_item_doc(
             nav: doc.nav,
             draft: doc.draft == Some(true),
             slot_only: doc.slot_only,
-            unlisted: doc.listed == Some(false),
+            unlisted: doc.listed == Some(false) || doc.search_engines == Some(false),
         },
         doc.is_root_level,
         crate::build::render::lang_roots::is_language_root(&doc.url_path),

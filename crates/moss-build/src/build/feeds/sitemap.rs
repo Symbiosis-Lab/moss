@@ -14,11 +14,14 @@ pub struct SitemapEntry {
 /// body starts, at most 4 MiB; past that, or on a read error, the page counts
 /// as noindex, so a tag that was not seen never publishes a hidden address.
 pub(crate) fn declares_noindex(path: &std::path::Path) -> bool {
+    std::fs::File::open(path).is_ok_and(head_declares_noindex)
+}
+
+/// [`declares_noindex`] over a page already open or in memory.
+pub(crate) fn head_declares_noindex(mut page: impl std::io::Read) -> bool {
     use lol_html::{element, HtmlRewriter, Settings};
-    use std::io::Read;
 
     const LIMIT: usize = 4 << 20;
-    let Ok(mut file) = std::fs::File::open(path) else { return false };
     let found = std::cell::Cell::new(false);
     let head_over = std::cell::Cell::new(false);
     let mut rewriter = HtmlRewriter::new(
@@ -51,7 +54,7 @@ pub(crate) fn declares_noindex(path: &std::path::Path) -> bool {
         if read >= LIMIT {
             return true;
         }
-        match file.read(&mut buf) {
+        match page.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
                 read += n;

@@ -1149,6 +1149,7 @@ pub fn generate_blocking_content_for_build(
         for doc in &mut documents {
             doc.edition = editions.of(&doc.url_path);
         }
+        crate::build::types::mark_hidden_folders(&mut documents);
         log::debug!(target: "timing", "[reduce] slug_dedup ({} docs): {:?}", documents.len(), reduce_start.elapsed());
 
         if documents.iter().any(|d| d.slot_only && d.html_content.contains("moss-hero-closing")) {
@@ -2639,8 +2640,9 @@ pub fn generate_blocking_content_for_build(
 
     // Generate _previews.json for hover link previews
     // Compact JSON mapping permalink → { title, description, preview }
-    // Keyed on `is_public_page` (not `is_listable`): a `listed: false` page can
-    // be linked (footer / wikilink), so its hover preview should still resolve.
+    // Keyed on `is_indexable` (not `is_listable`): a `listed: false` page can
+    // be linked (footer / wikilink), so its hover preview should still resolve;
+    // a page reached only by its link must not be named in this site-wide file.
     // Emitted only when [site].link_preview is on — the same gate that
     // controls the <script> tag and preview.js file below, so the runtime,
     // its data file, and the tag that loads it always agree.
@@ -2649,7 +2651,7 @@ pub fn generate_blocking_content_for_build(
         let mut previews: BTreeMap<String, serde_json::Value> = BTreeMap::new();
         let mut excerpts = crate::build::feeds::previews::PreviewCache::begin(Path::new(source_path));
         for doc in &documents {
-            if !doc.is_public_page() {
+            if !doc.is_indexable() {
                 continue;
             }
             let preview_text = excerpts.excerpt(&doc.url_path, &doc.content, site_config.math, |content| {

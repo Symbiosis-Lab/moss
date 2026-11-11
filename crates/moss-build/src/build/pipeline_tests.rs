@@ -8548,3 +8548,202 @@ fn a_quotation_source_link_becomes_the_cite_and_the_pages_citation() {
     assert!(!staged(&dir, "notes/plain/index.html").contains("cite="));
     assert!(ld("notes/plain/index.html").get("citation").is_none());
 }
+
+/// `search_engines: false` on a folder's home hides the whole folder: every
+/// page in it, generated or written, carries `noindex`, and nothing that names
+/// pages to the whole site names any of them, while listings inside the folder
+/// still show them. A page's own `search_engines: false` leaves every listing.
+mod hidden_from_search_engines {
+    use super::*;
+
+    fn site() -> (std::path::PathBuf, impl Drop) {
+        let (dir, cleanup) = create_test_dir();
+        let files = [
+            ("index.md", "---\ntitle: Home\nhome: true\ncascade:\n  syndicate: [bluesky]\n---\n"),
+            ("about.md", "---\ntitle: About\n---\n\nAbout us.\n"),
+            ("quietk3x9.md", "---\ntitle: Quiet room\nsearch_engines: false\n---\n\n# Opening\n\nBy link only.\n"),
+            ("notes/index.md", "---\ntitle: Notes\n---\n"),
+            ("notes/open.md", "---\ntitle: Open\n---\n\nFor everyone.\n\n![Open photo](open-photo.png)\n<!-- photography -->\n\n![Open clip](open-clip.mp4)\n<!-- video-meta -->\n"),
+            ("notes/open-photo.png", "png"),
+            ("notes/open-clip.mp4", "mp4"),
+            ("notes/wip.md", "---\ntitle: Work in progress\ndraft: true\n---\n\n![Draft photo](wip-k3x9.png)\n<!-- photography -->\n"),
+            ("notes/wip-k3x9.png", "png"),
+            ("notes/quiet.md", "---\ntitle: Quiet\nsearch_engines: false\n---\n\nBy link only.\n"),
+            ("rooms/acme-k3x9/index.md", "---\ntitle: Acme\nsearch_engines: false\nsort: date\n---\n"),
+            ("rooms/acme-k3x9/posted-k3x9.md", "---\ntitle: Posted\nsyndicate: [bluesky]\n---\n\nPosted.\n"),
+            ("rooms/acme-k3x9/brief.md", "---\ntitle: Brief\ndate: 2026-01-02\ntags: [k3x9mark]\n---\n\nThe brief.\n\n![A photo](k3x9-photo.png)\n<!-- photography -->\n\n![A clip](k3x9-clip.mp4)\n<!-- video-meta -->\n"),
+            ("rooms/acme-k3x9/k3x9-photo.png", "png"),
+            ("rooms/acme-k3x9/k3x9-clip.mp4", "mp4"),
+            ("rooms/acme-k3x9/pics/one.png", "png"),
+            ("rooms/acme-k3x9/pics/two.png", "png"),
+            ("rooms/acme-k3x9/proposal.pdf", "%PDF-1.4\n"),
+            ("rooms/acme-k3x9/proposal.md", "---\ntitle: Proposal\ndate: 2026-01-05\npartial: true\nlisted: true\nexternal_url: /rooms/acme-k3x9/proposal.pdf\n---\n"),
+            ("rooms/acme-k3x9/Second Round/index.md", "---\ntitle: Second round\nseries: true\n---\n"),
+            ("rooms/acme-k3x9/Second Round/notes.md", "---\ntitle: Round notes\ndate: 2026-01-10\n---\n\nNotes.\n"),
+            ("rooms/acme-k3x9/Second Round/plan.md", "---\ntitle: Round plan\ndate: 2026-01-11\n---\n\nThe plan.\n"),
+            ("rooms/acme-k3x9/log.md", "---\ntitle: Log\nchildren_in: sidebar\nchildren_source: \"[[sketches]]\"\n---\n\nThe log.\n"),
+            ("rooms/acme-k3x9/sketches/one.md", "---\ntitle: Sketch one\ndate: 2026-01-03\n---\n\nA sketch.\n"),
+            ("rooms/acme-k3x9/first/index.html", "<!doctype html><html><head><meta name=\"robots\" content=\"noindex\"><title>First</title></head><body>The first round.</body></html>"),
+        ];
+        for (path, text) in files {
+            let path = dir.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        build_test_at_site_url(dir.to_str().unwrap()).expect("build");
+        (dir, cleanup)
+    }
+
+    fn staged(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join(".moss/build.nosync/staging")
+    }
+
+    fn page(dir: &std::path::Path, path: &str) -> String {
+        fs::read_to_string(staged(dir).join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
+    }
+
+    const NOINDEX: &str = r#"<meta name="robots" content="noindex"#;
+    const LEFT_OUT: &str = r#"data-pagefind-ignore="all""#;
+
+    #[test]
+    fn the_home_and_every_page_in_its_folder_carry_noindex() {
+        let (dir, _cleanup) = site();
+        for path in [
+            "rooms/acme-k3x9/index.html",
+            "rooms/acme-k3x9/brief/index.html",
+            "rooms/acme-k3x9/second-round/index.html",
+            "rooms/acme-k3x9/second-round/notes/index.html",
+            "rooms/acme-k3x9/sketches/index.html",
+            "rooms/acme-k3x9/pics/index.html",
+            "quietk3x9/index.html",
+            "notes/quiet/index.html",
+        ] {
+            let html = page(&dir, path);
+            assert!(html.contains(NOINDEX) && html.contains(LEFT_OUT), "{path} must ask to be left out of search");
+        }
+        for path in ["notes/open/index.html", "about/index.html", "index.html"] {
+            let html = page(&dir, path);
+            assert!(!html.contains(NOINDEX) && !html.contains(LEFT_OUT), "{path} is untouched");
+        }
+    }
+
+    #[test]
+    fn listings_inside_the_folder_still_show_its_pages() {
+        let (dir, _cleanup) = site();
+        let home = page(&dir, "rooms/acme-k3x9/index.html");
+        for shown in ["/rooms/acme-k3x9/brief/", "/rooms/acme-k3x9/proposal.pdf", "/rooms/acme-k3x9/second-round/"] {
+            assert!(home.contains(&format!("href=\"{shown}\"")), "the home lists {shown}: {home}");
+        }
+        let second = page(&dir, "rooms/acme-k3x9/second-round/index.html");
+        assert!(second.contains("href=\"/rooms/acme-k3x9/second-round/notes/\""), "a folder inside lists its own pages: {second}");
+        let count = crate::i18n::article_count_label(crate::i18n::Language::En, 2, None);
+        assert!(home.contains(&count), "its row counts the pages inside ({count}): {home}");
+        let notes = page(&dir, "rooms/acme-k3x9/second-round/notes/index.html");
+        assert!(notes.contains("/rooms/acme-k3x9/second-round/plan/"), "a series runs inside the folder: {notes}");
+        let log = page(&dir, "rooms/acme-k3x9/log/index.html");
+        assert!(log.contains("href=\"/rooms/acme-k3x9/sketches/one/\""), "so does a sidebar: {log}");
+        let notes = page(&dir, "notes/index.html");
+        assert!(notes.contains("Open") && !notes.contains("Quiet"), "a page's own search_engines: false leaves its folder's listing: {notes}");
+    }
+
+    #[test]
+    fn nothing_that_names_pages_to_the_whole_site_names_them() {
+        let (dir, _cleanup) = site();
+        assert!(!staged(&dir).join("rooms/index.html").exists(), "a folder holding only a hidden folder gets no generated page");
+        assert!(!staged(&dir).join("tags/k3x9mark/index.html").exists(), "a hidden page's tag gets no page");
+        let brief = page(&dir, "rooms/acme-k3x9/brief/index.html");
+        assert!(!brief.contains("/tags/k3x9mark/"), "nor a link to one: {brief}");
+        for file in ["index.html", "about/index.html", "sitemap.xml", "rss.xml", "llms.txt", "_moss/previews.json"] {
+            let text = page(&dir, file);
+            let named: Vec<&str> = text.lines().filter(|l| l.contains("k3x9")).collect();
+            assert!(named.is_empty(), "{file} names a hidden page: {named:?}");
+        }
+        let searched: Vec<String> = crate::build::feeds::search::read_pages(&staged(&dir)).pages.into_iter().map(|p| p.rel_path).collect();
+        assert!(searched.iter().any(|p| p == "notes/open/index.html"), "{searched:?}");
+        let hidden: Vec<&String> = searched.iter().filter(|p| p.contains("k3x9") || p.contains("quiet")).collect();
+        assert!(hidden.is_empty(), "the site's search reads hidden pages: {hidden:?}");
+    }
+
+    /// The photography and video pages gather media from pages open to
+    /// everyone: not from a hidden page, nor from a draft.
+    #[test]
+    fn the_photography_and_video_pages_show_only_open_pages() {
+        let (dir, _cleanup) = site();
+        for (file, open) in [("photography/index.html", "open-photo"), ("videos/index.html", "open-clip")] {
+            let text = page(&dir, file);
+            assert!(text.contains(open), "{file} shows the open page's media: {text}");
+            assert!(!text.contains("k3x9"), "{file} shows a hidden or draft page's media: {text}");
+        }
+    }
+
+    /// A page at the site root is a header link by position, unless it leaves
+    /// listings: then it is no nav page, and keeps its title above the body's
+    /// own opening heading as any other page does.
+    #[test]
+    fn a_root_page_hidden_from_search_engines_is_no_nav_item() {
+        let (dir, _cleanup) = site();
+        let home = page(&dir, "index.html");
+        assert!(home.contains("href=\"/about/\""), "a root page is a header link: {home}");
+        assert!(!home.contains("/quietk3x9/"), "{home}");
+        let quiet = page(&dir, "quietk3x9/index.html");
+        assert!(quiet.contains("moss-article-title") && quiet.contains("Quiet room"), "{quiet}");
+    }
+
+    /// A copy posted to a channel names the page to everyone, so a hidden
+    /// page posts none, even when a folder above cascades `syndicate:`.
+    #[test]
+    fn a_hidden_page_posts_no_copies() {
+        crate::build::cache::tests::logged_count(log::Level::Warn, "");
+        let (dir, _cleanup) = site();
+        let map: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.join(".moss/build.nosync/article-map.json")).unwrap()).unwrap();
+        let channels = |url: &str| map["articles"][url]["syndicate"].clone();
+        assert_eq!(channels("about/"), serde_json::json!(["bluesky"]), "the cascade reaches open pages");
+        for url in ["rooms/acme-k3x9/brief/", "rooms/acme-k3x9/posted-k3x9/", "quietk3x9/", "notes/quiet/"] {
+            assert_eq!(channels(url), serde_json::json!([]), "{url} posts copies");
+        }
+        assert_eq!(crate::build::cache::tests::logged_count(log::Level::Warn, "[rooms/acme-k3x9/brief.md] `syndicate:`"), 0, "a cascaded list is not the page's own");
+    }
+
+    /// The page's own channels it cannot post to are named, once. Its own
+    /// site: the log is shared by every test that builds the fixture above.
+    #[test]
+    fn a_hidden_page_names_its_own_channels_once() {
+        crate::build::cache::tests::logged_count(log::Level::Warn, "");
+        let (dir, _cleanup) = create_test_dir();
+        fs::create_dir_all(dir.join("room-q7w2")).unwrap();
+        fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n").unwrap();
+        fs::write(dir.join("room-q7w2/index.md"), "---\ntitle: Room\nsearch_engines: false\n---\n").unwrap();
+        fs::write(dir.join("room-q7w2/own-q7w2.md"), "---\ntitle: Own\nsyndicate: [bluesky]\n---\n\nOwn.\n").unwrap();
+        build_test_at_site_url(dir.to_str().unwrap()).expect("build");
+        let warned = crate::build::cache::tests::logged_count(log::Level::Warn, "[room-q7w2/own-q7w2.md] `syndicate:` names channels");
+        assert_eq!(warned, 1);
+    }
+
+    /// `moss list` names why each hidden page is missing from listings.
+    #[test]
+    fn the_inventory_says_why_a_hidden_page_is_missing() {
+        let (dir, _cleanup) = site();
+        let rows: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.join(".moss/build.nosync/inventory.json")).unwrap()).unwrap();
+        let hidden = |source: &str| -> serde_json::Value {
+            let rows = rows.as_array().or_else(|| rows["entries"].as_array()).expect("inventory rows");
+            rows.iter().find(|r| r["source_path"] == source).unwrap_or_else(|| panic!("{source} not in the inventory"))["hidden"].clone()
+        };
+        assert_eq!(hidden("notes/quiet.md"), serde_json::json!(["search-engines"]));
+        assert_eq!(hidden("rooms/acme-k3x9/brief.md"), serde_json::json!(["hidden-folder"]));
+        assert_eq!(hidden("notes/open.md"), serde_json::json!([]));
+        assert_eq!(hidden("rooms/acme-k3x9/index.md"), serde_json::json!(["search-engines"]), "a home is not inside itself");
+    }
+
+    /// A folder whose only page says `search_engines: false` has nothing to
+    /// list, so it gets no generated page leading to it.
+    #[test]
+    fn a_folder_of_hidden_pages_gets_no_generated_page() {
+        let (dir, _cleanup) = create_test_dir();
+        fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n").unwrap();
+        fs::create_dir_all(dir.join("letters")).unwrap();
+        fs::write(dir.join("letters/to-acme.md"), "---\ntitle: To Acme\nsearch_engines: false\n---\n\nDear Acme.\n").unwrap();
+        build_test_at_site_url(dir.to_str().unwrap()).expect("build");
+        assert!(staged(&dir).join("letters/to-acme/index.html").exists());
+        assert!(!staged(&dir).join("letters/index.html").exists(), "an empty listing page at an address nobody made");
+    }
+}

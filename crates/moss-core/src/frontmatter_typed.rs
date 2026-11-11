@@ -364,6 +364,11 @@ pub struct FrontMatter {
     /// are independent of this flag.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub listed: Option<bool>,
+    /// `false` asks search engines not to index the page (`noindex`) and keeps
+    /// it off every surface that names pages to the whole site; on a folder's
+    /// home it covers everything in the folder.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub search_engines: Option<bool>,
     /// Partial: the page exists only to be transcluded into other pages
     /// (`![[name]]`). It resolves like any page but is never built, listed,
     /// or given a URL, so it is absent from nav, sitemap, feeds, search and
@@ -1173,7 +1178,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         }
                     };
                 }
-                "nav" | "home" | "draft" | "listed" | "partial" | "footer" | "comments" => {
+                "nav" | "home" | "draft" | "listed" | "search_engines" | "partial" | "footer" | "comments" => {
                     let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
                     // Anything other than "true"/"false" is a likely typo (e.g.
                     // "yes", "Ture"); warn rather than silently defaulting to
@@ -1195,6 +1200,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         "home" => frontmatter.home = flag,
                         "draft" => frontmatter.draft = flag,
                         "listed" => frontmatter.listed = flag,
+                        "search_engines" => frontmatter.search_engines = flag,
                         "partial" => frontmatter.partial = flag,
                         "footer" => frontmatter.footer = flag,
                         "comments" => frontmatter.comments = flag,

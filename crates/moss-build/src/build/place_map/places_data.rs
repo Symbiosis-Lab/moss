@@ -348,7 +348,7 @@ fn build_entry(
     let companions = companion_indices
         .iter()
         .copied()
-        .filter(|&i| documents[i].is_public_page())
+        .filter(|&i| documents[i].is_indexable())
         .map(|i| Companion { title: documents[i].title.clone(), url: page_url(&documents[i].url_path) })
         .collect();
     let entry = WorkEntry {
@@ -422,7 +422,7 @@ pub fn emit_places_data(
 
     for group in works.values() {
         let home = &documents[group.home_idx];
-        if !home.is_public_page() {
+        if !home.is_indexable() {
             continue;
         }
         // Only a companion at the home's own place is folded into the work;
@@ -447,7 +447,7 @@ pub fn emit_places_data(
     }
 
     for (i, doc) in documents.iter().enumerate() {
-        if claimed.contains(&i) || !doc.is_public_page() || doc.location.is_empty() {
+        if claimed.contains(&i) || !doc.is_indexable() || doc.location.is_empty() {
             continue;
         }
         if let Some((entry, resolved)) = build_entry(maps, gazetteer, namespace, documents, i, &[], math, dir_overrides) {
@@ -897,6 +897,31 @@ mod tests {
                 ("Evening".to_string(), "/works/kyoto-walk/evening/".to_string()),
             ]
         );
+    }
+
+    /// The places file is one site-wide list, so a page reached only by its
+    /// link (its own `search_engines: false`, or its folder home's) is on no
+    /// map: not as a work, a standalone page or a companion.
+    #[test]
+    fn a_page_hidden_from_search_engines_is_on_no_map() {
+        let mut quiet = standalone("posts/nara-diary.md", "posts/nara-diary/", "Nara Diary", &["Nara"]);
+        quiet.search_engines = Some(false);
+        let mut room = home("rooms/acme/kyoto-walk/kyoto-walk.md", "rooms/acme/kyoto-walk/", "Kyoto Walk", &["Kyoto"]);
+        room.hidden_home = Some("rooms/acme/".to_string());
+        let mut morning = companion("rooms/acme/kyoto-walk/morning.md", "rooms/acme/kyoto-walk/morning/", "Dawn");
+        morning.hidden_home = Some("rooms/acme/".to_string());
+        let mut note = companion("works/osaka-walk/note.md", "works/osaka-walk/note/", "Field note");
+        note.search_engines = Some(false);
+        let docs = vec![
+            quiet, room, morning, note,
+            home("works/osaka-walk/osaka-walk.md", "works/osaka-walk/", "Osaka Walk", &["Kyoto"]),
+            companion("works/osaka-walk/morning.md", "works/osaka-walk/morning/", "Morning"),
+        ];
+        let json = emit_places_data(&docs, &context(gazetteer()), true, &HashMap::new());
+        assert!(json.contains("Osaka Walk") && json.contains("Morning"), "{json}");
+        for hidden in ["Nara Diary", "Kyoto Walk", "Dawn", "Field note"] {
+            assert!(!json.contains(hidden), "{hidden} is on the map: {json}");
+        }
     }
 
     #[test]

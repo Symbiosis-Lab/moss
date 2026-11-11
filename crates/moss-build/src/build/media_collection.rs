@@ -188,7 +188,8 @@ pub fn aggregate_media_collections(
 
     let mut collections: HashMap<MediaType, Vec<MediaItem>> = HashMap::new();
 
-    for doc in documents {
+    // A collection page names pages to the whole site, as the places map does.
+    for doc in documents.iter().filter(|doc| doc.is_indexable()) {
         for item in &doc.media_items {
             collections
                 .entry(item.media_type.clone())

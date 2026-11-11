@@ -184,6 +184,17 @@ pub struct ParsedDocument {
     /// `None` ⇒ listed. Orthogonal to `draft` (which adds `noindex` + drops
     /// the share card).
     pub listed: Option<bool>,
+    /// The page's own `search_engines:`. Read through [`Self::is_indexable`]
+    /// and [`Self::is_listable_in`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub search_engines: Option<bool>,
+    /// The folder (`a/b/`, URL space) of the nearest home above this page that
+    /// says `search_engines: false`: the page is then shown only by listings
+    /// inside that folder. Set by [`mark_hidden_folders`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(skip)]
+    pub hidden_home: Option<String>,
     /// When set, this page's rendered HTML is emitted into the named slot
     /// instead of (or in addition to) being a page.
     ///
@@ -858,32 +869,42 @@ impl ParsedDocument {
 
     pub fn is_draft(&self) -> bool { self.draft == Some(true) }
 
-    /// Whether this document appears on moss's auto-generated *listing*
-    /// surfaces — page lists, folder embeds, year-grouped article lists,
-    /// home/folder children, auto-index pages, RSS, llms.txt, sitemap, and the
-    /// auto sidebar/sibling listings. False when **any** exclusion fires:
-    ///
-    /// 1. `draft == Some(true)` — rendered for the preview, never published;
-    ///    (via `is_public_page`) `noindex` with no share card.
-    /// 2. `listed == Some(false)` — a finished page curated *off-feed*: hidden
-    ///    from these listing surfaces but still a public page — indexable,
-    ///    share-cardable, reachable (see `is_public_page`).
-    /// 3. `slot_only == true` — layout chrome (e.g. `footer.md`) that fills a
-    ///    layout slot rather than rendering as a page. Structurally detected by
-    ///    `crate::build::footer::is_excluded_from_pages`; see
-    ///    `ParsedDocument::slot_only`.
-    /// 4. `is_not_found_page()` — the site's `404.md`, which a host shows for
-    ///    an address that does not exist.
-    ///
-    /// All list-emitting sites call this helper so any future visibility flag
-    /// is added in one place.
+    /// Whether this document appears on the listing surfaces that serve the
+    /// whole site — the home's listings, RSS, llms.txt, the sitemap, tag
+    /// pages, recent lists, auto-index pages: [`Self::is_listable_in`] the
+    /// root. A page in a hidden folder is listed only inside that folder.
     ///
     /// **NOT** to be used for: nav/footer placement (explicit `nav:`/`footer:`,
     /// independent of this flag); page-emission gating (drafts and off-feed
     /// pages both render — emission only branches on `slot_only`); or
-    /// `noindex`/share-card gating (use `is_public_page`).
+    /// `noindex`/share-card gating (use `is_indexable` / `is_public_page`).
     pub fn is_listable(&self) -> bool {
-        self.draft != Some(true) && self.listed != Some(false) && !self.slot_only && !self.is_not_found_page()
+        self.is_listable_in("")
+    }
+
+    /// Whether a listing of the folder `folder` (`a/b/`, URL space; `""` for
+    /// the root) may show this document. False when **any** exclusion fires:
+    ///
+    /// 1. `draft == Some(true)` — rendered for the preview, never published.
+    /// 2. `listed == Some(false)` — a finished page curated *off-feed*, still
+    ///    a public page (see `is_public_page`).
+    /// 3. `search_engines == Some(false)` — a page reached only by its link.
+    /// 4. `slot_only == true` — layout chrome (e.g. `footer.md`) or a partial.
+    /// 5. `is_not_found_page()` — the site's `404.md`.
+    /// 6. The page sits in a hidden folder ([`Self::hidden_home`]) that
+    ///    `folder` is outside of.
+    ///
+    /// All list-emitting sites call this helper so any future visibility flag
+    /// is added in one place.
+    pub fn is_listable_in(&self, folder: &str) -> bool {
+        self.draft != Some(true) && self.listed != Some(false) && self.search_engines != Some(false)
+            && !self.slot_only && !self.is_not_found_page() && self.reaches(folder)
+    }
+
+    /// Whether a listing of `folder` may name this page at all: false only for
+    /// a page in a hidden folder that `folder` is outside of.
+    pub fn reaches(&self, folder: &str) -> bool {
+        self.hidden_home.as_deref().is_none_or(|home| folder.starts_with(home))
     }
 
     /// An authored `partial: true` file that is not a draft. Read from the
@@ -910,15 +931,45 @@ impl ParsedDocument {
         self.url_path == crate::build::served_path::NOT_FOUND_PAGE
     }
 
-    /// Whether this is a real reader-facing page: indexable (no `noindex`) and
-    /// eligible for an og/twitter share card + JSON-LD + QR + hover preview.
-    /// Independent of *listing* membership — a `listed: false` page is still a
-    /// public page. Only `draft` (work-in-progress), `slot_only` (layout
-    /// chrome) and the not-found page (which a crawler should never be sent
-    /// to) are excluded. Gates per-page public affordances, where
-    /// `is_listable` gates multi-page listing surfaces.
+    /// Whether this is a real reader-facing page, eligible for an og/twitter
+    /// share card + JSON-LD + QR. Independent of *listing* membership — a
+    /// `listed: false` page is still a public page. Only `draft`
+    /// (work-in-progress), `slot_only` (layout chrome) and the not-found page
+    /// are excluded. Whether search engines and the site's own site-wide files
+    /// may name it is [`Self::is_indexable`].
     pub fn is_public_page(&self) -> bool {
         self.draft != Some(true) && !self.slot_only && !self.is_not_found_page()
+    }
+
+    /// A public page that does not ask to be left out of search
+    /// (`search_engines: false`, its own or its folder home's). It alone
+    /// decides the page's `noindex`, its place in the site's search, the
+    /// hover-preview file, the places map and the photography and video pages.
+    pub fn is_indexable(&self) -> bool {
+        self.is_public_page() && !self.hidden_from_search_engines()
+    }
+
+    /// `search_engines: false`, the page's own or its folder home's.
+    pub fn hidden_from_search_engines(&self) -> bool {
+        self.search_engines == Some(false) || self.hidden_home.is_some()
+    }
+}
+
+/// Sets every page's [`ParsedDocument::hidden_home`]: the folder of the
+/// nearest home above it whose own frontmatter says `search_engines: false`.
+/// Runs once every authored page has its final address, and again for the
+/// folder pages generated after. The site root is not such a home: the whole
+/// site's switch is `[site] search_engines`.
+pub(crate) fn mark_hidden_folders(docs: &mut [ParsedDocument]) {
+    let homes: Vec<String> = docs.iter()
+        .filter(|doc| doc.kind == moss_core::PageKind::Folder && doc.search_engines == Some(false))
+        .filter_map(|doc| doc.url_path.strip_suffix("/index.html").map(|dir| format!("{dir}/")))
+        .collect();
+    for doc in docs.iter_mut() {
+        doc.hidden_home = homes.iter()
+            .filter(|home| doc.url_path.strip_prefix(home.as_str()).is_some_and(|rest| rest != "index.html"))
+            .max_by_key(|home| home.len())
+            .cloned();
     }
 }
 
@@ -1398,6 +1449,30 @@ mod tests {
             vec!["journal/appendix/index.html", "journal/intro.html", "journal/closing.html"],
             "appendix (a subfolder) must keep its declared first position"
         );
+    }
+
+    /// A page takes the nearest hidden home above it, never itself; the
+    /// site's own home hides nothing but itself.
+    #[test]
+    fn a_page_takes_the_nearest_hidden_home_above_it() {
+        let page = |url: &str, kind: moss_core::PageKind, hidden: bool| ParsedDocument {
+            url_path: url.to_string(),
+            kind,
+            search_engines: hidden.then_some(false),
+            ..Default::default()
+        };
+        use moss_core::PageKind::{Article, Folder};
+        let mut docs = vec![
+            page("index.html", Folder, true),
+            page("about/index.html", Article, false),
+            page("rooms/index.html", Folder, true),
+            page("rooms/plan/index.html", Article, false),
+            page("rooms/acme/index.html", Folder, true),
+            page("rooms/acme/brief/index.html", Article, false),
+        ];
+        mark_hidden_folders(&mut docs);
+        let homes: Vec<Option<&str>> = docs.iter().map(|d| d.hidden_home.as_deref()).collect();
+        assert_eq!(homes, [None, None, None, Some("rooms/"), Some("rooms/"), Some("rooms/acme/")]);
     }
 
     #[test]
