@@ -98,9 +98,13 @@ declarations that fight each other.
   that result even slightly; it is redundant, and safe to omit, only when it
   matches the filename's derived title character for character. A body
   that opens with a `# Heading` whose text is the title is the page's one
-  title, and moss adds none above it; so is that heading inside a `:::hero`
-  or a `:::grid` at the top of the body, or after a leading image. A heading
-  whose text differs is not the title: the page shows its title above it.
+  title, and moss adds none above it; so is the first `# Heading` of a
+  `:::grid` at the top of the body, when its text is the title. A `:::hero`
+  at the top that holds words takes the title's place: a `# Heading` in it
+  is the page's title, and without one the title is kept for screen readers
+  only. A page in the navigation takes any `# Heading` it opens with as its
+  title, after a leading picture too. Anywhere else the page shows its
+  title above the body, so a heading whose text differs follows it.
   A name that starts with a date stamp (`2026-11-06 Autumn hotpot.md`) dates the page and the words after it
   are the title; a name that is only the stamp is an untitled, dated post (`moss guide authoring`, "Content structure").
 - **Name files in their own language; pin a non-ASCII URL.** The
