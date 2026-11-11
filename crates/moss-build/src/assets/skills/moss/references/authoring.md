@@ -1211,7 +1211,7 @@ The build also publishes the site's source under `_moss/source/`: the Markdown p
 
 ## Templates
 
-A template is a starting page that a person makes new pages from. It lives in `.moss/templates/` as a file named from the template's name: `production.md` for a template named Production. The file is an ordinary page whose four `_template_` keys moss reads and does not copy into the pages it makes: `_template_name` (the name the create menu shows), `_template_kind` (`page` for one new file, or `folder` for a new folder with a home page inside it), `_template_folder` and `_template_created_at`.
+A template is a starting page that a person makes new pages from. It lives in `.moss/templates/` as a file named from the template's name: `production.md` for a template named Production. The file name must be lowercase letters, digits and hyphens (`open-call.md` for a template named Open Call); a file with any other name is not listed, and the build reports it. The file is an ordinary page whose four `_template_` keys moss reads and does not copy into the pages it makes: `_template_name` (the name the create menu shows), `_template_kind` (`page` for one new file, or `folder` for a new folder with a home page inside it), `_template_folder` and `_template_created_at`.
 
 `_template_folder` is optional and names a folder from the site root in the default language, such as `work/`. Every page made from the template goes into that folder, whatever folder the author was in. Without it, a page goes where it was asked for. If the folder does not exist, `moss new` refuses and creates nothing, and `moss build` warns.
 
