@@ -95,7 +95,7 @@ pub struct BodyPlan {
     /// Each heading's anchor and the name it shares with headings of the same
     /// name (the id it is numbered from, else its own), in document order.
     /// Read when a section is left out, so empty when the body has none.
-    pub heading_names: Vec<(String, String)>,
+    pub heading_names: Vec<sections::HeadingName>,
 }
 
 /// One piece of the emitted body.

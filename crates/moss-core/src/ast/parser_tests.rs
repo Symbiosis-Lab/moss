@@ -999,15 +999,29 @@ fn duplicate_headings_get_suffixed_ids() {
 #[test]
 fn a_numbered_heading_id_names_the_id_it_is_numbered_from() {
     let doc = parse("## Posts\n\n## Posts\n\n## Posts 2\n\n## Notes {#posts-3}\n");
-    let from: Vec<Option<&str>> = doc
+    let from: Vec<Option<(&str, usize)>> = doc
         .blocks
         .iter()
         .filter_map(|b| match b {
-            Block::Heading { numbered_from, .. } => Some(numbered_from.as_deref()),
+            Block::Heading { numbered_from, .. } => Some(numbered_from.as_ref().map(|n| (n.from.as_str(), n.place))),
             _ => None,
         })
         .collect();
-    assert_eq!(from, vec![None, Some("posts"), None, None]);
+    assert_eq!(from, vec![None, Some(("posts", 1)), None, None]);
+}
+
+#[test]
+fn a_numbered_heading_place_follows_the_rendered_order() {
+    // The note's heading comes first in the source but renders after the body.
+    let doc = parse("See[^a].\n\n[^a]: ## Notes\n\n## Notes\n");
+    let mut places = Vec::new();
+    super::super::visit_blocks(&doc, |b| {
+        if let Block::Heading { id, numbered_from, .. } = b {
+            places.push((id.clone().unwrap_or_default(), numbered_from.as_ref().map(|n| n.place)));
+        }
+        true
+    });
+    assert_eq!(places, vec![("notes-1".to_string(), Some(1)), ("notes".to_string(), None)]);
 }
 
 #[test]

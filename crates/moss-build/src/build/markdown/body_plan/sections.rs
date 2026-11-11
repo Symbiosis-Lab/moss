@@ -127,14 +127,24 @@ pub(super) fn build(blocks: &[Block], start: usize, end: usize, render: &mut dyn
     SectionEmission { heading: render(start), id, parts }
 }
 
-/// Each heading's anchor and its name: headings sharing a name were numbered
-/// apart by the parser (`posts`, `posts-1`), in the order the page renders
-/// them, which puts hoisted endnotes after the body.
-pub(super) fn heading_names(doc: &moss_core::ast::Document) -> Vec<(String, String)> {
+/// A heading's anchor, its name, and its place among the headings of that
+/// name in the order the page renders them, which puts hoisted endnotes after
+/// the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadingName {
+    pub id: String,
+    pub name: String,
+    pub place: usize,
+}
+
+/// Every heading's [`HeadingName`]; headings sharing a name were numbered
+/// apart by the parser (`posts`, `posts-1`).
+pub(super) fn heading_names(doc: &moss_core::ast::Document) -> Vec<HeadingName> {
     let mut names = Vec::new();
     moss_core::ast::visit_blocks(doc, |block| {
         if let Block::Heading { id: Some(id), numbered_from, .. } = block {
-            names.push((id.clone(), numbered_from.clone().unwrap_or_else(|| id.clone())));
+            let (name, place) = numbered_from.as_ref().map_or_else(|| (id.clone(), 0), |n| (n.from.clone(), n.place));
+            names.push(HeadingName { id: id.clone(), name, place });
         }
         true
     });
@@ -145,13 +155,14 @@ pub(super) fn heading_names(doc: &moss_core::ast::Document) -> Vec<(String, Stri
 /// answers, as `(kept id, dropped id)`: the n-th kept heading of a name answers
 /// the n-th id of that name when its heading was left out, which is the id it
 /// would have had if the dropped ones had never been written.
-pub(super) fn answered_by_namesakes(names: &[(String, String)], dropped: &[String]) -> Vec<(String, String)> {
+pub(super) fn answered_by_namesakes(names: &[HeadingName], dropped: &[String]) -> Vec<(String, String)> {
     let gone = |id: &str| dropped.iter().any(|d| d == id);
-    let dropped_names: BTreeSet<&str> = names.iter().filter(|(id, _)| gone(id)).map(|(_, name)| name.as_str()).collect();
+    let dropped_names: BTreeSet<&str> = names.iter().filter(|h| gone(&h.id)).map(|h| h.name.as_str()).collect();
     let mut answered = Vec::new();
     for name in dropped_names {
-        let mut ids: Vec<&str> = names.iter().filter(|(_, n)| n == name).map(|(id, _)| id.as_str()).collect();
-        ids.sort_by_key(|id| rendered_place(id, name));
+        let mut namesakes: Vec<&HeadingName> = names.iter().filter(|h| h.name == name).collect();
+        namesakes.sort_by_key(|h| h.place);
+        let ids: Vec<&str> = namesakes.iter().map(|h| h.id.as_str()).collect();
         for (n, kept) in ids.iter().filter(|id| !gone(id)).enumerate() {
             if gone(ids[n]) {
                 answered.push((kept.to_string(), ids[n].to_string()));
@@ -159,13 +170,6 @@ pub(super) fn answered_by_namesakes(names: &[(String, String)], dropped: &[Strin
         }
     }
     answered
-}
-
-/// Where a heading named `name` renders among its namesakes. The parser gives
-/// the n-th of them `name-n` (the first keeps `name`) in rendered order, not
-/// source order, so the number is the place.
-fn rendered_place(id: &str, name: &str) -> usize {
-    id.strip_prefix(name).and_then(|n| n.strip_prefix('-')).and_then(|n| n.parse().ok()).unwrap_or(0)
 }
 
 /// `html` with an anchor for `alias` inside the heading whose id is `id`, the

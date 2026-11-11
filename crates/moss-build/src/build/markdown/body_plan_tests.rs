@@ -773,3 +773,11 @@ fn expanding_drops_a_section_whose_embeds_are_empty_innermost_first_and_keeps_th
     plan.expand_html(&|html| html.replace(POSTS_EMBED, "<ul>x</ul>"));
     assert!(plan.to_html().contains("<h3") && plan.to_html().contains("<h2") && plan.to_html().contains("<ul>x</ul>"));
 }
+
+#[test]
+fn a_kept_namesake_answers_the_dropped_id_by_rendered_place_not_by_its_id_text() {
+    let name = |id: &str, place| sections::HeadingName { id: id.into(), name: "posts".into(), place };
+    // `posts-9` renders first, so it holds the bare name's place.
+    let names = [name("posts", 1), name("posts-9", 0)];
+    assert_eq!(sections::answered_by_namesakes(&names, &["posts-9".into()]), [("posts".to_string(), "posts-9".to_string())]);
+}

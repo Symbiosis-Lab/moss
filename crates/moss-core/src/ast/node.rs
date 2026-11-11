@@ -188,6 +188,15 @@ pub enum Fold {
     Closed,
 }
 
+/// The id a heading's id was numbered apart from, and its place among the
+/// headings of that id in the order the page renders them (the first, which
+/// keeps the bare id, is place 0).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct HeadingNumber {
+    pub from: String,
+    pub place: usize,
+}
+
 /// A block-level AST node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -206,11 +215,10 @@ pub enum Block {
         /// `{#id}` it is that id's slugged spelling, which `[[Page#id]]` emits.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         legacy_id: Option<String>,
-        /// The id this one is numbered from, when the parser added a `-N` to
-        /// tell it from an earlier heading with the same id: `posts` for
-        /// `posts-1`. Headings sharing it share a name.
+        /// Set when the parser added a `-N` to tell this id from an earlier
+        /// heading's: `posts` and 1 for `posts-1`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        numbered_from: Option<String>,
+        numbered_from: Option<HeadingNumber>,
         /// The heading was written `## Title {contents=end}`: it opens the part
         /// of the page after the main sections.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]

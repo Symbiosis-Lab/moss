@@ -26,7 +26,7 @@ use super::document::{BlockMeta, Document};
 use super::footnotes::FootnoteIndex;
 use super::math_text::{math_inline, math_source};
 use super::nesting::{cap_nesting, MAX_BLOCK_NESTING};
-use super::node::{Block, CalloutKind, ColumnAlignment, Fold, Inline};
+use super::node::{Block, CalloutKind, ColumnAlignment, Fold, HeadingNumber, Inline};
 use super::shortcode::Shortcode;
 use super::shortcode_extract::{extract_shortcodes_with_config, parse_placeholder, ExtractedShortcode};
 use super::url::Url;
@@ -2187,8 +2187,8 @@ fn assign_heading_id_suffixes(blocks: &mut [Block]) {
         let mut old = slot.legacy_id.take().or_else(|| slot.id.clone());
         disambiguate_heading_id(&mut old, &mut legacy_counts);
         let base = slot.id.clone();
-        disambiguate_heading_id(slot.id, &mut id_counts);
-        *slot.numbered_from = base.filter(|b| Some(b) != slot.id.as_ref());
+        let place = disambiguate_heading_id(slot.id, &mut id_counts);
+        *slot.numbered_from = base.zip(place).map(|(from, place)| HeadingNumber { from, place });
         *slot.legacy_id = old.filter(|o| Some(o) != slot.id.as_ref());
     }
     // An alias that is another heading's id would duplicate it: that id
@@ -2250,18 +2250,18 @@ fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
 struct HeadingSlot<'a> {
     id: &'a mut Option<String>,
     legacy_id: &'a mut Option<String>,
-    numbered_from: &'a mut Option<String>,
+    numbered_from: &'a mut Option<HeadingNumber>,
 }
 
-/// Apply the `-N` suffix rule to one heading id slot.
-fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<String, usize>) {
-    let Some(slug) = id else { return };
+/// Apply the `-N` suffix rule to one heading id slot; the N it added, if any.
+fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<String, usize>) -> Option<usize> {
+    let slug = id.clone()?;
     let count = *id_counts.entry(slug.clone()).or_insert(0);
     id_counts.insert(slug.clone(), count + 1);
-    if count > 0 {
-        let suffixed = format!("{slug}-{count}");
-        *id = Some(suffixed);
-    }
+    (count > 0).then(|| {
+        *id = Some(format!("{slug}-{count}"));
+        count
+    })
 }
 
 /// Collect a mutable handle to every heading id in the tree, bucketed by
