@@ -15,6 +15,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A page with link cards shows a saved edit sooner: a build no longer copies, decodes and encodes each card's picture again when the files encoded from it under the current settings are already cached.
 - moss accepts the plugin catalog only when the registry's own key signed it. A catalog or kill list served without its signature, or signed by any other key, is refused and the copy moss already has stays in force, so a mirror or a hijacked address can hold back an update but never forge one.
 - A picture on the line after a paragraph's text, or before it, with no blank line between, is its own paragraph, as if the blank line were there, and several picture lines together make a row. An italic line under the picture stays its caption. Without one, a standard-markdown picture's alt text stays alt text and does not become a caption, while a wiki embed's pipe text is its caption, as on its own line. A picture that shares its line with words stays in the text. A picture split out this way can now be a page's social card or a list's cover.
 - A folder whose `.moss` a sync service renamed, such as `.moss 2`, or that moss set aside after it was published, is put back by itself when nothing else can be meant, from the app and from the command line. While the folder is still arriving from the cloud, moss asks for the files it needs and waits, and never starts a second site beside it.
