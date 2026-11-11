@@ -36,3 +36,21 @@ test("a stacked phone hero's lead heading takes --moss-hero-title-size, else 1.5
   await page.addStyleTag({ content: ":root { --moss-hero-title-size: 40px; }" });
   expect(await size(), "token set").toBe("40px");
 });
+
+for (const width of [390, 1280]) {
+  test(`the closing picture at ${width}px: an image in the words stays an inline mark, not the picture`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+    const hero = page.locator("footer .moss-hero-closing").first();
+    const mark = hero.locator(".moss-hero-content a img");
+    const words = (await hero.locator(".moss-hero-content").boundingBox())!;
+    const box = (await mark.boundingBox())!;
+    expect(box.width, "mark width").toBeLessThan(40);
+    expect(box.y, "mark top is inside the words").toBeGreaterThanOrEqual(words.y);
+    expect(box.y + box.height, "mark bottom is inside the words").toBeLessThanOrEqual(words.y + words.height);
+    expect(await mark.evaluate((img) => getComputedStyle(img).display)).toBe("inline");
+    // The hero's own picture is untouched: it still fills the closing picture.
+    const picture = (await hero.locator(":scope > img, :scope > picture img").first().boundingBox())!;
+    expect(picture.width).toBeGreaterThan(200);
+  });
+}

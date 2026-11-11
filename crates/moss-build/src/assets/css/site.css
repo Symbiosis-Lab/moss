@@ -8661,6 +8661,20 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 }
 
+/* An image in the hero's words (a mark inside a link) is content, not the
+   picture: it keeps its inline flow and its own size. The picture rules above
+   select every `img` in the hero, at up to (0,3,1); the doubled class lifts
+   this to a tie that source order wins, so it must follow them. */
+.moss-hero.moss-hero .moss-hero-content img {
+  position: static;
+  display: inline;
+  inline-size: auto;
+  block-size: auto;
+  max-inline-size: 100%;
+  max-block-size: none;
+  z-index: auto;
+}
+
 /* Pale cover — the rules (reasoning at the scrim block, search
    data-hero-tone). MUST STAY LAST: ties on specificity with the rule it
    replaces, source order is the only tiebreak. Scoped to the two OVERLAID

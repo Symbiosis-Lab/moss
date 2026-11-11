@@ -1055,10 +1055,14 @@ const VERTICAL_BODY = Array.from({ length: 12 }, () =>
 const HERO_LINK_WORDS = `[A text link](/notes/) runs on into the rest of a sentence.
 
 [Plan a visit](/visit/)`;
+// The closing picture's last line is a small logo inside a link: an image in
+// the words, which must stay inline text-sized, not become the picture.
+const HERO_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#c33"/></svg>`;
 export const HERO_LINKS_GATE: ScratchSiteSpec = {
   name: "hero-links-gate",
   files: {
     "cover.svg": HERO_PORTRAIT_SVG,
+    "mark.svg": HERO_MARK_SVG,
     "index.md": `---
 title: Hero links
 uid: "hlg00101"
@@ -1074,6 +1078,8 @@ Body text.
 `,
     "footer.md": `:::hero {image=cover.svg align=top}
 ${HERO_LINK_WORDS}
+
+[![Example mark](mark.svg) Example mark](https://example.org)
 :::
 `,
   },

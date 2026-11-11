@@ -440,7 +440,7 @@ A fenced div works inside a hero, so a block of text can take its own class and 
 :::
 ```
 
-The inner `:::` closes the div and the outer one closes the hero; the div lands inside the hero's overlay panel.
+The inner `:::` closes the div and the outer one closes the hero; the div lands inside the hero's overlay panel. An image written in the hero's words, such as a small mark inside a link, stays inline at its own size; only the image on the fence line or the embed at the top of the fence is the picture.
 
 `:::hero {.plate}` (2026-09-11) is a moss default, not a per-site class to style: it renders the hero image whole — never cropped, never enlarged past the resolution it was delivered at, shrunk to fit the column instead. Reach for it over a plain hero whenever the image's own shape, not the page layout, should decide how large it appears — an artwork, manuscript page, or photograph reproduction where cropping would cut off part of the object, and especially a wide or tall outlier (a handscroll, a long strip) that a viewport-relative `100vw` sizing would otherwise fetch too small and stretch blurry. A plain `:::hero` (or `:::hero {caption="…"}`, which already avoids cropping but still bounds the frame at the default height cap) stays right for a banner meant to fill its slot.
 
