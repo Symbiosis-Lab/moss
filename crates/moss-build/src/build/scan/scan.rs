@@ -1604,7 +1604,6 @@ pub fn scan_folder_with_dedup_emit_with_error(
         storage_folders,
     };
     crate::build::scan::path_collision::refuse_colliding_files(&structure, &spellings).map_err(ScanFailure::Message)?;
-    crate::build::template_check::warn_template_problems(Path::new(folder_path));
     Ok(structure)
 }
 

@@ -1060,6 +1060,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             Err(failure) => return Err(scan_failure(failure)),
         }
     }
+    crate::build::template_check::warn_template_problems(Path::new(&folder_path));
 
     // Cache domain config once — reused by native process, feature slots, and build.
     // Avoids re-reading and re-parsing .moss/state.toml on every access.

@@ -84,3 +84,24 @@ fn build_warns_on_a_template_file_it_cannot_read_as_a_template() {
     assert!(stderr.contains("production.md"), "stderr:\n{stderr}");
     assert!(!out.status.success(), "--strict must fail; stderr:\n{stderr}");
 }
+
+#[test]
+fn a_badly_named_template_is_reported_once_when_the_build_waits_on_process_hooks() {
+    let moss_home = tempfile::tempdir().expect("tempdir for MOSS_HOME");
+    let site = tempfile::tempdir().expect("tempdir for the site");
+    write(site.path(), "index.md", HOME);
+    write(site.path(), ".moss/templates/open call.md", &production_template("work/"));
+    let site_dir = std::fs::canonicalize(site.path()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .arg("build")
+        .arg(&site_dir)
+        .arg("--strict")
+        .env("MOSS_HOME", moss_home.path())
+        .stdin(Stdio::null())
+        .output()
+        .expect("run moss-cli build");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let reports = stderr.lines().filter(|l| l.contains("open call.md")).count();
+    assert_eq!(reports, 1, "stderr:\n{stderr}");
+    assert!(!out.status.success(), "--strict must fail; stderr:\n{stderr}");
+}
