@@ -133,9 +133,9 @@ fn with_folder_lists<'a>(content: &str, pages_of: impl Fn(&str) -> Option<Vec<&'
         out.push_str(before);
         for page in pages_of(body).unwrap_or_default() {
             let text = page.label.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]");
-            // A row with no page has no address: its outlet, or its words alone.
+            // A row with no page has no address of its own: its link, or its words alone.
             let url = if page.is_pageless_entry() {
-                crate::build::scan::page_map::external_url(&page.raw_frontmatter)
+                crate::build::scan::page_map::pageless_row_href(&page.raw_frontmatter)
             } else {
                 Some(format!("/{}", crate::build::scan::article_map::to_pretty_url(&page.url_path)))
             };

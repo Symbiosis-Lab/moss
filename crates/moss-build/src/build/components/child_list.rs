@@ -576,9 +576,13 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     // Pattern from JSON Feed 1.1. The local archive URL is preserved as the
     // card's `permalink` so child_summary can emit a `★` mark next to the
     // kicker (the Daring-Fireball linkblog convention).
-    let external_url = crate::build::scan::page_map::external_url(&doc.raw_frontmatter);
     // A page-less entry has no local address: no archive mark, and no link
-    // unless it names an outlet.
+    // unless it names an outlet or a file on the site.
+    let external_url = if doc.is_pageless_entry() {
+        crate::build::scan::page_map::pageless_row_href(&doc.raw_frontmatter)
+    } else {
+        crate::build::scan::page_map::external_url(&doc.raw_frontmatter)
+    };
     let local_url = (!doc.is_pageless_entry())
         .then(|| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path)));
     let permalink = external_url.as_ref().and(local_url.clone());

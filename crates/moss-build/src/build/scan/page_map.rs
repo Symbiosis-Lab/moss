@@ -852,6 +852,17 @@ pub fn nav_external_href(
         .filter(|u| is_valid_nav_target(u))
 }
 
+/// Where a page-less listing row links: an http(s) outlet or a site path to a
+/// file or folder the site serves (a PDF, a hand-made HTML folder), the same
+/// targets a page-less nav entry takes. `None` draws the row unlinked.
+pub fn pageless_row_href(
+    raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Option<String> {
+    nav_external_href(raw_frontmatter)
+        .filter(|u| is_valid_external_url(u) || (u.starts_with('/') && !u.starts_with("//")))
+        .map(str::to_string)
+}
+
 /// Emits a `log::warn!` when `raw_url` is set but is not a value any
 /// consumer of `external_url:` accepts (see [`is_valid_nav_target`]).
 /// `file_path` is used only for the diagnostic message.
