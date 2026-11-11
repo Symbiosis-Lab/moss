@@ -595,6 +595,7 @@ pub trait RenderHooks {
                 }
                 out.push_str("</section>");
             }
+            Shortcode::Block(args) => super::render::render_plugin_block(self, out, args),
             Shortcode::Grid(args) => {
                 // ONE grid byte shape: the flat form is the split form
                 // re-assembled. See [`RenderHooks::render_grid_parts`].

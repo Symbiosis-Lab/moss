@@ -60,7 +60,7 @@ renders as `<div class="moss-unknown-shortcode" data-name="gallry">` wrapping
 your body, and the build prints:
 
 ```
-[essays/piece.md] unknown shortcode `:::gallry`
+[essays/piece.md] unknown shortcode `:::gallry` on line 12
 ```
 
 So a block that came out as an unstyled div is a name problem, not a fence

@@ -411,6 +411,17 @@ impl ServedPath {
         out.strip_suffix(".html").map(|stem| ServedPath(format!("{stem}.ics")))
     }
 
+    /// A script or stylesheet a plugin block loads. The manifest check keeps
+    /// `path` inside the plugin's folder.
+    pub fn for_plugin_asset(plugin: &str, path: &str) -> Self {
+        ServedPath(format!("_moss/plugins/{plugin}/{path}"))
+    }
+
+    /// The settings a plugin publishes for its elements to read.
+    pub fn for_extension_data(plugin: &str) -> Self {
+        ServedPath(format!("_moss/extensions/{plugin}.json"))
+    }
+
     /// The site's public description of its request forms, at a fixed,
     /// unhashed address so a form service can fetch it by the site's URL.
     pub fn for_commerce_json() -> Self {

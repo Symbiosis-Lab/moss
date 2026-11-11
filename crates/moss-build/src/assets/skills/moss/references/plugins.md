@@ -78,6 +78,59 @@ var BoardviewPlugin = {
 };
 ```
 
+
+## A block: a custom element an author places
+
+A plugin can give authors a custom element to place on a page, without running any plugin code at build. It declares the element under `contributes.blocks.<short>`, with a script and stylesheet from its own folder and the attributes the element accepts:
+
+```json
+{ "name": "catalog", "version": "1.0.0",
+  "contributes": { "blocks": { "card": {
+    "element": "catalog-card", "script": "card.js", "stylesheet": "card.css",
+    "attributes": [{ "key": "size", "type": "number" }] } } } }
+```
+
+An author writes a `:::card` fence around ordinary markdown, and moss emits `<catalog-card>` with the body as its children and loads the script and stylesheet once, only on pages that use the block. Write the body so it works alone: it is what a reader gets with the plugin missing, JavaScript off or a failed start, and another tool shows it too.
+
+- Each of `attributes` has a `key` and may say `type` (`string`, the default, `number` or `boolean`), `required`, `options` (the only values a string takes) and `pattern`, a regular expression the value must contain a match of (anchor it with `^…$` for the whole value), with an optional `pattern_message` for the warning. An attribute the block does not declare, or a value its `type`, `options` or `pattern` refuses, is dropped with a warning at the fence's line, and a missing `required` one is reported. A fence's `.class`, `#id` and width are ignored the same way.
+- moss emits only what the fence wrote; an attribute has no default in the manifest. The element reads its attribute first, then any data the site publishes for it, then its own default.
+- `script` (`.js` or `.mjs`) and `stylesheet` (`.css`) are paths inside the plugin's folder, served at `/_moss/plugins/<plugin>/<path>`. A plugin that only declares blocks needs no `entry`.
+- A block's full name is `<plugin>--<short>`. The short name works while one installed plugin declares it; when two do, neither places it, the body shows, and a warning names the full names to write. Names moss uses for its own shortcodes cannot be declared.
+- The element must be a valid custom element name, an attribute may not be an event handler (`on…`), and a `pattern` must compile. A manifest that breaks one of these does not load.
+
+An element that needs the site's own settings names them under `contributes.public_data`: `{ "keys": ["currency", "cancel.late_percent", "services.*.name"] }`, paths below the plugin's own table `[services.<plugin>]` in `.moss/config.toml`, where `*` stands for any one key, such as the ids of a map. moss publishes `/_moss/extensions/<plugin>.json` holding `{ "schema": 1, "data": { … } }`, built from those paths only: each ends at a value that is not a table (a string, number, boolean, date, or a list of those), and anything else in the table, at any depth, is left out, so a private address or a token added there later cannot publish. A left-out key the plugin's own `site_settings` draws is private by design; any other is named in a warning. A key that `*` admits is left out too when its name looks like a secret, and a path cannot put a named key beside `*` at the same step. A path cannot start with `*` or contain a name that looks like a secret (`token`, `secret`, `password`, `api_key` and the like). A site that has no such table publishes nothing. A plugin that only declares blocks or public data needs no `entry`.
+
+A key the site leaves out can be filled by the build with the address of one of moss's own services for this site: `"fill": { "endpoint": { "service": "commerce", "path": "/sites/{site}/booking" } }` beside `keys`. The address follows the folder's environment and is never written into the folder; a value written in the table wins. Where the service does not run, or the folder has never been published, nothing is filled.
+
+### Settings kept in the site's own table
+
+A plugin whose settings belong to the site, and should travel with it and be readable in `.moss/config.toml`, declares them under `contributes.site_settings` instead of `setup.settings`. moss draws them in the plugin's tab and writes each change into `[services.<plugin>]`, one key at a time, keeping the file's comments and order, so a person, an agent or a text editor can change the same keys by hand.
+
+```json
+"site_settings": {
+  "settings": [
+    { "key": "currency", "type": "string", "label": "Currency" },
+    { "key": "items", "type": "map", "label": "Products", "add_label": "Add product",
+      "items": { "type": "object", "fields": [
+        { "key": "name", "type": "string", "label": "Name" },
+        { "key": "sold_as", "type": "string", "label": "Sold", "default": "unit",
+          "options": [{ "value": "unit", "label": "Each" }, { "value": "weight", "label": "By weight" }] },
+        { "key": "price", "type": "number", "label": "Price", "scale": 100, "when": { "sold_as": "unit" } },
+        { "key": "per_kilo", "type": "number", "label": "Price", "unit": "per kg", "scale": 100, "when": { "sold_as": "weight" } }
+      ] } },
+    { "key": "open", "type": "object", "label": "Opening hours", "fields": [
+      { "key": "mon", "type": "array", "label": "Monday", "items": { "type": "string" } } ] }
+  ],
+  "actions": [{ "id": "connect", "label": "Connect payments", "service": "commerce", "method": "POST", "path": "/sites/{site}/stripe/onboarding" }]
+}
+```
+
+- The field vocabulary is `setup.settings`' plus `object` (named `fields`, a table; `optional: true` draws a switch that adds or removes it), `map` (entries under ids the person names, fixed once made, checked by `key_pattern`; its `placeholder` shows an example id in the box where a new one is typed; `items` is an `object` or a scalar) and `array` (scalar values, written comma-separated). A `number` takes `scale` (a power of ten: `100` shows `12000` as `120.00`) and `unit` (the word after the input).
+- `when` looks back within the same table. A select with no stored value is read from the fields it reveals; changing it removes the keys of the fields it hides and writes the defaults of the ones it shows, in one save.
+- `secret` and `hidden` are refused: the table syncs with the folder, and a key the tab does not draw is simply left out of the manifest and kept as written.
+- An action calls a route on one of moss's own services, signed by the folder, and opens the `https` address in the answer. moss makes the call only for plugins it ships or its registry lists.
+- `translations` at the manifest's top level, keyed by locale and then by the English text (`{ "zh": { "Currency": "币种" } }`), show the manifest's words in the reader's language; a missing entry shows the English.
+
 ## Setup: declare, don't build UI
 
 A contribution that needs anything from the user declares a `setup` block — moss draws all of it; a plugin never builds settings or first-publish UI. Three members, ordered by what they cost to evaluate:

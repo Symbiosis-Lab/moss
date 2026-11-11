@@ -2504,6 +2504,8 @@ pub fn generate_blocking_content_for_build(
     // publish the templates.
     let on_moss_host = crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some();
     if on_moss_host { crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?; }
+    site_config.blocks.emit_assets(&documents, output_dir, pending)?;
+    crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
     crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
     send_progress(

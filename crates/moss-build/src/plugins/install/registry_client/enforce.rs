@@ -53,9 +53,9 @@ static CONSENT: RwLock<Option<(Option<PathBuf>, Approvals)>> = RwLock::new(None)
 /// choose it, which closes that door on every platform that has it.
 static CODE: OnceLock<Mutex<HashMap<PathBuf, (Fingerprint, Option<Code>)>>> = OnceLock::new();
 
-/// The entry file's name, then (size, mtime, ctime) of the manifest and of
-/// the entry.
-type Fingerprint = (String, [(u64, Option<SystemTime>, (i64, i64)); 2]);
+/// The entry file's name, then (size, mtime, ctime) of the manifest, the
+/// entry and each block asset.
+type Fingerprint = (String, Vec<(u64, Option<SystemTime>, (i64, i64))>);
 
 #[derive(Clone)]
 struct Code {
@@ -312,6 +312,15 @@ pub fn vouched_for(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
         || approved(plugin_dir, code.as_ref().map(|code| code.hash.as_str()))
 }
 
+/// Are these moss's own bytes: shipped in this binary, or exactly the code
+/// moss's registry lists for this id? What a host call made on the site's
+/// behalf asks, since a user's consent to run a plugin is not consent to sign
+/// for it.
+pub fn is_moss_own(manifest: &PluginManifest, plugin_dir: &Path) -> bool {
+    code_of(manifest, plugin_dir).is_some_and(|code| code.shipped)
+        || matches!(registry_status(manifest, plugin_dir), RegistryStatus::ListedExact { .. })
+}
+
 /// The two grounds that refuse a plugin whatever the user has said —
 /// withdrawn, or built for a newer moss. [`verdict`] asks them first; an
 /// install asks them alone, about the manifest that came out of the archive,
@@ -366,7 +375,9 @@ fn refusal_without_consent(manifest: &PluginManifest, plugin_dir: &Path) -> Opti
 
 /// The code in `plugin_dir`, hashed once and remembered until it changes.
 fn code_of(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Code> {
-    let stamps = ["manifest.json", manifest.entry.as_deref().unwrap_or("")].map(|name| {
+    let mut hashed = vec!["manifest.json", manifest.entry.as_deref().unwrap_or("")];
+    hashed.extend(crate::plugins::contributions::blocks::asset_paths(manifest));
+    let stamps = hashed.into_iter().map(|name| {
         let meta = std::fs::metadata(plugin_dir.join(name)).ok();
         #[cfg(unix)]
         let ctime = {
@@ -376,7 +387,7 @@ fn code_of(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Code> {
         #[cfg(not(unix))]
         let ctime = (0, 0);
         (meta.as_ref().map_or(0, |m| m.len()), meta.and_then(|m| m.modified().ok()), ctime)
-    });
+    }).collect();
     let fingerprint: Fingerprint = (manifest.entry.clone().unwrap_or_default(), stamps);
     let memo = CODE.get_or_init(Default::default);
     if let Some((seen, code)) = memo.lock().unwrap_or_else(|e| e.into_inner()).get(plugin_dir) {
@@ -688,6 +699,21 @@ pub fn host_meets_floor(min_moss_version: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A block's script runs in readers' browsers, so swapping it after the
+    /// user allowed the plugin has to ask again.
+    #[test]
+    fn a_changed_block_asset_is_different_code() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("manifest.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("view.js"), "one").unwrap();
+        let manifest = crate::plugins::types::PluginManifest::parse(
+            r#"{"name":"cards","version":"1.0.0","contributes":{"blocks":{"card":{"element":"demo-card","script":"view.js"}}}}"#,
+        ).unwrap();
+        let before = code_of(&manifest, dir.path()).unwrap().hash;
+        std::fs::write(dir.path().join("view.js"), "a longer script").unwrap();
+        assert_ne!(before, code_of(&manifest, dir.path()).unwrap().hash);
+    }
+
     use super::*;
     use crate::plugins::install::registry_client::cache::Anchor;
     use crate::plugins::install::registry_client::index::accept_revoked;

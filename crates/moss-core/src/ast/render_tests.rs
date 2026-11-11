@@ -1344,6 +1344,7 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
     let tail = vec!["word"; 80].join(" ");
     let md = format!("# Title\n\nfirst paragraph\n\n## Sub\n\nsecond paragraph\n\n## A\n\n{tail}\n\n## B\n\n{tail}\n");
     let config = super::super::parser::ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,

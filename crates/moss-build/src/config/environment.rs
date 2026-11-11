@@ -65,6 +65,17 @@ impl HostingEnvironment {
         }
     }
 
+    /// The address of one of moss's own hosted services, for a plugin that
+    /// names the service rather than the address. `None` where the service
+    /// does not run, so nothing is published that would point at the wrong
+    /// one: commerce runs only as its test server so far.
+    pub fn service_url(&self, service: &str) -> Option<&'static str> {
+        match (service, self) {
+            ("commerce", Self::Staging | Self::Local) => Some("https://commerce-staging.mosspub.com"),
+            _ => None,
+        }
+    }
+
     /// The name `parse_env_name` accepts for this environment — the one
     /// spelling shared by the config key, the CLI grammar and the UI.
     pub fn name(&self) -> &'static str {

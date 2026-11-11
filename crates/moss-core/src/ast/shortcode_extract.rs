@@ -25,8 +25,9 @@ use super::cells::split_cells;
 use super::document::{BlockMeta, Document};
 use super::node::{Block, Inline};
 use super::parser::{parse_fragment_with_config, ParseConfig};
+use crate::page::block_names::BlockName;
 use super::shortcode::{
-    ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode,
+    BlockShortcode, ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode,
     RecentShortcode, Shortcode, ShortcodeSource, SourceFragment, SubscribeShortcode,
 };
 use super::url::Url;
@@ -103,7 +104,7 @@ pub(crate) fn fragment_parts(doc: Document) -> (Vec<Block>, Vec<BlockMeta>, Diag
 /// body `config` describes. The one place a fragment's start is carried, so
 /// the fragment's blocks and warnings report document lines instead of
 /// fragment lines.
-pub(crate) fn config_at_body_line(config: &ParseConfig, body_line: usize) -> ParseConfig {
+pub(crate) fn config_at_body_line<'a>(config: &ParseConfig<'a>, body_line: usize) -> ParseConfig<'a> {
     ParseConfig {
         source_line_offset: config.source_line_offset + body_line,
         warning_line_offset: config.warning_line_offset + body_line,
@@ -132,7 +133,7 @@ pub(crate) fn source_fragment(
 /// with a build warning.
 const TYPED_KNOWN: &[&str] = &["subscribe", "buttons", "gallery", "hero", "grid", "recent", "form"];
 
-fn is_typed_known(name: &str) -> bool {
+pub(crate) fn is_typed_known(name: &str) -> bool {
     TYPED_KNOWN.contains(&name)
 }
 
@@ -1751,26 +1752,7 @@ fn extract_with_state(
                             ));
                         }
                     }
-                    let index = collected.extracted.len();
-                    output.push_str(&placeholder_for(&nonce, index));
-                    output.push('\n');
-                    // Preserve the block's original line count. The block spanned
-                    // lines i..=j (opener..closer); the sentinel is a single line,
-                    // so pad with (j - i) blank lines. This keeps the post-
-                    // extraction LineLookup (parser.rs) line-accurate: without it,
-                    // a multi-line shortcode (grid/hero) collapses to one line and
-                    // every data-source-line AFTER it drifts, breaking editor↔
-                    // preview scroll sync (the home page grid scrolled the preview
-                    // to the bottom). Trailing blank lines after the sentinel HTML
-                    // comment produce no pulldown-cmark events, so the AST is
-                    // unchanged.
-                    for _ in 0..(j - i) {
-                        output.push('\n');
-                    }
-                    collected.extracted.push(ExtractedShortcode {
-                        index,
-                        shortcode: sc,
-                    });
+                    push_sentinel(&mut output, nonce, collected, sc, j - i);
                     i = j + 1;
                     continue;
                 }
@@ -1783,12 +1765,28 @@ fn extract_with_state(
                 continue;
             }
 
-            // Unknown name (Task E): wrap the body in a fallback div and
-            // emit a build warning so authors see misspellings. Recurse
-            // into the body so a misspelled outer doesn't strand any
-            // valid typed shortcodes nested inside it.
+            let line_number = config.warning_line_offset + i + 1;
+            let resolved = config.blocks.map_or(BlockName::Unknown, |names| names.resolve(name));
+            if let BlockName::Block(full) = resolved {
+                let body_config = config_at_body_line(config, body_start);
+                let sc = parse_plugin_block(full, name, args, &body, line_number, &body_config, collected);
+                push_sentinel(&mut output, nonce, collected, sc, j - i);
+                i = j + 1;
+                continue;
+            }
+
+            // Unknown name: wrap the body in a fallback div and warn, so
+            // authors see misspellings and a missing plugin leaves its content
+            // standing. Recurse into the body so a misspelled outer doesn't
+            // strand any valid typed shortcodes nested inside it.
             let parsed = super::attrs::parse_attrs(args).unwrap_or_default();
-            collected.warnings.push(format!("unknown shortcode `:::{}`", name));
+            collected.warnings.push(match resolved {
+                BlockName::Ambiguous(owners) => format!(
+                    "`:::{name}` on line {line_number} is declared by more than one plugin, so only its content is shown; write {} instead",
+                    owners.iter().map(|o| format!("`:::{o}`")).collect::<Vec<_>>().join(" or ")
+                ),
+                _ => format!("unknown shortcode `:::{name}` on line {line_number}"),
+            });
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
             let extra_attrs = format!(r#" data-name="{}""#, crate::media::html_escape(name));
@@ -1829,6 +1827,37 @@ fn extract_with_state(
     }
 
     output
+}
+
+/// Replace an extracted block with its sentinel. The block spanned
+/// `extra_lines + 1` lines and the sentinel is one, so blank lines pad the
+/// rest: `LineLookup` stays line-accurate and editor scroll sync does not
+/// drift. Trailing blanks after an HTML comment produce no parser events.
+fn push_sentinel(output: &mut String, nonce: &str, collected: &mut Collected, shortcode: Shortcode, extra_lines: usize) {
+    let index = collected.extracted.len();
+    output.push_str(&placeholder_for(nonce, index));
+    output.push('\n');
+    output.extend(std::iter::repeat_n('\n', extra_lines));
+    collected.extracted.push(ExtractedShortcode { index, shortcode });
+}
+
+/// A fence naming a declared block. Attribute checks need the manifest, so the
+/// host does them; only what the grammar cannot carry is reported here.
+fn parse_plugin_block(full: &str, written: &str, args: &str, body: &str, line: usize, body_config: &ParseConfig, collected: &mut Collected) -> Shortcode {
+    let attrs = super::attrs::parse_attrs(args).unwrap_or_else(|_| {
+        collected.warnings.push(format!("the attributes of `:::{written}` on line {line} could not be read, so they are ignored"));
+        Default::default()
+    });
+    if !attrs.classes.is_empty() || attrs.id.is_some() || attrs.width.is_some() {
+        collected.warnings.push(format!("`:::{written}` on line {line} takes only its declared attributes; its classes, id and width are ignored"));
+    }
+    if body.trim().is_empty() {
+        collected.warnings.push(format!("`:::{written}` on line {line} has no content, so nothing shows when its script does not run"));
+    }
+    let (blocks, _, diag) = fragment_parts(super::parser::parse_fragment_with_config(body, body_config));
+    collected.warnings.extend(diag.warnings);
+    collected.advisories.extend(diag.advisories);
+    Shortcode::Block(BlockShortcode { name: full.to_string(), element: None, attrs: attrs.kvs, body: blocks, line })
 }
 
 /// Word the warning for an opener no bare colon line ever closes.

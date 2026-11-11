@@ -149,6 +149,10 @@ pub struct SiteConfig {
     /// `[services.forms] endpoint`, without a trailing slash: where request
     /// forms post. `None` leaves forms pending.
     pub forms_endpoint: Option<String>,
+    /// The blocks the enabled plugins declare, resolved once per build.
+    pub blocks: std::sync::Arc<crate::plugins::contributions::blocks::BlockPlan>,
+    /// The settings the enabled plugins publish.
+    pub public_data: Vec<crate::plugins::contributions::public_data::PublicFile>,
     /// `[services.booking]` as read: the offer, or why it could not be read.
     pub booking: Option<Result<crate::config::services::BookingService, String>>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
@@ -177,6 +181,7 @@ impl SiteConfig {
             fields: &self.field_decls,
             lang: &self.lang,
             forms_endpoint: self.forms_endpoint.as_deref(),
+            blocks: Some(&self.blocks),
         }
     }
 }
@@ -223,6 +228,8 @@ impl Default for SiteConfig {
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,
+            blocks: Default::default(),
+            public_data: Vec::new(),
             plugins_skipped: false,
         }
     }

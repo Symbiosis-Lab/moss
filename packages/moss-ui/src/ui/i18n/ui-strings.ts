@@ -764,6 +764,7 @@ const EN = {
   'trust.allow_one': 'Allow {name}',                         // {name} — also the switch's accessible name
   'trust.allow_many': 'Allow {n} plugins',                   // {n}
   'trust.continue_without': 'Continue without plugins',
+  'trust.ability.adds_to_pages': 'Adds a script to pages',
   'trust.ability.draws_pages': 'Draws pages',
   'trust.ability.publishes': 'Publishes',
   'trust.ability.signs_in': 'Signs in',
@@ -779,6 +780,7 @@ const EN = {
   'trust.runs_any_program': 'any program, on your computer',
   'trust.without.publishes_to': 'Without it, publishing skips {domain}.', // {domain}
   'trust.without.publishes': 'Without it, publishing skips {name}.',     // {name}
+  'trust.without.adds_to_pages': 'Without it, those pages show the written content only.',
   'trust.without.draws_pages': 'Without it, pages in its style are a plain list.',
   'trust.without.refused': 'It stays in the folder, switched off.',
   'trust.registry.listed': 'In the moss registry, version {version}', // {version}
@@ -1027,6 +1029,10 @@ const EN = {
   'schema.secret_removed': 'Removed',
   'schema.failed_to_save': 'Failed to save',
   'schema.saved': 'Saved',
+  'site_settings.add': 'Add',
+  'site_settings.remove': 'Remove',
+  'site_settings.id_invalid': 'Use lowercase letters, digits and hyphens.',
+  'site_settings.id_taken': '{id} is already here.',
 
   // [deployment]
   'deployment.label.host': "Host",
@@ -2510,6 +2516,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.allow_one': '{name} erlauben',
     'trust.allow_many': '{n} Plugins erlauben',
     'trust.continue_without': 'Ohne Plugins fortfahren',
+    'trust.ability.adds_to_pages': 'Fügt Seiten ein Skript hinzu',
     'trust.ability.draws_pages': 'Zeichnet Seiten',
     'trust.ability.publishes': 'Veröffentlicht',
     'trust.ability.signs_in': 'Meldet an',
@@ -2525,6 +2532,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.runs_any_program': 'beliebige Programme auf deinem Computer',
     'trust.without.publishes_to': 'Ohne es wird beim Veröffentlichen {domain} übersprungen.',
     'trust.without.publishes': 'Ohne es wird beim Veröffentlichen {name} übersprungen.',
+    'trust.without.adds_to_pages': 'Ohne es zeigen diese Seiten nur den geschriebenen Inhalt.',
     'trust.without.draws_pages': 'Ohne es sind Seiten in seinem Stil eine einfache Liste.',
     'trust.without.refused': 'Es bleibt im Ordner, ausgeschaltet.',
     'trust.registry.listed': 'Im moss-Verzeichnis, Version {version}',
@@ -2752,6 +2760,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'schema.secret_removed': 'Entfernt',
     'schema.failed_to_save': 'Speichern fehlgeschlagen',
     'schema.saved': 'Gespeichert',
+    'site_settings.add': 'Hinzufügen',
+    'site_settings.remove': 'Entfernen',
+    'site_settings.id_invalid': 'Nur Kleinbuchstaben, Ziffern und Bindestriche.',
+    'site_settings.id_taken': '{id} gibt es schon.',
     'deployment.label.host': 'Host',
     'deployment.host.moss': 'mosspub.com',
     'deployment.host.add': 'Host hinzufügen…',
@@ -4112,6 +4124,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.allow_one': '允许 {name}',
     'trust.allow_many': '允许 {n} 个插件',
     'trust.continue_without': '不启用插件并继续',
+    'trust.ability.adds_to_pages': '向页面添加脚本',
     'trust.ability.draws_pages': '绘制页面',
     'trust.ability.publishes': '发布',
     'trust.ability.signs_in': '登录',
@@ -4127,6 +4140,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.runs_any_program': '在你的电脑上运行任何程序',
     'trust.without.publishes_to': '不启用它，发布时会跳过 {domain}。',
     'trust.without.publishes': '不启用它，发布时会跳过 {name}。',
+    'trust.without.adds_to_pages': '不启用它，这些页面只显示所写的内容。',
     'trust.without.draws_pages': '不启用它，使用其样式的页面会显示为普通列表。',
     'trust.without.refused': '它会留在文件夹中，保持关闭。',
     'trust.registry.listed': '已收录于青苔插件仓库，版本 {version}',
@@ -4362,6 +4376,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'schema.secret_removed': '已移除',
     'schema.failed_to_save': '保存失败',
     'schema.saved': '已保存',
+    'site_settings.add': '添加',
+    'site_settings.remove': '移除',
+    'site_settings.id_invalid': '只能用小写字母、数字和连字符。',
+    'site_settings.id_taken': '{id} 已经存在。',
 
     // [deployment]
     'deployment.label.host': "托管",
@@ -5762,6 +5780,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.allow_one': '允許 {name}',
     'trust.allow_many': '允許 {n} 個插件',
     'trust.continue_without': '不啟用插件並繼續',
+    'trust.ability.adds_to_pages': '向頁面加入指令碼',
     'trust.ability.draws_pages': '繪製頁面',
     'trust.ability.publishes': '發佈',
     'trust.ability.signs_in': '登入',
@@ -5777,6 +5796,7 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'trust.runs_any_program': '在你的電腦上執行任何程式',
     'trust.without.publishes_to': '不啟用它，發佈時會略過 {domain}。',
     'trust.without.publishes': '不啟用它，發佈時會略過 {name}。',
+    'trust.without.adds_to_pages': '不啟用它，這些頁面只顯示所寫的內容。',
     'trust.without.draws_pages': '不啟用它，使用其樣式的頁面會顯示為普通列表。',
     'trust.without.refused': '它會留在資料夾中，保持關閉。',
     'trust.registry.listed': '已收錄於青苔插件倉庫，版本 {version}',
@@ -6012,6 +6032,10 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'schema.secret_removed': '已移除',
     'schema.failed_to_save': '儲存失敗',
     'schema.saved': '已儲存',
+    'site_settings.add': '新增',
+    'site_settings.remove': '移除',
+    'site_settings.id_invalid': '只能用小寫字母、數字和連字號。',
+    'site_settings.id_taken': '{id} 已經存在。',
 
     // [deployment]
     'deployment.label.host': "託管",

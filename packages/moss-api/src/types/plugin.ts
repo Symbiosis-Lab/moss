@@ -27,7 +27,7 @@ export interface ProjectInfo {
 export interface PluginManifest {
   name: string;
   version: string;
-  /** Omit only for a plugin that declares nothing but `contributes.derivations`. */
+  /** Omit only for a plugin that declares nothing but `contributes.derivations`, `contributes.blocks` or `contributes.public_data`. */
   entry?: string;
   category: PluginCategory;
   global_name?: string;
@@ -76,6 +76,61 @@ export interface DerivationContribution {
   /** Placeholder lines: each is empty or `#<fragment name>`. */
   stub?: string[];
   run: { binary: string; artifact: ArtifactSource[] };
+}
+
+/**
+ * `contributes.public_data`: the part of the site's settings a plugin's
+ * element reads in the browser, published at
+ * `/_moss/extensions/<plugin>.json` as `{schema, data}`.
+ *
+ * @category Plugin manifest
+ */
+export interface PublicDataContribution {
+  /**
+   * Dotted paths below the plugin's own `[services.<plugin>]` table, `*`
+   * standing for any one key: `cancel.late_percent`, `services.*.name`. Each
+   * ends at a value that is not a table; nothing else is published.
+   */
+  keys: string[];
+  /** Keys the build fills with the address of one of moss's services when the table leaves them out. */
+  fill?: Record<string, { service: string; path: string }>;
+}
+
+/**
+ * `contributes.blocks[short]`: a custom element an author places with a
+ * `:::<short>` fence around ordinary markdown. No plugin code runs at build.
+ *
+ * @category Plugin manifest
+ */
+export interface BlockContribution {
+  /** A valid custom element name. */
+  element: string;
+  /** Path inside the plugin's folder ending in `.js` or `.mjs`, loaded only on pages that use the block. */
+  script?: string;
+  /** Path inside the plugin's folder ending in `.css`, loaded only on pages that use the block. */
+  stylesheet?: string;
+  /** The attributes a fence may set; anything else is dropped with a warning. */
+  attributes?: BlockAttribute[];
+}
+
+/**
+ * One attribute a block's fence may set. Only what the fence wrote is
+ * emitted, so an attribute has no default.
+ *
+ * @category Plugin manifest
+ */
+export interface BlockAttribute {
+  key: string;
+  /** Defaults to `"string"`. */
+  type?: "string" | "number" | "boolean";
+  /** A fence that leaves it out is reported. */
+  required?: boolean;
+  /** The only values a `string` attribute takes. */
+  options?: string[];
+  /** A regular expression the value must contain a match of; anchor it with `^…$` to hold the whole value. */
+  pattern?: string;
+  /** What the warning says when `pattern` does not match; optional. */
+  pattern_message?: string;
 }
 
 /**

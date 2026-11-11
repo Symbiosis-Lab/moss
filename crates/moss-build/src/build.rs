@@ -549,7 +549,8 @@ fn collect_native_slots_for_documents(
         || comments_enabled
         || crate::build::features::should_inject_subscribe_assets(&pages, email_channel_installed)
         || has_footer_file
-        || crate::build::footer::has_cached_folder_slots(folder_path))
+        || crate::build::footer::has_cached_folder_slots(folder_path)
+        || pages.iter().any(|p| !p.features.block_assets.is_empty()))
     {
         return crate::build::enhance::ResolvedSlots::empty();
     }

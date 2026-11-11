@@ -124,3 +124,19 @@ fn open_windows_pages_and_endpoint_are_checked() {
     o.endpoint = Some("booking.example".into());
     assert!(o.problem().unwrap().contains("endpoint"));
 }
+
+#[test]
+fn a_written_charge_is_read_and_must_match_the_keys() {
+    let o = offer("[services.call]\nname = \"x\"\ncharge = \"fixed\"\nminutes = 30\nprice = 900");
+    assert_eq!(o.problem(), None);
+    assert_eq!(serde_json::to_value(&o).unwrap()["services"]["call"]["charge"], "fixed");
+    let cases = [
+        ("[services.call]\nname = \"x\"\ncharge = \"hourly\"\nminutes = 30\nprice = 900", "keys of the other kind"),
+        ("[services.walk]\nname = \"x\"\ncharge = \"fixed\"\nper_hour = 100\nhours = { min = 1, max = 2 }", "keys of the other kind"),
+        ("[services.call]\nname = \"x\"\ncharge = \"daily\"\nminutes = 30\nprice = 900", "must be \"hourly\" or \"fixed\""),
+    ];
+    for (edit, expected) in cases {
+        let problem = offer(edit).problem().unwrap_or_default();
+        assert!(problem.contains(expected), "{edit:?} gave {problem:?}");
+    }
+}

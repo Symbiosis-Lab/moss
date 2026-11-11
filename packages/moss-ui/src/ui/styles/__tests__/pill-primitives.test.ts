@@ -8,8 +8,8 @@ const css = fs.readFileSync(
 );
 
 function rule(selector: string): string {
-  // Match ".class { ... }" (greedy match to closing brace of that block)
-  const re = new RegExp(`${selector.replace(/[-/.*+?^$()|[\\]{}]/g, '\\$&')}\\s*\\{([^}]*)\\}`);
+  // The rule whose selector starts its line, not a compound selector ending in it.
+  const re = new RegExp(`^${selector.replace(/[-/.*+?^$()|[\\]{}]/g, '\\$&')}\\s*\\{([^}]*)\\}`, 'm');
   const match = css.match(re);
   if (!match) throw new Error(`No rule found for ${selector}`);
   return match[1];

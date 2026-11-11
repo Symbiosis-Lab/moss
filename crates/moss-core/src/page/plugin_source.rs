@@ -12,6 +12,8 @@ pub struct ContributedFrontmatter {
 pub struct PageContributions {
     pub frontmatter: Option<ContributedFrontmatter>,
     pub listing_styles: Option<BTreeMap<String, ListingStyleContribution>>,
+    /// Only the names: what a block does is the build's concern.
+    pub blocks: Option<BTreeMap<String, serde::de::IgnoredAny>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +31,9 @@ pub fn read_manifest(json: &str) -> serde_json::Result<PageManifest> {
     let mut manifest: PageManifest = serde_json::from_str(json)?;
     manifest.entry = validate_page_contributions(manifest.entry.take(), manifest.contributes.listing_styles.as_ref())
         .map_err(serde_json::Error::custom)?;
+    for short in manifest.contributes.blocks.iter().flatten().map(|(short, _)| short) {
+        super::block_names::validate_short_name(short).map_err(serde_json::Error::custom)?;
+    }
     Ok(manifest)
 }
 

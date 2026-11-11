@@ -107,7 +107,7 @@ mod lines {
     use crate::ast::node::{Block, Inline};
     use crate::ast::parser::{parse_fragment_with_config, parse_with_config, ParseConfig};
 
-    fn breaks() -> ParseConfig {
+    fn breaks() -> ParseConfig<'static> {
         ParseConfig { hard_line_breaks: true, emit_source_lines: true, ..Default::default() }
     }
 

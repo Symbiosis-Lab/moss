@@ -598,6 +598,7 @@ fn is_full_width_block(block: &Block) -> bool {
     match block {
         Block::Shortcode(Shortcode::Grid(_)) | Block::Shortcode(Shortcode::Gallery(_)) => true,
         Block::Table { .. } => true,
+        Block::Shortcode(Shortcode::Block(args)) => args.body.iter().any(is_full_width_block),
         // Width tokens: `body` is the default measure, so only a
         // widened figure forces a release.
         Block::Figure { width: Some(w), .. } => w != "body",

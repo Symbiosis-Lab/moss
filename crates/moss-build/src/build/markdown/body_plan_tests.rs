@@ -117,6 +117,7 @@ fn plan_reassembles_with_source_lines_on() {
     // the regression guard for using `render_block_with_meta` over
     // `render_blocks`.
     let cfg = ParseConfig {
+        blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -780,4 +781,11 @@ fn a_kept_namesake_answers_the_dropped_id_by_rendered_place_not_by_its_id_text()
     // `posts-9` renders first, so it holds the bare name's place.
     let names = [name("posts", 1), name("posts-9", 0)];
     assert_eq!(sections::answered_by_namesakes(&names, &["posts-9".into()]), [("posts".to_string(), "posts-9".to_string())]);
+}
+
+#[test]
+fn a_block_holding_a_full_width_child_releases_the_lede() {
+    let block = |body| Block::Shortcode(Shortcode::Block(moss_core::ast::BlockShortcode { body, ..Default::default() }));
+    assert!(is_full_width_block(&block(vec![Block::Shortcode(Shortcode::Gallery(Default::default()))])));
+    assert!(!is_full_width_block(&block(vec![Block::ThematicBreak])));
 }

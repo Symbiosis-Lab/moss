@@ -47,7 +47,7 @@ fn check_parity(markdown: &str, fixture_name: &str) {
     let extract_names: Vec<&str> = extract_result
         .extracted
         .iter()
-        .map(|e| kind_name(e.shortcode.kind()))
+        .map(|e| kind_name(e.shortcode.kind().expect("the corpus holds only built-ins")))
         .collect();
 
     assert_eq!(

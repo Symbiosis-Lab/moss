@@ -1440,6 +1440,15 @@ fn build_inner(
     // `field_decls` below, so the listing gets its own copy.
     let listing_field_decls = field_decls.clone();
     // Read site-level config from .moss/config.toml [site] section
+    let declaring_plugins = crate::plugins::discovery::plugins_declaring_for_build(!services.is_some_and(|s| s.plugins_skipped), folder_path);
+    let (public_files, withheld) = crate::plugins::contributions::public_data::project(
+        &declaring_plugins,
+        cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
+        &crate::plugins::contributions::public_data::FillContext::for_folder(folder_path),
+    );
+    for sentence in withheld {
+        crate::build::cli_output::log_warn_problem!(target: "plugin", "{sentence}");
+    }
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
         typesetting: site_str("typesetting"),
@@ -1520,6 +1529,8 @@ fn build_inner(
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
         forms_endpoint,
+        blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&declaring_plugins)),
+        public_data: public_files,
         booking: cfg.as_ref().and_then(crate::config::services::booking::read),
         place_maps,
         incremental,

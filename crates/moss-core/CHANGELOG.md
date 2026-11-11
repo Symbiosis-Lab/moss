@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `FieldEdit::SetChild` sets or removes one key inside a frontmatter mapping such as `cascade:`, leaving the mapping's other lines and comments as written.
+- `Shortcode::Block` and `page::block_names`: a `:::name` fence a plugin declares parses to a block whose body stays ordinary markdown.
+
+### Changed
+
+- **Breaking:** `ParseConfig` takes a lifetime and a `blocks` field naming the fences plugins declare.
+- **Breaking:** `Shortcode::kind` returns `Option<ShortcodeKind>`, `None` for a plugin's block.
+- An unknown shortcode's warning now names its line.
 
 ## [0.23.1] - 2026-11-09
 

@@ -77,6 +77,9 @@ pub enum Shortcode {
     /// fallback content rendered when the query returns zero matches.
     /// Empty body means no fallback (the shortcode renders nothing).
     Recent(RecentShortcode),
+    /// `:::<name>` naming a block a plugin declares. The element wraps the
+    /// fence's body, which stays the content when the script never runs.
+    Block(BlockShortcode),
     /// `:::form {#name next=/path/}` — a request form written as a list; see
     /// [`FormShortcode`].
     Form(FormShortcode),
@@ -210,6 +213,33 @@ impl ShortcodeSource {
 /// Tile counts a `{collage}` grid has a layout for; the stylesheet draws one
 /// arrangement per count.
 pub const COLLAGE_TILES: std::ops::RangeInclusive<usize> = 3..=9;
+
+/// Arguments for [`Shortcode::Block`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockShortcode {
+    /// The full `<plugin-id>--<short>` name, whichever spelling the author used.
+    pub name: String,
+    /// The custom element. `None` until a host that knows the plugins fills it;
+    /// without one the body renders by itself.
+    pub element: Option<String>,
+    /// `key=value` pairs from the fence, narrowed to the declared ones with `element`.
+    pub attrs: Vec<(String, String)>,
+    pub body: Vec<Block>,
+    /// File line of the opening fence, for diagnostics.
+    pub line: usize,
+}
+
+impl BlockShortcode {
+    /// The opening tag, or `None` when no host named an element.
+    pub fn open_tag(&self) -> Option<String> {
+        let mut tag = format!("<{}", self.element.as_deref()?);
+        for (key, value) in &self.attrs {
+            tag.push_str(&format!(r#" {key}="{}""#, crate::media::html_escape(value)));
+        }
+        tag.push('>');
+        Some(tag)
+    }
+}
 
 /// Arguments for [`Shortcode::Grid`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -560,9 +590,10 @@ impl ShortcodeKind {
 }
 
 impl Shortcode {
-    /// Return the [`ShortcodeKind`] of this shortcode.
-    pub fn kind(&self) -> ShortcodeKind {
-        match self {
+    /// The [`ShortcodeKind`] of this shortcode; `None` for a plugin's block,
+    /// which is not one of moss's own.
+    pub fn kind(&self) -> Option<ShortcodeKind> {
+        Some(match self {
             Shortcode::Subscribe(_) => ShortcodeKind::Subscribe,
             Shortcode::Buttons(_) => ShortcodeKind::Buttons,
             Shortcode::Gallery(_) => ShortcodeKind::Gallery,
@@ -570,7 +601,8 @@ impl Shortcode {
             Shortcode::Grid(_) => ShortcodeKind::Grid,
             Shortcode::Recent(_) => ShortcodeKind::Recent,
             Shortcode::Form(_) => ShortcodeKind::Form,
-        }
+            Shortcode::Block(_) => return None,
+        })
     }
 }
 
@@ -613,7 +645,7 @@ mod tests {
     #[test]
     fn subscribe_kind_method_returns_subscribe() {
         let sc = Shortcode::Subscribe(SubscribeShortcode::default());
-        assert_eq!(sc.kind(), ShortcodeKind::Subscribe);
+        assert_eq!(sc.kind(), Some(ShortcodeKind::Subscribe));
     }
 
     #[test]
@@ -654,7 +686,7 @@ mod tests {
     #[test]
     fn buttons_kind_method_returns_buttons() {
         let sc = Shortcode::Buttons(ButtonsShortcode::default());
-        assert_eq!(sc.kind(), ShortcodeKind::Buttons);
+        assert_eq!(sc.kind(), Some(ShortcodeKind::Buttons));
     }
 
     #[test]
@@ -708,7 +740,7 @@ mod tests {
     #[test]
     fn gallery_kind_method_returns_gallery() {
         let sc = Shortcode::Gallery(GalleryShortcode::default());
-        assert_eq!(sc.kind(), ShortcodeKind::Gallery);
+        assert_eq!(sc.kind(), Some(ShortcodeKind::Gallery));
     }
 
     #[test]
@@ -830,7 +862,7 @@ mod tests {
     #[test]
     fn recent_kind_method_returns_recent() {
         let sc = Shortcode::Recent(RecentShortcode::default());
-        assert_eq!(sc.kind(), ShortcodeKind::Recent);
+        assert_eq!(sc.kind(), Some(ShortcodeKind::Recent));
     }
 
     #[test]

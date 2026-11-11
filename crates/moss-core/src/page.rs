@@ -1,6 +1,7 @@
 //! Check and render a page from host-supplied site values, without a build.
 
 pub mod site_sources;
+pub mod block_names;
 pub mod plugin_source;
 pub mod site_config;
 pub mod listing_style;
@@ -45,6 +46,9 @@ pub struct SiteBundle {
 pub struct BundlePlugin {
     pub name: String,
     pub fields: HashMap<String, crate::schema::FieldDefinition>,
+    /// Short names of the blocks this plugin declares.
+    #[serde(default)]
+    pub blocks: Vec<String>,
 }
 
 impl SiteBundle {
@@ -56,7 +60,10 @@ impl SiteBundle {
                 .collect();
             crate::schema::compose_schema(&self.declared_name_lists, &plugins, &self.listing_styles).0
         });
-        SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang }
+        let blocks = block_names::BlockNames::from_contributions(self.plugins.iter().flat_map(|p| {
+            p.blocks.iter().map(|short| (p.name.as_str(), short.as_str()))
+        }));
+        SiteInputs { files: self.files, notes: self.notes, schema, lang: self.lang, blocks }
     }
 }
 
@@ -70,6 +77,8 @@ pub struct SiteInputs {
     pub schema: crate::schema::ContentSchema,
     /// BCP-47-ish language tag from the site configuration.
     pub lang: String,
+    /// Fence names the installed plugins own.
+    pub blocks: block_names::BlockNames,
 }
 
 /// Check frontmatter, moss syntax and page links. Lines count from the file's start.
@@ -181,7 +190,7 @@ fn check_syntax(body: &str, offset: usize, site: &SiteInputs) -> Vec<Diagnostic>
         }
         let source = body.get(range).unwrap_or_default();
         let mut quoted_lines = HashMap::new();
-        for message in parse_warnings(source, open_line - 1) {
+        for message in parse_warnings(source, open_line - 1, site) {
             // The scan already placed a hint on each legacy divider.
             if !message.starts_with("`---` on line ") {
                 let line = message_line(&message).or_else(|| quoted_opener_line(source, &message, open_line, &mut quoted_lines)).unwrap_or(open_line);
@@ -191,7 +200,7 @@ fn check_syntax(body: &str, offset: usize, site: &SiteInputs) -> Vec<Diagnostic>
     }
     // Blanking whole fence lines with ASCII keeps the bytes valid UTF-8.
     let rest = String::from_utf8(rest).unwrap_or_default();
-    for message in parse_warnings(&rest, offset) {
+    for message in parse_warnings(&rest, offset, site) {
         let line = message_line(&message);
         diagnostics.push(diagnostic(Severity::Warning, message, line));
     }
@@ -212,8 +221,8 @@ fn quoted_opener_line(source: &str, message: &str, first_line: usize, used: &mut
     })
 }
 
-fn parse_warnings(source: &str, line_offset: usize) -> Vec<String> {
-    ast::parse_with_config(source, &ParseConfig { warning_line_offset: line_offset, ..parse_config() }).warnings
+fn parse_warnings(source: &str, line_offset: usize, site: &SiteInputs) -> Vec<String> {
+    ast::parse_with_config(source, &ParseConfig { warning_line_offset: line_offset, blocks: Some(&site.blocks), ..parse_config() }).warnings
 }
 
 fn legacy_divider(line: usize) -> Diagnostic {
@@ -242,7 +251,7 @@ fn graph(site: &SiteInputs) -> ContentGraph {
     ContentGraph::from_paths(&site.files.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
-fn parse_config() -> ParseConfig {
+fn parse_config() -> ParseConfig<'static> {
     ParseConfig { math: true, hard_line_breaks: true, ..Default::default() }
 }
 
@@ -291,7 +300,7 @@ pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> Rendered
         let line = message_line(&message);
         diagnostic(Severity::Warning, message, line)
     }).collect();
-    let mut doc = ast::parse_with_config(&markdown, &ParseConfig { warning_line_offset: offset, ..parse_config() });
+    let mut doc = ast::parse_with_config(&markdown, &ParseConfig { warning_line_offset: offset, blocks: Some(&site.blocks), ..parse_config() });
     diagnostics.extend(doc.warnings.iter().map(|message| diagnostic(Severity::Warning, message.clone(), message_line(message))));
     let resolution = ast::resolve_document(
         &mut doc, &crate::asset_snapshot::AssetSnapshot::new(), Some(&graph), source_path,

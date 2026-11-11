@@ -370,6 +370,7 @@ fn collect_images_in_shortcode<'a>(
         // The hero image itself is a `Url` on the shortcode, not an
         // `Inline::Image`: the cover chain reads `hero_image_url` for it.
         Shortcode::Hero(args) => collect_images_in_blocks(&args.overlay, notes, hoisted, out),
+        Shortcode::Block(args) => collect_images_in_blocks(&args.body, notes, hoisted, out),
         Shortcode::Grid(args) => {
             for cell in &args.cells {
                 collect_images_in_blocks(cell, notes, hoisted, out);

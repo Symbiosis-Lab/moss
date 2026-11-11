@@ -189,6 +189,7 @@ fn dispatch_in_shortcode(
         Shortcode::Hero(args) => {
             dispatch_in_block_children(&mut args.overlay, snapshot, graph, source_path, result);
         }
+        Shortcode::Block(args) => dispatch_in_block_children(&mut args.body, snapshot, graph, source_path, result),
         Shortcode::Grid(args) => {
             for cell in args.cells.iter_mut() {
                 dispatch_in_block_children(cell, snapshot, graph, source_path, result);
@@ -610,6 +611,7 @@ mod tests {
             | Shortcode::Gallery(_)
             | Shortcode::Recent(_) | Shortcode::Form(_) => false,
             Shortcode::Hero(args) => args.overlay.iter().any(block_has_wikilink_image),
+            Shortcode::Block(args) => args.body.iter().any(block_has_wikilink_image),
             Shortcode::Grid(args) => args
                 .cells
                 .iter()

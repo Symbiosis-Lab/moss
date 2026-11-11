@@ -243,6 +243,59 @@
 .moss-info-grid > .moss-field--switch > .moss-label {
   line-height: 22px;
 }
+
+/* Site settings (site-settings-form.ts). An object's heading and rows sit in
+   the grid they belong to; a map entry is a card spanning the grid with a grid
+   of its own, so its rows keep the same label column inside it. */
+.moss-info-grid > .moss-site-settings-entry,
+.moss-info-grid > .moss-site-settings-add,
+.moss-info-grid > .moss-site-settings-actions {
+  grid-column: 1 / -1;
+}
+.moss-info-grid > .moss-site-settings-entry[hidden],
+.moss-info-grid > .moss-site-settings-add[hidden] {
+  display: none;
+}
+.moss-site-settings-entry {
+  border: 1px solid var(--moss-border-light);
+  border-radius: var(--moss-border-radius);
+  padding: var(--moss-space-sm);
+}
+.moss-site-settings-entry__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--moss-space-xs);
+  margin-bottom: var(--moss-space-sm);
+}
+.moss-site-settings-entry__id {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.moss-site-settings-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--moss-space-xs);
+}
+.moss-field-with-unit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--moss-space-xs);
+  max-width: 100%;
+}
+/* An input keeps its own width while the column has room and shrinks to the
+   column when it does not (a narrow window), so its unit stays in view. */
+.moss-info-grid .moss-field-body > .moss-pill-input,
+.moss-field-with-unit > .moss-pill-input {
+  min-width: 0;
+  max-width: 100%;
+}
+.moss-field-unit {
+  font-size: 0.8125rem;
+  color: var(--moss-color-text-secondary);
+  white-space: nowrap;
+}
 /* `.moss-toggle`'s own `padding: var(--moss-space-sm) 0` (16px) exists for a
    standalone toggle LIST (Services tab), where it is the only vertical
    rhythm between rows. Inside a grid row the grid's own `gap` already

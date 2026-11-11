@@ -162,6 +162,20 @@ pub fn scan_installed_plugins(project_path: &str) -> Result<InstalledPlugins, St
     Ok(found)
 }
 
+/// The installed plugins whose declarations may reach a page: none when plugins
+/// are off for this build, and never one its settings disable, since discovery
+/// itself treats every installed plugin as active.
+pub fn plugins_declaring_for_build(plugins_on: bool, project_path: &str) -> Vec<Plugin> {
+    if !plugins_on {
+        return Vec::new();
+    }
+    let Ok(installed) = scan_installed_plugins(project_path) else { return Vec::new() };
+    installed.loaded.into_iter().filter(|p| {
+        get_plugin_config(project_path, &p.manifest.name)
+            .map_or(true, |config| config.get("enabled") != Some(&serde_json::Value::Bool(false)))
+    }).collect()
+}
+
 /// Load a single plugin from a directory
 ///
 /// # Arguments

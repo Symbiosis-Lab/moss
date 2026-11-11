@@ -176,6 +176,17 @@ pub fn render_block_with_meta<H: RenderHooks + ?Sized>(
     render_block(hooks, out, block, meta, fnotes);
 }
 
+/// A plugin block's element around its body. Without an element the body
+/// renders by itself, which is what a reader without the plugin gets.
+pub fn render_plugin_block<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, args: &super::shortcode::BlockShortcode) {
+    let open = args.open_tag();
+    out.push_str(open.as_deref().unwrap_or_default());
+    render_blocks(hooks, out, &args.body);
+    if let (Some(_), Some(element)) = (open, &args.element) {
+        out.push_str(&format!("</{element}>"));
+    }
+}
+
 /// Render a sequence of blocks to HTML. Used by shortcode-body renderers —
 /// grid cells and, via moss-build's `render_hero_html_typed`,
 /// the hero overlay — to render a `Vec<Block>` that didn't come from a full

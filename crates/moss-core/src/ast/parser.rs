@@ -45,7 +45,7 @@ use crate::heading::anchor::{legacy_heading_anchor, obsidian_heading_anchor};
 /// bare `<img>` (none today, but the flag exists for symmetry with the
 /// legacy `transform_events` API and the production `site_config` field).
 #[derive(Debug, Clone, Copy)]
-pub struct ParseConfig {
+pub struct ParseConfig<'a> {
     /// When true, populates [`BlockMeta::source_line`] for top-level
     /// blocks. The renderer emits `data-source-line="N"` on the opening
     /// tag for any block whose meta carries `Some(N)`.
@@ -116,9 +116,13 @@ pub struct ParseConfig {
     /// every committed fixture keeps today's behavior until a site opts in.
     /// Production wires it from `site_config.hard_line_breaks`.
     pub hard_line_breaks: bool,
+
+    /// Fence names the installed plugins own. `None` means every such fence
+    /// is an unknown one.
+    pub blocks: Option<&'a crate::page::block_names::BlockNames>,
 }
 
-impl Default for ParseConfig {
+impl Default for ParseConfig<'_> {
     fn default() -> Self {
         Self {
             emit_source_lines: false,
@@ -135,6 +139,7 @@ impl Default for ParseConfig {
             // Off by default so in-crate callers and committed fixtures keep
             // CommonMark's "newline is a space". Production opts in.
             hard_line_breaks: false,
+            blocks: None,
         }
     }
 }
@@ -569,6 +574,11 @@ pub(crate) fn unwrap_implicit_figure(block: &mut Block) {
             }
             Shortcode::Hero(args) => {
                 for child in args.overlay.iter_mut() {
+                    unwrap_implicit_figure(child);
+                }
+            }
+            Shortcode::Block(args) => {
+                for child in args.body.iter_mut() {
                     unwrap_implicit_figure(child);
                 }
             }
@@ -2379,6 +2389,9 @@ fn collect_heading_id_slots<'a>(
                     for cell in args.cells.iter_mut() {
                         collect_heading_id_slots(cell, sink, hoisted, notes, scope.inside_shortcode());
                     }
+                }
+                Shortcode::Block(args) => {
+                    collect_heading_id_slots(&mut args.body, sink, hoisted, notes, scope.inside_shortcode());
                 }
                 Shortcode::Hero(args) => {
                     collect_heading_id_slots(&mut args.overlay, sink, hoisted, notes, scope.inside_shortcode());

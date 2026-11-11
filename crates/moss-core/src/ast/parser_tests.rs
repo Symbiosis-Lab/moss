@@ -1473,6 +1473,7 @@ fn parse_default_config_keeps_block_meta_empty() {
 fn parse_with_source_lines_assigns_1_based_line_numbers() {
     let md = "# H1\n\npara on line 3\n\n## H2 on line 5\n\npara on line 7\n";
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1499,6 +1500,7 @@ fn source_line_offset_is_applied_additively() {
     // this test only pins the additive mechanism, not a coordinate model.
     let md = "# H1\n\npara on line 3\n";
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 7,
@@ -1529,6 +1531,7 @@ fn source_lines_not_collapsed_across_multiline_shortcode() {
     let md =
         "# Title\n\n:::grid 3\n[\n![](a.jpg)\n](/x)\n+++\n[\n![](b.jpg)\n](/y)\n:::\n\n## After\n";
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1554,6 +1557,7 @@ fn source_lines_not_collapsed_across_multiline_shortcode() {
 fn parse_with_source_lines_lists_and_blockquotes() {
     let md = "- item one\n- item two\n\n> quote on line 4\n";
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1578,6 +1582,7 @@ fn parse_with_source_lines_populates_item_lines_on_list() {
     // must capture the 1-based line of each `Tag::Item` start.
     let md = "- one\n- two\n- three\n";
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1635,6 +1640,7 @@ fn parse_with_source_lines_populates_row_lines_on_table() {
     // line of each `Tag::TableRow` start.
     let md = "| h1 | h2 |\n| --- | --- |\n| a | b |\n| c | d |\n| e | f |\n";
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1815,6 +1821,7 @@ fn parse_with_source_lines_handles_list_after_blank_line_offset() {
     // 0-based index from the list opener.
     let md = "intro paragraph\n\n- item on line 3\n- item on line 4\n";
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1851,6 +1858,7 @@ fn parse_implicit_figure_default_promotes_image_only_paragraph() {
 #[test]
 fn parse_implicit_figure_off_leaves_image_paragraph_unpromoted() {
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: false,
         implicit_figure: false,
         source_line_offset: 0,
@@ -1958,6 +1966,7 @@ fn implicit_figure_caption_carries_link_and_math_nodes() {
     // renderer's link + math hooks fire; the flat `alt` keeps the link
     // label and the math as its `$…$` source.
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: false,
         implicit_figure: true,
         source_line_offset: 0,
@@ -1999,6 +2008,7 @@ fn implicit_figure_caption_only_math_is_a_math_node() {
     // `![$E=mc^2$](img.png)` (math on) → caption is a single math
     // `Inline::Other` node (so it typesets), alt is the `$…$` source.
     let config = ParseConfig {
+            blocks: None,
         emit_source_lines: false,
         implicit_figure: true,
         source_line_offset: 0,

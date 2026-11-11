@@ -135,6 +135,12 @@ pub struct PluginManifest {
     #[serde(default)]
     pub preview: bool,
 
+    /// The manifest's own words in other languages, keyed by locale and then
+    /// by the English text: `{"zh": {"Time zone": "时区"}}`. Applied to every
+    /// string moss draws from the manifest; a missing entry shows the English.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub translations: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+
     /// Host capabilities this plugin is granted; absent or unlisted = REFUSED.
     /// Named per binary since 2026-08-30: `"execute_binary:<basename>"` grants
     /// one executable; the bare `"execute_binary"` blanket is a deprecated

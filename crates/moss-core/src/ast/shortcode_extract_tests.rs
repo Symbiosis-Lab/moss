@@ -3257,7 +3257,7 @@ fn every_shortcode_kind_url_slot_is_accounted_for() {
             Shortcode::Buttons(_) => Tracking::GenericOnly,
             // `visit.rs`: cells are typed blocks; every URL in them came from
             // real markdown inline syntax.
-            Shortcode::Grid(_) => Tracking::GenericOnly,
+            Shortcode::Grid(_) | Shortcode::Block(_) => Tracking::GenericOnly,
             // `visit.rs`: item.src — a gallery body line may be a bare path.
             Shortcode::Gallery(_) => Tracking::Structural,
             // `visit.rs`: args.image + args.extra_images — `image=` attr,
@@ -3428,4 +3428,56 @@ fn a_buttons_line_that_is_not_a_link_is_named_in_a_warning() {
 fn two_links_on_one_buttons_line_are_named_in_a_warning() {
     let result = extract_shortcodes("::::buttons\n[a](/a/) [b](/b/)\n::::\n");
     assert!(result.warnings.iter().any(|w| w.contains("[a](/a/) [b](/b/)") && w.contains("one link per line")), "{:?}", result.warnings);
+}
+
+mod plugin_blocks {
+    use crate::ast::{parse_with_config, Block, ParseConfig, Shortcode};
+    use crate::page::block_names::BlockNames;
+
+    fn parse(markdown: &str, names: &BlockNames) -> crate::ast::Document {
+        parse_with_config(markdown, &ParseConfig { blocks: Some(names), ..Default::default() })
+    }
+
+    #[test]
+    fn a_declared_fence_becomes_a_block_with_its_body_and_line() {
+        let names = BlockNames::from_contributions([("catalog", "card")]);
+        let doc = parse("# Title\n\n:::card {label=hi}\n**Body**\n:::\n", &names);
+        let Block::Shortcode(Shortcode::Block(block)) = &doc.blocks[1] else { panic!("{:?}", doc.blocks) };
+        assert_eq!(block.name, "catalog--card");
+        assert_eq!(block.attrs, vec![("label".to_string(), "hi".to_string())]);
+        assert_eq!(block.line, 3);
+        assert!(matches!(block.body[0], Block::Paragraph(_)));
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+    }
+
+    #[test]
+    fn a_nested_block_and_what_the_grammar_cannot_carry_are_reported_at_their_lines() {
+        let names = BlockNames::from_contributions([("catalog", "card")]);
+        let doc = parse("::::card {.wide-one #x}\n:::card\n:::\n::::\n", &names);
+        let Block::Shortcode(Shortcode::Block(outer)) = &doc.blocks[0] else { panic!("{:?}", doc.blocks) };
+        assert!(matches!(outer.body[0], Block::Shortcode(Shortcode::Block(_))), "{:?}", outer.body);
+        assert!(doc.warnings.iter().any(|w| w.contains("classes, id and width") && w.contains("line 1")), "{:?}", doc.warnings);
+        assert!(doc.warnings.iter().any(|w| w.contains("has no content") && w.contains("line 2")), "{:?}", doc.warnings);
+    }
+
+    #[test]
+    fn a_shared_short_name_keeps_the_body_and_names_the_full_names() {
+        let names = BlockNames::from_contributions([("catalog", "card"), ("zeta", "card")]);
+        let doc = parse(":::card\nBody.\n:::\n", &names);
+        assert!(doc.warnings.iter().any(|w| w.contains("`:::catalog--card` or `:::zeta--card`")), "{:?}", doc.warnings);
+        assert!(!matches!(doc.blocks.first(), Some(Block::Shortcode(_))), "{:?}", doc.blocks);
+    }
+
+    #[test]
+    fn a_block_body_is_walked_like_any_other_container() {
+        let names = BlockNames::from_contributions([("catalog", "card")]);
+        let doc = parse("::::card\n:::buttons\n[Go](/x)\n:::\n::::\n", &names);
+        assert!(crate::ast::has_shortcode_recursive(&doc, crate::ast::ShortcodeKind::Buttons));
+    }
+
+    #[test]
+    fn an_unknown_fence_says_its_line() {
+        let doc = parse("\n\n:::nope\nBody.\n:::\n", &BlockNames::default());
+        assert_eq!(doc.warnings, vec!["unknown shortcode `:::nope` on line 3".to_string()]);
+    }
 }

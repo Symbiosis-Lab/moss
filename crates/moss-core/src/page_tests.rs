@@ -4,6 +4,7 @@ use proptest::prelude::*;
 
 fn site(files: &[&str]) -> SiteInputs {
     SiteInputs {
+        blocks: Default::default(),
         notes: HashMap::new(),
         files: files.iter().map(|path| path.to_string()).collect(),
         schema: crate::schema::builtin_schema(),
@@ -346,4 +347,15 @@ fn canonical_field_spans_use_simplified_fields_and_ignore_nested_yaml() {
         vec![("title", "title", 2), ("tags", "tags", 3), ("draft", "draft", 5)]);
     assert!(field_spans("---\ntitle: incomplete").is_empty());
     assert!(field_spans("# Body").is_empty());
+}
+
+#[test]
+fn a_declared_block_is_not_an_unknown_shortcode_to_the_editor() {
+    let text = "# Home\n\n:::card\nBody.\n:::\n";
+    let bare = check_page("index.md", text, &site(&["index.md"]));
+    assert!(bare.iter().any(|d| d.message.contains("unknown shortcode `:::card`") && d.line == Some(3)), "{bare:?}");
+    let mut with_block = site(&["index.md"]);
+    with_block.blocks = block_names::BlockNames::from_contributions([("catalog", "card")]);
+    let diagnostics = check_page("index.md", text, &with_block);
+    assert!(diagnostics.iter().all(|d| !d.message.contains("unknown shortcode")), "{diagnostics:?}");
 }

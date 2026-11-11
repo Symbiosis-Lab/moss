@@ -70,6 +70,7 @@ use crate::build::render::shows_comments;
 use crate::config::services::ServicesConfig;
 use crate::config::deployment::DomainDeploymentConfig;
 use crate::build::enhance::{EnhanceContent, EnhanceResult, ResolvedSlots};
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 /// Decide whether to inject the moss-hosted subscribe JS+CSS bundle.
@@ -595,6 +596,29 @@ pub fn generate_native_slots(
             };
             slots.merge(&form_result, 100, "__native_moss_subscribe_form_default");
         }
+    }
+
+    // A footer is spliced into every page, so what a slot file's blocks load
+    // goes on every page.
+    let everywhere: BTreeSet<_> = pages.iter().filter(|d| d.slot_only).flat_map(|d| d.features.block_assets.iter().cloned()).collect();
+    if !everywhere.is_empty() {
+        let html = crate::plugins::contributions::blocks::asset_tags(&everywhere);
+        let result = EnhanceResult {
+            success: true,
+            slots: HashMap::from([(Slot::HeadEnd.as_str().into(), EnhanceContent::Static { html })]),
+        };
+        slots.merge(&result, 1, "__native_plugin_blocks_site");
+    }
+    let per_page: HashMap<String, String> = pages.iter().filter(|d| !d.slot_only).filter_map(|d| {
+        let own: BTreeSet<_> = d.features.block_assets.difference(&everywhere).cloned().collect();
+        (!own.is_empty()).then(|| (d.url_path.clone(), crate::plugins::contributions::blocks::asset_tags(&own)))
+    }).collect();
+    if !per_page.is_empty() {
+        let result = EnhanceResult {
+            success: true,
+            slots: HashMap::from([(Slot::HeadEnd.as_str().into(), EnhanceContent::PerPage { pages: per_page })]),
+        };
+        slots.merge(&result, 1, "__native_plugin_blocks");
     }
 
     // Author-customized footer slots (footer.md at site root and per language

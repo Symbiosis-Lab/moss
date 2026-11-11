@@ -119,6 +119,7 @@ pub fn site_bundle(mut sources: SiteSources) -> (SiteBundle, Vec<String>) {
     }));
     warnings.extend(styles.conflicts.iter().cloned());
     let plugins: Vec<_> = manifests.into_iter().map(|(name, manifest)| BundlePlugin {
+        blocks: manifest.contributes.blocks.into_iter().flatten().map(|(short, _)| short).collect(),
         name, fields: manifest.contributes.frontmatter.map(|f| f.fields).unwrap_or_default(),
     }).collect();
     let listing_styles = styles.ids().map(str::to_string).collect();

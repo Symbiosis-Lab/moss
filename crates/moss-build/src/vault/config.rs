@@ -224,6 +224,88 @@ pub fn set_domain_in_config(folder_path: &str, domain: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// A plugin's own table, `[services.<plugin>]`, as JSON: what its settings
+/// tab draws. An absent table is an empty object.
+pub fn plugin_settings(project_path: &str, plugin: &str) -> Result<serde_json::Value, String> {
+    moss_core::page::block_names::validate_plugin_id(plugin)?;
+    let config = crate::build::site_config::read_project_config(project_path)?;
+    let table = config.section(&["services", plugin]).cloned().unwrap_or(Value::Table(Table::new()));
+    serde_json::to_value(table).map_err(|e| e.to_string())
+}
+
+/// One change to a plugin's table: the key path below `[services.<plugin>]`,
+/// and its new value, or `None` to remove the key.
+pub type SettingChange = (Vec<String>, Option<serde_json::Value>);
+
+/// Apply `changes` to the plugin's own `[services.<plugin>]` table, each
+/// checked first against what `site` declares, at every depth of its value:
+/// the one way into the table, so no caller can skip the check.
+pub fn save_plugin_settings(
+    project_path: &str,
+    plugin: &str,
+    site: &crate::plugins::contributions::site_settings::SiteSettingsContribution,
+    changes: &[SettingChange],
+) -> Result<(), String> {
+    for (path, value) in changes {
+        site.check_change(path, value.as_ref())?;
+    }
+    write_plugin_settings(project_path, plugin, changes)
+}
+
+/// Write `changes` into the plugin's table in one read and one write, so a change made of several keys (a kind replacing
+/// another's keys) never reaches the file half done. The file is read again
+/// on every call and only the changed lines are rewritten, so another writer's
+/// edit between two saves is kept, and so are comments and key order. No path
+/// can leave the plugin's table: it is relative to it, and a step that is not
+/// a table is refused rather than replaced.
+fn write_plugin_settings(project_path: &str, plugin: &str, changes: &[SettingChange]) -> Result<(), String> {
+    moss_core::page::block_names::validate_plugin_id(plugin)?;
+    let config_path = Path::new(project_path).join(".moss").join("config.toml");
+    let ManagedToml { original, mut root } = load_managed_toml(&config_path)?;
+    for (path, value) in changes {
+        let value = value
+            .clone()
+            .map(|v| Value::try_from(v).map_err(|e| format!("{plugin}.{}: {e}", path.join("."))))
+            .transpose()?;
+        apply_plugin_change(&mut root, plugin, path, value)?;
+    }
+    write_managed_toml(&config_path, &original, &root, crate::config::migrations::CURRENT_VERSION)
+}
+
+fn apply_plugin_change(root: &mut Table, plugin: &str, path: &[String], value: Option<Value>) -> Result<(), String> {
+    let Some((last, parents)) = path.split_last() else {
+        return Err(format!("a setting of plugin `{plugin}` needs a key"));
+    };
+    if path.iter().any(String::is_empty) {
+        return Err(format!("a setting of plugin `{plugin}` has an empty key in {path:?}"));
+    }
+    let Some(value) = value else {
+        // A removal walks what is there and creates nothing.
+        let mut table = match root.get_mut("services").and_then(Value::as_table_mut).and_then(|s| s.get_mut(plugin)).and_then(Value::as_table_mut) {
+            Some(table) => table,
+            None => return Ok(()),
+        };
+        for step in parents {
+            table = match table.get_mut(step).and_then(Value::as_table_mut) {
+                Some(next) => next,
+                None => return Ok(()),
+            };
+        }
+        table.remove(last);
+        return Ok(());
+    };
+    let mut table = subtable(subtable(root, "services")?, plugin)?;
+    for step in parents {
+        table = subtable(table, step)?;
+    }
+    table.insert(last.clone(), value);
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "config_plugin_settings_tests.rs"]
+mod plugin_settings_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

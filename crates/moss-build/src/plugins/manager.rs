@@ -1244,6 +1244,9 @@ mod tests {
                     stack: None,
                     derivations: None,
                     listing_styles: None,
+                    blocks: None,
+                    public_data: None,
+                    site_settings: None,
                 }),
                 ..Default::default()
             },

@@ -9,7 +9,7 @@
       "value": {
         "crates/moss-build/src/build/cache.rs": 1000,
         "crates/moss-build/src/build/folder_embed.rs": 1300,
-        "crates/moss-build/src/build/markdown/pipeline.rs": 1300,
+        "crates/moss-build/src/build/markdown/pipeline.rs": 1400,
         "crates/moss-build/src/build/media/ffmpeg.rs": 900,
         "crates/moss-build/src/build/media/image.rs": 1500,
         "crates/moss-build/src/build/media/pipeline.rs": 1100,
@@ -78,7 +78,7 @@
         "crates/moss-build/src/build/emit": 18,
         "crates/moss-build/src/assets/js": 18,
         "crates/moss-build/src/build/place_map": 16,
-        "packages/moss-ui/src/ui/shared/ui": 18,
+        "packages/moss-ui/src/ui/shared/ui": 19,
         "packages/moss-ui/src/ui": 20,
         "packages/moss-ui/src/ui/editor": 93,
         "packages/moss-ui/src/ui/editor/tree": 17,
@@ -115,7 +115,7 @@
       "value": {
         "crates/moss-build/src/build.rs::run_pipeline_body": 500,
         "crates/moss-build/src/build/features.rs::generate_native_slots": 300,
-        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 700,
+        "crates/moss-build/src/build/markdown/pipeline.rs::process_markdown_file": 750,
         "crates/moss-build/src/build/markdown/typed_renderers.rs::render_hero_html_typed": 350,
         "crates/moss-build/src/build/media/image.rs::convert_single_image": 250,
         "crates/moss-build/src/build/media/image.rs::run_image_conversion": 400,

@@ -990,6 +990,9 @@ pub struct PageFeatures {
     /// True if the page contains a `:::form`, nested ones included. Gates the forms
     /// stylesheet and script, and tells `commerce.json` which pages to read.
     pub forms: bool,
+    /// The scripts and stylesheets of the plugin blocks this page
+    /// places, nested ones included. Sorted, so each loads once.
+    pub block_assets: std::collections::BTreeSet<crate::plugins::contributions::blocks::BlockAsset>,
     /// True if the page contains a `:::subscribe` inline shortcode block.
     /// When any page in a build has this set, the email feature pass injects
     /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
@@ -1044,6 +1047,7 @@ impl PageFeatures {
     pub fn absorb(&mut self, inlined: &PageFeatures) {
         let PageFeatures {
             forms,
+            block_assets,
             inline_subscribe,
             callouts,
             footnotes,
@@ -1058,6 +1062,7 @@ impl PageFeatures {
             stream: _,
         } = inlined;
         self.forms |= *forms;
+        self.block_assets.extend(block_assets.iter().cloned());
         self.inline_subscribe |= *inline_subscribe;
         self.callouts |= *callouts;
         self.footnotes |= *footnotes;
@@ -1520,6 +1525,17 @@ mod tests {
 
         let none = SiteAssets::of(&[without], None, SiteAssets::default());
         assert!(!none.has_footnotes, "no footnote page must leave it clear");
+    }
+
+    #[test]
+    fn a_page_drawn_whole_brings_the_block_assets_it_places() {
+        use crate::plugins::contributions::blocks::BlockAsset;
+        let mut host = PageFeatures::default();
+        host.block_assets.insert(BlockAsset::Stylesheet("/_moss/plugins/a/a.css".to_string()));
+        let mut inlined = PageFeatures::default();
+        inlined.block_assets.insert(BlockAsset::Script("/_moss/plugins/b/b.js".to_string()));
+        host.absorb(&inlined);
+        assert_eq!(host.block_assets.len(), 2, "{:?}", host.block_assets);
     }
 }
 

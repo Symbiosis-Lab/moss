@@ -355,7 +355,7 @@ struct DeclaredFields {
 /// fingerprint too, so a field added here invalidates cached bodies without a
 /// second edit there. Every field is
 /// resolved on `SiteConfig` — see `SiteConfig::markdown`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct SiteMarkdown<'a> {
     /// `[site].implicit_figure`: an image alone in a paragraph with alt text
     /// renders as a captioned `<figure>`.
@@ -382,6 +382,8 @@ pub struct SiteMarkdown<'a> {
     /// `[services.forms] endpoint`, which request forms post to. `None` leaves
     /// them pending. Part of the parse cache fingerprint.
     pub forms_endpoint: Option<&'a str>,
+    /// Blocks the installed plugins declare.
+    pub blocks: Option<&'a crate::plugins::contributions::blocks::BlockPlan>,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -399,6 +401,7 @@ impl Default for SiteMarkdown<'_> {
             fields: &[],
             lang: "en",
             forms_endpoint: None,
+            blocks: None,
         }
     }
 }
@@ -1032,18 +1035,24 @@ pub fn process_markdown_file(
         warning_line_offset: raw_body_offset,
         math: site.math,
         hard_line_breaks: site.hard_line_breaks,
+        blocks: site.blocks.map(|plan| &plan.names),
     };
     let mut doc = moss_core::ast::parse_with_config(&markdown_content, &parse_config);
+    let (block_assets, placement_problems) = site.blocks.map(|plan| plan.place(&mut doc)).unwrap_or_default();
     // Mirrors the `frontmatter:` warning line above: a misspelled shortcode
     // used to leave no trace but a `moss-unknown-shortcode` div in the output.
     // A page whose embeds were expanded into `content` would repeat each
     // embedded file's findings under its own name, so read them from the
     // page as authored; the embedded file reports its own.
-    let authored_doc = page.authored_source.filter(|a| *a != content).map(|a| {
+    let mut authored_doc = page.authored_source.filter(|a| *a != content).map(|a| {
         moss_core::ast::parse_with_config(&parse_ready_body(a), &parse_config)
     });
+    let placement_problems = match (site.blocks, authored_doc.as_mut()) {
+        (Some(plan), Some(authored)) => plan.place(authored).1,
+        _ => placement_problems,
+    };
     let findings = authored_doc.as_ref().unwrap_or(&doc);
-    for w in &findings.warnings {
+    for w in findings.warnings.iter().chain(&placement_problems) {
         crate::build::cli_output::cli_warn!("[{}] {}", file_path, w);
     }
     // Advisories are plain log lines, not problems: the page builds the same
@@ -1680,6 +1689,7 @@ pub fn process_markdown_file(
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
             forms: has_forms,
+            block_assets,
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
@@ -2332,6 +2342,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
             moss_core::ast::Shortcode::Form(args) => {
                 out.push_str(&self.render_request_form(args));
             }
+            moss_core::ast::Shortcode::Block(args) => moss_core::ast::render_plugin_block(self, out, args),
             moss_core::ast::Shortcode::Grid(args) => {
                 // moss-core's own Grid arm, verbatim: the asset binding lives
                 // in `render_grid_parts` above, so the flat and segmented
