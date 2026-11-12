@@ -25,6 +25,7 @@ import { startSiteAccent } from "./site-accent";
 import type { ThemeSettled } from "./theme-settled";
 import { classifyClickGesture, installViewerGuard, shouldLeaveClickToPage } from "./click-vocabulary";
 import { installContextMenu } from "./context-menu";
+import { installPlainTabReload } from "./plain-tab-reload";
 import { resolveSourceTarget } from "./source-target";
 import { installCaptureResponder } from "./capture/responder";
 
@@ -51,19 +52,15 @@ import { installCaptureResponder } from "./capture/responder";
   // ============================================================
   // Chrome clearance: `moss-shell-frame` class on <html>
   // ============================================================
-  // INERT now: the shell insets the preview iframe, so the served
-  // document needs no clearance and site.css defines no rule for this class.
-  // The reconciliation below still runs, kept as the revert path in case
-  // this insetting is ever undone. It formerly gated
-  // `body{padding-top:48px}`, stamped server-side before first
-  // paint off the `?__moss_shell=1` marker; this runtime topology check is the
-  // defense-in-depth half, recovering the class when user-page JS navigates and
-  // drops the marker, and REMOVING it when the marker leaks into a nested
-  // iframe (chrome geometry must never reach one — the load-bearing
-  // nested-iframe invariant). On the
-  // real web the bridge is never injected at all, so nothing here applies.
-  const isShellMounted =
-    window !== window.top && window.parent === window.top;
+  // No stylesheet rule reads this class today: the shell insets the preview
+  // iframe, so the document needs no clearance. The class is still kept true
+  // to the topology, stamped by the server off the `?__moss_shell=1` marker
+  // and corrected here: added when page script navigated and dropped the
+  // marker, removed when the marker leaked into a nested iframe, which chrome
+  // geometry must never reach. A published site never carries the bridge;
+  // the preview server injects it into every page, embedded or not.
+  const embedded = window !== window.top;
+  const isShellMounted = embedded && window.parent === window.top;
   const hasFrameClass =
     document.documentElement.classList.contains("moss-shell-frame");
   if (isShellMounted && !hasFrameClass) {
@@ -80,12 +77,22 @@ import { installCaptureResponder } from "./capture/responder";
     document.documentElement.classList.remove("moss-shell-frame");
   }
 
+  // A page open in a plain browser tab has no moss around it. Everything
+  // below talks to a parent window or holds a gesture for one, so none of it
+  // runs there: the page reloads itself on a rebuild and is otherwise the
+  // browser's, as the published page will be.
+  if (!embedded) {
+    installPlainTabReload(window);
+    installBlueprintFallback();
+    return;
+  }
+
   // ============================================================
   // Theme bridge (shell-mounted preview only). The moon toggle in the
   // site (theme.ts) is the single theme control inside moss: relay its
   // choice UP to the shell, and apply the shell's choice when pushed DOWN.
-  // Never runs for real visitors — the bridge isn't injected without
-  // ?__moss_shell=1, and the listeners below are gated on isShellMounted.
+  // The listeners below are gated on isShellMounted, so a page open in a
+  // plain tab keeps its own theme control.
   // ============================================================
   let currentShellTheme: "light" | "dark" | null = null;
 
@@ -487,8 +494,8 @@ import { installCaptureResponder } from "./capture/responder";
   // ============================================================
   // The site shell swaps any broken <img> to a STATIC blueprint-grid SVG
   // (class .moss-img-fallback) — that is what real visitors of the published
-  // site always see. This bridge is injected ONLY into moss's preview/editor
-  // webviews (never into published output), so here — and only here — we
+  // site always see. This bridge is only in pages the preview server serves
+  // (never in published output), so here — and only here — we
   // upgrade those static placeholders to the launcher's live, mouse-reactive
   // blueprint grid, reusing the <img>'s exact box. See ./blueprint-fallback.ts.
   installBlueprintFallback();
@@ -606,10 +613,6 @@ import { installCaptureResponder } from "./capture/responder";
   document.addEventListener('click', (event: MouseEvent) => postSourceTarget(event, 'click'));
   document.addEventListener('dblclick', (event: MouseEvent) => postSourceTarget(event, 'dblclick'));
 
-  // Right-click: suppress the native WebKit menu (whose Reload/Back/Forward
-  // bypassed the shell's navigation orchestration and whose "Copy Link"
-  // handed out localhost URLs) and report the click's context to the shell,
-  // which renders the moss menu. Logic lives in bridge/context-menu.ts.
   installContextMenu(window);
 
   // ============================================================

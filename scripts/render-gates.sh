@@ -109,6 +109,7 @@ GATES_BUILD=(
   place-map-route
   place-dot-links
   preview-parity-gate
+  plain-tab-reload
   touch-targets
   places-explorer-boot
   places-explorer-camera

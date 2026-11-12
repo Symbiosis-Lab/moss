@@ -326,6 +326,7 @@ pub async fn start_server(
                 "/__moss/comments/api/v2/comments",
                 axum::routing::post(super::comment_stub::handle_comment_stub),
             )
+            .route("/__moss/reload", get(super::events::handle_reload))
             // Unconditional like health/source/comments — see `yield_route`.
             .route(
                 "/__moss/yield",

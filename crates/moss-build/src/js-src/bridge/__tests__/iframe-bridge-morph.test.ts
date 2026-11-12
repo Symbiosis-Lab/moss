@@ -643,7 +643,10 @@ describe("shipped morph failure correlation", () => {
     const dom = new JSDOM('<!doctype html><html><head><script src="old.js"></script></head><body></body></html>', { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
     const w = dom.window;
     const replies: unknown[] = [];
-    w.postMessage = (message) => { replies.push(message); };
+    // Framed, as in moss: a page in a plain tab takes no morph.
+    const parent = { postMessage: (message: unknown) => replies.push(message) };
+    dom.reconfigure({ windowTop: parent });
+    Object.defineProperty(w, "parent", { value: parent });
     w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) as any;
     (w as any).ResizeObserver = class { observe() {} disconnect() {} };
     (w as any).IntersectionObserver = class { observe() {} disconnect() {} };

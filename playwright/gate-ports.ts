@@ -92,6 +92,7 @@ const GATE_PORT_KEYS = [
   'country-map-interaction',
   'preview-parity-gate:static',
   'preview-parity-gate:preview',
+  'plain-tab-reload',
   'header-hit-areas',
   'lightbox-github-shapes',
   'grid-card-no-cover',

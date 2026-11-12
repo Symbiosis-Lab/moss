@@ -3060,6 +3060,38 @@ async fn event_stream_delivers_a_published_event_to_a_browser() {
     let _ = shutdown_tx.send(());
 }
 
+/// A page holds no token, so the reload stream opens without one, and for
+/// that reason its frame says only that a rebuild happened.
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_stream_tells_a_page_of_a_rebuild_and_nothing_else() {
+    let _streams = event_stream_lock();
+    use crate::ops::serve::events;
+    use crate::types::events::{FileChangeEvent, MossEvent};
+
+    let (_parent, _vault_path, site_dir) = confinement_vault();
+    let (port, shutdown_tx, _token) = serve_bound(site_dir.clone(), 63470).await;
+
+    let url = format!("http://localhost:{port}/__moss/reload");
+    let reader = tokio::task::spawn_blocking(move || {
+        ureq::get(&url).timeout(std::time::Duration::from_secs(10)).call().expect("the stream opens with no token").into_reader()
+    })
+    .await
+    .unwrap();
+
+    // A finished build with no new files is not a reason to reload.
+    let rebuilt = events::reloads().subscribe();
+    events::publish(&MossEvent::BuildComplete(crate::build::progress::BuildComplete { videos_converted: 0, total_time_ms: 42, skipped_symlinks: 0 }));
+    assert!(!rebuilt.has_changed().unwrap());
+    let mut changed = FileChangeEvent::new();
+    changed.changed_output_files = Some(vec!["private/page/index.html".into()]);
+    events::publish(&MossEvent::FileChanged(changed));
+
+    let record = tokio::task::spawn_blocking(move || read_one_sse_record(reader)).await.unwrap().expect("a rebuild arrives as one SSE record");
+    assert_eq!(record, "data: reload\n\n");
+
+    let _ = shutdown_tx.send(());
+}
+
 /// An event stream counts while a browser holds it open and stops counting
 /// once it disconnects, and both moments are activity — the signal a host
 /// waits on to tell whether anyone is watching outside its own window.

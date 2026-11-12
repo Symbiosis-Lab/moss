@@ -1,5 +1,7 @@
 //! The event carrier: `GET /__moss/events`, a Server-Sent Events stream of the
-//! same typed bus the desktop frontend receives over Tauri IPC.
+//! same typed bus the desktop frontend receives over Tauri IPC. Beside it,
+//! `GET /__moss/reload` tells a page in a plain browser tab that the site was
+//! rebuilt, and nothing more ([`handle_reload`]).
 //!
 //! ## Why this exists
 //!
@@ -40,7 +42,7 @@
 //!
 //! ## Auth
 //!
-//! Token-gated like `/__moss/read`: these events describe the vault (paths,
+//! `/__moss/events` is token-gated like `/__moss/read`: these events describe the vault (paths,
 //! build results, task failures). The route is `GET`, so the browser client is
 //! `fetch` + a `ReadableStream` reader rather than `EventSource` — `EventSource`
 //! cannot set a request header, and putting the token in the query string
@@ -74,6 +76,18 @@ fn bus() -> &'static broadcast::Sender<String> {
     BUS.get_or_init(|| broadcast::channel(CAPACITY).0)
 }
 
+/// Marked each time rebuilt bytes become servable. It carries nothing, so the
+/// reload stream can be read by a page, which holds no token.
+pub(crate) fn reloads() -> &'static watch::Sender<()> {
+    static RELOADS: OnceLock<watch::Sender<()>> = OnceLock::new();
+    RELOADS.get_or_init(|| watch::channel(()).0)
+}
+
+/// Open event and reload streams together.
+fn open_streams() -> usize {
+    bus().receiver_count() + reloads().receiver_count()
+}
+
 /// What the preview server has seen of its viewers. Only activity is
 /// reported; how long it keeps the host awake is the host's decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +95,7 @@ pub struct ViewerActivity {
     /// The last page navigation, or event stream opening or closing. `None`
     /// until the first.
     pub last_activity: Option<std::time::Instant>,
-    /// Browsers holding `GET /__moss/events` open right now. One that went
+    /// Browsers holding `GET /__moss/events` or `/__moss/reload` open right now. One that went
     /// away still counts until its stream fails a write, at the next event or
     /// keep-alive (about 15 s).
     pub streams: usize,
@@ -103,14 +117,14 @@ pub(crate) fn viewer_signal_lock() -> std::sync::MutexGuard<'static, ()> {
 /// pays nothing for it.
 pub fn viewer_activity() -> watch::Receiver<ViewerActivity> {
     ACTIVITY
-        .get_or_init(|| watch::channel(ViewerActivity { last_activity: None, streams: bus().receiver_count() }).0)
+        .get_or_init(|| watch::channel(ViewerActivity { last_activity: None, streams: open_streams() }).0)
         .subscribe()
 }
 
 /// Record that someone is looking, now.
 pub(crate) fn note_activity() {
     if let Some(tx) = ACTIVITY.get() {
-        let streams = bus().receiver_count();
+        let streams = open_streams();
         tx.send_modify(|a| {
             a.last_activity = Some(std::time::Instant::now());
             a.streams = streams;
@@ -145,23 +159,22 @@ pub(super) async fn track_viewer(
     response
 }
 
-/// One open event stream's place on the bus. Opening it and dropping it —
-/// however the stream ends — are both viewer activity.
-struct Subscription(Option<broadcast::Receiver<String>>);
+/// One open stream's receiver, of events or of reloads. Opening it and
+/// dropping it — however the stream ends — are both viewer activity.
+struct Subscription<R>(Option<R>);
 
-impl Subscription {
-    fn open() -> Self {
-        let rx = bus().subscribe();
+impl<R> Subscription<R> {
+    fn open(rx: R) -> Self {
         note_activity();
         Self(Some(rx))
     }
 
-    fn rx(&mut self) -> &mut broadcast::Receiver<String> {
+    fn rx(&mut self) -> &mut R {
         self.0.as_mut().expect("taken only by drop")
     }
 }
 
-impl Drop for Subscription {
+impl<R> Drop for Subscription<R> {
     fn drop(&mut self) {
         // Leave the bus first, so the count reported no longer has this stream.
         self.0 = None;
@@ -190,6 +203,9 @@ pub fn publish_named(name: &str, payload: serde_json::Value) {
 
 /// Publish a `MossEvent` on the same channel name the Tauri bus uses.
 pub fn publish(event: &MossEvent) {
+    if matches!(event, MossEvent::FileChanged(_)) {
+        reloads().send_replace(());
+    }
     match serde_json::to_value(event) {
         Ok(payload) => publish_named(MOSS_EVENT_CHANNEL, payload),
         Err(e) => log::error!(target: "preview", "carrier: MossEvent is not serializable: {e}"),
@@ -203,7 +219,7 @@ pub fn publish(event: &MossEvent) {
 /// disconnecting a slow tab would turn a hiccup into a permanently dead
 /// subscription. The gap is logged so it is not invisible.
 fn event_stream(
-    sub: Subscription,
+    sub: Subscription<broadcast::Receiver<String>>,
     browser: Option<super::ui::auth::BrowserSession>,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
     futures::stream::unfold((sub, browser), |(mut sub, browser)| async move {
@@ -227,6 +243,20 @@ fn event_stream(
     })
 }
 
+/// `GET /__moss/reload`: one constant frame each time rebuilt bytes become
+/// servable, for a page open in a plain browser tab, which reloads on it.
+///
+/// Token-free, unlike `/__moss/events`: the frame names no path, page or
+/// result, so it tells a page only that a rebuild happened. A frame missed
+/// while disconnected is not replayed; the page reloads when it reconnects.
+pub(crate) async fn handle_reload() -> impl axum::response::IntoResponse {
+    let stream = futures::stream::unfold(Subscription::open(reloads().subscribe()), |mut sub| async move {
+        sub.rx().changed().await.ok()?;
+        Some((Ok::<_, std::convert::Infallible>(Event::default().data("reload")), sub))
+    });
+    ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
 /// `GET /__moss/events`. The token gate is a `route_layer` in `router.rs`; by
 /// the time this runs the caller is authenticated and same-origin.
 ///
@@ -243,7 +273,7 @@ pub(crate) async fn handle_events(
     // Subscribe BEFORE returning, so an event emitted between the request
     // arriving and the stream being polled is buffered rather than missed.
     // `setup-panel.ts` depends on exactly this ordering on the Tauri side.
-    let stream = event_stream(Subscription::open(), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned());
+    let stream = event_stream(Subscription::open(bus().subscribe()), browser.map(|b| b.0)).take_until(session.retired().clone().cancelled_owned());
     // A reverse proxy that buffers responses (nginx by default) would hold events back.
     ([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(KeepAlive::default()))
 }

@@ -5098,3 +5098,29 @@ lang = "en"
 `,
   },
 };
+
+/** A page the plain-tab-reload gate edits while `build --serve --watch` serves it. */
+export const PLAIN_TAB_RELOAD: ScratchSiteSpec = {
+  name: "plain-tab-reload",
+  files: {
+    "index.md": `---
+title: Plain Tab Reload
+---
+
+First text.
+
+[Another site](https://example.com/)
+
+[Another page](other.md)
+
+![A picture](picture.png)
+`,
+    "picture.png": syntheticBusyImage(400, 300),
+    "other.md": `---
+title: Another Page
+---
+
+Second page.
+`,
+  },
+};
