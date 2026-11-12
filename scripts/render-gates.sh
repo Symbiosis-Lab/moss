@@ -92,6 +92,7 @@ GATES_BUILD=(
   contents-ruler
   contents-lens
   header-none
+  page-chrome-none
   header-scroll
   folded-callouts
   header-over-ink

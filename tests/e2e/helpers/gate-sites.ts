@@ -810,6 +810,46 @@ link_preview = false
   },
 };
 
+// ── `chrome: none`: one page without the site's frame ───────────────────────
+// A landing page whose title is long enough to reach the controls, beside an
+// ordinary page. Served by playwright/page-chrome-none.config.ts.
+export const PAGE_CHROME_NONE_GATE: ScratchSiteSpec = {
+  name: "page-chrome-none-gate",
+  files: {
+    "index.md": `---
+title: Harbour
+uid: "pcn00001"
+---
+
+Home text.
+`,
+    "landing.md": `---
+title: An open day at the harbour for everyone who lives along the estuary
+uid: "pcn00002"
+chrome: none
+---
+
+Come along on Saturday.
+`,
+    "about.md": `---
+title: About
+uid: "pcn00003"
+nav: true
+---
+
+Who we are.
+`,
+    "footer.md": "Write to us.\n",
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+link_preview = false
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── A grid-card image fills the card's inline size ───────────────────────────
 // An internal whole-cell image link renders as `a.moss-grid-card[data-kind=
 // "link"]` wrapping a `<figure class="moss-image">`; nothing stretches that

@@ -989,8 +989,8 @@ main {
 /* `[site] header = "none"`: with no header band the page's first element would
    sit at the window's top edge. Give it the space the header's own top padding
    would have, below any notch. A page that opens with a hero keeps its picture
-   at the edge. */
-body:has(> .moss-nav-island[data-header="none"]):not(:has(> .moss-hero)) > main {
+   at the edge. A `chrome: none` page has no header either. */
+:is(body:has(> .moss-nav-island[data-header="none"]), body[data-chrome="none"]):not(:has(> .moss-hero)) > main {
   padding-block-start: calc(var(--moss-space-lg) + env(safe-area-inset-top, 0px));
 }
 
@@ -4220,8 +4220,9 @@ body {
      and the closing picture, the top-of-page controls covering the opening;
    - anywhere else they are fixed in the slot the bar keeps free at its end.
    Both places are worked out from the bar's and the ruler's own geometry
-   tokens (on `body`), never retyped. */
-.moss-nav-island[data-header="none"] + .nav-icons {
+   tokens (on `body`), never retyped. A `chrome: none` page has the controls
+   with no island, so only in the first place. */
+:is(.moss-nav-island[data-header="none"] + .nav-icons, body[data-chrome="none"] > .nav-icons) {
   position: absolute;
   z-index: 100;
   --_top: calc(
@@ -4238,6 +4239,10 @@ body {
   inset-block-start: var(--_top);
   inset-inline-end: var(--_end);
   margin: 0;
+  /* One property takes the controls away together with the room the title
+     keeps for them below:
+         body[data-chrome="none"] { --moss-controls-display: none; } */
+  display: var(--moss-controls-display, flex);
 }
 
 /* Their place at the top is the end of the page's first line: the article keeps
@@ -4251,20 +4256,21 @@ body {
    is more than any of them takes. Once the controls have moved to the bar or
    the list's foot the room is off screen. A vertical page takes it back in
    site/vertical.css. */
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons) {
+body:has(> .nav-icons) {
   --moss-nav-island-controls-guess: 3rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons > :nth-child(2)) {
+body:has(> .nav-icons > :nth-child(2)) {
   --moss-nav-island-controls-guess: 6rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons > :nth-child(3)) {
+body:has(> .nav-icons > :nth-child(3)) {
   --moss-nav-island-controls-guess: 9rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-child), :has(> :is(p, a):first-child + h1:not(.visually-hidden)))::before {
+body:has(> .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-child), :has(> :is(p, a):first-child + h1:not(.visually-hidden)))::before {
   content: "";
+  display: var(--moss-controls-display, block);
   float: inline-end;
   inline-size: calc(
     var(--moss-nav-island-controls, var(--moss-nav-island-controls-guess)) + var(--moss-nav-island-edge)

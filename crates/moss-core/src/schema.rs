@@ -445,7 +445,8 @@ mod tests {
         // (`color` added 2026-10 — a folder home's section accent.)
         // (`partial` added 2026-10 — a transclusion source that is never built.)
         // (`search_engines` — a page's own noindex.)
-        assert_eq!(schema.frontmatter.fields.len(), 73);
+        // (`chrome` — a page without the site's frame.)
+        assert_eq!(schema.frontmatter.fields.len(), 74);
     }
 
     #[test]

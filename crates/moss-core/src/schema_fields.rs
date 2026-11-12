@@ -932,6 +932,20 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "chrome",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["site", "none"]),
+        // Frequency=0, Importance=1 → score=96
+        score: 96,
+        description: "`none` draws this page without the site's header, floating nav island and footer, for a landing page that stands alone. The page keeps its title, the language, search and theme controls at its top, and the colophon. Absent or `site` keeps the site's frame.",
+        label: Some("Site frame"),
+        label_key: "chip.chrome.label",
+        group: "This Page",
+        applies_when: Some(&[PAGE, FOLDER, HOME]),
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "contents",
         field_type: FieldType::String,
         widget: Widget::Select,

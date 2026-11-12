@@ -75,7 +75,9 @@ impl PageChromeContext<'_, '_> {
         site_url: &crate::build::site_url::SiteUrl,
     ) -> ShellVars {
         let generated = matches!(family, PageFamily::GeneratedFolder);
-        let contents_pictures = doc.and_then(|d| d.raw_frontmatter.get("contents")).and_then(|v| v.as_str()) == Some("pictures");
+        let bare = doc.is_some_and(|d| d.bare);
+        // The contents lane's list is the island's, which a bare page has not.
+        let contents_pictures = !bare && doc.and_then(|d| d.raw_frontmatter.get("contents")).and_then(|v| v.as_str()) == Some("pictures");
         let site_title = self.site_title(doc);
         let ui_lang = doc.map(|d| d.lang).unwrap_or(self.site_lang);
         let page_lang_tag = doc.and_then(|d| d.lang_tag.clone())
@@ -140,6 +142,7 @@ impl PageChromeContext<'_, '_> {
         let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
         body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
         if contents_pictures { body_attrs.push_str(r#" data-contents="pictures""#); }
+        if bare { body_attrs.push_str(r#" data-chrome="none""#); }
         // The body names the mode only where the header really stays: a site
         // with no header has nothing to keep, and a header laid over the
         // page's opening hero scrolls away with it, so the island keeps its bar.
@@ -147,7 +150,7 @@ impl PageChromeContext<'_, '_> {
             .and_then(|d| d.hero_html.as_deref())
             .and_then(|h| h.split('>').next())
             .is_some_and(|open_tag| open_tag.contains(r#" data-header="over""#));
-        if self.layout.header != crate::build::components::nav::HeaderMode::None && !header_over {
+        if self.layout.header != crate::build::components::nav::HeaderMode::None && !header_over && !bare {
             if let Some(value) = self.layout.header_scroll.attr_value() {
                 body_attrs.push_str(&format!(r#" data-header-scroll="{value}""#));
             }
@@ -173,13 +176,16 @@ impl PageChromeContext<'_, '_> {
             css_path: paths.css_path(), js_path: paths.js_path(),
             lazy_chunk_attrs: self.assets.scripts.lazy_chunk_attrs(&self.layout.assets),
             navigation: nav.generate_navigation(),
-            has_header: self.layout.header != crate::build::components::nav::HeaderMode::None,
+            has_header: !bare && self.layout.header != crate::build::components::nav::HeaderMode::None,
+            bare,
             colophon: self.layout.colophon,
             color_scheme: self.layout.color_scheme,
             theme_color: self.layout.theme_color.clone(),
             colophon_credit: self.layout.colophon_credit.clone(),
-            nav_island: if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
-            footer: Some(nav.generate_footer(self.show_rss_in_footer)),
+            // A bare page keeps only the controls, loose where a headerless
+            // site's island would put them at the top of the page.
+            nav_island: if bare { nav.nav_icons_html() } else if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
+            footer: (!bare).then(|| nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),
             head_alternates: Some([self.assets.head_alternates.unwrap_or_default(), self.layout.profile_links.as_str()]

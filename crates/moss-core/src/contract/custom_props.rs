@@ -218,6 +218,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Forces the floating nav island off from CSS, media queries included — the page then behaves as it did before this feature shipped: the masthead scrolls away and nothing replaces it. Not the main switch: the island is opt-in and ships off, so `[site].floating_nav = true` (the Settings → Services toggle) is what turns it on in the first place, and this property is for a theme that wants it off at some widths and not others. Appearance is otherwise tuned through the island's contract-registered classes; its measure already tracks `--moss-nav-width`/`--moss-content-width`, so widening the nav widens the island with it.",
     },
     CustomProp {
+        name: "--moss-controls-display",
+        owner: "nav-icons",
+        default: "flex",
+        description: "`none` takes away the controls (search, language links, theme toggle) that stand loose at the top of a `chrome: none` page or a site with no header, and the room the title's first line keeps for them: `body[data-chrome=\"none\"] { --moss-controls-display: none; }`. Hiding `.nav-icons` itself leaves that room empty.",
+    },
+    CustomProp {
         name: "--moss-sidenote-reserve",
         owner: "body",
         default: "0px",
@@ -816,6 +822,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "cite",
         values: &[],
         description: "The address of the record a quotation comes from, set when the blockquote's last paragraph begins with an em dash and links to an `http` or `https` address (a grid quote cell takes it from its italic source line). Only the attribute is added: the markup and the source line are as before. Style the cited ones with `blockquote[cite]`.",
+    },
+    ScopeAttr {
+        selector: "body",
+        name: "data-chrome",
+        values: &["none"],
+        description: "The page's `chrome: none`: it is drawn without the site's header, floating nav island, footer and skip link. The controls (search, language, theme) stay at the top of the page and the colophon after it; a theme that wants neither sets `--moss-controls-display: none` on `body[data-chrome=\"none\"]` and hides `body[data-chrome=\"none\"] .moss-colophon`.",
     },
     ScopeAttr {
         selector: "html",

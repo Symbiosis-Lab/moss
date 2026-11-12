@@ -691,6 +691,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub title_block: Option<String>,
+    /// `chrome: none` — the page is drawn without the site's header, nav
+    /// island, footer and skip link. The page's own, never cascaded.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub bare: bool,
     /// `reader_controls: false` removes the text-size control from a dated
     /// page. Set on the page or cascaded from a folder.
     #[serde(skip)]

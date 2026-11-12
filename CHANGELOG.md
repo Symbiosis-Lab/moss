@@ -7,6 +7,7 @@ All notable changes to moss will be documented here.
 ### New
 
 - A card with a picture cover carries the picture's width over its height as `--item-cover-ratio` in its `style`, so a theme can lay cards out by each cover's shape (a row of covers at one height, say) without script.
+- `chrome: none` in a page's frontmatter draws that page without the site's header, floating nav island, footer and skip link, for a landing page that stands alone. The page keeps its title, the search, language and theme controls at its top, and the colophon; `<body>` carries `data-chrome="none"`, and a theme takes the controls away there with `--moss-controls-display: none`.
 - A plugin named `booking` that declares `public_data` owns `[services.booking]`: moss's own booking reader switches off for that table, so the plugin's own keys draw no warning and moss writes no `booking` object into `/_moss/commerce.json`. The build prints one line saying so.
 - A country map can show the reader's own date in its "As of" stamp and panel: `as_of: today` under `country_map:`. The date is written in the page's language; a reader without script sees the page's `date:`, or the day of the build when the page has none.
 - A `##` or lower heading whose section holds only folder embeds is left out while every one of those embeds lists nothing, so a section of posts or upcoming events can be written before its first entry exists; the build prints a note naming the heading's anchor, and the heading appears with the first page.

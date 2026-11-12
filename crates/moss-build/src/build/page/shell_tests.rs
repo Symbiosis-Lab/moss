@@ -1617,6 +1617,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         lazy_chunk_attrs: String::new(),
         navigation: "".to_string(),
         has_header: true,
+        bare: false,
         nav_island: String::new(),
         homepage_content: "".to_string(),
         latest_list: None,
@@ -2979,8 +2980,8 @@ fn test_template_includes_colophon_text_placeholder() {
 #[test]
 fn test_template_skip_link_is_first_in_body_and_localized() {
     // Skip link (WCAG 2.4.1): must be the very first thing after
-    // <body ...>, before {nav_island}, and localized via {skip_link_label}
-    // rather than hardcoded — same reasoning as the colophon text above.
+    // <body ...>, before {nav_island}, and localized rather than
+    // hardcoded — same reasoning as the colophon text above.
     let body_open = SHELL_TEMPLATE
         .find("<body")
         .expect("shell template must have a <body> tag");
@@ -2990,7 +2991,7 @@ fn test_template_skip_link_is_first_in_body_and_localized() {
         .expect("<body ...> tag must close");
     let after_body = &SHELL_TEMPLATE[body_tag_end..];
     assert!(
-        after_body.starts_with(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">{skip_link_label}</a>"##),
+        after_body.starts_with("{skip_link}"),
         "Skip link must be the first element after <body ...>, got: {:?}",
         &after_body[..after_body.len().min(120)]
     );

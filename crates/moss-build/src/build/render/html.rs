@@ -815,7 +815,7 @@ pub(super) fn render_page<'d>(
                 if outcome == TitleOutcome::None {
                     content
                 } else {
-                    let headerless = layout_config.header == crate::build::components::nav::HeaderMode::None;
+                    let headerless = doc.bare || layout_config.header == crate::build::components::nav::HeaderMode::None;
                     let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, !(headerless && outcome == TitleOutcome::Visible));
                     format!("{h1}\n{content}")
                 }

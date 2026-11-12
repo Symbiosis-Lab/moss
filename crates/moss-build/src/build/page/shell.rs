@@ -145,6 +145,9 @@ pub struct ShellVars {
     /// Whether the page carries the `<header>` band: false under
     /// `[site].header = "none"`, where the island holds the controls.
     pub has_header: bool,
+    /// `chrome: none`: the page stands without the site's frame, so it has
+    /// no skip link either.
+    pub bare: bool,
     /// Whether moss's colophon is emitted (`[site].colophon`, default true).
     pub colophon: bool,
     /// `[site].color_scheme` — automatic reader choice or a fixed palette.
@@ -432,7 +435,11 @@ impl ShellProcessor {
             // moss's own voice, derived from one language rather than passed
             // in four already-rendered pieces — see `ShellVars::ui_lang`.
             ("colophon", colophon),
-            ("skip_link_label", crate::i18n::t(vars.ui_lang, "skip_to_content").to_string()),
+            // The link bypasses the blocks every page repeats; a page with
+            // none of them has nothing to skip.
+            ("skip_link", if vars.bare { String::new() } else {
+                format!(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">{}</a>"##, crate::i18n::t(vars.ui_lang, "skip_to_content"))
+            }),
             ("latest_list", vars.latest_list.unwrap_or_default()),
             ("latest_sidebar", latest_sidebar),
             ("favicon", vars.favicon.unwrap_or_default()),
