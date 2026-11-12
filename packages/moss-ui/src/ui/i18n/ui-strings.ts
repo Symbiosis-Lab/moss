@@ -212,6 +212,8 @@ const EN = {
   'fm_hint.logo': 'Site logo, shown before the site name in the nav.',
   'fm_hint.tagline': "A phrase after the site name in the home page's tab title and link preview.",
   'fm_hint.nav': 'Whether this page appears in the site navigation.',
+  'fm_hint.members': 'Who may read this page: public, subscribers or paid.',
+  'fm_hint.search_engines': 'false asks search engines not to index this page and leaves it off listings and feeds.',
   'fm_hint.nav_label': "A shorter name for this page in the nav bar and footer links, when its title is too long. The page's own heading and listings keep the title.",
   'fm_hint.footer': 'Show this page as a link in the site footer.',
 
@@ -2082,6 +2084,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'fm_hint.logo': 'Logo der Website, das im Menü vor dem Namen der Website steht.',
     'fm_hint.tagline': 'Ein Zusatz nach dem Namen der Website im Tab-Titel und in der Linkvorschau der Startseite.',
     'fm_hint.nav': 'Ob diese Seite in der Navigation der Website erscheint.',
+    'fm_hint.members': 'Wer diese Seite lesen darf: public, subscribers oder paid.',
+    'fm_hint.search_engines': 'false bittet Suchmaschinen, diese Seite nicht zu indexieren, und lässt sie aus Listen und Feeds heraus.',
     'fm_hint.nav_label': 'Kürzerer Name für diese Seite in der Navigationsleiste und den Fußzeilen-Links, wenn der Titel zu lang ist. Die Überschrift der Seite und die Listen behalten den Titel.',
     'fm_hint.footer': 'Diese Seite als Link in der Fußzeile der Website anzeigen.',
     'chip.ui.select_placeholder': '-- Auswählen --',
@@ -3687,6 +3691,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'fm_hint.logo': '站点图标，显示在导航栏站点名称之前。',
     'fm_hint.tagline': '首页标签页标题和链接预览中，跟在站点名称之后的一句话。',
     'fm_hint.nav': '此页面是否显示在站点导航中。',
+    'fm_hint.members': '谁可以阅读此页面：public、subscribers 或 paid。',
+    'fm_hint.search_engines': 'false 表示请搜索引擎不要收录此页面，并且不在列表和订阅源中显示。',
     'fm_hint.nav_label': '此页面在导航栏和页脚链接中的较短名称，用于标题过长时。页面自身的标题和列表仍使用原标题。',
     'fm_hint.footer': '在站点页脚显示此页面的链接。',
 
@@ -5360,6 +5366,8 @@ export const UI_STRINGS: Record<AppLocale, UiStringMap> = {
     'fm_hint.logo': '網站圖示，顯示在導覽列網站名稱之前。',
     'fm_hint.tagline': '首頁分頁標題和連結預覽中，接在網站名稱之後的一句話。',
     'fm_hint.nav': '此頁面是否顯示在網站導覽中。',
+    'fm_hint.members': '誰可以閱讀此頁面：public、subscribers 或 paid。',
+    'fm_hint.search_engines': 'false 表示請搜尋引擎不要收錄此頁面，並且不在列表和訂閱源中顯示。',
     'fm_hint.nav_label': '此頁面在導覽列和頁尾連結中的較短名稱，用於標題過長時。頁面自身的標題和列表仍使用原標題。',
     'fm_hint.footer': '在網站頁尾顯示此頁面的連結。',
 
