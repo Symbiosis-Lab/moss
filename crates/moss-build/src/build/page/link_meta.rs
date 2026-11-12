@@ -419,7 +419,8 @@ fn bare_host(url: &str) -> &str {
 /// True when `url`'s literal host is private (RFC1918), link-local
 /// (169.254.0.0/16 — the address every major cloud provider serves instance
 /// metadata from — and its IPv6 twin `fe80::/10`), unspecified, multicast, or
-/// unique-local IPv6 (`fc00::/7`).
+/// unique-local IPv6 (`fc00::/7`), including an IPv4 one written in an IPv6
+/// form (`[::ffff:169.254.169.254]`).
 ///
 /// Deliberately does NOT include loopback: this crate's own test suite fakes
 /// "a real remote server" with a `127.0.0.1` `TcpListener` throughout (every
@@ -444,17 +445,8 @@ fn bare_host(url: &str) -> &str {
 /// resolver/connector, more machinery than this proportional guard is trying
 /// to be.
 fn is_unsafe_fetch_target(url: &str) -> bool {
-    let host = bare_host(url);
-    match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(v4)) => v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_multicast(),
-        Ok(std::net::IpAddr::V6(v6)) => {
-            v6.is_unspecified()
-                || v6.is_multicast()
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local, fc00::/7
-                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local unicast, fe80::/10
-        }
-        Err(_) => false,
-    }
+    use crate::system::address::{classify, AddressClass::*};
+    bare_host(url).parse().is_ok_and(|ip| matches!(classify(ip), Private | LinkLocal | Unspecified | Multicast))
 }
 
 /// Fetch (or serve from the cache, however old) one URL's link metadata.
@@ -1988,6 +1980,17 @@ mod tests {
         assert!(is_unsafe_fetch_target("http://[fc00::1]/"));
         assert!(is_unsafe_fetch_target("http://[fd12:3456::1]/"));
         assert!(is_unsafe_fetch_target("http://[::]/"));
+    }
+
+    #[test]
+    fn is_unsafe_fetch_target_reads_ipv4_written_in_an_ipv6_form() {
+        for form in ["::ffff:169.254.169.254", "::169.254.169.254", "64:ff9b::169.254.169.254", "::ffff:10.0.0.5"] {
+            assert!(is_unsafe_fetch_target(&format!("http://[{form}]/page")), "{form}");
+        }
+        // Its loopback decision holds in every form, and a public address stays public.
+        for form in ["::ffff:127.0.0.1", "::127.0.0.1", "64:ff9b::127.0.0.1", "::ffff:93.184.216.34", "64:ff9b::93.184.216.34"] {
+            assert!(!is_unsafe_fetch_target(&format!("http://[{form}]/")), "{form}");
+        }
     }
 
     #[test]

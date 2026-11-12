@@ -148,20 +148,25 @@ fn refuses_loopback_ipv6() {
 }
 
 #[test]
-fn refuses_ipv4_mapped_loopback() {
-    // ::ffff:127.0.0.1 — a common bypass for a check that only inspects
-    // the plain IPv6 loopback form.
-    refuse_unsafe_scrape_url("http://[::ffff:127.0.0.1]/")
-        .expect_err("an IPv4-mapped loopback literal must be refused");
-}
-
-#[test]
 fn refuses_link_local() {
     // 169.254.169.254 — the AWS/GCP/Azure instance-metadata address, the
     // canonical SSRF target.
     let err = refuse_unsafe_scrape_url("http://169.254.169.254/latest/meta-data/")
         .expect_err("a link-local URL must be refused");
     assert!(err.contains("link-local"), "{err}");
+}
+
+#[test]
+fn refuses_loopback_and_link_local_written_in_any_ipv6_form() {
+    for form in [
+        "::ffff:127.0.0.1", "::127.0.0.1", "64:ff9b::127.0.0.1",
+        "::ffff:169.254.169.254", "::169.254.169.254", "64:ff9b::169.254.169.254",
+    ] {
+        refuse_unsafe_scrape_url(&format!("http://[{form}]/")).expect_err(form);
+    }
+    for form in ["::ffff:93.184.216.34", "::93.184.216.34", "64:ff9b::93.184.216.34"] {
+        assert!(refuse_unsafe_scrape_url(&format!("http://[{form}]/")).is_ok(), "{form}");
+    }
 }
 
 #[test]

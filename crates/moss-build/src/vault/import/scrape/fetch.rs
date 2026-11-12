@@ -123,50 +123,20 @@ pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
     // returns an IPv6 literal WITH its brackets (`"[::1]"`), which fails a
     // plain `str::parse::<IpAddr>()` and would silently let every bracketed
     // IPv6 literal through unchecked.
-    match url.host() {
-        Some(url::Host::Domain(d)) => {
-            if d.eq_ignore_ascii_case("localhost") {
-                return Err("URL must not target localhost".to_string());
-            }
+    let ip: std::net::IpAddr = match url.host() {
+        Some(url::Host::Domain(d)) if d.eq_ignore_ascii_case("localhost") => {
+            return Err("URL must not target localhost".to_string());
         }
-        Some(url::Host::Ipv4(v4)) => {
-            let ip = std::net::IpAddr::V4(v4);
-            if is_loopback_or_link_local(&ip) {
-                return Err(format!(
-                    "URL must not target a loopback or link-local address ({ip})"
-                ));
-            }
-        }
-        Some(url::Host::Ipv6(v6)) => {
-            let ip = std::net::IpAddr::V6(v6);
-            if is_loopback_or_link_local(&ip) {
-                return Err(format!(
-                    "URL must not target a loopback or link-local address ({ip})"
-                ));
-            }
-        }
+        Some(url::Host::Domain(_)) => return Ok(()),
+        Some(url::Host::Ipv4(v4)) => v4.into(),
+        Some(url::Host::Ipv6(v6)) => v6.into(),
         None => return Err("URL has no host".to_string()),
+    };
+    use crate::system::address::{classify, AddressClass};
+    if matches!(classify(ip), AddressClass::Loopback | AddressClass::LinkLocal) {
+        return Err(format!("URL must not target a loopback or link-local address ({ip})"));
     }
     Ok(())
-}
-
-/// True for a loopback or link-local address, including an IPv4 address
-/// spelled as an IPv4-mapped IPv6 literal (`::ffff:127.0.0.1`) — a common
-/// bypass for a check that only inspects the IPv6 form directly.
-fn is_loopback_or_link_local(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => {
-            if v6.is_loopback() {
-                return true;
-            }
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return mapped.is_loopback() || mapped.is_link_local();
-            }
-            // fe80::/10
-            (v6.segments()[0] & 0xffc0) == 0xfe80
-        }
-    }
 }
 
 /// `agent.get(url)`, following redirects by hand so every hop's target is
