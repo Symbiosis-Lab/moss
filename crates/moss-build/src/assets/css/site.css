@@ -2349,14 +2349,14 @@ header:has(+ .moss-hero[data-header="over"]) {
    The phone menu's sheet is opaque and not over the photo, so its links keep
    their own colour, as does a submenu panel, which has its own background. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
-header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .nav-sub *) {
+header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   color: inherit;
 }
 
 /* Focus rings sit on the photo, so they take the header's ink rather than the
    accent, which can fall below contrast on an image. The opened mobile sheet
    keeps the accent ring: it is opaque, not over the photo; so does a submenu panel. */
-header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .nav-sub *) {
+header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .moss-nav-sub *) {
   outline-color: var(--_over-ink);
 }
 
@@ -2896,7 +2896,7 @@ body > header .site-name {
 /* Second level: an entry with a submenu is a link plus a disclosure button
    (js-src/site/nav/submenu.ts unhides the button and opens the panel). The panel clamps
    to the viewport on both edges in script, so it needs no flip rule here. */
-.nav-group {
+.moss-nav-group {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -2905,7 +2905,7 @@ body > header .site-name {
 
 /* A 44px square that adds no height to the row (negative block margin) and
    tucks its trailing edge under the next entry's own hit area. */
-.nav-sub-toggle {
+.moss-nav-sub-toggle {
   position: relative;
   display: grid;
   place-items: center;
@@ -2920,7 +2920,7 @@ body > header .site-name {
   cursor: pointer;
 }
 
-.nav-sub-toggle::after {
+.moss-nav-sub-toggle::after {
   content: "";
   display: block;
   inline-size: 0.4rem;
@@ -2930,15 +2930,15 @@ body > header .site-name {
   transform: translateY(-0.1rem) rotate(45deg);
 }
 
-.nav-sub-toggle[aria-expanded="true"]::after {
+.moss-nav-sub-toggle[aria-expanded="true"]::after {
   transform: translateY(0.1rem) rotate(-135deg);
 }
 
-.nav-sub-toggle:hover {
+.moss-nav-sub-toggle:hover {
   color: var(--moss-color-ui-accent);
 }
 
-.nav-sub {
+.moss-nav-sub {
   position: absolute;
   inset-block-start: 100%;
   inset-inline-start: 0;
@@ -2956,14 +2956,14 @@ body > header .site-name {
 }
 
 /* Beats `.main-nav a.active`'s underline and padding by coming later. */
-.main-nav .nav-sub a {
+.main-nav .moss-nav-sub a {
   display: block;
   padding: 0.4rem 1rem;
   border-block-end: none;
 }
 
 /* The links already carry their own touch padding. */
-.nav-links .nav-sub a::after {
+.nav-links .moss-nav-sub a::after {
   display: none;
 }
 
@@ -6645,16 +6645,16 @@ article a:where(:not(.moss-btn)):focus {
 
   /* Nothing nests without a disclosure: the toggle goes and the list shows,
      indented under its entry. */
-  .nav-group {
+  .moss-nav-group {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .nav-sub-toggle {
+  .moss-nav-sub-toggle {
     display: none;
   }
 
-  .nav-sub {
+  .moss-nav-sub {
     display: block;
     position: static;
     min-inline-size: 0;
@@ -6666,7 +6666,7 @@ article a:where(:not(.moss-btn)):focus {
     box-shadow: none;
   }
 
-  .main-nav .nav-links .nav-sub a {
+  .main-nav .nav-links .moss-nav-sub a {
     padding-inline: 0;
     font-size: calc(var(--moss-menu-link-size, 1.875rem) * 0.7);
   }

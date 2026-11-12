@@ -8,12 +8,12 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const toggle = (page: Page) => page.locator('.nav-sub-toggle');
-const panel = (page: Page) => page.locator('.nav-sub');
+const toggle = (page: Page) => page.locator('.moss-nav-sub-toggle');
+const panel = (page: Page) => page.locator('.moss-nav-sub');
 
 async function panelEdges(page: Page) {
   return page.evaluate(() => {
-    const r = document.querySelector('.nav-sub')!.getBoundingClientRect();
+    const r = document.querySelector('.moss-nav-sub')!.getBoundingClientRect();
     return { left: r.left, right: r.right, width: document.documentElement.clientWidth };
   });
 }
@@ -31,7 +31,7 @@ for (const width of [1280, 390, 321]) {
       await expect(panel(page)).toBeHidden();
       await expect(page.locator('.nav-links > a[href*="tides"]')).toHaveCount(0);
       await expect(page.locator('.nav-links a[href*="harbour"]')).toHaveCount(1);
-      await expect(page.locator('.nav-links > .nav-group > a')).toHaveText('社區保護');
+      await expect(page.locator('.nav-links > .moss-nav-group > a')).toHaveText('社區保護');
     });
 
     test('keyboard opens it, Escape closes it and returns focus', async ({ page }) => {
@@ -107,7 +107,7 @@ test('over a header=over hero the open panel keeps readable ink on its own backg
   const link = panel(page).locator('a').first();
   await expect(link).toBeVisible();
   const colours = await page.evaluate(() => {
-    const ul = document.querySelector('.nav-sub')!;
+    const ul = document.querySelector('.moss-nav-sub')!;
     const a = ul.querySelector('a')!;
     return { ink: getComputedStyle(a).color, bg: getComputedStyle(ul).backgroundColor };
   });
@@ -117,7 +117,7 @@ test('over a header=over hero the open panel keeps readable ink on its own backg
   await link.focus();
   await page.keyboard.press('Tab');
   await page.keyboard.press('Shift+Tab');
-  const ring = await page.evaluate(() => getComputedStyle(document.querySelector('.nav-sub a:focus-visible')!).outlineColor);
+  const ring = await page.evaluate(() => getComputedStyle(document.querySelector('.moss-nav-sub a:focus-visible')!).outlineColor);
   expect(contrast(ring, colours.bg)).toBeGreaterThanOrEqual(3);
 });
 
@@ -125,8 +125,8 @@ test('at 390px the toggle is a 44px square that hits itself and leaves the link 
   await page.setViewportSize({ width: 390, height: 800 });
   await page.goto('/');
   const result = await page.evaluate(() => {
-    const t = document.querySelector('.nav-sub-toggle')!;
-    const link = document.querySelector('.nav-group > a')!;
+    const t = document.querySelector('.moss-nav-sub-toggle')!;
+    const link = document.querySelector('.moss-nav-group > a')!;
     const r = t.getBoundingClientRect();
     const l = link.getBoundingClientRect();
     const hits = (x: number, y: number) => document.elementFromPoint(x, y);

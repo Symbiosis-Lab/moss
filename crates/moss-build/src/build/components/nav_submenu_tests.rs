@@ -24,9 +24,9 @@ fn render(documents: &[ParsedDocument], current: Option<&str>) -> String {
     NavigationBuilder::new(documents, "Site", current, crate::i18n::Language::En, false).generate_navigation()
 }
 
-/// The `<ul class="nav-sub">` markup, or empty when there is none.
+/// The `<ul class="moss-nav-sub">` markup, or empty when there is none.
 fn submenu(html: &str) -> &str {
-    html.split_once(r#"<ul class="nav-sub""#)
+    html.split_once(r#"<ul class="moss-nav-sub""#)
         .and_then(|(_, rest)| rest.split_once("</ul>"))
         .map_or("", |(inside, _)| inside)
 }
@@ -40,9 +40,9 @@ fn nav_child_of_a_nav_folder_is_listed_in_its_submenu() {
     ];
     let html = render(&documents, None);
 
-    assert!(html.contains(r#"<span class="nav-group"><a href="/services/""#), "got: {html}");
+    assert!(html.contains(r#"<span class="moss-nav-group"><a href="/services/""#), "got: {html}");
     assert!(
-        html.contains(r#"aria-controls="nav-sub-1""#) && html.contains(r#"<ul class="nav-sub" id="nav-sub-1" hidden>"#),
+        html.contains(r#"aria-controls="nav-sub-1""#) && html.contains(r#"<ul class="moss-nav-sub" id="nav-sub-1" hidden>"#),
         "got: {html}"
     );
     assert!(submenu(&html).contains(r#"<li><a href="/services/patrol/""#), "got: {html}");
@@ -58,7 +58,7 @@ fn nav_child_of_a_folder_outside_the_header_stays_a_top_level_link() {
     let html = render(&documents, None);
 
     assert!(html.contains(r#"<a href="/services/patrol/""#), "got: {html}");
-    assert!(!html.contains("nav-group") && !html.contains("nav-sub"), "got: {html}");
+    assert!(!html.contains("moss-nav-group") && !html.contains("moss-nav-sub"), "got: {html}");
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn nav_folder_whose_children_are_not_in_the_header_gets_no_group() {
     let html = render(&documents, None);
 
     assert!(html.contains(r#"<a href="/services/""#), "got: {html}");
-    assert!(!html.contains("nav-group") && !html.contains("nav-sub") && !html.contains("Patrol"), "got: {html}");
+    assert!(!html.contains("moss-nav-group") && !html.contains("moss-nav-sub") && !html.contains("Patrol"), "got: {html}");
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn deeper_nav_pages_join_the_outermost_folder_submenu() {
     let html = render(&documents, None);
     let list = submenu(&html);
 
-    assert_eq!(html.matches("nav-group").count(), 1, "one group only: {html}");
+    assert_eq!(html.matches("moss-nav-group").count(), 1, "one group only: {html}");
     assert!(list.contains(">Water<") && list.contains(">Tests<"), "got: {html}");
     assert!(list.find(">Tests<") < list.find(">Water<"), "weight order: {html}");
 }
@@ -131,7 +131,7 @@ fn link_only_partials_in_a_folder_without_a_home_page_stay_top_level() {
     let html = render(&documents, None);
 
     assert!(html.contains(r#"href="https://example.org/book""#) && html.contains(r#"href="mailto:hello@example.org""#), "got: {html}");
-    assert!(!html.contains("nav-group") && !html.contains("nav-sub"), "got: {html}");
+    assert!(!html.contains("moss-nav-group") && !html.contains("moss-nav-sub"), "got: {html}");
 }
 
 /// A folder's home page leaves `nav` unset: it is not in the bar by position
@@ -145,5 +145,5 @@ fn folder_home_without_nav_is_not_in_the_bar_by_position() {
     let html = NavigationBuilder::new(&documents, "Site", None, crate::i18n::Language::En, true).generate_navigation();
 
     assert!(html.contains(">Patrol<") && !html.contains(">Services<"), "got: {html}");
-    assert!(!html.contains("nav-group"), "got: {html}");
+    assert!(!html.contains("moss-nav-group"), "got: {html}");
 }

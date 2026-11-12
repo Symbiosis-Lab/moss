@@ -16,7 +16,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-cards-minimal-year-group` | container | Year-grouped section in minimal card layout (e.g. blog index). Modifier `--summary` collapses past years. |
 | `.minimal` | instance | Bare co-class on a minimal year group, alongside the prefixed name. Retained because themes in the wild key on it. |
 | `.moss-cards-minimal-year-group--summary` | container | BEM modifier on `.moss-cards-minimal-year-group`. Applied to year groups that should render in collapsed summary form (e.g. past years on a blog index). |
-| `.moss-card` | instance | v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`. Tag is `<a>` for ordinary cards and `<div>` for linkblog cards (`[data-linkblog]`). |
+| `.moss-card` | instance | v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`. Tag is `<a>` for ordinary cards and `<div>` for linkblog cards (`[data-linkblog]`). A card whose cover is a picture moss read carries the picture's width over its height as `--item-cover-ratio` in its `style` (`3 / 2`), for a theme that lays cards out by each cover's shape. |
 | `.moss-card-link` | instance | The title link of an event card whose page has `tickets:` or `online:`, which then is not one whole-card anchor. Its `::after` stretches over the card, so the card is still one click target; the card carries `position: relative`. |
 | `.moss-card-cover` | instance | Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover="quote"` when a sibling card in the same listing has a cover and this one doesn't. |
 | `.moss-marquee-track` | instance | The strip that slides sideways: inside a `.moss-card-pictures[data-motion="marquee"]` (`motion:marquee`) or a `.moss-gallery[data-motion="marquee"]` (`:::gallery marquee`). It holds two `.moss-marquee-set`s and is translated by one set's width, so the loop has no seam. Written once as markup; the stylesheet and marquee.js decide whether it moves, and a strip whose set is narrower than its box does not. |
@@ -134,6 +134,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-subscribe-landing` | standalone | Standalone subscribe landing page surface (larger variant). |
 | `.moss-calendar-links` | standalone | Closing line of an event page ("Add to calendar") or of a folder that holds events (its calendar file and a webcal subscribe link). |
 | `.moss-calendar-link` | instance | One calendar link: the .ics file, or the webcal:// subscription. |
+| `.moss-external-link` | standalone | The link out at the end of a page with an http(s) `external_url:`, named by that address's host. Left out when the body already links to that address. |
 | `.moss-series-nav` | standalone | Series navigation bar (prev/next/collection) on series pages. |
 | `.moss-series-nav-links` | instance | Row holding prev/next links in series nav. |
 | `.moss-series-nav-link` | instance | Individual link inside series nav. Modifiers: `moss-series-nav-prev`, `moss-series-nav-next`, `empty` (placeholder). |
@@ -218,6 +219,9 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.nav-left` | chrome | Left group of the nav bar. Holds either `.site-name` or the breadcrumb trail, never both — or, under `[site] header = "nav"`, neither: the element itself is not emitted, and `.nav-right` takes the full row. |
 | `.nav-right` | chrome | Right group of the nav bar: the mobile menu button, the nav links, and the icon cluster, in that order. |
 | `.nav-links` | chrome | The nav link list. The link for the page currently being viewed carries the bare class `active` — style `.nav-links .active`, not a `moss-` class — and `aria-current="page"`. Below 20rem (320px) the list becomes a full-screen sheet under the header, opened by `.mobile-menu-button`; set `--moss-menu-bg`, `--moss-menu-ink` and `--moss-menu-link-size` to restyle it rather than its selectors. Under `[site] header = "nav"` the list always opens with an unstyled Home link ahead of the site's own nav items. That mode drops the breadcrumb trail, so a nav item whose section contains the page being viewed — without being that exact page — carries `active` and `aria-current="true"` instead of `"page"`, the one remaining cue for which section a deep page is under. |
+| `.moss-nav-group` | chrome | A header entry that has a submenu: the folder's own link, its `.moss-nav-sub-toggle` and its `.moss-nav-sub` list, together. Written when a header page sits inside a header folder; a header without such pages has none. |
+| `.moss-nav-sub-toggle` | chrome | The button that opens and closes a `.moss-nav-sub` list. It is written `hidden` and shown by the site script, so without the script the list stays a plain set of links; `aria-expanded` carries its state. |
+| `.moss-nav-sub` | chrome | A header folder's submenu: the header pages inside that folder, a third level joining the same list. The site script keeps an open list inside the viewport. |
 | `.site-logo` | instance | Optional logo image inside the site-name link. Decorative by construction (`alt=""` + `aria-hidden`), because the adjacent text already names the site. A raster logo carries its intrinsic `width` and `height`, so the header does not move when it loads; an SVG logo carries neither. |
 | `.breadcrumb-label` | instance | The final, non-linked breadcrumb segment — the page you are on. `.breadcrumb-segment` is the linked form for ancestors. |
 | `.breadcrumb-separator` | instance | The `/` between breadcrumb segments, hidden from assistive technology and drawn in `--moss-border-strong` (3:1 non-text contrast). Restyle or hide this rather than trying to remove it from the markup. |
@@ -370,7 +374,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-country-land` | container | The group holding every country's path. |
 | `.moss-country-legend` | container | The levels in order, lowest first, each with its swatch and name, so colour is never the only carrier. |
 | `.moss-country-swatch` | instance | A level's colour chip; `data-level` picks the level. |
-| `.moss-country-stamp` | instance | The as-of line, "As of <the page's date>", never the build day. |
+| `.moss-country-stamp` | instance | The as-of line, "As of <the page's date>". Under `as_of: today` the site script shows the visitor's date instead, and a page with no `date:` is built with the build day. |
 | `.moss-country-panel` | container | The panel a chosen country opens: name, level, the row's other columns (or the level's text), the as-of date and an optional action link. Hidden until a country is chosen; filled by the site script. |
 | `.moss-country-panel-head` | instance | The panel's name row, with its close button. |
 | `.moss-country-panel-name` | instance | The chosen country's name. |

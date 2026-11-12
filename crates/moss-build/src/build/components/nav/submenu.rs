@@ -1,6 +1,6 @@
 //! The header's second level: a header page inside a header folder is listed
-//! under that folder's entry. Hooks (`.nav-group`, `.nav-sub-toggle`,
-//! `.nav-sub`) are styled in site.css and driven by `js-src/site/nav/submenu.ts`.
+//! under that folder's entry. Hooks (`.moss-nav-group`, `.moss-nav-sub-toggle`,
+//! `.moss-nav-sub`) are styled in site.css and driven by `js-src/site/nav/submenu.ts`.
 
 use super::{sort_nav_items, NavItem};
 use crate::build::features::html_escape;
@@ -66,7 +66,7 @@ fn group_html(parent: &NavItem<'_>, children: &[NavItem<'_>], n: usize, lang: La
     let label = format!("{}: {}", html_escape(parent.label), crate::i18n::t(lang, "nav_more"));
     let list: String = children.iter().map(|c| format!("<li>{}</li>", c.html)).collect();
     format!(
-        r#"<span class="nav-group">{link}<button class="nav-sub-toggle" type="button" hidden aria-expanded="false" aria-controls="{id}" aria-label="{label}"></button><ul class="nav-sub" id="{id}" hidden>{list}</ul></span>"#,
+        r#"<span class="moss-nav-group">{link}<button class="moss-nav-sub-toggle" type="button" hidden aria-expanded="false" aria-controls="{id}" aria-label="{label}"></button><ul class="moss-nav-sub" id="{id}" hidden>{list}</ul></span>"#,
         link = parent.html,
     )
 }

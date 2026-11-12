@@ -6,11 +6,11 @@ const registered: Registered[] = [];
 function render(): { group: HTMLElement; button: HTMLElement; panel: HTMLElement; other: HTMLElement } {
   document.body.innerHTML = `
     <div class="nav-links">
-      <span class="nav-group"><a href="/services/">Services</a><button class="nav-sub-toggle" type="button" hidden aria-expanded="false" aria-controls="nav-sub-1"></button><ul class="nav-sub" id="nav-sub-1" hidden><li><a href="/services/patrol/">Patrol</a></li></ul></span>
+      <span class="moss-nav-group"><a href="/services/">Services</a><button class="moss-nav-sub-toggle" type="button" hidden aria-expanded="false" aria-controls="nav-sub-1"></button><ul class="moss-nav-sub" id="nav-sub-1" hidden><li><a href="/services/patrol/">Patrol</a></li></ul></span>
     </div>
     <p id="other">elsewhere</p>`;
   const q = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
-  return { group: q(".nav-group"), button: q(".nav-sub-toggle"), panel: q(".nav-sub"), other: q("#other") };
+  return { group: q(".moss-nav-group"), button: q(".moss-nav-sub-toggle"), panel: q(".moss-nav-sub"), other: q("#other") };
 }
 
 async function load(): Promise<void> {
