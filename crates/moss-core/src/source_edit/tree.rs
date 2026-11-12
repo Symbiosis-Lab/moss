@@ -190,8 +190,7 @@ fn zone_of(node: &TreeNode, parent_folder_name: &str) -> Zone {
     if node.is_dir {
         return Zone::Folder;
     }
-    let lower = node.name.to_ascii_lowercase();
-    if !lower.ends_with(".md") {
+    if !super::policy::is_page_path(std::path::Path::new(&node.name)) {
         return Zone::NonMd;
     }
     let stem = node
@@ -279,7 +278,7 @@ fn collect_descendants<'a>(
 }
 
 fn is_md_file(node: &TreeNode) -> bool {
-    !node.is_dir && node.name.to_ascii_lowercase().ends_with(".md")
+    !node.is_dir && super::policy::is_page_path(std::path::Path::new(&node.name))
 }
 
 
@@ -404,7 +403,7 @@ fn folder_node(
         if child.is_dir {
             children.push(folder_node(&child.path, Some(child), by_parent, options));
         } else {
-            let (publish_date, date_source, home) = if child_name.to_ascii_lowercase().ends_with(".md") {
+            let (publish_date, date_source, home) = if super::policy::is_page_path(std::path::Path::new(child_name)) {
                 child.resolved_date.clone().unwrap_or_else(|| resolve_md_date(
                     child_name, child.modified,
                     &frontmatter_from_prefix(child.frontmatter.as_deref().unwrap_or("").as_bytes()),

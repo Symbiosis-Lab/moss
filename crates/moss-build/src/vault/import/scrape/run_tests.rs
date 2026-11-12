@@ -2145,26 +2145,14 @@ fn a_composed_note_takes_the_heading_when_the_title_is_never_shown() {
     assert!(!note.contains("T_Winter_Tale_S"), "{note}");
 }
 
-/// A link aimed at a note that was never written goes back to the address it
-/// was written with; links to other notes are untouched.
 #[test]
-fn a_link_to_a_page_that_left_the_site_is_restored() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        tmp.path().join("index.md"),
-        "[Survey](./r/abc.md) and [About](./about.md) and [again](./r/abc.md)\n",
-    )
-    .unwrap();
-    let left = vec![(
-        "](./r/abc.md)".to_string(),
-        "](https://example.test/r/abc)".to_string(),
-    )];
-    restore_left_links(tmp.path(), &["index.md".to_string()], &left).unwrap();
-    let note = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
-    assert_eq!(
-        note,
-        "[Survey](https://example.test/r/abc) and [About](./about.md) and [again](https://example.test/r/abc)\n"
+fn a_link_to_a_page_that_left_the_site_uses_its_destination() {
+    let left = HashMap::from([("https://source.test/r/abc".into(), "https://example.test/r/abc".into())]);
+    let note = super::super::writer::rewrite_links(
+        "[Survey](/r/abc#answer) and [About](./about.md) and [again](/r/abc)\n",
+        "https://source.test/", "index.md", &HashMap::new(), &left,
     );
+    assert_eq!(note, "[Survey](https://example.test/r/abc#answer) and [About](./about.md) and [again](https://example.test/r/abc)\n");
 }
 
 const LEAF_BODY: &str = "Page body, long enough to be extracted as content by the generic scorer.";
@@ -2188,11 +2176,11 @@ fn read_leaf(out: &Path, rel: &str) -> String {
 
 #[test]
 fn a_link_is_relative_to_the_page_that_holds_it() {
-    assert_eq!(super::super::finalize::relative_path("index.md", "about.md"), "./about.md");
-    assert_eq!(super::super::finalize::relative_path("notes/first.md", "about.md"), "../about.md");
-    assert_eq!(super::super::finalize::relative_path("notes/first.md", "notes/second.md"), "./second.md");
-    assert_eq!(super::super::finalize::relative_path("notes/index.md", "notes/2024/post.md"), "./2024/post.md");
-    assert_eq!(super::super::finalize::relative_path("a/b/c.md", "a/x.md"), "../x.md");
+    assert_eq!(super::super::writer::relative_path("index.md", "about.md"), "./about.md");
+    assert_eq!(super::super::writer::relative_path("notes/first.md", "about.md"), "../about.md");
+    assert_eq!(super::super::writer::relative_path("notes/first.md", "notes/second.md"), "./second.md");
+    assert_eq!(super::super::writer::relative_path("notes/index.md", "notes/2024/post.md"), "./2024/post.md");
+    assert_eq!(super::super::writer::relative_path("a/b/c.md", "a/x.md"), "../x.md");
 }
 
 /// A crawl of `/`, `/notes/` (with `/notes/first/` under it) and `/about/`:
@@ -2306,20 +2294,16 @@ async fn a_site_without_a_menu_gets_no_nav_bar_from_its_root_level_leaves() {
 #[test]
 fn links_in_code_and_to_pages_the_import_did_not_write_are_left_alone() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("notes/first")).unwrap();
-    std::fs::write(tmp.path().join("about.md"), "About").unwrap();
-    let body = "---\ntitle: \"First\"\n---\n\n[real](./about.md) and [mine](./notes.md) and `[x](./about.md)`.\n\n```\n[y](./about.md)\n![z](../assets/imported/p.png)\n```\n";
-    std::fs::write(tmp.path().join("notes/first/index.md"), body).unwrap();
-    let mut written = vec!["notes/first/index.md".to_string(), "about.md".to_string()];
-    super::super::finalize::settle_layout(tmp.path(), &mut written, &mut HashMap::new(), &[]).unwrap();
-
+    let body = "---\ntitle: \"First\"\n---\n\n[real](https://example.test/about/) and [mine](./notes.md) and `[x](https://example.test/about/)`.\n\n```\n[y](https://example.test/about/)\n![z](./assets/imported/p.png)\n```\n";
+    let pages = vec![
+        PendingPage::new("https://example.test/notes/first/", body, true).unwrap(),
+        PendingPage::new("https://example.test/about/", "About", true).unwrap(),
+    ];
+    let paths = OutputPaths::reserve(tmp.path(), &UrlScope::new("https://example.test/").unwrap(), &pages).unwrap();
+    let written = paths.write(tmp.path(), &pages, &HashMap::new(), true).unwrap();
     assert_eq!(written[0], "notes/first.md");
-    let got = std::fs::read_to_string(tmp.path().join("notes/first.md")).unwrap();
-    assert_eq!(
-        got,
-        body.replace("[real](./about.md)", "[real](../about.md)"),
-        "only the real link to an imported page changes"
-    );
+    let got = std::fs::read_to_string(tmp.path().join(&written[0])).unwrap();
+    assert_eq!(got, body.replace("[real](https://example.test/about/)", "[real](../about.md)"));
 }
 
 /// A link's title (`[text](url "title")` once converted) stays a title after
@@ -2441,20 +2425,22 @@ fn a_link_preview_card_becomes_one_block_link() {
         &HashMap::new(),
         None,
         "https://notes.example.test/first-light/",
-        Some(LinkScope { scope: &scope, rewrite_pages: true }),
+        Some(&scope),
     )
     .expect("a note");
-    assert!(note.contains("](./second-draft/index.md)"), "{note}");
+    let paths = HashMap::from([("https://notes.example.test/second-draft".into(), "second-draft.md".into())]);
+    let note = super::super::writer::rewrite_links(&note, "https://notes.example.test/first-light/", "first-light.md", &paths, &HashMap::new());
+    assert!(note.contains("](./second-draft.md)"), "{note}");
     assert!(note.contains("](https://other.example.test/essay)"), "{note}");
-    assert!(note.contains("SecondDraft](./second-draft/index.md)\n\nA note about drafts."), "{note}");
+    assert!(note.contains("SecondDraft](./second-draft.md)\n\nA note about drafts."), "{note}");
     assert!(note.contains("OutsideEssay](https://other.example.test/essay)\n\nAn essay elsewhere."), "{note}");
     assert!(!note.contains("Publisher Line") && !note.contains("favicon"), "{note}");
     for line in note.lines().filter(|l| l.contains('[')) {
         assert_eq!(line.matches('[').count(), line.matches(']').count(), "a link opened and not closed: {line}");
     }
     assert_eq!(note.matches("](./second-draft").count(), 1, "{note}");
-    let picture_link = rewrite_links("[![](a.jpg)](https://notes.example.test/second-draft/)", &scope);
-    assert_eq!(picture_link, "[![](a.jpg)](./second-draft/index.md)");
+    let picture_link = super::super::writer::rewrite_links("[![](a.jpg)](https://notes.example.test/second-draft/)", "https://notes.example.test/", "index.md", &paths, &HashMap::new());
+    assert_eq!(picture_link, "[![](a.jpg)](./second-draft.md)");
 }
 
 /// A platform's outbound `?ref=<own host>` tag is dropped from every link;
@@ -2473,7 +2459,7 @@ fn a_composed_note_drops_the_platforms_own_ref_tag_from_outbound_links() {
         &HashMap::new(),
         None,
         "https://notes.example.test/first-light/",
-        Some(LinkScope { scope: &scope, rewrite_pages: false }),
+        Some(&scope),
     )
     .expect("a note");
     assert!(note.contains("](https://other.example.test/page#faq)"), "{note}");
@@ -2594,4 +2580,148 @@ async fn a_start_url_that_leaves_its_host_is_not_counted_as_leaving_the_site() {
     let left = scrape_to_folder(config, |_| {}).await.map_or(0, |res| res.left_by_redirect);
 
     assert_eq!(left, 0);
+}
+
+#[tokio::test]
+async fn reserved_paths_keep_scoped_encoded_links_and_collision_fragments() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let root = "/field%20notes/";
+    let first = format!("{base}{root}entry?p=1");
+    let second = format!("{base}{root}entry?p=2");
+    let home_body = leaf_page("Home", &format!(
+        "<a href=\"{first}#one\">First</a> <a href=\"{second}#two\">Second</a>"
+    )).replace("</head>", "<meta property=\"og:site_name\" content=\"Field Journal\"></head>");
+    let _home = server.mock("GET", root).with_status(200)
+        .with_header("content-type", "text/html").with_body(home_body).create_async().await;
+    let _first = server.mock("GET", "/field%20notes/entry?p=1").with_status(200)
+        .with_header("content-type", "text/html").with_body(leaf_page("First", &format!(
+            "<a href=\"{root}#home\">Home</a> <a href=\"{second}#two\">Second</a>"
+        ))).create_async().await;
+    let _second = server.mock("GET", "/field%20notes/entry?p=2").with_status(200)
+        .with_header("content-type", "text/html").with_body(leaf_page("Second", &format!(
+            "<a href=\"{first}#one\">First</a>"
+        ))).create_async().await;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("entry.md"), "Author's existing page").unwrap();
+    std::fs::write(tmp.path().join("field notes.md"), "Author's existing home").unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}{root}#start"), tmp.path());
+    config.recursive = true;
+    let result = scrape_to_folder(config, |_| {}).await.unwrap();
+    assert_eq!(result.total_pages, 3);
+    assert_eq!(result.failed_pages, 0);
+    let mut origins = HashMap::new();
+    for entry in std::fs::read_dir(tmp.path()).unwrap().flatten() {
+        if entry.path().extension().is_some_and(|ext| ext == "md") {
+            let content = std::fs::read_to_string(entry.path()).unwrap();
+            let doc = moss_core::frontmatter::parse(&content);
+            if let Some(origin) = doc.frontmatter.get("origin").and_then(|v| v.as_str()) {
+                origins.insert(origin.to_string(), (entry.file_name().to_string_lossy().to_string(), content));
+            }
+        }
+    }
+    let (first_path, first_content) = &origins[&first];
+    let (second_path, _) = &origins[&second];
+    let (home_path, home_content) = &origins[&format!("{base}{root}#start")];
+    assert!(home_content.contains("title: \"Field Journal\""), "{home_content}");
+    assert_eq!(home_path, "field notes 2.md");
+    assert!(first_content.contains("](./field%20notes%202.md#home)"), "{first_content}");
+    assert!(first_content.contains(&format!("](./{}#two)", second_path.replace(' ', "%20"))), "{first_content}");
+    assert!(home_content.contains(&format!("](./{}#one)", first_path.replace(' ', "%20"))), "{home_content}");
+    assert_eq!(read_leaf(tmp.path(), "entry.md"), "Author's existing page");
+    assert_eq!(read_leaf(tmp.path(), "field notes.md"), "Author's existing home");
+}
+
+#[tokio::test]
+async fn reserved_paths_preserve_case_and_unicode_equivalent_pages() {
+    use moss_core::content_graph::normalize_path;
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let routes = ["About", "about", "caf%C3%A9", "cafe%CC%81", "ABOUT?p=1", "ABOUT?p=2"];
+    let mut mocks = Vec::new();
+    let links = routes.iter().map(|route| format!("<a href=\"/{route}#part\">{route}</a>"))
+        .collect::<Vec<_>>().join(" ");
+    mocks.push(server.mock("GET", "/").with_status(200).with_header("content-type", "text/html")
+        .with_body(leaf_page("Home", &links)).create_async().await);
+    for (index, route) in routes.iter().enumerate() {
+        mocks.push(server.mock("GET", format!("/{route}").as_str()).with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(leaf_page("Distinct page", &format!("Unique body number {index}. {links}")))
+            .create_async().await);
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("aBoUt.md"), "Existing author page").unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.recursive = true;
+    let result = scrape_to_folder(config, |_| {}).await.unwrap();
+    assert_eq!(result.total_pages, routes.len() + 1);
+    assert_eq!(result.failed_pages, 0);
+    let mut notes = HashMap::new();
+    let mut destinations = std::collections::HashSet::new();
+    for entry in std::fs::read_dir(tmp.path()).unwrap().flatten() {
+        if entry.path().extension().is_some_and(|ext| ext == "md") {
+            let filename = entry.file_name().to_string_lossy().into_owned();
+            assert!(destinations.insert(normalize_path(&filename)), "duplicate resolver path: {filename}");
+            let content = std::fs::read_to_string(entry.path()).unwrap();
+            let doc = moss_core::frontmatter::parse(&content);
+            if let Some(origin) = doc.frontmatter.get("origin").and_then(|v| v.as_str()) {
+                notes.insert(origin.to_string(), (filename, content));
+            }
+        }
+    }
+    assert_eq!(notes.len(), routes.len() + 1, "every source body must survive");
+    for (index, route) in routes.iter().enumerate() {
+        let (_, body) = &notes[&format!("{base}/{route}")];
+        assert!(body.contains(&format!("Unique body number {index}.")), "{body}");
+        for target in &routes {
+            let (filename, _) = &notes[&format!("{base}/{target}")];
+            assert!(normalize_path(body).contains(&normalize_path(&format!("](./{}#part)", filename.replace(' ', "%20")))), "{body}");
+        }
+    }
+    assert_eq!(read_leaf(tmp.path(), "aBoUt.md"), "Existing author page");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reserved_paths_ignore_unreadable_unrelated_directories() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePermissions(std::path::PathBuf, std::fs::Permissions);
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            std::fs::set_permissions(&self.0, self.1.clone()).unwrap();
+        }
+    }
+
+    let mut server = mockito::Server::new_async().await;
+    let _home = server.mock("GET", "/").with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(leaf_page("Home", "<a href=\"/post/\">Read the post</a>"))
+        .create_async().await;
+    let _page = server.mock("GET", "/post/").with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(leaf_page("Imported post", "The imported body survives beside existing author content."))
+        .create_async().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let unrelated = tmp.path().join("post");
+    std::fs::create_dir(&unrelated).unwrap();
+    std::fs::write(unrelated.join("keep.txt"), "Unrelated content").unwrap();
+    std::fs::write(tmp.path().join("POST.md"), "Existing author page").unwrap();
+    let restore = RestorePermissions(unrelated.clone(), std::fs::metadata(&unrelated).unwrap().permissions());
+    std::fs::set_permissions(&unrelated, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(std::fs::read_dir(&unrelated).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied,
+        "the regression requires an actually unreadable directory");
+    let nested = vec![PendingPage::new("https://example.test/post/child", "Nested", true).unwrap()];
+    let error = OutputPaths::reserve(tmp.path(), &UrlScope::new("https://example.test/").unwrap(), &nested).err().unwrap();
+    assert!(error.contains("Cannot inspect import destination"), "{error}");
+
+    let mut config = ScrapeConfig::new(format!("{}/", server.url()), tmp.path());
+    config.recursive = true;
+    let result = scrape_to_folder(config, |_| {}).await.unwrap();
+    assert_eq!(result.total_pages, 2);
+    assert_eq!(result.failed_pages, 0);
+    assert!(read_leaf(tmp.path(), "post 2.md").contains("The imported body survives"));
+    assert_eq!(read_leaf(tmp.path(), "POST.md"), "Existing author page");
+    drop(restore);
+    assert_eq!(std::fs::read_to_string(unrelated.join("keep.txt")).unwrap(), "Unrelated content");
 }

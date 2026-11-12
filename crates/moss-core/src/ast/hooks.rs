@@ -2337,6 +2337,7 @@ mod tests {
         let sc = Shortcode::Subscribe(SubscribeShortcode {
             placeholder: None,
             button: None,
+            members: None,
         });
         let mut out = String::new();
         let hooks = DefaultHooks::new();

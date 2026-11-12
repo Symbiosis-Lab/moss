@@ -1490,9 +1490,11 @@ fn parse_subscribe_args(args: &str) -> SubscribeShortcode {
         .get("button")
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let members = parsed.get("members").and_then(crate::frontmatter::members::Members::restricted);
     SubscribeShortcode {
         placeholder,
         button,
+        members,
     }
 }
 

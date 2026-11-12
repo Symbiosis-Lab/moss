@@ -274,3 +274,27 @@ mod forms_tests {
         assert!(parse("[services.forms]\nendpoint = \"https://forms.example\"\n").validate(false).is_ok());
     }
 }
+
+/// Who may subscribe; a subscriber may read members pages.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MembersConfig {
+    #[serde(default)]
+    pub join: MemberJoin,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemberJoin {
+    #[default]
+    Open,
+    Invite,
+}
+
+impl MembersConfig {
+    pub fn read(config: &crate::config::ConfigFile) -> Result<Self, String> {
+        config.section(&["members"]).map_or(Ok(Self::default()), |table| {
+            table.clone().try_into().map_err(|e| format!("[members]: {e}"))
+        })
+    }
+}

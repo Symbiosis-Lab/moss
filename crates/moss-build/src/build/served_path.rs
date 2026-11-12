@@ -433,6 +433,11 @@ impl ServedPath {
         ServedPath(crate::build::emit::commerce::COMMERCE_PATH.to_string())
     }
 
+    /// Membership admission at its stable address beside commerce settings.
+    pub fn for_members_json() -> Self {
+        ServedPath(crate::build::emit::members::MEMBERS_PATH.to_string())
+    }
+
     /// The welcome email of one language tree, read by the hosting server
     /// when a subscriber is confirmed. `edition` is the language-tree folder
     /// name, or `default` for the root tree.

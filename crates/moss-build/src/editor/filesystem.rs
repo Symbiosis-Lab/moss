@@ -224,7 +224,7 @@ fn collect_tree_listing(
         if entry.is_dir {
             collect_tree_listing(&entry.path, project_path, &rel, show_internal, cache, listing)?;
         } else {
-            let resolved_date = entry.name.to_ascii_lowercase().ends_with(".md").then(|| resolve_md_date(&entry, cache));
+            let resolved_date = moss_core::source_edit::policy::is_page_path(std::path::Path::new(&entry.name)).then(|| resolve_md_date(&entry, cache));
             listing.push(ListingEntry {
                 path: rel, is_dir: false,
                 size,

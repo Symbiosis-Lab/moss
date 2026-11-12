@@ -15,6 +15,9 @@
 //! `frontmatter_range` records the byte offsets of the `---` delimiters
 //! so callers can do surgical replacement without re-serializing.
 
+pub mod members;
+pub mod member_cascade;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Range;

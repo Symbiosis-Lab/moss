@@ -23,9 +23,9 @@ pub mod run;
 pub mod service;
 
 pub(crate) mod crawler;
-mod crawl_state;
+pub(crate) mod crawl_state;
 pub(crate) mod extractor;
-pub(crate) mod fetch;
+pub mod fetch;
 pub(crate) mod import_local;
 mod finalize;
 pub(crate) mod metadata;

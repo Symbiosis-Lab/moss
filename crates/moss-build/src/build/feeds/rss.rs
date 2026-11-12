@@ -190,10 +190,14 @@ pub fn generate_rss_feed(
             "<link>{}</link>\n",
             moss_core::media::xml_escape(&article_url_with_utm)
         ));
-        xml.push_str(&format!(
-            "<guid>{}</guid>\n",
-            moss_core::media::xml_escape(&article_url_with_utm)
-        ));
+        if let Some(id) = &article.import_feed_id {
+            xml.push_str(&format!("<guid isPermaLink=\"false\">{}</guid>\n", moss_core::media::xml_escape(id)));
+        } else {
+            xml.push_str(&format!(
+                "<guid>{}</guid>\n",
+                moss_core::media::xml_escape(&article_url_with_utm)
+            ));
+        }
 
         // Add pubDate in RFC 822 format
         if let Some(ref date) = article.date {

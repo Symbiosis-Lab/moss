@@ -92,6 +92,10 @@ pub struct SubscribeShortcode {
     pub placeholder: Option<String>,
     /// Optional override for the submit button label.
     pub button: Option<String>,
+    /// Who a members page is for; the renderer puts that line, in the
+    /// site's language, above the form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<crate::frontmatter::members::Members>,
 }
 
 /// Arguments for [`Shortcode::Buttons`].
@@ -662,6 +666,7 @@ mod tests {
         let sc = Shortcode::Subscribe(SubscribeShortcode {
             placeholder: Some("you@example.com".to_string()),
             button: Some("Subscribe".to_string()),
+            members: None,
         });
         match &sc {
             Shortcode::Subscribe(args) => {
@@ -684,6 +689,7 @@ mod tests {
         let sc = Shortcode::Subscribe(SubscribeShortcode {
             placeholder: Some("p".to_string()),
             button: Some("b".to_string()),
+            members: Some(crate::frontmatter::members::Members::Paid),
         });
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");

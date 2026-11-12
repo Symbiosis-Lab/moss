@@ -114,6 +114,8 @@ pub struct BackgroundContext {
     /// can't mutate this struct — video dispatch takes it by value and
     /// already reassigns `video_items` here the same way).
     pub carried_advisories: Vec<crate::advisory::Advisory>,
+    /// The build's one members policy, for the source copy.
+    pub members_policy: moss_core::frontmatter::member_cascade::MemberCascade,
 }
 
 impl BackgroundContext {
@@ -140,6 +142,7 @@ impl BackgroundContext {
             notebook_files: Vec::new(),
             rung_collisions: HashMap::new(),
             carried_advisories: Vec::new(),
+            members_policy: Default::default(),
         }
     }
 }
@@ -672,23 +675,10 @@ mod tests {
     #[test]
     fn test_background_context_creation() {
         let ctx = BackgroundContext {
-            og_requests: Vec::new(),
-            video_items: vec![],
-            image_items: Vec::new(),
             source_path: "/test".to_string(),
             staging_dir: std::path::PathBuf::from("/test/.moss/build.nosync/staging"),
             moss_dir: std::path::PathBuf::from("/test/.moss"),
-            previous_hashes: SiteHashes::default(),
-            mount: Default::default(),
-            start_time: std::time::Instant::now(),
-            dir_overrides: Default::default(),
-            spa_defaults: None,
-            passthrough_roots: Default::default(),
-            search_enabled: false,
-            ffmpeg_bin_path: None,
-            notebook_files: vec![],
-            rung_collisions: Default::default(),
-            carried_advisories: Vec::new(),
+            ..BackgroundContext::for_test()
         };
         assert!(ctx.video_items.is_empty());
         assert_eq!(ctx.source_path, "/test");

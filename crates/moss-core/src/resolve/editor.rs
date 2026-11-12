@@ -99,9 +99,9 @@ impl UrlIndex for FolderPages<'_> {
     fn lookup_exact(&self, _: &str) -> bool { false }
     fn lookup_normalized(&self, _: &str) -> Option<String> { None }
     fn resolve_reference_to_url(&self, reference: &str, from_source: &str) -> Option<String> {
-        [reference.to_string(), format!("{reference}.md")].iter().find_map(|written| {
-            match resolve_file_target(written, from_source, self.0) {
-                AssetResolution::Resolved { root_rel, .. } if root_rel.ends_with(".md") => Some(root_rel),
+        std::iter::once(reference.to_string()).chain(crate::page_kind::PAGE_EXTENSIONS.iter().map(|ext| format!("{reference}.{ext}"))).find_map(|written| {
+            match resolve_file_target(&written, from_source, self.0) {
+                AssetResolution::Resolved { root_rel, .. } if crate::source_edit::policy::is_page_path(std::path::Path::new(&root_rel)) => Some(root_rel),
                 _ => None,
             }
         })

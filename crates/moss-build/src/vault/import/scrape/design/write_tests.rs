@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use super::super::super::scope::UrlScope;
 use super::super::facts::{Facts, Icon, IconKind, NavEntry};
 use super::super::HomePage;
 use super::*;
@@ -43,9 +42,8 @@ fn folder() -> (tempfile::TempDir, HashMap<String, String>) {
 }
 
 async fn run(root: &Path, written: &HashMap<String, String>, facts: &Facts) -> ChromeSummary {
-    let scope = UrlScope::new(BASE).unwrap();
     let home = HomePage { url: BASE.to_string(), html: String::new(), is_start: true };
-    let capture = Capture { out_dir: root, scope: &scope, user_agent: "test", home: &home, written };
+    let capture = Capture { out_dir: root, user_agent: "test", home: &home, written };
     apply(&capture, facts, &mut HostPacer::default()).await.unwrap()
 }
 

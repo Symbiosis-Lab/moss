@@ -87,6 +87,17 @@ fn parse_retry_after(value: &str) -> Option<std::time::Duration> {
 /// resolves to a loopback/link-local address only at connect time — is NOT
 /// covered here; that needs a connect-time check inside the fetch itself,
 /// out of scope for this string-level gate.
+/// Debug builds only: let imports reach this machine, for a local test
+/// server. A process flag rather than the environment variable, which a test
+/// cannot set while other tests' threads read the environment.
+#[cfg(debug_assertions)]
+pub fn allow_loopback() {
+    ALLOW_LOOPBACK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(debug_assertions)]
+static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
     let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
     match url.scheme() {
@@ -96,6 +107,17 @@ pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
                 "URL scheme '{other}' is not allowed - only http/https"
             ))
         }
+    }
+    // Local development is explicit and cannot be enabled in a release build.
+    #[cfg(debug_assertions)]
+    if ALLOW_LOOPBACK.load(std::sync::atomic::Ordering::Relaxed) || std::env::var("MOSS_IMPORT_ALLOW_LOOPBACK").as_deref() == Ok("1") {
+        let loopback = match url.host() {
+            Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        };
+        if loopback { return Ok(()); }
     }
     // `url::Host::Ipv4`/`Ipv6` carry parsed addresses directly — `host_str()`
     // returns an IPv6 literal WITH its brackets (`"[::1]"`), which fails a

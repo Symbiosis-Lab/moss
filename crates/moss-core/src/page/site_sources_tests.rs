@@ -19,7 +19,7 @@ fn only_site_text_paths_are_needed_to_assemble_the_bundle() {
         for path in &input.files {
             input.texts.entry(path.clone()).or_insert_with(|| "---\nhome: true\nlang: es\n---".into());
         }
-        for path in ["z.md", "z.MD"] {
+        for path in ["z.md", "z.MD", "index.markdown"] {
             input.texts.insert(path.into(), "---\nlang: de\n---".into());
         }
         if let Some(path) = home {
@@ -28,7 +28,7 @@ fn only_site_text_paths_are_needed_to_assemble_the_bundle() {
         // Texts absent from the file snapshot cannot elect a home either.
         input.texts.insert("absent.md".into(), "---\nhome: true\nlang: it\n---".into());
         let paths = site_text_paths(&input.files);
-        assert_eq!(paths, ["a.md", "index.md", "z.MD", "z.md"]);
+        assert_eq!(paths, ["a.md", "index.markdown", "index.md", "z.MD", "z.md"]);
         let mut selected = input.clone();
         selected.texts.retain(|path, _| paths.contains(&path.as_str()));
         let all = site_bundle(input);

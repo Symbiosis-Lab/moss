@@ -107,8 +107,7 @@ fn spellings_of<'a>(segment: &'a str, names: &'a [OsString]) -> impl Iterator<It
 }
 
 fn is_markdown(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".markdown")
+    moss_core::source_edit::policy::is_page_path(Path::new(path))
 }
 
 /// A path composed and lowercased: two paths with one fold are one file on a

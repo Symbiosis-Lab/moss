@@ -96,7 +96,7 @@ pub fn check_page(source_path: &str, text: &str, site: &SiteInputs) -> Vec<Diagn
         }
         let check = match reference.syntax {
             RefSyntax::MarkdownLink { .. } | RefSyntax::Definition { .. } => {
-                target.ends_with(".md")
+                crate::source_edit::policy::is_page_path(std::path::Path::new(target))
             }
             RefSyntax::MarkdownImage { .. } | RefSyntax::StructuralAsset => false,
             _ => true,

@@ -244,7 +244,7 @@ async fn a_table_that_is_not_a_list_and_a_row_without_a_body_are_counted_skipped
 fn a_protocol_relative_image_is_fetched_over_https() {
     let page = note_page(&json!({"id": 1, "note": {"fulltext": "<img src=\"//img1.doubanio.example/a.jpg\"><img src=\"/rel.jpg\">"}})).unwrap();
     assert_eq!(
-        page.images(),
+        page.page.images(),
         [("//img1.doubanio.example/a.jpg".to_string(), "https://img1.doubanio.example/a.jpg".to_string())]
     );
 }
@@ -270,4 +270,29 @@ fn a_file_url_reaches_the_reader() {
     let args = [format!("file://{}", zip.display()), out.to_str().unwrap().to_string()];
     assert_eq!(crate::cli::import::run(&args), 0);
     assert!(out.join("note/3.md").exists());
+}
+
+#[tokio::test]
+async fn duplicate_ids_keep_successful_media_in_separate_bundles() {
+    let mut server = mockito::Server::new_async().await;
+    let first = server.mock("GET", "/picture.jpg")
+        .match_header("referer", format!("{}/", server.url()).as_str())
+        .with_header("content-type", "image/jpeg").with_body("first image").create_async().await;
+    let second = server.mock("GET", "/picture.jpg")
+        .match_header("referer", format!("{}/", server.url()).as_str())
+        .with_header("content-type", "image/jpeg").with_body("second image").create_async().await;
+    let note = |title: &str| json!({"id": 8, "note": {
+        "title": title, "url": format!("{}/note/8/", server.url()),
+        "fulltext": format!("<p>Body.</p><img src=\"{}/picture.jpg\">", server.url())
+    }});
+    let (tmp, report) = import(json!({"note": [note("First"), note("Second")]})).await;
+    first.assert_async().await;
+    second.assert_async().await;
+    assert_eq!((report.pages["note"], report.media_downloaded, report.media_failed), (2, 2, 0));
+    let site = tmp.path().join("site");
+    for (dir, bytes) in [("note/8", "first image"), ("note/8 2", "second image")] {
+        let body = read(&site, &format!("{dir}/index.md"));
+        let image = body.split("![](./").nth(1).unwrap().split(')').next().unwrap();
+        assert_eq!(std::fs::read(site.join(dir).join(image)).unwrap(), bytes.as_bytes());
+    }
 }

@@ -2,6 +2,7 @@
 //! the full-text search index.
 
 pub mod calendar;
+pub(crate) mod import_addresses;
 pub(crate) mod kept_addresses;
 pub mod llms_txt;
 pub mod previews;

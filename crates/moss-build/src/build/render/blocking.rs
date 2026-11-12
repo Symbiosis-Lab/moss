@@ -553,6 +553,7 @@ pub fn generate_blocking_content_for_build(
     crate::build::markdown::math::set_disk_cache(crate::build::cache::TransformCache::for_site(
         &paths,
     ));
+    let members_policy = &frontmatter_scan_cache.members_policy;
     let parse_session = crate::build::parse_cache::ParseSession::begin(
         Path::new(source_path),
         &paths.cache_hash_index(),
@@ -578,7 +579,7 @@ pub fn generate_blocking_content_for_build(
             // same commit. The `[site]` flags ride as one `SiteMarkdown`, the
             // same value the call takes, so a field added to it needs no edit
             // here.
-            &crate::build::parse_cache::site_scalars(
+            &(members_policy, crate::build::parse_cache::site_scalars(
                 site_lang,
                 site_id.as_deref(),
                 seta_url_for_build.as_str(),
@@ -586,7 +587,7 @@ pub fn generate_blocking_content_for_build(
                 emit_source_lines,
                 project_structure.has_content_folders,
                 page_ground,
-            ),
+            )),
         ),
     );
 
@@ -755,7 +756,8 @@ pub fn generate_blocking_content_for_build(
                     let (stat_before_read, content) = crate::build::stat::stat_then(&source_file_path, |path| {
                         crate::build::cloud_readiness::read_page_source(path, &deferred_mutex, &input_evidence)
                     });
-                    let content = content?;
+                    let source_content = content?;
+                    let content = members_policy.public_source(&file_info.path, &source_content);
                     if super::empty_home::skip_empty_source(&content, &file_info.path) { return None; }
                     md_read_ns.fetch_add(t_read.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
@@ -802,6 +804,7 @@ pub fn generate_blocking_content_for_build(
                                 crate::build::cloud_readiness::request_download_foreground(&full_path);
                             }
                             crate::build::cloud_readiness::read_page_source(&full_path, &deferred_mutex, &input_evidence)
+                                .map(|source| members_policy.public_source(path, &source).into_owned())
                         },
                         &resolve_marker_handlers,
                         asset_snapshot,
@@ -975,7 +978,7 @@ pub fn generate_blocking_content_for_build(
                     // touches the emitted HTML.
 
                     md_process_ns.fetch_add(t_process.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    Some((doc, Some((content, stat_before_read))))
+                    Some((doc, Some((source_content, stat_before_read))))
                 },
             )
             .collect();
@@ -1029,7 +1032,7 @@ pub fn generate_blocking_content_for_build(
         let doc = &mut documents[record.document_index];
         doc.missing_reference_occurrences = crate::build::types::MissingReferenceOccurrence::from_authored_source(
             &record.source_path,
-            &record.source,
+            &members_policy.public_source(&record.source_path, &record.source),
             &authored_evidence_parse_config,
             &reference_context,
         );
@@ -1047,6 +1050,7 @@ pub fn generate_blocking_content_for_build(
     // The PRE-reduce cache boundary: the passes below fold other documents'
     // state into a parsed document.
     parse_session.finish(&documents);
+    crate::build::feeds::import_addresses::apply(source_path_buf, &mut documents)?;
 
     // Which uid each page is built under: its own, the published one, or one
     // derived from its path and bytes. After the snapshot above, so a replayed
@@ -2507,6 +2511,7 @@ pub fn generate_blocking_content_for_build(
     site_config.blocks.emit_assets(&documents, output_dir, pending)?;
     crate::plugins::contributions::public_data::emit(&site_config.public_data, output_dir, pending)?;
     crate::build::emit::commerce::emit(&documents, site_config.forms_endpoint.as_deref(), site_config.booking.as_ref(), on_moss_host, output_dir, pending)?;
+    crate::build::emit::members::emit(&site_config.members, output_dir, pending)?;
     let own_icon = (!favicon.used_default).then_some(crate::build::site_meta::site_identity::OwnIcon { file: &favicon_filename, raster_sizes: &favicon_raster_sizes });
     crate::build::site_meta::site_identity::emit(&layout_config, own_icon, user_css_content.as_deref(), output_dir, pending)?;
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
@@ -3380,6 +3385,7 @@ pub fn generate_blocking_content_for_build(
         notebook_files: project_structure.notebook_files.clone(),
         rung_collisions,
         carried_advisories: Vec::new(),
+        members_policy: members_policy.clone(),
     };
 
     // Math render cache build-end hook (see `parse_cache::math_cache_finish_build`'s

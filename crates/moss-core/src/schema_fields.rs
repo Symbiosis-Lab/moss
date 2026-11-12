@@ -783,6 +783,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "members",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["public", "subscribers", "paid"]),
+        score: 81,
+        description: "Page access: public overrides inherited restrictions; subscribers and paid restrict the body. cascade.members applies to descendants, excluding its declaring page. Only text before <!--members-only--> is public; without the marker no body is published. Paid pages remain restricted. Invalid values fail closed.",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "draft",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,

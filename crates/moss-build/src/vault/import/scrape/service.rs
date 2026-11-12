@@ -2,18 +2,16 @@
 //!
 //! [`ScrapeConfig`] is the single shared config struct passed into
 //! [`super::run::scrape_to_folder`] from both the Tauri command and the
-//! CLI. [`generate_frontmatter`] renders an [`super::metadata::ArticleMetadata`]
-//! + source URL as YAML for the head of each imported `.md`.
+//! CLI. [`imported_frontmatter`] types an [`super::metadata::ArticleMetadata`]
+//! + source URL as the fields at the head of each imported `.md`.
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use regex::Regex;
-use url::Url;
 
-use super::crawler::is_non_page_file_url;
 use super::metadata::ArticleMetadata;
-use super::scope::{is_within_scope, UrlScope};
+use super::scope::UrlScope;
 
 // `[text](url)` or `[text](url "title")` markdown link, captured once and reused
 // across pages. Group 3 is the title with its leading space, in any of the
@@ -72,113 +70,27 @@ impl ScrapeConfig {
     }
 }
 
-/// Render YAML frontmatter for an imported page.
-///
-/// Keys are aligned with moss's `BUILTIN_FIELDS` schema (see
-/// `crates/moss-core/src/schema_fields.rs`). Empty/None fields are omitted.
-pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> String {
-    let mut out = String::from("---\n");
-
-    push_string(&mut out, "title", metadata.title.as_deref());
-    push_string(&mut out, "date", metadata.date.as_deref());
-    push_string(&mut out, "author", metadata.author.as_deref());
-    push_string(&mut out, "publisher", metadata.publisher.as_deref());
-    push_string(&mut out, "lang", metadata.lang.as_deref());
-    push_string(&mut out, "description", metadata.description.as_deref());
-    push_string(&mut out, "cover", metadata.cover.as_deref());
-    if !metadata.tags.is_empty() {
-        push_string_list(&mut out, "tags", &metadata.tags);
+/// The typed fields of an imported page; empty values are omitted.
+pub(crate) fn imported_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> moss_core::frontmatter_typed::FrontMatter {
+    let clean = |s: Option<&str>| s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    moss_core::frontmatter_typed::FrontMatter {
+        title: clean(metadata.title.as_deref()),
+        date: clean(metadata.date.as_deref()),
+        author: clean(metadata.author.as_deref()).map(|s| vec![s]),
+        publisher: clean(metadata.publisher.as_deref()),
+        lang: clean(metadata.lang.as_deref()),
+        description: clean(metadata.description.as_deref()),
+        cover: clean(metadata.cover.as_deref()),
+        tags: (!metadata.tags.is_empty()).then(|| metadata.tags.clone()),
+        start: clean(metadata.event.start.as_deref()),
+        end: clean(metadata.event.end.as_deref()),
+        location: clean(metadata.event.location.as_deref()).map(|s| vec![s]),
+        status: clean(metadata.event.status.as_deref()),
+        tickets: clean(metadata.event.tickets.as_deref()),
+        online: clean(metadata.event.online.as_deref()),
+        origin: clean(Some(source_url)),
+        ..Default::default()
     }
-    // An event never writes `date`: that stays the page's own published date.
-    push_string(&mut out, "start", metadata.event.start.as_deref());
-    push_string(&mut out, "end", metadata.event.end.as_deref());
-    push_string(&mut out, "location", metadata.event.location.as_deref());
-    push_string(&mut out, "status", metadata.event.status.as_deref());
-    push_string(&mut out, "tickets", metadata.event.tickets.as_deref());
-    push_string(&mut out, "online", metadata.event.online.as_deref());
-    // `moss import` records provenance, not syndication: the source page's
-    // address becomes `origin` (`moss_core::schema_fields::BUILTIN_FIELDS`),
-    // a single URL. Unlike POSSE `syndicated:` — which means the content also
-    // lives at that URL — `origin` makes no such claim: a site port's old
-    // address is going away, not gaining a mirror. A local file with no known
-    // source (`source_url` empty) has no `origin` at all.
-    push_string(&mut out, "origin", Some(source_url));
-    out.push_str("---\n\n");
-    out
-}
-
-/// Strip stray C0/C1 control chars and YAML-escape `\`/`"`/newlines for
-/// embedding in a double-quoted scalar. Shared by every hand-rolled
-/// frontmatter field this module writes — `push_string`'s metadata values
-/// and `render_error_markdown`'s error-page fields alike — so no caller can
-/// skip the control-char strip and end up with the weaker of two defenses.
-/// Both sources are untrusted (scraped HTML, remote server error text), and
-/// this is the same write-boundary defense-in-depth applied in
-/// `moss_core::frontmatter::serialize` (macOS Tauri multiwebview arrow-key
-/// bug, tauri-apps/tauri#10194), needed here because this hand-rolled writer
-/// bypasses that path entirely.
-///
-/// `\n`/`\r` are escaped, not just stripped of C0/C1 siblings: the stripper
-/// above keeps them as "legitimate whitespace" for callers writing multi-line
-/// bodies, but a value embedded here that keeps a raw newline turns one
-/// written line into several, and the frontmatter reader that finds the
-/// closing `---` (`moss_core::frontmatter::yaml_span`) does a plain
-/// line-by-line scan with no notion of YAML quoting. A value containing
-/// `"\n---\n"` forged a closing fence from inside the scalar, truncating the
-/// real frontmatter early — confirmed to drop `title` entirely rather than
-/// fail safe. Escaping keeps the whole value on one physical line, so no
-/// line inside it can ever trim down to exactly `---`.
-pub(crate) fn escape_yaml_string(s: &str) -> String {
-    let clean = moss_core::frontmatter::strip_control_chars_str(s);
-    clean
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-}
-
-fn push_string(out: &mut String, key: &str, value: Option<&str>) {
-    if let Some(v) = value {
-        let trimmed = v.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        let escaped = escape_yaml_string(trimmed);
-        out.push_str(&format!("{}: \"{}\"\n", key, escaped));
-    }
-}
-
-/// `key: ["a", "b"]`, each item escaped as in `push_string`. An empty list
-/// writes `key: []`; callers that want no key skip the call.
-pub(crate) fn push_string_list(out: &mut String, key: &str, values: &[String]) {
-    let items: Vec<String> = values
-        .iter()
-        .map(|v| format!("\"{}\"", escape_yaml_string(v)))
-        .collect();
-    out.push_str(&format!("{}: [{}]\n", key, items.join(", ")));
-}
-
-/// Rewrite in-scope links in markdown to point at the local mirror.
-///
-/// Only used when running in `--recursive` mode where the same scope contains
-/// multiple pages on disk; for a single-URL import this is a no-op (no
-/// in-scope links exist on disk).
-pub fn rewrite_links(markdown: &str, scope: &UrlScope) -> String {
-    LINK_PATTERN
-        .replace_all(markdown, |caps: &regex::Captures| {
-            let text = &caps[1];
-            let url = &caps[2];
-            // A file link (`.pdf`, …) has no `.md` twin; it is the file
-            // downloader's to rewrite, and stays as written when that failed.
-            if is_within_scope(scope, url) && !is_non_page_file_url(url) {
-                if let Some(rel) = url_to_relative_md_path(url, scope) {
-                    let title = caps.get(3).map_or("", |m| m.as_str());
-                    return format!("[{}]({}{})", text, rel, title);
-                }
-            }
-            caps[0].to_string()
-        })
-        .to_string()
 }
 
 /// `url` without a `ref` query parameter whose value is the imported site's
@@ -211,26 +123,6 @@ pub(crate) fn strip_outbound_refs(markdown: &str, scope: &UrlScope) -> String {
         .to_string()
 }
 
-fn url_to_relative_md_path(url_str: &str, scope: &UrlScope) -> Option<String> {
-    let url = Url::parse(url_str).ok()?;
-    let path = url.path();
-    let scope_path = scope.path_prefix();
-    let relative = if scope_path == "/" {
-        path.trim_start_matches('/')
-    } else {
-        path.strip_prefix(scope_path)?.trim_start_matches('/')
-    };
-
-    if relative.is_empty() {
-        return Some("./index.md".to_string());
-    }
-    if relative.ends_with('/') {
-        let dir = relative.trim_end_matches('/');
-        return Some(format!("./{}/index.md", dir));
-    }
-    Some(format!("./{}.md", relative))
-}
-
 /// Body content used when a page failed to fetch.
 pub fn generate_error_page(source_url: &str, error: &str) -> String {
     format!(
@@ -242,21 +134,21 @@ pub fn generate_error_page(source_url: &str, error: &str) -> String {
 /// Render the complete markdown file content (frontmatter + body) for a page
 /// that could not be fetched.
 ///
-/// Unlike [`generate_frontmatter`], this function does not require an
+/// Unlike [`imported_frontmatter`], this function does not require an
 /// [`ArticleMetadata`] struct — error pages are not articles and should not
 /// pretend to be one. The frontmatter contains only the minimal keys that are
 /// meaningful for an error record: `title`, `external_url`, `scrape_error`, and
 /// `listed: false`, so the stub stays out of navigation and listings.
 pub fn render_error_markdown(source_url: &str, error: &str) -> String {
-    let escaped_url = escape_yaml_string(source_url);
-    let escaped_error = escape_yaml_string(error);
-
-    let frontmatter = format!(
-        "---\ntitle: \"Page Unavailable\"\nexternal_url: \"{}\"\nscrape_error: \"{}\"\nlisted: false\n---\n\n",
-        escaped_url, escaped_error
-    );
-    let body = generate_error_page(source_url, error);
-    format!("{}{}", frontmatter, body)
+    use crate::vault::import::page::{render_frontmatter_with, PageStyle};
+    let fields = moss_core::frontmatter_typed::FrontMatter {
+        title: Some("Page Unavailable".into()),
+        external_url: Some(source_url.into()),
+        listed: Some(false),
+        ..Default::default()
+    };
+    let frontmatter = render_frontmatter_with(&fields, &[("scrape_error", error)], PageStyle::Html);
+    format!("{frontmatter}{}", generate_error_page(source_url, error))
 }
 
 #[cfg(test)]
@@ -264,39 +156,9 @@ mod tests {
     use super::*;
     use super::super::metadata::derive;
 
-    #[test]
-    /// The regex scan over a whole markdown body, which every recursive page
-    /// goes through. Subsumes the two `url_to_relative_md_path` unit tests it
-    /// replaced — a flat link, a nested one, and an out-of-scope one that must
-    /// be left alone, all through the public door.
-    fn rewrite_links_redirects_in_scope_and_leaves_the_rest() {
-        let scope = UrlScope::new("https://example.com/blog/").unwrap();
-        let markdown = "See [post 2](https://example.com/blog/post-2), \
-                        [nested](https://example.com/blog/2024/post) and \
-                        [external](https://other.com/page).";
-
-        let rewritten = rewrite_links(markdown, &scope);
-
-        assert!(rewritten.contains("[post 2](./post-2.md)"), "{rewritten}");
-        assert!(rewritten.contains("[nested](./2024/post.md)"), "{rewritten}");
-        assert!(
-            rewritten.contains("[external](https://other.com/page)"),
-            "an out-of-scope link must survive untouched: {rewritten}"
-        );
-    }
-
-    #[test]
-    fn rewrite_links_keeps_a_links_title_out_of_its_path() {
-        let scope = UrlScope::new("https://example.test/").unwrap();
-        for title in [r#" "Example Notes""#, " 'Example Notes'", " (Example Notes)"] {
-            let markdown = format!("[second](https://example.test/b/{title})");
-            let rewritten = rewrite_links(&markdown, &scope);
-            assert_eq!(rewritten, format!("[second](./b/index.md{title})"));
-        }
-        assert_eq!(
-            rewrite_links("[second](https://example.test/b/)", &scope),
-            "[second](./b/index.md)"
-        );
+    fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> String {
+        crate::vault::import::page::render_frontmatter(&imported_frontmatter(metadata, source_url),
+            crate::vault::import::page::PageStyle::Html)
     }
 
     #[test]

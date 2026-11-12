@@ -327,6 +327,15 @@ fn config_tables() -> Vec<ConfigTableInfo> {
         ],
     },
     ConfigTableInfo {
+        name: "members",
+        entry: "join = \"open\"",
+        description: "Who may subscribe, which is what opens members pages. Published at /_moss/members.json for the host.",
+        rules: vec![
+            "`join` is open (default) or invite. Invalid values stop the build.",
+            "Members pages publish only the preview before <!--members-only-->; without a marker no body is public. Paid pages remain restricted.",
+        ],
+    },
+    ConfigTableInfo {
         name: "services.booking",
         entry: "timezone = \"America/Los_Angeles\"",
         description: "What the site offers for booking, published as the `booking` object of /_moss/commerce.json for a booking service to read: `endpoint`, `timezone`, `currency`, `services.<id>` (hourly: `per_hour`, `hours.min`, `hours.max`; fixed: `minutes`, `price`; then `fields`, `labels` and an optional `deposit` of `percent`, `hold_hours` and `balance_days_before`), `open.<day>` start windows, `start_every`, `notice_hours`, `horizon_days`, `cancel.full_before_hours`, `cancel.late_percent`, and `pages.book`, `pages.done`, `pages.manage`, with `pages.desk` when a service takes a deposit.",

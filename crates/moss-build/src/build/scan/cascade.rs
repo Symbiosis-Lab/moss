@@ -144,7 +144,7 @@ fn report_cascade_values(
     fields: &[moss_core::fields::FieldDecl],
 ) {
     let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str());
-    for key in cascade.keys().filter(|k| !CASCADE_KEYS.contains(&k.as_str()) && cascadable_field(fields, k.as_str()).is_none()) {
+    for key in cascade.keys().filter(|k| k.as_str() != "members" && !CASCADE_KEYS.contains(&k.as_str()) && cascadable_field(fields, k.as_str()).is_none()) {
         log::warn!(
             "[{page}] cascade key \"{key}\" is not a key cascade carries ({}) or a declared field; it has no effect",
             CASCADE_KEYS.join(", ")

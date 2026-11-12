@@ -27,7 +27,6 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use super::crawl_state::HostPacer;
-use super::scope::UrlScope;
 
 pub(crate) use facts::norm_url;
 
@@ -101,7 +100,6 @@ pub(crate) struct HomePage {
 /// Everything one chrome pass needs from the finished crawl.
 pub(crate) struct Capture<'a> {
     pub out_dir: &'a Path,
-    pub scope: &'a UrlScope,
     pub user_agent: &'a str,
     pub home: &'a HomePage,
     /// Normalised URL ([`norm_url`]) → the note written for it, relative to

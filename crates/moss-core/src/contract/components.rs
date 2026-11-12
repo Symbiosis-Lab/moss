@@ -2289,6 +2289,17 @@ const CORE: &[ComponentEntry] = &[
     // Subscribe form (newsletter / Buttondown / seta).
     // -------------------------------------------------------------------
     ComponentEntry {
+        class: "moss-members",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-members"><p id="moss-members-lead-5d1e0c2a-0">This post is for subscribers.</p><div class="moss-subscribe">...</div></div>"#,
+        example_markdown: "members: subscribers\n---\nPublic preview\n<!--members-only-->\nPrivate body\n",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Public fallback for a members page: its access notice and subscribe form. Only the public preview is built; no private body is emitted, including for paid pages.",
+    },
+    ComponentEntry {
         class: "moss-subscribe",
         kind: "standalone",
         parent: "",

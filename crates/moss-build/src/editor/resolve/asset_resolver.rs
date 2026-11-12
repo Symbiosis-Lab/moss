@@ -552,7 +552,6 @@ mod tests {
         use moss_core::resolve::ext_kind::ExtKind;
 
         let scheme_handler_exceptions = [
-            "md", "markdown",       // text source, not served as media
             "html", "htm",          // native browser render
             "csv", "tsv",           // table renderer path
             "ipynb",                // notebook renderer path
@@ -563,7 +562,7 @@ mod tests {
         ];
 
         for a in all_assets() {
-            if a.kind == ExtKind::Other || scheme_handler_exceptions.contains(&a.ext) {
+            if moss_core::source_edit::policy::is_page_source(a.ext) || a.kind == ExtKind::Other || scheme_handler_exceptions.contains(&a.ext) {
                 continue;
             }
             let got = mime_for_path(Path::new(&format!("x.{}", a.ext)));

@@ -376,7 +376,7 @@ pub fn quick_detect_homepage(root: &VaultRoot) -> Option<String> {
     let filenames: Vec<String> = std::fs::read_dir(root.path())
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .filter(|e| moss_core::source_edit::policy::is_page_path(&e.path()))
         .filter(|e| !scan::classify::is_agent_config_name(&e.file_name().to_string_lossy()))
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();

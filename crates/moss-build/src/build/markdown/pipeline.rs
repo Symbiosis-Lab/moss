@@ -459,6 +459,9 @@ impl Default for PageContext<'_> {
 
 /// Processes a markdown file with frontmatter into a ParsedDocument.
 ///
+/// `content` and `page.authored_source` are the page's public view
+/// (`MemberCascade::public_source`); this function never restricts them.
+///
 /// `site_lang` is the site's default language, used as the final fallback
 /// when a document has no `lang:` frontmatter, no filename suffix, no
 /// ancestor lang folder, and content too short for `whatlang` to detect.
@@ -952,6 +955,8 @@ pub fn process_markdown_file(
         ) == Some("vertical"),
         leading_image: std::cell::Cell::new(None),
         diagrams: super::diagram::PageDiagrams::new(file_path, doc_lang, Some(&note_links)),
+        page: file_path,
+        members_leads: std::cell::Cell::new(0),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -1725,6 +1730,7 @@ pub fn process_markdown_file(
         syndicate,
         untitled,
         raw_frontmatter,
+        import_feed_id: None,
         sort: frontmatter.sort.clone(),
         direct_children_sort: None,
         body_plan: Some(body_plan),
@@ -2100,6 +2106,8 @@ fn render_markdown_to_html_with_config(
         vertical: false,
         leading_image: std::cell::Cell::new(None),
         diagrams: super::diagram::PageDiagrams::new("", crate::i18n::Language::En, None),
+        page: "",
+        members_leads: std::cell::Cell::new(0),
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -2177,6 +2185,10 @@ struct PipelineHooks<'a> {
     /// fragment paths.
     leading_image: std::cell::Cell<Option<usize>>,
     diagrams: super::diagram::PageDiagrams<'a>,
+    /// The page's source path and how many members notices it has drawn,
+    /// which keep each notice's id unique where listings show many pages.
+    page: &'a str,
+    members_leads: std::cell::Cell<usize>,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -2187,14 +2199,22 @@ impl<'a> PipelineHooks<'a> {
     /// keeps the root audience. Unpublished sites (empty site_id) render the
     /// pending form, consistent with the auto-injected footer form.
     fn render_subscribe_form(&self, args: &moss_core::ast::SubscribeShortcode) -> String {
-        crate::build::features::email::render_hosted_subscribe_form(
+        use moss_core::frontmatter::members::Members;
+        let form = crate::build::features::email::render_hosted_subscribe_form(
             Some(self.site_id).filter(|s| !s.is_empty()),
             self.lang,
             "",
             args.placeholder.as_deref(),
             args.button.as_deref(),
             self.seta_base,
-        )
+        );
+        let Some(members) = args.members.filter(|m| *m != Members::Public) else { return form };
+        // A stream listing shows many pages' notices on one page.
+        use sha2::Digest;
+        let page = sha2::Sha256::digest(self.page.as_bytes());
+        let n = self.members_leads.replace(self.members_leads.get() + 1);
+        let id = format!("moss-members-lead-{:02x}{:02x}{:02x}{:02x}-{n}", page[0], page[1], page[2], page[3]);
+        crate::build::features::email::with_members_lead(&form, self.lang, members, &id)
     }
 
     fn render_request_form(&self, form: &moss_core::ast::FormShortcode) -> String {

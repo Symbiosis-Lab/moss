@@ -105,8 +105,9 @@ fn ships_from_stage_by_design(key: &str) -> bool {
         .split('.')
         .any(|part| part.len() == 16 && part.bytes().all(|b| b.is_ascii_hexdigit()));
     (key.starts_with("_moss/") && content_named)
-        // Config-derived (site URL, `ai_policy`): moves only on a config edit.
+        // Config-derived (site URL, `ai_policy`, `[members]`): moves only on a config edit.
         || key == "robots.txt"
+        || key == crate::build::emit::members::MEMBERS_PATH
         || (key.starts_with("qr/") && key.ends_with(".svg"))
         // Moves only when the favicon source does.
         || key.starts_with("assets/favicon")

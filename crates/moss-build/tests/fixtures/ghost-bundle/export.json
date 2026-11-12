@@ -1,0 +1,173 @@
+{
+  "db": [
+    {
+      "meta": {
+        "exported_on": 1767225600000,
+        "version": "6.0.0"
+      },
+      "data": {
+        "posts": [
+          {
+            "id": "65a1b2c3d4e5f60718293a4b",
+            "uuid": "00000000-0000-4000-8000-000000000001",
+            "slug": "public",
+            "title": "Public",
+            "type": "post",
+            "status": "published",
+            "visibility": "public",
+            "html": "<p>A public dispatch.</p><p><a href=\"/members/\">Continue</a></p><img src=\"__GHOST_URL__/content/images/cover.svg\">",
+            "published_at": "2026-01-01T10:00:00.000Z",
+            "created_at": "2025-12-30T10:00:00.000Z",
+            "feature_image": "__GHOST_URL__/content/images/cover.svg"
+          },
+          {
+            "id": "2",
+            "uuid": "00000000-0000-4000-8000-000000000002",
+            "slug": "members",
+            "title": "Members",
+            "type": "post",
+            "status": "published",
+            "visibility": "members",
+            "html": "<p>A visible preview.</p><!--members-only--><p>copper-private-body-928441</p>",
+            "published_at": "2026-01-01T10:00:00.000Z",
+            "created_at": "2025-12-30T10:00:00.000Z",
+            "feature_image": null
+          },
+          {
+            "id": "3",
+            "uuid": "00000000-0000-4000-8000-000000000003",
+            "slug": "paid",
+            "title": "Paid",
+            "type": "post",
+            "status": "published",
+            "visibility": "paid",
+            "html": "<p>copper-private-body-928441</p>",
+            "published_at": "2026-01-01T10:00:00.000Z",
+            "created_at": "2025-12-30T10:00:00.000Z",
+            "feature_image": null
+          },
+          {
+            "id": "4",
+            "uuid": "00000000-0000-4000-8000-000000000004",
+            "slug": "draft",
+            "title": "Draft",
+            "type": "post",
+            "status": "draft",
+            "visibility": "public",
+            "html": "<p>draft-not-published-827351</p>",
+            "published_at": "2026-01-01T10:00:00.000Z",
+            "created_at": "2025-12-30T10:00:00.000Z",
+            "feature_image": null
+          },
+          {
+            "id": "5",
+            "uuid": "00000000-0000-4000-8000-000000000005",
+            "slug": "about",
+            "title": "About",
+            "type": "page",
+            "status": "published",
+            "visibility": "public",
+            "html": "<p>About this invented journal.</p>",
+            "published_at": "2026-01-01T10:00:00.000Z",
+            "created_at": "2025-12-30T10:00:00.000Z",
+            "feature_image": null
+          }
+        ],
+        "tags": [
+          {
+            "id": "t1",
+            "slug": "field-notes",
+            "name": "Field notes",
+            "description": "Notes from outside.",
+            "visibility": "public"
+          }
+        ],
+        "users": [
+          {
+            "id": "u1",
+            "name": "Journal Editor",
+            "slug": "journal-editor",
+            "email": "never-copy-editor@example.test",
+            "password": "never-copy-password-value"
+          },
+          {
+            "id": "u-unused",
+            "name": "Unused Editor",
+            "slug": "never-copy-unused-editor",
+            "email": "never-copy-unused@example.test"
+          }
+        ],
+        "posts_tags": [
+          {
+            "post_id": "65a1b2c3d4e5f60718293a4b",
+            "tag_id": "t1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "2",
+            "tag_id": "t1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "3",
+            "tag_id": "t1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "4",
+            "tag_id": "t1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "5",
+            "tag_id": "t1",
+            "sort_order": 0
+          }
+        ],
+        "posts_authors": [
+          {
+            "post_id": "65a1b2c3d4e5f60718293a4b",
+            "author_id": "u1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "2",
+            "author_id": "u1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "3",
+            "author_id": "u1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "4",
+            "author_id": "u1",
+            "sort_order": 0
+          },
+          {
+            "post_id": "5",
+            "author_id": "u1",
+            "sort_order": 0
+          }
+        ],
+        "settings": [
+          {
+            "key": "title",
+            "value": "Copper Journal"
+          },
+          {
+            "key": "description",
+            "value": "An invented export for testing."
+          },
+          {
+            "key": "secret_setting",
+            "value": "never-copy-setting-value"
+          }
+        ],
+        "newsletters": [],
+        "tiers": []
+      }
+    }
+  ]
+}

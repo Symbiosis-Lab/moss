@@ -7,6 +7,8 @@ export interface AssetInfo { ext:string; kind:string; mime:string; canEmbed:bool
 export const ASSET_REGISTRY: readonly AssetInfo[] = [
   { ext:"md", kind:"Transclusion", mime:"text/markdown", canEmbed:true, acceptOnDrop:true, standardEmbed:true, label:"Markdown", iconKey:"doc" },
   { ext:"markdown", kind:"Transclusion", mime:"text/markdown", canEmbed:true, acceptOnDrop:true, standardEmbed:true, label:"Markdown", iconKey:"doc" },
+  { ext:"mdown", kind:"Transclusion", mime:"text/markdown", canEmbed:true, acceptOnDrop:true, standardEmbed:true, label:"Markdown", iconKey:"doc" },
+  { ext:"mkd", kind:"Transclusion", mime:"text/markdown", canEmbed:true, acceptOnDrop:true, standardEmbed:true, label:"Markdown", iconKey:"doc" },
   { ext:"png", kind:"Image", mime:"image/png", canEmbed:true, acceptOnDrop:true, standardEmbed:true, label:"Image", iconKey:"image" },
   { ext:"jpg", kind:"Image", mime:"image/jpeg", canEmbed:true, acceptOnDrop:true, standardEmbed:true, label:"Image", iconKey:"image" },
   { ext:"jpeg", kind:"Image", mime:"image/jpeg", canEmbed:true, acceptOnDrop:true, standardEmbed:true, label:"Image", iconKey:"image" },

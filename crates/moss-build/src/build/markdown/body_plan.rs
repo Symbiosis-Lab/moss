@@ -122,6 +122,9 @@ pub struct SubscribeEmission {
     pub html: String,
     /// The id of the text that names the form's email input, when there is one.
     pub labelled_by: Option<String>,
+    /// The id of the members notice above the form, kept when the form is
+    /// rendered again with its section's scope.
+    pub members_lead: Option<String>,
 }
 
 /// A `:::grid` block as both the HTML that was emitted and the typed cells it
@@ -694,7 +697,8 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
                 if let Some(id) = &labelled_by {
                     html = crate::build::features::email::label_subscribe_input(&html, id);
                 }
-                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by }));
+                let members_lead = crate::build::features::email::members_lead_id(&html);
+                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by, members_lead }));
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),
         }

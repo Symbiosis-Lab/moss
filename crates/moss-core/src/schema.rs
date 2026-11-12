@@ -446,7 +446,8 @@ mod tests {
         // (`partial` added 2026-10 — a transclusion source that is never built.)
         // (`search_engines` — a page's own noindex.)
         // (`chrome` — a page without the site's frame.)
-        assert_eq!(schema.frontmatter.fields.len(), 74);
+        // (`members` — who may read a page's body.)
+        assert_eq!(schema.frontmatter.fields.len(), 75);
     }
 
     #[test]

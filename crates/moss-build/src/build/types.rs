@@ -665,6 +665,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub raw_frontmatter: std::collections::BTreeMap<String, serde_json::Value>,
+    /// The feed entry id the page had on the site it was imported from, so a
+    /// feed reader does not show it again as new. Set from the import ledger.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub import_feed_id: Option<String>,
     /// The site's declared fields this page's own frontmatter carries, parsed
     /// at the markdown stage. Folder `cascade:` values are not included.
     #[serde(skip)]

@@ -494,7 +494,7 @@ pub(in crate::resolve) fn lower_embed(
     }
     // Nothing claims `#text` for this file type, so the embed stays as
     // written and the viewer shows no text. Say so rather than fail silently.
-    if anchor == Some("text") && !matches!(ext.as_str(), "md" | "markdown") {
+    if anchor == Some("text") && !crate::source_edit::policy::is_page_source(&ext) {
         diagnostics.push(Diagnostic {
             message: format!(
                 "embed shows no text: no installed plugin derives text from .{ext} files; add the folder under [derive] in .moss/config.toml, or install the plugin that derives text from .{ext} files"
@@ -506,7 +506,7 @@ pub(in crate::resolve) fn lower_embed(
     }
     // Markdown transclusion: `![[note.md]]` →
     // `<!-- moss-embed:note.md[#anchor] -->`.
-    if ext == "md" || ext == "markdown" {
+    if crate::source_edit::policy::is_page_source(&ext) {
         let target_with_anchor = match anchor {
             Some(a) => format!("{}#{}", target_path, a),
             None => target_path,

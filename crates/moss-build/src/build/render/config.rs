@@ -155,6 +155,8 @@ pub struct SiteConfig {
     pub public_data: Vec<crate::plugins::contributions::public_data::PublicFile>,
     /// `[services.booking]` as read: the offer, or why it could not be read.
     pub booking: Option<Result<crate::config::services::BookingService, String>>,
+    /// Who may subscribe, which is what opens members pages.
+    pub members: crate::config::services::MembersConfig,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -225,6 +227,7 @@ impl Default for SiteConfig {
             field_decls: Vec::new(),
             forms_endpoint: None,
             booking: None,
+            members: Default::default(),
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

@@ -24,6 +24,8 @@ use crate::vault::import::widgets::{carry_widgets, html_to_markdown, WidgetCount
 
 /// Output of the extraction pipeline.
 pub struct Article {
+    /// Ghost supplied its lock box rather than the article body.
+    pub members_only: bool,
     /// Markdown body produced from the article's main-content subtree.
     pub markdown: String,
     /// Absolute URLs of every image referenced by the markdown.
@@ -184,8 +186,10 @@ pub fn extract_article_with_snapshot(
         metadata.og_image = Some(abs);
     }
 
+    let members_only = scraper::Html::parse_document(html).select(&scraper::Selector::parse(".gh-post-upgrade-cta").unwrap()).next().is_some();
     Article {
-        markdown,
+        members_only,
+        markdown: if members_only { String::new() } else { markdown },
         media_urls,
         metadata,
         widgets,

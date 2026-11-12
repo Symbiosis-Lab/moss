@@ -27,7 +27,7 @@ use crate::i18n::{t, Language};
 use crate::types::content::ProjectStructure;
 
 /// Extensions copied into the source folder: the pages and the data they use.
-const SOURCE_EXTENSIONS: &[&str] = &["md", "markdown", "csv", "tsv", "json", "yaml", "yml", "bib"];
+const DATA_SOURCE_EXTENSIONS: &[&str] = &["csv", "tsv", "json", "yaml", "yml", "bib"];
 
 /// Where each page's edition block points.
 const SOURCE_README: &str = "_moss/source/README.md";
@@ -91,7 +91,7 @@ fn source_files(structure: &ProjectStructure) -> Vec<String> {
         .markdown_files
         .iter()
         .chain(&structure.other_files)
-        .filter(|file| SOURCE_EXTENSIONS.contains(&file.file_type.as_str()))
+        .filter(|file| moss_core::source_edit::policy::is_page_path(Path::new(&file.path)) || DATA_SOURCE_EXTENSIONS.contains(&file.file_type.as_str()))
         .map(|file| file.path.clone())
         .chain(layer_files)
         .filter(|path| !path.split('/').any(|segment| segment == "_moss" || segment == "node_modules"))
@@ -111,11 +111,13 @@ pub struct SiteFacts<'a> {
     pub lang: &'a str,
     pub folder_name: Option<&'a str>,
     pub now: chrono::NaiveDateTime,
+    pub members_policy: &'a moss_core::frontmatter::member_cascade::MemberCascade,
 }
 
 /// What the build knows about the site, for the README and the citation.
 struct EditionInputs<'a> {
     structure: &'a ProjectStructure,
+    members_policy: &'a moss_core::frontmatter::member_cascade::MemberCascade,
     documents: &'a [ParsedDocument],
     site_url: Option<&'a SiteUrl>,
     author: Option<String>,
@@ -147,6 +149,7 @@ pub fn from_build(
     );
     let inputs = EditionInputs {
         structure: site.structure,
+        members_policy: site.members_policy,
         documents: site.documents,
         site_url: site_url.as_ref(),
         author: site.author,
@@ -168,6 +171,9 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
         // A file the sync client has not materialised yet is left out of this
         // edition rather than failing the build.
         let Ok(bytes) = std::fs::read(on_disk(root, &rel)) else { continue };
+        let bytes = if moss_core::source_edit::policy::is_page_path(Path::new(&rel)) {
+            inputs.members_policy.public_source(&rel, &String::from_utf8_lossy(&bytes)).into_owned().into_bytes()
+        } else { bytes };
         let Ok(served) = ServedPath::for_source_copy(&rel) else { continue };
         BuildContext::for_render(stage_dir, pending).emit(&served, &bytes, HashBucket::Files)?;
         inventory.push_str(&format!("{rel}\0{}\n", compute_binary_hash(&bytes)));

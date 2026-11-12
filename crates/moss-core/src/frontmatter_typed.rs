@@ -350,6 +350,9 @@ pub struct FrontMatter {
     /// regardless of filename. Written by moss on homes it creates; survives rename.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub home: Option<bool>,
+    /// Restrict this page to members. Invalid values fail closed as subscribers.
+    #[serde(default, deserialize_with = "crate::frontmatter::members::deserialize_members")]
+    pub members: Option<crate::frontmatter::members::Members>,
     /// Draft: built so the preview can show it, but never published, and
     /// hidden from all listings, feeds, sitemap, and navigation (and marked
     /// `noindex`).
@@ -863,7 +866,7 @@ pub fn frontmatter_ref_to_stem(s: &str) -> String {
 
     // If the result looks like a file path (has / or .md extension),
     // extract the meaningful name.
-    if cleaned.contains('/') || cleaned.ends_with(".md") {
+    if cleaned.contains('/') || crate::source_edit::policy::is_page_path(std::path::Path::new(cleaned)) {
         #[allow(clippy::unwrap_used)] // rsplit always has at least one element
         let filename = cleaned.rsplit('/').next().unwrap_or(cleaned);
         #[allow(clippy::string_slice)] // byte index from rfind is char-aligned (ASCII dot)
@@ -980,8 +983,8 @@ pub(crate) fn is_frontmatter_field_line(trimmed: &str) -> bool {
 /// Keys that may be written bare, as `nav` rather than `nav: true`. Must stay in
 /// step with the bare-flag arm of [`parse_simplified_frontmatter`];
 /// `every_bare_flag_is_recognised_by_the_parser` fails if it drifts.
-pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 9] = [
-    "nav", "home", "draft", "listed", "partial", "breadcrumb", "footer", "comments", "children",
+pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 10] = [
+    "nav", "home", "draft", "listed", "partial", "breadcrumb", "footer", "comments", "children", "members",
 ];
 
 /// The field names a simplified frontmatter block declares, in source order.
@@ -1050,6 +1053,10 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
             let value = trimmed[colon_pos + 1..].trim();
 
             match key {
+                "members" => {
+                    let value = serde_yaml::from_str(value).unwrap_or(serde_yaml::Value::Null);
+                    frontmatter.members = Some(crate::frontmatter::members::Members::from_value(&value));
+                }
                 "title" => frontmatter.title = Some(value.to_string()),
                 "date" => frontmatter.date = Some(value.to_string()),
                 "start" => frontmatter.start = Some(value.to_string()),
@@ -1228,6 +1235,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
         } else {
             // Boolean flag (just the word)
             match trimmed {
+                "members" => frontmatter.members = Some(crate::frontmatter::members::Members::Subscribers),
                 "nav" => frontmatter.nav = Some(true),
                 "home" => frontmatter.home = Some(true),
                 "draft" => frontmatter.draft = Some(true),
@@ -2067,7 +2075,7 @@ mod url_path_tests {
             let (fm, _) = parse_simplified_frontmatter(&content);
             let set = format!("{fm:?}");
             assert!(
-                set.contains("Some(true)") || set.contains("Some(On)"),
+                set.contains("Some(true)") || set.contains("Some(On)") || set.contains("Some(Subscribers)"),
                 "`{flag}` is detected but the parser sets no field from it"
             );
         }

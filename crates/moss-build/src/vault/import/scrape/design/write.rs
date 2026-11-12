@@ -17,9 +17,10 @@ use crate::build::components::nav::is_navigational_page;
 use crate::build::media::decode::sniff_decode_bytes;
 use super::super::crawler::host_of;
 use super::super::fetch::{download_asset, fetch_raw_bytes, observe_pace};
-use super::super::finalize::{with_fields_absent, with_title};
-use super::super::run::{write_note, ASSETS_SUBDIR};
-use super::super::service::{escape_yaml_string, rewrite_links};
+use crate::vault::import::page::{with_fields_absent, with_title, write_note};
+use super::super::run::ASSETS_SUBDIR;
+use moss_core::frontmatter_typed::FrontMatter;
+use super::super::writer::rewrite_links;
 use super::facts::{is_generic_title, norm_url, Facts, Icon, IconKind};
 use super::{Capture, ChromePart, ChromeSummary};
 
@@ -59,10 +60,6 @@ fn has_key(content: &str, key: &str) -> bool {
     moss_core::frontmatter::frontmatter_map(content).contains_key(key)
 }
 
-fn quoted(value: &str) -> String {
-    format!("\"{}\"", escape_yaml_string(value))
-}
-
 /// `nav: true` and an ascending `weight:` on every written page the home
 /// page's primary nav links to, in the nav's own order. Fewer than two such
 /// pages is not a nav bar.
@@ -92,7 +89,7 @@ fn write_nav(
         if has_key(&content, "nav") || has_key(&content, "weight") {
             continue;
         }
-        let fields = [("nav", "true".to_string()), ("weight", (summary.nav_items + 1).to_string())];
+        let fields = FrontMatter { nav: Some(true), weight: Some((summary.nav_items + 1) as i32), ..Default::default() };
         if let Some(next) = with_fields_absent(&content, &fields) {
             rewrite_note(capture.out_dir, rel, &next)?;
             summary.nav_items += 1;
@@ -123,7 +120,7 @@ fn opt_out_of_auto_nav(
             continue;
         }
         let content = read_note(capture.out_dir, rel)?;
-        if let Some(next) = with_fields_absent(&content, &[("nav", "false".to_string())]) {
+        if let Some(next) = with_fields_absent(&content, &FrontMatter { nav: Some(false), ..Default::default() }) {
             rewrite_note(capture.out_dir, rel, &next)?;
         }
     }
@@ -141,7 +138,7 @@ async fn write_home_note(
 ) -> Result<(), String> {
     let original = read_note(capture.out_dir, rel)?;
     let mut content = original.clone();
-    let mut fields: Vec<(&str, String)> = Vec::new();
+    let mut fields = FrontMatter::default();
 
     let former = moss_core::frontmatter::frontmatter_map(&original)
         .get("title")
@@ -152,7 +149,7 @@ async fn write_home_note(
         if let Some(next) = with_title(&content, name) {
             content = next;
             if !is_generic_title(&former, name) {
-                fields.push(("description", quoted(&former)));
+                fields.description = Some(former.clone());
             }
         }
     }
@@ -163,7 +160,7 @@ async fn write_home_note(
         }
     } else if let Some(url) = &facts.logo {
         if let Some(file) = download_logo(url, capture, pacer).await {
-            fields.push(("logo", quoted(&format!("./{ASSETS_SUBDIR}/{file}"))));
+            fields.logo = Some(format!("./{ASSETS_SUBDIR}/{file}"));
             summary.logo = ChromePart::Written;
         }
     }
@@ -201,7 +198,7 @@ fn write_footer(capture: &Capture<'_>, facts: &Facts, summary: &mut ChromeSummar
         summary.footer = ChromePart::LeftUnchanged;
         return Ok(());
     }
-    let markdown = rewrite_links(markdown, capture.scope);
+    let markdown = rewrite_links(markdown, &capture.home.url, "footer.md", capture.written, &Default::default());
     if markdown.trim().is_empty() {
         return Ok(());
     }

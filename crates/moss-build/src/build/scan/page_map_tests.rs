@@ -1188,6 +1188,42 @@ mod frontmatter_scan_cache_tests {
         );
     }
 
+    /// A folder home this build cannot read restricts its folder, even when
+    /// an earlier build read its declaration; and only an elected home's
+    /// `cascade:` has a scope.
+    #[test]
+    fn members_access_comes_from_homes_this_build_read() {
+        let dir = setup_temp_dir(&[
+            ("index.md", "---\ntitle: Home\n---\n"),
+            ("notes/index.md", "---\ncascade: {members: subscribers}\n---\n"),
+            ("notes/article.md", "Article"),
+            ("essays.md", "---\ncascade: {members: subscribers}\n---\n"),
+            ("essays/piece.md", "Piece"),
+            ("drafts/a.md", "---\ncascade: {members: subscribers}\n---\n"),
+            ("drafts/b.md", "Draft"),
+        ]);
+        let files: Vec<_> = ["index.md", "notes/index.md", "notes/article.md", "essays.md", "essays/piece.md", "drafts/a.md", "drafts/b.md"]
+            .into_iter().map(make_file).collect();
+        let winners = compute_home_file_winners(&files, "mysite", &std::collections::HashMap::new());
+        let overrides = std::collections::HashMap::new();
+        let mut cache = FrontmatterScanCache::default();
+        build_page_map_and_external_urls_cached_with_evicted(&files, dir.path(), "mysite", &winners, &overrides, &mut cache, &|_: &Path| false);
+        assert!(cache.is_members("notes/article.md"));
+        assert!(!cache.is_members("notes/index.md"));
+        assert!(!cache.is_members("essays/piece.md"), "a page that is no folder home has no cascade scope");
+        assert!(!cache.is_members("drafts/b.md"), "a folder's first page is not its home");
+
+        fs::write(dir.path().join("notes/index.md"), "---\ncascade: {members: public}\n---\n").unwrap();
+        build_page_map_and_external_urls_cached_with_evicted(&files, dir.path(), "mysite", &winners, &overrides, &mut cache, &|_: &Path| false);
+        assert!(!cache.is_members("notes/article.md"));
+        let is_evicted = |p: &Path| p.ends_with("notes/index.md");
+        build_page_map_and_external_urls_cached_with_evicted(&files, dir.path(), "mysite", &winners, &overrides, &mut cache, &is_evicted);
+        assert!(cache.is_members("notes/article.md"), "an evicted home restricts its folder, whatever an earlier build read");
+        fs::write(dir.path().join("notes/index.md"), [0xff, 0xfe]).unwrap();
+        build_page_map_and_external_urls_cached_with_evicted(&files, dir.path(), "mysite", &winners, &overrides, &mut cache, &|_: &Path| false);
+        assert!(cache.is_members("notes/article.md"), "an unreadable home restricts its folder");
+    }
+
     #[test]
     fn unchanged_file_is_served_from_the_cache_not_reread() {
         let dir = setup_temp_dir(&[("about.md", "---\nurl: custom-slug\n---\n# About\n")]);

@@ -37,9 +37,11 @@ pub struct AssetInfo {
 }
 
 pub const ASSET_REGISTRY: &[AssetInfo] = &[
-    // Markdown / transclusion
-    AssetInfo { ext:"md",       kind:ExtKind::Transclusion, mime:"text/markdown", can_embed:true, accept_on_drop:true, label:"Markdown", icon_key:"doc" },
-    AssetInfo { ext:"markdown", kind:ExtKind::Transclusion, mime:"text/markdown", can_embed:true, accept_on_drop:true, label:"Markdown", icon_key:"doc" },
+    // The page classifier owns this vocabulary, including non-.md spellings.
+    AssetInfo { ext:crate::page_kind::PAGE_EXTENSIONS[0], kind:ExtKind::Transclusion, mime:"text/markdown", can_embed:true, accept_on_drop:true, label:"Markdown", icon_key:"doc" },
+    AssetInfo { ext:crate::page_kind::PAGE_EXTENSIONS[1], kind:ExtKind::Transclusion, mime:"text/markdown", can_embed:true, accept_on_drop:true, label:"Markdown", icon_key:"doc" },
+    AssetInfo { ext:crate::page_kind::PAGE_EXTENSIONS[2], kind:ExtKind::Transclusion, mime:"text/markdown", can_embed:true, accept_on_drop:true, label:"Markdown", icon_key:"doc" },
+    AssetInfo { ext:crate::page_kind::PAGE_EXTENSIONS[3], kind:ExtKind::Transclusion, mime:"text/markdown", can_embed:true, accept_on_drop:true, label:"Markdown", icon_key:"doc" },
     // Image (avif added — fixes the drop/build split)
     AssetInfo { ext:"png",  kind:ExtKind::Image, mime:"image/png",     can_embed:true, accept_on_drop:true, label:"Image", icon_key:"image" },
     AssetInfo { ext:"jpg",  kind:ExtKind::Image, mime:"image/jpeg",    can_embed:true, accept_on_drop:true, label:"Image", icon_key:"image" },
@@ -94,6 +96,19 @@ pub fn all_assets() -> &'static [AssetInfo] { ASSET_REGISTRY }
 mod tests {
     use super::*;
     use crate::resolve::ext_kind::ExtKind;
+
+    #[test]
+    fn every_page_extension_is_a_transclusion() {
+        for ext in crate::page_kind::PAGE_EXTENSIONS {
+            for spelling in [ext.to_string(), ext.to_ascii_uppercase()] {
+                assert!(crate::source_edit::policy::is_page_source(&spelling));
+                let asset = asset_info(&spelling).unwrap();
+                assert_eq!(asset.kind, ExtKind::Transclusion);
+                assert!(asset.can_embed && asset.accept_on_drop);
+            }
+        }
+        assert!(!crate::source_edit::policy::is_page_source("md.exe"));
+    }
 
     #[test]
     fn image_avif_is_embeddable() {

@@ -289,13 +289,13 @@ pub fn special_file_kind(rel_path: &str, page_settings_dirs: &HashSet<String>) -
 /// never restates this list. A copy of it in TypeScript is the Rust↔TS parity
 /// trap the preview follower's slot check already avoids.
 pub fn is_page_source(extension: &str) -> bool {
-    crate::page_kind::PAGE_EXTENSIONS.contains(&extension)
+    crate::page_kind::PAGE_EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(extension))
 }
 
 /// [`is_page_source`] for a path, whatever the letter case of its extension:
 /// `Post.MD` is a page like `post.md`.
 pub fn is_page_path(path: &Path) -> bool {
-    path.extension().is_some_and(|e| is_page_source(&e.to_string_lossy().to_lowercase()))
+    path.extension().is_some_and(|e| is_page_source(&e.to_string_lossy()))
 }
 
 /// Split a source-relative path into its language-tree bucket and the path

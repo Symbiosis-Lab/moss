@@ -322,6 +322,7 @@ fn detect_project_language(
     // 20 entries are dataless, `.take` before the filter used to hand the
     // whole vote to whatever tiny sample survived past them — see
     // `detect_project_language_reads_past_an_evicted_prefix_to_find_prose`.
+    let policy = crate::build::scan::members::load(markdown_files, &crate::vault::paths::VaultRoot::resolve(root_path), is_evicted);
     let texts: Vec<String> = markdown_files
         .iter()
         .filter_map(|f| {
@@ -331,7 +332,7 @@ fn detect_project_language(
             }
             let content = std::fs::read_to_string(abs_path).ok()?;
             // Strip frontmatter to avoid YAML polluting detection
-            Some(strip_frontmatter(&content))
+            Some(strip_frontmatter(&policy.public_source(&f.path, &content)))
         })
         .take(20)
         .collect();
