@@ -42,6 +42,9 @@ const ALLOWLIST = new Set<string>(
 
 // German values legitimately identical to English. Format: `de:${key}`.
 const GERMAN_IDENTICAL = [
+  // German uses these English words as they are
+  'launcher.import.kind_site', // Website
+  'launcher.import.kind_file', // Export
   // brand and product names
   'launcher.wordmark',
   'channels.name.matters',
