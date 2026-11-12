@@ -137,9 +137,10 @@ pub struct PublishOutcome {
     pub url: String,
     /// RFC 3339. Required.
     pub deployed_at: String,
-    /// The plugin's own canonical url (e.g. an OnionPress onion address), or
-    /// `None` for moss hosting, whose URL derives from site_id at resolution
-    /// time (persisting it would freeze the environment suffix).
+    /// Where the target said the site lives: a plugin's own canonical url
+    /// (e.g. an OnionPress onion address), or the address moss hosting
+    /// answered with. `None` clears what an earlier publish stored, and the
+    /// next build derives the address from site_id.
     pub site_url: Option<String>,
     pub dns_target: Option<DnsTarget>,
     pub metadata: Option<std::collections::HashMap<String, String>>,

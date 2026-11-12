@@ -8,6 +8,7 @@
 //! `moss-build`. Reading and writing `state.toml` stays app-side: the
 //! vocabulary lives here, file access does not.
 
+use super::environment::HostingEnvironment;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -170,14 +171,16 @@ pub struct DomainDeploymentConfig {
     pub deploy_method: Option<String>,
     /// URL of the last deployment
     pub last_deployment_url: Option<String>,
-    /// Canonical public URL of a plugin deployment (e.g. an OnionPress
-    /// `http://<addr>.onion`). Set by `record_publish` when a plugin
-    /// deploy supplies its own canonical url; cleared when moss hosting deploys
-    /// (which resolves its URL from `site_id`). `resolve_site_url` consults this
-    /// AFTER `domain` (a bought custom domain still wins → the onion becomes an
-    /// Onion-Location alternate) and BEFORE `site_id`, so an onion site bakes its
-    /// real address into canonical/OG/RSS instead of localhost. Additive +
-    /// serde-default so pre-existing `state.toml` files still deserialize.
+    /// Where the active target said the site lives, as of its last publish:
+    /// a plugin deployment's own address (e.g. an OnionPress
+    /// `http://<addr>.onion`), or the address moss hosting serves the site at
+    /// (`https://<site_id><suffix>`, never a custom domain). Written by
+    /// `record_publish`, which clears it when the publish reports none.
+    /// `resolve_site_url` consults it AFTER the authored address (a custom
+    /// domain still wins → an onion becomes an Onion-Location alternate) and
+    /// BEFORE `site_id`, so a build bakes the address the site answers on
+    /// without asking a server. Read it through [`Self::site_url_in`]: moss
+    /// hosting's address holds only in the environment that gave it.
     #[serde(default)]
     pub site_url: Option<String>,
     /// The OnionPress name claimed for this project (e.g. "her-blog", without
@@ -246,6 +249,18 @@ impl DomainDeploymentConfig {
         let method =
             derive_deploy_method(self.deploy_method.as_deref(), self.site_id.as_deref())?;
         slot_for(&method, self.site_id.as_deref())
+    }
+
+    /// `site_url` as a build for `env` may use it: a plugin's own address
+    /// always, moss hosting's only while it is this site's address in `env`.
+    /// A folder published to one environment and built for another would
+    /// otherwise bake the first one's address into every page.
+    pub fn site_url_in(&self, env: &HostingEnvironment) -> Option<&str> {
+        let url = self.site_url.as_deref()?;
+        let method = derive_deploy_method(self.deploy_method.as_deref(), self.site_id.as_deref());
+        let usable = method.as_deref() != Some(MOSS_TARGET_ID)
+            || self.site_id.as_deref().is_some_and(|id| env.serves(id, url));
+        usable.then_some(url)
     }
 
     /// The bare `.onion` host persisted in `site_url` (`http://<addr>.onion`

@@ -20,6 +20,7 @@ All notable changes to moss will be documented here.
 - A page that no other form of a channel takes goes as its title, the `description` from its front matter and its link. A description that does not fit whole is left out, and moss no longer quotes the page's opening in its place.
 - A publish right after a build, with nothing changed since, no longer makes every page again: it keeps the pages nothing changed, as `moss build` does. The first build after a publish still makes every page.
 - The plugin catalog shows each plugin as a tile with a round logo. Installing runs a ring round the logo, from a plus into a minus and back.
+- A site on moss hosting takes its address from what the hosting service answers at publish, kept in `.moss/state.toml`, instead of always assuming `<site>.mosspub.com`. The next build writes that address into canonical links, `og:url`, the sitemap and feeds, and `moss deploy` prints it; a build still makes no network request. An authored `[site] url` ranks above it as before, and a folder that has not published since updating keeps the assumed address.
 
 ### Fixed
 

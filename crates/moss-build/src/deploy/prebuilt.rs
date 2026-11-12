@@ -457,13 +457,14 @@ async fn push_prebuilt_inner(
     if let Some(target) = crate::config::deployment::slot_for("moss", Some(site_id)) {
         crate::deploy::landed::record_prebuilt_landed(project_folder, &generation_id, &target, &manifest);
     }
+    let hosted = crate::deploy::hosted_address(&env, site_id, &commit_result.url);
     if let Err(e) = crate::vault::deployment_state::record_publish(
         &folder_path_str,
         crate::vault::deployment_state::PublishOutcome {
-            url: commit_result.url.clone(),
+            url: hosted.clone().unwrap_or_else(|| env.assumed_site_url(site_id)),
             deployed_at,
             generation_id: Some(generation_id.clone()),
-            // moss-hosted prebuilt deploy — canonical URL derives from site_id.
+            site_url: hosted,
             ..Default::default()
         },
     ) {
@@ -474,10 +475,7 @@ async fn push_prebuilt_inner(
     // exit for every publish. The `total, total` counts were never read: both
     // listeners stop reading fields once the stage is terminal.
 
-    // Use the env-derived URL rather than the server-echoed one so staging
-    // deploys surface the correct staging URL (not the prod-shaped echo).
-    // Mirrors the already-fixed short-circuit paths at :207/:236. Like those
-    // paths, the custom domain wins once DNS is verified.
+    // Like the short-circuit paths, the custom domain wins once DNS is verified.
     Ok(PushResult::Success {
         url: crate::deploy::view_site_url(&folder_path_str, site_id, env),
         files_uploaded: total,
