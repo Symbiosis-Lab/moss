@@ -105,12 +105,11 @@ hides_edit: boolean;
  */
 is_below_titlebar: boolean; 
 /**
- * Whether the browser-panel is showing a login URL (matters.town/matters.icu
- * login path). When true, the shell renders the login chrome (identity +
- * back + close) instead of the generic plugin-title strip. Always false for
- * non-browser occupants (editor, composer). Design: C1–C4.
+ * The login the browser-panel shows, if any. A login renders its own
+ * chrome (identity and actions) instead of the generic plugin-title strip.
+ * Never set for non-browser occupants (editor, composer).
  */
-is_login_browser: boolean }
+login: LoginKind | null }
 
 /**
  * What one address IS, which decides how moss offers it.
@@ -1333,6 +1332,11 @@ export type LoginFailureReason =
  * Network appears fine, but the webview page loaded with an empty body.
  */
 "loaded_blank"
+
+/**
+ * A login the browser-panel can show; the shell draws each in its own words.
+ */
+export type LoginKind = "matters" | "ghost"
 
 /**
  * Physical-source evidence for a missing authored asset.

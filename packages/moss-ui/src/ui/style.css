@@ -2721,8 +2721,8 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
 }
 
 /* Login chrome.
-   Rendered into #moss-titlebar-plugin-section when the login browser-panel is
-   open (`is_login_browser=true`). ONE 48px titlebar strip, panel-side region:
+   Rendered into #moss-titlebar-plugin-section when the browser-panel shows a
+   login (`login` is set). ONE 48px titlebar strip, panel-side region:
    [back (hidden if !canGoBack)] [Matters icon + "Matters" centered] [spacer].
    Tokens only — no raw hexes. Mirrors .moss-matters-bar's flex layout. */
 .moss-login-chrome {

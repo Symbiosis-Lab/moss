@@ -226,8 +226,8 @@ pub const MOSS_EVENT_CHANNEL: &str = "moss-event";
 // `types/event_payloads.rs` (row-(a) length budget); re-exported here so the
 // enum stays a thin tag and every consumer spells `types::events::X`.
 pub use crate::types::event_payloads::{
-    host_from_url, ActionPanelOpened, CredentialRequest, LoginFailureReason, NestedRootInfo,
-    NestedRootsReport, PageVerdict, PublishReceipt, PublishReceiptDomain,
+    host_from_url, ActionPanelOpened, CredentialRequest, LoginFailureReason, LoginKind,
+    NestedRootInfo, NestedRootsReport, PageVerdict, PublishReceipt, PublishReceiptDomain,
     PublishReceiptLive, PublishReceiptNewsletter, PublishReceiptPage, PublishReceiptPageKind,
     PublishReceiptUploaded, PublishTarget, PublishVerdict, PublishVerdictOrigin,
     PublishVerdictState, RootClass,
