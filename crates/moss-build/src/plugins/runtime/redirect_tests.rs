@@ -33,6 +33,8 @@ impl Server {
             while !stopped.load(Ordering::SeqCst) && Instant::now() < deadline {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Some platforms hand the listener's non-blocking mode to the accepted socket.
+                        stream.set_nonblocking(false).unwrap();
                         stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                         stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
                         let request = read_request(&stream);
@@ -117,6 +119,18 @@ fn read_request(stream: &std::net::TcpStream) -> CapturedRequest {
         reader.read_exact(&mut body).unwrap();
     }
     CapturedRequest { line: request_line, headers, body: String::from_utf8_lossy(&body).into_owned() }
+}
+
+#[test]
+fn a_request_that_arrives_late_is_still_read_whole() {
+    let server = Server::new(|_, _| reply(200, None, "ok"));
+    let mut client = std::net::TcpStream::connect(server.url.trim_start_matches("http://")).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    client.write_all(b"GET /late HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_eq!(server.finish()[0].line, "GET /late HTTP/1.1");
 }
 
 #[tokio::test]
