@@ -4431,6 +4431,17 @@ const CORE: &[ComponentEntry] = &[
         description: "The endnote section as the bottom sheet: `position: sticky; bottom: 0` plus a JS-driven height clip. The section never leaves flow — the peek clips to exactly the tapped note, dragging up expands to a 62vh glossary, and scrolling the page to the section's true place docks it back, chrome fading via `--moss-sheet-away`. One surface; nothing is cloned or re-parented.",
     },
     ComponentEntry {
+        class: "moss-footnote-slot",
+        kind: "instance",
+        parent: "",
+        data_attrs: &[],
+        example_html: r##"<div class="moss-footnote-slot" style="overflow-anchor: none"></div>"##,
+        example_markdown: "Text[^1].\n\n[^1]: The note.",
+        status: Status::Emerging,
+        since: "1",
+        description: "The zero-height placeholder `sidenotes.ts` puts just before the endnote section. While the section is lifted as a sheet its height grows by exactly what the clip took, so the page keeps one length docked and lifted.",
+    },
+    ComponentEntry {
         class: "moss-footnote-landed",
         kind: "instance",
         parent: "",

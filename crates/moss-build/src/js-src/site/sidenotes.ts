@@ -66,7 +66,39 @@ interface Sheet {
   release(): void;
 }
 
-export function initSidenotes(): void {
+/** Takes back everything an earlier run built, leaving the served endnote list,
+ * whatever a morph did or did not remove. */
+function teardown(): void {
+  document.querySelectorAll("aside.moss-sidenote").forEach((a) => a.remove());
+  document
+    .querySelectorAll("[aria-describedby^='moss-sidenote-']")
+    .forEach((el) => el.removeAttribute("aria-describedby"));
+  document.querySelectorAll(".moss-footnote-slot").forEach((el) => el.remove());
+  document.querySelectorAll<HTMLElement>("section.moss-footnotes").forEach((section) => {
+    const scroller = section.querySelector(":scope > .moss-footnote-scroller");
+    if (scroller) {
+      section.replaceChildren(...scroller.childNodes);
+      section.querySelector(":scope > h2.moss-footnotes-title")?.remove();
+      section.querySelector(":scope > ol")?.removeAttribute("role");
+    }
+    section.querySelectorAll(":scope > .moss-footnote-grab").forEach((g) => g.remove());
+    section.classList.remove("moss-footnotes-cloned", "moss-footnotes-lifted");
+    section.style.height = "";
+    section.style.removeProperty("--moss-sheet-away");
+  });
+}
+
+/** The previous run's listeners: a morph re-runs the init over elements that
+ * kept their identity, and their old handlers must not stack. */
+let wired: AbortController | undefined;
+
+/** `arrive` replays the `#fn-N` arrival: right for a page load, wrong for a
+ * morph, which would re-wash and re-scroll to a note the reader already left. */
+export function initSidenotes(arrive = true): void {
+  wired?.abort();
+  wired = new AbortController();
+  const { signal } = wired;
+  teardown();
   const bucket = langBucket(document.documentElement.lang);
   const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -137,14 +169,22 @@ export function initSidenotes(): void {
       // it is already visible, yanking the page while the sheet peeks.
       // Keyboard focus (Tab) never passes through mousedown and keeps
       // working.
-      link.addEventListener("mousedown", (e) => {
-        if (sheetIsHome()) e.preventDefault();
-      });
-      link.addEventListener("click", (e) => {
-        if (!sheetIsHome()) return;
-        e.preventDefault();
-        liftAt(note);
-      });
+      link.addEventListener(
+        "mousedown",
+        (e) => {
+          if (sheetIsHome()) e.preventDefault();
+        },
+        { signal },
+      );
+      link.addEventListener(
+        "click",
+        (e) => {
+          if (!sheetIsHome()) return;
+          e.preventDefault();
+          liftAt(note);
+        },
+        { signal },
+      );
     });
 
   /* ---- the sheets ----------------------------------------------------- */
@@ -202,6 +242,7 @@ export function initSidenotes(): void {
     // Scroll anchoring would read the slot's growth and the section leaving
     // flow as content shifting under the reader, and "correct" it by
     // scrolling the page — hundreds of pixels, on a tap that asked for none.
+    slot.className = "moss-footnote-slot";
     slot.style.overflowAnchor = "none";
     section.before(slot);
     let flowH = 0; // the flow the clip took, measured at the lift
@@ -289,6 +330,7 @@ export function initSidenotes(): void {
     }
 
     let anim = 0;
+    signal.addEventListener("abort", () => cancelAnimationFrame(anim));
     function settleTo(target: number, done?: () => void) {
       cancelAnimationFrame(anim);
       hTarget = target;
@@ -347,9 +389,9 @@ export function initSidenotes(): void {
     };
     // Scrolling gestures only — a TAP must not open the window, or the
     // deferred focus-reveal that follows it walks right through.
-    addEventListener("wheel", intent, { passive: true, capture: true });
-    addEventListener("touchmove", intent, { passive: true, capture: true });
-    addEventListener("keydown", intent, { capture: true });
+    addEventListener("wheel", intent, { passive: true, capture: true, signal });
+    addEventListener("touchmove", intent, { passive: true, capture: true, signal });
+    addEventListener("keydown", intent, { capture: true, signal });
 
     let zoneS: number | null = null;
     function checkDock() {
@@ -384,7 +426,7 @@ export function initSidenotes(): void {
         });
       }
     }
-    window.addEventListener("scroll", checkDock, { passive: true });
+    window.addEventListener("scroll", checkDock, { passive: true, signal });
 
     // Drag — the gesture leaves the sheet's box immediately on an upward
     // pull, so move/up listen on the window for the pointer's lifetime. An
@@ -452,7 +494,7 @@ export function initSidenotes(): void {
       addEventListener("pointermove", mv, { passive: false });
       addEventListener("pointerup", up);
       addEventListener("pointercancel", up);
-    });
+    }, { signal });
 
     // The grabber: the drag's destination, equally there by tap, keyboard
     // and screen reader.
@@ -515,7 +557,7 @@ export function initSidenotes(): void {
           });
         }
       }
-    });
+    }, { signal });
 
     // The page stays live behind the sheet: scrolling never dismisses; a
     // discrete tap outside it does (no scrim — the page is not modal).
@@ -526,10 +568,10 @@ export function initSidenotes(): void {
         !(e.target as Element).closest(".moss-footnote-ref")
       )
         sink();
-    });
+    }, { signal });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && lifted) sink();
-    });
+    }, { signal });
 
     return {
       lift: (note) => {
@@ -563,8 +605,11 @@ export function initSidenotes(): void {
       liftAt(note);
     }
   }
-  window.addEventListener("hashchange", land);
-  land();
+  window.addEventListener("hashchange", land, { signal });
+  if (arrive) land();
 }
 
 initSidenotes();
+// A morph removes the margin notes and sheet furniture and restores the
+// served endnote list, so the build runs again from it.
+document.addEventListener("moss-morph-patched", () => initSidenotes(false));
