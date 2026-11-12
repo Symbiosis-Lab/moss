@@ -69,6 +69,7 @@ pub(super) enum FailureClass {
 /// | `SiteLimitReached` | Fatal | The plan's quota is a final answer; the user must act on it. |
 /// | `StorageCapExceeded` | Fatal | The site is over its storage cap; re-sending cannot shrink it. |
 /// | `DeploySuperseded` | Fatal | A newer publish owns the site now; this one is over. |
+/// | `UpdateRequired` | Fatal | The server refuses this moss as too old; only an update changes that. |
 /// | `Challenge` | Fatal | Unsolvable by a native client **on every status**, including the 503 the row above calls Backpressure. Retrying only deepens the edge's reputation signal against the user. |
 pub(super) fn classify(error: &SetaError) -> FailureClass {
     match error {
@@ -76,6 +77,7 @@ pub(super) fn classify(error: &SetaError) -> FailureClass {
         // challenge can arrive as a 503 or a 429, the two statuses the `Api`
         // arm below would otherwise wave through as Backpressure.
         SetaError::Challenge { .. } => FailureClass::Fatal,
+        SetaError::UpdateRequired { .. } => FailureClass::Fatal,
         SetaError::TooSoon { .. } => FailureClass::Backpressure,
         SetaError::Api { status, .. } => match *status {
             429 | 503 => FailureClass::Backpressure,

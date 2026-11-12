@@ -16,7 +16,8 @@ fn error_body(status: u16, body: &str, code: &str) -> Option<serde_json::Value> 
 /// A refusal the server names in a `code` field: `storage_cap_exceeded` on a
 /// 413 and `deploy_superseded` on a 409, whose `error` is the sentence to
 /// show; `folder_not_signed_in` on a 403 and `key_has_other_site` on a 409,
-/// which name a `site`. Any other body, or a known code on another status, is
+/// which name a `site`; `update_required` on a 410, whose `message` is the
+/// sentence to show and `min_version` the oldest moss the route accepts. Any other body, or a known code on another status, is
 /// not one of these and falls through to the generic path.
 pub(super) fn parse_coded_refusal(status: u16, body: &str) -> Option<SetaError> {
     let json = serde_json::from_str::<serde_json::Value>(body).ok()?;
@@ -30,6 +31,7 @@ pub(super) fn parse_coded_refusal(status: u16, body: &str) -> Option<SetaError> 
         (409, "deploy_superseded") => Some(SetaError::DeploySuperseded { message: text("error")? }),
         (403, "folder_not_signed_in") => Some(SetaError::NotSignedIn { site: text("site")? }),
         (409, "key_has_other_site") => Some(SetaError::KeyHasOtherSite { site: text("site")? }),
+        (410, "update_required") => Some(SetaError::UpdateRequired { min_version: text("min_version"), message: text("message")? }),
         _ => None,
     }
 }

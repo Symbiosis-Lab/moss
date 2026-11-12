@@ -174,6 +174,7 @@ impl MossSetaClient {
     // ========== Site Hosting (Public) Endpoints ==========
 
     /// Check if a site ID is available on mosspub.com (public, no auth required).
+    /// `Ok(false)` is the server's own "taken"; any failed request is an `Err`.
     pub async fn check_site_id_available(&self, site_id: &str) -> Result<bool, SetaError> {
         let url = format!("{}/api/sites/{}/available", self.base_url, site_id);
 
@@ -182,7 +183,7 @@ impl MossSetaClient {
         let response = self.client.get(&url).send().await?;
 
         if !response.status().is_success() {
-            return Ok(false);
+            return Err(SetaError::from_failed_response(response).await);
         }
 
         #[derive(Deserialize)]

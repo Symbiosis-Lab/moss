@@ -738,8 +738,7 @@ fn test_for_environment_routes_production() {
 }
 
 /// `new_for_environment` (unauthenticated) must honor the environment.
-/// Guards the check_site_id_available fix (check_site_id_available fix):
-/// staging users querying ID availability must hit the staging server.
+/// Staging users querying ID availability must hit the staging server.
 #[test]
 fn test_new_for_environment_routes_staging() {
     let _env = crate::ENV_TEST_MUTEX
@@ -1275,6 +1274,38 @@ fn a_storage_cap_refusal_without_a_site_total_still_parses() {
         parse_coded_refusal(413, body),
         Some(SetaError::StorageCapExceeded { cap_bytes: 10, site_bytes: None, .. })
     ));
+}
+
+const UPDATE_BODY: &str = r#"{"code":"update_required","min_version":"0.16.0","message":"Update moss to publish."}"#;
+
+#[tokio::test]
+async fn a_410_update_required_is_typed_with_its_version_and_shows_both() {
+    let err = failed_sync(410, UPDATE_BODY).await;
+    assert!(
+        matches!(&err, SetaError::UpdateRequired { min_version: Some(v), message } if v == "0.16.0" && message == "Update moss to publish."),
+        "{err:?}"
+    );
+    assert_eq!(err.to_string(), "Update moss to publish. This needs moss 0.16.0 or newer.");
+}
+
+#[tokio::test]
+async fn a_410_without_the_update_code_stays_an_api_error() {
+    for body in [r#"{"code":"gone","message":"Gone."}"#, "", r#"{"message":"Update moss to publish."}"#] {
+        let err = failed_sync(410, body).await;
+        assert!(matches!(err, SetaError::Api { status: 410, .. }), "{body}: {err:?}");
+    }
+}
+
+#[tokio::test]
+async fn an_update_required_code_on_another_status_stays_an_api_error() {
+    let err = failed_sync(400, UPDATE_BODY).await;
+    assert!(matches!(err, SetaError::Api { status: 400, .. }), "{err:?}");
+}
+
+#[test]
+fn update_required_without_a_version_shows_only_the_message() {
+    let err = SetaError::UpdateRequired { min_version: None, message: "Update moss to publish.".into() };
+    assert_eq!(err.to_string(), "Update moss to publish.");
 }
 
 #[tokio::test]

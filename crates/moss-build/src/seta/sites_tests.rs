@@ -510,3 +510,31 @@ fn event_row_without_visitor_parses_as_none() {
     let row: EventRow = serde_json::from_str(json).unwrap();
     assert_eq!(row.visitor, None);
 }
+
+/// The client ignores response fields it does not know, so a newer server can add them.
+#[test]
+fn a_response_with_an_unknown_field_still_deserializes() {
+    let json = r#"{"url": "https://her-blog.mosspub.com", "files_updated": 5, "files_removed": 1, "timestamp": 1711756800, "added_later": {"x": 1}}"#;
+    let resp: CommitResponse = serde_json::from_str(json).unwrap();
+    assert_eq!(resp.files_updated, 5);
+}
+
+fn available(server: &StandIn) -> impl std::future::Future<Output = Result<bool, crate::seta::client::SetaError>> + '_ {
+    let client = client_for(server);
+    async move { client.check_site_id_available("her-blog").await }
+}
+
+#[tokio::test]
+async fn the_name_check_answers_taken_and_available() {
+    let taken = StandIn::json(200, r#"{"available":false}"#).await;
+    assert!(matches!(available(&taken).await, Ok(false)));
+    let free = StandIn::json(200, r#"{"available":true}"#).await;
+    assert!(matches!(available(&free).await, Ok(true)));
+}
+
+#[tokio::test]
+async fn the_name_check_reports_a_server_failure_instead_of_taken() {
+    let server = StandIn::json(500, r#"{"error":"boom"}"#).await;
+    let result = available(&server).await;
+    assert!(matches!(result, Err(crate::seta::client::SetaError::Api { status: 500, .. })), "{result:?}");
+}

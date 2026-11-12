@@ -13,6 +13,7 @@ All notable changes to moss will be documented here.
 
 - In the editor, a hover card opens only when it has something the line does not show: resting on an external link opens nothing (⌘K still offers the address, Open and Unlink), a page link's card opens only when that page has a description, and the "⌘-click to open" line is gone. In the dark theme the cards are dark again; they had turned pale under light text.
 - The warning about a theme colour set without a dark value is no longer shown on a site whose `color_scheme` is fixed to light or dark, which never shows the other side.
+- `moss deploy` says to update moss when the server no longer accepts this version, instead of a bare API error.
 
 ### Fixed
 
@@ -25,6 +26,7 @@ All notable changes to moss will be documented here.
 - An import drops a page builder's spacer paragraphs and writes a looping strip's repeated pictures once; an alt that is the picture's own file name (`DSC_0042`) is no longer shown as a caption; and a page that opens with its own title as a heading takes it instead of a composite search-engine title.
 - `moss deploy --email` (and any command that waits for a sign-in link) stops as soon as the link has expired and says so: "The sign-in link sent to <address> expired before it was opened. Run the command again with --email to get a new link." Before, it kept checking, then reported that the service could not be reached.
 - Editing a page in the preview no longer strips the margin notes, the selection popover, the mobile selection bar or the link-preview card: they stay after each edit, and a footnote reference still shows its margin note instead of jumping to the end-of-page list. Before, they were gone until a full reload.
+- Checking a site name reports a failed check as a failure, where it used to say the name was taken.
 
 ## [0.15.23] - 2026-11-12
 

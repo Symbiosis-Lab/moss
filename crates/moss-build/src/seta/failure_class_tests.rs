@@ -86,3 +86,10 @@ fn is_transient_is_exactly_not_fatal() {
         );
     }
 }
+
+/// A refusal for an old app is answered only by updating the app.
+#[test]
+fn an_update_required_refusal_is_never_retried() {
+    let e = SetaError::UpdateRequired { min_version: Some("0.16.0".into()), message: "Update moss to publish.".into() };
+    assert_eq!(classify(&e), FailureClass::Fatal);
+}

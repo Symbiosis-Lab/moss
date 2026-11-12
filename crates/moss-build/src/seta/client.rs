@@ -475,6 +475,20 @@ pub enum SetaError {
     /// `409 {code:'deploy_superseded', error}`. Display is the server's sentence.
     #[error("{message}")]
     DeploySuperseded { message: String },
+
+    /// The server refuses this moss as too old for the route:
+    /// `410 {code:'update_required', min_version?, message}`. Retrying cannot
+    /// help; the app has to be updated first.
+    #[error("{}", update_required_text(message, min_version))]
+    UpdateRequired { min_version: Option<String>, message: String },
+}
+
+/// The server's sentence, then the oldest moss it accepts when it names one.
+fn update_required_text(message: &str, min_version: &Option<String>) -> String {
+    match min_version {
+        Some(v) => format!("{message} This needs moss {v} or newer."),
+        None => message.to_string(),
+    }
 }
 
 /// The folder a sign-in link is for: its site, once it has one, and its own
