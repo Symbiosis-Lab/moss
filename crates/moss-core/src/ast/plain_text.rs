@@ -349,12 +349,7 @@ fn render_block(
         Block::DefinitionDefinition(children) => {
             render_blocks(children, index, hoisted, list_depth, out);
         }
-        Block::Shortcode(_) => {
-            // Shortcodes are stripped or expanded out of the raw markdown
-            // upstream (e.g. newsletter.rs's `expand_recent_then_strip`)
-            // before it ever reaches a parser — a shortcode block surviving
-            // to this renderer is defensive-only and contributes no text.
-        }
+        Block::Shortcode(_) => {}
         Block::ThematicBreak => out.push_str("---\n\n"),
         Block::Figure { image, .. } => {
             render_inline_plain(image, index, out);

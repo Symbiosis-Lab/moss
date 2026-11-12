@@ -6620,7 +6620,8 @@ article a:where(:not(.moss-btn)):focus {
 
 .moss-cards[data-layout="grid"] {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--moss-card-min, var(--_card-min, 280px)), 1fr));
+  /* Capped at the container, so a minimum wider than it fits rather than overflowing. */
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--moss-card-min, var(--_card-min, 280px)), 100%), 1fr));
   gap: var(--moss-space-lg);
   /* Logical: the listing's separation from the prose around it is a block-axis
      rhythm. Spelled physically it ate 128px off a vertical page's band. */
@@ -6760,11 +6761,12 @@ article a:where(:not(.moss-btn)):focus {
   overflow-wrap: anywhere;
 }
 
-/* Fall back to single column in very narrow containers (sidebar embeds etc.).
-   The @container query targets the wrapper, so the rule looks INTO the grid. */
+/* Very narrow containers (a phone, a sidebar embed) get one column, unless the
+   theme set `--moss-card-min`: then its minimum decides, capped as above. The
+   @container query targets the wrapper, so the rule looks INTO the grid. */
 @container (max-width: 320px) {
   .moss-cards[data-layout="grid"] {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--moss-card-min, 100%), 100%), 1fr));
   }
 }
 
@@ -10017,7 +10019,7 @@ main.has-sidebar > .moss-series-nav {
 .moss-series-nav-link {
   display: flex;
   align-items: baseline;
-  gap: 0.3em;
+  gap: var(--moss-space-xs);
   width: 50%;
   font-size: var(--moss-size-sm);
   line-height: 1.4;
@@ -10031,9 +10033,12 @@ main.has-sidebar > .moss-series-nav {
   text-align: right;
 }
 
-/* Arrow stays fixed, doesn't wrap */
+/* The arrow is set as the label it marks, so its line is no taller than the
+   label's and the link's box starts where its text does. */
 .moss-series-nav-arrow {
   flex-shrink: 0;
+  font-size: var(--moss-size-xs);
+  line-height: 1.2;
 }
 
 /* Title can wrap to multiple lines */

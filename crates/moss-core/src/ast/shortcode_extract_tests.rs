@@ -3481,3 +3481,19 @@ mod plugin_blocks {
         assert_eq!(doc.warnings, vec!["unknown shortcode `:::nope` on line 3".to_string()]);
     }
 }
+
+#[test]
+fn block_syntax_goes_and_the_writing_stays() {
+    let md = "Intro.\n\n:::hero {image=a.jpg align=bottom\n  dark=auto}\n# Welcome\nA line.\n:::\n\n::::{.band}\n:::grid 2\nOne.\n+++\nTwo.\n:::\n---\nAfter the rule.\n::::\n\n```md\n:::hero {image=b.jpg}\n:::\n```\n\n:::form {#ask}\n- Name *\n:::\n\n:::grid\nunclosed\n";
+    let out = without_block_syntax(md);
+    assert_eq!(
+        out,
+        "Intro.\n\n# Welcome\nA line.\n\nOne.\nTwo.\n---\nAfter the rule.\n\n```md\n:::hero {image=b.jpg}\n:::\n```\n\n\n:::grid\nunclosed\n"
+    );
+}
+
+#[test]
+fn a_rule_inside_a_hero_is_the_page_s_own() {
+    let md = ":::hero {image=a.jpg}\nTitle\n---\nA line.\n\n---\n\nMore.\n:::\n";
+    assert_eq!(without_block_syntax(md), "Title\n---\nA line.\n\n---\n\nMore.\n");
+}

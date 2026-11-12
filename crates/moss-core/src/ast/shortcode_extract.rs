@@ -2058,6 +2058,47 @@ pub(crate) fn find_block_end(
     None
 }
 
+/// `markdown` with its `:::` block syntax taken out and the writing inside
+/// kept, for a reader of the source rather than the page. Opener lines (a
+/// multi-line attribute block included) and closer lines go, and so do a grid's
+/// own `+++`/`---` cell dividers. A block whose body is not writing
+/// ([`ShortcodeKind::body_is_writing`]) goes whole. Code, comments and an
+/// opener nothing closes stay as written, the same as the build treats them.
+pub fn without_block_syntax(markdown: &str) -> String {
+    use crate::ast::shortcode::ShortcodeKind;
+    let lines: Vec<&str> = markdown.lines().collect();
+    let inert = crate::inert_regions::inert_lines(markdown);
+    let is_inert = |idx: usize| inert.get(idx).copied().unwrap_or(false);
+    let mut keep = vec![true; lines.len()];
+    // `None` for a fenced div or a plugin's block.
+    let mut open: Vec<Option<ShortcodeKind>> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if !is_inert(i) {
+            if let Some((name, args)) = parse_shortcode_opener(trimmed) {
+                let (_, attr_lines) = gather_multi_line_attrs(args, &lines[i + 1..]);
+                if find_block_end(&lines, i + 1 + attr_lines, is_inert).is_some() {
+                    keep[i..=i + attr_lines].fill(false);
+                    open.push(ShortcodeKind::all().find(|k| k.name() == name));
+                    i += 1 + attr_lines;
+                    continue;
+                }
+            } else if is_close_fence(trimmed) {
+                keep[i] = false;
+                open.pop();
+                i += 1;
+                continue;
+            }
+        }
+        let divider = !is_inert(i) && (trimmed == "+++" || trimmed == "---");
+        keep[i] = !(open.iter().flatten().any(|k| !k.body_is_writing())
+            || (divider && matches!(open.last(), Some(Some(ShortcodeKind::Grid)))));
+        i += 1;
+    }
+    markdown.split_inclusive('\n').zip(&keep).filter(|(_, k)| **k).map(|(l, _)| l).collect()
+}
+
 #[cfg(test)]
 #[path = "shortcode_extract_tests.rs"]
 mod tests;

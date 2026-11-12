@@ -2433,6 +2433,17 @@ const CORE: &[ComponentEntry] = &[
         description: "One calendar link: the .ics file, or the webcal:// subscription.",
     },
     ComponentEntry {
+        class: "moss-external-link",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-external-link"><a href="https://archive.example.org/field/">archive.example.org<span aria-hidden="true"> ↗</span></a></p>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "0.24",
+        description: "The link out at the end of a page with an http(s) `external_url:`, named by that address's host. Left out when the body already links to that address.",
+    },
+    ComponentEntry {
         class: "moss-series-nav",
         kind: "standalone",
         parent: "",

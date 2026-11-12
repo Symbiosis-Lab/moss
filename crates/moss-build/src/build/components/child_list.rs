@@ -578,11 +578,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     // kicker (the Daring-Fireball linkblog convention).
     // A page-less entry has no local address: no archive mark, and no link
     // unless it names an outlet or a file on the site.
-    let external_url = if doc.is_pageless_entry() {
-        crate::build::scan::page_map::pageless_row_href(&doc.raw_frontmatter)
-    } else {
-        crate::build::scan::page_map::external_url(&doc.raw_frontmatter)
-    };
+    let external_url = crate::build::scan::page_map::outlet_href(doc);
     let local_url = (!doc.is_pageless_entry())
         .then(|| path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path)));
     let permalink = external_url.as_ref().and(local_url.clone());

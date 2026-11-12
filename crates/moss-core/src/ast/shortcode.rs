@@ -572,6 +572,15 @@ impl ShortcodeKind {
         }
     }
 
+    /// Whether the block's body is the page's own writing, as opposed to field
+    /// specs or a fallback line the rendered block replaces.
+    pub fn body_is_writing(self) -> bool {
+        match self {
+            ShortcodeKind::Buttons | ShortcodeKind::Gallery | ShortcodeKind::Hero | ShortcodeKind::Grid => true,
+            ShortcodeKind::Subscribe | ShortcodeKind::Recent | ShortcodeKind::Form => false,
+        }
+    }
+
     /// All shortcode variants, in a stable order.
     ///
     /// Used for enforcement and round-trip tests in `components_test.rs`.

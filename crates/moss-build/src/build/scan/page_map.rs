@@ -852,6 +852,16 @@ pub fn nav_external_href(
         .filter(|u| is_valid_nav_target(u))
 }
 
+/// Where a listing row or card for `doc` links instead of its local address: a
+/// page-less entry's [`pageless_row_href`], else a page's [`external_url`].
+pub fn outlet_href(doc: &crate::build::types::ParsedDocument) -> Option<String> {
+    if doc.is_pageless_entry() {
+        pageless_row_href(&doc.raw_frontmatter)
+    } else {
+        external_url(&doc.raw_frontmatter)
+    }
+}
+
 /// Where a page-less listing row links: an http(s) outlet or a site path to a
 /// file or folder the site serves (a PDF, a hand-made HTML folder), the same
 /// targets a page-less nav entry takes. `None` draws the row unlinked.

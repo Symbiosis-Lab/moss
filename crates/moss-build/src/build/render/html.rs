@@ -581,6 +581,7 @@ impl<'a> PageFacts<'a> {
         if !eyebrow.is_empty() {
             plan.prepend_html(eyebrow.to_string());
         }
+        plan.append_html(credits::external_home_link(doc, &plan).unwrap_or_default());
         plan
     }
 

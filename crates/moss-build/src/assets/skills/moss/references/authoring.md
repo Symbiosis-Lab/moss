@@ -1102,6 +1102,8 @@ Breadcrumbs are switched on for the whole site by `breadcrumb: true` on the home
 
 `url:` sets where a page is published, always inside the page's own folder: in `x/page.md`, `url: share/ID` publishes at `x/share/id/` and `url: a/b` at `x/a/b/`. A `/` is kept as a path separator, each part is cleaned up on its own (lowercased, for one), and `..` parts are dropped. A leading `/` is dropped too, not read as the site root: `url: /a/b` in `x/page.md` also publishes at `x/a/b/`, never at `/a/b/`.
 
+A page that lives on another site needs only a stub here: give it `external_url: https://…` and its cards link there, its canonical link names that address, it stays out of the sitemap, and `llms.txt` lists it with that address. The built page ends with a link there, named by the address's host (`<p class="moss-external-link">`), so the body needs no `[Open ↗](…)` line; a body that already links to that exact address gets no second one.
+
 A nav bar entry can point somewhere other than its page: a page that is in the nav (`nav: true`) and sets `external_url:` makes its entry link to that value — `https://…`, `mailto:`, `tel:`, a section anchor `#services` or a site path `/#services` — and `nav_label` still names it. The page itself is still built at its own URL; give it `listed: false` if it should stay out of listings. Style the entry with a selector like `.nav-links a[href^="mailto:"]`. This applies to the header nav only: the footer links keep the page's own URL, and cards, canonical links and the sitemap only honour an `https://` or `http://` value, so a `mailto:`, `tel:` or `#anchor` there is used by the nav entry alone.
 
 ```yaml

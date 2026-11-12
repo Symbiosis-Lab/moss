@@ -309,6 +309,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_shortcode_leaves_no_block_syntax_behind() {
+        for e in catalog() {
+            let source = template_with_wide(e.canonical_template);
+            let left = crate::ast::shortcode_extract::without_block_syntax(&source);
+            for line in left.lines() {
+                let t = line.trim();
+                assert!(
+                    !t.starts_with(":::") && t != "+++" && !t.contains("{wide") && !t.contains("{type="),
+                    "{}: `{t}` is block syntax, left in {left:?}",
+                    e.name
+                );
+            }
+        }
+    }
+
     /// The template as an author would type it, with `{wide}` in its
     /// attribute block and the snippet tab stops replaced by their text.
     fn template_with_wide(template: &str) -> String {

@@ -4855,3 +4855,105 @@ children: false
     "work/gamma.md": STRIP_PROJECT("Gamma Ventures"),
   },
 };
+
+/** An ordered series of three pages, the middle one with a title long enough
+ * to wrap in a phone's half-width link. */
+export const SERIES_NAV_GATE: ScratchSiteSpec = {
+  name: "series-nav-gate",
+  files: {
+    "index.md": `---
+title: Field Course
+uid: "srn00101"
+---
+
+# Field Course
+`,
+    "course/index.md": `---
+title: Course
+uid: "srn00102"
+series: true
+sort: weight
+---
+`,
+    "course/one.md": `---
+title: Reading the ground
+uid: "srn00103"
+weight: 1
+---
+
+The first lesson.
+`,
+    "course/two.md": `---
+title: Measuring a slope by eye, with a pole and a length of string
+uid: "srn00104"
+weight: 2
+---
+
+The second lesson.
+`,
+    "course/three.md": `---
+title: Mapping
+uid: "srn00105"
+weight: 3
+---
+
+The third lesson.
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
+  },
+};
+
+const CARD_MIN_ENTRY = (title: string, uid: string, weight: number, description = "") => `---
+title: ${title}
+uid: "${uid}"
+weight: ${weight}
+${description ? `description: ${description}\n` : ""}---
+
+${title}.
+`;
+
+/** A theme that asks for small cards (\`--moss-card-min\`), over a grid
+ * listing with descriptions and a bare-label roster (the index state). */
+export const CARD_MIN_TOKEN_GATE: ScratchSiteSpec = {
+  name: "card-min-token-gate",
+  files: {
+    "index.md": `---
+title: Shelves
+uid: "cmt00101"
+---
+
+# Shelves
+
+## Shelf
+
+![[shelf/|style:grid,sort:weight]]
+
+## Roster
+
+![[roster/|style:grid,sort:weight]]
+`,
+    "shelf/index.md": `---\ntitle: Shelf\nuid: "cmt00102"\n---\n`,
+    "shelf/a.md": CARD_MIN_ENTRY("Alder", "cmt00103", 1, "A short note."),
+    "shelf/b.md": CARD_MIN_ENTRY("Birch", "cmt00104", 2, "A short note."),
+    "shelf/c.md": CARD_MIN_ENTRY("Cedar", "cmt00105", 3, "A short note."),
+    "shelf/d.md": CARD_MIN_ENTRY("Damson", "cmt00106", 4, "A short note."),
+    "roster/index.md": `---\ntitle: Roster\nuid: "cmt00107"\n---\n`,
+    "roster/a.md": CARD_MIN_ENTRY("Ash", "cmt00108", 1),
+    "roster/b.md": CARD_MIN_ENTRY("Beech", "cmt00109", 2),
+    "roster/c.md": CARD_MIN_ENTRY("Cherry", "cmt00110", 3),
+    "roster/d.md": CARD_MIN_ENTRY("Dogwood", "cmt00111", 4),
+    ".moss/theme/style.css": `:root {
+  --moss-card-min: 7rem;
+}
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
+  },
+};

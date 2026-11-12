@@ -1,4 +1,5 @@
-//! Credit rows: the byline at the head of a page and the colophon at its foot.
+//! Credit rows: the byline at the head of a page and the colophon at its foot,
+//! and the link out at the end of a page that lives on another site.
 //!
 //! **On every page kind.** Frontmatter that exists only to be displayed is
 //! displayed; everything else is metadata, and the body is the author's.
@@ -177,6 +178,25 @@ pub fn splice_page_masthead(
     } else {
         crate::build::markdown::html_post::splice_after_title_block(&content, &masthead)
     }
+}
+
+/// A link to the address a page published elsewhere lives at (`external_url:`),
+/// for the end of its body, named by that address's host as the author wrote
+/// it (so an international domain reads in its own script, not punycode);
+/// `None` when the body already links there.
+pub fn external_home_link(doc: &crate::build::types::ParsedDocument, body: &crate::build::markdown::body_plan::BodyPlan) -> Option<String> {
+    let url = crate::build::scan::page_map::external_url(&doc.raw_frontmatter)?;
+    let attr = format!(r#"href="{}""#, moss_core::media::html_escape_attr(&url));
+    let mut linked = false;
+    body.for_each_html(&mut |html| linked |= html.contains(&attr));
+    url::Url::parse(&url).ok()?.host_str()?;
+    let authority = url.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit('@').next()?;
+    let host = host.rsplit_once(':').filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit())).map_or(host, |(h, _)| h);
+    (!linked).then(|| format!(
+        r#"<p class="moss-external-link"><a {attr}>{}<span aria-hidden="true"> ↗</span></a></p>"#,
+        crate::build::features::html_escape(host.trim_start_matches("www.")),
+    ))
 }
 
 /// One term line: the field's label, then its names as links through the one

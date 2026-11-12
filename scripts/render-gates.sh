@@ -130,6 +130,8 @@ GATES_BUILD=(
   type-defaults
   diagrams
   browser-editor
+  series-nav
+  card-min-token
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

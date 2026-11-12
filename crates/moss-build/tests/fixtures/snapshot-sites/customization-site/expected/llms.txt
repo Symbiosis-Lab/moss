@@ -166,26 +166,18 @@ Type system and trait reference.
 
 This page demonstrates shortcodes.
 
-:::toc
-:::
 
 ## Image Gallery
 
-:::gallery 2
 https://example.com/photo1.jpg
 https://example.com/photo2.jpg
 https://example.com/photo3.jpg
-:::
 
 ## Important Notes
 
-:::callout warning
 This is a warning callout block.
-:::
 
-:::callout tip
 This is a helpful tip.
-:::
 
 ## Further Reading
 

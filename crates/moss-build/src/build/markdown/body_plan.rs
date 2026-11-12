@@ -373,6 +373,18 @@ impl BodyPlan {
         self.after_first_text_segments += 1;
     }
 
+    /// Put `html` after the body, inside the cover column when the whole body
+    /// is. No-op for an empty fragment.
+    pub fn append_html(&mut self, html: String) {
+        if html.is_empty() {
+            return;
+        }
+        if self.lede_segments >= self.segments.len() {
+            self.lede_segments += 1;
+        }
+        self.segments.push(BodySegment::Html(html));
+    }
+
     /// Insert the place-map locator `html` into the body at `placement`:
     /// immediately before the body's first text block (a paragraph, list or
     /// blockquote), or immediately after it. A leading heading, rule or media
