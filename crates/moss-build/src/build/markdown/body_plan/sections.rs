@@ -175,8 +175,6 @@ pub(super) fn answered_by_namesakes(names: &[HeadingName], dropped: &[String]) -
 /// `html` with an anchor for `alias` inside the heading whose id is `id`, the
 /// way the renderer places a heading's second id.
 pub(super) fn add_heading_alias(html: &str, id: &str, alias: &str) -> String {
-    let Ok(open) = Regex::new(&format!(r#"<h[1-6] id="{}"[^>]*>"#, regex::escape(id))) else {
-        return html.to_string();
-    };
+    let open = Regex::new(&format!(r#"<h[1-6] id="{}"[^>]*>"#, regex::escape(id))).expect("an escaped id in a fixed pattern is a valid regex");
     open.replace(html, |c: &regex::Captures| format!(r#"{}<span id="{alias}"></span>"#, &c[0])).into_owned()
 }

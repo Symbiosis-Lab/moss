@@ -768,7 +768,7 @@ fn expanding_drops_a_section_whose_embeds_are_empty_innermost_first_and_keeps_th
     let md = format!("Lede.\n\n## A\n\n### B\n\n{POSTS_EMBED}\n\n## C\n\n{POSTS_EMBED}\n");
     let mut plan = render_segmented(&parse(&md), &hooks);
     let dropped = plan.expand_html(&|html| if html.contains("MOSS_MARKER") { String::new() } else { html.to_string() });
-    assert_eq!(dropped, ["b", "a", "c"]);
+    assert_eq!(dropped, [("b".to_string(), false), ("a".to_string(), false), ("c".to_string(), false)]);
     assert!(!plan.to_html().contains("<h"), "{}", plan.to_html());
     let mut plan = render_segmented(&parse(&md), &hooks);
     plan.expand_html(&|html| html.replace(POSTS_EMBED, "<ul>x</ul>"));

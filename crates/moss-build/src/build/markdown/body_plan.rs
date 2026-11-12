@@ -94,7 +94,6 @@ pub struct BodyPlan {
     pub has_text: bool,
     /// Each heading's anchor and the name it shares with headings of the same
     /// name (the id it is numbered from, else its own), in document order.
-    /// Read when a section is left out, so empty when the body has none.
     pub heading_names: Vec<sections::HeadingName>,
 }
 
@@ -313,12 +312,13 @@ impl BodyPlan {
 
     /// [`map_html`] with `expand` for the folder embeds: a section whose embeds
     /// all expand to nothing is left out, and the ids of those left out are
-    /// returned. No heading left changes its id; a kept heading of the same
+    /// returned, each with whether a kept heading of the same name answers its
+    /// anchor. No heading left changes its id; a kept heading of the same
     /// name also answers a dropped one's anchor, so `#posts` still lands on
     /// the first "Posts" the page shows.
     ///
     /// [`map_html`]: BodyPlan::map_html
-    pub fn expand_html(&mut self, expand: &dyn Fn(&str) -> String) -> Vec<String> {
+    pub fn expand_html(&mut self, expand: &dyn Fn(&str) -> String) -> Vec<(String, bool)> {
         let mut dropped = Vec::new();
         let mut at = 0;
         while let Some(seg) = self.segments.get_mut(at) {
@@ -339,10 +339,11 @@ impl BodyPlan {
                 }
             }
         }
-        for (kept, alias) in sections::answered_by_namesakes(&self.heading_names, &dropped) {
-            self.map_html(&|html| sections::add_heading_alias(html, &kept, &alias));
+        let answered = sections::answered_by_namesakes(&self.heading_names, &dropped);
+        for (kept, alias) in &answered {
+            self.map_html(&|html| sections::add_heading_alias(html, kept, alias));
         }
-        dropped
+        dropped.into_iter().map(|id| { let is_answered = answered.iter().any(|(_, alias)| *alias == id); (id, is_answered) }).collect()
     }
 
     /// Every inline subscribe form in the body, for the Reduce pass that
@@ -722,7 +723,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     let after_first_text_segments = after_first_text_segments.unwrap_or(first_text_segments);
     moss_core::ast::footnotes::render_section(hooks, &mut buf, &doc.blocks, &mut fnotes);
     flush(&mut buf, &mut segments);
-    let heading_names = if section_until > 0 { sections::heading_names(doc) } else { Vec::new() };
+    let heading_names = sections::heading_names(doc);
 
     BodyPlan {
         segments,

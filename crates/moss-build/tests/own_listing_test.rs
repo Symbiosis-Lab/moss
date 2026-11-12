@@ -308,6 +308,13 @@ mod empty_sections {
     }
 
     #[test]
+    fn an_authors_element_with_the_dropped_id_is_not_a_target_for_the_note() {
+        let site = site("## Posts\n\n![[posts/|limit:1]]\n\n## Other\n\n<span id=\"posts\"></span>\n\nTail.", false);
+        let note = site.notes.iter().find(|n| n.contains("left out the heading #posts")).unwrap_or_else(|| panic!("{:?}", site.notes));
+        assert!(note.contains("no target"), "{note}");
+    }
+
+    #[test]
     fn a_heading_of_another_name_keeps_its_id_and_answers_nothing_new() {
         for kept in ["## Posts 2", "## Notes {#posts-2}"] {
             let site = site(&format!("## Posts\n\n![[posts/|limit:1]]\n\n{kept}\n\nWords, see [here](#posts-2)."), false);
