@@ -41,7 +41,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::document::Document;
-use super::footnotes::{self, FootnoteIndex};
+use super::footnotes::{self, Definitions, FootnoteIndex};
 use super::math_text::math_source_from_other;
 use super::node::{Block, CalloutKind, Fold, Inline};
 use super::url::Url;
@@ -142,11 +142,12 @@ pub fn inlines_to_plain_text(inlines: &[Inline]) -> String {
 /// Does NOT append any email-specific footer (unsubscribe line, etc.) —
 /// callers own their own presentation around this lowering.
 pub fn render_plain_text(doc: &Document) -> String {
-    let index = FootnoteIndex::build(&doc.blocks);
-    let hoisted = footnotes::hoisted_definition_bodies(&doc.blocks);
+    let definitions = Definitions::collect(&doc.blocks);
+    let hoisted = definitions.addresses();
+    let index = FootnoteIndex::from_definitions(&doc.blocks, &definitions);
     let mut out = String::new();
     render_blocks(&doc.blocks, &index, &hoisted, 0, &mut out);
-    render_footnote_section(&doc.blocks, &index, &hoisted, &mut out);
+    render_footnote_section(&definitions, &index, &hoisted, &mut out);
     out
 }
 
@@ -491,7 +492,7 @@ fn render_inline_plain(inline: &Inline, index: &FootnoteIndex, out: &mut String)
 }
 
 fn render_footnote_section(
-    blocks: &[Block],
+    definitions: &Definitions<'_>,
     index: &FootnoteIndex,
     hoisted: &HashMap<String, usize>,
     out: &mut String,
@@ -501,7 +502,7 @@ fn render_footnote_section(
     }
     out.push_str("--\n");
     for (n, label) in index.entries() {
-        let Some(children) = FootnoteIndex::definition(blocks, label) else {
+        let Some(children) = definitions.body(label) else {
             continue;
         };
         let body = render_blocks_to_string(children, index, hoisted, 0);

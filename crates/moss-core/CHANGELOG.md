@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING:** `ParseConfig` takes a lifetime, `ParseConfig<'a>`, and a `blocks: Option<&'a BlockNames>` field naming the fences plugins declare. Build it as `ParseConfig { …, ..ParseConfig::default() }`; `blocks: None` keeps the old reading, where every `:::name` fence a plugin would own is an unknown shortcode. A struct or function that stored a `ParseConfig` gains the lifetime.
 - **BREAKING:** `Shortcode::kind` returns `Option<ShortcodeKind>`, `None` for a plugin's block.
 - An unknown shortcode's warning now names its line.
+- **BREAKING:** `FootnoteIndex::definition` is removed. It searched the whole block tree on every call; the index and the renderer now find every label's first definition in one walk.
 
 ### Added
 

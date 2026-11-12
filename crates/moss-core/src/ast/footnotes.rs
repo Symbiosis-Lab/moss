@@ -12,6 +12,7 @@
 //! block tree except shortcode bodies, which render through
 //! [`super::render::render_blocks`] as their own little documents.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -41,17 +42,17 @@ impl FootnoteIndex {
     /// Build the index for a block tree. Empty when the tree defines no
     /// footnotes, which is the overwhelmingly common case.
     pub fn build(blocks: &[Block]) -> Self {
-        let mut defined: Vec<String> = Vec::new();
-        collect_definitions(blocks, &mut defined, &mut HashSet::new());
-        if defined.is_empty() {
+        Self::from_definitions(blocks, &Definitions::collect(blocks))
+    }
+
+    /// [`Self::build`] from a walk the caller already made.
+    pub(super) fn from_definitions(blocks: &[Block], definitions: &Definitions<'_>) -> Self {
+        if definitions.labels.is_empty() {
             return Self::default();
         }
-        let defined_set: HashSet<&str> = defined.iter().map(String::as_str).collect();
-
         let mut order: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        let hoisted = first_definition_bodies(blocks, &defined);
-        collect_refs(blocks, &mut order, &mut seen, &hoisted);
+        collect_refs(blocks, &mut order, &mut seen, definitions);
         // From here the reader is reading the endnote section top to
         // bottom, and the numbering follows that reading. A HOISTED note's
         // body can itself carry a marker (`[^1]: see [^2]`); those markers
@@ -69,21 +70,21 @@ impl FootnoteIndex {
         let mut i = 0;
         loop {
             if i == order.len() {
-                let Some(next) = defined.iter().find(|l| !seen.contains(l.as_str())) else {
+                let Some(next) = definitions.labels.iter().find(|l| !seen.contains(**l)) else {
                     break;
                 };
-                seen.insert(next.clone());
-                order.push(next.clone());
+                seen.insert(next.to_string());
+                order.push(next.to_string());
             }
-            if let Some(children) = Self::definition(blocks, &order[i]) {
-                collect_refs(children, &mut order, &mut seen, &hoisted);
+            if let Some(children) = definitions.body(&order[i]) {
+                collect_refs(children, &mut order, &mut seen, definitions);
             }
             i += 1;
         }
 
         let mut index = Self::default();
         for label in order {
-            if !defined_set.contains(label.as_str()) {
+            if definitions.body(&label).is_none() {
                 continue;
             }
             let n = index.order.len() + 1;
@@ -108,80 +109,69 @@ impl FootnoteIndex {
     pub fn entries(&self) -> &[(usize, String)] {
         &self.order
     }
+}
 
-    /// The body blocks of the FIRST definition of `label` in document order,
-    /// at any depth. A repeated label is an authoring error; first wins.
-    pub fn definition<'a>(blocks: &'a [Block], label: &str) -> Option<&'a [Block]> {
+/// The doc-order-first definition of each label, found in one walk.
+///
+/// Every "which definition owns this label" question (the endnote body, the
+/// hoist decision) is answered from here, so they agree by construction and
+/// the tree is walked once however many notes it has. Descends into every
+/// structural container and stops at shortcode bodies, so a label defined
+/// only inside one is absent and never hoisted, matching the renderer.
+pub(super) struct Definitions<'a> {
+    /// In document order of each label's first definition.
+    labels: Vec<&'a str>,
+    bodies: HashMap<&'a str, &'a [Block]>,
+}
+
+impl<'a> Definitions<'a> {
+    pub(super) fn collect(blocks: &'a [Block]) -> Self {
+        let mut definitions = Self {
+            labels: Vec::new(),
+            bodies: HashMap::new(),
+        };
+        definitions.walk(blocks);
+        definitions
+    }
+
+    fn walk(&mut self, blocks: &'a [Block]) {
         for block in blocks {
-            let found = match block {
-                Block::FootnoteDefinition { label: l, children } if l == label => {
-                    return Some(children)
+            count_visit();
+            match block {
+                Block::FootnoteDefinition { label, children } => {
+                    if let Entry::Vacant(slot) = self.bodies.entry(label.as_str()) {
+                        slot.insert(children);
+                        self.labels.push(label.as_str());
+                    }
+                    self.walk(children);
                 }
-                Block::FootnoteDefinition { children, .. }
-                | Block::BlockQuote(children)
+                Block::BlockQuote(children)
                 | Block::Callout { children, .. }
-                | Block::LinkCard { children, .. } => Self::definition(children, label),
-                Block::List { items, .. } => items
-                    .iter()
-                    .find_map(|item| Self::definition(item, label)),
-                Block::DefinitionList(children) | Block::DefinitionDefinition(children) => Self::definition(children, label),
-                _ => None,
-            };
-            if found.is_some() {
-                return found;
+                | Block::LinkCard { children, .. } => self.walk(children),
+                Block::DefinitionList(children) | Block::DefinitionDefinition(children) => self.walk(children),
+                Block::List { items, .. } => {
+                    for item in items {
+                        self.walk(item);
+                    }
+                }
+                _ => {}
             }
         }
-        None
     }
-}
 
-/// Collect footnote definition labels in document order, deduplicated.
-/// Descends into every structural container; stops at shortcode bodies.
-fn collect_definitions(blocks: &[Block], out: &mut Vec<String>, seen: &mut HashSet<String>) {
-    for block in blocks {
-        match block {
-            Block::FootnoteDefinition { label, children } => {
-                if seen.insert(label.clone()) {
-                    out.push(label.clone());
-                }
-                collect_definitions(children, out, seen);
-            }
-            Block::BlockQuote(children)
-            | Block::Callout { children, .. }
-            | Block::LinkCard { children, .. } => collect_definitions(children, out, seen),
-            Block::DefinitionList(children) | Block::DefinitionDefinition(children) => collect_definitions(children, out, seen),
-            Block::List { items, .. } => {
-                for item in items {
-                    collect_definitions(item, out, seen);
-                }
-            }
-            _ => {}
-        }
+    /// The body of `label`'s first definition, the one the endnote renders.
+    pub(super) fn body(&self, label: &str) -> Option<&'a [Block]> {
+        self.bodies.get(label).copied()
     }
-}
 
-/// [`first_definition_bodies`] over every label the tree defines, for walks
-/// (e.g. `query.rs`'s cover search) that start from raw blocks rather than a
-/// built index. A label defined only inside a shortcode body is absent —
-/// `collect_definitions` stops there — so such definitions never test as
-/// hoisted, matching the renderer, which never hoists them.
-pub(super) fn hoisted_definition_bodies(blocks: &[Block]) -> HashMap<String, usize> {
-    let mut defined = Vec::new();
-    collect_definitions(blocks, &mut defined, &mut HashSet::new());
-    first_definition_bodies(blocks, &defined)
-}
-
-/// Body address of the doc-order-first definition per label — the identity
-/// [`is_hoisted`] decides by, shared so every walk that must agree with the
-/// renderer answers "is this occurrence hoisted?" from the same lookup.
-fn first_definition_bodies(blocks: &[Block], labels: &[String]) -> HashMap<String, usize> {
-    labels
-        .iter()
-        .filter_map(|label| {
-            FootnoteIndex::definition(blocks, label)
-                .map(|children| (label.clone(), children.as_ptr() as usize))
-        })
-        .collect()
+    /// Body address per label: the identity [`is_hoisted`] decides by, owned
+    /// so a context that outlives the borrow can keep it.
+    pub(super) fn addresses(&self) -> HashMap<String, usize> {
+        self.bodies
+            .iter()
+            .map(|(label, body)| (label.to_string(), body.as_ptr() as usize))
+            .collect()
+    }
 }
 
 /// Collect footnote marker labels in reading order, deduplicated. Skips
@@ -195,7 +185,7 @@ fn collect_refs(
     blocks: &[Block],
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
-    hoisted: &HashMap<String, usize>,
+    definitions: &Definitions<'_>,
 ) {
     for block in blocks {
         match block {
@@ -204,17 +194,17 @@ fn collect_refs(
             }
             Block::BlockQuote(children)
             | Block::Callout { children, .. }
-            | Block::LinkCard { children, .. } => collect_refs(children, out, seen, hoisted),
+            | Block::LinkCard { children, .. } => collect_refs(children, out, seen, definitions),
             Block::FootnoteDefinition { label, children } => {
-                if hoisted.get(label.as_str()) != Some(&(children.as_ptr() as usize)) {
-                    collect_refs(children, out, seen, hoisted);
+                if definitions.body(label).map(<[Block]>::as_ptr) != Some(children.as_ptr()) {
+                    collect_refs(children, out, seen, definitions);
                 }
             }
             Block::DefinitionTitle(children) => collect_refs_in_inlines(children, out, seen),
-            Block::DefinitionList(children) | Block::DefinitionDefinition(children) => collect_refs(children, out, seen, hoisted),
+            Block::DefinitionList(children) | Block::DefinitionDefinition(children) => collect_refs(children, out, seen, definitions),
             Block::List { items, .. } => {
                 for item in items {
-                    collect_refs(item, out, seen, hoisted);
+                    collect_refs(item, out, seen, definitions);
                 }
             }
             Block::Table { header, rows, .. } => {
@@ -276,16 +266,13 @@ pub struct FootnoteCtx {
 impl FootnoteCtx {
     /// The context `render_document` uses: numbering for the whole tree.
     pub fn for_document(blocks: &[Block]) -> Self {
-        let index = FootnoteIndex::build(blocks);
-        // Built through the same `FootnoteIndex::definition` search the
-        // endnote section renders from, so "the definition the section
-        // hoists" and "the definition the body pass skips" are one lookup.
-        let labels: Vec<String> = index.entries().iter().map(|(_, l)| l.clone()).collect();
-        let hoisted = first_definition_bodies(blocks, &labels);
+        // One walk answers both "the definition the section hoists" and
+        // "the definition the body pass skips".
+        let definitions = Definitions::collect(blocks);
         Self {
-            index,
+            index: FootnoteIndex::from_definitions(blocks, &definitions),
             emitted: HashMap::new(),
-            hoisted,
+            hoisted: definitions.addresses(),
             permalinks_off: !crate::heading::anchor_rule::wants_heading_anchors(blocks),
         }
     }
@@ -360,11 +347,9 @@ pub(super) fn is_hoisted(label: &str, children: &[Block], ctx: &FootnoteCtx) -> 
     is_hoisted_in(label, children, &ctx.hoisted)
 }
 
-/// [`is_hoisted`]'s identity check, taking the hoisted-bodies map directly
-/// rather than a full [`FootnoteCtx`] — for walks (e.g.
-/// `ast::plain_text::render_plain_text`) that only need
-/// [`hoisted_definition_bodies`]'s numbering-free structural answer and
-/// never build a `FootnoteCtx`.
+/// [`is_hoisted`]'s identity check, taking [`Definitions::addresses`]
+/// directly rather than a full [`FootnoteCtx`] — for walks (e.g.
+/// `ast::plain_text::render_plain_text`) that never build a `FootnoteCtx`.
 pub(super) fn is_hoisted_in(
     label: &str,
     children: &[Block],
@@ -393,8 +378,9 @@ pub fn render_section<H: RenderHooks + ?Sized>(
     // inline HTML). The back-link rides inside the trailing paragraph so it
     // sits at the end of the note's text, not on a line of its own.
     let mut notes: Vec<(usize, String, String, Option<String>)> = Vec::new();
+    let definitions = Definitions::collect(blocks);
     for (n, label) in ctx.index.entries().to_vec() {
-        let Some(children) = FootnoteIndex::definition(blocks, &label) else {
+        let Some(children) = definitions.body(&label) else {
             continue;
         };
         let (mut head, mut tail) = (String::new(), None);
@@ -451,5 +437,156 @@ fn push_backrefs(out: &mut String, n: usize, count: usize) {
             out,
             r##" <a class="moss-footnote-backref" href="#{id}" role="doc-backlink" aria-label="Back to reference {n}{nth}">&#8617;&#xFE0E;</a>"##
         );
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static DEFINITION_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Ticks once per block a definition lookup walks, so tests can pin the cost.
+fn count_visit() {
+    #[cfg(test)]
+    DEFINITION_VISITS.with(|n| n.set(n.get() + 1));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::hooks::DefaultHooks;
+    use crate::ast::parser::parse;
+
+    const REPEATED: &str = "A[^a] B[^b]\n\n[^a]: first a\n\n[^b]: bee\n\n[^a]: second a\n";
+    const IN_LIST_AND_QUOTE: &str =
+        "- item[^l]\n\n  [^l]: in list\n\n> quote[^q]\n>\n> [^q]: in quote\n";
+    const DEFINED_BEFORE_USE: &str = "[^early]: defined first [^inner]\n\n[^inner]: inner note\n\n[^lonely]: never cited\n\nText[^early].\n";
+    const NESTED_FIRST: &str =
+        "See[^n] and[^o].\n\n> [^n]: quoted first\n\n[^o]: outer\n\n    [^m]: inside o\n\n[^n]: repeat\n\n[^m]: repeat of m\n";
+    const NO_FOOTNOTES: &str = "Just text.\n\n## Heading\n";
+
+    /// HTML and plain text of each case above, recorded before definition lookups shared one walk.
+    const RENDERED: [(&str, &str); 5] = [
+        (
+            "<p>A<sup class=\"moss-footnote-ref\" id=\"fnref-1\" tabindex=\"-1\"><a href=\"#fn-1\" role=\"doc-noteref\">1</a></sup> B<sup class=\"moss-footnote-ref\" id=\"fnref-2\" tabindex=\"-1\"><a href=\"#fn-2\" role=\"doc-noteref\">2</a></sup></p>\n<p>second a</p>\n<section class=\"moss-footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\" tabindex=\"-1\"><p>first a <a class=\"moss-footnote-backref\" href=\"#fnref-1\" role=\"doc-backlink\" aria-label=\"Back to reference 1\">&#8617;&#xFE0E;</a></p>\n</li>\n<li id=\"fn-2\" tabindex=\"-1\"><p>bee <a class=\"moss-footnote-backref\" href=\"#fnref-2\" role=\"doc-backlink\" aria-label=\"Back to reference 2\">&#8617;&#xFE0E;</a></p>\n</li>\n</ol>\n</section>\n",
+            "A[1] B[2]\n\nsecond a\n\n--\n[1] first a\n[2] bee\n\n",
+        ),
+        (
+            "<ul>\n<li>\n<p>item<sup class=\"moss-footnote-ref\" id=\"fnref-1\" tabindex=\"-1\"><a href=\"#fn-1\" role=\"doc-noteref\">1</a></sup></p>\n</li>\n</ul>\n<blockquote>\n<p>quote<sup class=\"moss-footnote-ref\" id=\"fnref-2\" tabindex=\"-1\"><a href=\"#fn-2\" role=\"doc-noteref\">2</a></sup></p>\n</blockquote>\n<section class=\"moss-footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\" tabindex=\"-1\"><p>in list <a class=\"moss-footnote-backref\" href=\"#fnref-1\" role=\"doc-backlink\" aria-label=\"Back to reference 1\">&#8617;&#xFE0E;</a></p>\n</li>\n<li id=\"fn-2\" tabindex=\"-1\"><p>in quote <a class=\"moss-footnote-backref\" href=\"#fnref-2\" role=\"doc-backlink\" aria-label=\"Back to reference 2\">&#8617;&#xFE0E;</a></p>\n</li>\n</ol>\n</section>\n",
+            "- item[1]\n\n> quote[2]\n\n--\n[1] in list\n[2] in quote\n\n",
+        ),
+        (
+            "<p>Text<sup class=\"moss-footnote-ref\" id=\"fnref-1\" tabindex=\"-1\"><a href=\"#fn-1\" role=\"doc-noteref\">1</a></sup>.</p>\n<section class=\"moss-footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\" tabindex=\"-1\"><p>defined first <sup class=\"moss-footnote-ref\" id=\"fnref-2\" tabindex=\"-1\"><a href=\"#fn-2\" role=\"doc-noteref\">2</a></sup> <a class=\"moss-footnote-backref\" href=\"#fnref-1\" role=\"doc-backlink\" aria-label=\"Back to reference 1\">&#8617;&#xFE0E;</a></p>\n</li>\n<li id=\"fn-2\" tabindex=\"-1\"><p>inner note <a class=\"moss-footnote-backref\" href=\"#fnref-2\" role=\"doc-backlink\" aria-label=\"Back to reference 2\">&#8617;&#xFE0E;</a></p>\n</li>\n<li id=\"fn-3\" tabindex=\"-1\"><p>never cited</p>\n</li>\n</ol>\n</section>\n",
+            "Text[1].\n\n--\n[1] defined first [2]\n[2] inner note\n[3] never cited\n\n",
+        ),
+        (
+            "<p>See<sup class=\"moss-footnote-ref\" id=\"fnref-1\" tabindex=\"-1\"><a href=\"#fn-1\" role=\"doc-noteref\">1</a></sup> and<sup class=\"moss-footnote-ref\" id=\"fnref-2\" tabindex=\"-1\"><a href=\"#fn-2\" role=\"doc-noteref\">2</a></sup>.</p>\n<p>repeat</p>\n<p>repeat of m</p>\n<section class=\"moss-footnotes\" role=\"doc-endnotes\">\n<ol>\n<li id=\"fn-1\" tabindex=\"-1\"><p>quoted first <a class=\"moss-footnote-backref\" href=\"#fnref-1\" role=\"doc-backlink\" aria-label=\"Back to reference 1\">&#8617;&#xFE0E;</a></p>\n</li>\n<li id=\"fn-2\" tabindex=\"-1\"><p>outer <a class=\"moss-footnote-backref\" href=\"#fnref-2\" role=\"doc-backlink\" aria-label=\"Back to reference 2\">&#8617;&#xFE0E;</a></p>\n</li>\n<li id=\"fn-3\" tabindex=\"-1\"><p>inside o</p>\n</li>\n</ol>\n</section>\n",
+            "See[1] and[2].\n\nrepeat\n\nrepeat of m\n\n--\n[1] quoted first\n[2] outer\n[3] inside o\n\n",
+        ),
+        (
+            "<p>Just text.</p>\n<h2 id=\"heading\">Heading</h2>\n",
+            "Just text.\n\nHeading\n\n",
+        ),
+    ];
+
+    /// The per-label search the index used before [`Definitions`]: the first
+    /// definition of `label` in document order, at any depth.
+    fn first_definition<'a>(blocks: &'a [Block], label: &str) -> Option<&'a [Block]> {
+        blocks.iter().find_map(|block| match block {
+            Block::FootnoteDefinition { label: l, children } if l == label => Some(children.as_slice()),
+            Block::FootnoteDefinition { children, .. }
+            | Block::BlockQuote(children)
+            | Block::Callout { children, .. }
+            | Block::LinkCard { children, .. }
+            | Block::DefinitionList(children)
+            | Block::DefinitionDefinition(children) => first_definition(children, label),
+            Block::List { items, .. } => items.iter().find_map(|item| first_definition(item, label)),
+            _ => None,
+        })
+    }
+
+    fn visits_during(f: impl FnOnce()) -> usize {
+        DEFINITION_VISITS.with(|n| n.set(0));
+        f();
+        DEFINITION_VISITS.with(|n| n.get())
+    }
+
+    /// Blocks one definition walk reaches: the containers it descends into, not shortcode bodies.
+    fn walkable_blocks(blocks: &[Block]) -> usize {
+        blocks
+            .iter()
+            .map(|block| {
+                1 + match block {
+                    Block::FootnoteDefinition { children, .. }
+                    | Block::BlockQuote(children)
+                    | Block::Callout { children, .. }
+                    | Block::LinkCard { children, .. }
+                    | Block::DefinitionList(children)
+                    | Block::DefinitionDefinition(children) => walkable_blocks(children),
+                    Block::List { items, .. } => items.iter().map(|item| walkable_blocks(item)).sum(),
+                    _ => 0,
+                }
+            })
+            .sum()
+    }
+
+    #[test]
+    fn numbering_and_hoisting_match_the_first_definition_in_document_order() {
+        let cases: [(&str, &[&str], (&str, &str)); 5] = [
+            (REPEATED, &["a", "b"], RENDERED[0]),
+            (IN_LIST_AND_QUOTE, &["l", "q"], RENDERED[1]),
+            (DEFINED_BEFORE_USE, &["early", "inner", "lonely"], RENDERED[2]),
+            (NESTED_FIRST, &["n", "o", "m"], RENDERED[3]),
+            (NO_FOOTNOTES, &[], RENDERED[4]),
+        ];
+        for (markdown, labels, expected) in cases {
+            let doc = parse(markdown);
+            let index = FootnoteIndex::build(&doc.blocks);
+            let numbered: Vec<(usize, String)> =
+                labels.iter().enumerate().map(|(i, l)| (i + 1, l.to_string())).collect();
+            assert_eq!(index.entries(), numbered.as_slice(), "{markdown:?}");
+            let ctx = FootnoteCtx::for_document(&doc.blocks);
+            assert_eq!(ctx.index, index, "{markdown:?}");
+            let first_bodies: HashMap<String, usize> = labels
+                .iter()
+                .map(|l| {
+                    let body = first_definition(&doc.blocks, l).expect("defined");
+                    (l.to_string(), body.as_ptr() as usize)
+                })
+                .collect();
+            assert_eq!(ctx.hoisted, first_bodies, "{markdown:?}");
+            let rendered = (
+                crate::ast::render::render_document(&doc, &DefaultHooks::new()),
+                crate::ast::plain_text::render_plain_text(&doc),
+            );
+            assert_eq!((rendered.0.as_str(), rendered.1.as_str()), expected, "{markdown:?}");
+        }
+    }
+
+    #[test]
+    fn every_entry_point_walks_the_tree_for_definitions_once() {
+        let mut markdown = String::new();
+        for i in 1..=30 {
+            markdown.push_str(&format!("Paragraph {i} cites[^n{i}].\n\n"));
+        }
+        for i in 1..=10 {
+            markdown.push_str(&format!("[^n{i}]: plain note {i}\n\n"));
+        }
+        for i in 11..=20 {
+            markdown.push_str(&format!("- [^n{i}]: listed note {i}\n\n"));
+        }
+        for i in 21..=30 {
+            markdown.push_str(&format!("> [^n{i}]: quoted note {i}\n\n"));
+        }
+        let doc = parse(&markdown);
+        let one_walk = walkable_blocks(&doc.blocks);
+        assert_eq!(FootnoteIndex::build(&doc.blocks).entries().len(), 30);
+
+        assert_eq!(visits_during(|| { FootnoteIndex::build(&doc.blocks); }), one_walk);
+        assert_eq!(visits_during(|| { FootnoteCtx::for_document(&doc.blocks); }), one_walk);
+        assert_eq!(visits_during(|| { crate::ast::plain_text::render_plain_text(&doc); }), one_walk);
+        assert_eq!(visits_during(|| { crate::ast::query::block_images(&doc); }), one_walk);
+        let hooks = DefaultHooks::new();
+        assert_eq!(visits_during(|| { crate::ast::render::render_document(&doc, &hooks); }), 2 * one_walk);
     }
 }

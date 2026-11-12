@@ -35,6 +35,7 @@ All notable changes to moss will be documented here.
 - A page no longer links automatically to its syndicated copies, including hidden markup and comment reply links; each copy links back to the page. Copy records remain available for deduplication, edits and deletion.
 - A publish with nothing to upload now still sends the copies a post newly names, and ends with its check that the site is live.
 - When a folder and a folder inside it set the same `cascade:` key, a page now takes the nearer folder's value. Before, the outer folder's value won, so a site that sets one key at two levels can change.
+- A page with many footnotes builds faster: moss finds each note's text in one read of the page instead of one per note.
 
 ### Fixed
 

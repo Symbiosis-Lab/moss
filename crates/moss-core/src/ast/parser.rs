@@ -2255,20 +2255,15 @@ pub fn clear_heading_ids(doc: &mut Document) {
 /// Every heading's id slot, in the order the headings appear on the rendered
 /// page: the body first, then each hoisted endnote in endnote order.
 fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
-    // Built BEFORE the mutable walk: `entries()` is the order
-    // `render_section` emits the `<li id="fn-N">`s, and it needs a shared
-    // borrow of the same tree.
-    let note_order: Vec<String> = FootnoteIndex::build(blocks)
-        .entries()
-        .iter()
-        .map(|(_, label)| label.clone())
-        .collect();
+    // Built BEFORE the mutable walk, which it cannot borrow alongside: a
+    // note's number is the order `render_section` emits the `<li id="fn-N">`s.
+    let index = FootnoteIndex::build(blocks);
 
     let mut body: Vec<HeadingSlot<'_>> = Vec::new();
     let mut notes: Vec<(String, Vec<HeadingSlot<'_>>)> = Vec::new();
     let mut hoisted: HashSet<String> = HashSet::new();
     let scope = HoistScope {
-        document_notes: &note_order,
+        document_notes: &index,
         in_shortcode: false,
     };
     collect_heading_id_slots(blocks, &mut body, &mut hoisted, &mut notes, scope);
@@ -2276,12 +2271,7 @@ fn heading_id_slots(blocks: &mut [Block]) -> Vec<HeadingSlot<'_>> {
     // Stable sort into endnote order. A label the index doesn't own is
     // impossible today (every defined label is numbered); if one ever
     // appears it keeps its document position, at the end.
-    notes.sort_by_key(|(label, _)| {
-        note_order
-            .iter()
-            .position(|l| l == label)
-            .unwrap_or(usize::MAX)
-    });
+    notes.sort_by_key(|(label, _)| index.number(label).unwrap_or(usize::MAX));
     body.extend(notes.into_iter().flat_map(|(_, slots)| slots));
     body
 }
@@ -2310,8 +2300,8 @@ fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<Stri
 /// `render_section` emits them.
 ///
 /// `hoisted` records which labels have had their first definition seen, in
-/// document order — the same rule [`super::footnotes::FootnoteIndex::definition`]
-/// uses to pick the definition whose body the endnote renders. A REPEAT
+/// document order — the same rule [`super::footnotes::Definitions`] uses to
+/// pick the definition whose body the endnote renders. A REPEAT
 /// definition of a label is not hoisted (it renders in place), so its
 /// headings stay in the surrounding bucket.
 /// Where the walk currently is, for deciding whether a footnote definition
@@ -2325,15 +2315,15 @@ fn disambiguate_heading_id(id: &mut Option<String>, id_counts: &mut HashMap<Stri
 ///    answers from a map built only from the index's entries, and that index
 ///    is exactly `document_notes`. A repeat definition of an already-defined
 ///    label is left in place by the renderer.
-/// 2. The walk is inside a shortcode body. `footnotes::collect_definitions`
+/// 2. The walk is inside a shortcode body. `footnotes::Definitions`
 ///    stops at shortcode bodies, so a `[^x]: …` written inside a `:::grid`
 ///    cell is never collected, never numbered, and never hoisted — it renders
 ///    in the cell. Bucketing it as an endnote would number a grid heading
 ///    after the body even though it renders before it.
 #[derive(Clone, Copy)]
 struct HoistScope<'a> {
-    /// Labels the document's `FootnoteIndex` owns, in endnote order.
-    document_notes: &'a [String],
+    /// The document's footnotes; a label it does not number is never hoisted.
+    document_notes: &'a FootnoteIndex,
     /// Whether the walk is inside a `:::grid` cell or `:::hero` overlay.
     in_shortcode: bool,
 }
@@ -2346,7 +2336,7 @@ impl HoistScope<'_> {
         if self.in_shortcode {
             return false;
         }
-        if !self.document_notes.iter().any(|l| l == label) {
+        if self.document_notes.number(label).is_none() {
             return false;
         }
         hoisted.insert(label.to_string())
