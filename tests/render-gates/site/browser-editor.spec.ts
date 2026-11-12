@@ -9,12 +9,13 @@
  * script on the origin that shows it; this pins that the browser's PDF viewer
  * still draws under that policy (Chromium: its viewer frame loads; WebKit
  * draws in place and exposes no frame, so the response and the viewer's
- * element are what it can check).
+ * element are what it can check), and that the viewer stays once the preview
+ * has followed to the PDF's own address.
  *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Frame } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -87,17 +88,49 @@ test('the browser editor boots, saves, and opens a sandboxed PDF in the file vie
   await shell.press('dialog', 'Escape');
 
   const pdfResponse = page.waitForResponse((r) => r.url().includes('/__moss/source/doc.pdf'), { timeout: 15_000 });
+  // The preview follows to the PDF's own address, and the shell asks what backs it.
+  const backing = page.waitForResponse(
+    (r) => r.url().endsWith('/resolve_page_source') && (r.request().postData() ?? '').includes('doc.pdf'),
+    { timeout: 15_000 },
+  );
+  // Every PDF viewer the editor mounts or removes from here on, read as the test's last step.
+  await editor.evaluate(() => {
+    const seen = ((window as unknown as { pdfViewers: { mounted: number; removed: number } }).pdfViewers = { mounted: 0, removed: 0 });
+    const viewers = (nodes: NodeList): number =>
+      [...nodes].filter((n) => n instanceof Element && (n.matches('embed.moss-file-viewer__pdf') || n.querySelector('embed.moss-file-viewer__pdf'))).length;
+    new MutationObserver((records) => {
+      for (const r of records) {
+        seen.mounted += viewers(r.addedNodes);
+        seen.removed += viewers(r.removedNodes);
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
   await editor.click('.cm-media-embed-card', { modifiers: ['ControlOrMeta'] });
-  await editor.waitForSelector('embed.moss-file-viewer__pdf', { timeout: 15_000 });
+  const viewer = await editor.waitForSelector('embed.moss-file-viewer__pdf', { timeout: 15_000 });
   const pdf = await pdfResponse;
   expect(pdf.status()).toBe(200);
   expect((await pdf.allHeaders())['content-security-policy']).toMatch(/^sandbox;/);
+  // The answer is the PDF itself, so the editor stays on the viewer it opened:
+  // the same element, neither replaced by a pane nor mounted again.
+  expect((await (await backing).json()).source_path).toMatch(/doc\.pdf$/);
+  // The editor records the answer in its own address as it applies it, and a
+  // second load of a file already in its viewer would replace the viewer in
+  // the same turn: once the address is there, so is the outcome.
+  await expect.poll(() => editor.evaluate(() => location.search), { timeout: 10_000 }).toContain('doc.pdf');
+  expect(await viewer.evaluate((el) => el.isConnected), 'the viewer the click opened is still on screen').toBe(true);
   if (browserName === 'chromium') {
+    // The built page embeds the same PDF, so the preview has a viewer frame of
+    // its own; only one under the editor's embed counts.
+    const underTheEmbed = (f: Frame | null): boolean => !!f && (f.url().includes('/__moss/source/doc.pdf') || underTheEmbed(f.parentFrame()));
     await expect
-      .poll(() => page.frames().some((f) => f.url().startsWith('chrome-extension://') && f.url().endsWith('/index.html')), {
+      .poll(() => page.frames().some((f) => f.url().startsWith('chrome-extension://') && f.url().endsWith('/index.html') && underTheEmbed(f)), {
         timeout: 15_000,
-        message: 'the PDF viewer frame',
+        message: "the PDF viewer frame under the editor's embed",
       })
       .toBe(true);
   }
+  expect(
+    await editor.evaluate(() => (window as unknown as { pdfViewers: unknown }).pdfViewers),
+    'the editor mounted one PDF viewer and never took it down',
+  ).toEqual({ mounted: 1, removed: 0 });
 });

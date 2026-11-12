@@ -251,7 +251,7 @@ export interface PreviewUrlChangedEvent {
   pending: "lookup" | "download" | null;
   /** URL path from preview (e.g., "posts/my-article.html") */
   urlPath: string;
-  /** Absolute path to the source markdown file, or null */
+  /** Absolute path to the file behind the page (its markdown source, or the source of any other served file), or null */
   sourcePath: string | null;
   /** Whether this page is a directory listing (homepage, section index) */
   isDir: boolean;

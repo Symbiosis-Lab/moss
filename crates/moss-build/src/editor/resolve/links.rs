@@ -21,7 +21,10 @@ pub fn source_path_for_url(map: &ArticleMap, url: &str) -> Option<String> {
 /// Result of resolving a preview URL to its source file and page type.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct PageSource {
-    /// Absolute path to the source markdown file, if found.
+    /// Absolute path to the file behind the URL, if found: a page's markdown
+    /// source, or the source of any other file the build serves (a PDF, a picture).
+    /// It is not always a page: a caller that needs one moss renders (the
+    /// build's preview requirement takes only a page source) checks that itself.
     pub source_path: Option<String>,
     /// Whether this page is a directory listing (e.g., homepage, section index).
     pub is_dir: bool,
@@ -359,42 +362,61 @@ pub fn url_to_source_candidates(url_path: &str) -> Vec<String> {
 /// Inner logic for `resolve_asset_url_for_file`, extracted for testability.
 ///
 /// Maps a project-relative source asset path to the URL the preview server
-/// serves it at. Returns `None` when the asset is absent from the current
-/// build manifest (not yet built or excluded by scan rules).
-///
-/// Algorithm:
-/// 1. Apply `resolve_path_with_overrides` with the ArticleMap's `dir_overrides`
-///    to get the slugified output path.
-/// 2. Prefer the `.webp` variant when present in `image_outputs`.
-/// 3. Fall back to the original path if it appears in `files`, `image_outputs`,
-///    or `video_outputs`.
+/// serves it at: the first of [`served_paths`]. Returns `None` when the asset
+/// is absent from the current build manifest (not yet built or excluded by
+/// scan rules).
 pub fn resolve_asset_url_inner(
     rel_path: &str,
     hashes: &crate::types::content::SiteHashes,
     overrides: &std::collections::HashMap<String, String>,
 ) -> Option<String> {
+    served_paths(rel_path, hashes, overrides).next().map(|path| format!("/{path}"))
+}
+
+/// Every site-relative path the build serves `rel_path` at, the one a link to
+/// it uses first: its slugified output path (`resolve_path_with_overrides`
+/// with the ArticleMap's `dir_overrides`) as WebP when `image_outputs` has
+/// that variant, then under its own extension when `files`, `image_outputs`
+/// or `video_outputs` has it.
+fn served_paths(
+    rel_path: &str,
+    hashes: &crate::types::content::SiteHashes,
+    overrides: &std::collections::HashMap<String, String>,
+) -> impl Iterator<Item = String> {
     let output_path =
         moss_core::resolve::output_url::resolve_path_with_overrides(rel_path, overrides);
-
-    // Prefer the WebP variant when present in image_outputs.
     let stem_no_ext = output_path
         .rsplit_once('.')
         .map_or(output_path.as_str(), |(stem, _)| stem);
     let webp_path = format!("{}.webp", stem_no_ext);
 
-    if hashes.image_outputs.contains(&webp_path) {
-        return Some(format!("/{}", webp_path));
-    }
-
-    // Fall back to the original output path.
-    if hashes.files.contains_key(&output_path)
+    let webp = hashes.image_outputs.contains(&webp_path).then_some(webp_path);
+    let own = (hashes.files.contains_key(&output_path)
         || hashes.image_outputs.contains(&output_path)
-        || hashes.video_outputs.contains(&output_path)
-    {
-        return Some(format!("/{}", output_path));
-    }
+        || hashes.video_outputs.contains(&output_path))
+    .then_some(output_path);
+    [webp, own].into_iter().flatten()
+}
 
-    None
+/// The source file the build serves at `url_path` (site-relative, no leading
+/// slash): the one recorded source with it among its [`served_paths`], so a
+/// slugged folder and a picture served as WebP resolve the way they are
+/// served. `Ok(None)` for a page and for an address nothing is served at.
+/// `Err` when two sources share the address (`pic.png` and `pic.jpg`, both
+/// served as `pic.webp`): the manifest does not say which one is there.
+pub fn asset_source_for_url(
+    url_path: &str,
+    hashes: &crate::types::content::SiteHashes,
+    overrides: &std::collections::HashMap<String, String>,
+) -> Result<Option<String>, String> {
+    let mut served_here = hashes.sources.keys().filter(|source| {
+        !moss_core::source_edit::policy::is_page_path(std::path::Path::new(source))
+            && served_paths(source, hashes, overrides).any(|path| path == url_path)
+    });
+    match (served_here.next(), served_here.next()) {
+        (source, None) => Ok(source.cloned()),
+        _ => Err(format!("more than one file is served at '{url_path}'")),
+    }
 }
 
 #[cfg(test)]
@@ -1050,5 +1072,66 @@ mod tests {
         );
 
         assert_eq!(result, Some(format!("/{}", out_path)));
+    }
+
+    // ── asset_source_for_url tests ────────────────────────────────────────────
+
+    fn source(hashes: &mut crate::types::content::SiteHashes, path: &str) {
+        hashes.sources.insert(
+            path.to_string(),
+            crate::build::types::SourceMetadata {
+                hash: "abc".into(),
+                stat: crate::build::stat::FileStat::whole_second(1, 1000),
+            },
+        );
+    }
+
+    /// Whatever URL a file is served at names that file again: a plain copy, a
+    /// picture served as WebP, a file under a folder whose name was slugged.
+    #[test]
+    fn the_url_a_file_is_served_at_names_that_file() {
+        let mut hashes = make_hashes();
+        let overrides = HashMap::from([("交互".to_string(), "interactive".to_string())]);
+        for path in ["doc.pdf", "pic.png", "交互/two.pdf", "index.md"] {
+            source(&mut hashes, path);
+        }
+        for output in ["doc.pdf", "pic.png", "interactive/two.pdf", "index.html"] {
+            hashes.files.insert(output.to_string(), "100644:abc".to_string());
+        }
+        hashes.image_outputs.insert("pic.webp".to_string());
+
+        for path in ["doc.pdf", "pic.png", "交互/two.pdf"] {
+            let url = super::resolve_asset_url_inner(path, &hashes, &overrides).expect("served");
+            let back = super::asset_source_for_url(url.trim_start_matches('/'), &hashes, &overrides);
+            assert_eq!(back, Ok(Some(path.to_string())), "{url}");
+        }
+        // The copy under the picture's own extension is served beside the WebP one.
+        assert_eq!(super::asset_source_for_url("pic.png", &hashes, &overrides), Ok(Some("pic.png".to_string())));
+    }
+
+    /// Two pictures that differ only by extension are both served as one WebP
+    /// file. Neither is named for it; each still answers for its own copy.
+    #[test]
+    fn an_address_two_files_share_names_neither() {
+        let mut hashes = make_hashes();
+        for path in ["pic.jpg", "pic.png"] {
+            source(&mut hashes, path);
+            hashes.image_outputs.insert(path.to_string());
+        }
+        hashes.image_outputs.insert("pic.webp".to_string());
+
+        assert!(super::asset_source_for_url("pic.webp", &hashes, &HashMap::new()).is_err());
+        assert_eq!(super::asset_source_for_url("pic.jpg", &hashes, &HashMap::new()), Ok(Some("pic.jpg".to_string())));
+    }
+
+    #[test]
+    fn a_page_and_an_unserved_file_name_no_asset_source() {
+        let mut hashes = make_hashes();
+        source(&mut hashes, "index.md");
+        source(&mut hashes, "notes/draft.pdf");
+        hashes.files.insert("index.html".to_string(), "100644:abc".to_string());
+        for url in ["index.html", "index.md", "notes/draft.pdf", "missing.pdf"] {
+            assert_eq!(super::asset_source_for_url(url, &hashes, &HashMap::new()), Ok(None), "{url}");
+        }
     }
 }

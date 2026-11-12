@@ -212,11 +212,12 @@ export async function resolveNodeForEdit(
  * `sameFile` alone is NOT sufficient: a no-source pane-state tears down the CM6
  * editor, so after navigating to a no-source page → back to the same content
  * page, `sameFile` is true but the editor is gone. Reloading must also be forced when
- * CM6 is not currently mounted — otherwise the stale pane-state stays visible
+ * the file is not currently on screen — otherwise the stale pane-state stays visible
  * and the file never re-renders (a silent desync, the very thing this check prevents).
+ * `mounted` is CM6 for a text file and the file viewer for any other.
  */
-export function shouldLoadContentPage(sameFile: boolean, cmMounted: boolean): boolean {
-  return !sameFile || !cmMounted;
+export function shouldLoadContentPage(sameFile: boolean, mounted: boolean): boolean {
+  return !sameFile || !mounted;
 }
 
 /**

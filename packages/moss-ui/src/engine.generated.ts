@@ -1755,7 +1755,10 @@ revision: string; html: string; title: string; diagnostics: EditorDiagnostic[] }
  */
 export type PageSource = { 
 /**
- * Absolute path to the source markdown file, if found.
+ * Absolute path to the file behind the URL, if found: a page's markdown
+ * source, or the source of any other file the build serves (a PDF, a picture).
+ * It is not always a page: a caller that needs one moss renders (the
+ * build's preview requirement takes only a page source) checks that itself.
  */
 source_path: string | null; 
 /**

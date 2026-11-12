@@ -37,7 +37,7 @@ import { routeHistoryKey, computeHistoryInputs } from './history-routing';
 import { matchesKeySpec, isMacPlatform, UNDO_KEY, REDO_KEY } from "../utils/kbd-label";
 import { CmFindController } from './cm-find';
 import { isMarkdownFile, detectFileCategory } from './file-types';
-import { showFileViewer, destroyFileViewer } from './file-viewer';
+import { showFileViewer, destroyFileViewer, fileViewerIsOpen } from './file-viewer';
 import { FileTree, createOneFile } from './tree';
 import { EntryRegistry } from './entry-registry';
 import { PreviewFollower } from './preview-follower';
@@ -1915,7 +1915,7 @@ async function loadContentPageDeduped(
   const sameFile = !versionsMode.isActive() && ((entryId !== null && currentEntryId() !== null)
     ? entryId === currentEntryId()
     : rel === currentFilePath());
-  if (shouldLoadContentPage(sameFile, cmEditor !== null)) {
+  if (shouldLoadContentPage(sameFile, cmEditor !== null || fileViewerIsOpen())) {
     return { path: rel, outcome: await loadFile(rel, undefined, { forceAnchor: true }) };
   }
   return null;

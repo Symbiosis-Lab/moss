@@ -267,10 +267,7 @@ vi.mock('../cm-editor', async () => ({
   CmEditor: (await import('./disk-hash')).acceptingExternalChanges(MockCmEditor),
 }));
 
-vi.mock('../file-viewer', () => ({
-  showFileViewer: vi.fn(),
-  destroyFileViewer: vi.fn(),
-}));
+vi.mock('../file-viewer');
 
 vi.mock('../tree', () => ({
   FileTree: MockFileTree,
@@ -652,6 +649,26 @@ describe('editor-main same-file guard (editor:load-source)', () => {
     // Second call: same path — should NOT call parseFrontmatter
     await loadSourceCb!({ sourcePath: filePath, isDir: false });
     expect(mockCommands.parseFrontmatter).not.toHaveBeenCalled();
+  });
+
+  test('editor:load-source keeps an open file viewer when the preview resolves to the file it shows', async () => {
+    const { showFileViewer, fileViewerIsOpen } = await import('../file-viewer');
+    vi.mocked(showFileViewer).mockClear();
+    const filePath = '/Users/test/blog/content/doc.pdf';
+
+    await bootEditorMain();
+    await vi.waitFor(() => {
+      expect(listenCallbacks.has('editor:load-source')).toBe(true);
+    });
+    const loadSourceCb = listenCallbacks.get('editor:load-source')!;
+
+    await loadSourceCb({ sourcePath: filePath, isDir: false });
+    expect(showFileViewer).toHaveBeenCalledTimes(1);
+    vi.mocked(fileViewerIsOpen).mockReturnValue(true);
+
+    // The preview followed to the PDF's own address and its answer names the PDF.
+    await loadSourceCb({ sourcePath: filePath, isDir: false });
+    expect(showFileViewer).toHaveBeenCalledTimes(1);
   });
 
   test('editor:load-source loads new file when sourcePath differs', async () => {

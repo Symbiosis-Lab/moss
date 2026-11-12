@@ -6,6 +6,7 @@ import { sourceAssetUrl } from './source-asset-url';
 import { toRelative } from './path-domain';
 import { t } from "../i18n/index";
 import { engine } from '../engine';
+import type { EditorFileInfo } from '@symbiosis-lab/moss-ui';
 
 let currentViewerEl: HTMLElement | null = null;
 let currentFontStyleEl: HTMLStyleElement | null = null;
@@ -24,13 +25,21 @@ function createInfoBar(items: string[]): HTMLElement {
   return bar;
 }
 
+/** The file's name, then what `describe` reads from its info, under the viewer once the info is in. */
+function appendInfoBar(viewer: HTMLElement, filePath: string, describe: (info: EditorFileInfo) => string[] = (info) => [formatFileSize(info.size)]): void {
+  const filename = filePath.split('/').pop() ?? '';
+  void engine.getFileInfo(filePath).then((result) => {
+    viewer.appendChild(createInfoBar([filename, ...(result.status === 'ok' ? describe(result.data) : [])]));
+  });
+}
+
 function createViewer(): HTMLElement {
   const el = document.createElement('div');
   el.className = 'moss-file-viewer';
   return el;
 }
 
-async function renderImage(container: HTMLElement, filePath: string, projectRoot: string): Promise<void> {
+function renderImage(filePath: string, projectRoot: string): HTMLElement {
   const viewer = createViewer();
   const content = document.createElement('div');
   content.className = 'moss-file-viewer__content moss-file-viewer__checkerboard';
@@ -57,22 +66,14 @@ async function renderImage(container: HTMLElement, filePath: string, projectRoot
   content.appendChild(img);
   viewer.appendChild(content);
 
-  // Info bar with metadata
-  const filename = filePath.split('/').pop() ?? '';
-  const result = await engine.getFileInfo(filePath);
-  if (result.status === 'ok') {
-    const info = result.data;
-    const dims = info.width && info.height ? `${info.width}\u00D7${info.height}` : '';
-    viewer.appendChild(createInfoBar([filename, dims, formatFileSize(info.size)]));
-  } else {
-    viewer.appendChild(createInfoBar([filename]));
-  }
-
-  container.appendChild(viewer);
-  currentViewerEl = viewer;
+  appendInfoBar(viewer, filePath, (info) => [
+    info.width && info.height ? `${info.width}\u00D7${info.height}` : '',
+    formatFileSize(info.size),
+  ]);
+  return viewer;
 }
 
-function renderVideo(container: HTMLElement, filePath: string, projectRoot: string): void {
+function renderVideo(filePath: string, projectRoot: string): HTMLElement {
   const viewer = createViewer();
   const content = document.createElement('div');
   content.className = 'moss-file-viewer__content';
@@ -85,20 +86,11 @@ function renderVideo(container: HTMLElement, filePath: string, projectRoot: stri
   content.appendChild(video);
   viewer.appendChild(content);
 
-  const filename = filePath.split('/').pop() ?? '';
-  engine.getFileInfo(filePath).then((result) => {
-    if (result.status === 'ok') {
-      viewer.appendChild(createInfoBar([filename, formatFileSize(result.data.size)]));
-    } else {
-      viewer.appendChild(createInfoBar([filename]));
-    }
-  });
-
-  container.appendChild(viewer);
-  currentViewerEl = viewer;
+  appendInfoBar(viewer, filePath);
+  return viewer;
 }
 
-function renderAudio(container: HTMLElement, filePath: string, projectRoot: string): void {
+function renderAudio(filePath: string, projectRoot: string): HTMLElement {
   const viewer = createViewer();
   const content = document.createElement('div');
   content.className = 'moss-file-viewer__content';
@@ -110,20 +102,11 @@ function renderAudio(container: HTMLElement, filePath: string, projectRoot: stri
   content.appendChild(audio);
   viewer.appendChild(content);
 
-  const filename = filePath.split('/').pop() ?? '';
-  engine.getFileInfo(filePath).then((result) => {
-    if (result.status === 'ok') {
-      viewer.appendChild(createInfoBar([filename, formatFileSize(result.data.size)]));
-    } else {
-      viewer.appendChild(createInfoBar([filename]));
-    }
-  });
-
-  container.appendChild(viewer);
-  currentViewerEl = viewer;
+  appendInfoBar(viewer, filePath);
+  return viewer;
 }
 
-function renderPdf(container: HTMLElement, filePath: string, projectRoot: string): void {
+function renderPdf(filePath: string, projectRoot: string): HTMLElement {
   const viewer = createViewer();
 
   const embed = document.createElement('embed');
@@ -133,20 +116,11 @@ function renderPdf(container: HTMLElement, filePath: string, projectRoot: string
 
   viewer.appendChild(embed);
 
-  const filename = filePath.split('/').pop() ?? '';
-  engine.getFileInfo(filePath).then((result) => {
-    if (result.status === 'ok') {
-      viewer.appendChild(createInfoBar([filename, formatFileSize(result.data.size)]));
-    } else {
-      viewer.appendChild(createInfoBar([filename]));
-    }
-  });
-
-  container.appendChild(viewer);
-  currentViewerEl = viewer;
+  appendInfoBar(viewer, filePath);
+  return viewer;
 }
 
-function renderFont(container: HTMLElement, filePath: string, projectRoot: string): void {
+function renderFont(filePath: string, projectRoot: string): HTMLElement {
   const viewer = createViewer();
   const content = document.createElement('div');
   content.className = 'moss-file-viewer__content moss-file-viewer__font-samples';
@@ -189,20 +163,11 @@ function renderFont(container: HTMLElement, filePath: string, projectRoot: strin
 
   viewer.appendChild(content);
 
-  const filename = filePath.split('/').pop() ?? '';
-  engine.getFileInfo(filePath).then((result) => {
-    if (result.status === 'ok') {
-      viewer.appendChild(createInfoBar([filename, formatFileSize(result.data.size)]));
-    } else {
-      viewer.appendChild(createInfoBar([filename]));
-    }
-  });
-
-  container.appendChild(viewer);
-  currentViewerEl = viewer;
+  appendInfoBar(viewer, filePath);
+  return viewer;
 }
 
-function renderBinary(container: HTMLElement, filePath: string): void {
+function renderBinary(filePath: string): HTMLElement {
   const viewer = createViewer();
   const content = document.createElement('div');
   content.className = 'moss-file-viewer__content';
@@ -242,34 +207,29 @@ function renderBinary(container: HTMLElement, filePath: string): void {
   card.appendChild(msg);
   content.appendChild(card);
   viewer.appendChild(content);
-  container.appendChild(viewer);
-  currentViewerEl = viewer;
+  return viewer;
 }
 
+function renderViewer(filePath: string, projectRoot: string, category: FileCategory): HTMLElement {
+  switch (category) {
+    case 'image': return renderImage(filePath, projectRoot);
+    case 'video': return renderVideo(filePath, projectRoot);
+    case 'audio': return renderAudio(filePath, projectRoot);
+    case 'pdf': return renderPdf(filePath, projectRoot);
+    case 'font': return renderFont(filePath, projectRoot);
+    default: return renderBinary(filePath);
+  }
+}
+
+/** The viewer is on screen and counted open when this returns; only its info bar arrives later. */
 export function showFileViewer(container: HTMLElement, filePath: string, projectRoot: string, category: FileCategory): void {
   destroyFileViewer();
   container.innerHTML = '';
+  currentViewerEl = container.appendChild(renderViewer(filePath, projectRoot, category));
+}
 
-  switch (category) {
-    case 'image':
-      renderImage(container, filePath, projectRoot);
-      break;
-    case 'video':
-      renderVideo(container, filePath, projectRoot);
-      break;
-    case 'audio':
-      renderAudio(container, filePath, projectRoot);
-      break;
-    case 'pdf':
-      renderPdf(container, filePath, projectRoot);
-      break;
-    case 'font':
-      renderFont(container, filePath, projectRoot);
-      break;
-    default:
-      renderBinary(container, filePath);
-      break;
-  }
+export function fileViewerIsOpen(): boolean {
+  return currentViewerEl !== null;
 }
 
 export function destroyFileViewer(): void {

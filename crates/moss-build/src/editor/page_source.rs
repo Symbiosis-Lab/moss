@@ -85,9 +85,19 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         }
     }
 
+    // A served file that is no page (a PDF, a picture) has the file it was
+    // built from as its source: nothing generated it, and an editor showing
+    // that file is already on it.
     let source_path = url_to_source_candidates(normalized)
         .into_iter()
-        .find_map(|c| existing(&c));
+        .find_map(|c| existing(&c))
+        .or_else(|| match served_asset_source(normalized, folder_path, &map) {
+            Ok(source) => source.and_then(|src| existing(&src)),
+            Err(why) => {
+                unknown.get_or_insert(why);
+                None
+            }
+        });
     // What would replace the page when nothing backs it, in the language the
     // build resolved (the root entry of `site-languages.json`); no build yet
     // means the default, never a content scan from a resolve.
@@ -122,6 +132,19 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         source_pending: false,
         source_known: not_known.is_none(),
     })
+}
+
+/// The source of the non-page file served at `url`, from the last build's
+/// manifest. A page URL (the root, a folder, an `.html` file) never reads it.
+/// `Err` when there is no manifest to read, or two files share the address:
+/// which file is served there is not known, which is not the same as none.
+fn served_asset_source(url: &str, folder_path: &Path, map: &ArticleMap) -> Result<Option<String>, String> {
+    if url.is_empty() || url.ends_with('/') || url.ends_with(".html") {
+        return Ok(None);
+    }
+    let hashes = crate::ops::watch::sweep::walk::read_baseline_from_disk(folder_path)
+        .ok_or("no build manifest to read yet")?;
+    crate::editor::resolve::links::asset_source_for_url(url, &hashes, &map.dir_overrides)
 }
 
 /// One page of the served build.
@@ -253,6 +276,36 @@ mod tests {
         let r = resolve_page_source("", &root).unwrap();
         assert!(r.is_dir);
         assert!(r.source_path.unwrap().ends_with("Garden.md"));
+    }
+
+    /// The preview on a served PDF or picture is on that file, not on a page
+    /// moss generated: an editor showing the file keeps showing it.
+    #[test]
+    fn a_served_file_resolves_to_the_file_it_was_built_from() {
+        let dir = vault(&[], &[], &["index.md", "doc.pdf", "My Files/pic.png"]);
+        let stat = serde_json::json!({ "hash": "abc", "size": 1, "mtime": 1000 });
+        std::fs::write(
+            dir.path().join(".moss/build.nosync/hashes.json"),
+            serde_json::json!({
+                "files": { "index.html": "100644:a", "doc.pdf": "100644:a", "my-files/pic.png": "100644:a" },
+                "sources": { "index.md": stat, "doc.pdf": stat, "My Files/pic.png": stat },
+                "image_outputs": ["my-files/pic.webp"],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for (url, file) in [("/doc.pdf", "doc.pdf"), ("/my-files/pic.webp", "My Files/pic.png")] {
+            let r = resolve_page_source(url, dir.path()).unwrap();
+            assert!(r.source_path.as_deref().is_some_and(|p| p.ends_with(file)), "{url}: {:?}", r.source_path);
+            assert!(r.source_known && r.takeover.is_none() && !r.is_dir && !r.is_article, "{url}");
+        }
+        // A file the build does not serve is still nothing to edit.
+        let missing = resolve_page_source("/missing.pdf", dir.path()).unwrap();
+        assert!(missing.source_path.is_none() && missing.source_known);
+        // Without a manifest, which file is served there is not known yet.
+        std::fs::remove_file(dir.path().join(".moss/build.nosync/hashes.json")).unwrap();
+        let unread = resolve_page_source("/doc.pdf", dir.path()).unwrap();
+        assert!(unread.source_path.is_none() && !unread.source_known);
     }
 
     #[test]

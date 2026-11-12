@@ -135,7 +135,7 @@ const {
 vi.mock('../../engine', () => ({ engine: mockCommands }));
 vi.mock('../chip-bar', () => ({ ChipBar: MockChipBar }));
 vi.mock('../cm-editor', () => ({ CmEditor: MockCmEditor }));
-vi.mock('../file-viewer', () => ({ showFileViewer: vi.fn(), destroyFileViewer: vi.fn() }));
+vi.mock('../file-viewer');
 // FileTree is mocked; mkBackCrumb/mkTitleBarRow stay REAL (versions-surface.ts
 // imports them from this same module, tree/index.ts's public surface) — the
 // real DOM those two build is what the "‹ Editor"/restore tests below dispatch
