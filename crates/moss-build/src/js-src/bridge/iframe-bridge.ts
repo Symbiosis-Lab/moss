@@ -1121,10 +1121,12 @@ import { installCaptureResponder } from "./capture/responder";
           ignoreActiveValue: true,
           callbacks,
         });
+        // idiomorph leaves the focused element's children unmorphed under
+        // ignoreActiveValue; a click focuses <main tabindex="-1">, so keep it for typing only.
+        const active = document.activeElement as HTMLElement | null;
         Idiomorph.morph(document.body, fragmentOf(doc.body), {
           morphStyle: "innerHTML",
-          ignoreActiveValue: true,
-          restoreFocus: true,
+          ignoreActiveValue: !!active && (active.matches("input, textarea, select") || active.isContentEditable),
           callbacks,
         });
         // Sync <body>'s OWN attributes: `morphStyle: "innerHTML"` reconciles a
@@ -1191,7 +1193,6 @@ import { installCaptureResponder } from "./capture/responder";
         pageColor?.fire();
         chromeAmbient?.fire();
         forceRepaint();
-        void gen; // reserved for Fix D gen-unification; ack-echoed below
         window.parent.postMessage(
           {
             type: "moss-morph-applied",
