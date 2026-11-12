@@ -133,11 +133,20 @@ fn render_item(
         root,
         media_lookup,
     );
-    // One `style` attribute carries both the cover's band colour and the
-    // page's section colour.
+    // An image cover's own shape, where its size was read: a theme lays out
+    // by it without waiting for the picture or running script.
+    let cover_ratio = match (props.cover.as_deref(), cover_type, media_lookup) {
+        (Some(cover), Some(CoverType::Image), Some(lookup)) => {
+            moss_core::render::image::lookup_dims(lookup.asset_snapshot(), moss_core::media::split_pipe(cover).0)
+        }
+        _ => None,
+    };
+    // One `style` attribute carries the cover's band colour, its shape and
+    // the page's section colour.
     let style_decls: Vec<String> = cover_color
         .iter()
         .map(|c| format!("--item-cover-color: {}", html_escape(c)))
+        .chain(cover_ratio.iter().filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| format!("--item-cover-ratio: {w} / {h}")))
         .chain(props.section_color.iter().map(|a| html_escape(&crate::build::scan::section_text::section_style(a))))
         .collect();
     let cover_color_attrs = format!(

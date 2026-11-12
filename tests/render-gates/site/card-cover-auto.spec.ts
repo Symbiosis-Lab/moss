@@ -7,7 +7,9 @@
  * phone width, and in `:::grid {rows=equal}` cards, whose titles still line
  * up. A summary list's thumbnail is 120px wide: with a ratio it is that tall
  * at least, taller when its row's words are; with `auto` it is its picture's
- * shape. A cover always spans its card, on a phone too.
+ * shape. A cover always spans its card, on a phone too. Each card carries
+ * its picture's shape as `--item-cover-ratio`, and the guide's flex row laid
+ * out by it stands every cover at one height with no script.
  *
  * Site: tests/e2e/helpers/gate-sites.ts → CARD_COVER_AUTO_GATE.
  */
@@ -64,6 +66,20 @@ for (const [label, viewport] of [["desktop", DESKTOP], ["phone", PHONE]] as cons
     }
   });
 }
+
+test("a flex row sized by --item-cover-ratio stands every cover at one height", async ({ page }) => {
+  await open(page, DESKTOP, "auto");
+  await page.addStyleTag({
+    content: `.moss-cards { display: flex; }
+.moss-card { display: block; flex: calc(var(--item-cover-ratio, 1)) 1 0; min-inline-size: 0; }`,
+  });
+  const wide = await shape(cover(page, "Grid", "Wide print"));
+  const tall = await shape(cover(page, "Grid", "Tall print"));
+  expect(wide.ratio).toBeCloseTo(3 / 2, 1);
+  expect(tall.ratio).toBeCloseTo(2 / 3, 1);
+  expect(Math.abs(wide.box.height - tall.box.height), "one height").toBeLessThan(2);
+  expect(wide.box.width / tall.box.width, "widths in the pictures' proportion").toBeCloseTo(9 / 4, 1);
+});
 
 test("auto keeps each shape in equal-row cards and their titles still line up", async ({ page }) => {
   await open(page, DESKTOP, "auto");

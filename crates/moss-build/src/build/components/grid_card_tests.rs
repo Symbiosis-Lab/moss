@@ -1031,3 +1031,28 @@ fn event_grid_card_without_tickets_keeps_its_whole_card_anchor() {
         r#"<a href="spring-gala.html" class="moss-card" aria-label="Spring Gala"><div class="moss-card-cover moss-card-no-cover"></div><div class="moss-card-content"><span class="moss-card-meta"></span><span class="moss-card-title">Spring Gala</span></div></a>"#
     );
 }
+
+/// A theme lays cards out by each cover's shape, so the card carries it. Only
+/// a size moss read counts: an unread picture or a video gets no property,
+/// and the theme's fallback applies.
+#[test]
+fn a_picture_cover_publishes_its_shape() {
+    use crate::build::media::dimensions::MediaDimensionLookup;
+    let meta = crate::types::content::MediaMetadata {
+        path: "prints/wave.jpg".to_string(),
+        dimensions: Some((1500, 1000)),
+        ..Default::default()
+    };
+    let flat = crate::types::content::MediaMetadata { path: "prints/flat.jpg".to_string(), dimensions: Some((0, 1000)), ..Default::default() };
+    let lookup = MediaDimensionLookup::new(&[meta, flat], &[], &std::collections::HashMap::new(), None);
+    let card = |cover: &str| {
+        let props = ChildItemProps { title: "Wave".to_string(), url: Some("wave/".to_string()), cover: Some(cover.to_string()), ..blank() };
+        render_item_with_typesetting(&props, None, Language::En, None, Some(&lookup), false, false)
+    };
+
+    assert!(card("prints/wave.jpg").contains("--item-cover-ratio: 1500 / 1000"), "{}", card("prints/wave.jpg"));
+    assert!(card("prints/wave.jpg|fit=contain").contains("--item-cover-ratio: 1500 / 1000"));
+    assert!(!card("prints/unread.jpg").contains("--item-cover-ratio"));
+    assert!(!card("prints/flat.jpg").contains("--item-cover-ratio"));
+    assert!(!card("prints/clip.mp4").contains("--item-cover-ratio"));
+}

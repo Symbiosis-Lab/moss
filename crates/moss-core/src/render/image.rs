@@ -797,7 +797,7 @@ fn sizes_for<'s>(
 ///
 /// Returns `None` when none of the variants is in the snapshot. The caller
 /// supplies the fallback (800×600 for dims, no style for LQIP / color).
-pub(crate) fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
+pub fn lookup_dims(assets: &AssetSnapshot, src: &str) -> Option<(u32, u32)> {
     probe_paths(src, |p| assets.dims(&p))
 }
 

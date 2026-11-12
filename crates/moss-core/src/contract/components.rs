@@ -403,7 +403,7 @@ const CORE: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`. Tag is `<a>` for ordinary cards and `<div>` for linkblog cards (`[data-linkblog]`).",
+        description: "v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`. Tag is `<a>` for ordinary cards and `<div>` for linkblog cards (`[data-linkblog]`). A card whose cover is a picture moss read carries the picture's width over its height as `--item-cover-ratio` in its `style` (`3 / 2`), for a theme that lays cards out by each cover's shape.",
     },
     ComponentEntry {
         class: "moss-card-link",
