@@ -45,7 +45,7 @@ Rung 2 reaches further than it looks. CSS `:has()` and the sibling combinators s
 - A column by what it holds: `.moss-grid-card:has(> h1)` for the column with the title, `.moss-grid-card:has(> .moss-cards-container)` for the column with a listing embed.
 - A card in a grid: a cell that opens with a bold line, `.moss-grid-card:has(> p:first-child > strong:only-child)`.
 - A statement set between two bands: `article.container > .moss-grid ~ p:has(~ .moss-grid)`. Bound it on both sides; `article.container > p` alone also matches the opening paragraph of every page that has no bands.
-- A band's label and its anchor: write the short label as the band's heading and the line under it one level down (`## The room`, then `### Small, bright, under a brick vault.`). moss names the heading from its text, so the nav links to `/#the-room` with no `{#id}`, and rewriting the headline never breaks that link. The label rule is `.moss-grid-card > h2:has(+ h3)`. A lone `{#id}` on a heading, or on a `:::grid` in its braces (`:::grid 2 {#rooms}`), is for an anchor that must differ from the heading's text; the other typed blocks (`:::gallery`, `:::buttons`, `:::hero`) do not carry an id and the build warns if one is written.
+- A band's anchor: write the band's heading as the plain name of what it holds (`## Opening hours`). moss names the heading from its text, so the nav links to `/#opening-hours` with no `{#id}`, and rewriting the heading never breaks that link. A lone `{#id}` on a heading, or on a `:::grid` in its braces (`:::grid 2 {#hours}`), is for an anchor that must differ from the heading's text; the other typed blocks (`:::gallery`, `:::buttons`, `:::hero`) do not carry an id and the build warns if one is written.
 - A `screen` band whose content keeps the text measure: `padding-inline: max(var(--moss-container-padding), calc((100cqi - 1240px) / 2))`. A percentage there resolves against the text column, not the band; `cqi` measures the page.
 - A row of buttons: a paragraph made only of links, one per line. moss marks such a paragraph `class="moss-links"` (a link around a picture does not count, and a sentence holding a link does not get it), so `p.moss-links > a` styles each button and `p.moss-links > a:only-child` is one call to action alone in its paragraph. moss turns the line break between links into a `<br>`, so `a + a` never matches; hide it with `p.moss-links > br { display: none }`. moss draws nothing for the class. This replaces `:::buttons`.
 - A linked title, a heading whose words are a link: `h3:has(> a:not(.moss-heading-anchor))`, and `h3 > a:not(.moss-heading-anchor)` for the link itself. On a page with several sections of running text, moss ends each heading with its permalink mark, `<a class="moss-heading-anchor">`, so a plain `h3:has(> a)` or `h3 > a` also matches every heading that carries one, and a rule meant for a few linked titles restyles the page's ordinary headings.
@@ -53,7 +53,7 @@ Rung 2 reaches further than it looks. CSS `:has()` and the sibling combinators s
 - A table of facts: a list whose items open with the label in bold, the value on the next line (`- **Capacity**` then `  about ten people`), styled by `ul:has(> li > strong:first-child)`. The label can sit in its own column with `position: absolute` on `li > strong:first-child` and a matching `padding-inline-start` on the item; the line break after the label is a `<br>`, hidden as above. Definition lists (`Term` then `: value`) are not CommonMark: GitHub and most editors show the colon lines as written.
 
 - A register of dated entries, one row each (a bibliography, a list of talks): a listing embed with `style:list` writes each entry as `.moss-prefix-link` holding `.moss-prefix-link-prefix` (the `time`, then each `card = true` field as `.moss-card-field`) and `.moss-prefix-link-title`. `display: grid` on `.moss-prefix-link` with `.moss-prefix-link-prefix { display: contents }` puts the year in its own column, the title beside it and the fields under the title; a field's `data-field` picks one out. A journal's name italic inside a venue line is written in the field's value (`venue: "*Example Journal,* 4(2): 1-7"`), not as a rule that italicises the whole field.
-- A label and the title it introduces: two headings, `## Book project` then `### The book's title`, selected as `article > h2 + h3` for the title and `article > h2 + h3 + p` for a line under it. Each heading keeps its anchor, and the page reads as an outline in any editor.
+- A title with a line of data above it, such as a date or a category the reader filters by: two headings, `#### 2026` then `### The book's title`, selected as `article > h4 + h3`. Each heading keeps its anchor, and the page reads as an outline in any editor. The upper line is content, never a name for the section.
 - A page whose job is one line (an address to write to): `article > h1:first-child + p:last-child`, which only a page made of a title and one paragraph matches.
 - Detail on demand: a folded callout (`> [!note]- Background` with the paragraphs quoted under it) is a native `<details>` that starts closed. `.callout` and `summary.callout-title` restyle it as a quiet label, so the page shows its first lines and keeps the rest one click away with no HTML in the Markdown.
 
@@ -346,6 +346,17 @@ Embed a video or pen by URL. The standard form makes the same player as the wiki
 ```
 
 The wiki spelling is `![[https://www.youtube.com/watch?v=dQw4w9WgXcQ|640x360]]`. YouTube, Vimeo, and CodePen get provider-aware players; only the wiki form turns another https page URL into a generic iframe. Give a frame a title and a size together as `![[https://example.test/form|Sign-up form|420x620]]`; a frame without a title gets a default name: the player's for YouTube, Vimeo and CodePen, or the site's for any other page.
+
+## Words on the page
+
+Say what a thing is, in the name its readers already use, and stop. A heading is the plain name of what follows it (`Patrol`, `Opening hours`, `Courses`), a sentence under it says what it is or what it costs, and a call to action names the action (`Book a table`). Write for the reader's task, not for a judge of copywriting.
+
+- No slogan, riddle or invented term for a service, product or place. If the people it is for would not say the word, replace it with the word they would say.
+- No label above a heading that restates the heading or names the section's role (`Our services` over `Services`). One heading per section.
+- No sentence that explains the page, reassures, or describes the design. Show it with the layout, a picture, a number.
+- Test every sentence by deleting it. If the reader loses nothing they would act on, it stays deleted.
+
+Before: `#### Night patrol` over `### A watchful presence for the whole street.` After: `### Night patrol`, then `Two uniformed guards on foot, 10 pm to 6 am, Monday to Sunday.`
 
 ## Content structure
 
