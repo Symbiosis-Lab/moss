@@ -339,6 +339,38 @@ test.describe("collage credits", () => {
     await expect(page.locator(`${MIXED} > :nth-child(1) figcaption > strong`)).toHaveText("Harbour at dawn");
   });
 
+  test("the arrow is drawn as text in the accent colour, not as a colour emoji, when only an emoji face has it", async ({ page }) => {
+    await page.goto("/mixed/");
+    // A linked tile's title in a face with no arrow, so the arrow falls to the
+    // platform's colour emoji font (a title set in that font itself draws a
+    // text glyph either way). On white with a pure red accent, a text glyph
+    // paints only white-to-red.
+    const png = await page.evaluate(() => {
+      document.body.insertAdjacentHTML("beforeend", `<div class="moss-grid" data-collage style="position:fixed;inset:0 auto auto 0;z-index:2147483647;display:block;inline-size:auto;background:#fff;--moss-color-accent:#f00">
+        <div class="moss-grid-card"><figure class="moss-image" style="margin:0"><a href="#"></a><figcaption style="position:static;opacity:1;transform:none;background:#fff"><strong id="arrow-probe" style="display:inline-block;padding:8px;font:500 40px 'Bodoni 72','Apple Color Emoji','Noto Color Emoji','Segoe UI Emoji'"></strong></figcaption></figure></div></div>`);
+    }).then(() => page.locator("#arrow-probe").screenshot());
+    const { painted, coloured } = await page.evaluate(async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const canvas = Object.assign(document.createElement("canvas"), { width: img.width, height: img.height });
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0);
+      const px = ctx.getImageData(0, 0, img.width, img.height).data;
+      let painted = 0;
+      let coloured = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const [r, g, b] = [px[i], px[i + 1], px[i + 2]];
+        if (r > 250 && g > 250 && b > 250) continue;
+        painted++;
+        if (r < 235 || Math.abs(g - b) > 20) coloured++;
+      }
+      return { painted, coloured };
+    }, png.toString("base64"));
+    expect(painted, "the arrow is drawn").toBeGreaterThan(20);
+    expect(coloured, "pixels off the line from white to the accent").toBe(0);
+  });
+
   for (const width of [1360, 900, 768])
   test(`at ${width}px every title is shown whole on hover, and a long word is not broken`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

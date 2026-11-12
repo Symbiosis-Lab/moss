@@ -9507,7 +9507,8 @@ a.moss-grid-card:hover {
 }
 /* The title is whole, never clipped: its size follows the tile's width so the
    longest word fits, and a linked tile's arrow ends it. The arrow is drawn,
-   not read: its alternative text is empty. */
+   not read: its alternative text is empty. U+FE0E asks for the text glyph
+   where the face lacks the arrow and the fallback offers a colour emoji. */
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child {
   display: block;
   color: var(--moss-color-text);
@@ -9518,8 +9519,8 @@ a.moss-grid-card:hover {
   text-wrap: balance;
 }
 .moss-grid[data-collage] .moss-image:has(> a) figcaption > strong:first-child::after {
-  content: "\00a0\2197";
-  content: "\00a0\2197" / "";
+  content: "\00a0\2197\FE0E";
+  content: "\00a0\2197\FE0E" / "";
   color: var(--moss-color-accent);
 }
 /* Too small for both lines, or a window under 56.25rem: the title stays, the

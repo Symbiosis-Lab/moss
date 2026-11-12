@@ -2448,7 +2448,7 @@ const CORE: &[ComponentEntry] = &[
         kind: "standalone",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<p class="moss-external-link"><a href="https://archive.example.org/field/">archive.example.org<span aria-hidden="true"> ↗</span></a></p>"#,
+        example_html: r#"<p class="moss-external-link"><a href="https://archive.example.org/field/">archive.example.org<span aria-hidden="true"> ↗&#xFE0E;</span></a></p>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "0.24",
