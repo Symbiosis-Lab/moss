@@ -43,7 +43,8 @@ impl AuthoredAssetRef {
 ///
 /// Markdown inside a raw HTML block (`<pre>`, `<script>`, `<style>`, or any
 /// tag-opened block up to its blank line) reaches the page as literal text, so
-/// it is no candidate.
+/// it is no candidate. The `src` of a raw `<img>`, `<video>` or `<audio>` tag
+/// is one: the build serves that file as it serves a Markdown image's.
 pub fn extract_authored_asset_refs(
     source: &str,
     parse_config: &crate::ast::parser::ParseConfig,
@@ -67,11 +68,73 @@ pub fn extract_authored_asset_refs(
             .into_iter()
             .filter_map(|span| structural_raw_ref(source, span)),
     );
+    refs.extend(raw_media_tags(source).into_iter().filter_map(|tag| {
+        let src = tag.src?;
+        Some(AuthoredAssetRef {
+            raw: RawRef {
+                text: source.get(src.clone())?.to_string(),
+                syntax: RefSyntax::StructuralAsset,
+                byte_from: tag.byte_offset,
+                byte_to: src.end,
+                ref_from: src.start,
+                ref_to: src.end,
+            },
+            is_embed: true,
+        })
+    }));
     refs.sort_by_key(|reference| reference.raw.ref_from);
     refs.dedup_by(|left, right| {
         left.raw.ref_from == right.raw.ref_from && left.raw.ref_to == right.raw.ref_to
     });
     refs
+}
+
+/// One author-typed `<img>`, `<video>` or `<audio>` tag.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct RawMediaTag {
+    /// Lowercase tag name.
+    pub tag: String,
+    /// Byte offset of the tag's `<` in the source.
+    pub byte_offset: usize,
+    /// Byte span of the `src` value, without its quotes, when the tag has one.
+    pub src: Option<std::ops::Range<usize>>,
+}
+
+/// Every raw `<img>`, `<video>` and `<audio>` tag in `source`. A tag shown as
+/// code, inside a comment, or in the content of a `<script>`, `<style>` or
+/// `<textarea>` is text, not media, and is left out.
+pub fn raw_media_tags(source: &str) -> Vec<RawMediaTag> {
+    use std::sync::LazyLock;
+    // The class after the name keeps `<imgur>` and `<videos>` out.
+    static TAG: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r"(?i)<(img|video|audio)[\s/>]").ok());
+    static SRC: LazyLock<Option<regex::Regex>> =
+        LazyLock::new(|| regex::Regex::new(r#"(?i)\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#).ok());
+    // An element left open holds text to the end, as in a browser.
+    static TEXT: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+        regex::Regex::new(r"(?is)<script\b.*?(?:</script\s*>|\z)|<style\b.*?(?:</style\s*>|\z)|<textarea\b.*?(?:</textarea\s*>|\z)").ok()
+    });
+    let (Some(tag_re), Some(src_re), Some(text_re)) = (TAG.as_ref(), SRC.as_ref(), TEXT.as_ref()) else {
+        return Vec::new();
+    };
+    // The mask keeps every offset.
+    let live = crate::inert_regions::mask_inert(source);
+    let text: Vec<_> = text_re.find_iter(&live).map(|m| m.range()).collect();
+    tag_re
+        .captures_iter(&live)
+        .filter_map(|cap| {
+            let (whole, name) = (cap.get(0)?, cap.get(1)?);
+            if text.iter().any(|span| span.contains(&whole.start())) {
+                return None;
+            }
+            let attrs = live.get(name.end()..)?;
+            let attrs = attrs.split_once('>').map_or(attrs, |(inside, _)| inside);
+            let src = src_re
+                .captures(attrs)
+                .and_then(|c| c.get(1).or(c.get(2)).or(c.get(3)))
+                .map(|m| name.end() + m.start()..name.end() + m.end());
+            Some(RawMediaTag { tag: name.as_str().to_ascii_lowercase(), byte_offset: whole.start(), src })
+        })
+        .collect()
 }
 
 fn definition_is_image(raw: &RawRef, image_definitions: &HashSet<std::ops::Range<usize>>) -> bool {

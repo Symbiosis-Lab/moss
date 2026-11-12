@@ -28,7 +28,7 @@ use super::math_text::{math_inline, math_source};
 use super::nesting::{cap_nesting, MAX_BLOCK_NESTING};
 use super::node::{Block, CalloutKind, ColumnAlignment, Fold, HeadingNumber, Inline};
 use super::shortcode::Shortcode;
-use super::shortcode_extract::{extract_shortcodes_with_config, parse_placeholder, ExtractedShortcode};
+use super::shortcode_extract::{extract_shortcodes_with_config, ExtractedShortcode};
 use super::url::Url;
 use crate::heading::anchor::{legacy_heading_anchor, obsidian_heading_anchor};
 
@@ -333,7 +333,7 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
 
     // Put the lifted things back: placeholders become typed Shortcodes, `![[…]]`
     // sentinels their `Inline::Image`. Both BEFORE `assign_heading_id_suffixes`.
-    substitute_shortcode_placeholders(&mut blocks, &extraction.nonce, &extraction.extracted);
+    substitute_shortcode_placeholders(&mut blocks, &mut block_meta, &extraction.nonce, &extraction.extracted);
     super::linked_embed::restore(&mut blocks, &linked_embeds, config);
     // After the restore, so `[![[x.jpg]]](url)` and `[![x](x.jpg)](url)` reach
     // it as the same `Link(Image)` shape.
@@ -733,26 +733,56 @@ impl LineLookup {
     }
 }
 
-/// Walk top-level blocks; replace any `Block::Other` whose payload is a
-/// `<!--MOSS_SC_{nonce}_{index}-->` sentinel with the corresponding typed
-/// [`Block::Shortcode`].
+/// Walk top-level blocks; replace every `<!--MOSS_SC_{nonce}_{index}-->`
+/// sentinel in a `Block::Other` with the corresponding typed
+/// [`Block::Shortcode`]. A sentinel written between the lines of a raw HTML
+/// block (`<div>`, the shortcode, `</div>`, no blank lines) shares its block
+/// with that HTML, so the block is split around it. The first piece keeps the
+/// block's metadata; `block_meta` stays one entry per block.
 fn substitute_shortcode_placeholders(
     blocks: &mut Vec<Block>,
+    block_meta: &mut Vec<BlockMeta>,
     nonce: &str,
     extracted: &[ExtractedShortcode],
 ) {
-    for block in blocks.iter_mut() {
-        if let Block::Other(html) = block {
-            if let Some(index) = parse_placeholder(nonce, html) {
-                if let Some(entry) = extracted.iter().find(|e| e.index == index) {
-                    *block = Block::Shortcode(entry.shortcode.clone());
-                }
+    let open = format!("<!--MOSS_SC_{nonce}_");
+    let mut out = Vec::with_capacity(blocks.len());
+    let mut out_meta = Vec::with_capacity(blocks.len());
+    for (block, meta) in blocks.drain(..).zip(block_meta.drain(..)) {
+        out_meta.push(meta);
+        let Block::Other(html) = &block else {
+            out.push(block);
+            continue;
+        };
+        let mut rest = html.as_str();
+        let mut pieces = Vec::new();
+        while let Some((before, tail)) = rest.split_once(&open) {
+            let shortcode = tail.split_once("-->").and_then(|(index, after)| {
+                let index = index.parse::<usize>().ok()?;
+                let entry = extracted.iter().find(|e| e.index == index)?;
+                Some((entry.shortcode.clone(), after))
+            });
+            let Some((shortcode, after)) = shortcode else { break };
+            if !before.trim().is_empty() {
+                pieces.push(Block::Other(before.to_string()));
             }
+            pieces.push(Block::Shortcode(shortcode));
+            rest = after;
         }
+        if pieces.is_empty() {
+            out.push(block);
+            continue;
+        }
+        if !rest.trim().is_empty() {
+            pieces.push(Block::Other(rest.to_string()));
+        }
+        out_meta.extend(std::iter::repeat_n(BlockMeta::default(), pieces.len() - 1));
+        out.extend(pieces);
         // Future: descend into BlockQuote / List items / Callouts when
-        // shortcodes inside those constructs are modeled. Phase B Tasks
-        // 7-10 only need top-level shortcodes.
+        // shortcodes inside those constructs are modeled.
     }
+    *blocks = out;
+    *block_meta = out_meta;
 }
 
 /// Parse one block-level construct starting at `events[start]`. Returns

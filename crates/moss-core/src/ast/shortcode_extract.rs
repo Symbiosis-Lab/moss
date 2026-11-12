@@ -1507,19 +1507,6 @@ pub fn placeholder_for(nonce: &str, index: usize) -> String {
     format!("<!--MOSS_SC_{nonce}_{index}-->")
 }
 
-/// Try to interpret a [`Block::Other`] payload as a shortcode placeholder
-/// matching the given `nonce`. Returns the `index` if it matches.
-///
-/// Any sentinel with a different (or absent) nonce is rejected — that's
-/// what makes authored content with a similar comment shape inert.
-pub fn parse_placeholder(nonce: &str, html: &str) -> Option<usize> {
-    let trim = html.trim();
-    let prefix = format!("<!--MOSS_SC_{nonce}_");
-    let inner = trim.strip_prefix(&prefix)?;
-    let inner = inner.strip_suffix("-->")?;
-    inner.parse::<usize>().ok()
-}
-
 /// Compute the per-extraction nonce from the input markdown. Uses
 /// `std::hash::DefaultHasher` (FxHash-like; not cryptographic, but good
 /// enough to make a literal authored-content collision computationally

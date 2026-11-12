@@ -260,6 +260,23 @@ fn warm_parse_cache_replays_then_replaces_missing_reference_evidence() {
     crate::build::parse_cache::reset_for_tests();
 }
 
+/// The build serves the file a raw `<img src>` names, so one that is not there
+/// is a missing file like a Markdown image's; one that is there is not.
+#[test]
+fn a_raw_img_src_to_a_missing_file_is_a_missing_reference() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    crate::build::parse_cache::reset_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    fs::create_dir_all(dir.join("img")).unwrap();
+    fs::write(dir.join("img/here.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: marks\n---\n<img src=\"img/here.svg\" alt=\"\">\n\n<img src=\"img/gone.svg\" alt=\"\">\n").unwrap();
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: false };
+
+    let (_, missing) = build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates).expect("build");
+    let named: Vec<&str> = missing.iter().map(|m| m.reference.as_str()).collect();
+    assert_eq!(named, ["img/gone.svg"], "{missing:?}");
+}
+
 /// A page replayed from the parse cache is recorded at the bytes it was
 /// replayed from, even when the manifest on disk is older than the cached
 /// parse, as it is while the previous build's seal has not written it yet.

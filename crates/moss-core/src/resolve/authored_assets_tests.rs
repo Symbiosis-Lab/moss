@@ -261,3 +261,130 @@ Inline <code>![inline code](inline-code.jpg)</code> is Markdown.
         ["inline-code.jpg", "after-tag.jpg", "wrapper-blank.jpg", "in-shortcode.jpg"]
     );
 }
+
+#[test]
+fn a_raw_media_tag_names_its_src_as_a_file() {
+    let source = "<img src=\"img/gone.svg\" alt=\"\">\n\nText <IMG alt='' SRC='img/here.svg'> and <video src=clip.mp4 controls></video>.\n\n<img alt=\"no source\">\n\n`<img src=\"shown.png\">`\n\n<!-- <img src=\"commented.png\"> -->\n\n<img src=\"https://example.org/far.png\">\n";
+    assert_eq!(texts(source), ["img/gone.svg", "img/here.svg", "clip.mp4", "https://example.org/far.png"]);
+    assert_eq!(missing(source, &["img/here.svg"]), ["img/gone.svg", "clip.mp4"]);
+    let gone = &refs(source)[0].raw;
+    assert_eq!(&source[gone.ref_from..gone.ref_to], "img/gone.svg");
+    assert_eq!(gone.byte_from, 0);
+}
+
+#[test]
+fn media_tags_shown_as_code_are_not_raw_media() {
+    let md = "A live one: <img src=\"live.jpg\">\n\n\
+              ```html\n<img src=\"fenced.jpg\">\n```\n\n\
+              ~~~\n<video src=\"tilde.mp4\">\n~~~\n\n\
+              Inline: `<audio src=\"inline.mp3\">`.\n\n\
+              <!-- <img src=\"commented.jpg\"> -->\n\n\
+              \x20   <img src=\"indented.jpg\">\n";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1, "only the live tag is raw media: {hits:?}");
+    assert_eq!(hits[0].byte_offset, "A live one: ".len());
+}
+
+#[test]
+fn media_tag_in_a_raw_html_block_is_still_raw_media() {
+    let hits = raw_media_tags("<div>\n<img src=\"block.jpg\">\n</div>\n");
+    assert_eq!(hits.len(), 1, "an HTML block is live markup, not code: {hits:?}");
+}
+
+#[test]
+fn detects_raw_img_tag() {
+    let md = "some text <img src=\"x.jpg\"> more text";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].tag, "img");
+    assert_eq!(hits[0].byte_offset, "some text ".len());
+}
+
+#[test]
+fn detects_video_tag() {
+    let md = "<video src=\"x.mp4\">";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].tag, "video");
+    assert_eq!(hits[0].byte_offset, 0);
+}
+
+/// `![[track.mp3]]` synthesizes an audio player, so a hand-typed `<audio>`
+/// loses that as a raw `<img>` loses its placeholder.
+#[test]
+fn detects_audio_tag() {
+    let md = "<audio src=\"x.mp3\" controls></audio>";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].tag, "audio");
+    assert_eq!(hits[0].byte_offset, 0);
+}
+
+#[test]
+fn no_detection_for_markdown_image() {
+    let md = "![alt](photo.jpg) plain markdown\n![[file.png]] embed";
+    assert!(raw_media_tags(md).is_empty());
+}
+
+#[test]
+fn detects_uppercase_tag() {
+    let md = "<IMG src=\"x.jpg\">";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].tag, "img");
+}
+
+#[test]
+fn detects_self_closing_img() {
+    let md = "<img/>";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].tag, "img");
+}
+
+#[test]
+fn detects_multiple_tags_in_one_page() {
+    let md = "<img src=\"a.jpg\"> middle <video src=\"b.mp4\"></video> <img>";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 3);
+    assert_eq!(hits[0].tag, "img");
+    assert_eq!(hits[1].tag, "video");
+    assert_eq!(hits[2].tag, "img");
+}
+
+#[test]
+fn does_not_match_similar_identifiers() {
+    // `<imgur>`, `<videos>` and `<audiobook>` are not raw media tags -
+    // the boundary class (`\s`, `>`, `/`) prevents the false match.
+    let md = "<imgur>foo</imgur> <videos>bar</videos> <audiobook>baz</audiobook>";
+    assert!(raw_media_tags(md).is_empty());
+}
+
+#[test]
+fn detects_tag_with_no_attributes() {
+    let md = "<img>";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].tag, "img");
+}
+
+/// A page's own script, style or form text can spell a media tag
+/// (`'<img src="' + url + '">'`); the browser reads it as text.
+#[test]
+fn a_media_tag_inside_script_style_or_textarea_is_text() {
+    let md = "<script>\nel.innerHTML = '<img src=\"' + url + '\">';\nconst t = `<video src=\"${clip}\">`;\n</script>\n\n\
+              <style>/* <img src=\"in-style.png\"> */</style>\n\n\
+              <textarea><audio src=\"in-form.mp3\"></textarea>\n\n\
+              <img src=\"live.png\">\n\n<script>\n'<img src=\"never-closed.png\">'\n";
+    let hits = raw_media_tags(md);
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(texts(md), ["live.png"]);
+}
+
+/// Only a file the folder should hold can be missing.
+#[test]
+fn a_raw_src_that_names_no_file_or_a_present_one_is_not_missing() {
+    let source = "<img src=\"\">\n\n<img src=\"data:image/gif;base64,R0lGODlhAQABAAAAACw=\">\n\n<img src=\"#\">\n\n\
+                  <img src=\"//cdn.example.org/far.png\">\n\n<img src=\"/img/here.svg\">\n\n<img src=\"img/here.svg?v=2\">\n";
+    assert_eq!(missing(source, &["img/here.svg"]), Vec::<String>::new());
+}

@@ -155,33 +155,6 @@ fn extracts_multiple_subscribes_with_increasing_indices() {
 }
 
 #[test]
-fn parse_placeholder_round_trips_index() {
-    let nonce = "deadbeef";
-    for index in [0, 1, 5, 99] {
-        let s = placeholder_for(nonce, index);
-        assert_eq!(parse_placeholder(nonce, &s), Some(index));
-    }
-}
-
-#[test]
-fn parse_placeholder_rejects_non_placeholder_html() {
-    let nonce = "deadbeef";
-    assert!(parse_placeholder(nonce, "<div>hi</div>").is_none());
-    assert!(parse_placeholder(nonce, "<!--just a comment-->").is_none());
-}
-
-#[test]
-fn parse_placeholder_rejects_wrong_nonce() {
-    // Authored content collision case: an author writes a literal
-    // <!--MOSS_SC_*_0--> in their markdown. parse_placeholder requires
-    // the same nonce as this extraction's session, so a mismatched
-    // nonce returns None. This forecloses the authored-content
-    // namespace collision.
-    let s = placeholder_for("aaaa1111", 5);
-    assert_eq!(parse_placeholder("bbbb2222", &s), None);
-}
-
-#[test]
 fn extract_uses_content_derived_nonce() {
     // The nonce is deterministic per input — calling extract_shortcodes
     // twice on the same input produces the same nonce.
@@ -2773,6 +2746,21 @@ Real content after the comment.
         html.contains("<h1"),
         "content before the comment must still render:\n{html}"
     );
+}
+
+#[test]
+fn a_shortcode_between_the_lines_of_a_raw_html_block_is_rendered_in_place() {
+    // No blank lines, so the tag, the sentinel and the closing tag are one
+    // HTML block to the Markdown parser.
+    let html = render_markdown("<div class=\"wrap\">\n:::grid 2\nLeft\n+++\nRight\n:::\n</div>\n\nAfter.\n");
+    assert!(!html.contains("MOSS_SC"), "{html}");
+    let (open, grid, close) = (html.find("<div class=\"wrap\">"), html.find("moss-grid"), html.find("</div>\n<p>After."));
+    assert!(matches!((open, grid, close), (Some(o), Some(g), Some(c)) if o < g && g < c), "the grid sits inside the author's div: {html}");
+    assert!(html.contains("Left") && html.contains("Right"), "{html}");
+
+    // A sentinel an author typed, with a nonce that is not this page's, is text.
+    let typed = render_markdown("<div>\n<!--MOSS_SC_00000000_0-->\n</div>\n\n:::grid 2\nLeft\n+++\nRight\n:::\n");
+    assert!(typed.contains("<!--MOSS_SC_00000000_0-->"), "{typed}");
 }
 
 #[test]

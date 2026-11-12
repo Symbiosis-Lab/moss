@@ -37,6 +37,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A shortcode written between the lines of a raw HTML block with no blank lines around it (`<div>`, `:::grid`, its cells, `:::`, `</div>`) is rendered in place. The page used to show an empty comment where it stood.
+- A raw `<img>`, `<video>` or `<audio>` tag whose `src` names a file that is not in the folder counts as a missing file when publishing, like a Markdown image's. The publish used to go out with the broken picture.
 - A publish refused for missing files names each one with the source file and line that asks for it, in `moss deploy --dry-run` too, instead of only a count.
 - Markdown written inside a raw HTML block (`<pre>`, `<script>`, `<style>`, or any block opened by a tag, up to its blank line) no longer counts as a missing file when publishing: the page shows that text as written.
 - On a `content_width: screen` page, a picture in a top-level grid or band asks for a file as wide as the band it is drawn in. It asked for one sized to the text column, so a first picture, and every picture in Safari, was enlarged from too small a file.
