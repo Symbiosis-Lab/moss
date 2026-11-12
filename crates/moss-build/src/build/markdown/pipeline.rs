@@ -2175,7 +2175,7 @@ struct PipelineHooks<'a> {
     /// `permalink_section_label` trait override hands it back to moss-core.
     permalink_section_label: &'a str,
     /// Whether this page's headings get permalink marks, read by the
-    /// `emit_heading_anchors` override below. Ids are emitted either way.
+    /// `heading_anchors` override below. Ids are emitted either way.
     heading_anchors: bool,
     /// The page's effective typesetting is vertical. Handed to the delegated
     /// `DefaultHooks`, where it only changes body images' `sizes=`.
@@ -2259,8 +2259,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         crate::i18n::t(self.lang, "gallery_open_image")
     }
 
-    fn emit_heading_anchors(&self, level: u8) -> bool {
-        self.heading_anchors && level != 1
+    fn heading_anchors(&self, level: u8) -> moss_core::ast::HeadingAnchors {
+        if self.heading_anchors && level != 1 { moss_core::ast::HeadingAnchors::All } else { moss_core::ast::HeadingAnchors::None }
     }
 
     /// The single place grid rendering is bound to the asset snapshot.
@@ -2271,8 +2271,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     /// `Shortcode::Grid` arm and the segmented render funnel through here — one
     /// binding, one byte shape.
     ///
-    /// `without_heading_anchors` rather than `asset_bound_hooks`: a heading in
-    /// a cell is a card title, so it carries no `#` permalink.
+    /// `card_titles` rather than `asset_bound_hooks`: a heading in a cell is a
+    /// card title, marked only where the author named its id.
     fn render_grid_parts(
         &self,
         args: &moss_core::ast::GridShortcode,
@@ -2280,7 +2280,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     ) -> moss_core::ast::GridParts {
         let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
         let form = |f: &moss_core::ast::FormShortcode| self.render_request_form(f);
-        let hooks = moss_core::ast::DefaultHooks::without_heading_anchors(self.assets)
+        let hooks = moss_core::ast::DefaultHooks::card_titles(self.assets, self.heading_anchors.then_some(self.permalink_section_label))
             .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe))
             .with_request_form(moss_core::ast::RequestFormFn(&form));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)

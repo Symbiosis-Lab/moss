@@ -1,6 +1,7 @@
 /**
  * Render gate: a heading's `#` is drawn by CSS, so copying a heading copies
- * the heading — and a grid cell's heading carries no `#` at all.
+ * the heading — and a grid cell's heading carries a `#` only when the author
+ * named its id.
  *
  * An engine question in the strictest sense: the assertion reads
  * `getSelection().toString()`, which IS the browser's own text serializer.

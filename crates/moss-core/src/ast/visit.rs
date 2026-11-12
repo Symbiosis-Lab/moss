@@ -674,6 +674,7 @@ mod tests {
             id: None,
             legacy_id: None,
             numbered_from: None,
+            named_id: false,
             contents_end: false,
             contents_label: None,
         }]);

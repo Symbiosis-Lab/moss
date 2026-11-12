@@ -1090,10 +1090,7 @@ fn homepage_sections_keep_permalink_anchors_and_title_has_none() {
     );
 }
 
-/// Same body as `homepage_heading_suppresses_h2_permalink_anchor`, on an
-/// ordinary (non-home) page: the `## Section` heading keeps its permalink
-/// anchor, same as always. Proves the suppression above is specific to the
-/// home page, not a side effect of the level-2 heading itself.
+/// The same two sections on an ordinary page carry their marks too.
 #[test]
 fn ordinary_page_heading_keeps_h2_permalink_anchor() {
     let md = format!("---\n---\n## Section\n\n{}\n\n## Other\n\n{}\n", eighty_words(), eighty_words());
@@ -2685,6 +2682,36 @@ fn a_short_page_has_heading_ids_but_no_permalink_marks() {
     let html = render_body_with_heading_anchors("## First\n\nshort.\n\n## Second\n\nshort.\n", true);
     assert!(!html.contains("moss-heading-anchor"), "{html}");
     assert!(html.contains(r#"<h2 id="first">First"#) && html.contains(r#"<h2 id="second">Second"#), "{html}");
+}
+
+/// An id the author named is a link target they chose, so its heading carries
+/// the mark on a page too short for marks and in a `:::grid` cell. A title, a
+/// hero's heading, a derived id and a named id moss had to renumber do not,
+/// and the site's switch still turns every mark off.
+#[test]
+fn a_named_heading_id_carries_the_mark_on_a_short_page_and_in_a_grid_cell() {
+    let body = "# Top {#top}\n\n:::hero\n## Over {#over}\n:::\n\n## Work {#work}\n\nshort.\n\n## About\n\nshort.\n\n## Again {#work}\n\n:::grid 2\n### Plain\n+++\n### Named {#named}\n:::\n";
+    let html = render_body_with_heading_anchors(body, true);
+    let mark = |id: &str| format!(r##"<a class="moss-heading-anchor" href="#{id}" aria-label="Permalink to this section"></a></h"##);
+    assert!(html.contains(&mark("work")) && html.contains(&mark("named")), "{html}");
+    assert_eq!(html.matches("moss-heading-anchor").count(), 2, "{html}");
+    for id in ["top", "over", "about", "work-1", "plain"] {
+        assert!(html.contains(&format!(r#" id="{id}""#)), "{id} keeps its id: {html}");
+    }
+    assert!(!render_body_with_heading_anchors(body, false).contains("moss-heading-anchor"));
+    // A page drawn into a slot of every other page, and a render with no
+    // site settings resolved (it has not been told marks are wanted): neither
+    // has one.
+    let unresolved = crate::build::render::SiteConfig::default();
+    let slot = format!("---\nslot: before-article-end\n---\n{body}");
+    for (file, body, site) in [
+        ("signoff.md", slot.as_str(), crate::build::markdown::SiteMarkdown { heading_anchors: true, ..Default::default() }),
+        ("test.md", body, unresolved.markdown()),
+    ] {
+        let doc = process_markdown_file(file, body, "site", &HashMap::new(), false, crate::i18n::Language::En, None, site, None, None, None, PageContext::default()).expect("should parse");
+        assert!(doc.html_content.contains(r#" id="named""#), "{file}: {}", doc.html_content);
+        assert!(!doc.html_content.contains("moss-heading-anchor"), "{file}: {}", doc.html_content);
+    }
 }
 
 /// Render a page long enough for marks with an explicit `[site].heading_anchors`

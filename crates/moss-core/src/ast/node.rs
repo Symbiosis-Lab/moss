@@ -220,6 +220,9 @@ pub enum Block {
         /// heading's: `posts` and 1 for `posts-1`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         numbered_from: Option<HeadingNumber>,
+        /// The author named the id with `{#id}`: a link target they chose.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        named_id: bool,
         /// The heading was written `## Title {contents=end}`: it opens the part
         /// of the page after the main sections.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -538,6 +541,7 @@ mod tests {
             id: Some("hello".to_string()),
             legacy_id: None,
             numbered_from: None,
+            named_id: false,
             contents_end: false,
             contents_label: None,
         };
@@ -789,6 +793,7 @@ mod tests {
             id: Some("setup".to_string()),
             legacy_id: None,
             numbered_from: None,
+            named_id: false,
             contents_end: false,
             contents_label: None,
         };

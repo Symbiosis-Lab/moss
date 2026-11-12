@@ -1400,6 +1400,25 @@ Only a few words here.
 
 Only a few more.
 `,
+    "named/index.md": `---
+title: A short page with named ids
+uid: "hag00105"
+---
+
+## Opening hours {#hours}
+
+Only a few words here.
+
+:::grid 2
+### The reading room on the upper floor {#reading-room}
+
+The cell's own text.
++++
+### The archive
+
+The other cell's text.
+:::
+`,
     "edge/index.md": `---
 title: Headings that fill their lines
 uid: "hag00103"

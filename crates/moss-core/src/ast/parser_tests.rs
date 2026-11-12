@@ -2681,7 +2681,7 @@ fn heading_contents_label_is_an_attribute_not_text() {
     ] {
         let html = crate::ast::render::render_document(&parse(src), &crate::ast::hooks::DefaultHooks::new());
         assert!(
-            html.starts_with(r#"<h2 id="hours" data-contents-label="Opening hours">Opening hours of the reading room</h2>"#),
+            html.starts_with(r#"<h2 id="hours" data-contents-label="Opening hours">Opening hours of the reading room<"#),
             "{src:?}: {html}"
         );
         assert!(parse(src).warnings.is_empty(), "{src:?}");

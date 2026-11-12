@@ -885,6 +885,7 @@ fn parse_block_with_tag(
                     id: Some(id),
                     legacy_id,
                     numbered_from: None,
+                    named_id: named.is_some(),
                     contents_end,
                     contents_label,
                 }),

@@ -461,5 +461,5 @@ fn a_site_that_turned_heading_anchors_off_stays_off_without_a_warning() {
     let config = ConfigFile::parse("[site]\nheading_anchors = false\n").unwrap();
     assert_eq!(config.site_bool("heading_anchors"), Some(false));
     assert!(config.unknown_site_keys().is_empty(), "{:?}", config.unknown_site_keys());
-    assert!(crate::config::site_settings::site_settings().iter().all(|s| s.name != "heading_anchors"));
+    assert_eq!(crate::config::site_settings::site_settings().iter().filter(|s| s.name == "heading_anchors").count(), 1, "describe lists it");
 }
