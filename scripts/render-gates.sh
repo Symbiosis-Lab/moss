@@ -145,6 +145,7 @@ GATES_NOBUILD=(
   term-index-layout
   site-elevation
   card-media-track
+  card-grid-rows
   card-cover-fit
   card-description-clamp
   img-fallback

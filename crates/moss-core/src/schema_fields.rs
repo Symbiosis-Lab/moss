@@ -872,7 +872,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::Object,
         widget: Widget::CodeEditor,
         score: 95,
-        description: "Marks this page's markdown table as a country map: `by` names the column whose value colours each country (the first column names the country), `levels` lists that column's values lowest first (each a string or `{name, text}` with the advice shown when a row has no extra columns), optional `unrated` is the text shown for a country with no row, and optional `action: {label, link}` adds a link to the panel, with `{country}` in `link` replaced by the URL-encoded country name, and `search: false` turns off the search field above the map (on by default; it finds every country by name or major city). The page's `date` is the map's as-of stamp. Embed it elsewhere with `![[page|style:map]]`.",
+        description: "Marks this page's markdown table as a country map: `by` names the column whose value colours each country (the first column names the country), `levels` lists that column's values lowest first (each a string or `{name, text}` with the advice shown when a row has no extra columns), optional `unrated` is the text shown for a country with no row, and optional `action: {label, link}` adds a link to the panel, with `{country}` in `link` replaced by the URL-encoded country name, and `search: false` turns off the search field above the map (on by default; it finds every country by name or major city). The page's `date` is the map's as-of stamp; `as_of: today` shows the visitor's date instead. Embed it elsewhere with `![[page|style:map]]`.",
         label_key: "chip.country_map.label",
         group: "This Page",
         ..FIELD_DEFAULTS

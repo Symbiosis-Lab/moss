@@ -1620,7 +1620,7 @@ fn render_one(
     }
     if parsed.style.as_deref() == Some("map") {
         if !parsed.path.ends_with('/') {
-            return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
+            return Ok(maps::render(parsed, ordinal, all_docs, place_maps, now));
         }
         if let Some(html) = place_maps.and_then(|maps| maps::render_place_root(parsed, ordinal, from, all_docs, maps)) {
             return Ok(html);

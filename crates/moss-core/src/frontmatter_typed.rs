@@ -248,7 +248,7 @@ pub struct FrontMatter {
         serialize_with = "serialize_term_claim"
     )]
     pub place_page: Option<crate::terms::TermClaim>,
-    /// The country-map settings (`by`, `levels`, `unrated`, `action`, `search`), carried
+    /// The country-map settings (`by`, `levels`, `unrated`, `action`, `search`, `as_of`), carried
     /// as written: moss-build reads them, so a malformed block is a build
     /// problem naming the page instead of a frontmatter parse failure.
     pub country_map: Option<Value>,

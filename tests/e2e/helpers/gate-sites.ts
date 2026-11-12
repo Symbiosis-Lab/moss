@@ -4803,6 +4803,19 @@ country_map:
 | Russia | Elevated | |
 | Singapore | Low | |
 `,
+    "living.md": `---
+title: Open now
+date: 2026-11-03
+country_map:
+  by: Level
+  levels: [Closed, Open]
+  as_of: today
+---
+| Country | Level |
+|---|---|
+| Japan | Open |
+| Chile | Closed |
+`,
     ".moss/config.toml": `schema_version = 6
 
 [site]

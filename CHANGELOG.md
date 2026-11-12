@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A country map can show the reader's own date in its "As of" stamp and panel: `as_of: today` under `country_map:`. The date is written in the page's language; a reader without script sees the page's `date:`, or the day of the build when the page has none.
 - A `##` or lower heading whose section holds only folder embeds is left out while every one of those embeds lists nothing, so a section of posts or upcoming events can be written before its first entry exists; the build prints a note naming the heading's anchor, and the heading appears with the first page.
 - `children_listed: here` on a folder's home keeps the pages under that folder out of the listings that flatten the folders above it (the site home's whole-tree listing, an ancestor's `children_depth: all`, an archive of the home), while the folder's own listing, feed, search and sitemap keep them. A folder of short posts no longer floods the home.
 - A bare embed of the page's own folder (`![[./]]`, or the folder by name) places the page's own listing at that spot instead of after the body, so a home can list its articles and then show a heading and a folder embed below them. An embed with options, and any embed on a page that draws no listing of its own, stays a plain embed.

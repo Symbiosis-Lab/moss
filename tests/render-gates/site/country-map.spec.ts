@@ -3,7 +3,8 @@
  * both themes: lightness moves one way (darker with each level on the light
  * theme, lighter on the dark theme), every level differs from uncoloured
  * land, and the figure fits a phone. A tap on a country or a list row opens
- * the panel; Esc closes it.
+ * the panel; Esc closes it. Under `as_of: today` the stamp shows the reader's
+ * date, and the page's date without script.
  *
  * Run via:
  *   npx playwright test -c playwright/country-map.config.ts
@@ -64,4 +65,16 @@ test("a tap and a list row from the keyboard open the panel; Esc closes it", asy
   await page.locator('.moss-country[data-slug="chad"]').dispatchEvent("click");
   await expect(panel).toContainText("Not rated");
   await expect(panel).toContainText("No assessment yet.");
+});
+
+test("as_of: today stamps the reader's own date; without script the page's date stands", async ({ page }) => {
+  const html = await (await page.request.get("/living/")).text();
+  expect(html).toContain("As of November 3, 2026</time>");
+  await page.clock.setFixedTime(new Date(2030, 4, 20, 12));
+  await page.goto("/living/");
+  const stamp = page.locator(".moss-country-map > .moss-country-stamp time");
+  await expect(stamp).toHaveText("As of May 20, 2030");
+  await expect(stamp).toHaveAttribute("datetime", "2030-05-20");
+  await page.locator('.moss-country[data-slug="japan"]').click();
+  await expect(page.locator(".moss-country-panel .moss-country-stamp")).toHaveText("As of May 20, 2030");
 });

@@ -152,7 +152,9 @@ pub(crate) fn render(model: &Model, title: &str, date: Option<&str>, lang: Langu
     }
     out.push_str("</ul>");
     if let Some((raw, text)) = &stamp {
-        let _ = write!(out, r#"<p class="moss-country-stamp"><time datetime="{}">{}</time></p>"#, html_escape(raw), html_escape(text));
+        let today = if model.spec.as_of_today { format!(r#" data-today="{}""#, html_escape(t(lang, "country_map_as_of"))) } else { String::new() };
+        // The stamp's words are in the interface language, which can differ from the page's.
+        let _ = write!(out, r#"<p class="moss-country-stamp" lang="{}"{today}><time datetime="{}">{}</time></p>"#, lang.as_bcp47_attr(), html_escape(raw), html_escape(text));
     }
     if place == Place::Embedded {
         out.push_str(&list(model, lang, ""));
