@@ -40,20 +40,25 @@ impl AuthoredAssetRef {
 /// broader rename scanner. A markdown token inside a gallery therefore meets
 /// its structural counterpart at the same destination span and is retained
 /// once; identical references at different spans remain separate.
+///
+/// Markdown inside a raw HTML block (`<pre>`, `<script>`, `<style>`, or any
+/// tag-opened block up to its blank line) reaches the page as literal text, so
+/// it is no candidate.
 pub fn extract_authored_asset_refs(
     source: &str,
     parse_config: &crate::ast::parser::ParseConfig,
 ) -> Vec<AuthoredAssetRef> {
-    let image_definition_spans = image_definition_spans(source, parse_config);
+    let ParsedSpans { image_definitions, literal_html } = parsed_spans(source, parse_config);
     let mut refs: Vec<AuthoredAssetRef> = extract_md_references(source)
         .into_iter()
+        .filter(|raw| !holds_ref(&literal_html, raw))
         .filter(|raw| {
             !matches!(raw.syntax, RefSyntax::Definition { .. })
-                || definition_is_image(raw, &image_definition_spans)
+                || definition_is_image(raw, &image_definitions)
         })
         .map(|raw| AuthoredAssetRef {
             is_embed: markdown_ref_is_embed(&raw.syntax)
-                || definition_is_image(&raw, &image_definition_spans),
+                || definition_is_image(&raw, &image_definitions),
             raw,
         })
         .collect();
@@ -69,37 +74,55 @@ pub fn extract_authored_asset_refs(
     refs
 }
 
-fn definition_is_image(raw: &RawRef, image_definition_spans: &HashSet<std::ops::Range<usize>>) -> bool {
-    matches!(raw.syntax, RefSyntax::Definition { .. })
-        && image_definition_spans
-            .iter()
-            .any(|span| span.start <= raw.ref_from && raw.ref_to <= span.end)
+fn definition_is_image(raw: &RawRef, image_definitions: &HashSet<std::ops::Range<usize>>) -> bool {
+    matches!(raw.syntax, RefSyntax::Definition { .. }) && holds_ref(image_definitions, raw)
 }
 
-/// Definition source ranges whose destination is rendered by at least one
-/// Markdown image reference. Pulldown owns label normalization (including
-/// case-folding and collapsed/shortcut forms); this pass only joins its
-/// definition span to the already-exact `RawRef` destination span.
-fn image_definition_spans(
-    source: &str,
-    parse_config: &crate::ast::parser::ParseConfig,
-) -> HashSet<std::ops::Range<usize>> {
-    // allow:math-events-ignored — this walker matches only
-    // `Event::Start(Tag::Image { .. })` and records the DEFINITION's source
-    // byte span for later comparison against `RawRef` spans; every other
-    // event, including `InlineMath`/`DisplayMath`, falls through the
-    // `else { continue }` below with its payload never read. Nothing here is
-    // rebuilt from the event stream, so an ignored math event drops nothing.
+/// Whether one of `spans` holds the whole destination of `raw`.
+fn holds_ref<'a>(spans: impl IntoIterator<Item = &'a std::ops::Range<usize>>, raw: &RawRef) -> bool {
+    spans.into_iter().any(|span| span.start <= raw.ref_from && raw.ref_to <= span.end)
+}
+
+/// What the Markdown parser alone can say about `source`.
+struct ParsedSpans {
+    /// Definition source ranges whose destination is rendered by at least one
+    /// Markdown image reference. Pulldown owns label normalization (including
+    /// case-folding and collapsed/shortcut forms); the caller only joins its
+    /// definition span to the already-exact `RawRef` destination span.
+    image_definitions: HashSet<std::ops::Range<usize>>,
+    /// Raw HTML blocks whose text the page carries as written. A block holding
+    /// a `:::` line is left out: a shortcode is lifted out of the source before
+    /// the parser runs, so its body is Markdown wherever it sits.
+    literal_html: Vec<std::ops::Range<usize>>,
+}
+
+fn parsed_spans(source: &str, parse_config: &crate::ast::parser::ParseConfig) -> ParsedSpans {
     let mut parser =
         Parser::new_ext(source, crate::ast::parser::parser_options(parse_config.math)).into_offset_iter();
-    let mut spans = HashSet::new();
-    while let Some((event, _)) = parser.next() {
-        let Event::Start(Tag::Image { link_type, id, .. }) = event else { continue };
-        if !matches!(link_type, LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut) {
-            continue;
-        }
-        if let Some(definition) = parser.reference_definitions().get(id.as_ref()) {
-            spans.insert(definition.span.clone());
+    let mut spans = ParsedSpans { image_definitions: HashSet::new(), literal_html: Vec::new() };
+    while let Some((event, range)) = parser.next() {
+        // allow:math-events-ignored — only the source span of an HTML block and
+        // of an image's reference definition is read, for comparison against
+        // `RawRef` spans. Nothing is rebuilt from the event stream.
+        match event {
+            Event::Start(Tag::HtmlBlock) => {
+                let holds_shortcode = source
+                    .get(range.clone())
+                    .is_some_and(|block| block.lines().any(|line| line.trim_start().starts_with(":::")));
+                if !holds_shortcode {
+                    spans.literal_html.push(range);
+                }
+            }
+            Event::Start(Tag::Image {
+                link_type: LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut,
+                id,
+                ..
+            }) => {
+                if let Some(definition) = parser.reference_definitions().get(id.as_ref()) {
+                    spans.image_definitions.insert(definition.span.clone());
+                }
+            }
+            _ => {}
         }
     }
     spans

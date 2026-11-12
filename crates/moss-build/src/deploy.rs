@@ -477,7 +477,7 @@ pub fn publish_refusal(folder_path: &str) -> Option<Refusal> {
             return Some(Refusal::new(RefusalKind::UnresolvedInputs, stale_source_refusal_text(&projection.unresolved_inputs)));
         }
         if !projection.missing_references.is_empty() {
-            return Some(Refusal::new(RefusalKind::MissingReferences, refusal_text(projection.missing_references.len())));
+            return Some(Refusal::new(RefusalKind::MissingReferences, refusal_text(&projection.missing_references)));
         }
         if !projection.drafts_linked.is_empty() {
             return Some(Refusal::new(RefusalKind::DraftsLinked, drafts_linked_refusal_text(&projection.drafts_linked)));
@@ -532,16 +532,21 @@ pub fn refuse_foreign_inputs(
     }
 }
 
+/// "1 file is missing" or "3 files are missing".
+fn files_are(count: usize, state: &str) -> String {
+    if count == 1 { format!("1 file is {state}") } else { format!("{count} files are {state}") }
+}
+
 /// The refusal a user reads. Says what did not happen, not which subsystem said
-/// no.
-pub(crate) fn refusal_text(count: usize) -> String {
-    let subject = if count == 1 {
-        "1 file is missing".to_string()
-    } else {
-        format!("{count} files are missing")
-    };
+/// no, and where each missing file is named: this text is the only place a
+/// driver without a problems panel learns which line to fix.
+pub(crate) fn refusal_text(missing: &[crate::build::types::MissingReferenceOccurrence]) -> String {
+    let subject = files_are(missing.len(), "missing");
+    let lines = removal_gate::capped_lines(missing, |m| {
+        format!("`{}` line {} names `{}`.", m.source_path, m.source_span.line, m.reference)
+    });
     format!(
-        "Nothing published — {subject}. A published site can't show a broken file. \
+        "Nothing published — {subject}:\n{lines}A published site can't show a broken file. \
          Fix these, then publish again."
     )
 }
@@ -566,11 +571,7 @@ pub(crate) fn drafts_linked_refusal_text(links: &[crate::build::types::DraftLink
 /// The refusal for text a render showed as a placeholder because the file was
 /// still being read. Reads as "wait": nothing is broken.
 pub(crate) fn derivations_refusal_text(count: usize) -> String {
-    let subject = if count == 1 {
-        "1 file is still being read".to_string()
-    } else {
-        format!("{count} files are still being read")
-    };
+    let subject = files_are(count, "still being read");
     format!("Nothing published — {subject}. Publish again in a moment.")
 }
 
@@ -580,11 +581,7 @@ pub(crate) fn derivations_refusal_text(count: usize) -> String {
 /// that tells the two refusals apart, and getting it backwards would send an
 /// author hunting for a broken file that does not exist.
 pub(crate) fn in_flight_refusal_text(count: usize) -> String {
-    let subject = if count == 1 {
-        "1 file is still being prepared".to_string()
-    } else {
-        format!("{count} files are still being prepared")
-    };
+    let subject = files_are(count, "still being prepared");
     format!(
         "Nothing published — {subject}. moss is still finishing a video in the background. \
          Publish again in a moment."

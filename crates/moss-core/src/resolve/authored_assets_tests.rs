@@ -213,3 +213,51 @@ fn structural_boundaries_match_multiline_attrs_hero_priority_and_inert_openers()
     let malformed = ":::hero {\n  image=never.png\n";
     assert!(refs(malformed).is_empty());
 }
+
+/// Each line here was built and read back: seven reach the page as literal
+/// text, the four expected below as a picture.
+#[test]
+fn markdown_in_a_raw_html_block_is_no_candidate() {
+    let source = "\
+<div>
+<pre><span>![in a wrapped pre](wrapped-pre.jpg)</span></pre>
+![[wiki-in-div.jpg]]
+</div>
+
+<pre>
+![top pre](top-pre.jpg)
+
+![past a blank line in a pre](pre-blank.jpg)
+</pre>
+
+<script>
+const s = \"![in script](in-script.jpg)\";
+</script>
+
+<style>
+/* ![in style](in-style.jpg) */
+</style>
+
+Inline <code>![inline code](inline-code.jpg)</code> is Markdown.
+
+<span>hi</span> ![after a tag](after-tag.jpg)
+
+<div>
+<pre>
+![wrapped](wrapped.jpg)
+
+![past the wrapper's blank line](wrapper-blank.jpg)
+</pre>
+</div>
+
+<div>
+:::grid
+![in a shortcode](in-shortcode.jpg)
+:::
+</div>
+";
+    assert_eq!(
+        texts(source),
+        ["inline-code.jpg", "after-tag.jpg", "wrapper-blank.jpg", "in-shortcode.jpg"]
+    );
+}
