@@ -126,6 +126,10 @@ pub struct ArticleMap {
     #[serde(default)]
     pub page_titles: HashMap<String, String>,
 
+    /// Rendered site names by pretty page URL, independent of content language.
+    #[serde(default)]
+    pub page_site_names: HashMap<String, String>,
+
     /// File-tree → page-tree directory rename map (e.g., `{"图片" → "image"}`).
     ///
     /// Captured here so the post-build native-slots phase — which loads this map
@@ -213,6 +217,9 @@ pub struct ArticleMap {
     /// the edition a page is in.
     #[serde(default)]
     pub editions: moss_core::home::Editions,
+    /// The language each page rendered with, including inferred and filename languages.
+    #[serde(default)]
+    pub page_languages: HashMap<String, String>,
 }
 
 impl ArticleMap {

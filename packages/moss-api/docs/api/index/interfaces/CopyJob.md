@@ -47,7 +47,7 @@ The channel's resolved settings.
 optional form?: "short" | "thread" | "long" | "teaser" | "handoff";
 ```
 
-Absent for a delete, whose page is gone.
+Payload fields may be absent for a delete or a lookup whose copy no longer fits.
 
 ***
 
@@ -58,6 +58,26 @@ idempotency_key: string;
 ```
 
 The same on every send of this post to this channel, on every computer.
+
+***
+
+### included\_pictures?
+
+```ts
+optional included_pictures?: number;
+```
+
+Included HTML image occurrences for long articles; attachment entries for other forms.
+
+***
+
+### omitted\_pictures?
+
+```ts
+optional omitted_pictures?: number;
+```
+
+Pictures omitted by the channel's image limit.
 
 ***
 
@@ -74,6 +94,16 @@ op: "publish" | "update" | "delete" | "find";
 ```ts
 optional parts?: CopyPart[];
 ```
+
+***
+
+### pictures?
+
+```ts
+optional pictures?: CopyPicture[];
+```
+
+Upload attachments for plain copies. Long articles own images in HTML, with no duplicate attachments.
 
 ***
 

@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 import type {
+  CopyJob,
+  CopyPicture,
   ProjectInfo,
   PluginManifest,
   PluginCategory,
@@ -350,5 +352,30 @@ describe("Type Definitions", () => {
       ];
       expect(messages).toHaveLength(6);
     });
+  });
+});
+
+describe("copy picture payload", () => {
+  it("exports typed attachments and optional counts through the public barrel", () => {
+    expectTypeOf<CopyJob["pictures"]>().toEqualTypeOf<CopyPicture[] | undefined>();
+    expectTypeOf<CopyJob["included_pictures"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<CopyJob["omitted_pictures"]>().toEqualTypeOf<number | undefined>();
+    const picture: CopyPicture = { url: "https://example.org/photo.png", alt: "A maple" };
+    const job: CopyJob = {
+      op: "publish", channel: "one", idempotency_key: "stable-key",
+      post: { url: "https://example.org/page/", source_path: "page.md", title: "Page" },
+      config: {}, form: "short", parts: [{ text: "Hello", links: [] }],
+      pictures: [picture], included_pictures: 1, omitted_pictures: 2,
+    };
+    expect(job.pictures?.[0].alt).toBe("A maple");
+    const long: CopyJob = { ...job, form: "long", parts: [], pictures: [], article: { title: "Page", html: '<img src="https://example.org/photo.png" alt="A maple">' } };
+    expect(long.pictures).toEqual([]);
+    expect(long.included_pictures).toBe(1);
+    for (const op of ["find", "delete"] as const) {
+      const identity: CopyJob = { op, channel: job.channel, idempotency_key: job.idempotency_key, post: job.post, config: {} };
+      expect(identity.pictures).toBeUndefined();
+      expect(identity.included_pictures).toBeUndefined();
+      expect(identity.omitted_pictures).toBeUndefined();
+    }
   });
 });

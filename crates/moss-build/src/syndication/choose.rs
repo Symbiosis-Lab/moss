@@ -35,6 +35,8 @@ pub enum ChoiceOrigin {
     NotIncluded,
     /// Off: what is live could not be read, so a publish plans nothing.
     Unknown,
+    /// The channel cannot take this page in any available form.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
@@ -42,6 +44,8 @@ pub struct ChannelChoice {
     pub channel: String,
     pub on: bool,
     pub origin: ChoiceOrigin,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Whether the post was on the site before this publish.
@@ -128,7 +132,18 @@ pub fn read_post_with(folder: &Path, source: &str, channels: &BTreeMap<String, C
         live,
         records: Records::in_vault(&mp),
     };
-    Some(channels.iter().map(|(id, info)| view.choice(id, info)).collect())
+    let config = crate::build::site_config::read_project_config(&folder.to_string_lossy()).ok()?;
+    Some(channels.iter().map(|(id, info)| {
+        let mut choice = view.choice(id, info);
+        let verdict = plan::verdict(id, Some(info), &view.facts, &view.records, false);
+        let opts = super::shape::ShapeOptions::new(&config, folder, &map, post, id, None);
+        if let Verdict::Unavailable { reason } = plan::assess_verdict(verdict, post, info, &view.records, id, config.site_str("url"), &opts) {
+            choice.on = false;
+            choice.origin = ChoiceOrigin::Unavailable;
+            choice.reason = Some(reason);
+        }
+        choice
+    }).collect())
 }
 
 /// One post as its chips read it.
@@ -156,11 +171,12 @@ impl PostView<'_> {
                 Verdict::Settled(_) => (true, chosen),
                 _ if self.live == Live::Unknown => (false, ChoiceOrigin::Unknown),
                 Verdict::LiveBeforeNamed => (false, ChoiceOrigin::LiveBefore),
+                Verdict::Unavailable { .. } => (false, ChoiceOrigin::Unavailable),
                 Verdict::NotSetUp => (false, ChoiceOrigin::NotIncluded),
                 Verdict::Due | Verdict::Update | Verdict::Adopt { .. } => (true, chosen),
             }
         };
-        ChannelChoice { channel: id.to_string(), on, origin }
+        ChannelChoice { channel: id.to_string(), on, origin, reason: None }
     }
 }
 
@@ -256,7 +272,7 @@ pub fn adopt(folder: &Path, source: &str, channel: &str, url: &str) -> Result<Ad
             }
         }
         State::Sending => Err(AdoptRefusal::Busy),
-        State::Due | State::Refused | State::Unconfirmed | State::HandedOff => {
+        State::Due | State::Refused | State::Unavailable | State::Unconfirmed | State::HandedOff => {
             record.source_path = post.source_path.clone();
             record.url_path = post.url_path.clone();
             let outcome = super::record::CopyOutcome { id: Some(url.into()), url: Some(url.into()), ..Default::default() };

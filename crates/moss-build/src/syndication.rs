@@ -11,6 +11,7 @@ pub mod choose;
 pub mod job;
 pub mod landing;
 pub mod plan;
+pub mod pictures;
 pub mod preview;
 pub mod record;
 pub mod send;

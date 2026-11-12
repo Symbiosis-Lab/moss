@@ -5,6 +5,7 @@
 mod site;
 
 use moss_build::build::scan::article_map::ArticleMap;
+use moss_build::syndication::channel::{ChannelSpec, Form};
 use moss_build::syndication::choose::read_post_with;
 use moss_build::syndication::plan::ChannelInfo;
 use site::Site;
@@ -44,7 +45,9 @@ fn every_chip_agrees_with_the_cascade_the_build_applied() {
     ]);
     let map = ArticleMap::load(&site.root.join(".moss")).unwrap();
     assert!(map.articles.len() >= 10, "{:?}", map.articles.keys());
-    let channels: BTreeMap<String, ChannelInfo> = ["a", "b", "c"].iter().map(|c| (c.to_string(), ChannelInfo::default())).collect();
+    // Each channel takes a short post, so every page here fits and a chip is off only when the cascade leaves it out.
+    let short = ChannelSpec { forms: vec![Form::Short], ..Default::default() };
+    let channels: BTreeMap<String, ChannelInfo> = ["a", "b", "c"].iter().map(|c| (c.to_string(), ChannelInfo { spec: short.clone(), ..Default::default() })).collect();
     for post in map.articles.values() {
         let chips = read_post_with(&site.root, &post.source_path, &channels).unwrap_or_else(|| panic!("no chips for {}", post.source_path));
         let resolved = post.syndicate.clone().unwrap_or_default();

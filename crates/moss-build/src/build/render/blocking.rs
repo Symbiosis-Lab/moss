@@ -2604,7 +2604,7 @@ pub fn generate_blocking_content_for_build(
     // Build and save article map for syndication support
     // This creates a mapping from URL paths to article metadata
     generated_index_urls.sort(); // HashMap iteration order above; the persisted map must be stable
-    let article_map = std::sync::Arc::new(build_article_map(
+    let mut article_map = build_article_map(
         &documents,
         &project_structure.dirs,
         &dir_overrides,
@@ -2612,7 +2612,15 @@ pub fn generate_blocking_content_for_build(
         &generated_index_urls,
         &term_index,
         &editions,
-    ));
+    );
+    article_map.page_languages = documents.iter().map(|doc| {
+        let lang = doc.lang_tag.clone().unwrap_or_else(|| crate::i18n::lang_tag(&site_config.lang));
+        (crate::build::scan::article_map::to_pretty_url(&doc.url_path), lang)
+    }).collect();
+    article_map.page_site_names = documents.iter().map(|doc| {
+        (crate::build::scan::article_map::to_pretty_url(&doc.url_path), render_context.chrome.site_title(Some(doc)))
+    }).collect();
+    let article_map = std::sync::Arc::new(article_map);
     if let Err(e) = article_map.save(&moss_dir) {
         log::info!("⚠️ Failed to save article map: {}", e);
     }

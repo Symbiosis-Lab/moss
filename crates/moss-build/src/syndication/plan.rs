@@ -23,6 +23,9 @@ pub struct PlanInputs<'a> {
     /// Sources whose content changed in this publish.
     pub edited_sources: &'a HashSet<String>,
     pub channels: &'a BTreeMap<String, ChannelInfo>,
+    pub config: &'a crate::config::ConfigFile,
+    pub folder: &'a std::path::Path,
+    pub site_url: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -34,6 +37,7 @@ pub enum Action {
     Update,
     /// The post already lists a copy on this channel's host.
     Adopt { url: String },
+    Unavailable { reason: String },
     Skip { reason: String },
 }
 
@@ -76,6 +80,7 @@ pub(super) enum Verdict {
     Update,
     Adopt { url: String },
     NotSetUp,
+    Unavailable { reason: String },
     /// Live before only its folder named the channel.
     LiveBeforeNamed,
     /// A record stands and nothing is owed now; `None` when it cannot be read.
@@ -89,6 +94,7 @@ impl Verdict {
             Verdict::Due => Some(Action::Due),
             Verdict::Update => Some(Action::Update),
             Verdict::Adopt { url } => Some(Action::Adopt { url }),
+            Verdict::Unavailable { reason } => Some(Action::Unavailable { reason }),
             Verdict::NotSetUp => Some(Action::Skip { reason: format!("no channel named {channel} is set up for this site") }),
             Verdict::LiveBeforeNamed => Some(Action::Skip { reason: "it was live before the folder named this channel; name the channel in the page itself to post it".into() }),
             Verdict::Settled(_) => None,
@@ -115,15 +121,31 @@ pub(super) fn verdict(channel: &str, info: Option<&ChannelInfo>, post: &PostFact
     if records.exists(post.uid, channel) {
         return match records.get(post.uid, channel) {
             Some(r) if r.state == State::Posted && edited => Verdict::Update,
+            Some(r) if r.definite_first() && edited => {
+                adopt().unwrap_or(Verdict::Due)
+            }
             // A copy the author posted by hand, or found after an uncertain
             // send, is adopted once its address is listed.
-            Some(r) if matches!(r.state, State::HandedOff | State::Unconfirmed | State::Due | State::Refused) => {
-                adopt().unwrap_or(Verdict::Settled(Some(r.state)))
+            Some(r) if matches!(r.state, State::HandedOff | State::Unconfirmed | State::Due | State::Refused | State::Unavailable) => {
+                adopt().unwrap_or_else(|| if r.state == State::Unavailable {
+                    Verdict::Unavailable { reason: r.reason.unwrap_or_else(|| "the latest page cannot be copied".into()) }
+                } else { Verdict::Settled(Some(r.state)) })
             }
             other => Verdict::Settled(other.map(|r| r.state)),
         };
     }
     adopt().unwrap_or(if post.already_live && !post.own.iter().any(|c| c == channel) { Verdict::LiveBeforeNamed } else { Verdict::Due })
+}
+
+/// Apply content constraints only after identity and adoption have been checked.
+pub(super) fn assess_verdict(verdict: Verdict, post: &ArticleInfo, info: &ChannelInfo, records: &Records, channel: &str, site: Option<&str>, opts: &super::shape::ShapeOptions) -> Verdict {
+    if !matches!(verdict, Verdict::Due | Verdict::Update) { return verdict; }
+    let uid = post.uid.as_deref().unwrap_or_default();
+    let record = records.get(uid, channel).unwrap_or_else(|| CopyRecord::due(uid, channel, &post.source_path, &post.url_path));
+    match super::shape::assess(post, &info.spec, site, opts, &record) {
+        Ok(_) => verdict,
+        Err(reason) => Verdict::Unavailable { reason },
+    }
 }
 
 /// Decide, reading nothing but `inputs` and the existing records.
@@ -161,7 +183,13 @@ pub fn decide(inputs: &PlanInputs<'_>, records: &Records) -> Vec<PostPlan> {
                 continue;
             }
             let edited = inputs.edited_sources.contains(&post.source_path);
-            let Some(action) = verdict(channel, inputs.channels.get(channel), &facts, records, edited).into_action(channel) else { continue };
+            let info = inputs.channels.get(channel);
+            let mut verdict = verdict(channel, info, &facts, records, edited);
+            if let Some(info) = info {
+                let opts = super::shape::ShapeOptions::new(inputs.config, inputs.folder, inputs.articles, post, channel, None);
+                verdict = assess_verdict(verdict, post, info, records, channel, inputs.site_url, &opts);
+            }
+            let Some(action) = verdict.into_action(channel) else { continue };
             entries.push(entry(channel, action));
         }
         if !entries.is_empty() {
@@ -208,20 +236,29 @@ pub fn apply(plans: Vec<PostPlan>, records: &Records, site_url: Option<&str>, pu
                     records.save(&r)
                 }
                 Action::Adopt { url } => {
-                    let mut r = CopyRecord::due(&plan.uid, &entry.channel, &entry.source_path, &entry.url_path);
+                    let mut r = records.get(&plan.uid, &entry.channel)
+                        .unwrap_or_else(|| CopyRecord::due(&plan.uid, &entry.channel, &entry.source_path, &entry.url_path));
                     r.state = State::Posted;
                     r.remote = Some(RemoteRef { id: url.clone(), url: url.clone() });
+                    r.reason = None;
+                    r.handoff = None;
+                    r.update_due = false;
                     records.save(&r)
                 }
                 Action::Update => match records.get(&plan.uid, &entry.channel) {
                     Some(mut r) => {
                         r.update_due = true;
+                        r.reason = None;
                         r.site_url = site_url.map(str::to_string).or(r.site_url);
                         r.post = post_of(&plan.uid);
                         r.touch();
                         records.save(&r)
                     }
                     None => Ok(()),
+                },
+                Action::Unavailable { reason } => match records.get(&plan.uid, &entry.channel) {
+                    Some(mut r) => if r.make_unavailable(reason) { records.save(&r) } else { Ok(()) },
+                    _ => Ok(()),
                 },
                 Action::Skip { .. } => Ok(()),
             };

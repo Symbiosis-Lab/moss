@@ -9,7 +9,7 @@ const SOURCE: &str = "notes/a.md";
 const URL: &str = "notes/a/";
 
 fn channels() -> BTreeMap<String, ChannelInfo> {
-    BTreeMap::from([("bluesky".to_string(), ChannelInfo { domains: vec!["bsky.app".into()], ..Default::default() })])
+    BTreeMap::from([("bluesky".to_string(), ChannelInfo { spec: super::super::channel::ChannelSpec { forms: vec![super::super::channel::Form::Short], ..Default::default() }, domains: vec!["bsky.app".into()], ..Default::default() })])
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -69,7 +69,7 @@ fn a_chip_reads_on_exactly_when_a_publish_would_act_or_a_copy_stands() {
                             map.articles.insert(URL.into(), post);
                             let before = [LiveEntry { uid: UID.into(), url: URL.into(), source_path: String::new(), title: String::new() }];
                             let sources = HashSet::from([SOURCE.to_string()]);
-                            let inputs = PlanInputs {
+                            let inputs = PlanInputs { folder: std::path::Path::new("."), config: &crate::config::ConfigFile::parse("").unwrap(), site_url: Some("https://example.org"),
                                 articles: &map,
                                 previously_live: live.then_some(&before[..]),
                                 edited_sources: if edited { &sources } else { &HashSet::new() },
@@ -113,7 +113,7 @@ fn a_copy_of_a_channel_the_list_no_longer_names_reads_off() {
         live: Live::Yes,
         records,
     };
-    assert_eq!(view.choice("bluesky", &channels()["bluesky"]), ChannelChoice { channel: "bluesky".into(), on: false, origin: ChoiceOrigin::LeftOut });
+    assert_eq!(view.choice("bluesky", &channels()["bluesky"]), ChannelChoice { channel: "bluesky".into(), on: false, origin: ChoiceOrigin::LeftOut, reason: None });
 }
 
 #[test]

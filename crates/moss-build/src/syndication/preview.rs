@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::channel::{ChannelSpec, Form};
 use super::landing::Before;
 use super::plan::{Action, ChannelInfo};
-use super::shape::{shape, Teaser};
+use super::shape::{assess, ShapeOptions, Teaser, Article};
 use crate::build::manifest::SealedManifest;
 use crate::build::scan::article_map::{ArticleInfo, ArticleMap};
 use crate::moss_paths::MossPaths;
@@ -34,6 +34,12 @@ pub struct PreviewCopy {
     pub parts: Vec<PreviewPart>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_card: Option<Teaser>,
+    pub article: Option<Article>,
+    pub pictures: Vec<super::pictures::Picture>,
+    pub omitted_pictures: usize,
+    pub included_pictures: usize,
+    /// The final page address is unknown; length and links need checking at send.
+    pub pending_site_url: bool,
     /// The copy could not be shaped for this network.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -48,8 +54,10 @@ pub fn for_dry_run(folder: &Path, sealed: &SealedManifest) -> Vec<PreviewCopy> {
     // Without an address of its own the site's is known only at publish, so
     // the preview's links to it are paths.
     let site = super::landing::canonical(sealed).unwrap_or("").to_string();
+    let records = super::record::Records::in_vault(&mp);
+    let Ok(config) = crate::build::site_config::read_project_config(&folder.to_string_lossy()) else { return Vec::new() };
     let mut out = Vec::new();
-    for plan in before.decide(folder, &live) {
+    for plan in before.decide_with(folder, &live, &config, &records) {
         for entry in plan.entries {
             let post = live.articles.get(&entry.url_path);
             let info = before.channels().get(&entry.channel);
@@ -60,10 +68,15 @@ pub fn for_dry_run(folder: &Path, sealed: &SealedManifest) -> Vec<PreviewCopy> {
                 form: None,
                 parts: Vec::new(),
                 link_card: None,
+                article: None,
+                pictures: Vec::new(),
+                omitted_pictures: 0,
+                included_pictures: 0,
+                pending_site_url: false,
                 error: None,
             };
             if let (Action::Due | Action::Update, Some(post), Some(info)) = (&entry.action, post, info) {
-                fill(&mut copy, post, &info.spec, &site);
+                fill(&config, &records, folder, &live, &mut copy, post, &info.spec, &site);
             }
             out.push(copy);
         }
@@ -78,6 +91,8 @@ pub fn for_post(folder: &Path, source_path: &str, site_url: &str) -> Vec<Preview
     let Some(live) = read_map(&mp) else { return Vec::new() };
     let Some(post) = live.articles.values().find(|a| a.source_path == source_path) else { return Vec::new() };
     let channels = super::landing::channels(folder);
+    let records = super::record::Records::in_vault(&mp);
+    let Ok(config) = crate::build::site_config::read_project_config(&folder.to_string_lossy()) else { return Vec::new() };
     post.syndicate
         .iter()
         .flatten()
@@ -90,10 +105,15 @@ pub fn for_post(folder: &Path, source_path: &str, site_url: &str) -> Vec<Preview
                 form: None,
                 parts: Vec::new(),
                 link_card: None,
+                article: None,
+                pictures: Vec::new(),
+                omitted_pictures: 0,
+                included_pictures: 0,
+                pending_site_url: false,
                 error: None,
             };
             match channels.get(channel) {
-                Some(ChannelInfo { spec, .. }) => fill(&mut copy, post, spec, site_url),
+                Some(ChannelInfo { spec, .. }) => fill(&config, &records, folder, &live, &mut copy, post, spec, site_url),
                 None => copy.action = Action::Skip { reason: format!("no channel named {channel} is set up for this site") },
             }
             copy
@@ -101,8 +121,13 @@ pub fn for_post(folder: &Path, source_path: &str, site_url: &str) -> Vec<Preview
         .collect()
 }
 
-fn fill(copy: &mut PreviewCopy, post: &ArticleInfo, spec: &ChannelSpec, site: &str) {
-    match shape(post, spec, site) {
+fn fill(config: &crate::config::ConfigFile, records: &super::record::Records, folder: &Path, live: &ArticleMap, copy: &mut PreviewCopy, post: &ArticleInfo, spec: &ChannelSpec, site: &str) {
+    let uid = post.uid.as_deref().unwrap_or_default();
+    let record = records.get(uid, &copy.channel).unwrap_or_else(|| super::record::CopyRecord::due(uid, &copy.channel, &post.source_path, &post.url_path));
+    let opts = ShapeOptions::new(config, folder, live, post, &copy.channel, None);
+    copy.pending_site_url = site.is_empty();
+    let shaped = assess(post, spec, (!site.is_empty()).then_some(site), &opts, &record);
+    match shaped {
         Ok(shaped) => {
             copy.form = Some(shaped.form);
             copy.parts = shaped
@@ -111,8 +136,12 @@ fn fill(copy: &mut PreviewCopy, post: &ArticleInfo, spec: &ChannelSpec, site: &s
                 .map(|p| PreviewPart { text: p.text.clone(), chars: spec.length(&p.text), max_chars: spec.max_chars })
                 .collect();
             copy.link_card = shaped.teaser;
+            copy.article = shaped.article;
+            copy.pictures = shaped.pictures;
+            copy.omitted_pictures = shaped.omitted_pictures;
+            copy.included_pictures = shaped.included_pictures;
         }
-        Err(e) => copy.error = Some(e),
+        Err(e) => { copy.action = Action::Unavailable { reason: e.clone() }; copy.error = Some(e); }
     }
 }
 
@@ -144,7 +173,7 @@ mod tests {
         let copies = for_post(root, "essays/autumn.md", "https://notes.example.org/");
         let channels: Vec<&str> = copies.iter().map(|c| c.channel.as_str()).collect();
         assert_eq!(channels, ["one", "ghost"], "the newsletter is not a channel");
-        assert_eq!(copies[0].form, Some(Form::Teaser));
+        assert_eq!(copies[0].form, Some(Form::Short));
         assert!(copies[0].parts[0].text.contains("https://notes.example.org/essays/autumn/"), "{:?}", copies[0].parts);
         assert_eq!(copies[0].parts[0].max_chars, Some(300));
         assert!(matches!(&copies[1].action, Action::Skip { reason } if reason.contains("ghost")));
