@@ -2455,6 +2455,7 @@ pub fn generate_blocking_content_for_build(
     // What the settings leave out, so the publish gate reads a missing
     // llms.txt, tdmrep.json or QR code as the owner's choice.
     pending.set_withdrawn(Withdrawn::from_settings(site_config.ai, layout_config.assets.selection_tools));
+    if frontmatter_scan_cache.restricts_pages(&project_structure.markdown_files) { pending.mark_restricts_pages(); }
 
     // Calendar files for event pages and for folders of them. Written whether or
     // not the site has a deployed address, so a preview serves the links the

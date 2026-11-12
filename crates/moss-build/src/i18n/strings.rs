@@ -186,8 +186,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
 
         // RSS / Subscribe
         "subscribe" => ["Subscribe", "Abonnieren", "订阅", "訂閱"],
-        "members_subscribers" => ["This post is for subscribers.", "Dieser Beitrag ist für Abonnenten.", "这篇文章仅供订阅者阅读。", "這篇文章僅供訂閱者閱讀。"],
-        "members_paid" => ["This post is for paid members.", "Dieser Beitrag ist für zahlende Mitglieder.", "这篇文章仅供付费会员阅读。", "這篇文章僅供付費會員閱讀。"],
+        "members_subscribers" => ["Subscribers only.", "Nur für Abonnenten.", "仅供订阅者阅读。", "僅供訂閱者閱讀。"],
+        "members_paid" => ["Paid members only.", "Nur für zahlende Mitglieder.", "仅供付费会员阅读。", "僅供付費會員閱讀。"],
         // Request forms
         "form_send" => ["Send", "Senden", "发送", "送出"],
         "form_optional" => ["Optional", "Optional", "选填", "選填"],

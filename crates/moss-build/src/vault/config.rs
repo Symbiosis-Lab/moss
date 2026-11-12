@@ -162,6 +162,31 @@ pub fn subtable<'a>(table: &'a mut Table, key: &str) -> Result<&'a mut Table, St
         .ok_or_else(|| format!("`{key}` is not a table; moss left the file alone"))
 }
 
+/// The first moss that keeps a members page's body out of what it publishes.
+/// An older one publishes the page whole.
+pub const MEMBERS_MOSS: &str = "0.15.23";
+
+/// Name [`MEMBERS_MOSS`] as the folder's `min_moss_version`, unless a higher
+/// floor is there, so an older moss refuses to publish it. Called wherever moss
+/// learns that a folder has members pages: an import that writes one, and a
+/// publish whose build restricted one.
+pub fn require_members_moss(folder: &Path) -> Result<(), String> {
+    use crate::config::migrations::CURRENT_VERSION;
+    use crate::system::version_core;
+    let path = folder.join(".moss/config.toml");
+    let mut config = load_managed_toml(&path)?;
+    let floor = config.root.get("min_moss_version").and_then(Value::as_str).and_then(version_core);
+    if floor >= version_core(MEMBERS_MOSS) { return Ok(()); }
+    config.root.insert("min_moss_version".into(), MEMBERS_MOSS.into());
+    // A file created here has the current shape. Its version stamp is what
+    // makes a moss from before `min_moss_version` refuse it too.
+    if config.original.trim().is_empty() {
+        config.root.insert("schema_version".into(), Value::Integer(CURRENT_VERSION.into()));
+    }
+    std::fs::create_dir_all(folder.join(".moss")).map_err(|e| e.to_string())?;
+    write_managed_toml(&path, &config.original, &config.root, CURRENT_VERSION)
+}
+
 /// Write the top-level `environment` key into `.moss/config.toml`.
 pub fn save_environment(project_path: &str, env: HostingEnvironment) -> Result<(), String> {
     let config_path = Path::new(project_path).join(".moss").join("config.toml");

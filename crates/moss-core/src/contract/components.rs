@@ -2293,7 +2293,7 @@ const CORE: &[ComponentEntry] = &[
         kind: "standalone",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<div class="moss-members"><p id="moss-members-lead-5d1e0c2a-0">This post is for subscribers.</p><div class="moss-subscribe">...</div></div>"#,
+        example_html: r#"<div class="moss-members"><p id="moss-members-lead-5d1e0c2a-0">Subscribers only.</p><div class="moss-subscribe">...</div></div>"#,
         example_markdown: "members: subscribers\n---\nPublic preview\n<!--members-only-->\nPrivate body\n",
         status: Status::Confirmed,
         since: "0",

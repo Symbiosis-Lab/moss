@@ -269,38 +269,15 @@ impl OutputPaths {
                 written.push(relative.clone());
             }
         }
-        if members { require_members_moss(folder)?; }
+        if members { crate::vault::config::require_members_moss(folder)?; }
         Ok(written)
     }
 }
-
-/// The first moss that keeps a members page's body out of what it publishes.
-/// An older one publishes the page whole.
-pub(crate) const MEMBERS_MOSS: &str = "0.15.23";
 
 /// Whether an older moss would publish more of this page than this one does.
 fn restricts(content: &str) -> bool {
     use moss_core::frontmatter::{member_cascade::declared_cascade, members::public_source};
     matches!(public_source(content), std::borrow::Cow::Owned(_)) || declared_cascade(content).is_some()
-}
-
-/// Name [`MEMBERS_MOSS`] as the folder's `min_moss_version`, unless a higher
-/// floor is there, so an older moss refuses to publish it.
-fn require_members_moss(folder: &Path) -> Result<(), String> {
-    use crate::config::migrations::CURRENT_VERSION;
-    use crate::system::version_core;
-    let path = folder.join(".moss/config.toml");
-    let mut config = crate::vault::config::load_managed_toml(&path)?;
-    let floor = config.root.get("min_moss_version").and_then(toml::Value::as_str).and_then(version_core);
-    if floor >= version_core(MEMBERS_MOSS) { return Ok(()); }
-    config.root.insert("min_moss_version".into(), MEMBERS_MOSS.into());
-    // A file this import creates has the current shape. Its version stamp is
-    // what makes a moss from before `min_moss_version` refuse it too.
-    if config.original.trim().is_empty() {
-        config.root.insert("schema_version".into(), toml::Value::Integer(CURRENT_VERSION.into()));
-    }
-    std::fs::create_dir_all(folder.join(".moss")).map_err(|e| e.to_string())?;
-    crate::vault::config::write_managed_toml(&path, &config.original, &config.root, CURRENT_VERSION)
 }
 
 fn render_note(

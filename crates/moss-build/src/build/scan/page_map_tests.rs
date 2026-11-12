@@ -1224,6 +1224,38 @@ mod frontmatter_scan_cache_tests {
         assert!(cache.is_members("notes/article.md"), "an unreadable home restricts its folder");
     }
 
+    /// A home still downloading restricts its folder only on a site that
+    /// uses members: a page declaring access, or `[members]` in its settings.
+    #[test]
+    fn an_unread_home_restricts_only_where_the_site_uses_members() {
+        let dir = setup_temp_dir(&[
+            ("index.md", "---\ntitle: Home\n---\n"),
+            ("notes/index.md", "---\ntitle: Notes\n---\n"),
+            ("notes/article.md", "Article"),
+            ("about.md", "About"),
+        ]);
+        let files: Vec<_> = ["index.md", "notes/index.md", "notes/article.md", "about.md"].into_iter().map(make_file).collect();
+        let winners = compute_home_file_winners(&files, "mysite", &std::collections::HashMap::new());
+        let overrides = std::collections::HashMap::new();
+        let is_evicted = |p: &Path| p.ends_with("notes/index.md");
+        let restricted = || {
+            let mut cache = FrontmatterScanCache::default();
+            build_page_map_and_external_urls_cached_with_evicted(&files, dir.path(), "mysite", &winners, &overrides, &mut cache, &is_evicted);
+            cache.is_members("notes/article.md")
+        };
+        assert!(!restricted(), "a site without members restricts nothing while a home downloads");
+        fs::write(dir.path().join("notes/index.md"), [0xff, 0xfe]).unwrap();
+        let mut cache = FrontmatterScanCache::default();
+        build_page_map_and_external_urls_cached_with_evicted(&files, dir.path(), "mysite", &winners, &overrides, &mut cache, &|_: &Path| false);
+        assert!(cache.is_members("notes/article.md"), "a home on disk that cannot be read restricts its folder on any site");
+        fs::write(dir.path().join("about.md"), "---\nmembers: subscribers\n---\nAbout").unwrap();
+        assert!(restricted(), "a page declaring access shows the site uses members");
+        fs::write(dir.path().join("about.md"), "About").unwrap();
+        fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        fs::write(dir.path().join(".moss/config.toml"), "[members]\njoin = \"invite\"\n").unwrap();
+        assert!(restricted(), "[members] in the settings shows the site uses members");
+    }
+
     #[test]
     fn unchanged_file_is_served_from_the_cache_not_reread() {
         let dir = setup_temp_dir(&[("about.md", "---\nurl: custom-slug\n---\n# About\n")]);

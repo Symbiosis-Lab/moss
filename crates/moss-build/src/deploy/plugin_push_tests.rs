@@ -198,3 +198,37 @@ async fn a_version_ahead_config_refuses_before_the_seal_check() {
     .expect_err("a version-ahead config must refuse");
     assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
 }
+
+/// A generation that restricted a page publishes through a plugin only once
+/// the site names the moss its members pages need; a config that cannot take
+/// that floor refuses before the plugin runs.
+#[tokio::test]
+async fn a_members_generation_refuses_when_the_floor_cannot_be_written() {
+    struct NoSink;
+    impl progress::DeploySink for NoSink {
+        fn deploy_progress(&self, _: progress::DeployProgress) {}
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".moss")).unwrap();
+    std::fs::write(tmp.path().join(".moss/config.toml"), "[site\n").unwrap();
+    let mut pending = crate::build::manifest::PendingManifest::new(Default::default());
+    pending.mark_restricts_pages();
+    let sealed = pending.seal();
+
+    let managers = crate::plugins::manager::ManagerCache::headless(
+        crate::build::ports::reporter::discard_owned(),
+    );
+    let ports = crate::deploy::one_shot::HeadlessDeployPorts;
+    let sink: std::sync::Arc<dyn progress::DeploySink> = std::sync::Arc::new(NoSink);
+    let err = run_plugin_deploy_inner(&PluginDeployContext {
+        folder: tmp.path(),
+        sealed: Some(&sealed),
+        managers: &managers,
+        sink: &sink,
+        ports: &ports,
+    })
+    .await
+    .expect_err("a floor that cannot be written must refuse");
+    assert!(err.contains("could not write .moss/config.toml"), "got: {err}");
+}

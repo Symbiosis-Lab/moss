@@ -32,16 +32,38 @@ pub fn declared_cascade(content: &str) -> Option<Members> {
     names_members.then_some(Members::Subscribers)
 }
 
+/// What a build knows of one folder home's `cascade:`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeCascade {
+    /// The home was read: what its [`declared_cascade`] says.
+    Read(Option<Members>),
+    /// The home is still in the cloud, downloading.
+    Pending,
+    /// The home is on disk but could not be read (bytes that are not text, no permission).
+    Unreadable,
+}
+
 impl MemberCascade {
-    /// `homes` are the folder homes the build elected, each with what its
-    /// [`declared_cascade`] says; the host passes `Some(Subscribers)` for a
-    /// home it could not read. A home's declaration covers its folder's
-    /// subtree, never the home itself, and no other page's `cascade:` has a
-    /// scope.
-    pub fn from_homes<'a>(homes: impl IntoIterator<Item = (&'a str, Option<Members>)>) -> Self {
-        let declarations = homes.into_iter().filter_map(|(home, access)| {
+    /// `homes` are the folder homes the build elected. A home's declaration
+    /// covers its folder's subtree, never the home itself, and no other
+    /// page's `cascade:` has a scope.
+    ///
+    /// A home that cannot be read restricts its folder. One still downloading
+    /// restricts it only on a site that uses members: `site_uses_members`
+    /// (another page or the site's settings say so), or a read home declaring
+    /// a cascade. Elsewhere it restricts nothing, so a site without members
+    /// never shows its pages as members-only while a home downloads.
+    pub fn from_homes<'a>(homes: impl IntoIterator<Item = (&'a str, HomeCascade)>, site_uses_members: bool) -> Self {
+        let homes: Vec<_> = homes.into_iter().collect();
+        let uses_members = site_uses_members || homes.iter().any(|(_, home)| matches!(home, HomeCascade::Read(Some(_))));
+        let declarations = homes.into_iter().filter_map(|(home, cascade)| {
+            let access = match cascade {
+                HomeCascade::Read(access) => access?,
+                HomeCascade::Pending if !uses_members => return None,
+                HomeCascade::Pending | HomeCascade::Unreadable => Members::Subscribers,
+            };
             let prefix = home.rsplit_once('/').map_or(String::new(), |(folder, _)| format!("{folder}/"));
-            Some((home.to_string(), (prefix, access?)))
+            Some((home.to_string(), (prefix, access)))
         }).collect();
         Self { declarations }
     }
@@ -75,7 +97,7 @@ mod tests {
     use super::*;
 
     fn homes(sources: &[(&str, String)]) -> MemberCascade {
-        MemberCascade::from_homes(sources.iter().map(|(path, text)| (*path, declared_cascade(text))))
+        MemberCascade::from_homes(sources.iter().map(|(path, text)| (*path, HomeCascade::Read(declared_cascade(text)))), false)
     }
 
     #[test]
@@ -155,7 +177,7 @@ mod tests {
 
     #[test]
     fn an_unread_home_and_a_textual_cascade_restrict_the_folder() {
-        let unread = MemberCascade::from_homes([("notes/index.md", Some(Members::Subscribers))]);
+        let unread = MemberCascade::from_homes([("notes/index.md", HomeCascade::Pending)], true);
         assert!(!unread.public_source("notes/article.md", "private-word").contains("private-word"));
         for source in [
             "cascade: {members: public}\n---\nSimplified",
@@ -167,5 +189,20 @@ mod tests {
         }
         assert_eq!(declared_cascade("cascade: {nav: false}\n---\nSimplified"), None);
         assert_eq!(declared_cascade("---\ncascade: {members: paid}\n---\nYaml"), Some(Members::Paid));
+    }
+
+    #[test]
+    fn a_pending_home_restricts_only_on_a_site_that_uses_members() {
+        let unread = ("notes/index.md", HomeCascade::Pending);
+        assert_eq!(MemberCascade::from_homes([unread], false).inherited("notes/article.md"), None);
+        let unreadable = ("notes/index.md", HomeCascade::Unreadable);
+        assert_eq!(MemberCascade::from_homes([unreadable], false).inherited("notes/article.md"), Some(Members::Subscribers));
+        assert_eq!(MemberCascade::from_homes([unread], true).inherited("notes/article.md"), Some(Members::Subscribers));
+        for declared in [Members::Public, Members::Paid] {
+            let policy = MemberCascade::from_homes([unread, ("essays/index.md", HomeCascade::Read(Some(declared)))], false);
+            assert_eq!(policy.inherited("notes/article.md"), Some(Members::Subscribers), "{declared:?}");
+        }
+        let plain = MemberCascade::from_homes([unread, ("essays/index.md", HomeCascade::Read(None))], false);
+        assert_eq!(plain.inherited("notes/article.md"), None);
     }
 }

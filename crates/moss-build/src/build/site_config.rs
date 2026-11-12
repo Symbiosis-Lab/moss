@@ -192,6 +192,20 @@ pub fn ensure_config_current(project_path: &str) -> Result<(), String> {
     }
 }
 
+/// The config checks every publish route runs first: this moss is new enough
+/// for the site ([`ensure_config_current`]), and when the generation being
+/// published restricted a page, the site names the first moss with members as
+/// its floor, so a moss without them refuses to publish it rather than publish
+/// those pages whole. A floor that cannot be written refuses the publish.
+pub fn publish_door(project_path: &Path, restricts_pages: bool) -> Result<(), String> {
+    ensure_config_current(&project_path.to_string_lossy())?;
+    if restricts_pages {
+        crate::vault::config::require_members_moss(project_path)
+            .map_err(|e| format!("Not published: moss could not write .moss/config.toml. {e}"))?;
+    }
+    Ok(())
+}
+
 /// The `[services]` table of an already-read config, so a build that has parsed
 /// `.moss/config.toml` once does not read it again.
 pub(crate) fn parse_services(config: &crate::config::ConfigFile) -> Result<ServicesConfig, String> {
@@ -667,6 +681,18 @@ mod version_ahead_guard_tests {
         // refuse: absence is not version-ahead.
         let absent = tempfile::tempdir().unwrap();
         assert!(ensure_config_current(absent.path().to_str().unwrap()).is_ok());
+    }
+
+    /// The publish door names the members floor only for a generation that
+    /// restricted a page, and refuses when it cannot write it.
+    #[test]
+    fn publish_door_refuses_a_members_generation_whose_floor_cannot_be_written() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), "[site\n").unwrap();
+        assert!(publish_door(dir.path(), false).is_ok());
+        let err = publish_door(dir.path(), true).unwrap_err();
+        assert!(err.starts_with("Not published: moss could not write .moss/config.toml."), "got: {err}");
     }
 
     #[test]

@@ -8777,3 +8777,22 @@ mod hidden_from_search_engines {
         assert!(!staged(&dir).join("letters/index.html").exists(), "an empty listing page at an address nobody made");
     }
 }
+
+/// The generation a build seals says whether it restricted a page, by the
+/// page's own `members:` or a folder home's cascade, so the publish door
+/// decides the members floor from what it publishes.
+#[test]
+fn a_sealed_generation_says_whether_it_restricted_a_page() {
+    let open = [("index.md", "# Home"), ("open.md", "---\nmembers: public\n---\nOpen")];
+    let page = [("index.md", "# Home"), ("letter.md", "---\nmembers: subscribers\n---\nLetter")];
+    let cascade = [("index.md", "# Home"), ("notes/index.md", "---\ncascade: {members: paid}\n---\nNotes"), ("notes/one.md", "One")];
+    for (files, restricts) in [(&open[..], false), (&page[..], true), (&cascade[..], true)] {
+        let (dir, _cleanup) = create_test_dir();
+        for (rel, body) in files {
+            fs::create_dir_all(dir.join(rel).parent().unwrap()).unwrap();
+            fs::write(dir.join(rel), body).unwrap();
+        }
+        let (_, _, _, sealed) = build_test_promoted_or_withheld(dir.to_str().unwrap()).unwrap();
+        assert_eq!(sealed.restricts_pages(), restricts, "{files:?}");
+    }
+}

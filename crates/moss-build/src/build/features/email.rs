@@ -414,12 +414,6 @@ pub fn with_members_lead(form_html: &str, lang: Language, members: moss_core::fr
     format!("<p id=\"{}\">{}</p>\n{}", html_escape(id), crate::i18n::t(lang, lead), label_subscribe_input(form_html, id))
 }
 
-/// The id [`with_members_lead`] gave a rendered form's notice, if it has one.
-pub fn members_lead_id(html: &str) -> Option<String> {
-    let rest = html.strip_prefix("<p id=\"")?;
-    rest.split_once('"').map(|(id, _)| id.to_string()).filter(|id| id.starts_with("moss-members-lead-"))
-}
-
 /// Name a subscribe form's email input from the element `prompt_id` (the words
 /// above the block) and from its own `aria-label`, so a screen reader says both
 /// ("Join the weekly letter. Email address"). Applied to the form's HTML so a

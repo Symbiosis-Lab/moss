@@ -176,7 +176,7 @@ fn inherited_members_access_precedes_every_public_derivation_and_cached_rebuild(
     site.write("index.md", &root_private.replace("members: subscribers", "members: paid"));
     site::build_sync(&site.root.to_string_lossy(), BuildTrigger::ContentOnly(vec![site.root.join("index.md")])).unwrap();
     assert_public(&site);
-    assert!(site.html("library/article/index.html").contains("paid members"));
+    assert!(site.html("library/article/index.html").contains("Paid members only."));
 }
 
 #[test]
@@ -210,8 +210,8 @@ fn the_members_notice_speaks_the_site_language() {
         ("artikel.md", &format!("---\ntitle: Artikel\nmembers: paid\n---\nVorschau.\n<!--members-only-->\n{SECRET}\n")),
     ]);
     let html = site.html("artikel/index.html");
-    assert!(html.contains("Dieser Beitrag ist für zahlende Mitglieder."));
-    assert!(!html.contains("This post is for"));
+    assert!(html.contains("Nur für zahlende Mitglieder."));
+    assert!(!html.contains("Paid members only."));
     assert!(html.contains("<p id=\"moss-members-lead-"));
     assert_public(&site);
 }
@@ -262,4 +262,30 @@ fn the_members_notice_survives_the_language_section_scope() {
         assert!(html.contains("name=\"scope\" value=\""), "{path}");
     }
     assert_public(&site);
+}
+
+/// The publish door gives a generation that restricted a page the floor an
+/// import gives one: a moss without members then refuses the site instead of
+/// publishing its members pages whole.
+#[test]
+fn publishing_a_members_generation_sets_the_folder_floor() {
+    use moss_build::vault::config::MEMBERS_MOSS;
+    // A moss below a folder's floor refuses to write its config.
+    moss_build::system::seed_app_version(MEMBERS_MOSS);
+    for config in [Some("schema_version = 6\n\n[site]\nlang = 'en'\n"), None, Some("[site]\nlang = 'en'\n")] {
+        let site = site::Site::new(&[("index.md", "Home")]);
+        let path = site.root.join(".moss/config.toml");
+        match config {
+            Some(text) => fs::write(&path, text).unwrap(),
+            None => fs::remove_file(&path).unwrap(),
+        }
+        moss_build::build::site_config::publish_door(&site.root, true).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(moss_build::config::ConfigFile::parse(&text).unwrap().min_moss_version(), Some(MEMBERS_MOSS), "{text}");
+        // An unversioned file keeps its number until a migration saves it in the current shape.
+        if config.is_none_or(|text| text.starts_with("schema_version")) {
+            let raw: toml::Table = toml::from_str(&text).unwrap();
+            assert_eq!(raw["schema_version"].as_integer(), Some(7), "the stamp a moss from before the floor refuses: {text}");
+        }
+    }
 }

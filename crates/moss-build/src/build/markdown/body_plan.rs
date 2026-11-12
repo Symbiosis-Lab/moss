@@ -622,6 +622,17 @@ fn is_full_width_block(block: &Block) -> bool {
     }
 }
 
+/// The hooks a segmented render takes: the page's [`RenderHooks`], plus what
+/// the last `:::subscribe` form they drew needs kept beside its HTML.
+pub trait SegmentHooks: RenderHooks {
+    /// The id of the members notice the last subscribe form drew, if it drew one.
+    fn take_members_lead(&self) -> Option<String> {
+        None
+    }
+}
+
+impl SegmentHooks for moss_core::ast::DefaultHooks<'_> {}
+
 /// Serialize `doc` into a [`BodyPlan`].
 ///
 /// Byte-identical to `moss_core::ast::render_document(doc, hooks)` when
@@ -629,7 +640,7 @@ fn is_full_width_block(block: &Block) -> bool {
 /// `render_block_with_meta`, sharing one [`FootnoteCtx`] across the walk so
 /// numbering/hoisting stays document-wide, and `:::grid` blocks go through
 /// the same `RenderHooks::render_grid_parts` the flat `Grid` arm uses.
-pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> BodyPlan {
+pub fn render_segmented<H: SegmentHooks + ?Sized>(doc: &Document, hooks: &H) -> BodyPlan {
     let lede_end_block = lede_end(&doc.blocks);
     let text_block_index = first_text_block(&doc.blocks);
     let mut segments: Vec<BodySegment> = Vec::new();
@@ -692,12 +703,12 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
                 flush(&mut buf, &mut segments);
                 let mut html = String::new();
                 moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
+                let members_lead = hooks.take_members_lead();
                 let above_is_paragraph = matches!(i.checked_sub(1).and_then(|p| doc.blocks.get(p)), Some(Block::Paragraph(_)));
                 let labelled_by = doc.subscribe_labels.get(&i).filter(|_| !above_is_paragraph || std::mem::take(&mut tagged_prompt)).cloned();
                 if let Some(id) = &labelled_by {
                     html = crate::build::features::email::label_subscribe_input(&html, id);
                 }
-                let members_lead = crate::build::features::email::members_lead_id(&html);
                 segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by, members_lead }));
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),

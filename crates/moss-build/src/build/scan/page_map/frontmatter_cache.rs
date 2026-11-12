@@ -4,7 +4,7 @@
 
 use crate::build::scan::path_collision::on_disk;
 use crate::build::stat::{recording_clock, FileStat};
-use moss_core::frontmatter::member_cascade::{declared_cascade, MemberCascade};
+use moss_core::frontmatter::member_cascade::{declared_cascade, HomeCascade, MemberCascade};
 use moss_core::frontmatter::members::Members;
 use std::path::{Path, PathBuf};
 
@@ -110,7 +110,8 @@ impl FrontmatterScanCache {
         let root = crate::vault::paths::VaultRoot::resolve(source_path);
         let locate = |p: &str| on_disk(source_path, p);
         let (overrides, winners) = super::elect_homes_with_evicted(files, &root, &Default::default(), &locate, &|_| false);
-        scan_frontmatter_urls_with_evicted(files, &super::folder_homes(&winners, &overrides, root.name()), &locate, &mut cache, &|_| false);
+        let members_config = crate::build::scan::members::config_declares_members(source_path);
+        scan_frontmatter_urls_with_evicted(files, &super::folder_homes(&winners, &overrides, root.name()), &locate, &mut cache, &|_| false, members_config);
         cache
     }
 
@@ -131,10 +132,21 @@ impl FrontmatterScanCache {
 
     /// Whether the page's public view is restricted: its own `members:`
     /// wins, inherited access otherwise.
-    pub(super) fn is_members(&self, source_path: &str) -> bool {
+    pub(crate) fn is_members(&self, source_path: &str) -> bool {
         self.entries.get(source_path).and_then(|e| e.access)
             .or_else(|| self.members_policy.inherited(source_path))
             .is_some_and(|access| access != Members::Public)
+    }
+
+    /// Whether any of `files` declares `members:` or a `cascade:`, by what a
+    /// build read of it, this one or an earlier one.
+    pub(crate) fn declares_members(&self, files: &[crate::types::content::FileInfo]) -> bool {
+        files.iter().filter_map(|f| self.entries.get(&f.path)).any(|e| e.access.is_some() || e.cascade.is_some())
+    }
+
+    /// Whether any of `files` is restricted, by its own `members:` or by inheritance.
+    pub(crate) fn restricts_pages(&self, files: &[crate::types::content::FileInfo]) -> bool {
+        files.iter().any(|f| self.is_members(&f.path))
     }
 
     pub(super) fn is_partial(&self, source_path: &str) -> bool {
@@ -177,23 +189,27 @@ fn unquote(v: &str) -> &str {
 ///
 /// Each file is read from `locate(path)`, which is the path under the site
 /// folder for every build. `homes` are the elected folder homes, whose
-/// entries set `cache.members_policy`.
+/// entries set `cache.members_policy`; `members_config` is whether the site's
+/// settings name members.
 pub(super) fn scan_frontmatter_urls_with_evicted(
     markdown_files: &[crate::types::content::FileInfo],
     homes: &[&str],
     locate: &dyn Fn(&str) -> PathBuf,
     cache: &mut FrontmatterScanCache,
     is_evicted: &dyn Fn(&Path) -> bool,
+    members_config: bool,
 ) -> std::collections::HashMap<String, (Option<String>, Option<String>)> {
     use std::collections::HashMap;
 
     let mut out: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    let mut pending = std::collections::HashSet::new();
 
     for file_info in markdown_files {
         let file_path = &file_info.path;
         let source_file_path = locate(file_path);
 
         if is_evicted(&source_file_path) {
+            pending.insert(file_path.as_str());
             continue;
         }
 
@@ -297,10 +313,12 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
     }
 
     // Only an entry this build read or stat-vouched speaks for a home.
+    let uses_members = members_config || cache.declares_members(markdown_files);
     cache.members_policy = MemberCascade::from_homes(homes.iter().map(|&home| {
         let current = out.contains_key(home).then(|| cache.entries.get(home)).flatten();
-        (home, current.map_or(Some(Members::Subscribers), |entry| entry.cascade))
-    }));
+        let unread = if pending.contains(home) { HomeCascade::Pending } else { HomeCascade::Unreadable };
+        (home, current.map_or(unread, |entry| HomeCascade::Read(entry.cascade)))
+    }), uses_members);
     out
 }
 
@@ -349,7 +367,8 @@ pub(crate) fn build_page_map_and_external_urls_cached_with_evicted(
     std::collections::HashMap<String, String>,
 ) {
     let homes = super::folder_homes(home_file_winners, home_overrides, root_folder_name);
-    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &homes, &|p| on_disk(source_path, p), cache, is_evicted);
+    let members_config = crate::build::scan::members::config_declares_members(source_path);
+    let scanned = scan_frontmatter_urls_with_evicted(markdown_files, &homes, &|p| on_disk(source_path, p), cache, is_evicted, members_config);
     let (entries, dir_overrides, external_url_map) =
         assemble_page_map(markdown_files, &scanned, root_folder_name, home_file_winners, home_overrides);
     let page_map = entries.into_iter().map(|(k, v, _)| (k, v)).collect();

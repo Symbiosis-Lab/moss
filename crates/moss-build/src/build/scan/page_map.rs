@@ -566,7 +566,8 @@ pub(crate) fn pages_before_dedup(
     let (overrides, winners) = elect_homes_with_evicted(markdown_files, root, reserved, locate, is_evicted);
     let mut scan = FrontmatterScanCache::default();
     let homes = folder_homes(&winners, &overrides, root.name());
-    let scanned = frontmatter_cache::scan_frontmatter_urls_with_evicted(markdown_files, &homes, locate, &mut scan, is_evicted);
+    let members_config = crate::build::scan::members::config_declares_members(root.path());
+    let scanned = frontmatter_cache::scan_frontmatter_urls_with_evicted(markdown_files, &homes, locate, &mut scan, is_evicted, members_config);
     let (entries, _, _) = frontmatter_cache::assemble_page_map(markdown_files, &scanned, root.name(), &winners, &overrides);
     let mut folder_cache = FolderLangCache::load(&crate::moss_paths::MossPaths::new(root.path()).cache_folder_lang());
     let folder_langs =

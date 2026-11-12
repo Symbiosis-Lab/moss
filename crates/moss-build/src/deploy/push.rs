@@ -148,8 +148,8 @@ async fn push_site_inner_impl(
     let folder_path_str = folder_path.to_string_lossy().to_string();
 
     // Refuse before touching the network, through the door guard every
-    // config-reading door shares (`site_config::ensure_config_current`).
-    crate::build::site_config::ensure_config_current(&folder_path_str)?;
+    // publish route shares (`site_config::publish_door`).
+    crate::build::site_config::publish_door(folder_path, sealed.restricts_pages())?;
 
     // `AppState::active_environment()` is `resolve_environment(project_path)`
     // and nothing else, and this function has the folder in hand. Reading it
@@ -930,10 +930,14 @@ mod tests {
     /// `commit_sync` while the sync response below reports nothing to
     /// upload, so no bytes for it are ever read off disk.
     fn sealed_fixture(folder: &std::path::Path) -> SealedManifest {
+        pending_fixture(folder).seal()
+    }
+
+    fn pending_fixture(folder: &std::path::Path) -> PendingManifest {
         let mut pending = PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(folder));
         let sp = ServedPath::from_source("index.html").unwrap();
         pending.register(&sp, b"<html>Home</html>", HashBucket::Files);
-        pending.seal()
+        pending
     }
 
     #[tokio::test]
@@ -1253,6 +1257,46 @@ mod tests {
             spy.events.lock().unwrap().is_empty(),
             "no deploy port should have been touched — the refusal must come before any network activity"
         );
+    }
+
+    /// A generation that restricted a page publishes only once the site names
+    /// the moss its members pages need; a config that cannot take the floor
+    /// refuses the publish before any network call.
+    #[tokio::test]
+    async fn a_members_generation_refuses_when_the_floor_cannot_be_written() {
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_url = std::env::var("MOSS_SETA_URL").ok();
+        let closed_addr = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap()
+        };
+        std::env::set_var("MOSS_SETA_URL", format!("http://{closed_addr}"));
+
+        let identity = Identity::generate().expect("generate identity");
+        let dir = tempfile::tempdir().unwrap();
+        let mut pending = pending_fixture(dir.path());
+        pending.mark_restricts_pages();
+        let sealed = pending.seal();
+        std::fs::create_dir_all(MossPaths::new(dir.path()).generation_dir(sealed.generation_id())).unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), "[site\n").unwrap();
+
+        let sink = progress::silent();
+        let spy = SpyPorts::default();
+        let events_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cx = PushContext {
+            folder_path: dir.path(), identity: &identity, site_id: "members-floor-test",
+            sink: &sink, ports: &spy, events_lock: &events_lock,
+        };
+        let result = push_site_inner(&sealed, &cx).await;
+        match prev_url {
+            Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+            None => std::env::remove_var("MOSS_SETA_URL"),
+        }
+
+        let err = result.expect_err("publish must be refused, not attempted").to_string();
+        assert!(err.contains("could not write .moss/config.toml"), "got: {err}");
+        assert!(spy.events.lock().unwrap().is_empty());
     }
 
     /// The symlink-integrity check's counterpart to `upload.rs`'s file-hash
