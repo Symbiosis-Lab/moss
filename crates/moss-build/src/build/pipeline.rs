@@ -992,6 +992,19 @@ pub(crate) fn run_leased(
     result
 }
 
+/// `[services.booking]` as moss reads it, or nothing when an installed booking
+/// plugin owns the table; the build then says so once.
+fn core_booking(cfg: Option<&crate::config::ConfigFile>, plugins: &[crate::plugins::types::Plugin]) -> Option<Result<crate::config::services::booking::BookingService, String>> {
+    let cfg = cfg?;
+    if !crate::plugins::contributions::public_data::owns_service_table(plugins, "booking") {
+        return crate::config::services::booking::read(cfg);
+    }
+    if cfg.section(&["services", "booking"]).is_some() {
+        log::info!("[services.booking] is read by the booking plugin; moss's own booking reader is off");
+    }
+    None
+}
+
 /// Inner build function. `root` carries the folder path AND THE folder name (resolved once
 /// at the entry point by `vault::paths`), so no consumer re-derives it. Separated so the
 /// outer fn can manage DetachedRegistry state on all exit paths (both Ok and Err).
@@ -1531,7 +1544,7 @@ fn build_inner(
         forms_endpoint,
         blocks: std::sync::Arc::new(crate::plugins::contributions::blocks::BlockPlan::from_plugins(&declaring_plugins)),
         public_data: public_files,
-        booking: cfg.as_ref().and_then(crate::config::services::booking::read),
+        booking: core_booking(cfg.as_ref(), &declaring_plugins),
         place_maps,
         incremental,
         derivations: derived.clone(),

@@ -334,6 +334,7 @@ fn config_tables() -> Vec<ConfigTableInfo> {
             "Amounts are integer cents in `currency`, a lowercase ISO code.",
             "A key moss does not know, or an offer that breaks a rule, is a build problem, and the offer is left out of commerce.json until it is fixed; the site's forms and other services are not affected.",
             "Each page is a path on the site, starting with a single `/`, that the build must write.",
+            "When an installed plugin named `booking` declares `public_data`, the table is the plugin's: moss writes no `booking` object and checks none of these rules.",
             "`enabled = false` turns the table off.",
         ],
     }]

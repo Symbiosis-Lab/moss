@@ -158,6 +158,12 @@ impl<'a> Shape<'a> {
     }
 }
 
+/// Whether the installed plugin named `id` declares `public_data`, which makes
+/// `[services.<id>]` its table, so moss's own reader for that table stays off.
+pub fn owns_service_table(plugins: &[Plugin], id: &str) -> bool {
+    plugins.iter().any(|p| p.manifest.name == id && p.manifest.contributes.as_ref().is_some_and(|c| c.public_data.is_some()))
+}
+
 /// One file a build publishes for a plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicFile {
