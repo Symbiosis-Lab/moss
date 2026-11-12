@@ -251,13 +251,12 @@ impl MossSetaClient {
             "sync manifest",
             &budget,
             || async move {
-                let resp = this
+                let request = this
                     .signed(Method::POST, path_ref, body_ref.clone())?
                     .timeout(timeout)
                     .header("Content-Type", "application/json")
-                    .header("X-Moss-Generation", generation_id)
-                    .send()
-                    .await?;
+                    .header("X-Moss-Generation", generation_id);
+                let resp = this.send(request).await?;
                 if !resp.status().is_success() {
                     return Err(SetaError::from_failed_response(resp).await);
                 }
@@ -305,11 +304,10 @@ impl MossSetaClient {
             if let Some(tp) = stats {
                 tp.note_request();
             }
-            let response = request
+            let response = this.send(request
                 .timeout(UPLOAD_REQUEST_TIMEOUT)
                 .header("Content-Type", "application/octet-stream")
-                .header("X-Moss-Generation", generation_id)
-                .send()
+                .header("X-Moss-Generation", generation_id))
                 .await?;
             if !response.status().is_success() {
                 return Err(SetaError::from_failed_response(response).await);
@@ -351,16 +349,15 @@ impl MossSetaClient {
         let (this, path, target) = (self, path.as_str(), &target);
         let budget = crate::seta::client::RetryBudget::new();
         crate::seta::client::retry_transient(file_path, &budget, || async move {
-            let response = this
+            let request = this
                 .signed(Method::PUT, path, target.clone())?
                 // Stated, not inherited: the retry budget reserves
                 // UPLOAD_REQUEST_TIMEOUT per attempt (`client::MAX_ATTEMPT_DURATION`).
                 .timeout(UPLOAD_REQUEST_TIMEOUT)
                 .header("Content-Type", "text/plain; charset=utf-8")
                 .header("X-Moss-Entry", crate::types::content::MODE_SYMLINK)
-                .header("X-Moss-Generation", generation_id)
-                .send()
-                .await?;
+                .header("X-Moss-Generation", generation_id);
+            let response = this.send(request).await?;
             if !response.status().is_success() {
                 return Err(SetaError::from_failed_response(response).await);
             }
@@ -402,7 +399,7 @@ impl MossSetaClient {
             urlencoding::encode(site_id),
             urlencoding::encode(generation_id),
         );
-        let response = self.signed(Method::GET, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT).send().await?;
+        let response = self.send(self.signed(Method::GET, &path, Bytes::new())?.timeout(UPLOAD_REQUEST_TIMEOUT)).await?;
         if response.status().as_u16() == 404 {
             log::debug!(target: "seta", "GET {} → 404: server predates the resume endpoint, uploading from zero", path);
             return Ok(Vec::new());
@@ -450,12 +447,11 @@ impl MossSetaClient {
             "commit deploy",
             &budget,
             || async move {
-                let resp = this
+                let request = this
                     .signed(Method::POST, path_ref, body_ref.clone())?
                     .timeout(timeout)
-                    .header("Content-Type", "application/json")
-                    .send()
-                    .await?;
+                    .header("Content-Type", "application/json");
+                let resp = this.send(request).await?;
                 if !resp.status().is_success() {
                     return Err(SetaError::from_failed_response(resp).await);
                 }
@@ -501,7 +497,7 @@ impl MossSetaClient {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        let response = request.send().await?;
+        let response = self.send(request).await?;
         match response.status().as_u16() {
             200..=299 => Ok(Generation::Live(response.json().await.map_err(|e| SetaError::Parse(e.to_string()))?)),
             404 => Ok(Generation::NotFound),

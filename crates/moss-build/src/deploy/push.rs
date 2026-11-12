@@ -200,6 +200,7 @@ async fn push_site_inner_impl(
 
     let site_dir = MossPaths::new(folder_path).generation_dir(sealed.generation_id());
     let sizes = upload::regular_file_sizes(&site_dir, &manifest).await?;
+    super::profile::count("manifest_kb", sizes.values().sum::<u64>().div_ceil(1024));
     let diff = super::profile::sync(client.sync_manifest(&site_id, &manifest, &sizes, sealed.generation_id())).await?;
 
     if !diff.needs_commit() {

@@ -1096,6 +1096,7 @@ fn auth_status_test_client(base_url: &str) -> MossSetaClient {
         client: crate::system::proxy_reqwest::client_builder().no_proxy().build().unwrap(),
         base_url: MossSetaClient::validate_url(base_url),
         identity: None,
+        wire: Default::default(),
     }
 }
 

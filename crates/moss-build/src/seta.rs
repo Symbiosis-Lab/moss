@@ -4,7 +4,7 @@
 
 pub mod client;
 mod redact;
-mod wire;
+pub(crate) mod wire;
 pub mod signing;
 pub mod domains;
 pub mod dns;

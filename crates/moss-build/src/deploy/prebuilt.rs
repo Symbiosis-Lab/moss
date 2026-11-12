@@ -271,6 +271,7 @@ async fn push_prebuilt_inner(
         &crate::infra::app_advisory::t("comparing_with_server"),
     );
     let sizes = crate::deploy::upload::regular_file_sizes(prebuilt_dir, &manifest).await?;
+    super::profile::count("manifest_kb", sizes.values().sum::<u64>().div_ceil(1024));
     let diff = super::profile::sync(client.sync_manifest(site_id, &manifest, &sizes, &generation_id)).await?;
 
     if !diff.needs_commit() {

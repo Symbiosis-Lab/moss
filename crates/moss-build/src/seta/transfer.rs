@@ -49,7 +49,7 @@ impl MossSetaClient {
             "keep_publishing": keep_publishing,
             "client": { "name": "moss", "version": env!("CARGO_PKG_VERSION"), "os": std::env::consts::OS },
         });
-        Self::send_json(self.signed_json(Method::POST, &format!("/api/sites/{}/transfer", site_id), &body)?).await
+        self.send_json(self.signed_json(Method::POST, &format!("/api/sites/{}/transfer", site_id), &body)?).await
     }
 
     /// Withdraw the site's pending transfer; its mailed link stops working.
