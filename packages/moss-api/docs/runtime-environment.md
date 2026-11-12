@@ -61,10 +61,17 @@ client, not a spec-complete implementation:
   On a followed 301/302/303, methods other than GET/HEAD become GET and the
   body is discarded. A POST, PUT or DELETE receiving 307/308 is returned
   without following, rather than replaying the request.
-- **Credentials on redirects**: followed redirects strip `Authorization`,
-  `Cookie` and `Content-Length`, including same-host redirects. Custom headers
-  such as `X-Api-Key` can survive and reach another host. A request carrying
-  credentials in a custom header should use `redirect: "error"`.
+- **Headers on redirects**: same-origin redirects preserve caller headers.
+  Across an origin change (scheme, host or effective port), only `Accept`,
+  `Accept-Language`, `Content-Type` and `User-Agent` caller headers survive,
+  matched case-insensitively. Other headers, including authorization, cookies
+  and custom credentials, are removed and stay removed on later hops. URL
+  credentials are used only on the initial origin; redirect locations cannot
+  introduce credentials. The transport supplies its own framing headers.
+- Follow permits four hops, matching the existing client limit: a fifth
+  300–398 response errors even without `Location`; 399 is returned. Relative
+  locations resolve against the current URL, only HTTP(S) targets are allowed,
+  and a response without `Location` is returned. One timeout covers all hops.
 - The body is fully buffered before the promise resolves; default timeout is
   30 s.
 
