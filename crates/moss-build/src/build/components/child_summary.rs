@@ -176,7 +176,7 @@ pub fn render_with_sort(
     let draw = |url: &str, ct: CoverType, alt: &str| {
         let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
         let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
-        cover::render_cover_html(cover_path, ct, alt, "moss-card-cover", &cover_attrs, true, media_lookup, false)
+        cover::render_cover_html(cover_path, ct, alt, "moss-card-cover", &cover_attrs, true, media_lookup, false, None)
     };
     let cover_inner = if let Some(first) = props.pictures.first() {
         let rest = props.pictures.iter().skip(1).map(|url| draw(url, CoverType::Image, ""));

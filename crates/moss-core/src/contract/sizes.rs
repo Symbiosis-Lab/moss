@@ -8,14 +8,16 @@
 //! (definition) and site.css (overrides) when touching):
 //! - content column: `--moss-content-width` = calc(42 * 1.125rem) = 47.25rem
 //!   at the DEFAULT reading scale — the reader font-scale control shifts
-//!   `--moss-reading-size`, and `content_width: wide` pages use
-//!   calc(50 × reading-size). A scaled or wide page therefore gets slightly
-//!   suboptimal (never broken) fetches, same framing as theme overrides above.
+//!   `--moss-reading-size`, so a scaled page gets slightly suboptimal (never
+//!   broken) fetches, same framing as theme overrides above. A page whose
+//!   `content_width` widens the column has its values restated once that
+//!   width is known — see `sizes_in_page_column`
 //! - nav/content breakpoint: 48rem (see .claude/CLAUDE.md § "Navigation
 //!   Responsive Breakpoints")
 //! - `.moss-grid` runs 1–6 columns via data-columns within the content/wide
-//!   column; a horizontal site collapses to 1 column below 768px, a
-//!   vertical one never does (site.css) — see `sizes_for_grid_cell`
+//!   column, an author ratio or a `mid` count changing the tracks; a
+//!   horizontal site collapses to 1 column below 768px, a vertical one never
+//!   does (site.css) — see `sizes_for_grid_cell`
 //! - `content_width: screen` widens a page's top-level grids and bands after
 //!   their pictures are rendered — see `sizes_in_screen_block`
 //! - vertical typesetting: the column is a HEIGHT, not a width — see
@@ -150,10 +152,17 @@ pub fn sizes_for_data_width(width: &str) -> Option<&'static str> {
     }
 }
 
-/// The `sizes=` value for an image inside a `.moss-grid` cell: the cell
-/// track is the grid's band width divided by its column count (gaps are
-/// ignored — a slight, safe over-declaration). The band is the content
-/// column, or the escape band when the grid carries `data-width`.
+/// The `sizes=` value for an image inside a `.moss-grid` cell: the grid's
+/// band times its widest cell's share of it (gaps are ignored — a slight,
+/// safe over-declaration). The band is the content column, or the escape band
+/// when the grid carries `data-width`. The share is one column of `columns`,
+/// or the largest part of an author `ratio` (`5:7` is 7/12), which every cell
+/// of the grid then declares.
+///
+/// `mid` is the grid's column count from 48rem up to 64rem, where site.css
+/// lets it replace both `columns` and the ratio. A collage and a scroll row
+/// place their cells their own way: the caller passes `None` for both, and
+/// two columns for a collage, whose lead tile is half its band.
 ///
 /// Leads with `auto,` for the same reason as [`SIZES_CARD`]. The rest is
 /// for an eager image or an engine without `sizes="auto"`: the track above
@@ -165,7 +174,7 @@ pub fn sizes_for_data_width(width: &str) -> Option<&'static str> {
 /// for grid-cell images: a 3-across featured wall emitted
 /// `sizes="(min-width: 48rem) 47.25rem, 100vw"`, so the browser fetched the
 /// 800w candidate for a ~215px slot — ~12× the pixels needed, per tile.
-pub fn sizes_for_grid_cell(columns: u32, data_width: Option<&str>) -> String {
+pub fn sizes_for_grid_cell(columns: u32, data_width: Option<&str>, mid: Option<u32>, ratio: Option<&str>) -> String {
     let band: &str = match data_width {
         Some("wide") => "min(63rem, 100vw)",
         Some("page") => "min(1200px, 100vw)",
@@ -173,13 +182,29 @@ pub fn sizes_for_grid_cell(columns: u32, data_width: Option<&str>) -> String {
         // No data-width (or `body`): the content column.
         _ => BODY_COLUMN,
     };
-    let cols = columns.max(1);
-    let fallback = if cols == 1 {
-        band.to_string()
-    } else {
-        format!("(min-width: 48rem) calc({band} / {cols}), 100vw")
+    let even = |columns: u32| match columns.max(1) {
+        1 => band.to_string(),
+        n => format!("calc({band} / {n})"),
     };
-    format!("auto, {fallback}")
+    let wide = match ratio.map(widest_share) {
+        Some(Some((part, whole))) => format!("calc({band} * {part} / {whole})"),
+        // A ratio the stylesheet cannot read leaves the template undefined.
+        Some(None) => band.to_string(),
+        None => even(columns),
+    };
+    let mid = mid.map(even).filter(|mid| *mid != wide);
+    match mid {
+        Some(mid) => format!("auto, (min-width: 64rem) {wide}, (min-width: 48rem) {mid}, 100vw"),
+        None if wide == band => format!("auto, {band}"),
+        None => format!("auto, (min-width: 48rem) {wide}, 100vw"),
+    }
+}
+
+/// The largest part of a `1:2:1` ratio and the sum of its parts, or `None`
+/// when a part is not a positive number.
+fn widest_share(ratio: &str) -> Option<(f64, f64)> {
+    let parts: Vec<f64> = ratio.split(':').map(|n| n.trim().parse().ok().filter(|n: &f64| *n > 0.0 && n.is_finite())).collect::<Option<_>>()?;
+    Some((parts.iter().copied().fold(0.0, f64::max), parts.iter().sum()))
 }
 
 /// The content column as a grid cell's band, clamped to the window.
@@ -197,6 +222,23 @@ pub fn sizes_in_screen_block(sizes: &str) -> Option<String> {
     }
     sizes.contains(BODY_COLUMN).then(|| sizes.replace(BODY_COLUMN, SIZES_FULL_BLEED))
 }
+
+/// `sizes` as it should read on a page whose `content_width` widens the
+/// column (`wide`, `full`, or `screen`, whose column is the `full` one), or
+/// `None` when it does not name the default column or the page keeps it. The
+/// pictures were rendered before the page's width was resolved.
+pub fn sizes_in_page_column(sizes: &str, content_width: &str) -> Option<String> {
+    let column = match content_width {
+        // `calc(50 * var(--moss-reading-size))` at the default reading size.
+        "wide" => "min(56.25rem, 100vw)",
+        "full" | "screen" => "min(1200px, 100vw)",
+        _ => return None,
+    };
+    sizes.contains(DEFAULT_COLUMN).then(|| sizes.replace(BODY_COLUMN, column).replace(DEFAULT_COLUMN, column))
+}
+
+/// `--moss-content-width` at the default reading size.
+const DEFAULT_COLUMN: &str = "47.25rem";
 
 /// Body images on a `typesetting = "vertical"` page: `calc(A * (100vh - 4rem))`
 /// with `A` = the source's width/height, rounded UP to three decimals.
@@ -246,7 +288,7 @@ mod tests {
             .flat_map(|n| {
                 [None, Some("wide"), Some("page"), Some("screen")]
                     .into_iter()
-                    .map(move |w| sizes_for_grid_cell(n, w))
+                    .map(move |w| sizes_for_grid_cell(n, w, None, None))
             })
             .collect();
         for s in [SIZES_FULL_BLEED, SIZES_BODY, SIZES_CARD, SIZES_GALLERY, SIZES_GALLERY_COUNTED, SIZES_WIDE, SIZES_PAGE]
@@ -302,17 +344,64 @@ mod tests {
         // not the full content column, once past the `auto,` lead — the
         // fallback that fires when `auto` doesn't apply.
         assert_eq!(
-            sizes_for_grid_cell(3, None),
+            sizes_for_grid_cell(3, None, None, None),
             "auto, (min-width: 48rem) calc(min(47.25rem, 100vw) / 3), 100vw"
         );
         assert_eq!(
-            sizes_for_grid_cell(3, Some("page")),
+            sizes_for_grid_cell(3, Some("page"), None, None),
             "auto, (min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw"
         );
         // Single column: no calc wrapper.
-        assert_eq!(sizes_for_grid_cell(1, Some("screen")), "auto, 100vw");
+        assert_eq!(sizes_for_grid_cell(1, Some("screen"), None, None), "auto, 100vw");
         // Zero-column defensive clamp.
-        assert_eq!(sizes_for_grid_cell(0, None), "auto, min(47.25rem, 100vw)");
+        assert_eq!(sizes_for_grid_cell(0, None, None, None), "auto, min(47.25rem, 100vw)");
+    }
+
+    #[test]
+    fn a_ratio_grid_declares_its_widest_cell() {
+        assert_eq!(
+            sizes_for_grid_cell(2, Some("screen"), None, Some("5:7")),
+            "auto, (min-width: 48rem) calc(100vw * 7 / 12), 100vw"
+        );
+        assert_eq!(
+            sizes_for_grid_cell(3, None, None, Some("1 : 2.5 : 1")),
+            "auto, (min-width: 48rem) calc(min(47.25rem, 100vw) * 2.5 / 4.5), 100vw"
+        );
+        // Unreadable: the whole band, which no cell exceeds.
+        for ratio in ["1:x", "0:1", "1:-2", ""] {
+            assert_eq!(sizes_for_grid_cell(2, None, None, Some(ratio)), "auto, min(47.25rem, 100vw)", "{ratio}");
+        }
+    }
+
+    #[test]
+    fn a_mid_count_declares_its_cell_up_to_64rem() {
+        assert_eq!(
+            sizes_for_grid_cell(4, Some("page"), Some(2), None),
+            "auto, (min-width: 64rem) calc(min(1200px, 100vw) / 4), (min-width: 48rem) calc(min(1200px, 100vw) / 2), 100vw"
+        );
+        // `mid` replaces the ratio in its range.
+        assert_eq!(
+            sizes_for_grid_cell(2, Some("screen"), Some(1), Some("1:3")),
+            "auto, (min-width: 64rem) calc(100vw * 3 / 4), (min-width: 48rem) 100vw, 100vw"
+        );
+        assert_eq!(sizes_for_grid_cell(3, None, Some(3), None), sizes_for_grid_cell(3, None, None, None));
+    }
+
+    #[test]
+    fn a_wider_page_column_replaces_the_default_one() {
+        assert_eq!(
+            sizes_in_page_column(SIZES_BODY, "wide").as_deref(),
+            Some("auto, (min-width: 48rem) min(56.25rem, 100vw), 100vw")
+        );
+        assert_eq!(
+            sizes_in_page_column(&sizes_for_grid_cell(2, None, Some(1), Some("5:7")), "screen").as_deref(),
+            Some("auto, (min-width: 64rem) calc(min(1200px, 100vw) * 7 / 12), (min-width: 48rem) min(1200px, 100vw), 100vw")
+        );
+        assert_eq!(sizes_in_page_column(SIZES_BODY, "full"), sizes_in_page_column(SIZES_BODY, "screen"));
+        assert_eq!(sizes_in_page_column(SIZES_BODY, "body"), None);
+        for sizes in [SIZES_CARD, SIZES_GALLERY, SIZES_WIDE, SIZES_PAGE, SIZES_FULL_BLEED] {
+            assert_eq!(sizes_in_page_column(sizes, "full"), None, "{sizes}");
+        }
     }
 
     #[test]
@@ -368,8 +457,8 @@ mod tests {
     fn a_screen_grid_cell_reads_as_if_written_with_screen() {
         for columns in 1..=4 {
             assert_eq!(
-                sizes_in_screen_block(&sizes_for_grid_cell(columns, None)),
-                Some(sizes_for_grid_cell(columns, Some("screen")))
+                sizes_in_screen_block(&sizes_for_grid_cell(columns, None, None, None)),
+                Some(sizes_for_grid_cell(columns, Some("screen"), None, None))
             );
         }
     }
@@ -385,7 +474,7 @@ mod tests {
         for sizes in [SIZES_CARD, SIZES_GALLERY, SIZES_WIDE, SIZES_PAGE, SIZES_FULL_BLEED, SIZES_HERO_PLATE] {
             assert_eq!(sizes_in_screen_block(sizes), None, "{sizes}");
         }
-        assert_eq!(sizes_in_screen_block(&sizes_for_grid_cell(2, Some("wide"))), None);
+        assert_eq!(sizes_in_screen_block(&sizes_for_grid_cell(2, Some("wide"), None, None)), None);
     }
 
     /// The `screen-page` render gate fetches these against the real CSS in
@@ -393,13 +482,19 @@ mod tests {
     /// Rust, so it reads this golden. Regenerate with `SNAPSHOTS=overwrite`.
     #[test]
     fn screen_page_render_gate_golden_matches() {
-        let eager = |sizes: &str| sizes_in_screen_block(sizes).unwrap().trim_start_matches("auto, ").to_string();
-        let want = format!(
-            "{{\n  \"grid2\": \"{}\",\n  \"grid3\": \"{}\",\n  \"band\": \"{}\"\n}}\n",
-            eager(&sizes_for_grid_cell(2, None)),
-            eager(&sizes_for_grid_cell(3, None)),
-            eager(SIZES_BODY),
-        );
+        let eager = |sizes: String| sizes.trim_start_matches("auto, ").to_string();
+        let screen = |sizes: &str| eager(sizes_in_screen_block(sizes).unwrap());
+        let entries = [
+            ("grid2", screen(&sizes_for_grid_cell(2, None, None, None))),
+            ("grid3", screen(&sizes_for_grid_cell(3, None, None, None))),
+            ("band", screen(SIZES_BODY)),
+            ("ratio", screen(&sizes_for_grid_cell(2, None, None, Some("5:7")))),
+            ("mid", screen(&sizes_for_grid_cell(4, None, Some(2), None))),
+            ("wideColumn", eager(sizes_in_page_column(SIZES_BODY, "wide").unwrap())),
+            ("fullColumn", eager(sizes_in_page_column(SIZES_BODY, "full").unwrap())),
+            ("card", eager(SIZES_CARD.to_string())),
+        ];
+        let want = format!("{{\n{}\n}}\n", entries.map(|(name, sizes)| format!("  \"{name}\": \"{sizes}\"")).join(",\n"));
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/render-gates/site/screen-page.golden.json");
         if std::env::var("SNAPSHOTS").as_deref() == Ok("overwrite") {

@@ -183,7 +183,7 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
     // Each cell renders into its own buffer; `Block::LinkCard` brings its own wrapping `<a>`.
     let mut cells: Vec<GridCellParts> = Vec::with_capacity(args.cells.len());
     // Scope image `sizes=` to the cell track while cells render.
-    hooks.begin_grid_cells(args.columns, args.width.as_deref());
+    hooks.begin_grid_cells(args.cell_sizes());
     for (i, cell_blocks) in args.cells.iter().enumerate() {
         let fragment = args.source.fragments.get(i);
         let mut cell_html = String::new();

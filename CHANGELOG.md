@@ -45,6 +45,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - A PDF, picture or other file opened in the editor stays in its viewer. The preview follows to the file's own address, and the editor took that address for a page moss generated and replaced the viewer with "No page to edit".
+- A picture declares the width it is drawn at in three more places, so a browser that cannot measure it first (Safari, and every browser for the page's first picture) no longer enlarges a file that is too small: in the column of a `content_width: wide`, `full` or `screen` page; in a grid with a ratio (`:::grid 2 5:7`) or `mid=N`, where it declares the grid's widest cell; and as the cover of a page's card in a `:::grid` cell, which declared a listing card's width however wide the cell was. A collage's pictures declare half the collage's width, which is its lead tile's.
 - A shortcode written between the lines of a raw HTML block with no blank lines around it (`<div>`, `:::grid`, its cells, `:::`, `</div>`) is rendered in place. The page used to show an empty comment where it stood.
 - A raw `<img>`, `<video>` or `<audio>` tag whose `src` names a file that is not in the folder counts as a missing file when publishing, like a Markdown image's. The publish used to go out with the broken picture.
 - A publish refused for missing files names each one with the source file and line that asks for it, in `moss deploy --dry-run` too, instead of only a count.

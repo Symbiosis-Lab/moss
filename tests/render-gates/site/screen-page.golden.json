@@ -1,5 +1,10 @@
 {
   "grid2": "(min-width: 48rem) calc(100vw / 2), 100vw",
   "grid3": "(min-width: 48rem) calc(100vw / 3), 100vw",
-  "band": "100vw"
+  "band": "100vw",
+  "ratio": "(min-width: 48rem) calc(100vw * 7 / 12), 100vw",
+  "mid": "(min-width: 64rem) calc(100vw / 4), (min-width: 48rem) calc(100vw / 2), 100vw",
+  "wideColumn": "(min-width: 48rem) min(56.25rem, 100vw), 100vw",
+  "fullColumn": "(min-width: 48rem) min(1200px, 100vw), 100vw",
+  "card": "(min-width: 48rem) 24rem, 100vw"
 }

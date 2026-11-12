@@ -765,7 +765,7 @@ fn sizes_for<'s>(
         ImageContext::MarkdownInline => options.data_width,
         ImageContext::Hero { plate: true } => return Cow::Borrowed(ctx_sizes::SIZES_HERO_PLATE),
         ImageContext::Hero { plate: false } => return Cow::Borrowed(ctx_sizes::SIZES_FULL_BLEED),
-        ImageContext::FolderCardCover => return Cow::Borrowed(ctx_sizes::SIZES_CARD),
+        ImageContext::FolderCardCover => return Cow::Borrowed(options.grid_cell_sizes.unwrap_or(ctx_sizes::SIZES_CARD)),
         ImageContext::GalleryThumb { columns } => return Cow::Borrowed(ctx_sizes::sizes_for_gallery(*columns)),
         _ => return Cow::Borrowed(ctx_sizes::SIZES_BODY),
     };

@@ -338,6 +338,22 @@ impl GridShortcode {
         self.collage && COLLAGE_TILES.contains(&self.cells.len())
     }
 
+    /// The `sizes=` value of a picture in one of this grid's cells: the one
+    /// value its inline pictures and its cards' covers both declare.
+    pub fn cell_sizes(&self) -> String {
+        // A collage and a scroll row ignore `mid` and the ratio (site.css). A
+        // collage's lead is half its band and no other tile is wider, so it
+        // declares two columns. Under an upright lead a tile across all six
+        // columns is three fifths of the band, a small understatement.
+        let even = self.is_collage() || self.is_scroll_row();
+        crate::contract::sizes::sizes_for_grid_cell(
+            if self.is_collage() { 2 } else { self.columns },
+            self.width.as_deref(),
+            self.mid_columns.filter(|_| !even),
+            self.ratio.as_deref().filter(|_| !even),
+        )
+    }
+
     /// True when the cards' parts line up across a row: `rows=equal` on a grid
     /// that is neither a collage nor a scroll row, which place their cells
     /// their own way.

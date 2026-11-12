@@ -143,6 +143,8 @@ pub struct GridEmission {
     pub collage: bool,
     /// `{rows=equal}`, which [`GridParts::assemble`] counts the cards' parts for.
     pub equal_rows: bool,
+    /// The `sizes=` a card's cover takes in one of this grid's cells.
+    pub cell_sizes: String,
     pub cells: Vec<GridCellEmission>,
 }
 
@@ -774,6 +776,7 @@ fn emission(args: &GridShortcode, parts: GridParts) -> GridEmission {
         classes: args.classes.clone(),
         collage: args.is_collage(),
         equal_rows: parts.equal_rows,
+        cell_sizes: args.cell_sizes(),
         cells: args
             .cells
             .iter()

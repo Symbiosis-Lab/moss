@@ -42,30 +42,10 @@ use crate::build::page::meta::render_description_html_in_link;
 /// typed flag so the LCP decision flows through the synthesizer.
 ///
 /// `list_has_covers`: whether ANY card in this caller's row/list has a cover
-/// of its own — see the parameter doc on [`render_item`], which this calls
-/// straight through to. A hand-picked `:::grid` cell computes it across its
-/// own siblings the same way [`render_list_with_typesetting`] does
-/// (`build::render::grid_cells::apply_collection_cards`); a caller with no
-/// sibling list to compare against (a lone card, or a context that predates
-/// this parameter) passes `false`.
-pub fn render_item_with_typesetting(
-    props: &ChildItemProps,
-    root: Option<&Path>,
-    lang: Language,
-    typesetting: Option<&str>,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    eager: bool,
-    list_has_covers: bool,
-) -> String {
-    render_item(props, root, lang, typesetting, media_lookup, eager, list_has_covers)
-}
-
-/// Shared by [`render_item_with_typesetting`] (a lone card, or `:::grid`
-/// cells whose caller now computes `list_has_covers` across the row) and
-/// [`render_list_with_typesetting`] (which already knows whether ANY card
-/// in the list has a cover).
-///
-/// `list_has_covers`: when true and THIS card has no cover of its own, the
+/// of its own. A hand-picked `:::grid` cell computes it across its own
+/// siblings the same way [`render_list_with_typesetting`] does
+/// (`build::render::grid_cells::apply_collection_cards`); a lone card passes
+/// `false`. When true and THIS card has no cover of its own, the
 /// cover slot becomes a quote card (`data-cover="quote"`) carrying the
 /// page's description instead of the empty `.moss-card-no-cover`
 /// placeholder. With no description the slot is an empty `aria-hidden` tile:
@@ -75,7 +55,7 @@ pub fn render_item_with_typesetting(
 /// placeholder is invisible CSS (`moss-card-cover { display: none }`);
 /// the quote slot exists only to fill the gap a MIXED list would
 /// otherwise leave.
-fn render_item(
+pub fn render_item_with_typesetting(
     props: &ChildItemProps,
     root: Option<&Path>,
     lang: Language,
@@ -83,6 +63,8 @@ fn render_item(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     eager: bool,
     list_has_covers: bool,
+    // The `sizes=` of the `:::grid` cell the card fills; `None` in a listing.
+    grid_cell_sizes: Option<&str>,
 ) -> String {
     // A folder's meta is its count (preceded by its own date and place when
     // its home page declares one); a leaf's is its date and place, or
@@ -110,7 +92,7 @@ fn render_item(
             // with a title is decorative. Without a title the link has no name,
             // and the cover supplies one.
             let cover_alt = if props.title.trim().is_empty() { "cover" } else { "" };
-            cover::render_cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, media_lookup, eager)
+            cover::render_cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, media_lookup, eager, grid_cell_sizes)
         }
         _ if list_has_covers => {
             // The description is markdown (`ChildItemProps::description`'s
@@ -294,14 +276,14 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
         .map(|c| {
             let c = c.borrow();
             // Mark the first card with a cover as eager (LCP candidate).
-            // Pass the flag into the synthesizer via `render_item_with_typesetting`
+            // Pass the flag into the synthesizer
             // so the eager hint is part of the emitted markup from the
             // start — no post-render mutation needed.
             let eager = !found_first_cover && c.cover.is_some();
             if eager {
                 found_first_cover = true;
             }
-            render_item(c, root, lang, typesetting, media_lookup, eager, has_covers)
+            render_item_with_typesetting(c, root, lang, typesetting, media_lookup, eager, has_covers, None)
         })
         .collect::<Vec<_>>()
         .join("\n");

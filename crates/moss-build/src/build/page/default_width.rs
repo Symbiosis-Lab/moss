@@ -9,8 +9,9 @@
 //! with a width word of its own (`{body}` included, which renders
 //! `data-width="body"`) already carries the attribute and is left alone.
 //!
-//! A picture inside a widened block was given a `sizes` for the content
-//! column, so the same pass restates it for the block it is now drawn in.
+//! A picture was given a `sizes` for the default content column, so the same
+//! pass restates it: for the block a `screen` page widened around it, else for
+//! the column a `wide`, `full` or `screen` page draws it in.
 
 /// The `content_width` value that sets this default; the page's column is then
 /// the `full` one.
@@ -22,18 +23,21 @@ pub(crate) fn column_preset(content_width: &str) -> &str {
     if content_width == SCREEN { "full" } else { content_width }
 }
 
-/// `body`, with the `screen` default applied when the page's resolved
-/// `content_width` asks for it.
+/// `body` as a page of this resolved `content_width` draws it.
 pub(crate) fn apply(body: String, content_width: Option<&str>) -> String {
-    if content_width == Some(SCREEN) { screen_by_default(&body) } else { body }
+    match content_width {
+        Some(width @ ("wide" | "full" | SCREEN)) => widened(&body, width),
+        _ => body,
+    }
 }
 
-/// `body` with `data-width="screen"` added to every top-level grid and
-/// fenced-div band that has no width of its own, and the `sizes` of the
-/// pictures inside restated for that width. The selectors mirror the
-/// stylesheet's `article.container > …` escape rules, so only a block the
-/// escape reaches is touched.
-pub(crate) fn screen_by_default(body: &str) -> String {
+/// `body` with every picture's `sizes` restated for the page's column. On a
+/// `screen` page, `data-width="screen"` is first added to every top-level grid
+/// and fenced-div band that has no width of its own, and the pictures inside
+/// are restated for that width instead. The selectors mirror the stylesheet's
+/// `article.container > …` escape rules, so only a block the escape reaches is
+/// touched.
+fn widened(body: &str, content_width: &str) -> String {
     const OPEN: &str = r#"<article class="container">"#;
     const CLOSE: &str = "</article>";
     // The blocks the default widens. Selectors match the source's attributes,
@@ -42,23 +46,26 @@ pub(crate) fn screen_by_default(body: &str) -> String {
         "article.container > .moss-grid:not([data-width])",
         r#"article.container > div[class]:not([data-width]):not([class^="moss-"]):not([class*=" moss-"])"#,
     ];
-    let pictures = BLOCKS.map(|block| format!("{block} img[sizes], {block} source[sizes]")).join(", ");
+    use moss_core::contract::sizes::{sizes_in_page_column, sizes_in_screen_block};
+    let restate = |el: &mut lol_html::html_content::Element, restated: &dyn Fn(&str) -> Option<String>| {
+        match el.get_attribute("sizes").and_then(|sizes| restated(&sizes)) {
+            Some(sizes) => el.set_attribute("sizes", &sizes),
+            None => Ok(()),
+        }
+    };
+    let mut handlers = Vec::new();
+    if content_width == SCREEN {
+        let pictures = BLOCKS.map(|block| format!("{block} img[sizes], {block} source[sizes]")).join(", ");
+        handlers.push(lol_html::element!(BLOCKS.join(", "), |el| Ok(el.set_attribute("data-width", "screen")?)));
+        handlers.push(lol_html::element!(pictures, |el| Ok(restate(el, &sizes_in_screen_block)?)));
+    }
+    // Runs after the block's handler, whose value no longer names the column.
+    handlers.push(lol_html::element!("img[sizes], source[sizes]", |el| {
+        Ok(restate(el, &|sizes| sizes_in_page_column(sizes, content_width))?)
+    }));
     let mut out = Vec::with_capacity(body.len() + 64);
     let mut rewriter = lol_html::HtmlRewriter::new(
-        lol_html::Settings {
-            element_content_handlers: vec![
-                lol_html::element!(BLOCKS.join(", "), |el| Ok(el.set_attribute("data-width", "screen")?)),
-                lol_html::element!(pictures, |el| {
-                    let restated = el.get_attribute("sizes")
-                        .and_then(|sizes| moss_core::contract::sizes::sizes_in_screen_block(&sizes));
-                    if let Some(sizes) = restated {
-                        el.set_attribute("sizes", &sizes)?;
-                    }
-                    Ok(())
-                }),
-            ],
-            ..lol_html::Settings::default()
-        },
+        lol_html::Settings { element_content_handlers: handlers, ..lol_html::Settings::default() },
         |c: &[u8]| out.extend_from_slice(c),
     );
     let wrote = rewriter.write(OPEN.as_bytes()).and_then(|()| rewriter.write(body.as_bytes())).and_then(|()| rewriter.write(CLOSE.as_bytes()));
@@ -78,7 +85,7 @@ mod tests {
     #[test]
     fn grid_and_band_without_a_width_get_screen() {
         let body = r#"<h2>Top</h2><div class="moss-grid" data-columns="2">x</div><div class="band"><p>y</p></div>"#;
-        let out = screen_by_default(body);
+        let out = widened(body, SCREEN);
         assert!(out.contains(r#"<div class="moss-grid" data-columns="2" data-width="screen">"#), "{out}");
         assert!(out.contains(r#"<div class="band" data-width="screen">"#), "{out}");
         assert!(out.starts_with("<h2>Top</h2>"), "{out}");
@@ -87,29 +94,63 @@ mod tests {
     #[test]
     fn a_block_with_its_own_width_is_left_alone() {
         let body = r#"<div class="moss-grid" data-width="body">x</div><div class="band" data-width="wide">y</div>"#;
-        assert_eq!(screen_by_default(body), body);
+        assert_eq!(widened(body, SCREEN), body);
     }
 
     #[test]
     fn nested_and_component_blocks_are_left_alone() {
         let body = r#"<div class="band"><div class="moss-grid">in</div></div><div class="moss-gallery">g</div><div>plain</div>"#;
-        let out = screen_by_default(body);
+        let out = widened(body, SCREEN);
         assert!(out.contains(r#"<div class="moss-grid">in</div>"#), "{out}");
         assert!(out.contains(r#"<div class="moss-gallery">g</div>"#), "{out}");
         assert!(out.contains("<div>plain</div>"), "{out}");
     }
 
-    #[test]
-    fn pictures_in_a_widened_block_get_sizes_for_it() {
+    /// One `sizes` per picture, in document order.
+    fn sizes_of(html: &str) -> Vec<&str> {
+        html.split(r#"sizes=""#).skip(1).filter_map(|rest| rest.split('"').next()).collect()
+    }
+
+    /// A paragraph's picture, a two-column grid holding a picture and a card's
+    /// cover, a band's picture, and a grid the author kept at the column.
+    fn page() -> String {
         use moss_core::contract::sizes::{sizes_for_grid_cell, SIZES_BODY};
-        let cell = sizes_for_grid_cell(2, None);
-        let body = format!(
-            r#"<p><img sizes="{SIZES_BODY}"></p><div class="moss-grid" data-columns="2"><div><img sizes="{cell}"></div></div><div class="band"><picture><source sizes="{SIZES_BODY}"><img></picture></div><div class="moss-grid" data-width="body"><img sizes="{cell}"></div><p><img sizes="{SIZES_BODY}"></p>"#
+        let cell = sizes_for_grid_cell(2, None, None, None);
+        format!(
+            r#"<p><img sizes="{SIZES_BODY}"></p><div class="moss-grid" data-columns="2"><div><img sizes="{cell}"></div><a class="moss-card"><picture><source sizes="{cell}"><img></picture></a></div><div class="band"><picture><source sizes="{SIZES_BODY}"><img></picture></div><div class="moss-grid" data-width="body"><img sizes="{cell}"></div>"#
+        )
+    }
+
+    #[test]
+    fn a_screen_page_restates_a_widened_block_for_the_window_and_the_rest_for_the_column() {
+        let out = widened(&page(), SCREEN);
+        let half_window = "auto, (min-width: 48rem) calc(100vw / 2), 100vw";
+        assert_eq!(
+            sizes_of(&out),
+            [
+                "auto, (min-width: 48rem) min(1200px, 100vw), 100vw",
+                half_window,
+                half_window,
+                "auto, 100vw",
+                "auto, (min-width: 48rem) calc(min(1200px, 100vw) / 2), 100vw",
+            ],
+            "{out}"
         );
-        let out = screen_by_default(&body);
-        let sizes: Vec<&str> = out.split(r#"sizes=""#).skip(1).filter_map(|rest| rest.split('"').next()).collect();
-        let screen_cell = sizes_for_grid_cell(2, Some("screen"));
-        assert_eq!(sizes, [SIZES_BODY, screen_cell.as_str(), "auto, 100vw", cell.as_str(), SIZES_BODY], "{out}");
+    }
+
+    #[test]
+    fn a_wide_page_restates_every_picture_for_its_column() {
+        let out = apply(page(), Some("wide"));
+        let half = "auto, (min-width: 48rem) calc(min(56.25rem, 100vw) / 2), 100vw";
+        let column = "auto, (min-width: 48rem) min(56.25rem, 100vw), 100vw";
+        assert_eq!(sizes_of(&out), [column, half, half, column, half], "{out}");
+        assert!(!out.contains("data-width=\"screen\""), "{out}");
+    }
+
+    #[test]
+    fn a_page_at_the_default_column_is_untouched() {
+        assert_eq!(apply(page(), None), page());
+        assert_eq!(apply(page(), Some("unknown")), page());
     }
 
     #[test]

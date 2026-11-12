@@ -114,13 +114,13 @@ pub trait RenderHooks {
     /// Scope marker: the Grid arm of [`render_shortcode`]'s default impl
     /// calls this before rendering cell blocks (and [`end_grid_cells`]
     /// after), so an impl can scope image `sizes=` emission to the grid
-    /// CELL width instead of the content column — see
-    /// [`crate::contract::sizes::sizes_for_grid_cell`]. Calls nest for
+    /// CELL width instead of the content column: `cell_sizes` is the grid's
+    /// [`GridShortcode::cell_sizes`](super::shortcode::GridShortcode::cell_sizes). Calls nest for
     /// grids inside grid cells (inner-most wins).
     ///
     /// Default: no-op. [`DefaultHooks`] keeps a stack.
-    fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {
-        let _ = (columns, data_width);
+    fn begin_grid_cells(&self, cell_sizes: String) {
+        let _ = cell_sizes;
     }
 
     /// Close the scope opened by [`begin_grid_cells`]. Default: no-op.
@@ -984,12 +984,8 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         }
     }
 
-    fn begin_grid_cells(&self, columns: u32, data_width: Option<&str>) {
-        self.grid_cell_sizes
-            .borrow_mut()
-            .push(crate::contract::sizes::sizes_for_grid_cell(
-                columns, data_width,
-            ));
+    fn begin_grid_cells(&self, cell_sizes: String) {
+        self.grid_cell_sizes.borrow_mut().push(cell_sizes);
     }
 
     fn end_grid_cells(&self) {
