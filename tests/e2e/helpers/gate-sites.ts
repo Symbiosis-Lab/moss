@@ -1638,6 +1638,94 @@ nav: true
   },
 };
 
+// ── Header submenu ──
+// `Services` is the last header entry, so its toggle sits at the end edge of
+// the row, where an open panel is most likely to overflow. Its label is CJK
+// and its first child's label is long, so the panel is wide at a 321px
+// viewport. `Harbour` is a header folder whose child is not in the header:
+// it gets a plain link and no toggle.
+export const NAV_SUBMENU_GATE: ScratchSiteSpec = {
+  name: "nav-submenu-gate",
+  files: {
+    "index.md": `---
+title: Harbour Watch
+uid: "nsg00101"
+---
+
+# Harbour Watch
+`,
+    "poster.png": POSTER_PNG,
+    "cover.md": `---
+title: Cover
+uid: "nsg00108"
+listed: false
+---
+
+:::hero {header=over}
+![](/poster.png)
+
+Cover words
+:::
+
+Body text.
+`,
+    "About.md": `---
+title: About
+uid: "nsg00102"
+nav: true
+weight: 1
+---
+
+# About
+`,
+    "Harbour/index.md": `---
+title: Harbour
+uid: "nsg00103"
+nav: true
+weight: 2
+---
+
+# Harbour
+`,
+    "Harbour/Tides.md": `---
+title: Tides
+uid: "nsg00104"
+---
+
+# Tides
+`,
+    "Services/index.md": `---
+title: 社區保護
+uid: "nsg00105"
+nav: true
+weight: 3
+---
+
+# 社區保護
+`,
+    "Services/Patrol.md": `---
+title: Evening patrol rounds and incident reports
+uid: "nsg00106"
+nav: true
+weight: 1
+---
+
+# Patrol
+`,
+    "Services/Gate.md": `---
+title: Gate
+uid: "nsg00107"
+nav: true
+weight: 2
+---
+
+# Gate
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+  },
+};
+
 // ── Footnote `:target` landing ──
 // Two footnotes are enough to prove both directions of the fix without the
 // 152-note stress case (that belongs to the sidenote feature's own gates):

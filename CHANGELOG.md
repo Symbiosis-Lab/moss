@@ -19,6 +19,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A page with `nav: true` inside a folder whose home page is also in the nav bar is now listed in a submenu under that folder's entry, instead of as its own link in the bar. The entry stays a link with a button beside it that opens the list (keyboard and touch work, Escape closes); deeper pages join the same list. A page whose folder is not in the nav bar stays a top-level link, and a site with no such pages is unchanged.
 - A `[NOTE]` line no longer names the moss module that wrote it, and the note for a `panel=none` hero is one line per hero: the worst ratio its words (and its credit) reach with what they need, the widths and the themes, then what to do.
 - A page with link cards shows a saved edit sooner: a build no longer copies, decodes and encodes each card's picture again when the files encoded from it under the current settings are already cached.
 - moss accepts the plugin catalog only when the registry's own key signed it. A catalog or kill list served without its signature, or signed by any other key, is refused and the copy moss already has stays in force, so a mirror or a hijacked address can hold back an update but never forge one.

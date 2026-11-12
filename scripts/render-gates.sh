@@ -64,6 +64,7 @@ GATES_BUILD=(
   grid-card-no-cover
   grid-tile-scope
   nav-mobile
+  nav-submenu
   grid-mobile-collapse
   collage
   card-cover-ratio

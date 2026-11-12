@@ -112,6 +112,8 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Navigation
         "toggle_dark_mode" => ["Toggle dark mode", "Dunkelmodus umschalten", "切换深色模式", "切換深色模式"],
         "nav_menu" => ["Menu", "Menü", "菜单", "選單"],
+        // Follows the entry's label on the button that opens its submenu.
+        "nav_more" => ["more", "mehr", "更多", "更多"],
         // `[site] header = "nav"` masthead: the link list's leading item,
         // replacing the brand link that mode drops.
         "nav_home" => ["Home", "Startseite", "首页", "首頁"],

@@ -164,6 +164,7 @@ const GATE_PORT_KEYS = [
   'stream-listing',
   'series-nav',
   'card-min-token',
+  'nav-submenu',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

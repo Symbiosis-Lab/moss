@@ -2336,16 +2336,16 @@ header:has(+ .moss-hero[data-header="over"]) {
 /* Nav links and the site name set their own colour from the base sheet, which
    would stay dark over the photo; they take the header's ink back.
    The phone menu's sheet is opaque and not over the photo, so its links keep
-   their own colour. The open sheet is excluded by `.mobile-open`, a closing
+   their own colour, as does a submenu panel, which has its own background. The open sheet is excluded by `.mobile-open`, a closing
    one by `inert`, which it carries through the fade after `.mobile-open` goes. */
-header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *) {
+header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *, .nav-sub *) {
   color: inherit;
 }
 
 /* Focus rings sit on the photo, so they take the header's ink rather than the
    accent, which can fall below contrast on an image. The opened mobile sheet
-   keeps the accent ring: it is opaque, not over the photo. */
-header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *) {
+   keeps the accent ring: it is opaque, not over the photo; so does a submenu panel. */
+header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *, .nav-sub *) {
   outline-color: var(--_over-ink);
 }
 
@@ -2880,6 +2880,80 @@ body > header .site-name {
 
 .nav-links a {
   font-size: clamp(0.875rem, 0.6rem + 0.5vw, 1rem);
+}
+
+/* Second level: an entry with a submenu is a link plus a disclosure button
+   (js-src/site/nav/submenu.ts unhides the button and opens the panel). The panel clamps
+   to the viewport on both edges in script, so it needs no flip rule here. */
+.nav-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+/* A 44px square that adds no height to the row (negative block margin) and
+   tucks its trailing edge under the next entry's own hit area. */
+.nav-sub-toggle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  margin-block: -0.75rem;
+  margin-inline-end: -0.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--moss-header-ink, var(--moss-color-text-secondary));
+  cursor: pointer;
+}
+
+.nav-sub-toggle::after {
+  content: "";
+  display: block;
+  inline-size: 0.4rem;
+  block-size: 0.4rem;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: translateY(-0.1rem) rotate(45deg);
+}
+
+.nav-sub-toggle[aria-expanded="true"]::after {
+  transform: translateY(0.1rem) rotate(-135deg);
+}
+
+.nav-sub-toggle:hover {
+  color: var(--moss-color-ui-accent);
+}
+
+.nav-sub {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  z-index: 50;
+  box-sizing: border-box;
+  min-inline-size: 10rem;
+  max-inline-size: var(--nav-sub-max, none);
+  translate: var(--nav-sub-shift, 0) 0;
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0;
+  list-style: none;
+  border-radius: 6px;
+  background: var(--moss-menu-bg, var(--moss-header-bg, var(--moss-color-bg)));
+  box-shadow: var(--moss-elevation-2);
+}
+
+/* Beats `.main-nav a.active`'s underline and padding by coming later. */
+.main-nav .nav-sub a {
+  display: block;
+  padding: 0.4rem 1rem;
+  border-block-end: none;
+}
+
+/* The links already carry their own touch padding. */
+.nav-links .nav-sub a::after {
+  display: none;
 }
 
 /* The toggle cluster (search / language / theme). Its gap is the TIGHTEST of
@@ -6550,6 +6624,34 @@ article a:where(:not(.moss-btn)):focus {
      would only add scrollable overflow to the sheet. */
   .nav-links a::after {
     inset-block: 0;
+  }
+
+  /* Nothing nests without a disclosure: the toggle goes and the list shows,
+     indented under its entry. */
+  .nav-group {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .nav-sub-toggle {
+    display: none;
+  }
+
+  .nav-sub {
+    display: block;
+    position: static;
+    min-inline-size: 0;
+    max-inline-size: none;
+    translate: none;
+    margin: 0;
+    padding: 0 0 0 1rem;
+    background: none;
+    box-shadow: none;
+  }
+
+  .main-nav .nav-links .nav-sub a {
+    padding-inline: 0;
+    font-size: calc(var(--moss-menu-link-size, 1.875rem) * 0.7);
   }
 }
 
