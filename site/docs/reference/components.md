@@ -125,6 +125,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-cite-label` | instance | The citation block's label, in the page's interface language. |
 | `.moss-cite-text` | instance | The citation itself, plain text a reader can copy. |
 | `.moss-edition-rights` | instance | The site's `[site] license`, stated after the citation on every page. Absent when the site declares no licence. |
+| `.moss-members` | standalone | Public fallback for a members page: its access notice and subscribe form. Only the public preview is built; no private body is emitted, including for paid pages. |
 | `.moss-subscribe` | standalone | Newsletter subscribe block (auto-injected into footer when email channel configured). |
 | `.moss-subscribe-script` | instance | Marks the `<script>` moss injects into `<head>` when a page carries a subscribe form. It is a handle, not a styling hook — a theme or a test uses it to find (or suppress) moss's own subscribe behaviour without matching on script contents. |
 | `.moss-subscribe-form` | instance | Form element inside `.moss-subscribe`. |

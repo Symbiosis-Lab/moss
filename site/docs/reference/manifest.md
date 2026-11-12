@@ -25,7 +25,7 @@ Each plugin lives in `.moss/plugins/<name>/` inside the project.
 |---|---|---|---|
 | `name` | `string` | yes | Plugin identifier (e.g. "matters"). Must match the plugin directory name. |
 | `version` | `string` | yes | Plugin version in semver format (e.g. "1.0.0"). |
-| `entry` | `string` | no | Entry point JavaScript file path, relative to the plugin directory. Required unless the plugin declares only contributes.derivations (a pinned binary) or contributes.blocks (custom elements moss places) or contributes.public_data, which need no script. |
+| `entry` | `string` | no | Entry point JavaScript file path, relative to the plugin directory. Required unless the plugin declares only contributes.derivations (a pinned binary) or contributes.blocks (custom elements moss places) or contributes.public_data or contributes.site_settings, which need no script. |
 | `capabilities` | `string[]` | no | Hook names this plugin implements (e.g. ["process", "syndicate"]). Each must be a valid hook name. An empty or omitted capabilities field is valid (plugin implements no hooks). |
 | `description` | `string` | no | Human-readable description of what the plugin does. |
 | `author` | `string` | no | Plugin author name or contact. |

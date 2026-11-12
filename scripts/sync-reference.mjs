@@ -7,8 +7,8 @@
 //   node scripts/sync-reference.mjs --write   # rewrite stale regions in place
 //
 // The describe JSON comes from `$MOSS_BIN describe --json` (MOSS_BIN defaults to
-// `moss` on PATH). In CI, MOSS_BIN points at the pinned released binary so the
-// docs match exactly the moss version they describe.
+// `moss` on PATH). The pre-push hook and the pull-request workflow point
+// MOSS_BIN at the CLI built from the tree being checked.
 //
 // Region markers (one convention everywhere):
 //   <!-- auto:start:NAME -->
