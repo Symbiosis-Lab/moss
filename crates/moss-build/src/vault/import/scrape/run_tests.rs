@@ -1,4 +1,5 @@
 use super::*;
+use crate::vault::import::scrape::fetch::test_server;
 
 /// The gap this closes: a host's own `Retry-After` was previously
 /// ignored outright — every retry used the same blind exponential
@@ -11,7 +12,7 @@ use super::*;
 /// succeed either way.
 #[tokio::test]
 async fn a_429_with_retry_after_is_honored_before_the_retry_that_imports_the_page() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let rate_limited = server
         .mock("GET", "/page")
         .with_status(429)
@@ -54,7 +55,7 @@ async fn a_429_with_retry_after_is_honored_before_the_retry_that_imports_the_pag
 /// number of times.
 #[tokio::test]
 async fn a_429_that_never_clears_fails_after_a_bounded_number_of_attempts() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let rate_limited = server
         .mock("GET", "/stuck")
         .with_status(429)
@@ -89,7 +90,7 @@ async fn a_429_that_never_clears_fails_after_a_bounded_number_of_attempts() {
 /// credit behind.
 #[tokio::test]
 async fn a_terminal_rate_limit_paces_the_next_request_to_the_same_host() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server
@@ -211,7 +212,7 @@ async fn a_terminal_rate_limit_paces_the_next_request_to_the_same_host() {
 #[tokio::test]
 async fn a_failed_variant_of_a_confirmed_duplicate_path_is_not_stubbed_but_a_failed_new_page_still_is()
 {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let shared_body = "Shared root content for the confirmed-duplicate-path test, long \
          enough to pass the content extraction scorer reliably.";
@@ -318,7 +319,7 @@ async fn a_failed_variant_of_a_confirmed_duplicate_path_is_not_stubbed_but_a_fai
 /// and its lightbox/filter echo.
 #[tokio::test]
 async fn an_old_cms_style_path_with_no_confirmed_duplicate_still_stubs_a_failed_sibling() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let page1 = server
@@ -380,7 +381,7 @@ async fn an_old_cms_style_path_with_no_confirmed_duplicate_still_stubs_a_failed_
 /// and called it a success.
 #[tokio::test]
 async fn an_unextractable_page_is_counted_as_failed_not_written_empty() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let empty = server
         .mock("GET", "/nothing/")
         .with_status(200)
@@ -419,7 +420,7 @@ async fn an_unextractable_page_is_counted_as_failed_not_written_empty() {
 /// and calendar are content, so they are downloaded as linked files.
 #[tokio::test]
 async fn non_html_responses_are_skipped_not_written_as_pages() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let index_body = format!(
@@ -507,7 +508,7 @@ async fn non_html_responses_are_skipped_not_written_as_pages() {
 #[tokio::test]
 async fn a_failed_fetch_of_a_non_page_extension_is_not_stubbed_but_an_ordinary_failure_still_is()
 {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let index = server
@@ -598,7 +599,7 @@ async fn a_failed_fetch_of_a_non_page_extension_is_not_stubbed_but_an_ordinary_f
 /// `?dl=1` variant of a link is the same file, downloaded once.
 #[tokio::test]
 async fn a_reimport_keeps_plain_names_and_a_query_variant_is_one_file() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let _index = server
         .mock("GET", "/")
@@ -643,7 +644,7 @@ async fn a_reimport_keeps_plain_names_and_a_query_variant_is_one_file() {
 /// same as files — not only found again by moss's search fallback.
 #[tokio::test]
 async fn a_nested_pages_images_and_cover_are_page_relative() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let _home = server
         .mock("GET", "/")
@@ -687,7 +688,7 @@ async fn a_nested_pages_images_and_cover_are_page_relative() {
 /// a root-relative path to a file the folder does not serve.
 #[tokio::test]
 async fn an_image_that_is_embedded_and_linked_is_one_file_with_both_references_local() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let _index = server
         .mock("GET", "/")
@@ -726,7 +727,7 @@ async fn an_image_that_is_embedded_and_linked_is_one_file_with_both_references_l
 /// keyed identically by both passes: one request, one file.
 #[tokio::test]
 async fn an_image_with_a_query_embedded_and_linked_is_downloaded_once() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let _index = server
         .mock("GET", "/")
@@ -762,7 +763,7 @@ async fn an_image_with_a_query_embedded_and_linked_is_downloaded_once() {
 /// original.
 #[tokio::test]
 async fn an_oversized_linked_file_is_counted_on_its_own_and_keeps_its_link() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let _index = server
         .mock("GET", "/")
@@ -802,7 +803,7 @@ async fn an_oversized_linked_file_is_counted_on_its_own_and_keeps_its_link() {
 /// relative to the page that holds the link.
 #[tokio::test]
 async fn linked_files_are_downloaded_once_and_linked_relative_to_each_page() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let home = server
@@ -892,7 +893,7 @@ async fn linked_files_are_downloaded_once_and_linked_relative_to_each_page() {
 /// no such signal at all.
 #[tokio::test]
 async fn a_capped_crawl_reports_the_cap_and_the_leftover_count() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let index_body = format!(
@@ -972,7 +973,7 @@ async fn a_capped_crawl_reports_the_cap_and_the_leftover_count() {
 /// real pages import and the crawl finishes clean.
 #[tokio::test]
 async fn canonical_duplicates_are_not_written_and_do_not_consume_the_cap() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let gallery = server
@@ -1064,7 +1065,7 @@ async fn canonical_duplicates_are_not_written_and_do_not_consume_the_cap() {
 /// deterministic.
 #[tokio::test]
 async fn no_canonical_but_identical_body_at_the_same_path_is_a_duplicate() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let shared_body = "Shared identical content for the duplicate-body dedup test, \
          long enough to pass the content extraction scorer reliably.";
@@ -1134,7 +1135,7 @@ async fn no_canonical_but_identical_body_at_the_same_path_is_a_duplicate() {
 /// shape a "coming soon" location stub takes — must both import.
 #[tokio::test]
 async fn identical_body_at_different_paths_both_import() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let stub_body = "Coming soon — check back later.";
 
@@ -1198,7 +1199,7 @@ async fn identical_body_at_different_paths_both_import() {
 /// this fix, not a deletion candidate.
 #[tokio::test]
 async fn distinct_query_string_pages_with_self_canonicals_both_import() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let page1 = server
@@ -1260,7 +1261,7 @@ async fn distinct_query_string_pages_with_self_canonicals_both_import() {
 /// either URL. This page's own content must survive regardless.
 #[tokio::test]
 async fn a_page_is_written_when_its_own_canonical_target_later_fails_to_fetch() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     // The start URL's own path is the crawl root ("/"), which is the
@@ -1319,7 +1320,7 @@ async fn a_page_is_written_when_its_own_canonical_target_later_fails_to_fetch() 
 
 #[tokio::test]
 async fn a_sitemap_index_followed_by_a_sitemap_seeds_unlinked_pages() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server
@@ -1395,7 +1396,7 @@ async fn a_sitemap_index_followed_by_a_sitemap_seeds_unlinked_pages() {
 
 #[tokio::test]
 async fn sitemap_urls_beyond_the_link_cap_are_still_imported() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server
@@ -1489,7 +1490,7 @@ async fn a_sitemap_url_wins_survivor_choice_over_a_link_discovered_duplicate() {
     // ahead of link-discovered ones means `/about` is written FIRST,
     // so rule 1 (compares only against identities already WRITTEN)
     // now correctly makes `/aboutus` the duplicate instead.
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server
@@ -1567,7 +1568,7 @@ async fn a_sitemap_url_wins_survivor_choice_over_a_link_discovered_duplicate() {
 
 #[tokio::test]
 async fn no_sitemap_gives_unchanged_behavior() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server.mock("GET", "/robots.txt").with_status(404).create_async().await;
@@ -1623,7 +1624,7 @@ async fn a_gzip_compressed_sitemap_is_still_discovered() {
     use flate2::Compression;
     use std::io::Write;
 
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let sitemap_xml = format!(
@@ -1697,7 +1698,7 @@ async fn a_gzip_compressed_sitemap_is_still_discovered() {
 /// never even be fetched.
 #[tokio::test]
 async fn sitemap_locale_alternates_collapse_to_one_representative() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server
@@ -1800,7 +1801,7 @@ async fn sitemap_locale_alternates_collapse_to_one_representative() {
 /// anyway. It must never be fetched via this path either.
 #[tokio::test]
 async fn a_link_discovered_locale_alternate_is_never_fetched() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server
@@ -1878,7 +1879,7 @@ async fn a_link_discovered_locale_alternate_is_never_fetched() {
 /// that links to the real alternate — must still be crawled normally.
 #[tokio::test]
 async fn a_link_to_a_non_alternate_page_under_the_same_locale_prefix_is_still_followed() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
 
     let robots = server
@@ -1962,7 +1963,7 @@ async fn a_link_to_a_non_alternate_page_under_the_same_locale_prefix_is_still_fo
 /// dropped and counted — and neither leaves a trace in the written page.
 #[tokio::test]
 async fn widget_counts_reach_the_scrape_result() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let index = server
         .mock("GET", "/")
@@ -2004,7 +2005,7 @@ async fn widget_counts_reach_the_scrape_result() {
 /// `events/2026/one.md`), which is why the decision is made after the crawl.
 #[tokio::test]
 async fn a_recursive_crawl_marks_folder_indexes_children_false_and_leaves_leaves_alone() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let page = |links: &str| {
         format!(
             "<html><body><article><p>Page body, long enough to be extracted as content \
@@ -2049,7 +2050,7 @@ async fn a_recursive_crawl_marks_folder_indexes_children_false_and_leaves_leaves
 /// crawl strips it from those once it has seen them all.
 #[tokio::test]
 async fn a_title_segment_shared_by_every_crawled_page_is_stripped() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let page = |title: &str, links: &str| {
         format!(
             "<html><head><title>{title}</title></head><body><article><p>Page body, long \
@@ -2090,7 +2091,7 @@ async fn a_title_segment_shared_by_every_crawled_page_is_stripped() {
 /// same heading prints it twice. The heading goes; a later heading stays.
 #[tokio::test]
 async fn a_body_heading_repeating_the_title_is_not_imported() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let page = server
         .mock("GET", "/about")
         .with_status(200)
@@ -2188,7 +2189,7 @@ fn a_link_is_relative_to_the_page_that_holds_it() {
 /// link from a nested leaf names the file that exists.
 #[tokio::test]
 async fn a_page_with_nothing_under_it_is_a_file_and_links_follow_the_final_paths() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let pages = [
         ("/", leaf_page("Example Journal", &format!("<a href=\"{base}/notes/\">N</a> <a href=\"{base}/about/\">A</a>"))),
@@ -2233,7 +2234,7 @@ async fn a_page_with_nothing_under_it_is_a_file_and_links_follow_the_final_paths
 /// of two pages must leave the posts out of the bar.
 #[tokio::test]
 async fn leaf_pages_that_become_root_level_files_stay_out_of_the_nav_bar() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let home = format!(
         "<html><head><title>Example Journal</title></head><body><header><nav>\
@@ -2265,7 +2266,7 @@ async fn leaf_pages_that_become_root_level_files_stay_out_of_the_nav_bar() {
 /// into a nav item just because the site has a content folder.
 #[tokio::test]
 async fn a_site_without_a_menu_gets_no_nav_bar_from_its_root_level_leaves() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let home = format!(
         "<html><head><title>Example Journal</title></head><body><article><p>{LEAF_BODY} \
@@ -2310,7 +2311,7 @@ fn links_in_code_and_to_pages_the_import_did_not_write_are_left_alone() {
 /// the in-scope rewrite instead of becoming part of the destination path.
 #[tokio::test]
 async fn a_titled_in_scope_link_keeps_its_title_out_of_the_rewritten_path() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let page = |links: &str| {
         format!(
@@ -2356,7 +2357,7 @@ async fn a_titled_in_scope_link_keeps_its_title_out_of_the_rewritten_path() {
 /// builder's markup, so a cart URL the author links from the body still works.
 #[tokio::test]
 async fn a_builders_cart_link_in_the_header_is_not_crawled_or_stubbed() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let header = "<header><a href=\"/cart\" class=\"sqs-custom-cart icon--cart\">Cart</a></header>";
     let page = |title: &str, extra: &str| {
         format!(
@@ -2386,7 +2387,7 @@ async fn a_builders_cart_link_in_the_header_is_not_crawled_or_stubbed() {
 /// The same URL linked from the article body is an ordinary link and is followed.
 #[tokio::test]
 async fn a_cart_url_linked_from_the_body_is_still_crawled() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let home = leaf_page("Example Home", "<a href=\"/cart\">Our cart of crafts</a>");
     let mut mocks = Vec::new();
     for (path, body) in [("/", home), ("/cart", leaf_page("Cart of crafts", ""))] {
@@ -2473,7 +2474,7 @@ fn a_composed_note_drops_the_platforms_own_ref_tag_from_outbound_links() {
 /// is requested.
 #[tokio::test]
 async fn a_tracking_link_is_rewritten_to_its_destination() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let _page = server
         .mock("GET", "/")
@@ -2531,7 +2532,7 @@ async fn a_tracking_link_is_rewritten_to_its_destination() {
 /// The crawl carries a page's listing signal to the pass that knows the tags.
 #[tokio::test]
 async fn a_crawled_tag_archive_claims_its_tag() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let body = "<p>Intro paragraph, long enough to be extracted as the content of this page.</p>";
     let mut serve = |path: &str, html: String| {
@@ -2571,7 +2572,7 @@ async fn a_crawled_tag_archive_claims_its_tag() {
 /// as a page that left the site.
 #[tokio::test]
 async fn a_start_url_that_leaves_its_host_is_not_counted_as_leaving_the_site() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _start = server.mock("GET", "/").with_status(302).with_header("Location", "http://localhost:1/home").create_async().await;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -2584,7 +2585,7 @@ async fn a_start_url_that_leaves_its_host_is_not_counted_as_leaving_the_site() {
 
 #[tokio::test]
 async fn reserved_paths_keep_scoped_encoded_links_and_collision_fragments() {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let root = "/field%20notes/";
     let first = format!("{base}{root}entry?p=1");
@@ -2635,7 +2636,7 @@ async fn reserved_paths_keep_scoped_encoded_links_and_collision_fragments() {
 #[tokio::test]
 async fn reserved_paths_preserve_case_and_unicode_equivalent_pages() {
     use moss_core::content_graph::normalize_path;
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let base = server.url();
     let routes = ["About", "about", "caf%C3%A9", "cafe%CC%81", "ABOUT?p=1", "ABOUT?p=2"];
     let mut mocks = Vec::new();
@@ -2693,7 +2694,7 @@ async fn reserved_paths_ignore_unreadable_unrelated_directories() {
         }
     }
 
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let _home = server.mock("GET", "/").with_status(200)
         .with_header("content-type", "text/html")
         .with_body(leaf_page("Home", "<a href=\"/post/\">Read the post</a>"))

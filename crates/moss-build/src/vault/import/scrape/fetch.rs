@@ -69,6 +69,17 @@ fn parse_retry_after(value: &str) -> Option<std::time::Duration> {
     (secs > 0).then(|| std::time::Duration::from_secs(secs as u64).min(MAX_RETRY_AFTER))
 }
 
+/// Debug builds only: let imports reach this machine, for a local test
+/// server. A process flag rather than the environment variable, which a test
+/// cannot set while other tests' threads read the environment.
+#[cfg(debug_assertions)]
+pub fn allow_loopback() {
+    ALLOW_LOOPBACK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(debug_assertions)]
+static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Refuse a URL that is not a plain `http`/`https` request to a public host.
 ///
 /// The import path hands `start_url` (and, via [`fetch_with_validated_redirects`],
@@ -87,17 +98,6 @@ fn parse_retry_after(value: &str) -> Option<std::time::Duration> {
 /// resolves to a loopback/link-local address only at connect time — is NOT
 /// covered here; that needs a connect-time check inside the fetch itself,
 /// out of scope for this string-level gate.
-/// Debug builds only: let imports reach this machine, for a local test
-/// server. A process flag rather than the environment variable, which a test
-/// cannot set while other tests' threads read the environment.
-#[cfg(debug_assertions)]
-pub fn allow_loopback() {
-    ALLOW_LOOPBACK.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(debug_assertions)]
-static ALLOW_LOOPBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
     let url = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
     match url.scheme() {
@@ -198,9 +198,61 @@ fn fetch_with_validated_redirects(
     referer: Option<&str>,
     scope: Option<&UrlScope>,
 ) -> Result<ureq::Response, ureq::Error> {
-    fetch_following_redirects(agent, start_url, user_agent, accept, referer, refuse_unsafe_scrape_url, |next| {
+    fetch_following_redirects(agent, start_url, user_agent, accept, referer, import_policy, |next| {
         scope.is_some_and(|scope| leaves_site(scope, next))
     })
+}
+
+/// [`refuse_unsafe_scrape_url`], except in this crate's own tests, where the
+/// loopback servers they started with [`test_server`] are let through. Any
+/// other address, loopback included, still meets the real policy.
+fn import_policy(url: &str) -> Result<(), String> {
+    #[cfg(test)]
+    if test_servers::started(url) {
+        return Ok(());
+    }
+    refuse_unsafe_scrape_url(url)
+}
+
+/// A mockito server the import may fetch from. mockito keeps its servers
+/// bound for the life of the process, so a registered port never passes to
+/// another listener.
+#[cfg(test)]
+pub(crate) async fn test_server() -> mockito::ServerGuard {
+    let server = mockito::Server::new_async().await;
+    test_servers::STARTED.lock().unwrap().insert(server.host_with_port());
+    server
+}
+
+/// A loopback address no test registered, answering every request with an
+/// empty 200, and how many requests reached it.
+#[cfg(test)]
+pub(crate) fn unregistered_loopback_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = hits.clone();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = stream.read(&mut [0; 4096]);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+    });
+    (address, hits)
+}
+
+#[cfg(test)]
+mod test_servers {
+    pub(super) static STARTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+    pub(super) fn started(url: &str) -> bool {
+        let Ok(url) = url::Url::parse(url) else { return false };
+        let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else { return false };
+        STARTED.lock().unwrap().contains(&format!("{host}:{port}"))
+    }
 }
 
 /// Whether `next` is a contact address or an http(s) URL off the site.

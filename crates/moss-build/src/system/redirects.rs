@@ -11,7 +11,9 @@ pub(crate) const MAX_REDIRECT_HOPS: u32 = 5;
 
 /// `agent.get(start_url)`, resolving each `Location` against the URL that sent
 /// it, passing it through `rewrite`, then to `validate` before it is requested.
-/// A refused hop or an over-long chain is `Err(Status(400, ..))` carrying the
+/// `start_url` goes to `validate` too, before the first request: callers fetch
+/// addresses taken from a page's own content.
+/// A refused address or an over-long chain is `Err(Status(400, ..))` carrying the
 /// reason in its status text; a 3xx with no usable `Location` is returned as-is.
 ///
 /// `accept` and `referer` are sent on every hop.
@@ -48,6 +50,9 @@ pub(crate) fn get_following_redirects(
         )
     };
 
+    if let Err(msg) = validate(start_url) {
+        return Err(refused(&format!("disallowed URL: {msg}")));
+    }
     let mut current = start_url.to_string();
     let mut visited = vec![current.clone()];
     for _ in 0..=MAX_REDIRECT_HOPS {

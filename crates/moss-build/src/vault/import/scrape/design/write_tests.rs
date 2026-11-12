@@ -156,6 +156,20 @@ async fn an_existing_footer_and_favicon_are_left_alone() {
 }
 
 #[tokio::test]
+async fn a_logo_or_icon_on_loopback_is_never_requested() {
+    let (tmp, written) = folder();
+    let (loopback, hits) = crate::vault::import::scrape::fetch::unregistered_loopback_server();
+    let mut f = facts();
+    f.logo = Some(format!("{loopback}/logo.png"));
+    f.favicon = Some(Icon { url: format!("{loopback}/icon.png"), kind: IconKind::Png });
+
+    let summary = run(tmp.path(), &written, &f).await;
+
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!((summary.logo, summary.favicon), (ChromePart::NotFound, ChromePart::NotFound));
+}
+
+#[tokio::test]
 async fn footer_links_to_written_pages_become_note_links() {
     let (tmp, written) = folder();
     let mut f = facts();

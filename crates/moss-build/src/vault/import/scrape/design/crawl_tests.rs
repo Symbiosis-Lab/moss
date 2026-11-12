@@ -2,6 +2,7 @@
 //! files the crawl left behind.
 
 use std::path::Path;
+use crate::vault::import::scrape::fetch::test_server;
 
 use super::super::run::scrape_to_folder;
 use super::super::service::ScrapeConfig;
@@ -44,7 +45,7 @@ struct Site {
 }
 
 async fn site(pages: &[(&str, String)], files: &[(&str, &str)]) -> Site {
-    let mut server = mockito::Server::new_async().await;
+    let mut server = test_server().await;
     let mut mocks = Vec::new();
     for (path, body) in pages {
         mocks.push(
