@@ -8,3 +8,6 @@
 
 pub mod download;
 pub mod portable;
+
+#[cfg(test)]
+pub(crate) mod redirect_tests;

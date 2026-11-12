@@ -5,7 +5,7 @@
 
 use rquickjs::{Ctx, Exception, Object, Result, function::Async, prelude::Func};
 
-use crate::plugins::runtime::download::{do_http_request_full, FetchMethod};
+use crate::plugins::runtime::download::{do_http_request_full, FetchMethod, Redirect};
 
 /// Build the Response object from a completed FetchFull.
 ///
@@ -78,7 +78,7 @@ pub fn install_fetch(ctx: &Ctx<'_>) -> Result<()> {
     Ok(())
 }
 
-/// fetch(url, init?) -> Promise<Response>. init = { method?, headers?, body? }.
+/// fetch(url, init?) -> Promise<Response>. init = { method?, headers?, body?, redirect? }.
 ///
 /// All JS access (reading `init`) happens BEFORE the `do_http_request_full(...).await`
 /// — no JS handle is touched after the I/O await (async-lock discipline).
@@ -87,13 +87,19 @@ async fn host_fetch<'js>(
     url: String,
     init: rquickjs::function::Opt<Object<'js>>,
 ) -> Result<Object<'js>> {
-    let (method_str, headers, body) = match init.0 {
-        None => ("GET".to_string(), None, None),
+    let (method_str, headers, body, redirect) = match init.0 {
+        None => ("GET".to_string(), None, None, Redirect::Follow),
         Some(obj) => {
             let m: Option<String> = obj.get("method").ok();
             let b: Option<String> = obj.get("body").ok();
             let h: Option<std::collections::HashMap<String, String>> = obj.get("headers").ok();
-            (m.unwrap_or_else(|| "GET".into()).to_uppercase(), h, b)
+            let redirect = match obj.get::<_, Option<String>>("redirect")?.as_deref() {
+                None | Some("follow") => Redirect::Follow,
+                Some("error") => Redirect::Error,
+                Some("manual") => Redirect::Manual,
+                Some(_) => return Err(Exception::throw_type(&ctx, "redirect must be follow, error or manual")),
+            };
+            (m.unwrap_or_else(|| "GET".into()).to_uppercase(), h, b, redirect)
         }
     };
     let method = match method_str.as_str() {
@@ -104,7 +110,7 @@ async fn host_fetch<'js>(
         "DELETE" => FetchMethod::Delete,
         other => return Err(Exception::throw_type(&ctx, &format!("Unsupported method: {other}"))),
     };
-    let full = do_http_request_full(url, method, headers, Some(30_000))
+    let full = do_http_request_full(url, method, headers, Some(30_000), redirect)
         .await
         .map_err(|e| Exception::throw_message(&ctx, &e))?;
     build_response(&ctx, full.status, full.ok, full.headers, full.body)
@@ -138,6 +144,32 @@ pub(crate) mod tests {
             }
         });
         port
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fetch_redirect_options_reach_the_transport() {
+        use crate::plugins::runtime::redirect_tests::RedirectServer;
+        for (option, expected, requests) in [("error", "rejected", 0), ("manual", "302", 0), ("follow", "200", 1), ("", "200", 1)] {
+            let server = RedirectServer::new(302);
+            let url = server.url.clone();
+            let local = tokio::task::LocalSet::new();
+            let result: String = local.run_until(async move {
+                let rt = AsyncRuntime::new().unwrap();
+                let ctx = AsyncContext::full(&rt).await.unwrap();
+                async_with!(ctx => |ctx| {
+                    install_fetch(&ctx).unwrap();
+                    let redirect = if option.is_empty() { String::new() } else { format!(", redirect: '{option}'") };
+                    let code = format!("let outcome; try {{ outcome = String((await fetch('{url}', {{method: 'POST', body: 'payload'{redirect}}})).status); }} catch (e) {{ outcome = 'rejected'; }} outcome");
+                    let promise: rquickjs::Promise = ctx.eval_promise(code.as_bytes()).unwrap();
+                    let envelope: Object = promise.into_future().await.unwrap();
+                    envelope.get("value").unwrap()
+                }).await
+            }).await;
+            let (body, actual) = server.finish();
+            assert_eq!(body, "payload");
+            assert_eq!(actual, requests, "{option}");
+            assert_eq!(result, expected, "{option}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

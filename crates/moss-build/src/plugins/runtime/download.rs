@@ -455,6 +455,15 @@ pub(crate) enum FetchMethod {
     Delete,
 }
 
+/// Fetch redirect policy, enforced before a second request can be sent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Redirect {
+    #[default]
+    Follow,
+    Error,
+    Manual,
+}
+
 /// Full HTTP result with ALL response headers (lowercased keys) for the fetch
 /// shim's case-insensitive Headers.get (X-OAuth-Scopes at auth.ts:150).
 pub(crate) struct FetchFull {
@@ -469,6 +478,7 @@ pub(crate) async fn do_http_request_full(
     method: FetchMethod,
     req_headers: Option<std::collections::HashMap<String, String>>,
     timeout_ms: Option<u64>,
+    redirect: Redirect,
 ) -> Result<FetchFull, String> {
     use std::time::Duration;
     if url.is_empty() { return Err("URL cannot be empty".to_string()); }
@@ -479,7 +489,11 @@ pub(crate) async fn do_http_request_full(
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000));
     let url_c = url.clone();
     tokio::task::spawn_blocking(move || {
-        let agent = crate::system::proxy::proxied_ureq_agent(&url_c, timeout);
+        let agent = if redirect == Redirect::Follow {
+            crate::system::proxy::proxied_ureq_agent(&url_c, timeout)
+        } else {
+            crate::system::proxy::proxied_ureq_agent_no_redirects(&url_c, timeout)
+        };
         let mut req = match &method {
             FetchMethod::Get => agent.get(&url_c),
             FetchMethod::Head => agent.head(&url_c),
@@ -507,6 +521,9 @@ pub(crate) async fn do_http_request_full(
         match resp {
             Ok(r) => {
                 let status = r.status();
+                if redirect == Redirect::Error && (300..400).contains(&status) {
+                    return Err(format!("redirect refused (HTTP {status})"));
+                }
                 let ok = (200..300).contains(&status);
                 let mut headers = std::collections::HashMap::new();
                 for name in r.headers_names() {
@@ -546,15 +563,15 @@ mod fetch_full_tests {
     use super::*;
     #[tokio::test]
     async fn rejects_empty_and_bad_scheme() {
-        assert!(do_http_request_full("".into(), FetchMethod::Get, None, None).await.is_err());
-        assert!(do_http_request_full("ftp://x".into(), FetchMethod::Get, None, None).await.is_err());
+        assert!(do_http_request_full("".into(), FetchMethod::Get, None, None, Redirect::Follow).await.is_err());
+        assert!(do_http_request_full("ftp://x".into(), FetchMethod::Get, None, None, Redirect::Follow).await.is_err());
     }
     // A live HEAD against a stable endpoint proves HEAD + header capture (network).
     // Gate behind MOSS_NET_TESTS so CI without network still passes.
     #[tokio::test]
     async fn head_and_headers_when_net_available() {
         if std::env::var("MOSS_NET_TESTS").is_err() { return; }
-        let r = do_http_request_full("https://api.github.com".into(), FetchMethod::Head, None, Some(5000)).await.unwrap();
+        let r = do_http_request_full("https://api.github.com".into(), FetchMethod::Head, None, Some(5000), Redirect::Follow).await.unwrap();
         assert!(r.status > 0);
         assert!(r.headers.keys().all(|k| k == &k.to_lowercase()));
     }
