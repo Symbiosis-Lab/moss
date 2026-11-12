@@ -18,6 +18,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A `[NOTE]` line no longer names the moss module that wrote it, and the note for a `panel=none` hero is one line per hero: the worst ratio its words (and its credit) reach with what they need, the widths and the themes, then what to do.
 - A page with link cards shows a saved edit sooner: a build no longer copies, decodes and encodes each card's picture again when the files encoded from it under the current settings are already cached.
 - moss accepts the plugin catalog only when the registry's own key signed it. A catalog or kill list served without its signature, or signed by any other key, is refused and the copy moss already has stays in force, so a mirror or a hijacked address can hold back an update but never forge one.
 - A picture on the line after a paragraph's text, or before it, with no blank line between, is its own paragraph, as if the blank line were there, and several picture lines together make a row. An italic line under the picture stays its caption. Without one, a standard-markdown picture's alt text stays alt text and does not become a caption, while a wiki embed's pipe text is its caption, as on its own line. A picture that shares its line with words stays in the text. A picture split out this way can now be a page's social card or a list's cover.
@@ -30,6 +31,10 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A hero with `panel=auto` or `panel=none` is read only where its words are: an ordinary hero's words box as wide and tall as its words, or the `--moss-hero-content-width` a theme sets, and on a phone only with `mobile=overlay`, where the words are over the picture. A dark patch the words never reach no longer keeps their panel or puts a note in the build.
+- A hero with `header=over align=top` sets its words below the site header, on a phone with `mobile=overlay` and from 48rem, instead of under it.
+- A picture in `footer.md` fits the page's width; one wider than a phone used to widen the whole page sideways.
+- A faded closing picture (`fade=top`) with a `max-height=` is that tall on a phone too, and grows there only as far as its words and the room below them need. Before, a phone gave it at least 38rem whatever the cap, so a footer picture capped at 400px stood 608px tall on a phone, with or without words.
 - A folder embed (`![[Notes-src/|limit:1]]`) or `more:` naming a folder whose home sets a different `url:` now finds it, and the embed draws its "More →" link to the folder's address; before, the embed listed nothing or lost the link. A folder with a non-ASCII name and an ASCII `url:` works the same.
 - A hero's words still sit on their tinted panel, but the panel's edge now fades into the picture over 2.5rem on every side that faces it, instead of cutting the picture with a hard line. On a phone under `mobile=overlay`, or wherever a theme widens the words' box, that edge used to read as a dark band across the photo. The words stay on the solid panel, so their contrast is unchanged. `--moss-hero-panel-feather` sets the fade's width, and `0px` restores the hard edge; a theme that clears the panel (`background: none` on `.moss-hero-content`) gets no fade.
 - The Previous, Next and folder links of a series point at a page's clean address (`/letters/second/`), like every other link moss writes, instead of its `index.html`.

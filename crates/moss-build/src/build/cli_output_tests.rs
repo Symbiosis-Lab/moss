@@ -597,7 +597,7 @@ fn built_summary_names_pages_partials_and_problems() {
 #[test]
 fn a_note_prints_but_does_not_count_as_a_problem() {
     let note = log::Record::builder().level(log::Level::Warn).target("moss_build::x#note").args(format_args!("a")).build();
-    assert_eq!(log_line_for(&note), Some(("[NOTE] moss_build::x: a".to_string(), false)));
+    assert_eq!(log_line_for(&note), Some(("[NOTE] a".to_string(), false)));
     super::note_built(3, 0);
     super::note_cli_note();
     assert_eq!(super::take_built(), Some((3, 0, 1)));

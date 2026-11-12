@@ -1518,7 +1518,7 @@ const CORE: &[ComponentEntry] = &[
                 name: "data-fade",
                 values: &["top"],
                 default: "",
-                description: "Closing picture only, from `fade=top`: the picture's top fades into the page colour, over 38% of the box (half of it on a phone, where the box keeps at least 38rem so the words sit on the faded top), through a mask on the picture itself, so the words above it stay solid. The credit stays at the foot.",
+                description: "Closing picture only, from `fade=top`: the picture's top fades into the page colour, over 38% of the box (half of it on a phone, where the box is 38rem tall unless `max-height=` sets it, and grows to hold the words, so they sit on the faded top), through a mask on the picture itself, so the words above it stay solid. The credit stays at the foot.",
             },
             DataAttr {
                 name: "data-panel",

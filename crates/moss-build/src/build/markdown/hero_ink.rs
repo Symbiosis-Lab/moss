@@ -140,13 +140,13 @@ impl Layout {
 
     /// How far across the picture the words box can reach, as a share of the
     /// width, at the layout's narrowest window (768px and 1280px). A hero's
-    /// box is 600px from the start; a closing picture's starts where the page's
+    /// box starts at the edge ([`Type::ordinary`]); a closing picture's starts where the page's
     /// text column does, less the box's own padding, as [`Type`] sets it.
     fn box_share(self, closing: bool, theme: &TypeTheme, page: Page) -> f32 {
         let width = self.widths().0;
         match (self, closing) {
             (Layout::Narrow, _) => 1.0,
-            (_, false) => 600.0 / width,
+            (_, false) => Type::ordinary(width, theme).box_px / width,
             (_, true) => page.lanes().iter().map(|lane| Type::at(width, theme, page.column, *lane)).map(|t| (t.inset - t.pad + t.box_px) / width).fold(0.0, f32::max),
         }
     }
@@ -235,24 +235,37 @@ pub struct Frame {
     /// `object-position` as fractions.
     position: (f32, f32),
     max_height: Option<moss_core::media::MaxHeight>,
-    /// `fade=top`: the page shows through the top, and a phone's box keeps
-    /// [`PHONE_FADE_FLOOR_PX`].
+    /// `fade=top`: the page shows through the top, and a phone's box is
+    /// [`PHONE_FADE_FLOOR_PX`] tall unless capped.
     pub faded: bool,
     /// A closing picture, whose box is its own shape or its cap. An ordinary
     /// hero's box is [`DESKTOP_BOX_RATIO`] of the width from 48rem.
     pub closing: bool,
+    /// Whether a phone lays the words over the picture (`mobile=overlay`, which
+    /// a closing picture always has) rather than below it.
+    phone: bool,
+    /// How far below the box's top the words start with `align=top`: the
+    /// header's band under `header=over`.
+    top_clear: f32,
     /// What the words and the credit say, as widths ([`Words`]): they set how
     /// many lines each takes and so where the glyphs land.
     words: Words,
     /// The theme's changes to the type the words are set in.
     theme: TypeTheme,
+    /// The colophon's row on a phone, which the box keeps below the room under the words.
+    strip: f32,
 }
 
-/// A faded closing picture's least height on a phone (38rem), so its words
-/// sit on the faded top.
+/// A faded closing picture's height on a phone without a cap (38rem), so its
+/// words sit on the faded top.
 pub const PHONE_FADE_FLOOR_PX: f32 = 608.0;
+/// The band a header laid over a hero sits in (`--moss-hero-wash-size`, 6rem),
+/// which top-aligned words start below.
+const HEADER_BAND_PX: f32 = 96.0;
 /// A phone's box is never under 18rem.
 const PHONE_FLOOR_PX: f32 = 288.0;
+/// The least room a phone keeps clear below a closing picture's words (11rem).
+const PHONE_ROOM_PX: f32 = 176.0;
 
 impl Frame {
     /// The frame `position`, `max_height`, `align` and `fade=top` make. The
@@ -265,32 +278,54 @@ impl Frame {
             None if closing && align == Some("top") => (0.5, 1.0),
             None => (0.5, 0.0),
         };
-        Frame { position, max_height: max_height.filter(|_| closing), faded: faded && closing, closing, words, theme: TypeTheme::default() }
+        Frame { position, max_height: max_height.filter(|_| closing), faded: faded && closing, closing, phone: closing, top_clear: 0.0, words, theme: TypeTheme::default(), strip: 0.0 }
+    }
+
+    /// The same frame with its words starting below a header laid over the picture.
+    pub fn under_header(self, under: bool) -> Self {
+        Frame { top_clear: if under { HEADER_BAND_PX } else { 0.0 }, ..self }
+    }
+
+    /// The same frame with its words over the picture on a phone too.
+    pub fn over_on_phone(self, over: bool) -> Self {
+        Frame { phone: self.phone || over, ..self }
     }
 
     /// The frame on a page whose theme is `ground`.
     fn on(self, ground: &PageGround) -> Self {
-        Frame { theme: ground.type_theme, ..self }
+        Frame { theme: ground.type_theme, strip: if ground.colophon { colophon_px(Layout::Narrow, ground.credit) } else { 0.0 }, ..self }
     }
 
     /// The frame of a hero read straight from its fence.
     pub fn of(hero: &moss_core::ast::HeroShortcode, closing: bool) -> Self {
         let position = moss_core::media::parse_media_attrs(&hero.attrs).position;
         Frame::new(position, hero.max_height, hero.align.as_deref(), hero.fade.as_deref() == Some("top"), closing, Words::read(&hero.overlay, &moss_core::ast::plain_text::inlines_to_plain_text(&hero.caption)))
+            .over_on_phone(hero.mobile.as_deref() == Some("overlay"))
+            .under_header(hero.header.as_deref() == Some("over") && hero.align.as_deref() == Some("top") && !closing)
     }
 
     /// The box's height at `width` px in `layout`. A phone's box without the
     /// fade is set by its words and the room below them; it is taken as the
-    /// picture's own shape, or the floor if that is taller.
+    /// picture's own shape, or the floor if that is taller. A faded one is its
+    /// cap, or [`PHONE_FADE_FLOOR_PX`], unless the words need more.
     fn box_height(&self, aspect: f32, layout: Layout, width: f32) -> f32 {
         let natural = width * aspect.max(0.01);
         let cap = self.max_height.map(|c| c.px(width));
         match layout {
-            Layout::Narrow if self.faded => cap.unwrap_or(0.0).max(PHONE_FADE_FLOOR_PX),
+            Layout::Narrow if self.faded => cap.unwrap_or(PHONE_FADE_FLOOR_PX).max(self.phone_need(aspect, width)),
             Layout::Narrow => natural.max(cap.unwrap_or(PHONE_FLOOR_PX)),
             _ if self.closing => cap.unwrap_or(natural),
             _ => DESKTOP_BOX_RATIO * width,
         }
+    }
+
+    /// How tall a phone's box must be for what site.css stacks in it: the
+    /// words with their box's padding, the room below them (half the picture's
+    /// own height, at least 11rem) and the colophon's row.
+    fn phone_need(&self, aspect: f32, width: f32) -> f32 {
+        let at = Type::at(width, &self.theme, Column::Default, false);
+        let words = at.blocks(&self.words).last().map_or(0.0, |b| b.rows.1 + at.pad);
+        words + (0.5 * aspect * width).max(PHONE_ROOM_PX) + self.strip
     }
 
     /// The picture under the box rows `rows(width, height)` and columns
@@ -353,18 +388,24 @@ pub fn words_spot(align: Option<&str>, aspect: f32, layout: Layout, frame: &Fram
         });
         return Spot(areas.collect());
     }
-    let cols = move |_, _| match align {
-        _ if layout == Layout::Narrow => (0.0, 1.0),
-        Some("end") => (1.0 - share, 1.0),
-        Some("center") => {
-            let share = layout.box_share(false, &frame.theme, page);
-            ((1.0 - share) / 2.0, (1.0 + share) / 2.0)
+    // An ordinary hero's words box is as big as its words where the build reads them all.
+    let extent = move |width: f32| (!frame.closing && said && !frame.words.unmodelled && !frame.theme.resized).then(|| Type::ordinary(width, &frame.theme).extent(&frame.words, &frame.theme));
+    let cols = move |width: f32, _| {
+        let share = extent(width).map_or(share, |(wide, _)| (wide / width).min(share));
+        match align {
+            _ if layout == Layout::Narrow => (0.0, 1.0),
+            Some("end") => (1.0 - share, 1.0),
+            Some("center") => {
+                let share = extent(width).map_or_else(|| layout.box_share(false, &frame.theme, page), |_| share);
+                ((1.0 - share) / 2.0, (1.0 + share) / 2.0)
+            }
+            _ => (0.0, share),
         }
-        _ => (0.0, share),
     };
-    let rows = |_, height: f32| {
+    let rows = move |width: f32, height: f32| {
         let share = if frame.closing && layout != Layout::Narrow { (WORDS_PX / height).min(WORDS_SHARE) } else { WORDS_SHARE };
-        words_span(align, share)
+        // Below a header the band is read with the words, which start under it.
+        words_span(align, extent(width).map_or(share, |(_, tall)| ((tall + frame.top_clear) / height).min(share)))
     };
     let face = |width: f32| Type::at(width, &frame.theme, page.column, false).smallest_face();
     frame.spot(aspect, layout, rows, cols, face)
@@ -518,11 +559,6 @@ impl Tones {
             Limit { raw, need: t.need, normalized: raw * MIN_CONTRAST / t.need }
         };
         self.0.iter().map(at).fold(Limit { raw: f32::MAX, need: MIN_CONTRAST, normalized: f32::MAX }, |a, b| if b.normalized < a.normalized { b } else { a })
-    }
-
-    /// The worst contrast of an ink of luminance `ink` over the typical (median) window of each area, which a few stroke-sized specks cannot move.
-    fn typical(&self, ink: f32) -> f32 {
-        self.0.iter().map(|t| contrast_ratio(t.median.unwrap_or(t.darkest), ink)).fold(f32::MAX, f32::min)
     }
 
     /// As [`Tones::over_darkest`], over the lightest window.
@@ -731,6 +767,10 @@ fn readings(grid: &Ground, aspect: f32, align: Option<&str>, frame: &Frame, cred
     let mut out = Vec::new();
     for layout in Layout::ALL {
         let (Some(fade), Some(inks)) = (Fade::resolve(frame.faded, page, layout), words_inks) else { continue };
+        // A stacked phone sets the words below the picture, on the page.
+        if layout == Layout::Narrow && !frame.phone {
+            continue;
+        }
         // A theme that sets the words' type outside what is read keeps their panel, unless the
         // author asked for plain ink, which takes the better ink by the stylesheet's own scale.
         if frame.closing && frame.theme.resized && !forced {
@@ -851,16 +891,13 @@ fn plain_credit_ink(tones: &Tones, text: Option<Rgb>, page: Option<Rgb>) -> (Lim
     (if a.normalized <= b.normalized { a } else { b }, lum)
 }
 
-/// Where `panel=none` ink falls short: the part, the layout, the theme, the
-/// worst ratio the plain ink reaches there with the ratio its text needs, and
-/// the reading and ink behind it, for the ratio over the typical ground.
+/// Where `panel=none` ink falls short: the part, the layout, the theme, and the
+/// worst ratio the plain ink reaches there with the ratio its text needs.
 pub struct Shortfall {
     part: Part,
     layout: Layout,
     night: bool,
     limit: Limit,
-    tones: Tones,
-    ink: f32,
 }
 
 /// For `panel=none`: where the plain ink cannot be shown to reach the contrast
@@ -888,14 +925,14 @@ pub fn forced_ink_shortfalls(
                 Part::Words => plain_words_ink(&r.tones, r.inks),
                 Part::Credit => plain_credit_ink(&r.tones, text, page),
             };
-            let (limit, ink) = limit;
+            let (limit, _) = limit;
             if limit.normalized >= MIN_CONTRAST {
                 continue;
             }
             match found.iter_mut().find(|f| f.part == r.part && f.layout == r.layout && f.night == night) {
                 Some(known) if known.limit.normalized <= limit.normalized => {}
-                Some(known) => (known.limit, known.tones, known.ink) = (limit, r.tones.clone(), ink),
-                None => found.push(Shortfall { part: r.part, layout: r.layout, night, limit, tones: r.tones.clone(), ink }),
+                Some(known) => known.limit = limit,
+                None => found.push(Shortfall { part: r.part, layout: r.layout, night, limit }),
             }
         }
     }
@@ -932,28 +969,44 @@ pub fn note_forced_ink(
         if shortfalls.is_empty() {
             continue;
         }
-        let where_ = |layout: Layout| match layout {
-            Layout::Narrow => "on a phone",
-            Layout::Mid => "from 48rem to 80rem wide",
-            Layout::Wide => "from 80rem wide",
-        };
-        let mut groups: Vec<String> = Vec::new();
-        for (part, night) in [(Part::Words, false), (Part::Words, true), (Part::Credit, false), (Part::Credit, true)] {
-            let list: Vec<String> = Layout::ALL
-                .into_iter()
-                .filter_map(|layout| shortfalls.iter().find(|f| f.part == part && f.night == night && f.layout == layout))
-                .map(|f| format!("{} ({:.1}:1 at the worst spot, {:.1}:1 over the typical ground, needs {:.1}:1)", where_(f.layout), f.limit.raw, f.tones.typical(f.ink), f.limit.need))
-                .collect();
-            if !list.is_empty() {
-                groups.push(format!("the {} in the {} theme {}", if part == Part::Words { "words" } else { "credit" }, if night { "dark" } else { "light" }, list.join(", ")));
-            }
-        }
-        let words: String = hero.overlay_text.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
-        crate::build::cli_output::log_note!(
-            "[{file_path}] `:::hero {{panel=none}}` (\"{words}\"): plain ink, as asked. The ink cannot be shown to read at {}. Look at the picture at every width in both themes; `panel=auto` keeps the panel where the ink does not read.",
-            groups.join("; ")
-        );
+        let opening = hero.overlay.iter().find_map(|b| match b {
+            Block::Heading { children, .. } | Block::Paragraph(children) => Some(moss_core::ast::plain_text::inlines_to_plain_text(children)),
+            _ => None,
+        });
+        let opening = opening.unwrap_or_default().split_whitespace().take(6).collect::<Vec<_>>().join(" ");
+        crate::build::cli_output::log_note!("{}", forced_ink_note(file_path, &opening, &shortfalls));
     }
+}
+
+/// The `panel=none` note for one hero, on one line: for each part that falls
+/// short, its worst ratio with what it needs, where, and in which themes.
+fn forced_ink_note(file_path: &str, opening: &str, shortfalls: &[Shortfall]) -> String {
+    let and = |items: Vec<&str>| match items.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => items.concat(),
+    };
+    let parts: Vec<(Part, &str)> = [(Part::Words, "words"), (Part::Credit, "credit")].into_iter().filter(|(part, _)| shortfalls.iter().any(|f| f.part == *part)).collect();
+    let clauses: Vec<String> = parts
+        .iter()
+        .map(|(part, name)| {
+            let mine: Vec<&Shortfall> = shortfalls.iter().filter(|f| f.part == *part).collect();
+            let worst = mine.iter().map(|f| f.limit).fold(mine[0].limit, |a, b| if b.normalized < a.normalized { b } else { a });
+            let widths = Layout::ALL.into_iter().filter(|l| mine.iter().any(|f| f.layout == *l)).map(|l| match l {
+                Layout::Narrow => "on a phone",
+                Layout::Mid => "at 48–80rem",
+                Layout::Wide => "from 80rem",
+            });
+            let themes = match (mine.iter().any(|f| !f.night), mine.iter().any(|f| f.night)) {
+                (true, true) => "both themes",
+                (true, false) => "the light theme",
+                _ => "the dark theme",
+            };
+            let label = if parts.len() > 1 { format!("the {name} ") } else { String::new() };
+            format!("{label}worst {:.1}:1, needs {:.1}:1, {}, {themes}", worst.raw, worst.need, and(widths.collect()))
+        })
+        .collect();
+    let subject = and(parts.iter().map(|(_, name)| *name).collect());
+    format!("{file_path}: the hero's {subject} (\"{opening}\") may not read over the picture (panel=none): {}. Look at those widths, or set panel=auto.", clauses.join("; "))
 }
 
 /// A closing picture's `max-height=` at 48rem, where it is least (a px or vw
@@ -1206,6 +1259,92 @@ mod tests {
     }
 
     #[test]
+    fn a_phone_reads_an_ordinary_heros_words_only_when_they_are_over_the_picture() {
+        let lookup = lookup_of(&[("day.png", &banded(SKY, GROUND, 0.7))]);
+        let stacked = ink_attributes(Some(&lookup), "/day.png", None, plain(Some("top"), Backing::Auto, false));
+        assert!(stacked.contains("wide:dark") && !stacked.contains("narrow:"), "{stacked}");
+        let request = InkRequest { frame: Frame::new(None, None, Some("top"), false, false, Words::default()).over_on_phone(true), ..plain(Some("top"), Backing::Auto, false) };
+        assert!(ink_attributes(Some(&lookup), "/day.png", None, request).contains("narrow:dark"));
+    }
+
+    /// A pale sky with a dark patch over its lower rows from `from` of the width on.
+    fn sky_with_low_patch(from: f32) -> Ground {
+        let mut img = RgbImage::from_pixel(160, 70, Rgb(SKY));
+        for y in 35..70 {
+            for x in (160.0 * from) as u32..160 {
+                img.put_pixel(x, y, Rgb(INK));
+            }
+        }
+        Ground::from_image(&DynamicImage::ImageRgb8(img))
+    }
+
+    #[test]
+    fn an_ordinary_heros_words_are_read_where_their_box_reaches() {
+        let short = words("## Hi", "");
+        let near = sky_with_low_patch(0.3);
+        let read = |frame: &Frame| readable_ink(&near, &words_spot(None, 70.0 / 160.0, Layout::Wide, frame, PAGE), None, Inks::words());
+        // A short heading's box ends well before the patch; the 600px box it can grow to reaches it.
+        assert_eq!(read(&Frame::new(None, None, None, false, false, short)), Some(Ink::Dark));
+        assert_eq!(read(&Frame::new(None, None, None, false, false, words("## Hi\n\n- a list the model does not set", ""))), None);
+        assert_eq!(read(&Frame::new(None, None, None, false, false, words("## Hi\n\n### A second heading the model does not set", ""))), None);
+        // A theme's words box wider than 600px reaches a patch past 600px however short the words.
+        let far = sky_with_low_patch(0.55);
+        let read = |frame: &Frame| readable_ink(&far, &words_spot(None, 70.0 / 160.0, Layout::Wide, frame, PAGE), None, Inks::words());
+        let themed = |css: &str| Frame::new(None, None, None, false, false, short).on(&PageGround { type_theme: TypeTheme::of_theme(Some(css)), ..PageGround::default() });
+        assert_eq!(read(&Frame::new(None, None, None, false, false, Words::default())), Some(Ink::Dark), "the 600px box stops short of it");
+        assert_eq!(read(&themed(":root { --moss-hero-content-width: 80%; }")), None);
+        assert_eq!(read(&themed(".moss-hero { --moss-hero-content-width: 70rem; }")), None);
+        assert_eq!(read(&themed(":root { --moss-hero-content-width: 12rem; }")), Some(Ink::Dark));
+    }
+
+    #[test]
+    fn an_ordinary_heros_box_holds_an_h1s_margin_and_reads_the_header_band_above_top_words() {
+        let short = words("## Hi", "");
+        let at = Type::ordinary(1280.0, &TypeTheme::default());
+        let end = at.blocks(&short).last().map_or(0.0, |b| b.rows.1);
+        assert_eq!(at.extent(&short, &TypeTheme::default()).1, end + at.pad + 64.0, "the page's `h1` top margin from 48rem");
+        let bottom = |frame: Frame| words_spot(Some("top"), 0.4375, Layout::Wide, &frame, PAGE).0[0].rows.1;
+        let plain = Frame::new(None, None, Some("top"), false, false, short);
+        // The band takes the words' rows to the 60% the box allows.
+        assert!(bottom(plain.under_header(true)) > bottom(plain) + 0.03, "words under a header start below its band");
+        let css = include_str!("../../assets/css/site.css");
+        assert!(css.contains(&format!("--moss-hero-wash-size: {}rem;", HEADER_BAND_PX / 16.0)));
+    }
+
+    #[test]
+    fn a_footer_only_rule_sizes_the_closing_words_and_not_an_ordinary_heros() {
+        let plain = TypeTheme::default();
+        let footer = TypeTheme::of_theme(Some("footer h2 { font-size: 60px; line-height: 1.5; } footer p { font-size: 30px; }"));
+        assert!(!footer.resized);
+        let short = words("## A heading that sets long enough to wrap\n\nSome text.", "");
+        let ordinary = |t: &TypeTheme| Type::ordinary(1280.0, t).extent(&short, t);
+        assert_eq!(ordinary(&footer), ordinary(&plain), "an ordinary hero's box ignores the footer's rules");
+        let closing = |t: &TypeTheme| Type::at(1280.0, t, Column::Default, false).extent(&short, t);
+        assert_ne!(closing(&footer), closing(&plain), "the closing picture's words take them");
+    }
+
+    #[test]
+    fn the_unmodelled_fallback_box_is_never_narrower_than_the_modelled_one() {
+        let short = words("## Hi", "");
+        let fallback = Words { unmodelled: true, ..short };
+        let reach = |words: Words, layout: Layout, align: &str| words_spot(Some(align), 0.4, layout, &Frame::new(None, None, Some(align), false, false, words), PAGE).0.iter().map(|a| a.cols.1 - a.cols.0).collect::<Vec<_>>();
+        for layout in [Layout::Mid, Layout::Wide] {
+            for align in ["end", "center"] {
+                for (modelled, fell_back) in reach(short, layout, align).into_iter().zip(reach(fallback, layout, align)) {
+                    assert!(fell_back >= modelled, "{layout:?} {align}: {fell_back} < {modelled}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_closing_pictures_words_box_takes_the_themes_content_width() {
+        let theme = TypeTheme::of_theme(Some(":root { --moss-hero-content-width: 30rem; }"));
+        assert_eq!(Type::at(1280.0, &theme, Column::Default, false).box_px, 480.0);
+        assert_ne!(Type::at(1280.0, &TypeTheme::default(), Column::Default, false).box_px, 480.0);
+    }
+
+    #[test]
     fn a_hero_without_a_dark_picture_repeats_its_reading_for_night() {
         let lookup = lookup_of(&[("day.png", &banded(SKY, GROUND, 0.7))]);
         let one = ink_attributes(Some(&lookup), "/day.png", None, plain(Some("top"), Backing::Auto, true));
@@ -1421,6 +1560,25 @@ mod tests {
     }
 
     #[test]
+    fn a_capped_faded_phone_box_is_the_cap_unless_the_words_need_more() {
+        let cap = moss_core::media::MaxHeight::parse("clamp(400px, 30vw, 460px)");
+        let said = words("## Come and visit\n\n[Visit](/v/)", "");
+        let frame = |cap, words| Frame::new(None, cap, Some("top"), true, true, words);
+        assert_eq!(frame(cap, said).box_height(0.4375, Layout::Narrow, 390.0), 400.0);
+        assert_eq!(frame(None, said).box_height(0.4375, Layout::Narrow, 390.0), PHONE_FADE_FLOOR_PX);
+        // A tall picture's room below the words and the words outgrow a short cap.
+        let long = words(&format!("## {}\n\n[Visit](/v/)", "Come and visit the harbour ".repeat(12)), "");
+        let need = frame(cap, long).box_height(1.0, Layout::Narrow, 390.0);
+        assert!(need > 400.0, "{need}");
+        // What site.css stacks: the words and their box's bottom padding (5%), the room, the colophon's row.
+        let words_end = Type::at(390.0, &TypeTheme::default(), Column::Default, false).blocks(&long).last().map_or(0.0, |b| b.rows.1);
+        let bare = frame(cap, long).box_height(0.4, Layout::Narrow, 390.0);
+        assert!((bare - (words_end + 0.05 * 390.0 + PHONE_ROOM_PX)).abs() < 0.01, "{bare}");
+        let on = |credit| frame(cap, long).on(&PageGround { credit, ..PageGround::default() }).box_height(0.4, Layout::Narrow, 390.0) - bare;
+        assert_eq!((on(false), on(true)), (COLOPHON_PX, COLOPHON_PX + CREDIT_LINE_PX));
+    }
+
+    #[test]
     fn a_faded_phone_measures_the_words_over_the_floor_its_box_keeps() {
         // A wide picture in a 38rem-tall phone box shows only its middle columns,
         // and all its rows: a dark patch at the start edge is cropped away, and the
@@ -1448,7 +1606,8 @@ mod tests {
         for depth in [FADE_DEPTH.0, FADE_DEPTH.1] {
             assert!(css.contains(&format!("linear-gradient(to bottom, transparent, #000 {}%)", (depth * 100.0).round())), "fade {depth}");
         }
-        assert!(css.contains(&format!("min-block-size: max({}rem, var(--moss-hero-max-height, 0px))", PHONE_FADE_FLOOR_PX / 16.0)));
+        assert!(css.contains(&format!("min-block-size: var(--moss-hero-max-height, {}rem)", PHONE_FADE_FLOOR_PX / 16.0)));
+        assert!(css.contains(&format!("max(100% * var(--item-hero-ratio, 0.5) * 0.5, {}rem)", PHONE_ROOM_PX / 16.0)));
     }
 
     #[test]
@@ -2009,10 +2168,32 @@ mod tests {
         assert!(!credit(Some(":root { --moss-color-text-secondary: var(--ink); }")).contains("data-credit=\""), "an unread colour keeps the panel");
     }
 
+    fn shortfall(part: Part, layout: Layout, night: bool, raw: f32, need: f32) -> Shortfall {
+        Shortfall { part, layout, night, limit: Limit { raw, need, normalized: raw * MIN_CONTRAST / need } }
+    }
+
+    #[test]
+    fn the_panel_none_note_is_one_line_with_the_worst_ratio_where_and_in_which_themes() {
+        let words_only = [
+            shortfall(Part::Words, Layout::Narrow, false, 2.0, 4.5),
+            shortfall(Part::Words, Layout::Narrow, true, 1.14, 4.5),
+            shortfall(Part::Words, Layout::Mid, false, 1.8, 3.0),
+        ];
+        assert_eq!(
+            forced_ink_note("index.md", "Open all hours", &words_only),
+            "index.md: the hero's words (\"Open all hours\") may not read over the picture (panel=none): worst 1.1:1, needs 4.5:1, on a phone and at 48–80rem, both themes. Look at those widths, or set panel=auto."
+        );
+        let both = [shortfall(Part::Words, Layout::Wide, true, 2.5, 3.0), shortfall(Part::Credit, Layout::Narrow, false, 3.0, 4.5), shortfall(Part::Credit, Layout::Mid, false, 3.2, 4.5), shortfall(Part::Credit, Layout::Wide, false, 3.1, 4.5)];
+        assert_eq!(
+            forced_ink_note("about.md", "Visit", &both),
+            "about.md: the hero's words and credit (\"Visit\") may not read over the picture (panel=none): the words worst 2.5:1, needs 3.0:1, from 80rem, the dark theme; the credit worst 3.0:1, needs 4.5:1, on a phone, at 48–80rem and from 80rem, the light theme. Look at those widths, or set panel=auto."
+        );
+    }
+
     #[test]
     // Pins the reading as it is, pending a design for small type: a 12px credit's window is one source
     // pixel, so any foot with a highlight fails it.
-    fn a_few_pale_specks_set_the_worst_reading_but_not_the_typical_one() {
+    fn a_few_pale_specks_set_the_worst_reading() {
         // A dark foot with a pale speck every 37 pixels: the credit's page-coloured ink meets a speck as pale
         // as itself at the worst spot, and the dark foot nearly everywhere else.
         let mut img = RgbImage::from_pixel(400, 100, Rgb(GROUND));
@@ -2026,7 +2207,7 @@ mod tests {
         let credit: Vec<_> = forced_ink_shortfalls(&lookup, ("/specks.png", None), Some("top"), &frame, true).into_iter().filter(|s| s.part == Part::Credit && !s.night).collect();
         assert_eq!(credit.len(), 3, "every layout falls short at its worst spot");
         for s in &credit {
-            assert!(s.limit.raw < 1.5 && s.tones.typical(s.ink) >= MIN_CONTRAST, "{:?}: a speck as pale as the ink, a foot it reads on", s.limit);
+            assert!(s.limit.raw < 1.5, "{:?}: a speck as pale as the ink", s.limit);
         }
     }
 }

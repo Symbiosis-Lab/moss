@@ -1295,6 +1295,12 @@ body > footer.container:has(> .moss-hero-closing) > :not(.moss-hero-closing, .mo
   margin-inline: auto;
   padding-inline: var(--moss-container-padding);
 }
+/* A picture written in footer.md fits its column, as one in an article does;
+   at no specificity, so the footer's own pictures keep their rules. */
+:where(body > footer.container) img {
+  max-inline-size: 100%;
+  block-size: auto;
+}
 /* Doubled attribute selectors: out-rank the mobile-overlay hero's own padding
    and height floor, which assume a hero that opens a page. The floor is what a
    heading, a link and a credit need on a phone (18rem); from 48rem the box
@@ -1432,15 +1438,16 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
 }
 /* `fade=top`: the picture rises out of the page, its top fading into the page
    colour. The mask is on the picture, not the box, since the words sit in the
-   faded part; `hero_ink` measures them over the page colour at these depths,
-   and on a phone over the box this floor gives it (or the author's cap, if taller). */
+   faded part; `hero_ink` measures them over the page colour at these depths.
+   On a phone the box is 38rem tall unless the author's cap sets it; either way
+   it grows to hold the words and the room below them. */
 body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 38%);
   mask-image: linear-gradient(to bottom, transparent, #000 38%);
 }
 @media (width < 48rem) {
   body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay][data-fade="top"] {
-    min-block-size: max(38rem, var(--moss-hero-max-height, 0px));
+    min-block-size: var(--moss-hero-max-height, 38rem);
   }
   body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
     -webkit-mask-image: linear-gradient(to bottom, transparent, #000 50%);
@@ -2364,6 +2371,21 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.m
 }
 :is(:root:not([data-theme="dark"]) .moss-hero[data-header-ink="dark"], :root[data-theme="dark"] .moss-hero[data-header-ink-night="dark"])::after {
   content: none;
+}
+/* With the words at the top they start below the header, which sits in the
+   wash's band (or its measured height, where the site runtime writes it). */
+.moss-hero[data-header="over"][data-align="top"] > .moss-hero-content {
+  --_top-clear: max(var(--moss-hero-wash-size), var(--moss-header-height, 0px));
+}
+@media (width >= 48rem) {
+  .moss-hero[data-header="over"][data-overlay][data-align="top"] > .moss-hero-content {
+    margin-block-start: var(--_top-clear);
+  }
+}
+@media (width < 48rem) {
+  .moss-hero[data-header="over"][data-mobile="overlay"][data-align="top"] > .moss-hero-content {
+    margin-block-start: var(--_top-clear);
+  }
 }
 
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
