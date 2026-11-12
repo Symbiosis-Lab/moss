@@ -1262,7 +1262,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["past", "upcoming"]),
         // Frequency=1, Importance=2 → score=86
         score: 87,
-        description: "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past. Applied before children_limit. Absent = no filter.",
+        description: "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past, and an event whose start is empty or unreadable is in neither. Applied before children_limit. Absent = no filter.",
         label: Some("When"),
         label_key: "chip.children_when.label",
         group: "Child Styles",

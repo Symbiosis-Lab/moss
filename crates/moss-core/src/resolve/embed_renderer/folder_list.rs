@@ -24,7 +24,8 @@ pub struct FolderEmbedParams {
     /// counts the limit off the covered set rather than the full set.
     pub covers: Option<String>,
     /// Listing filter: "past" or "upcoming" keeps only the pages whose event
-    /// has ended, or has not. A page with no start or date is past.
+    /// has ended, or has not. A page with no start or date is past; one
+    /// whose start is empty or unreadable is in neither.
     pub when: Option<String>,
     /// How many of a page's own pictures a `style:summary` row draws as a
     /// strip, in place of its one cover: [`MIN_PICTURES`] to [`MAX_PICTURES`].

@@ -941,6 +941,13 @@ impl ParsedDocument {
         self.url_path == crate::build::served_path::NOT_FOUND_PAGE
     }
 
+    /// The page names a `start` that moss could not read as a date, an empty
+    /// one included: an event still waiting for its date. It is in no
+    /// calendar file and in neither the past nor the upcoming listing.
+    pub fn awaits_event_date(&self) -> bool {
+        self.event.is_none() && self.raw_frontmatter.contains_key("start")
+    }
+
     /// Whether this is a real reader-facing page, eligible for an og/twitter
     /// share card + JSON-LD + QR. Independent of *listing* membership — a
     /// `listed: false` page is still a public page. Only `draft`
