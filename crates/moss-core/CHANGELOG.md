@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-12
+
 ### Changed
 
 - **BREAKING:** `SubscribeShortcode` gains `members: Option<Members>`, set by `:::subscribe {members="subscribers"}` (or `"paid"`); a struct literal must name it or use `..Default::default()`.

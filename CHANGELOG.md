@@ -4,6 +4,8 @@ All notable changes to moss will be documented here.
 
 ## [Unreleased]
 
+## [0.15.23] - 2026-11-12
+
 ### New
 
 - `moss import` brings in a Ghost site from its own export (the `.zip` or `export.json` Ghost downloads from its settings): every post and page with its full text, drafts included, tags, authors and the addresses Ghost served them at, with members-only and paid posts kept as such. The member list never enters the folder; it is kept in a private directory outside it, for the step that moves readers.
