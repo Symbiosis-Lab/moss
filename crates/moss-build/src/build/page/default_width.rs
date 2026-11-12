@@ -8,6 +8,9 @@
 //! leaves every other width rule to the stylesheet's one `screen` path. A block
 //! with a width word of its own (`{body}` included, which renders
 //! `data-width="body"`) already carries the attribute and is left alone.
+//!
+//! A picture inside a widened block was given a `sizes` for the content
+//! column, so the same pass restates it for the block it is now drawn in.
 
 /// The `content_width` value that sets this default; the page's column is then
 /// the `full` one.
@@ -26,22 +29,34 @@ pub(crate) fn apply(body: String, content_width: Option<&str>) -> String {
 }
 
 /// `body` with `data-width="screen"` added to every top-level grid and
-/// fenced-div band that has no width of its own. The selectors mirror the
+/// fenced-div band that has no width of its own, and the `sizes` of the
+/// pictures inside restated for that width. The selectors mirror the
 /// stylesheet's `article.container > …` escape rules, so only a block the
 /// escape reaches is touched.
 pub(crate) fn screen_by_default(body: &str) -> String {
     const OPEN: &str = r#"<article class="container">"#;
     const CLOSE: &str = "</article>";
+    // The blocks the default widens. Selectors match the source's attributes,
+    // so the pictures inside are still found once the block carries its width.
+    const BLOCKS: [&str; 2] = [
+        "article.container > .moss-grid:not([data-width])",
+        r#"article.container > div[class]:not([data-width]):not([class^="moss-"]):not([class*=" moss-"])"#,
+    ];
+    let pictures = BLOCKS.map(|block| format!("{block} img[sizes], {block} source[sizes]")).join(", ");
     let mut out = Vec::with_capacity(body.len() + 64);
     let mut rewriter = lol_html::HtmlRewriter::new(
         lol_html::Settings {
-            element_content_handlers: vec![lol_html::element!(
-                r#"article.container > .moss-grid:not([data-width]), article.container > div[class]:not([data-width]):not([class^="moss-"]):not([class*=" moss-"])"#,
-                |el| {
-                    el.set_attribute("data-width", "screen")?;
+            element_content_handlers: vec![
+                lol_html::element!(BLOCKS.join(", "), |el| Ok(el.set_attribute("data-width", "screen")?)),
+                lol_html::element!(pictures, |el| {
+                    let restated = el.get_attribute("sizes")
+                        .and_then(|sizes| moss_core::contract::sizes::sizes_in_screen_block(&sizes));
+                    if let Some(sizes) = restated {
+                        el.set_attribute("sizes", &sizes)?;
+                    }
                     Ok(())
-                }
-            )],
+                }),
+            ],
             ..lol_html::Settings::default()
         },
         |c: &[u8]| out.extend_from_slice(c),
@@ -82,6 +97,19 @@ mod tests {
         assert!(out.contains(r#"<div class="moss-grid">in</div>"#), "{out}");
         assert!(out.contains(r#"<div class="moss-gallery">g</div>"#), "{out}");
         assert!(out.contains("<div>plain</div>"), "{out}");
+    }
+
+    #[test]
+    fn pictures_in_a_widened_block_get_sizes_for_it() {
+        use moss_core::contract::sizes::{sizes_for_grid_cell, SIZES_BODY};
+        let cell = sizes_for_grid_cell(2, None);
+        let body = format!(
+            r#"<p><img sizes="{SIZES_BODY}"></p><div class="moss-grid" data-columns="2"><div><img sizes="{cell}"></div></div><div class="band"><picture><source sizes="{SIZES_BODY}"><img></picture></div><div class="moss-grid" data-width="body"><img sizes="{cell}"></div><p><img sizes="{SIZES_BODY}"></p>"#
+        );
+        let out = screen_by_default(&body);
+        let sizes: Vec<&str> = out.split(r#"sizes=""#).skip(1).filter_map(|rest| rest.split('"').next()).collect();
+        let screen_cell = sizes_for_grid_cell(2, Some("screen"));
+        assert_eq!(sizes, [SIZES_BODY, screen_cell.as_str(), "auto, 100vw", cell.as_str(), SIZES_BODY], "{out}");
     }
 
     #[test]

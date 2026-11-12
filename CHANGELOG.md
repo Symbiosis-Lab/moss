@@ -38,6 +38,9 @@ All notable changes to moss will be documented here.
 
 - A publish refused for missing files names each one with the source file and line that asks for it, in `moss deploy --dry-run` too, instead of only a count.
 - Markdown written inside a raw HTML block (`<pre>`, `<script>`, `<style>`, or any block opened by a tag, up to its blank line) no longer counts as a missing file when publishing: the page shows that text as written.
+- On a `content_width: screen` page, a picture in a top-level grid or band asks for a file as wide as the band it is drawn in. It asked for one sized to the text column, so a first picture, and every picture in Safari, was enlarged from too small a file.
+- A picture in a grid of two or more columns asks for a file as wide as the window on a phone, where the grid is one column. It asked for a fraction of that, so a first picture, and every picture in Safari, was enlarged there. A collage, a scroll row and a vertical site keep narrower cells on a phone and fetch a larger file than they draw.
+- Form controls, scrollbars and an SVG picture that recolours itself for dark mode follow the page's theme instead of the OS setting (`color-scheme` on `<html>`). Safari still gives a picture the OS setting. On a dark page an embedded page that declares no colour scheme is drawn on white, not over the page.
 - A hero with `panel=auto` or `panel=none` is read only where its words are: an ordinary hero's words box as wide and tall as its words, or the `--moss-hero-content-width` a theme sets, and on a phone only with `mobile=overlay`, where the words are over the picture. A dark patch the words never reach no longer keeps their panel or puts a note in the build.
 - A hero with `header=over align=top` sets its words below the site header, on a phone with `mobile=overlay` and from 48rem, instead of under it.
 - A picture in `footer.md` fits the page's width; one wider than a phone used to widen the whole page sideways.

@@ -244,6 +244,17 @@
   box-sizing: border-box;
 }
 
+/* Form controls, scrollbars and an SVG image's own `prefers-color-scheme`
+   rule follow the page's theme, not the OS setting. WebKit gives images the
+   OS setting regardless. */
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 /* Text selection - moss green tint */
 ::selection {
   background: rgba(45, 90, 45, 0.15);

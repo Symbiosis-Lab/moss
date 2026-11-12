@@ -32,6 +32,9 @@ impl ColorScheme {
         }
     }
 
+    /// The inline `color-scheme` repeats what the site stylesheet derives
+    /// from `data-theme`, for the documents that do not load it: a notebook's
+    /// wrapper and an author's own HTML page.
     pub fn html_attrs(self) -> String {
         self.fixed().map(|scheme| format!(
             r#" data-moss-color-scheme="{scheme}" data-theme="{scheme}" style="color-scheme: {scheme}""#

@@ -1,0 +1,5 @@
+{
+  "grid2": "(min-width: 48rem) calc(100vw / 2), 100vw",
+  "grid3": "(min-width: 48rem) calc(100vw / 3), 100vw",
+  "band": "100vw"
+}

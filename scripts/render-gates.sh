@@ -152,6 +152,8 @@ GATES_NOBUILD=(
   img-fallback
   vertical-measure
   vertical-sizes
+  screen-page
+  color-scheme
   article-date-alignment
   footer-subscribe-alignment
   float-mobile-collapse

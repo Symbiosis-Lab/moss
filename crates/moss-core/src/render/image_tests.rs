@@ -1344,12 +1344,12 @@ fn grid_cell_scope_sets_a_body_images_sizes() {
         &s,
         ImageContext::MarkdownInline,
         &ImageRenderOptions {
-            grid_cell_sizes: Some("auto, calc(min(1200px, 100vw) / 3)"),
+            grid_cell_sizes: Some("auto, (min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw"),
             ..Default::default()
         },
     );
     assert!(
-        html.contains(r#"sizes="auto, calc(min(1200px, 100vw) / 3)""#),
+        html.contains(r#"sizes="auto, (min-width: 48rem) calc(min(1200px, 100vw) / 3), 100vw""#),
         "the grid cell scope must set sizes=; got: {html}"
     );
 }
@@ -1693,7 +1693,7 @@ fn scroll_shape_is_not_applied_inside_a_grid_card() {
     // its neighbours get), not the full-width scroll value. The same image in
     // ordinary article flow keeps the treatment.
     let assets = snapshot_dims("logo.jpg", 2500, 500);
-    let cell = "auto, calc(min(47.25rem, 100vw) / 4)";
+    let cell = "auto, (min-width: 48rem) calc(min(47.25rem, 100vw) / 4), 100vw";
     let in_card = synthesize_image_html(
         "logo.jpg",
         "alt",
