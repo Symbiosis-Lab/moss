@@ -25,6 +25,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- The macOS `moss` download is 1.1 MB smaller.
 - A page with `nav: true` inside a folder whose home page is also in the nav bar is now listed in a submenu under that folder's entry, instead of as its own link in the bar. The entry stays a link with a button beside it that opens the list (keyboard and touch work, Escape closes); deeper pages join the same list. A page whose folder is not in the nav bar stays a top-level link, and a site with no such pages is unchanged.
 - A `[NOTE]` line no longer names the moss module that wrote it, and the note for a `panel=none` hero is one line per hero: the worst ratio its words (and its credit) reach with what they need, the widths and the themes, then what to do.
 - Update moss on every device that deploys the site. Copies blocked by an unsuitable edit now have an `unavailable` record state; older moss versions cannot read those records and leave that work unsent. Added fields on other copy records do not make them incompatible.

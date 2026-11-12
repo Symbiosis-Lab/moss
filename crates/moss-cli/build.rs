@@ -16,6 +16,11 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(moss_ui_bundle_missing)");
     println!("cargo:rerun-if-changed={}", root.join("index.html").display());
     println!("cargo:rerun-if-env-changed=MOSS_REQUIRE_UI_BUNDLE");
+    // Nothing loads symbols from this executable, so its export table is dead
+    // weight in every download.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg-bins=-Wl,-no_exported_symbols");
+    }
     // A release build sets this, so a shipped binary never lacks the editor.
     if std::env::var_os("MOSS_REQUIRE_UI_BUNDLE").is_some_and(|v| v == "1")
         && !root.join("index.html").is_file()
