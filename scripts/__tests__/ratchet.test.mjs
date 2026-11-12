@@ -88,6 +88,7 @@ const fullBaseline = (value, deps = {}) => ({
   string_slices_per_crate: { letter: 'h', disposition: 'permanent', armed: true, value: { 'moss-build': 0, 'moss-cli': 0 } },
   raw_radius_shadow_ui: { letter: 'i', disposition: 'permanent', armed: true, value: 0 },
   raw_env_reads: { letter: 'j', disposition: 'permanent', armed: true, value: 0 },
+  artifact_bytes: { letter: 'k', disposition: 'permanent', armed: true, value: {} },
 });
 
 /** a and b are over their baselines, c sits exactly at its own. */
@@ -1472,6 +1473,151 @@ describe('row (i) raw_radius_shadow_ui', () => {
       const r = t.run('check');
       assert.notEqual(r.status, 0);
       assert.match(r.stdout, /raw_radius_shadow_ui: 2 > baseline 0/);
+    });
+  });
+});
+
+const SIZE_ROW = 'artifact_bytes';
+
+describe('row (k) artifact_bytes', () => {
+  /** A tree whose baseline holds `value`, and a file `moss-test` of `bytes` bytes. */
+  function sizeTree(value, bytes, make = tree) {
+    const t = make({}, { ...fullBaseline({}), [SIZE_ROW]: { letter: 'k', disposition: 'permanent', armed: true, value } });
+    fs.writeFileSync(path.join(t.root, 'moss-test'), Buffer.alloc(bytes));
+    return { ...t, size: (...argv) => t.run('size', 'moss-test', path.join(t.root, 'moss-test'), ...argv) };
+  }
+
+  it('is green within build noise of the row, either side', () => {
+    for (const bytes of [100_000, 100_400, 99_600]) {
+      const t = sizeTree({ 'moss-test': 100_000 }, bytes);
+      within(t, () => {
+        const r = t.size();
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.match(r.stdout, new RegExp(`OK\\s+moss-test\\s+${bytes} bytes \\(row 100000\\)`));
+      });
+    }
+  });
+
+  it('is red over the row, and says how to accept', () => {
+    const t = sizeTree({ 'moss-test': 100_000 }, 100_600);
+    within(t, () => {
+      const r = t.size();
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /RED\s+moss-test\s+100600 bytes \(row 100000\)/);
+      assert.match(r.stdout, /size moss-test .* --accept "<reason>"/);
+    });
+  });
+
+  it('is red for an artifact with no entry, and for a file that is not there', () => {
+    const t = sizeTree({}, 100);
+    within(t, () => {
+      const r = t.size();
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /RED\s+moss-test\s+100 bytes \(row none\)/);
+      const gone = t.run('size', 'moss-test', path.join(t.root, 'absent'));
+      assert.equal(gone.status, 1);
+      assert.match(gone.stderr, /cannot read/);
+    });
+  });
+
+  it('under the row is red and prints the tighten command', () => {
+    const t = sizeTree({ 'moss-test': 100_000 }, 90_000);
+    within(t, () => {
+      const r = t.size();
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /node scripts\/ratchet\.mjs size moss-test \S+ --tighten/);
+    });
+  });
+
+  it('--tighten lowers the row and never raises it', () => {
+    const t = sizeTree({ 'moss-test': 100_000 }, 90_000);
+    within(t, () => {
+      assert.equal(t.size('--tighten').status, 0);
+      assert.deepEqual(t.baseline().rows[SIZE_ROW].value, { 'moss-test': 90_000 });
+    });
+    const up = sizeTree({ 'moss-test': 100_000 }, 120_000);
+    within(up, () => {
+      const before = up.bytes();
+      const r = up.size('--tighten');
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /REFUSED to raise moss-test/);
+      assert.deepEqual(up.bytes(), before);
+    });
+  });
+
+  it('--accept raises the row to the measured size and prints the trailer; a weak reason is refused', () => {
+    const t = sizeTree({ 'moss-test': 100_000 }, 120_000);
+    within(t, () => {
+      const before = t.bytes();
+      const weak = t.size('--accept', 'wip');
+      assert.equal(weak.status, 1);
+      assert.match(weak.stderr, /reason too weak/);
+      assert.deepEqual(t.bytes(), before);
+      const ok = t.size('--accept', 'embeds the second search language pack');
+      assert.equal(ok.status, 0, ok.stderr);
+      assert.match(ok.stdout, new RegExp(`Ratchet-Accept: ${SIZE_ROW} moss-test — embeds the second search language pack`));
+      assert.deepEqual(t.baseline().rows[SIZE_ROW].value, { 'moss-test': 120_000 });
+    });
+    const fine = sizeTree({ 'moss-test': 100_000 }, 100_000);
+    within(fine, () => assert.equal(fine.size('--accept', 'nothing grew, so nothing to accept').status, 1));
+  });
+
+  it('a raised row needs its trailer in the commit message', () => {
+    within(sizeTree({ 'moss-test': 100_000 }, 120_000, gitTree), (t) => {
+      assert.equal(t.size('--accept', 'embeds the second search language pack').status, 0);
+      t.stageBaseline();
+      const bare = t.verifyAccepts('grow the binary, forgot the trailer\n');
+      assert.notEqual(bare.status, 0);
+      assert.match(bare.stderr, /artifact_bytes moss-test/);
+      const ok = t.verifyAccepts('grow the binary\n\nRatchet-Accept: artifact_bytes moss-test — embeds the second search language pack\n');
+      assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    });
+  });
+
+  it('--baseline measures against another file of the same shape and leaves this repo\'s row alone', () => {
+    const t = sizeTree({}, 120_000);
+    within(t, () => {
+      const own = t.bytes();
+      const other = path.join(t.root, 'size-baseline.json');
+      fs.writeFileSync(other, JSON.stringify({ rows: { [SIZE_ROW]: { letter: 'k', disposition: 'permanent', armed: true, value: { 'moss-test': 100_000 } } } }));
+      const red = t.size('--baseline', other);
+      assert.equal(red.status, 1);
+      assert.match(red.stdout, /row 100000/);
+      assert.match(red.stdout, /--baseline \S*size-baseline\.json --accept/);
+      assert.equal(t.size('--baseline', other, '--accept', 'the app embeds the browser editor').status, 0);
+      assert.equal(JSON.parse(fs.readFileSync(other, 'utf8')).rows[SIZE_ROW].value['moss-test'], 120_000);
+      assert.deepEqual(t.bytes(), own);
+      const check = t.run('check', '--baseline', other);
+      assert.equal(check.status, 1);
+      assert.match(check.stderr, /--baseline is for `size` only/);
+    });
+  });
+
+  it('in CI the red line downloads the run\'s artifact and measures that file', () => {
+    const t = sizeTree({ 'moss-test': 100_000 }, 120_000);
+    within(t, () => {
+      const r = spawnSync(process.execPath, [path.join(t.root, 'scripts', 'ratchet.mjs'), 'size', 'moss-test', path.join(t.root, 'moss-test'), '--root', t.root], {
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_RUN_ID: '4242' },
+      });
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /`rm -f moss-test && gh run download 4242 -n moss-test && node scripts\/ratchet\.mjs size moss-test moss-test --accept "<reason>"`/);
+    });
+  });
+
+  it('check validates the row shape without a built artifact', () => {
+    const bad = sizeTree({ 'moss-test': 0, other: 1.5 }, 1);
+    within(bad, () => {
+      const r = bad.run('check');
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /\(k\) artifact_bytes: 'moss-test' must be a positive integer/);
+      assert.match(r.stdout, /'other' must be a positive integer/);
+    });
+    const good = sizeTree({ 'moss-test': 100_000 }, 1);
+    within(good, () => {
+      const r = good.run('check');
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /\(k\) artifact_bytes\s+measured by `ratchet\.mjs size`/);
     });
   });
 });

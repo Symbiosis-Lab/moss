@@ -283,31 +283,60 @@ jobs:
   build-cli:
     name: Build moss-cli
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: '. -> target'
-          shared-key: linux-cli-release
+          shared-key: linux-cli-release-optimized
 
-      - name: Build the moss-cli binary
-        run: |
-          cargo build --release -p moss-cli
-          test -f ./target/release/moss-cli || { echo "::error::moss-cli not found after build"; exit 1; }
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          SKIP_RUST_INSTALL: 1
+
+      # The release's own recipe, so the size row and the e2e job see the
+      # binary that ships, editor bundle included.
+      - name: Build the linux release asset
+        run: scripts/build-cli-release-asset.sh linux-x86_64
 
       - name: Reference pages match `moss describe`
-        run: MOSS_BIN=./target/release/moss-cli node scripts/sync-reference.mjs --check
+        run: MOSS_BIN=./moss-linux-x86_64 node scripts/sync-reference.mjs --check
 
       - uses: actions/upload-artifact@v7
         with:
-          name: moss-cli-linux-release
-          path: target/release/moss-cli
-          retention-days: 1
+          name: moss-linux-x86_64
+          path: moss-linux-x86_64
+          retention-days: 7
           if-no-files-found: error
+
+  # Its own job, so a size change never hides the e2e result, and a red run
+  # leaves the artifact its message names.
+  size:
+    name: Binary size
+    needs: build-cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: moss-linux-x86_64
+
+      - name: The binary stays within its size row
+        run: node scripts/ratchet.mjs size moss-linux-x86_64 moss-linux-x86_64
 
   # ==========================================================================
   # NEW, not lifted — no existing desktop job runs an end-to-end check against
@@ -331,16 +360,15 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: moss-cli-linux-release
-          path: target/release/
+          name: moss-linux-x86_64
 
       - name: Restore the executable bit
         run: |
-          chmod +x target/release/moss-cli
-          ./target/release/moss-cli --version
+          chmod +x moss-linux-x86_64
+          ./moss-linux-x86_64 --version
 
       - name: List guides (headless)
-        run: xvfb-run --auto-servernum ./target/release/moss-cli guide --list
+        run: xvfb-run --auto-servernum ./moss-linux-x86_64 guide --list
 
       # The output path comes from the build itself (`--json`), so the check
       # follows wherever moss writes it.
@@ -354,7 +382,7 @@ jobs:
 
           index body
           EOF
-          xvfb-run --auto-servernum ./target/release/moss-cli build /tmp/moss-cli-e2e-vault --no-plugins --strict --json > /tmp/moss-cli-e2e-build.json
+          xvfb-run --auto-servernum ./moss-linux-x86_64 build /tmp/moss-cli-e2e-vault --no-plugins --strict --json > /tmp/moss-cli-e2e-build.json
           output=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["output"])' /tmp/moss-cli-e2e-build.json)
           test -f "$output/index.html" || { echo "::error::moss-cli build produced no index.html in $output"; exit 1; }
 

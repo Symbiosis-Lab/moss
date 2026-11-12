@@ -43,6 +43,11 @@
 //                             module's `env`, which records it in the sealed
 //                             manifest, so a later build that saw no events
 //                             notices when it changes.
+//   (k) artifact_bytes      — the size of each built binary people download,
+//                             keyed by artifact name: one row per binary,
+//                             measured on the pull request's build of the
+//                             recipe that ships. `check` only validates the
+//                             row's shape; `size` measures it.
 //
 // Roots: this repo's own `crates/*/src` and `packages/*/src` (rows a/b);
 // mirror_markers never scanned packages.
@@ -61,6 +66,14 @@
 //                                             crate, compare with row (h);
 //                                             --tighten lowers it, --accept
 //                                             raises it and prints the trailers
+//   node scripts/ratchet.mjs size <artifact> <file> [--tighten] [--accept "<reason>"] [--baseline <file>]
+//                                             compare a built file's size with
+//                                             row (k); red when it is over or
+//                                             under by more than build noise,
+//                                             so the change that shrank it
+//                                             lowers the row. --baseline
+//                                             reads the row from another file
+//                                             of the same shape
 //   node scripts/ratchet.mjs verify-accepts <commit-msg-file>
 //                                             commit-msg hook body: every
 //                                             row/key that rose between HEAD's
@@ -733,6 +746,7 @@ const ROWS = {
   string_slices_per_crate: { letter: 'h', disposition: 'permanent' },
   raw_radius_shadow_ui: { letter: 'i', disposition: 'permanent' },
   raw_env_reads: { letter: 'j', disposition: 'permanent' },
+  artifact_bytes: { letter: 'k', disposition: 'permanent' },
 };
 
 export function collectCurrent(root, baseline) {
@@ -745,8 +759,12 @@ export function collectCurrent(root, baseline) {
 // baseline I/O
 // ---------------------------------------------------------------------------
 
+// `size --baseline <file>`: another repo keeps its own binary's row in a file
+// of the same shape, so one verb serves both without that repo's numbers here.
+let baselineOverride;
+
 function baselinePath() {
-  return path.join(SCRIPT_DIR, 'ratchet-baseline.open.json');
+  return baselineOverride ?? path.join(SCRIPT_DIR, 'ratchet-baseline.open.json');
 }
 
 /**
@@ -1178,7 +1196,7 @@ function cmdCheck(root) {
       continue;
     }
     const before = violations.length;
-    const summary = key === SLICE_ROW ? checkSliceShape(row, violations) : checkRow(key, row, current[key], violations);
+    const summary = (BUILD_MEASURED[key] ?? ((r, v) => checkRow(key, r, current[key], v)))(row, violations);
     const mark = violations.length > before ? 'RED' : 'OK ';
     console.log(`  ${mark} (${spec.letter}) ${key.padEnd(24)} ${summary}`);
   }
@@ -1329,13 +1347,7 @@ function cmdAccept(root, rowKey, reason, only = []) {
     process.exit(1);
   }
   const baseline = loadBaseline();
-  if (reasonIsWeak(reason, rowKey)) {
-    console.error(
-      `reason too weak: needs >= ${WEAK_REASON_MIN_LENGTH} characters, and can't be just the row name ` +
-      `or one of ${[...WEAK_REASON_WORDS].join(', ')} — say what changed and why.`,
-    );
-    process.exit(1);
-  }
+  refuseWeakReason(reason, rowKey);
   const row = baseline.rows?.[rowKey];
   if (!row) { console.error(`unknown row '${rowKey}'`); process.exit(1); }
   if (!row.armed) { console.error(`row '${rowKey}' is not armed — nothing to accept`); process.exit(1); }
@@ -1447,23 +1459,7 @@ function measureSlices(root, from) {
 }
 
 function cmdSlices(root, { from, tighten, accept }) {
-  if (tighten && accept !== undefined) {
-    console.error('--tighten and --accept are opposites; pass one');
-    process.exit(1);
-  }
-  const baseline = loadBaseline();
-  const row = baseline.rows?.[SLICE_ROW];
-  if (!row?.armed) {
-    console.error(`row '${SLICE_ROW}' is missing or not armed in the baseline`);
-    process.exit(1);
-  }
-  if (accept !== undefined && reasonIsWeak(accept, SLICE_ROW)) {
-    console.error(
-      `reason too weak: needs >= ${WEAK_REASON_MIN_LENGTH} characters, and can't be just the row name ` +
-      `or one of ${[...WEAK_REASON_WORDS].join(', ')} — say what changed and why.`,
-    );
-    process.exit(1);
-  }
+  const { baseline, row } = measuredRow(SLICE_ROW, { tighten, accept });
   const spans = measureSlices(root, from);
   const base = row.value ?? {};
   const over = [];
@@ -1506,6 +1502,90 @@ function cmdSlices(root, { from, tighten, accept }) {
 }
 
 // ---------------------------------------------------------------------------
+// size — row (k). Needs a built artifact, so `check` never runs it.
+// ---------------------------------------------------------------------------
+
+const SIZE_ROW = 'artifact_bytes';
+// Two builds of one commit differ by a toolchain's worth of bytes (0.22%
+// between two stable releases); a real change moves the size by more.
+const SIZE_NOISE = 0.005;
+
+function checkSizeShape(row, violations) {
+  const bad = Object.entries(row.value ?? {}).filter(([, n]) => !Number.isInteger(n) || n <= 0);
+  for (const [name] of bad) violations.push(`(k) ${SIZE_ROW}: '${name}' must be a positive integer in the baseline`);
+  return bad.length ? `${bad.length} bad entr${bad.length === 1 ? 'y' : 'ies'}` : 'measured by `ratchet.mjs size`';
+}
+
+function cmdSize(artifact, file, { tighten, accept }) {
+  if (!artifact || !file) {
+    console.error('usage: ratchet.mjs size <artifact> <file> [--tighten] [--accept "<reason>"] [--baseline <file>]');
+    process.exit(1);
+  }
+  const { baseline, row } = measuredRow(SIZE_ROW, { tighten, accept });
+  let bytes;
+  try { bytes = fs.statSync(file).size; } catch (e) {
+    console.error(`RED ${SIZE_ROW}: cannot read ${file}: ${e.message}`);
+    process.exit(1);
+  }
+  const base = row.value?.[artifact];
+  const over = base === undefined || bytes > base * (1 + SIZE_NOISE);
+  const under = !over && bytes < base * (1 - SIZE_NOISE);
+  const rerun = (flag) => sizeRerun(artifact, file, flag);
+  const set = () => { row.value = { ...row.value, [artifact]: bytes }; saveBaseline(baseline); };
+  console.log(`  ${over || under ? 'RED' : 'OK '} ${artifact} ${bytes} bytes (row ${base ?? 'none'})`);
+
+  if (accept !== undefined) {
+    if (!over) { console.error(`nothing to accept: ${artifact} is not over its row`); process.exit(1); }
+    set();
+    printTrailers(SIZE_ROW, [artifact], accept);
+  } else if (tighten) {
+    if (over) {
+      console.log(`REFUSED to raise ${artifact} — tighten NEVER raises; make it smaller or use \`${rerun('--accept "<reason>"')}\``);
+      process.exit(1);
+    }
+    if (bytes < base) set();
+    console.log(bytes < base ? `tightened: ${artifact}` : 'row already tight — no changes written.');
+  } else if (over) {
+    console.log(`\nRED ${SIZE_ROW}: ${artifact} ${base === undefined ? 'has no row' : 'grew past its row'}. Make it smaller, or state why the bytes are worth every download by running \`${rerun('--accept "<reason>"')}\` on this same file (a CI run's artifact, never a build of another machine).`);
+    process.exit(1);
+  } else if (under) {
+    console.log(`\nRED ${SIZE_ROW}: ${artifact} shrank; keep the gain by lowering its row in this change: \`${rerun('--tighten')}\``);
+    process.exit(1);
+  }
+}
+
+/** The command that repeats this measurement with `flag`. In CI it first
+ *  downloads the run's artifact, which the workflow uploads under the row's
+ *  name, so the line works as printed on the file that was measured. */
+function sizeRerun(artifact, file, flag) {
+  const script = baselineOverride ? path.relative(process.cwd(), fileURLToPath(import.meta.url)) : 'scripts/ratchet.mjs';
+  const baseline = baselineOverride ? ` --baseline ${path.relative(process.cwd(), baselineOverride)}` : '';
+  const run = process.env.GITHUB_RUN_ID;
+  const measure = `node ${script} size ${artifact} ${run ? path.basename(file) : file}${baseline} ${flag}`;
+  return run ? `rm -f ${artifact} && gh run download ${run} -n ${artifact} && ${measure}` : measure;
+}
+
+/** Rows `check` cannot measure, each with the shape check it runs instead. */
+const BUILD_MEASURED = { [SLICE_ROW]: checkSliceShape, [SIZE_ROW]: checkSizeShape };
+
+/** The armed row a measuring verb works on, after refusing flags that cannot
+ *  be honoured. Exits on any refusal. */
+function measuredRow(rowKey, { tighten, accept }) {
+  if (tighten && accept !== undefined) {
+    console.error('--tighten and --accept are opposites; pass one');
+    process.exit(1);
+  }
+  const baseline = loadBaseline();
+  const row = baseline.rows?.[rowKey];
+  if (!row?.armed) {
+    console.error(`row '${rowKey}' is missing or not armed in the baseline`);
+    process.exit(1);
+  }
+  if (accept !== undefined) refuseWeakReason(accept, rowKey);
+  return { baseline, row };
+}
+
+// ---------------------------------------------------------------------------
 // verify-accepts — the commit-msg hook's body (ratchet-spec.md §3). The pure
 // core below (SCALAR_TRAILER_KEY through verifyAccepts, plus isMidMerge and
 // baselineFileNames) is copied verbatim from the private repo's own copy of
@@ -1533,6 +1613,15 @@ const SCALAR_TRAILER_KEY = '(total)';
 // the handful of reasons that give them literally nothing to read.
 const WEAK_REASON_WORDS = new Set(['wip', 'accept', 'fix', 'todo', 'n/a']);
 const WEAK_REASON_MIN_LENGTH = 15;
+
+function refuseWeakReason(reason, rowKey) {
+  if (!reasonIsWeak(reason, rowKey)) return;
+  console.error(
+    `reason too weak: needs >= ${WEAK_REASON_MIN_LENGTH} characters, and can't be just the row name ` +
+    `or one of ${[...WEAK_REASON_WORDS].join(', ')} — say what changed and why.`,
+  );
+  process.exit(1);
+}
 
 /** A reason too weak to justify a raise: under WEAK_REASON_MIN_LENGTH
  *  characters, or exactly the row name / the key being raised (ignoring case
@@ -1892,9 +1981,20 @@ function main(argv) {
     else if (args[i] === '--from') from = args[++i];
     else if (args[i] === '--tighten') tighten = true;
     else if (args[i] === '--accept') accept = args[++i] ?? '';
+    else if (args[i] === '--baseline') {
+      if (!args[i + 1]) {
+        console.error('--baseline needs a file');
+        process.exit(1);
+      }
+      baselineOverride = path.resolve(args[++i]);
+    }
     else positional.push(args[i]);
   }
   const cmd = positional[0];
+  if (baselineOverride && cmd !== 'size') {
+    console.error('--baseline is for `size` only: every other row is this repo\'s own');
+    process.exit(1);
+  }
   if (cmd === 'check') cmdCheck(root);
   else if (cmd === 'tighten') cmdTighten(root, only);
   else if (cmd === 'accept') cmdAccept(root, positional[1], positional.slice(2).join(' '), only);
@@ -1903,8 +2003,9 @@ function main(argv) {
     else cmdVerifyAccepts(root, positional[1]);
   } else if (cmd === 'docs') cmdDocs(root, { check: checkOnly });
   else if (cmd === 'slices') cmdSlices(root, { from, tighten, accept });
+  else if (cmd === 'size') cmdSize(positional[1], positional[2], { tighten, accept });
   else {
-    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts|docs|slices> [args] [--path <file>]... [--range <A>..<B>] [--check] [--root <path>]');
+    console.error('usage: ratchet.mjs <check|tighten|accept|verify-accepts|docs|slices|size> [args] [--path <file>]... [--range <A>..<B>] [--check] [--root <path>]');
     process.exit(1);
   }
 }
