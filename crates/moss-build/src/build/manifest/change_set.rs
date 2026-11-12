@@ -563,7 +563,12 @@ where
 
 /// The output paths `previous` has that `current` no longer produces, sorted.
 pub fn removed_files(previous: &HashMap<String, String>, current: &SealedManifest) -> Vec<String> {
-    let mut gone: Vec<String> = vanished_keys(previous, &current.files()).map(str::to_string).collect();
+    removed_files_of(previous, &current.files())
+}
+
+/// [`removed_files`] for a plain path→entry map, such as a prebuilt folder's.
+pub fn removed_files_of(previous: &HashMap<String, String>, current: &HashMap<String, String>) -> Vec<String> {
+    let mut gone: Vec<String> = vanished_keys(previous, current).map(str::to_string).collect();
     gone.sort();
     gone
 }

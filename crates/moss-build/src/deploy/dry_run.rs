@@ -542,10 +542,13 @@ pub async fn run_prebuilt_dry_run(
     let manifest = super::prebuilt::build_manifest_from_dir(dir)?;
     super::profile::count("manifest_files", manifest.len() as u64);
     let (transfer, refusal) = match super::prebuilt::removed_against_last_publish(folder, &site_id, &manifest) {
-        Some((baseline, removed)) => {
-            let refusal = (!accept_removals && !removed.is_empty())
-                .then(|| crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, crate::deploy::removal_gate::prebuilt_refusal(&removed)));
+        // The gate refuses for a lost public address; the transfer counts
+        // every file the upload deletes, a rotated `_moss/` asset included.
+        Some((baseline, offline)) => {
+            let refusal = (!accept_removals && !offline.is_empty())
+                .then(|| crate::deploy::Refusal::new(crate::deploy::RefusalKind::Removals, crate::deploy::removal_gate::prebuilt_refusal(&offline)));
             let upload = change_set::upload_count_of(&baseline.files, &manifest) as u32;
+            let removed = change_set::removed_files_of(&baseline.files, &manifest);
             (Transfer::SinceLastPublish { upload, removed }, refusal)
         }
         None => (Transfer::NoRecord, None),
@@ -852,6 +855,20 @@ mod tests {
             let dry = run(&dir, true).await;
             assert!(dry.refusal.is_none(), "{dry:?}");
             assert!(matches!(&dry.transfer, Transfer::SinceLastPublish { removed, .. } if removed.len() == 1), "{dry:?}");
+        }
+
+        /// A renamed plugin copy: no address is lost, so nothing is refused,
+        /// and the old file is still one the upload removes.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_replaced_file_under_moss_is_counted_as_removed_and_not_refused() {
+            let dir = folder(
+                &[("index.html", "a"), ("_moss/plugins/booking.g.js", "g")],
+                Some(&[("index.html", "a"), ("_moss/plugins/booking.f.js", "f")]),
+            );
+            let dry = run(&dir, false).await;
+            assert!(dry.refusal.is_none(), "{dry:?}");
+            let text = dry.render();
+            assert!(text.contains("would upload 1 file and remove 1 file.\nRemoved:\n  /_moss/plugins/booking.f.js\n"), "{text}");
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
