@@ -247,35 +247,6 @@ fn resolve_folder_id(path: &str, from: &str) -> String {
     parts.join("/")
 }
 
-/// A folder note (`work/Opera/Opera.md`) may list its own folder by name, as
-/// `![[Opera/]]`. Read beside the note, that target is `work/Opera/Opera/`,
-/// which usually does not exist. When the folder-relative target is missing
-/// and its first segment is the note's own folder name, return a `from` path
-/// anchored in the note's parent folder, so the target means `work/Opera/`.
-/// An existing folder-relative target keeps its meaning.
-fn folder_note_parent_from(
-    path: &str,
-    from: &str,
-    ctx: &moss_core::resolve::reference::ReferenceContext<'_>,
-) -> Option<String> {
-    use moss_core::resolve::reference::{classify_reference, ReferenceKind};
-    if path.starts_with('/') {
-        return None;
-    }
-    let note = Path::new(from);
-    let own_dir = note.parent()?.to_str()?;
-    let own_name = Path::new(own_dir).file_name()?.to_str()?;
-    if note.file_stem()?.to_str()? != own_name {
-        return None;
-    }
-    if path.trim_end_matches('/').split('/').next()? != own_name {
-        return None;
-    }
-    let parent_from = Path::new(own_dir).parent()?.join("_.md").to_str()?.to_string();
-    let target_missing = matches!(classify_reference(path, from, true, ctx).kind, ReferenceKind::NotFound);
-    target_missing.then_some(parent_from)
-}
-
 /// Auto-detect children rendering style and grouping.
 ///
 /// Checks whether children have "rich" metadata (covers or descriptions)
@@ -1429,7 +1400,7 @@ fn list_pages<'a>(
     dir_overrides: &std::collections::HashMap<String, String>,
     now: chrono::NaiveDateTime,
 ) -> Result<Listed<'a>, String> {
-    // Route the three-branch decision through moss-core's `classify_reference`:
+    // Route the three-branch decision through moss-core's `classify_reference_verdict`:
     // `dir_has_markdown_index` → FolderListing (Branch 1), else
     // `dir_has_static_index` → FolderIndexIframe (Branch 2), else NotFound.
     // The asset/url stubs are never consulted.
@@ -1445,10 +1416,10 @@ fn list_pages<'a>(
         folders: &folder_idx,
         urls: &no_urls,
     };
+    let verdict = moss_core::resolve::reference::classify_reference_verdict(parsed.path, from, true, &ctx);
     // `from` is always the page hosting the embed. Only the target is read
     // from a different anchor when a folder note embeds its own folder by name.
-    let own_name_anchor = folder_note_parent_from(parsed.path, from, &ctx);
-    let resolve_from = own_name_anchor.as_deref().unwrap_or(from);
+    let resolve_from = verdict.anchored_from.as_deref().unwrap_or(from);
     let folder_id = resolve_folder_id(parsed.path, resolve_from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
     // while `ParsedDocument.url_path` is slugified — lowercased and
@@ -1462,7 +1433,7 @@ fn list_pages<'a>(
         moss_core::slug::slugify_path_segments(&crate::build::scan::page_map::resolve_path_with_overrides(id, dir_overrides))
     };
     let folder_id_slug = url_slug(&folder_id);
-    let classified = moss_core::resolve::reference::classify_reference(parsed.path, resolve_from, true, &ctx);
+    let classified = verdict.resolved;
     use moss_core::resolve::reference::ReferenceKind;
 
     let target_doc: Option<&ParsedDocument> = match classified.kind {

@@ -115,10 +115,9 @@ fn rename_in(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<String,
         let shown = names.iter().take(5).copied().collect::<Vec<_>>().join(", ");
         let more = if names.len() > 5 { format!(" and {} more", names.len() - 5) } else { String::new() };
         line.push_str(&format!(
-            "\n{} link{} name no file exactly, so {} not rewritten; check {} by hand: {shown}{more}",
+            "\n{} link{} not rewritten; check {} by hand: {shown}{more}",
             left.len(),
-            if left.len() == 1 { "" } else { "s" },
-            if left.len() == 1 { "it was" } else { "they were" },
+            if left.len() == 1 { " was" } else { "s were" },
             if left.len() == 1 { "it" } else { "them" },
         ));
     }

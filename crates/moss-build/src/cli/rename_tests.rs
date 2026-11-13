@@ -215,7 +215,7 @@ fn a_link_only_name_search_resolves_is_reported_not_silently_kept() {
     let post = fs::read_to_string(p.join("blog/post.md")).unwrap();
     assert_eq!(post, "[x](./x/index.md)\n", "the link stays as written");
     assert!(
-        line.contains("3 links name no file exactly")
+        line.contains("3 links were not rewritten")
             && line.contains("blog/post.md")
             && line.contains("blog/more.md"),
         "{line}"
@@ -235,5 +235,5 @@ fn a_name_search_link_to_a_file_that_did_not_move_is_not_reported() {
 
     let line = rename_in(&args("other.md", "other2.md"), p, None).unwrap();
 
-    assert!(!line.contains("name no file exactly"), "{line}");
+    assert!(!line.contains("not rewritten"), "{line}");
 }

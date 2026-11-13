@@ -30,6 +30,7 @@ All notable changes to moss will be documented here.
 - `moss deploy --email` (and any command that waits for a sign-in link) stops as soon as the link has expired and says so: "The sign-in link sent to <address> expired before it was opened. Run the command again with --email to get a new link." Before, it kept checking, then reported that the service could not be reached.
 - Editing a page in the preview no longer strips the margin notes, the selection popover, the mobile selection bar or the link-preview card: they stay after each edit, and a footnote reference still shows its margin note instead of jumping to the end-of-page list. Before, they were gone until a full reload.
 - Checking a site name reports a failed check as a failure, where it used to say the name was taken.
+- The editor no longer marks a folder embed as a missing file when a folder's own page lists its folder by name (`events/events.md` writing `![[events/]]`). The build already read it as that folder's listing. Renaming the folder now renames it in that embed too (`![[dates/]]`), where it used to leave the old name.
 
 ## [0.15.23] - 2026-11-12
 

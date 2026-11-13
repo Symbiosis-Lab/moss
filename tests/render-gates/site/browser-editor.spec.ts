@@ -26,6 +26,9 @@
  * was written, and a chosen date and time reach the file in the form the
  * build draws.
  *
+ * Then a folder's own page that lists its folder by name carries no
+ * missing-file mark, while an embed of a folder that does not exist does.
+ *
  * Ports: playwright/gate-ports.ts, keys `browser-editor:ui` /
  * `browser-editor:preview`. Config: playwright/browser-editor.config.ts.
  */
@@ -67,6 +70,9 @@ test.beforeEach(async () => {
   writeFileSync(join(site, 'footer.md'), 'Tended by hand.\n');
   mkdirSync(join(site, 'events'));
   writeFileSync(join(site, 'events', 'reading-circle.md'), '---\ntitle: Reading circle\n---\nWe read together.\n\n[Back home](/)\n');
+  mkdirSync(join(site, 'meetings'));
+  writeFileSync(join(site, 'meetings', 'meetings.md'), '---\ntitle: Meetings\n---\nOurs:\n\n![[meetings/|style:summary]]\n\nGone:\n\n![[nowhere/|style:summary]]\n');
+  writeFileSync(join(site, 'meetings', 'first.md'), '---\ntitle: First\n---\nThe first meeting.\n');
   // MOSS_HOME and the search root keep the binary from finding, or handing
   // the folder to, an installed desktop app.
   server = spawn(MOSS_BIN, ['edit', site, '--serve', '--no-browser', '--port', String(gatePort('browser-editor:ui'))], {
@@ -319,4 +325,15 @@ test("an event's start and end open date and time controls that write what the b
   expect(file()).toBe(fair(''));
   await page.keyboard.press('Enter');
   await expect.poll(file, { timeout: 15_000 }).toBe(fair(`start: ${today}\n`));
+});
+
+test("a folder's own page listing its folder by name is not marked missing", async ({ page }) => {
+  const { editor } = await openEditor(page);
+  await editor.click('.seg.bc[data-path=""]');
+  await editor.click('.seg[data-path="meetings"]:not(.bc)');
+  await editor.click('.seg[data-path="meetings/meetings.md"]');
+  const marked = (target: string) => editor.locator(`.cm-line:has-text("![[${target}/") .cm-problem--blocks`);
+  // The missing folder's mark shows the resolver has answered for this page.
+  await expect(marked('nowhere')).not.toHaveCount(0, { timeout: 30_000 });
+  await expect(marked('meetings')).toHaveCount(0);
 });
