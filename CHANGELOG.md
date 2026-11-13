@@ -51,6 +51,7 @@ All notable changes to moss will be documented here.
 - For plugin authors: `moss describe` no longer lists the `syndicate` hook, which moss no longer calls. A channel posts through the copy hooks (`publish_copy` and the others listed there).
 - An edit saved in moss's editor shows in the preview without waiting for the computer to report the change to the file: the save asks for its own rebuild. That report took anywhere from a twentieth of a second to five seconds, and sometimes never came until the next periodic check.
 - A page renamed in moss's editor is seldom built twice. The computer's report of the same rename used to build the site again on most renames.
+- A page that opens with one picture, alone in its paragraph and with no caption or options, directly above the page's only `# Heading` now shows that picture as its hero, exactly as if it were written inside `:::hero`: window-wide under the header, loaded first, and used as the share picture. Before, the picture stayed in the text column. To keep it there, give it a width word (`![Harbour|body](harbour.jpg)`); a caption line under the picture, text between it and the heading, or a second `# Heading` anywhere on the page also leaves it as it was.
 
 ### New
 

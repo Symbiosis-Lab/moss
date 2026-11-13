@@ -262,6 +262,7 @@ pub(super) fn restore(blocks: &mut [Block], embeds: &LinkedEmbeds, config: &Pars
             math: config.math,
             blocks: None,
             hard_line_breaks: false,
+            page_body: false,
         },
     };
     for block in blocks.iter_mut() {

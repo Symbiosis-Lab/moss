@@ -124,6 +124,7 @@ fn plan_reassembles_with_source_lines_on() {
         warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
+        page_body: false,
     };
     let hooks = DefaultHooks::new();
     for (name, md) in corpus() {

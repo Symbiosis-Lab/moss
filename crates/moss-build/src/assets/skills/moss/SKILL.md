@@ -102,9 +102,13 @@ declarations that fight each other.
   `:::grid` at the top of the body, when its text is the title. A `:::hero`
   at the top that holds words takes the title's place: a `# Heading` in it
   is the page's title, and without one the title is kept for screen readers
-  only. A page in the navigation takes any `# Heading` it opens with as its
-  title, after a leading picture too. Anywhere else the page shows its
-  title above the body, so a heading whose text differs follows it.
+  only. A picture alone above the page's only `# Heading` is that page's
+  hero with no fence: write the picture, then the title. A width word on the
+  picture (`|body`), a caption line under it or a second `# Heading` on the
+  page keeps it a picture in the column. A page in the navigation takes any
+  `# Heading` it opens with as its title, after a leading picture too.
+  Anywhere else the page shows its title above the body, so a heading whose
+  text differs follows it.
   A name that starts with a date stamp (`2026-11-06 Autumn hotpot.md`) dates the page and the words after it
   are the title; a name that is only the stamp is an untitled, dated post (`moss guide authoring`, "Content structure").
 - **Name files in their own language; pin a non-ASCII URL.** The

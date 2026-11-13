@@ -300,7 +300,7 @@ pub fn render_page(source_path: &str, text: &str, site: &SiteInputs) -> Rendered
         let line = message_line(&message);
         diagnostic(Severity::Warning, message, line)
     }).collect();
-    let mut doc = ast::parse_with_config(&markdown, &ParseConfig { warning_line_offset: offset, blocks: Some(&site.blocks), ..parse_config() });
+    let mut doc = ast::parse_with_config(&markdown, &ParseConfig { warning_line_offset: offset, blocks: Some(&site.blocks), page_body: true, ..parse_config() });
     diagnostics.extend(doc.warnings.iter().map(|message| diagnostic(Severity::Warning, message.clone(), message_line(message))));
     let resolution = ast::resolve_document(
         &mut doc, &crate::asset_snapshot::AssetSnapshot::new(), Some(&graph), source_path,

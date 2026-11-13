@@ -132,6 +132,15 @@ fn images_use_site_relative_paths() {
     assert!(nested.body_html.contains("src=\"img/x.jpg\""), "{}", nested.body_html);
 }
 
+/// The preview renders a page body as the build does: the picture above the
+/// only title is the page's hero, and the title is not injected a second time.
+#[test]
+fn a_picture_above_the_only_title_is_the_hero() {
+    let page = render_page("a.md", "![](img/x.jpg)\n\n# A\n", &site(&["img/x.jpg"]));
+    assert!(page.body_html.contains("moss-hero"), "{}", page.body_html);
+    assert_eq!(page.title_outcome, TitleOutcome::None);
+}
+
 #[test]
 fn title_is_frontmatter_and_frontmatter_is_not_body() {
     let page = render_page("a.md", "---\ntitle: A title\ndescription: Hidden metadata\n---\nVisible body", &site(&[]));

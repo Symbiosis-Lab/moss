@@ -216,23 +216,68 @@ fn hero_fence_args(line: &str) -> Option<&str> {
     (rest.is_empty() || rest.starts_with([' ', '\t'])).then(|| rest.trim_start())
 }
 
-/// `body` after the HTML comments it opens with, which a reader never sees,
-/// the way `extract_hero` looks past them for the opening hero. A line may
-/// hold several comments; one with anything else after a `-->` is not
-/// comments alone, and nothing of it is skipped.
+/// `body` after the HTML comment blocks it opens with, which a reader never
+/// sees. A block is what the parser reads as one: it starts at a line that
+/// opens `<!--` (indented under four spaces) and runs through the first line
+/// that holds `-->`. A block with anything but comments in it stops the skip.
 pub(crate) fn skip_leading_comments(body: &str) -> &str {
-    let (mut rest, mut cursor) = (body, body);
-    while let Some((_, tail)) = cursor.trim_start().strip_prefix("<!--").and_then(|c| c.split_once("-->")) {
-        let (line_end, next) = tail.split_once('\n').unwrap_or((tail, ""));
-        if line_end.trim().is_empty() {
-            (rest, cursor) = (next, next);
-        } else if line_end.trim_start().starts_with("<!--") {
-            cursor = tail;
-        } else {
-            break;
+    let mut rest = body;
+    loop {
+        let mut block = rest;
+        while let Some((_, next)) = block.split_once('\n').filter(|(line, _)| line.trim().is_empty()) {
+            block = next;
         }
+        let opening = block.trim_start_matches(' ');
+        let Some((head, tail)) = block.split_once("-->").filter(|_| block.len() - opening.len() < 4 && opening.starts_with("<!--")) else {
+            return rest;
+        };
+        let end = head.len() + 3 + tail.find('\n').map_or(tail.len(), |i| i + 1);
+        let (block, next) = block.split_at(end);
+        if !comment_only(block) {
+            return rest;
+        }
+        rest = next;
     }
-    rest
+}
+
+/// True for text that holds only HTML comments.
+pub(crate) fn comment_only(html: &str) -> bool {
+    let mut rest = html.trim();
+    while let Some(after) = rest.strip_prefix("<!--") {
+        let Some((_, tail)) = after.split_once("-->") else { return false };
+        rest = tail.trim_start();
+    }
+    rest.is_empty()
+}
+
+/// The picture line of a body that opens with a hero by shape: one picture
+/// alone in its paragraph, with no words or options of its own, directly above
+/// the body's only level-1 heading, after any leading comments. It reads as if
+/// the picture were fenced in `:::hero`. A pipe on the picture (a width word
+/// such as `|body`, a placement, a caption), an italic caption line under it,
+/// prose between it and the heading, or a second level-1 heading keeps it a
+/// figure.
+pub(crate) fn banner_line(body: &str) -> Option<&str> {
+    let body = skip_leading_comments(body);
+    let mut lines = body.lines().filter(|line| !line.trim().is_empty());
+    let picture = lines.next().filter(|line| !line.starts_with([' ', '\t']))?;
+    h1_text(lines.next()?)?;
+    let media = crate::ast::extract_hero::hero_media_line_span(picture)?;
+    // A pipe in the alt carries a width word, placement or caption, and the
+    // span takes for the alt all before the first `](`, so a bracket or a
+    // backslash in it may be a link, a stray `]` or an escaped one on a line
+    // the parser reads as text. The span
+    // reads the address up to the line's last `)`, so a second picture, a
+    // quoted title or a space leaves in it what no bare address holds, and
+    // pulldown-cmark would not read a spaced address as a picture either. A
+    // wikilink target may hold spaces and parentheses; a bracket in it is a
+    // second embed.
+    let wikilink = picture.starts_with("![[");
+    let bare = !media.path.contains(|c: char| matches!(c, '[' | ']') || !wikilink && (c.is_whitespace() || matches!(c, '(' | ')' | '"')));
+    let wordless = media.is_token && media.attrs.is_empty() && !media.alt.contains(['|', '[', ']', '\\']) && bare;
+    let ext = crate::path_ext::path_extension_lower(&media.path);
+    let is_image = crate::resolve::ext_kind::reference_kind_for_ext(&ext) == crate::resolve::ext_kind::ExtKind::Image;
+    (wordless && is_image && h1_count(body) == 1).then_some(picture)
 }
 
 /// True when the body supplies a real heading: an ATX level-1 heading
@@ -244,13 +289,35 @@ pub(crate) fn skip_leading_comments(body: &str) -> &str {
 /// combine this with [`hero_at_top_owns_title`] through [`title_outcome`]
 /// rather than themselves.
 pub fn body_supplies_title(body_markdown: &str) -> bool {
-    first_body_h1(body_markdown).is_some()
+    body_h1s(body_markdown).next().is_some()
 }
 
-/// The text of the first level-1 heading [`body_supplies_title`] counts.
-fn first_body_h1(body_markdown: &str) -> Option<&str> {
+/// How many level-1 headings a body has outside code fences: each
+/// [`body_supplies_title`] counts, and each setext one (`Title` over `===`).
+fn h1_count(body_markdown: &str) -> usize {
+    let lines: Vec<_> = unfenced_lines(body_markdown).collect();
+    let setext = lines.windows(2).filter(|pair| matches!(pair, [Some(text), Some(rule)]
+        if !text.trim().is_empty() && !is_atx_heading(text) && !rule.trim().is_empty() && rule.trim_end().chars().all(|c| c == '='))).count();
+    body_h1s(body_markdown).count() + setext
+}
+
+/// True for an ATX heading line of any level: one to six `#`, then a space,
+/// a tab or the line's end. `#tag` is text.
+fn is_atx_heading(line: &str) -> bool {
+    let rest = line.trim_start_matches('#');
+    (1..=6).contains(&(line.len() - rest.len())) && (rest.is_empty() || rest.starts_with([' ', '\t']))
+}
+
+/// The text of each ATX level-1 heading outside a code fence.
+fn body_h1s(body_markdown: &str) -> impl Iterator<Item = &str> {
+    unfenced_lines(body_markdown).flatten().filter_map(h1_text)
+}
+
+/// Each line of the body with its indent trimmed, or `None` for a code fence
+/// line or a line inside a fence.
+fn unfenced_lines(body_markdown: &str) -> impl Iterator<Item = Option<&str>> {
     let mut fence: Option<&str> = None;
-    for line in body_markdown.lines().map(str::trim_start) {
+    body_markdown.lines().map(str::trim_start).map(move |line| {
         let marker = if line.starts_with("```") { Some("```") } else if line.starts_with("~~~") { Some("~~~") } else { None };
         if let Some(m) = marker {
             fence = match fence {
@@ -258,15 +325,10 @@ fn first_body_h1(body_markdown: &str) -> Option<&str> {
                 Some(open) if open == m => None,
                 other => other,
             };
-            continue;
+            return None;
         }
-        if fence.is_none() {
-            if let Some(rest) = line.strip_prefix('#').filter(|r| r.starts_with([' ', '\t']) && !r.trim().is_empty()) {
-                return Some(rest.trim());
-            }
-        }
-    }
-    None
+        fence.is_none().then_some(line)
+    })
 }
 
 /// Compute the full heading state for a page.
@@ -311,7 +373,8 @@ pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> 
 /// text is the same as `title` under [`same_heading_text`], or a `:::grid`
 /// whose first `# Text` line, up to the grid's first bare `:::` line, has that
 /// text (a heading moved into a cell is still the page's title). Leading blank
-/// lines are skipped, and so is an opening `:::hero` that draws no words: it
+/// lines are skipped, and so is an opening hero that draws no words, fenced
+/// in `:::hero` or a picture directly above the body's only `# Heading`: it
 /// is lifted out of the article, so the block after it opens the body.
 /// Anything else first, including a `##` heading or a different `# Text`,
 /// makes this false.
@@ -324,7 +387,9 @@ pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
 pub fn opening_h1(body_markdown: &str) -> Option<&str> {
     let body_markdown = skip_leading_comments(body_markdown);
     let mut lines = body_markdown.lines().filter(|line| !line.trim().is_empty()).peekable();
-    if lines.peek().copied().and_then(hero_fence_args).is_some() && !hero_at_top_owns_title(body_markdown) {
+    if banner_line(body_markdown).is_some() {
+        lines.next();
+    } else if lines.peek().copied().and_then(hero_fence_args).is_some() && !hero_at_top_owns_title(body_markdown) {
         lines.find(|l| l.trim() == ":::");
     }
     let first = lines.next();
@@ -337,13 +402,15 @@ pub fn opening_h1(body_markdown: &str) -> Option<&str> {
 
 /// The heading a body opens with when its text is not `title`: a case study's question over its name. `None` when the body opens with no heading, or with the title itself.
 pub fn opening_heading_beyond_title(body_markdown: &str, title: &str) -> Option<String> {
-    let heading = opening_h1(body_markdown)?.trim();
-    (!heading.is_empty() && !body_opens_with_title(body_markdown, title)).then(|| heading.to_string())
+    let heading = opening_h1(body_markdown)?;
+    (!body_opens_with_title(body_markdown, title)).then(|| heading.to_string())
 }
 
-/// The text of a `# Text` line, or `None` for any other line.
+/// The text of an ATX level-1 heading line (`# Text`, not `##` or `#tag`),
+/// trimmed, or `None` for any other line or an empty heading.
 fn h1_text(line: &str) -> Option<&str> {
-    line.strip_prefix('#')?.strip_prefix([' ', '\t'])
+    let text = line.strip_prefix('#')?;
+    text.starts_with([' ', '\t']).then(|| text.trim()).filter(|t| !t.is_empty())
 }
 
 /// The comparison key for "same heading text": case folded, `-` and `_`
@@ -388,7 +455,7 @@ fn title_to_inject(input: HeadingInputs<'_>) -> Option<HeadingState> {
 pub fn body_heading_replacing_title(input: HeadingInputs<'_>, is_nav_item: bool) -> Option<&str> {
     title_to_inject(input)?;
     if is_nav_item && title_outcome(input.body_markdown, is_nav_item) == TitleOutcome::None {
-        first_body_h1(input.body_markdown)
+        body_h1s(input.body_markdown).next()
     } else {
         None
     }
@@ -1056,6 +1123,39 @@ mod tests {
     fn title_inside_an_opening_hero_under_a_comment_has_no_injected_title() {
         let body = "<!-- note -->\n:::hero {image=hall.jpg}\n# Custom\n:::\n\ntext";
         assert_eq!(article_title_outcome(article_inputs(body, Some("Custom")), false), TitleOutcome::None);
+    }
+
+    /// The picture above the body's only `# Heading` is that hero without the
+    /// fence. A second `# Heading`, a caption line or a width word keeps the
+    /// picture in the body, and the injected title above it.
+    #[test]
+    fn title_under_an_opening_picture_has_no_injected_title() {
+        for picture in ["![Hall](hall.jpg)", "![[hall.jpg]]", "\n![](hall.jpg)\n"] {
+            let body = format!("{picture}\n\n# Custom\n\ntext\n\n## Part\n\n```\nCode\n===\n```\n\nA rule under a blank line:\n\n===\n");
+            assert_eq!(article_title_outcome(article_inputs(&body, Some("Custom")), false), TitleOutcome::None, "{picture}");
+        }
+        for body in [
+            "![Hall](hall.jpg)\n\n# Custom\n\n# 2.\n",
+            "![Hall](hall.jpg)\n*The hall in 1884*\n\n# Custom\n",
+            "![Hall|body](hall.jpg)\n\n# Custom\n",
+            "![[hall.jpg|The hall]]\n\n# Custom\n",
+            "![Hall](hall.jpg)\n\nA line.\n\n# Custom\n",
+            "![[notes.pdf]]\n\n# Custom\n",
+            "![Hall](hall.jpg)\n\n# Custom\n\nText.\n\nPart Two\n========\n",
+            "![Hall](hall.jpg)\n\n# Custom\n\nText.\n\n#two\n===\n",
+            // Not a picture to the parser: the address holds a space, the
+            // alt a link or a stray bracket, the line a second embed.
+            "![Hall](my hall.jpg)\n\n# Custom\n",
+            "![a [b](hall.jpg)\n\n# Custom\n",
+            "![a]b](hall.jpg)\n\n# Custom\n",
+            "![a\\](hall.jpg)\n\n# Custom\n",
+            // A visible line or a code block to the parser, not a comment.
+            "<!-- a --> <!-- b\nc -->\n![Hall](hall.jpg)\n\n# Custom\n",
+            "    <!-- a -->\n![Hall](hall.jpg)\n\n# Custom\n",
+            "![[hall.jpg]] ![[lake.jpg]]\n\n# Custom\n",
+        ] {
+            assert_eq!(article_title_outcome(article_inputs(body, Some("Custom")), false), TitleOutcome::Visible, "{body}");
+        }
     }
 
     #[test]

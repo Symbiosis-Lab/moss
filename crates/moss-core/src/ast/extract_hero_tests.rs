@@ -1,6 +1,7 @@
 use super::super::document::BlockMeta;
 use super::super::hooks::DefaultHooks;
 use super::super::node::Inline;
+use super::super::parser::parse_with_config;
 use super::super::shortcode::HeroShortcode;
 use super::super::url::{Url, UrlKind};
 use super::*;
@@ -265,4 +266,88 @@ fn a_comment_above_the_hero_does_not_stop_it_opening_the_page() {
     assert_eq!(doc.blocks.len(), 1, "the comment stays, the hero leaves");
     let drawn = extraction.drawn_from.expect("a from= hero is kept for its second render");
     assert_eq!(drawn.shortcode.header.as_deref(), Some("over"));
+}
+
+fn page(markdown: &str) -> Document {
+    parse_with_config(markdown, &ParseConfig { page_body: true, ..ParseConfig::default() })
+}
+
+fn hero(markdown: &str) -> Option<HeroShortcode> {
+    match page(markdown).blocks.into_iter().next()? {
+        Block::Shortcode(Shortcode::Hero(mut hero)) => {
+            hero.source = Default::default();
+            Some(hero)
+        }
+        _ => None,
+    }
+}
+
+#[test]
+fn a_picture_above_the_only_title_is_the_fenced_hero() {
+    for picture in ["![A hall](assets/hall.jpg)", "![[hall.jpg]]", "![](hall.jpg)", "![Hall (1884) \"east\"](hall.jpg)", "![[my hall (1).jpg]]"] {
+        let plain = format!("{picture}\n\n# Page Title\n\nText.\n\n## Part\n");
+        let fenced = format!(":::hero\n{picture}\n:::\n\n# Page Title\n\nText.\n\n## Part\n");
+        assert!(hero(&plain).is_some(), "{picture}");
+        assert_eq!(hero(&plain), hero(&fenced), "{picture}");
+        assert_eq!(page(&plain).blocks[1..], page(&fenced).blocks[1..], "{picture}");
+    }
+}
+
+/// A footer or partial is not a page body: nothing lifts a hero out of it,
+/// so its opening picture stays where it is written.
+#[test]
+fn outside_a_page_body_the_picture_stays_a_picture() {
+    let doc = parse_with_config("![Hall](hall.jpg)\n\n# Contact\n", &ParseConfig::default());
+    assert!(matches!(doc.blocks[0], Block::Figure { .. }), "{:?}", doc.blocks[0]);
+}
+
+/// A grid cell is parsed as a fragment, so a picture above a heading in a cell stays a picture.
+#[test]
+fn a_picture_above_a_heading_in_a_grid_cell_stays_a_picture() {
+    let doc = page(":::grid 2\n![Hall](hall.jpg)\n\n# Contact\n+++\nText.\n:::\n");
+    let Block::Shortcode(Shortcode::Grid(grid)) = &doc.blocks[0] else { panic!("{:?}", doc.blocks) };
+    assert!(matches!(grid.cells[0][0], Block::Figure { .. }), "{:?}", grid.cells[0]);
+}
+
+/// `extract_hero` looks past leading comments, so the picture after them opens the page.
+#[test]
+fn a_comment_above_the_picture_does_not_stop_it() {
+    for markdown in ["<!-- note -->\n![Hall](hall.jpg)\n\n# Title\n", "<!--\n# Draft\n-->\n![Hall](hall.jpg)\n\n# Title\n"] {
+        let doc = page(markdown);
+        assert!(matches!(doc.blocks[1], Block::Shortcode(Shortcode::Hero(_))), "{:?}", doc.blocks);
+    }
+}
+
+/// A click on the hero in the preview reaches the picture's own line.
+#[test]
+fn the_inferred_hero_sits_on_the_pictures_line() {
+    let config = ParseConfig { emit_source_lines: true, page_body: true, ..ParseConfig::default() };
+    let doc = parse_with_config("\n\n![Hall](hall.jpg)\n\n# Page Title\n", &config);
+    assert!(matches!(doc.blocks[0], Block::Shortcode(Shortcode::Hero(_))));
+    assert_eq!(doc.block_meta[0].source_line, Some(3));
+    let Block::Shortcode(Shortcode::Hero(hero)) = &doc.blocks[0] else { unreachable!() };
+    assert_eq!(hero.source.extra_lines, 0);
+}
+
+#[test]
+fn near_misses_keep_the_picture_in_the_body() {
+    for markdown in [
+        // Numbered sections written as level-1 headings: none is the title.
+        "![Hall](hall.jpg)\n\n# 1.\n\nText.\n\n# 2.\n\nText.\n",
+        "![Hall](hall.jpg)\n*The hall in 1884*\n\n# Page Title\n",
+        "![[hall.jpg|The hall in 1884]]\n\n# Page Title\n",
+        "![Hall|body](hall.jpg)\n\n# Page Title\n",
+        "![Hall|screen](hall.jpg)\n\n# Page Title\n",
+        "![Hall](hall.jpg)\n\nA line of text.\n\n# Page Title\n",
+        "![Hall](hall.jpg) ![Lake](lake.jpg)\n\n# Page Title\n",
+        "[![Hall](hall.jpg)](https://example.org)\n\n# Page Title\n",
+        "![Hall](hall.jpg)\n\n## Page Title\n",
+        "# Page Title\n\n![Hall](hall.jpg)\n",
+        "![[film.mp4]]\n\n# Page Title\n",
+        "![Hall](my hall.jpg)\n\n# Page Title\n",
+        "![[hall.jpg]] ![[lake.jpg]]\n\n# Page Title\n",
+        "![Hall](hall.jpg \"The hall\")\n\n# Page Title\n",
+    ] {
+        assert!(hero(markdown).is_none(), "{markdown}");
+    }
 }
