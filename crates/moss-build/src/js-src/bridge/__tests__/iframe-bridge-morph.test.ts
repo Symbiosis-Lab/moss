@@ -715,6 +715,7 @@ describe("shipped morph with focus inside the page", () => {
     const w = dom.window;
     const replies: unknown[] = [];
     const parent = { postMessage: (message: unknown) => replies.push(message) };
+    dom.reconfigure({ windowTop: parent });
     Object.defineProperty(w, "parent", { value: parent });
     w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) as any;
     (w as any).ResizeObserver = class { observe() {} disconnect() {} };
