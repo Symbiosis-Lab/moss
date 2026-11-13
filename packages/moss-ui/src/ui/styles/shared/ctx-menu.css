@@ -6,14 +6,13 @@
 /* The one look of a menu, dropdown or suggestion list: the box and its rows.
    Whatever builds one puts these two classes on it and sets no radius,
    padding, background or shadow of its own. A menu over the previewed page
-   repaints it through the three --moss-menu-* paint properties. */
+   repaints it through the --moss-menu-* paint properties. */
 /* The completion list is drawn by the editor library, whose theme outranks a
    single class: the longer selectors put it on the same surface. */
-.moss-menu, .cm-editor .cm-tooltip.cm-tooltip-autocomplete.moss-menu { background: var(--moss-menu-bg); border-radius: var(--moss-menu-radius); padding: var(--moss-menu-inset); box-shadow: var(--moss-menu-shadow); }
+.moss-menu, .cm-editor .cm-tooltip.cm-tooltip-autocomplete.moss-menu { background: var(--moss-menu-bg); border-radius: var(--moss-menu-radius); padding: var(--moss-menu-inset); box-shadow: var(--moss-menu-shadow); border: var(--moss-menu-border); }
 .moss-menu-row, .cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li.moss-menu-row { padding: var(--moss-menu-row-padding); border-radius: var(--moss-menu-row-radius); cursor: pointer; }
 /* One highlight for the row a click or Enter would take, however it is marked. */
 .moss-menu-row:hover, .moss-menu-row:focus, .moss-menu-row.is-active, .moss-menu-row[aria-selected="true"], .cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li.moss-menu-row[aria-selected] { background: var(--moss-menu-hover); color: inherit; outline: none; }
-.cm-editor .cm-tooltip.cm-tooltip-autocomplete.moss-menu { border: 0; }
 .cm-editor .cm-tooltip.cm-tooltip-autocomplete.moss-menu > ul { font-family: inherit; font-size: 13px; }
 
 /* Above the toast tier: a context menu is a direct answer to a click the user

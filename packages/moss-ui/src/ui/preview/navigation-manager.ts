@@ -53,6 +53,8 @@ const CHROME_TOKEN_NAMES = [
   "--moss-chrome-panel-degraded",
   "--moss-chrome-panel-border",
   "--moss-chrome-panel-hover",
+  "--moss-chrome-menu-bg",
+  "--moss-chrome-menu-border",
   // Depth on the same axis: the level strings are computed on the probe (their
   // inputs substituted there), so only the two levels need mirroring.
   "--moss-chrome-elevation-1",

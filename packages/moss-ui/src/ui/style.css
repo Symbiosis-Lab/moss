@@ -2930,7 +2930,8 @@ body.own-titlebar.controls-trailing .moss-titlebar-traffic-light-space {
   margin-top: 4px;
   max-height: 300px;
   overflow-y: auto;
-  --moss-menu-bg: var(--moss-chrome-panel-bg);
+  --moss-menu-bg: var(--moss-chrome-menu-bg);
+  --moss-menu-border: var(--moss-chrome-menu-border);
   --moss-menu-shadow: var(--moss-chrome-elevation-2);
   --moss-menu-hover: var(--moss-chrome-panel-hover);
   z-index: var(--z-popup); /* popup layer, inside the pill's stacking context */

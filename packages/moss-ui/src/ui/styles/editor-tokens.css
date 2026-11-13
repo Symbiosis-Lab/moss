@@ -93,7 +93,7 @@
   --moss-color-surface: #24242a;
   --moss-color-text: #c5c5cc;
   --moss-color-text-secondary: #9a9aa4;
-  --moss-color-muted: #78788a;
+  --moss-color-muted: #8a8a9c; /* 4.5:1 on the dark --moss-color-surface */
   --moss-editor-body-color: #d7dbe0; /* PROVISIONAL, see :root */
   --moss-hl-punct: #8a8490; /* see :root */
   --moss-editor-highlight: rgba(245, 200, 0, 0.3);

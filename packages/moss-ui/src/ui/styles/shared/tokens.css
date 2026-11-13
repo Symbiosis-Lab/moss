@@ -54,9 +54,8 @@
   /* [B] diverges from tokens.json (dark): app-shell dark #c8c3bc vs site dark
      #d4cbba (app chrome has lighter bg → slightly lower contrast target). Light match. */
   --moss-color-text: #2c2825;
-  /* [B] diverges from tokens.json (dark): app-shell dark #8a8580 vs site dark
-     #9a9080. Light values match — this one is darkened from #8a8580 to clear
-     4.5:1 (WCAG 1.4.3); the app dark value already clears it. */
+  /* [B] diverges from tokens.json (dark): app-shell dark #8c8782 vs site dark
+     #9a9080. Light values match; both clear 4.5:1 (WCAG 1.4.3). */
   --moss-color-muted: #716d69;
   /* [B] diverges from tokens.json (dark): app-shell dark #242018 vs site dark
      #252017. Light values match. */
@@ -114,6 +113,11 @@
   --moss-menu-bg: var(--moss-color-bg);
   --moss-menu-shadow: var(--moss-elevation-2);
   --moss-menu-hover: var(--moss-hover-overlay);
+  --moss-menu-border: none;
+  /* The address bar's list floats over the previewed page, so it follows the
+     page's own light or dark (the [data-chrome-theme] block), not the app's. */
+  --moss-chrome-menu-bg: var(--moss-chrome-panel-bg);
+  --moss-chrome-menu-border: none;
   --moss-menu-inset: 6px;
   --moss-menu-row-radius: calc(var(--moss-menu-radius) - var(--moss-menu-inset));
   --moss-menu-row-pad-block: 6px;
@@ -462,9 +466,11 @@ body.fullscreen-mode {
   --moss-color-accent: #4a7c4a;
   --moss-color-bg: #1a1816;
   --moss-color-text: #c8c3bc;
-  --moss-color-muted: #8a8580;
+  /* 4.5:1 on --moss-color-surface, the lightest ground muted text sits on. */
+  --moss-color-muted: #8c8782;
   --moss-color-surface: #242018;
   --moss-menu-bg: var(--moss-color-surface);
+  --moss-menu-border: 1px solid var(--moss-border-light);
 
   --moss-color-text-secondary: #a8a39c;
   --moss-color-accent-hover: #5a8c5a;
@@ -537,6 +543,9 @@ body.fullscreen-mode {
   --moss-chrome-surface-bg: rgba(26, 24, 22, 0.88);
   --moss-chrome-pill-bg: rgba(255, 255, 255, 0.14); /* floor: up from 0.08 */
   --moss-chrome-panel-bg: rgba(26, 24, 22, 0.94);
+  /* --moss-color-surface's dark value, at the panel's opacity. */
+  --moss-chrome-menu-bg: rgba(36, 32, 24, 0.94);
+  --moss-chrome-menu-border: 1px solid var(--moss-chrome-panel-border);
   --moss-chrome-panel-fg: #c8c3bc;
   --moss-chrome-panel-fg-secondary: #a8a39c;
   --moss-chrome-panel-fg-muted: #9a958e;
@@ -570,6 +579,8 @@ body.fullscreen-mode {
   --moss-chrome-surface-bg: rgba(248, 245, 240, 0.88);
   --moss-chrome-pill-bg: rgba(255, 255, 255, 0.9);
   --moss-chrome-panel-bg: rgba(250, 248, 245, 0.94);
+  --moss-chrome-menu-bg: var(--moss-chrome-panel-bg);
+  --moss-chrome-menu-border: none;
   --moss-chrome-panel-fg: #2c2825;
   --moss-chrome-panel-fg-secondary: #5d5853;
   --moss-chrome-panel-fg-muted: #66625e;
