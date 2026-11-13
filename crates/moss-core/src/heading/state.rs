@@ -194,24 +194,13 @@ pub fn is_untitled_stamp(file_path: &str, frontmatter_title: Option<&str>, dated
 /// Attributes on the opening line do not count as content — `caption=` and
 /// `image=` live there, and neither is a title.
 pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
-    let mut lines = body_markdown
+    let mut lines = skip_leading_comments(body_markdown)
         .lines()
         .skip_while(|line| line.trim().is_empty());
 
-    let Some(open) = lines.next() else {
+    let Some(args) = lines.next().and_then(hero_fence_args) else {
         return false;
     };
-    let trimmed = open.trim_start();
-    let opens_hero = trimmed == ":::hero"
-        || trimmed.starts_with(":::hero ")
-        || trimmed.starts_with(":::hero\t");
-    if !opens_hero {
-        return false;
-    }
-    let args = trimmed
-        .strip_prefix(":::hero")
-        .unwrap_or_default()
-        .trim_start();
 
     // Stop at the block's own fence. An unterminated hero runs to the end of
     // the body, which is what the renderer does with it too.
@@ -219,6 +208,31 @@ pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
     let body = body_lines.join("\n");
 
     crate::ast::extract_hero::hero_body_has_overlay_content(args, &body)
+}
+
+/// The arguments of a `:::hero` opening line, or `None` for any other line.
+fn hero_fence_args(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix(":::hero")?;
+    (rest.is_empty() || rest.starts_with([' ', '\t'])).then(|| rest.trim_start())
+}
+
+/// `body` after the HTML comments it opens with, which a reader never sees,
+/// the way `extract_hero` looks past them for the opening hero. A line may
+/// hold several comments; one with anything else after a `-->` is not
+/// comments alone, and nothing of it is skipped.
+pub(crate) fn skip_leading_comments(body: &str) -> &str {
+    let (mut rest, mut cursor) = (body, body);
+    while let Some((_, tail)) = cursor.trim_start().strip_prefix("<!--").and_then(|c| c.split_once("-->")) {
+        let (line_end, next) = tail.split_once('\n').unwrap_or((tail, ""));
+        if line_end.trim().is_empty() {
+            (rest, cursor) = (next, next);
+        } else if line_end.trim_start().starts_with("<!--") {
+            cursor = tail;
+        } else {
+            break;
+        }
+    }
+    rest
 }
 
 /// True when the body supplies a real heading: an ATX level-1 heading
@@ -297,8 +311,10 @@ pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> 
 /// text is the same as `title` under [`same_heading_text`], or a `:::grid`
 /// whose first `# Text` line, up to the grid's first bare `:::` line, has that
 /// text (a heading moved into a cell is still the page's title). Leading blank
-/// lines are skipped; anything else first, including a `##` heading or a
-/// different `# Text`, makes this false.
+/// lines are skipped, and so is an opening `:::hero` that draws no words: it
+/// is lifted out of the article, so the block after it opens the body.
+/// Anything else first, including a `##` heading or a different `# Text`,
+/// makes this false.
 pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
     let title = same_heading_text_key(title);
     !title.is_empty() && opening_h1(body_markdown).is_some_and(|text| same_heading_text_key(text) == title)
@@ -306,7 +322,11 @@ pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
 
 /// The text of the `# Text` heading a body opens with, in the sense of [`body_opens_with_title`]: its first block, or the first heading of an opening `:::grid`.
 pub fn opening_h1(body_markdown: &str) -> Option<&str> {
-    let mut lines = body_markdown.lines().filter(|line| !line.trim().is_empty());
+    let body_markdown = skip_leading_comments(body_markdown);
+    let mut lines = body_markdown.lines().filter(|line| !line.trim().is_empty()).peekable();
+    if lines.peek().copied().and_then(hero_fence_args).is_some() && !hero_at_top_owns_title(body_markdown) {
+        lines.find(|l| l.trim() == ":::");
+    }
     let first = lines.next();
     if first.is_some_and(|l| l.starts_with(":::grid")) {
         lines.take_while(|l| l.trim() != ":::").find_map(h1_text)
@@ -1014,6 +1034,28 @@ mod tests {
         assert_eq!(article_title_outcome(article_inputs("\n\n# Something Else\n", Some("Custom")), false), TitleOutcome::Visible);
         assert_eq!(article_title_outcome(article_inputs("# 1.\n\nIntro.\n", Some("Automate")), false), TitleOutcome::Visible);
         assert_eq!(article_title_outcome(article_inputs("# Custom Two\n", Some("Custom")), false), TitleOutcome::Visible);
+    }
+
+    /// A hero of only a picture is lifted out of the article, so the title
+    /// under it is the page's one heading. A heading of another text keeps the
+    /// injected title above it.
+    #[test]
+    fn title_under_a_wordless_opening_hero_has_no_injected_title() {
+        for hero in [":::hero\n![Hall](hall.jpg)\n:::", ":::hero {image=hall.jpg}\n:::", "\n:::hero hall.jpg\n:::\n", "<!-- note -->\n<!--\nTwo lines.\n-->\n:::hero\n![Hall](hall.jpg)\n:::", "<!-- a --> <!-- b -->\r\n:::hero\n![Hall](hall.jpg)\n:::"] {
+            let body = format!("{hero}\n\n# Custom\n\ntext");
+            assert_eq!(article_title_outcome(article_inputs(&body, Some("Custom")), false), TitleOutcome::None, "{hero}");
+        }
+        assert_eq!(article_title_outcome(article_inputs(":::hero\n![Hall](hall.jpg)\n:::\n\n# Other\n", Some("Custom")), false), TitleOutcome::Visible);
+        assert_eq!(article_title_outcome(article_inputs(":::heroic\n:::\n\n# Custom\n", Some("Custom")), false), TitleOutcome::Visible);
+        // Text after the comment on its line makes the line a block a reader sees.
+        assert_eq!(article_title_outcome(article_inputs("<!-- note --> Intro.\n\n# Custom\n", Some("Custom")), false), TitleOutcome::Visible);
+        assert_eq!(article_title_outcome(article_inputs("<!-- a --> <!-- b --> Intro.\n\n# Custom\n", Some("Custom")), false), TitleOutcome::Visible);
+    }
+
+    #[test]
+    fn title_inside_an_opening_hero_under_a_comment_has_no_injected_title() {
+        let body = "<!-- note -->\n:::hero {image=hall.jpg}\n# Custom\n:::\n\ntext";
+        assert_eq!(article_title_outcome(article_inputs(body, Some("Custom")), false), TitleOutcome::None);
     }
 
     #[test]

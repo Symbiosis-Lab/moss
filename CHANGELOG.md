@@ -31,6 +31,7 @@ All notable changes to moss will be documented here.
 - The red underline on a missing picture stays on the file's name. On `![[slide.jpg|800x450]]` it widened to the brackets and the size a moment after the page opened, where resting the pointer shows nothing.
 - The width buttons on a picture's ⌘K card wrap onto a second row. They ran out past the card's edge.
 - A picture written with a query or fragment after its name (`photo.jpg?v=2`) is found: it was reported as missing and stopped the publish.
+- A page that opens with a `:::hero` of only a picture, directly followed by a `# Heading` with the page's title, shows that heading once. It was printed twice on a page that is not in the navigation: the injected title above and the body's heading below. HTML comments at the top of the page no longer change this: above that hero, above a `:::hero` that holds the `# Heading` itself, or above the `# Heading` alone, the title was printed twice and is now printed once.
 
 ### Changed
 
