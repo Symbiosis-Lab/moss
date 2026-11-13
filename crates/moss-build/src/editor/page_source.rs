@@ -91,6 +91,7 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
     let source_path = url_to_source_candidates(normalized)
         .into_iter()
         .find_map(|c| existing(&c))
+        .map(|found| spelled_as_on_disk(folder_path, found))
         .or_else(|| match served_asset_source(normalized, folder_path, &map) {
             Ok(source) => source.and_then(|src| existing(&src)),
             Err(why) => {
@@ -132,6 +133,25 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
         source_pending: false,
         source_known: not_known.is_none(),
     })
+}
+
+/// `found` with its names spelled as the disk stores them. A candidate is
+/// spelled from the address (`events/a.md`), and a disk that ignores case
+/// finds `Events/a.md` under it; the editor and the file tree know the page
+/// only by its real path. The names are joined with `/`, as a mapped page's are.
+fn spelled_as_on_disk(folder_path: &Path, found: String) -> String {
+    let real = Path::new(&found).canonicalize().ok();
+    let root = folder_path.canonicalize().ok();
+    match (real, root) {
+        (Some(real), Some(root)) => match real.strip_prefix(&root) {
+            Ok(rel) => {
+                let names: Vec<_> = rel.iter().map(|name| name.to_string_lossy()).collect();
+                folder_path.join(names.join("/")).to_string_lossy().into_owned()
+            }
+            Err(_) => found,
+        },
+        _ => found,
+    }
 }
 
 /// The source of the non-page file served at `url`, from the last build's
@@ -255,6 +275,16 @@ mod tests {
             let r = resolve_page_source(url, dir.path()).unwrap();
             assert!(r.is_dir && !r.is_article, "{url:?}");
             assert!(r.source_path.unwrap().ends_with("index.md"));
+        }
+    }
+
+    #[test]
+    fn a_page_no_build_has_mapped_yet_resolves_under_its_spelling_on_disk() {
+        let dir = vault(&[], &[], &["Events/untitled.md"]);
+        let r = resolve_page_source("/events/untitled/", dir.path()).unwrap();
+        // A disk that tells `events` from `Events` finds no file; one that does not must not answer `events/`.
+        if let Some(source) = r.source_path {
+            assert_eq!(source, dir.path().join("Events/untitled.md").to_string_lossy());
         }
     }
 
