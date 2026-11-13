@@ -33,7 +33,7 @@ use specta::Type;
 
 use super::crawl_state::HostPacer;
 
-pub(crate) use facts::norm_url;
+pub(crate) use facts::{norm_url, NavEntry};
 pub(crate) use style::has_text_link;
 
 /// What the import did about one piece of chrome.
@@ -127,6 +127,15 @@ pub(crate) struct Capture<'a> {
     /// Normalised URL ([`norm_url`]) → the note written for it, relative to
     /// `out_dir`.
     pub written: &'a HashMap<String, String>,
+    /// A source's menu, the nav bar when the home page shows none.
+    pub menu: &'a [NavEntry],
+}
+
+/// Make `menu` the nav bar of the pages in `written`, for pages no home page
+/// was read for.
+pub(crate) fn place_menu(out_dir: &Path, written: &HashMap<String, String>, menu: &[NavEntry]) -> Result<(), String> {
+    let home = HomePage { url: String::new(), html: String::new(), is_start: false };
+    write::write_menu(&Capture { out_dir, user_agent: "", home: &home, post: None, written, menu })
 }
 
 /// Read the home page's chrome and write it into the crawl's output folder.

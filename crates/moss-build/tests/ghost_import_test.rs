@@ -217,3 +217,77 @@ fn saved_html_recognition_remains_a_file_fallback() {
     assert_eq!(recognised.title.as_deref(), Some("saved.html"));
     assert_eq!(recognised.host, None);
 }
+
+/// The desktop flow: an address import first, where a members-only post
+/// shows only Ghost's lock box, then the export dropped on the folder later.
+/// The post's page takes the export's text, keeps it members-only, the
+/// folder's moss floor is set, and no built file shows the private text.
+#[test]
+fn an_address_import_then_the_export_keeps_the_members_text_private() {
+    let rt = runtime();
+    moss_build::vault::import::scrape::fetch::allow_loopback();
+    let mut server = rt.block_on(mockito::Server::new_async());
+    let base = server.url();
+    let page = |body: &str| format!("<html><head><title>Copper Journal</title></head><body><article><h1>Members</h1>{body}</article></body></html>");
+    let _home = rt.block_on(server.mock("GET", "/").with_header("content-type", "text/html")
+        .with_body(page(&format!("<p><a href=\"{base}/members/\">Members</a> and enough words for the content scorer to keep this page body.</p>"))).create_async());
+    let _members = rt.block_on(server.mock("GET", "/members/").with_header("content-type", "text/html")
+        .with_body(page("<p>The public opening.</p><aside class=\"gh-post-upgrade-cta\">Subscribe to read</aside>")).create_async());
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = temp.path().join("bundle"); copy_fixture(&bundle);
+    fs::write(bundle.join("site.json"), format!("{{\"url\":\"{base}/\",\"title\":\"Copper Journal\"}}")).unwrap();
+    let out = temp.path().join("site"); fs::create_dir(&out).unwrap();
+
+    let options = || ImportOptions { recursive: true, private_members_dir: Some(temp.path().join("private")), ..Default::default() };
+    rt.block_on(import_source(&format!("{base}/"), &out, options(), |_| {})).unwrap();
+    assert!(!fs::read_to_string(out.join("members.md")).unwrap().contains(PRIVATE));
+    rt.block_on(import_source(bundle.to_str().unwrap(), &out, options(), |_| {})).unwrap();
+
+    let members = fs::read_to_string(out.join("members.md")).unwrap();
+    assert!(members.contains(PRIVATE) && members.contains("members: \"subscribers\""), "{members}");
+    assert!(!out.join("members 2.md").exists());
+    let config = fs::read_to_string(out.join(".moss/config.toml")).unwrap();
+    assert!(config.contains("min_moss_version"), "{config}");
+    drop(rt);
+    fs::write(out.join(".moss/config.toml"), format!("{config}\n[site]\nlang = 'en'\n")).unwrap();
+    site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
+    for entry in walkdir::WalkDir::new(out.join(".moss/build.nosync/staging")) {
+        let entry = entry.unwrap(); if !entry.file_type().is_file() { continue; }
+        let bytes = fs::read(entry.path()).unwrap();
+        assert!(!bytes.windows(PRIVATE.len()).any(|v| v == PRIVATE.as_bytes()), "{}", entry.path().display());
+    }
+}
+
+/// A page written empty that takes an export's text takes the export's
+/// visibility with it, over its own: an empty `draft: false` page whose post
+/// is a draft stays unpublished, and an empty `members: public` page whose
+/// post is members-only becomes restricted, with the folder's floor set.
+#[test]
+fn an_empty_page_takes_the_exports_visibility_with_its_text() {
+    let temp = tempfile::tempdir().unwrap();
+    let out = temp.path().join("site"); fs::create_dir(&out).unwrap();
+    for (slug, own) in [("draft", "draft: false"), ("members", "members: \"public\"")] {
+        fs::write(out.join(format!("{slug}.md")), format!("---\ntitle: \"Old\"\norigin: \"https://journal.example/{slug}/\"\n{own}\n---\n\n")).unwrap();
+    }
+    let rt = runtime();
+    rt.block_on(import_source(fixture().to_str().unwrap(), &out, ImportOptions { private_members_dir: Some(temp.path().join("private")), ..Default::default() }, |_| {})).unwrap();
+    let draft = fs::read_to_string(out.join("draft.md")).unwrap();
+    assert!(draft.contains("draft: true") && draft.contains("draft-not-published-827351"), "{draft}");
+    let members = fs::read_to_string(out.join("members.md")).unwrap();
+    assert_eq!(moss_core::frontmatter::frontmatter_map(&members)["members"].as_str(), Some("subscribers"), "{members}");
+    assert!(members.contains(PRIVATE), "{members}");
+    let config = fs::read_to_string(out.join(".moss/config.toml")).unwrap();
+    assert!(config.contains("min_moss_version"), "{config}");
+    drop(rt);
+    fs::write(out.join(".moss/config.toml"), format!("{config}\n[site]\nlang = 'en'\nurl = 'https://journal.example/'\n")).unwrap();
+    site::build_sync(out.to_str().unwrap(), moss_build::build::BuildTrigger::Full).unwrap();
+    let stage = out.join(".moss/build.nosync/staging");
+    for entry in walkdir::WalkDir::new(&stage) {
+        let entry = entry.unwrap(); if !entry.file_type().is_file() { continue; }
+        let text = String::from_utf8_lossy(&fs::read(entry.path()).unwrap()).into_owned();
+        assert!(!text.contains(PRIVATE), "{}", entry.path().display());
+    }
+    // A draft is built for preview only: kept out of search engines and the feed, never published.
+    assert!(fs::read_to_string(stage.join("draft/index.html")).unwrap().contains("noindex"));
+    assert!(!fs::read_to_string(stage.join("rss.xml")).unwrap().contains("draft-not-published-827351"));
+}

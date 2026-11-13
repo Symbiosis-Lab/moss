@@ -2726,3 +2726,39 @@ async fn reserved_paths_ignore_unreadable_unrelated_directories() {
     drop(restore);
     assert_eq!(std::fs::read_to_string(unrelated.join("keep.txt")).unwrap(), "Unrelated content");
 }
+
+/// Importing a site again into its folder adds no `name 2.md` copies, and the
+/// author's edits since (a body, the home page's title) stay as they are.
+#[tokio::test]
+async fn a_second_import_of_a_site_keeps_one_page_per_address_and_the_authors_edits() {
+    let mut server = test_server().await;
+    let base = server.url();
+    let pages = [
+        ("/", leaf_page("Example Journal", &format!("<a href=\"{base}/about/\">About</a> <a href=\"{base}/notes/\">Notes</a>"))),
+        ("/about/", leaf_page("About", "")),
+        ("/notes/", leaf_page("Notes", "")),
+    ];
+    let mut mocks = Vec::new();
+    for (path, body) in &pages {
+        mocks.push(
+            server.mock("GET", *path).with_status(200).with_header("content-type", "text/html")
+                .with_body(body).create_async().await,
+        );
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    crawl_leaves(&server, tmp.path()).await;
+    let about = read_leaf(tmp.path(), "about.md");
+    let edited = about.replace("---\n\n", "---\n\nThe author's own words.\n\n");
+    std::fs::write(tmp.path().join("about.md"), &edited).unwrap();
+    let home = read_leaf(tmp.path(), "index.md");
+    let renamed = super::super::super::page::with_title(&home, "Renamed by hand").unwrap();
+    std::fs::write(tmp.path().join("index.md"), &renamed).unwrap();
+    let before: Vec<_> = walkdir::WalkDir::new(tmp.path()).into_iter().filter_map(Result::ok).map(|e| e.path().to_path_buf()).collect();
+
+    crawl_leaves(&server, tmp.path()).await;
+
+    let after: Vec<_> = walkdir::WalkDir::new(tmp.path()).into_iter().filter_map(Result::ok).map(|e| e.path().to_path_buf()).collect();
+    assert_eq!(before.len(), after.len(), "{after:?}");
+    assert_eq!(read_leaf(tmp.path(), "about.md"), edited);
+    assert_eq!(read_leaf(tmp.path(), "index.md"), renamed);
+}

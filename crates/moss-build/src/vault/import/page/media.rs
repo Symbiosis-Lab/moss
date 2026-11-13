@@ -5,7 +5,7 @@ use std::path::Path;
 use super::{ImportedPage, PageStyle};
 use crate::vault::import::scrape::{
     crawl_state::{AssetMap, HostPacer}, crawler::host_of,
-    fetch::{content_type_to_extension, download_asset, hash_url, observe_pace, FileProgress},
+    fetch::{content_type_to_extension, download_asset, download_linked_file, hash_url, linked_filename, observe_pace, Downloaded, FetchError, FileProgress},
     mhtml::MhtmlResource, writer::rename_for_collision,
 };
 
@@ -56,6 +56,22 @@ impl MediaWriter<'_> {
             }
         }
         report
+    }
+
+    /// Download a file a page links to (a document, a score, a video) under
+    /// its own name, paced, and settle it in `assets`: its local path when it
+    /// landed, else its remote address. A file over `max_bytes` is not written.
+    pub async fn linked(&self, url: &str, assets: &mut AssetMap, pacer: &mut HostPacer, max_bytes: u64) -> Result<Downloaded, FetchError> {
+        let host = host_of(url);
+        pacer.wait(&host).await;
+        let filename = assets.claim_name(linked_filename(url), url);
+        let result = download_linked_file(url, self.directory, self.user_agent, self.referer, max_bytes, filename).await;
+        observe_pace(pacer, &host, &result);
+        match &result {
+            Ok(Downloaded::Saved(file)) => assets.insert(url.to_string(), format!("{}{file}", self.prefix)),
+            _ => assets.keep_remote(url.to_string()),
+        }
+        result
     }
 
     /// Place bytes already held by a local reader through the same hash naming

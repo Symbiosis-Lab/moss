@@ -84,7 +84,7 @@
         "packages/moss-ui/src/ui/editor": 93,
         "packages/moss-ui/src/ui/editor/tree": 17,
         "packages/moss-ui/src/ui/preview": 29,
-        "crates/moss-build/src/vault/import": 20,
+        "crates/moss-build/src/vault/import": 23,
         "crates/moss-build/src/system": 16
       },
       "oversized": {
@@ -137,7 +137,7 @@
         "crates/moss-build/src/engine/host_fns.rs::dispatch_command_core": 300,
         "crates/moss-build/src/ops/serve/router.rs::start_server": 350,
         "crates/moss-build/src/ops/watch/sweep/tick.rs::run": 400,
-        "crates/moss-build/src/vault/import/scrape/run.rs::scrape_to_folder": 300,
+        "crates/moss-build/src/vault/import/scrape/run.rs::scrape_into": 300,
         "crates/moss-core/src/ast/hooks.rs::render_shortcode": 350,
         "crates/moss-core/src/ast/parser.rs::parse_block_with_tag": 300,
         "crates/moss-core/src/ast/render.rs::render_block": 450,

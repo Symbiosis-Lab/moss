@@ -24,7 +24,7 @@ const DEFAULT_FAVICON_PATTERNS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct NavEntry {
+pub(crate) struct NavEntry {
     pub label: String,
     pub url: String,
 }

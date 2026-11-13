@@ -24,12 +24,12 @@ use super::crawler::{
     extract_canonical_url, extract_links, host_of, is_non_page_file_url,
     looks_like_html_page,
 };
-use super::fetch::{
-    download_linked_file, fetch_page, linked_filename, observe_pace, Downloaded, FileProgress,
-};
+use super::fetch::{fetch_page, observe_pace, Downloaded, FileProgress};
 use super::scope::{is_within_scope, left_site_by_redirect, UrlScope};
 use super::service::{imported_frontmatter, render_error_markdown, strip_outbound_ref, ScrapeConfig};
 use super::writer::{OutputPaths, PendingPage};
+use super::crawl_state::{AssetMap, HostPacer};
+use crate::vault::import::items::{ImportedPages, Progress};
 use crate::vault::import::widgets::WidgetCount;
 use crate::vault::import::page::{ImportedPage, PageStyle, media::MediaWriter};
 
@@ -42,6 +42,8 @@ pub use super::fetch::refuse_unsafe_scrape_url;
 /// Relative to `<output>/` so the saved markdown can reference assets
 /// with portable `./assets/imported/…` paths.
 pub const ASSETS_SUBDIR: &str = "assets/imported";
+/// [`ASSETS_SUBDIR`] as a page at the folder's root links into it.
+pub(crate) const ASSETS_PREFIX: &str = "./assets/imported/";
 
 /// Maximum concurrent HTTP requests across the whole pipeline.
 const SCRAPE_CONCURRENCY_LIMIT: usize = 5;
@@ -318,6 +320,25 @@ pub async fn scrape_to_folder<F>(
 where
     F: Fn(ScrapeProgress) + Send + Sync + 'static,
 {
+    let mut held = ImportedPages::scan(&config.output_dir);
+    scrape_into(config, &mut held, &on_progress).await.map(|crawl| crawl.result)
+}
+
+/// What a crawl leaves for a source read after it: the result, and the
+/// files and pacing it settled, so later downloads reuse both.
+pub(crate) struct Crawl {
+    pub result: ScrapeResult,
+    pub assets: AssetMap,
+    pub pacer: HostPacer,
+}
+
+/// [`scrape_to_folder`] into a folder whose imported pages `held` names,
+/// recording the pages it writes there.
+pub(crate) async fn scrape_into(
+    config: ScrapeConfig,
+    held: &mut ImportedPages,
+    on_progress: Progress<'_>,
+) -> Result<Crawl, String> {
     let scope = UrlScope::new(&config.start_url).map_err(|e| format!("Invalid URL: {}", e))?;
     let out_dir = config.output_dir.as_path();
     if !out_dir.exists() {
@@ -546,46 +567,30 @@ where
         let mut progress = FileProgress::new(pending.len());
 
         let images: Vec<_> = article.media_urls.iter().map(|u| (u.clone(), u.clone())).collect();
-        MediaWriter {
-            directory: &assets_dir, prefix: "./assets/imported/",
+        let media = MediaWriter {
+            directory: &assets_dir, prefix: ASSETS_PREFIX,
             user_agent: &config.user_agent, referer: Some(&url),
-        }.download(&images, &mut state.assets, Some((&mut state.pacer, &mut progress))).await;
+        };
+        media.download(&images, &mut state.assets, Some((&mut state.pacer, &mut progress))).await;
 
         // Files the page links to (a score, a document) get the same
         // treatment as its images: downloaded once into the assets folder,
         // the link pointed at the copy by `compose_note`.
         for file_url in linked_files {
             if !state.assets.is_settled(&file_url) {
-                let asset_host = host_of(&file_url);
-                state.pacer.wait(&asset_host).await;
-                let filename = state.assets.claim_name(linked_filename(&file_url), &file_url);
-                let result = download_linked_file(
-                    &file_url,
-                    &assets_dir,
-                    &config.user_agent,
-                    Some(&url),
-                    config.linked_file_max_bytes,
-                    filename,
-                )
-                .await;
-                observe_pace(&mut state.pacer, &asset_host, &result);
-                progress.finished_one(state.pacer.current_interval(&asset_host));
+                let result = media.linked(&file_url, &mut state.assets, &mut state.pacer, config.linked_file_max_bytes).await;
+                progress.finished_one(state.pacer.current_interval(&host_of(&file_url)));
                 match result {
-                    Ok(Downloaded::Saved(filename)) => {
-                        state.assets.insert(file_url.clone(), format!("./{ASSETS_SUBDIR}/{filename}"));
-                        state.tally.record_linked_file_downloaded();
-                    }
+                    Ok(Downloaded::Saved(_)) => state.tally.record_linked_file_downloaded(),
                     Ok(Downloaded::TooLarge) => {
                         log::warn!(
                             "import: linked file over {} MB, not downloaded and left as a remote link: {file_url}",
                             config.linked_file_max_bytes / (1024 * 1024)
                         );
-                        state.assets.keep_remote(file_url.clone());
                         state.tally.record_oversized_file();
                     }
                     Err(e) => {
                         log::warn!("import: linked file download failed, keeping remote URL: {file_url}: {e}");
-                        state.assets.keep_remote(file_url.clone());
                         state.tally.record_unreachable_file();
                     }
                 }
@@ -662,10 +667,14 @@ where
         }
     }
 
-    let paths = OutputPaths::reserve(out_dir, &scope, &pending)?;
+    let paths = OutputPaths::reserve_with(out_dir, &scope, &pending, held)?;
     let written = paths.write(out_dir, &pending, &left_site, config.recursive)?;
+    held.note(&pending, &paths);
+    // Only the pages this run wrote: a page the folder already had keeps its chrome.
+    let fresh: std::collections::HashSet<&String> = written.iter().collect();
     let written_urls: HashMap<String, String> = pending.iter().filter(|page| page.imported)
         .filter_map(|page| Some((norm_url(&page.source)?, paths.get(&page.source)?.clone())))
+        .filter(|(_, path)| fresh.contains(path))
         .collect();
     drop(pending);
 
@@ -679,6 +688,7 @@ where
                 home,
                 post: post_html.as_deref(),
                 written: &written_urls,
+                menu: &config.menu,
             };
             design::capture_site_chrome(&capture, &mut state.pacer).await?
         }
@@ -711,7 +721,7 @@ where
         .map(|(host, interval)| RateLimitedHost { host, interval_ms: interval.as_millis() as u64 })
         .collect();
 
-    Ok(ScrapeResult {
+    let result = ScrapeResult {
         restricted_pages,
         success: true,
         total_pages: state.tally.scraped(),
@@ -732,7 +742,8 @@ where
         rate_limited_hosts,
         chrome,
         error: None,
-    })
+    };
+    Ok(Crawl { result, assets: std::mem::take(&mut state.assets), pacer: std::mem::take(&mut state.pacer) })
 }
 
 #[cfg(test)]
