@@ -167,6 +167,9 @@ fn shared_url_entry_recognises_a_lock_page_and_downloads_missing_export_media() 
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { std::thread::sleep(Duration::from_millis(10)); continue; }
                 Err(e) => panic!("{e}"),
             };
+            // macOS hands the listener's non-blocking mode to the accepted socket,
+            // which would make the read below return before the request arrives.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut request = [0; 2048]; let size = stream.read(&mut request).unwrap();
             let request = String::from_utf8_lossy(&request[..size]); assert!(request.starts_with("GET "));
