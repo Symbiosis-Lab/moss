@@ -1424,6 +1424,27 @@ describe("PREVIEW_URL_CHANGED isReload flag", () => {
     navManager.handleNavigationUpdate({ url: event, title: "Reading circle", navType: "reload" });
     expect(lastUrlChangedEvent()?.isReload).toBe(true);
   });
+
+  // A new page's wait reloads it with a cache-busting query until a build
+  // serves it. Read as a navigation, that reload would take the editor back
+  // to the page while it opens the next one.
+  test("a cache-busted reload of the page on screen is a reload, and records no history", () => {
+    const page = "http://localhost:8080/workshops/untitled/";
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: "http://localhost:8080/", title: "Home" });
+    navManager.markEditorNavigation(page);
+    // @ts-ignore — calling private for testing
+    navManager.handleNavigationUpdate({ url: page, title: "", navType: "navigate", notFound: true });
+    // @ts-ignore — reading private for testing
+    const recorded = navManager.history.length();
+    for (const at of [1, 2]) {
+      // @ts-ignore — calling private for testing
+      navManager.handleNavigationUpdate({ url: `${page}?_t=${at}`, title: "", navType: "navigate", notFound: true });
+      expect(lastUrlChangedEvent()?.isReload).toBe(true);
+    }
+    // @ts-ignore — reading private for testing
+    expect(navManager.history.length()).toBe(recorded);
+  });
 });
 
 /**

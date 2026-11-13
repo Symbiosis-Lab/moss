@@ -27,7 +27,7 @@ import { PreviewHairline } from './preview-hairline';
 import { deployFraction } from './progress/hairline-pacing';
 import { eventBus, Events, type DeployProgressEvent } from '../context/event-bus';
 import { ProgressSeam } from './progress/progress-seam';
-import { NavigationManager, type ActivePage, type NavigationResultInfo } from "./navigation-manager";
+import { CACHE_BUST_PARAM, NavigationManager, type ActivePage, type NavigationResultInfo } from "./navigation-manager";
 import { PreviewState, PreviewStatus, resolveUnshowableReason, type UnshowableReason } from "./preview-state";
 import { getFileChangeAction, decideNewPageWait, type NewPageWaitState, FileChangeEvent, LINKED_SELECTOR, linkedPaths, changedNonPages } from "./preview-actions";
 import { extractPathFromUrl, sourcePathToHtmlPath } from "./path-matcher";
@@ -1818,7 +1818,7 @@ export class PreviewManager {
         const currentUrl = new URL(currentSrc);
         // If same origin and path, add cache bust to force reload
         if (newUrl.origin === currentUrl.origin && newUrl.pathname === currentUrl.pathname) {
-          newUrl.searchParams.set("_t", Date.now().toString());
+          newUrl.searchParams.set(CACHE_BUST_PARAM, Date.now().toString());
           url = newUrl.toString();
         }
       }
@@ -1924,7 +1924,7 @@ export class PreviewManager {
       if (currentUrl) {
         try {
           const url = new URL(currentUrl);
-          url.searchParams.set("_t", Date.now().toString());
+          url.searchParams.set(CACHE_BUST_PARAM, Date.now().toString());
           this.navigatePreviewIframe(url.toString());
         } catch {
           if (this.currentPreviewUrl) this.navigatePreviewIframe(this.currentPreviewUrl);

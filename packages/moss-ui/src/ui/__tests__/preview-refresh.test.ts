@@ -40,6 +40,7 @@ const { mockNavigationManager } = vi.hoisted(() => ({
 // Mock modules
 // ---------------------------------------------------------------------------
 vi.mock("../preview/navigation-manager", () => ({
+  CACHE_BUST_PARAM: "_t",
   NavigationManager: vi.fn().mockImplementation(() => mockNavigationManager),
 }));
 
