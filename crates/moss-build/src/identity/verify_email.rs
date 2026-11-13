@@ -182,6 +182,13 @@ pub async fn verify_folder_email(
                 }
             }
             Err(e) => {
+                // 410 is the service's answer once the link's life is over: no later poll can succeed.
+                if matches!(e, crate::seta::client::SetaError::Api { status: 410, .. }) {
+                    return Err(format!(
+                        "The sign-in link sent to {email} expired before it was opened. \
+                         Run the command again with --email to get a new link."
+                    ));
+                }
                 refusals_in_a_row = if is_client_error(&e) { refusals_in_a_row + 1 } else { 0 };
                 last_error = Some(e.to_string());
                 if refusals_in_a_row >= PERMANENT_REFUSALS {
